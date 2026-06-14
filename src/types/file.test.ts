@@ -231,4 +231,43 @@ describe('FileTypes', () => {
     };
     assert.equal(candidate.exists, true);
   });
+
+  // ── FileKind edge cases ──
+
+  it('should detect compound archive extensions like .tar.gz', () => {
+    assert.equal(detectFileKind('archive.tar.gz'), 'archive');
+    assert.equal(detectFileKind('archive.tar.bz2'), 'archive');
+    assert.equal(detectFileKind('archive.tgz'), 'archive');
+    assert.equal(detectFileKind('archive.tbz2'), 'archive');
+  });
+
+  it('should detect extensionless text files like Dockerfile', () => {
+    assert.equal(detectFileKind('Dockerfile'), 'text');
+    assert.equal(detectFileKind('Makefile'), 'text');
+    assert.equal(detectFileKind('CHANGELOG'), 'text');
+    assert.equal(detectFileKind('README'), 'text');
+  });
+
+  it('should detect hidden files like .env and .gitignore', () => {
+    assert.equal(detectFileKind('.env'), 'text');
+    assert.equal(detectFileKind('.gitignore'), 'text');
+    assert.equal(detectFileKind('.editorconfig'), 'text');
+  });
+
+  it('should handle uppercase extensions', () => {
+    assert.equal(detectFileKind('PHOTO.JPG'), 'image');
+    assert.equal(detectFileKind('README.MD'), 'text');
+    assert.equal(detectFileKind('ARCHIVE.TAR.GZ'), 'archive');
+  });
+
+  it('should return other for unknown extensions', () => {
+    assert.equal(detectFileKind('file.xyz'), 'other');
+    assert.equal(detectFileKind('data.bin'), 'other');
+  });
+
+  it('should handle files with no extension', () => {
+    assert.equal(detectFileKind('Makefile'), 'text');
+    assert.equal(detectFileKind('randomfile'), 'other');
+    assert.equal(detectFileKind('CHANGELOG'), 'text');
+  });
 });
