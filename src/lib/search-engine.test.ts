@@ -1,6 +1,8 @@
-import { describe, it } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { calculateScore, findSubsequence, findStreaks } from './search-engine';
+import * as fs from 'fs';
+import * as path from 'path';
+import { calculateScore, findSubsequence, findStreaks, grepContent } from './search-engine';
 
 describe('SearchEngine', () => {
   describe('findSubsequence', () => {
@@ -90,6 +92,62 @@ describe('SearchEngine', () => {
       const exact = calculateScore('Readme.md', 'Readme.md');
       const partial = calculateScore('Readme', 'Readme.md');
       assert.ok(exact > partial);
+    });
+  });
+
+  describe('grepContent', () => {
+    const GREP_DIR = path.join(process.env.HOME || '~', '.natives-test', 'grep-test');
+
+    before(() => {
+      fs.mkdirSync(path.join(GREP_DIR, 'subdir'), { recursive: true });
+      fs.writeFileSync(path.join(GREP_DIR, 'hello.txt'), 'Hello World\nThis is a test file\nLine 3', 'utf-8');
+      fs.writeFileSync(path.join(GREP_DIR, 'typescript.ts'), 'const x: number = 42;\nconsole.log(x);', 'utf-8');
+      fs.writeFileSync(path.join(GREP_DIR, 'binary.bin'), Buffer.from([0, 1, 2, 3, 255]));
+      fs.writeFileSync(path.join(GREP_DIR, 'subdir', 'nested.txt'), 'Nested file content\nWith hello in it', 'utf-8');
+    });
+
+    after(() => {
+      if (fs.existsSync(GREP_DIR)) {
+        fs.rmSync(GREP_DIR, { recursive: true, force: true });
+      }
+    });
+
+    it('should find matching lines for a simple query', async () => {
+      const results = await grepContent('Hello', GREP_DIR);
+      assert.ok(results.length >= 1);
+      assert.ok(results.some((r) => r.line === 1 && r.preview.includes('Hello')));
+    });
+
+    it('should search recursively', async () => {
+      const results = await grepContent('hello', GREP_DIR);
+      assert.ok(results.some((r) => r.path.includes('nested.txt')));
+    });
+
+    it('should be case insensitive', async () => {
+      const results = await grepContent('HELLO', GREP_DIR);
+      assert.ok(results.length >= 1);
+    });
+
+    it('should skip binary files', async () => {
+      const results = await grepContent('World', GREP_DIR);
+      // Ensure binary files are not in results
+      const binaryInResults = results.some((r) => r.path.endsWith('.bin'));
+      assert.equal(binaryInResults, false);
+      // But text results should still be found
+      assert.ok(results.some((r) => r.path.endsWith('.txt')));
+    });
+
+    it('should return empty array when no match', async () => {
+      const results = await grepContent('zzzznonexistent', GREP_DIR);
+      assert.equal(results.length, 0);
+    });
+
+    it('should filter by file extensions', async () => {
+      // Search for 'console' which exists in typescript.ts
+      const results = await grepContent('console', GREP_DIR, { fileExtensions: ['.ts'] });
+      assert.ok(results.length >= 1);
+      const allTs = results.every((r) => r.path.endsWith('.ts'));
+      assert.ok(allTs);
     });
   });
 });

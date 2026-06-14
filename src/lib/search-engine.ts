@@ -1,3 +1,7 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import { type ContentSearchResult } from '../types/file';
+
 /**
  * 子序列匹配
  * @param query 搜索词
@@ -30,7 +34,7 @@ export function findStreaks(positions: number[]): number[] {
   let currentStreak = 1;
 
   for (let i = 1; i < positions.length; i++) {
-    if (positions[i] === positions[i - 1] + 1) {
+    if (positions[i]! === positions[i - 1]! + 1) {
       currentStreak++;
     } else {
       streaks.push(currentStreak);
@@ -107,4 +111,122 @@ export function calculateScore(
   }
 
   return score;
+}
+
+// ── Binary Detection ──
+
+/** 检查是否二进制文件（内容中包含 null 字节） */
+function isBinary(content: Buffer): boolean {
+  const len = Math.min(content.length, 8192); // 只检查前 8KB
+  for (let i = 0; i < len; i++) {
+    if (content[i] === 0) return true;
+  }
+  return false;
+}
+
+const TEXT_EXTENSIONS = new Set([
+  '.txt', '.md', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+  '.json', '.yaml', '.yml', '.toml', '.xml', '.css', '.scss',
+  '.html', '.htm', '.py', '.rb', '.java', '.rs', '.go', '.c', '.h',
+  '.cpp', '.hpp', '.cs', '.swift', '.sh', '.bash', '.zsh', '.env',
+  '.conf', '.ini', '.cfg', '.sql', '.graphql', '.vue', '.svelte',
+  '.gitignore', '.dockerignore', '.editorconfig',
+]);
+
+const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB
+
+// ── grepContent ──
+
+/**
+ * 全文内容搜索
+ * @param query 搜索词
+ * @param root 搜索根目录
+ * @param options 选项
+ * @returns 匹配结果
+ */
+export async function grepContent(
+  query: string,
+  root: string,
+  options?: {
+    maxResults?: number;
+    fileExtensions?: string[];
+    contextLines?: number;
+  },
+): Promise<ContentSearchResult[]> {
+  const results: ContentSearchResult[] = [];
+  const maxResults = options?.maxResults || 50;
+  const contextLines = options?.contextLines || 0;
+  const allowedExts = options?.fileExtensions
+    ? new Set(options.fileExtensions.map((e) => e.startsWith('.') ? e : `.${e}`))
+    : null;
+  const q = query.toLowerCase();
+
+  async function searchFile(filePath: string): Promise<void> {
+    if (results.length >= maxResults) return;
+
+    // 扩展名过滤
+    if (allowedExts) {
+      const ext = path.extname(filePath).toLowerCase();
+      if (!allowedExts.has(ext)) return;
+    }
+
+    try {
+      const stat = await fs.promises.stat(filePath);
+      if (!stat.isFile() || stat.size > MAX_FILE_SIZE) return;
+
+      const ext = path.extname(filePath).toLowerCase();
+      if (!TEXT_EXTENSIONS.has(ext) && ext !== '') return;
+
+      const raw = await fs.promises.readFile(filePath);
+      if (isBinary(raw)) return;
+
+      const content = raw.toString('utf-8');
+      const lines = content.split('\n');
+
+      for (let i = 0; i < lines.length && results.length < maxResults; i++) {
+        const lineLower = lines[i]!.toLowerCase();
+        const matchIdx = lineLower.indexOf(q);
+        if (matchIdx !== -1) {
+          const preview = lines[i]!.substring(
+            Math.max(0, matchIdx - 20),
+            Math.min(lines[i]!.length, matchIdx + query.length + 20),
+          ).trim();
+          results.push({
+            path: filePath,
+            name: path.basename(filePath),
+            line: i + 1,
+            preview,
+            matchStart: matchIdx,
+            matchEnd: matchIdx + query.length,
+          });
+        }
+      }
+    } catch {
+      // 跳过无权限文件
+    }
+  }
+
+  async function walkDir(dirPath: string): Promise<void> {
+    if (results.length >= maxResults) return;
+
+    try {
+      const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+      for (const entry of entries) {
+        if (results.length >= maxResults) return;
+        const fullPath = path.join(dirPath, entry.name);
+        if (entry.isDirectory()) {
+          // 跳过 node_modules, .git 等
+          if (entry.name.startsWith('.')) continue;
+          await walkDir(fullPath);
+        } else if (entry.isFile()) {
+          await searchFile(fullPath);
+        }
+      }
+    } catch {
+      // 跳过无权限目录
+    }
+  }
+
+  await walkDir(root);
+  return results;
 }
