@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { execFile } from 'child_process';
 import { type ContentSearchResult, type SearchResult } from '../types/file';
 
 /**
@@ -345,8 +346,7 @@ export async function spotlightSearch(
 
 function execFilePromise(cmd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    const { execFile } = require('child_process');
-    execFile(cmd, args, { timeout: 15000 }, (err, stdout) => {
+    execFile(cmd, args, { timeout: 15000 }, (err: Error | null, stdout: string) => {
       if (err) reject(err);
       else resolve(stdout);
     });
