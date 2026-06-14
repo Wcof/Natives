@@ -409,3 +409,74 @@ export async function trashEntry(filePath: string): Promise<void> {
     });
   });
 }
+
+// ── Move Entry ──
+
+/**
+ * 移动文件（同卷 rename，跨卷 copy+delete）
+ * @param from 源路径
+ * @param to 目标路径
+ */
+export async function moveEntry(from: string, to: string): Promise<void> {
+  validatePath(from);
+  validatePath(to);
+
+  // 检查源是否存在
+  await fs.promises.stat(from);
+
+  // 如果目标存在，自动递增
+  let targetPath = to;
+  try {
+    await fs.promises.stat(targetPath);
+    const dir = path.dirname(to);
+    const ext = path.extname(to);
+    const base = path.basename(to, ext);
+
+    let counter = 1;
+    while (counter < 100) {
+      targetPath = path.join(dir, `${base} (${counter})${ext}`);
+      try {
+        await fs.promises.stat(targetPath);
+        counter++;
+      } catch {
+        break;
+      }
+    }
+  } catch {
+    // 目标不存在，使用原路径
+  }
+
+  try {
+    // 尝试同卷 rename
+    await fs.promises.rename(from, targetPath);
+  } catch (err: any) {
+    if (err.code === 'EXDEV') {
+      // 跨卷：copy + delete
+      const isDir = (await fs.promises.stat(from)).isDirectory();
+      if (isDir) {
+        // 递归复制目录
+        await copyDir(from, targetPath);
+      } else {
+        await fs.promises.copyFile(from, targetPath);
+      }
+      // 删除源
+      await fs.promises.rm(from, { recursive: true, force: true });
+    } else {
+      throw err;
+    }
+  }
+}
+
+async function copyDir(src: string, dest: string): Promise<void> {
+  await fs.promises.mkdir(dest, { recursive: true });
+  const entries = await fs.promises.readdir(src, { withFileTypes: true });
+  for (const entry of entries) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      await copyDir(srcPath, destPath);
+    } else {
+      await fs.promises.copyFile(srcPath, destPath);
+    }
+  }
+}

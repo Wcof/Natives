@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { listDir, readFile, streamFile, writeFileAtomic, createEntry, renameEntry, trashEntry } from './file-manager';
+import { listDir, readFile, streamFile, writeFileAtomic, createEntry, renameEntry, trashEntry, moveEntry } from './file-manager';
 
 const TEST_DIR = path.join(process.env.HOME || '~', '.natives-test', 'listdir-test');
 
@@ -482,6 +482,51 @@ describe('trashEntry', () => {
     await assert.rejects(
       () => trashEntry(path.join(TRASH_DIR, 'bad\0file.txt')),
       { code: 'EINVAL' },
+    );
+  });
+});
+
+const MOVE_DIR = path.join(process.env.HOME || '~', '.natives-test', 'move-test');
+
+describe('moveEntry', () => {
+  before(() => {
+    fs.mkdirSync(path.join(MOVE_DIR, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(MOVE_DIR, 'dest'), { recursive: true });
+    fs.writeFileSync(path.join(MOVE_DIR, 'src', 'file.txt'), 'move me', 'utf-8');
+  });
+
+  after(() => {
+    if (fs.existsSync(MOVE_DIR)) {
+      fs.rmSync(MOVE_DIR, { recursive: true, force: true });
+    }
+  });
+
+  it('should move file within same volume', async () => {
+    const src = path.join(MOVE_DIR, 'src', 'file.txt');
+    const dst = path.join(MOVE_DIR, 'dest', 'moved.txt');
+    await moveEntry(src, dst);
+    assert.equal(fs.existsSync(src), false);
+    assert.ok(fs.existsSync(dst));
+    assert.equal(fs.readFileSync(dst, 'utf-8'), 'move me');
+  });
+
+  it('should auto-increment when target exists', async () => {
+    fs.writeFileSync(path.join(MOVE_DIR, 'src', 'dup.txt'), 'source', 'utf-8');
+    fs.writeFileSync(path.join(MOVE_DIR, 'dest', 'dup.txt'), 'existing', 'utf-8');
+
+    await moveEntry(
+      path.join(MOVE_DIR, 'src', 'dup.txt'),
+      path.join(MOVE_DIR, 'dest', 'dup.txt'),
+    );
+
+    assert.equal(fs.existsSync(path.join(MOVE_DIR, 'src', 'dup.txt')), false);
+    assert.ok(fs.existsSync(path.join(MOVE_DIR, 'dest', 'dup.txt'))); // original
+    assert.ok(fs.existsSync(path.join(MOVE_DIR, 'dest', 'dup (1).txt'))); // moved
+  });
+
+  it('should reject non-existent source', async () => {
+    await assert.rejects(
+      () => moveEntry('/nonexistent/source.txt', '/tmp/dest.txt'),
     );
   });
 });
