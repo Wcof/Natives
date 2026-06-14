@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { calculateScore, findSubsequence, findStreaks, grepContent, searchFiles } from './search-engine';
+import { calculateScore, findSubsequence, findStreaks, grepContent, searchFiles, spotlightSearch } from './search-engine';
 
 describe('SearchEngine', () => {
   describe('findSubsequence', () => {
@@ -192,6 +192,33 @@ describe('SearchEngine', () => {
     it('should include directories when includeDirs is true', async () => {
       const results = await searchFiles('src', SEARCH_DIR, { includeDirs: true });
       assert.ok(results.some((r) => r.isDir));
+    });
+  });
+
+  describe('spotlightSearch', () => {
+    const SPOT_DIR = path.join(process.env.HOME || '~', '.natives-test', 'spotlight-test');
+
+    before(() => {
+      fs.mkdirSync(SPOT_DIR, { recursive: true });
+      fs.writeFileSync(path.join(SPOT_DIR, 'spotlight-me.txt'), 'spotlight content here', 'utf-8');
+      fs.writeFileSync(path.join(SPOT_DIR, 'other.txt'), 'other content', 'utf-8');
+    });
+
+    after(() => {
+      if (fs.existsSync(SPOT_DIR)) {
+        fs.rmSync(SPOT_DIR, { recursive: true, force: true });
+      }
+    });
+
+    it('should return results from mdfind or grep fallback', async () => {
+      const results = await spotlightSearch('spotlight', SPOT_DIR);
+      assert.ok(results.length >= 1);
+      assert.ok(results.some((r) => r.path.includes('spotlight-me.txt')));
+    });
+
+    it('should return empty array for no match', async () => {
+      const results = await spotlightSearch('zzzznomatchxyzxyz', SPOT_DIR);
+      assert.equal(results.length, 0);
     });
   });
 });

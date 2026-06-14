@@ -306,3 +306,49 @@ export async function searchFiles(
   results.sort((a, b) => b.score - a.score);
   return results.slice(0, maxResults);
 }
+
+// ── Spotlight Search ──
+
+/**
+ * macOS Spotlight 搜索（降级到 grepContent）
+ * @param query 搜索词
+ * @param root 搜索根目录
+ * @returns 匹配结果
+ */
+export async function spotlightSearch(
+  query: string,
+  root: string,
+): Promise<ContentSearchResult[]> {
+  // 优先使用 mdfind (macOS)
+  if (process.platform === 'darwin') {
+    try {
+      const output = await execFilePromise('mdfind', ['-onlyin', root, '-interpret', query]);
+      const lines = output.split('\n').filter((l) => l.trim());
+      if (lines.length > 0) {
+        return lines.slice(0, 50).map((filePath) => ({
+          path: filePath,
+          name: path.basename(filePath),
+          line: 1,
+          preview: query,
+          matchStart: 0,
+          matchEnd: query.length,
+        }));
+      }
+    } catch {
+      // mdfind 失败，降级到 grep
+    }
+  }
+
+  // 降级：使用 grepContent
+  return grepContent(query, root);
+}
+
+function execFilePromise(cmd: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const { execFile } = require('child_process');
+    execFile(cmd, args, { timeout: 15000 }, (err, stdout) => {
+      if (err) reject(err);
+      else resolve(stdout);
+    });
+  });
+}
