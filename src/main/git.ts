@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import * as path from 'path';
 import { type GitStatus, type GitFileStatus } from '../types/file';
 
 /**
@@ -84,4 +85,28 @@ function execFilePromise(cmd: string, args: string[], cwd: string): Promise<stri
       else resolve(stdout);
     });
   });
+}
+
+/**
+ * 获取文件的 Git diff（HEAD vs working tree）
+ * @param filePath 文件路径
+ * @returns diff 文本，未跟踪或非 git 返回 null
+ */
+export async function getGitDiff(filePath: string): Promise<string | null> {
+  const dir = path.dirname(filePath);
+
+  try {
+    // 先检查是否在 git 仓库中
+    await execFilePromise('git', ['rev-parse', '--show-toplevel'], dir);
+  } catch {
+    return null;
+  }
+
+  try {
+    const diff = await execFilePromise('git', ['diff', 'HEAD', '--', filePath], dir);
+    if (!diff.trim()) return null;
+    return diff;
+  } catch {
+    return null;
+  }
 }
