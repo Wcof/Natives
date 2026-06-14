@@ -105,6 +105,31 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
     setResults(filtered);
     setSelectedIndex(0);
 
+    // content: prefix — full-text search (PRD v2 story 47)
+    if (query.startsWith('content:') && query.length > 8) {
+      const searchTerm = query.slice(8).trim();
+      if (searchTerm.length >= 2) {
+        const root = process.env.HOME || '/';
+        window.nativesAPI?.search?.grep?.(searchTerm, root, { maxResults: 8 }).then((results) => {
+          if (Array.isArray(results) && results.length > 0) {
+            const contentCommands: CommandItem[] = results.map((r: { path: string; name: string; line?: number; match?: string }) => ({
+              id: `__file__:${r.path}`,
+              label: `${r.name}${r.line ? `:${r.line}` : ''}`,
+              category: 'navigation' as const,
+              icon: '🔍',
+              description: r.match || r.path,
+            }));
+            setResults((prev) => {
+              const cmdIds = new Set(prev.map((c) => c.id));
+              const newItems = contentCommands.filter((f) => !cmdIds.has(f.id));
+              return [...prev, ...newItems];
+            });
+          }
+        }).catch(() => { /* ignore */ });
+      }
+      return;
+    }
+
     // Also search files if query looks like a filename (has extension or starts with /)
     if (query.length >= 2 && (query.includes('.') || query.startsWith('/') || query.startsWith('~'))) {
       const root = query.startsWith('~') || query.startsWith('/') ? '/' : (process.env.HOME || '/');

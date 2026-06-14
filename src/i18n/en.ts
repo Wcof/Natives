@@ -157,7 +157,7 @@ export const en = {
 
   // Command Palette
   commandPalette: {
-    placeholder: 'Search modules and commands...',
+    placeholder: 'Search modules, files... (content: for full-text)',
     noResults: 'No results found',
   },
 

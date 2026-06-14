@@ -146,7 +146,7 @@ export const zh = {
   },
 
   commandPalette: {
-    placeholder: '搜索模块和命令...',
+    placeholder: '搜索模块、文件... (content: 全文搜索)',
     noResults: '未找到结果',
   },
 
