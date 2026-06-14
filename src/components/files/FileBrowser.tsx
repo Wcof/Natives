@@ -8,7 +8,11 @@ import FileBreadcrumb from './FileBreadcrumb';
 import FileToolbar from './FileToolbar';
 import FileContextMenu from './FileContextMenu';
 
-export default function FileBrowser() {
+interface FileBrowserProps {
+  onFileSelect?: (entry: FileEntry) => void;
+}
+
+export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const [currentPath, setCurrentPath] = useState('/');
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -22,17 +26,13 @@ export default function FileBrowser() {
   const loadEntries = useCallback(async () => {
     setLoading(true);
     try {
-      // In Electron, use IPC; in browser dev mode, use fetch
       const api = window.nativesAPI;
-      const httpPort = window.__nativesHttpPort || 3001;
 
-      if (api?.db?.get) {
-        // Use HTTP API via localserver
-        const res = await fetch(`http://localhost:${httpPort}/api/fs/list?path=${encodeURIComponent(currentPath)}&sortBy=${sortBy}&sortDir=${sortDir}&showHidden=${showHidden}`);
-        if (res.ok) {
-          const data = await res.json();
-          setEntries(data);
-        }
+      if (api?.fs?.listDir) {
+        // Use IPC (Electron)
+        const options = { sortBy, sortDir, showHidden };
+        const data = await api.fs.listDir(currentPath, options);
+        setEntries(data || []);
       } else {
         // Browser dev mode: empty state
         setEntries([]);
@@ -51,8 +51,9 @@ export default function FileBrowser() {
   const handleSelect = (entry: FileEntry) => {
     if (entry.isDir) {
       setCurrentPath(entry.path);
+    } else {
+      onFileSelect?.(entry);
     }
-    // Files: trigger preview (could be handled by parent)
   };
 
   const handleNavigate = (path: string) => {

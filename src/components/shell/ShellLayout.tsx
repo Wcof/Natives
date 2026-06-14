@@ -12,6 +12,8 @@ import WorkshopPage from './WorkshopPage';
 import SettingsPage from './SettingsPage';
 import StorePage from '@/app/store/page';
 import FileBrowser from '@/components/files/FileBrowser';
+import FilePreview from '@/components/files/FilePreview';
+import { type FileEntry } from '@/types/file';
 import AiWorkbench from '@/components/ai/AiWorkbench';
 import ToolsPage from '@/components/tools/ToolsPage';
 import { applyTheme } from '@/lib/theme-engine';
@@ -51,6 +53,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   const terminalSessionIdRef = useRef<string | null>(null);
   const iframeContainerRef = useRef<HTMLDivElement>(null);
   const activeModuleRef = useRef<string | null>(null);
+
+  // File preview state
+  const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null);
 
   // Phase 3: Screenshot state
   const [annotatingFile, setAnnotatingFile] = useState<string | null>(null);
@@ -292,6 +297,12 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     }
   }, [toggleRightPanel]);
 
+  // File selection handler — opens preview in right panel
+  const handleFileSelect = useCallback((entry: FileEntry) => {
+    setSelectedFile(entry);
+    setRightPanelMode('file-preview');
+  }, [setRightPanelMode]);
+
   const classNames = [
     'shell',
     state.sidebarCollapsed ? 'sidebar-collapsed' : '',
@@ -311,7 +322,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       case 'store':
         return <StorePage />;
       case 'files':
-        return <FileBrowser />;
+        return <FileBrowser onFileSelect={handleFileSelect} />;
       case 'ai':
         return <AiWorkbench />;
       case 'tools':
@@ -349,6 +360,15 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       >
         {state.rightPanelMode === 'notifications' && (
           <NotificationPanel locale={locale} />
+        )}
+        {state.rightPanelMode === 'file-preview' && selectedFile && (
+          <FilePreview
+            entry={selectedFile}
+            onClose={() => {
+              setSelectedFile(null);
+              setRightPanelMode('closed');
+            }}
+          />
         )}
       </RightPanel>
       <TerminalPanel
