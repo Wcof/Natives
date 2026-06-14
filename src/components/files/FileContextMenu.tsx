@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { type FileEntry } from '@/types/file';
+import { t, type Locale } from '@/i18n';
 
 interface FileContextMenuProps {
   entry: FileEntry;
@@ -20,6 +21,11 @@ export default function FileContextMenu({
   onOpen, onRename, onTrash, onNewFile, onNewFolder,
 }: FileContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const [locale, setLocale] = useState<Locale>('zh');
+
+  useEffect(() => {
+    window.nativesAPI?.getLocale?.().then((l) => { if (l === 'en') setLocale('en'); }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -41,19 +47,19 @@ export default function FileContextMenu({
   const parentDir = entry.isDir ? entry.path : entry.path.substring(0, entry.path.lastIndexOf('/')) || '/';
 
   const items = [
-    { label: 'Open', action: () => onOpen?.(entry) },
-    entry.isDir ? null : { label: 'Open With...', action: () => onOpen?.(entry) },
+    { label: t(locale, 'fileBrowser.open'), action: () => onOpen?.(entry) },
+    entry.isDir ? null : { label: t(locale, 'fileBrowser.openWith'), action: () => onOpen?.(entry) },
     null, // divider
-    { label: 'Rename', action: () => onRename?.(entry) },
-    { label: 'Move to Trash', action: () => onTrash?.(entry), danger: true },
+    { label: t(locale, 'fileBrowser.rename'), action: () => onRename?.(entry) },
+    { label: t(locale, 'fileBrowser.moveToTrash'), action: () => onTrash?.(entry), danger: true },
     null, // divider
-    entry.isDir ? { label: 'New File', action: () => onNewFile?.(entry.path) } : null,
-    entry.isDir ? { label: 'New Folder', action: () => onNewFolder?.(entry.path) } : null,
-    entry.isDir ? null : { label: 'New File', action: () => onNewFile?.(parentDir) },
-    entry.isDir ? null : { label: 'New Folder', action: () => onNewFolder?.(parentDir) },
+    entry.isDir ? { label: t(locale, 'fileBrowser.newFile'), action: () => onNewFile?.(entry.path) } : null,
+    entry.isDir ? { label: t(locale, 'fileBrowser.newFolder'), action: () => onNewFolder?.(entry.path) } : null,
+    entry.isDir ? null : { label: t(locale, 'fileBrowser.newFile'), action: () => onNewFile?.(parentDir) },
+    entry.isDir ? null : { label: t(locale, 'fileBrowser.newFolder'), action: () => onNewFolder?.(parentDir) },
     null, // divider
-    { label: 'Copy Path', action: () => { navigator.clipboard.writeText(entry.path); } },
-    entry.isDir ? { label: 'Copy as Terminal cd', action: () => { navigator.clipboard.writeText(`cd "${entry.path}"`); } } : null,
+    { label: t(locale, 'fileBrowser.copyPath'), action: () => { navigator.clipboard.writeText(entry.path); } },
+    entry.isDir ? { label: t(locale, 'fileBrowser.copyAsCd'), action: () => { navigator.clipboard.writeText(`cd "${entry.path}"`); } } : null,
   ].filter(Boolean);
 
   return (

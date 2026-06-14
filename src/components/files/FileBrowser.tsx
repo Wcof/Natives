@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { type FileEntry } from '@/types/file';
+import { t, type Locale } from '@/i18n';
 import FileGrid from './FileGrid';
 import FileList from './FileList';
 import FileBreadcrumb from './FileBreadcrumb';
@@ -28,21 +29,26 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const [newItemName, setNewItemName] = useState('');
   const [toast, setToast] = useState<string | null>(null);
   const [favorites, setFavorites] = useState<string[]>([]);
+  const [locale, setLocale] = useState<Locale>('zh');
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
   }, []);
 
-  // Load favorites
+  // Load favorites and locale
   useEffect(() => {
-    async function loadFavorites() {
+    async function load() {
       try {
         const stored = await window.nativesAPI?.db?.get?.('settings:favorites');
         if (stored) setFavorites(JSON.parse(stored));
       } catch { /* ignore */ }
+      try {
+        const saved = await window.nativesAPI?.getLocale?.();
+        if (saved) setLocale(saved === 'en' ? 'en' : 'zh');
+      } catch { /* ignore */ }
     }
-    loadFavorites();
+    load();
   }, []);
 
   const isFavorite = favorites.includes(currentPath);
@@ -54,7 +60,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     try {
       await window.nativesAPI?.db?.set?.('settings:favorites', JSON.stringify(next));
       window.dispatchEvent(new CustomEvent('favorites-changed'));
-      showToast(isFavorite ? 'Removed from favorites' : 'Added to favorites');
+      showToast(isFavorite ? t(locale, 'fileBrowser.removedFromFavorites') : t(locale, 'fileBrowser.addedToFavorites'));
     } catch { /* ignore */ }
   }, [currentPath, favorites, isFavorite, showToast]);
 
@@ -139,13 +145,13 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     try {
       const result = await window.nativesAPI?.fs?.renameEntry?.(renameTarget.path, newPath);
       if (result?.ok) {
-        showToast('Renamed');
+        showToast(t(locale, 'fileBrowser.renamed'));
         await loadEntries();
       } else {
-        showToast(result?.error || 'Rename failed');
+        showToast(result?.error || t(locale, 'fileBrowser.renameFailed'));
       }
     } catch (err) {
-      showToast('Rename failed');
+      showToast(t(locale, 'fileBrowser.renameFailed'));
     }
     setRenameTarget(null);
     setRenameValue('');
@@ -156,13 +162,13 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     try {
       const result = await window.nativesAPI?.fs?.trashEntry?.(entry.path);
       if (result?.ok) {
-        showToast('Moved to trash');
+        showToast(t(locale, 'fileBrowser.trashed'));
         await loadEntries();
       } else {
-        showToast(result?.error || 'Trash failed');
+        showToast(result?.error || t(locale, 'fileBrowser.trashFailed'));
       }
     } catch (err) {
-      showToast('Trash failed');
+      showToast(t(locale, 'fileBrowser.trashFailed'));
     }
   }, [loadEntries, showToast]);
 
@@ -182,13 +188,13 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     try {
       const result = await window.nativesAPI?.fs?.createEntry?.(targetPath, newItemTarget.type);
       if (result?.ok) {
-        showToast(`${newItemTarget.type === 'file' ? 'File' : 'Folder'} created`);
+        showToast(t(locale, 'fileBrowser.created'));
         await loadEntries();
       } else {
-        showToast(result?.error || 'Create failed');
+        showToast(result?.error || t(locale, 'fileBrowser.createFailed'));
       }
     } catch (err) {
-      showToast('Create failed');
+      showToast(t(locale, 'fileBrowser.createFailed'));
     }
     setNewItemTarget(null);
     setNewItemName('');
