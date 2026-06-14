@@ -117,3 +117,46 @@ export async function listDir(dirPath: string, options?: ListDirOptions): Promis
 
   return result;
 }
+
+// ── Truncation Constants ──
+
+const MAX_FULL_READ = 2 * 1024 * 1024; // 2MB
+const MAX_TRUNCATED_READ = 256 * 1024;  // 256KB
+
+/**
+ * 读取文件内容
+ * @param filePath 文件路径
+ * @returns 文件内容 + 元数据
+ */
+export async function readFile(filePath: string): Promise<{
+  content: string;
+  truncated: boolean;
+  size: number;
+  encoding: string;
+}> {
+  const stat = await fs.promises.stat(filePath);
+
+  if (!stat.isFile()) {
+    throw Object.assign(new Error(`Not a file: ${filePath}`), { code: 'EISDIR' });
+  }
+
+  const fileSize = stat.size;
+  const encoding = 'utf-8';
+  const truncated = fileSize > MAX_FULL_READ;
+
+  let content: string;
+  if (truncated) {
+    const buffer = Buffer.alloc(Math.min(MAX_TRUNCATED_READ, fileSize));
+    const fd = await fs.promises.open(filePath, 'r');
+    try {
+      await fd.read(buffer, 0, buffer.length, 0);
+    } finally {
+      await fd.close();
+    }
+    content = buffer.toString(encoding).replace(/\0+$/, '');
+  } else {
+    content = await fs.promises.readFile(filePath, encoding);
+  }
+
+  return { content, truncated, size: fileSize, encoding };
+}

@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { listDir } from './file-manager';
+import { listDir, readFile } from './file-manager';
 
 const TEST_DIR = path.join(process.env.HOME || '~', '.natives-test', 'listdir-test');
 
@@ -132,5 +132,67 @@ describe('listDir', () => {
     await assert.rejects(
       () => listDir(path.join(TEST_DIR, 'a-file.txt')),
     );
+  });
+});
+
+const READ_DIR = path.join(process.env.HOME || '~', '.natives-test', 'readfile-test');
+
+describe('readFile', () => {
+  before(() => {
+    fs.mkdirSync(READ_DIR, { recursive: true });
+    fs.writeFileSync(path.join(READ_DIR, 'small.txt'), 'Hello, World!', 'utf-8');
+    fs.writeFileSync(path.join(READ_DIR, 'multiline.txt'), 'line1\nline2\nline3\n', 'utf-8');
+    fs.writeFileSync(path.join(READ_DIR, 'chinese.txt'), '你好，世界！', 'utf-8');
+
+    // Create a file larger than 2MB to test truncation
+    const largeSize = 3 * 1024 * 1024; // 3MB
+    const buffer = Buffer.alloc(largeSize, 'A');
+    fs.writeFileSync(path.join(READ_DIR, 'large.txt'), buffer);
+  });
+
+  after(() => {
+    if (fs.existsSync(READ_DIR)) {
+      fs.rmSync(READ_DIR, { recursive: true, force: true });
+    }
+  });
+
+  it('should read small text file', async () => {
+    const result = await readFile(path.join(READ_DIR, 'small.txt'));
+    assert.equal(result.content, 'Hello, World!');
+    assert.equal(result.truncated, false);
+    assert.equal(result.size, 13);
+    assert.equal(result.encoding, 'utf-8');
+  });
+
+  it('should read multiline text file', async () => {
+    const result = await readFile(path.join(READ_DIR, 'multiline.txt'));
+    assert.ok(result.content.includes('line2'));
+    assert.equal(result.truncated, false);
+  });
+
+  it('should read Chinese text file', async () => {
+    const result = await readFile(path.join(READ_DIR, 'chinese.txt'));
+    assert.ok(result.content.includes('你好'));
+    assert.equal(result.truncated, false);
+  });
+
+  it('should truncate files larger than 2MB', async () => {
+    const result = await readFile(path.join(READ_DIR, 'large.txt'));
+    assert.equal(result.truncated, true);
+    assert.ok(result.content.length <= 256 * 1024);
+    assert.equal(result.size, 3 * 1024 * 1024);
+  });
+
+  it('should throw ENOENT for non-existent file', async () => {
+    await assert.rejects(
+      () => readFile(path.join(READ_DIR, 'nonexistent.txt')),
+      { code: 'ENOENT' },
+    );
+  });
+
+  it('should include file size in result', async () => {
+    const result = await readFile(path.join(READ_DIR, 'small.txt'));
+    assert.equal(typeof result.size, 'number');
+    assert.ok(result.size > 0);
   });
 });
