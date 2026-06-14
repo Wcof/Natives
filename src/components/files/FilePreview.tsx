@@ -182,19 +182,95 @@ function PreviewContent({ entry, httpPort }: { entry: FileEntry; httpPort: numbe
 }
 
 function CodePreview({ entry, httpPort }: { entry: FileEntry; httpPort: number }) {
+  const [code, setCode] = useState<string | null>(null);
+  const [highlighted, setHighlighted] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        // Fetch file content
+        const resp = await fetch(`http://localhost:${httpPort}/api/fs/raw?path=${encodeURIComponent(entry.path)}`);
+        if (!resp.ok) throw new Error('Failed to fetch');
+        const text = await resp.text();
+        if (cancelled) return;
+        setCode(text);
+
+        // Detect language from extension
+        const ext = entry.name.split('.').pop()?.toLowerCase() || '';
+        const langMap: Record<string, string> = {
+          ts: 'typescript', tsx: 'tsx', js: 'javascript', jsx: 'jsx',
+          py: 'python', rb: 'ruby', rs: 'rust', go: 'go',
+          java: 'java', kt: 'kotlin', swift: 'swift',
+          css: 'css', scss: 'scss', less: 'less',
+          html: 'html', xml: 'xml', svg: 'svg',
+          json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'toml',
+          md: 'markdown', sh: 'bash', zsh: 'bash', fish: 'fish',
+          sql: 'sql', graphql: 'graphql',
+          c: 'c', cpp: 'cpp', h: 'c', hpp: 'cpp',
+          cs: 'csharp', php: 'php', lua: 'lua', vim: 'vim',
+          dockerfile: 'dockerfile', makefile: 'makefile',
+        };
+        const lang = langMap[ext] || 'text';
+
+        // Highlight with Shiki
+        try {
+          const { codeToHtml } = await import('shiki');
+          const html = await codeToHtml(text, {
+            lang,
+            theme: 'vitesse-dark',
+          });
+          if (!cancelled) setHighlighted(html);
+        } catch {
+          // Fallback: plain text in a pre block
+          if (!cancelled) setHighlighted(null);
+        }
+      } catch {
+        if (!cancelled) setCode('Failed to load file');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [entry.path, entry.name, httpPort]);
+
+  if (loading) {
+    return (
+      <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
+        Loading...
+      </div>
+    );
+  }
+
+  if (highlighted) {
+    return (
+      <div
+        style={{
+          fontSize: 12, lineHeight: 1.6,
+          fontFamily: 'var(--font-mono, monospace)',
+          overflow: 'auto', height: '100%',
+          background: 'var(--bg-2, #131410)',
+          borderRadius: 4,
+        }}
+        dangerouslySetInnerHTML={{ __html: highlighted }}
+      />
+    );
+  }
+
+  // Fallback: plain text
   return (
-    <iframe
-      src={`http://localhost:${httpPort}/api/fs/raw?path=${encodeURIComponent(entry.path)}`}
-      style={{
-        width: '100%', height: '100%', border: 'none',
-        background: 'var(--bg-2, #131410)',
-        color: 'var(--text, #f2f2ea)',
-        fontFamily: 'var(--font-ui, monospace)',
-        fontSize: 12,
-        whiteSpace: 'pre-wrap',
-      }}
-      sandbox="allow-same-origin"
-    />
+    <pre style={{
+      margin: 0, fontSize: 12, lineHeight: 1.6,
+      fontFamily: 'var(--font-mono, monospace)',
+      color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+      background: 'var(--bg-2, #131410)',
+      padding: 12, borderRadius: 4,
+    }}>
+      {code}
+    </pre>
   );
 }
 
