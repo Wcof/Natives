@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkSkillHealth, getDeactivatedPath, SKILL_SOURCE_DIRS, type SkillSource } from './skills-manager';
+import { checkSkillHealth, getDeactivatedPath, SKILL_SOURCE_DIRS } from './skills-manager';
 
 describe('SkillsManager', () => {
   it('should have 5 skill source directories', () => {
