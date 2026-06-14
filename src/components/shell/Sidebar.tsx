@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Settings, Layers, ChevronRight, Square, ShoppingBag, Bell } from 'lucide-react';
+import { useEffect, useState, useCallback } from 'react';
+import { Settings, Layers, ChevronRight, Square, ShoppingBag, Bell, Folder, Star, Home, Monitor, FileText, Download } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
 interface ModuleItem {
@@ -9,6 +9,13 @@ interface ModuleItem {
   name: string;
   icon?: string;
 }
+
+const QUICK_ACCESS_DIRS = [
+  { id: 'home', label: 'Home', path: '~', icon: <Home size={16} /> },
+  { id: 'desktop', label: 'Desktop', path: '~/Desktop', icon: <Monitor size={16} /> },
+  { id: 'documents', label: 'Documents', path: '~/Documents', icon: <FileText size={16} /> },
+  { id: 'downloads', label: 'Downloads', path: '~/Downloads', icon: <Download size={16} /> },
+];
 
 interface SidebarProps {
   isCollapsed: boolean;
@@ -33,6 +40,24 @@ export default function Sidebar({
   const [modules, setModules] = useState<ModuleItem[]>([]);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [locale, setLocale] = useState<Locale>('zh');
+  const [favorites, setFavorites] = useState<string[]>([]);
+
+  // Load favorites from DB
+  const loadFavorites = useCallback(async () => {
+    try {
+      const api = window.nativesAPI;
+      if (api?.db?.get) {
+        const stored = await api.db.get('settings:favorites');
+        if (stored) {
+          setFavorites(JSON.parse(stored));
+        }
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    loadFavorites();
+  }, [loadFavorites]);
 
   // Load modules on mount
   useEffect(() => {
@@ -184,6 +209,46 @@ export default function Sidebar({
           ))
         )}
       </div>
+
+      {/* Quick Access */}
+      <div className="sidebar-section-title">{t(locale, 'sidebar.quickAccess')}</div>
+      <div style={{ padding: '0 4px' }}>
+        {QUICK_ACCESS_DIRS.map((dir) => (
+          <button
+            key={dir.id}
+            className="sidebar-item"
+            onClick={() => onModuleSelect(`__files__:${dir.path}`)}
+            style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left' }}
+            title={dir.path}
+          >
+            {dir.icon}
+            <span style={{ fontSize: 12 }}>{dir.label}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Favorites */}
+      {favorites.length > 0 && (
+        <>
+          <div className="sidebar-section-title">{t(locale, 'sidebar.favorites')}</div>
+          <div style={{ padding: '0 4px' }}>
+            {favorites.map((fav) => (
+              <button
+                key={fav}
+                className="sidebar-item"
+                onClick={() => onModuleSelect(`__files__:${fav}`)}
+                style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left' }}
+                title={fav}
+              >
+                <Star size={14} style={{ color: 'var(--accent,#cdf24b)' }} />
+                <span style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {fav.split('/').pop() || fav}
+                </span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
 
       <div className="sidebar-footer">
         <button className="sidebar-item" onClick={onNotificationClick} style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', position: 'relative' }}>

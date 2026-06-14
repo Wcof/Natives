@@ -74,9 +74,10 @@ export default function TerminalPanel({
     const container = terminalRef.current;
     if (!container) return;
 
-    const [{ Terminal }, { FitAddon }] = await Promise.all([
+    const [{ Terminal }, { FitAddon }, { WebLinksAddon }] = await Promise.all([
       import('@xterm/xterm'),
       import('@xterm/addon-fit'),
+      import('@xterm/addon-web-links'),
     ]);
 
     const term = new Terminal({
@@ -94,6 +95,17 @@ export default function TerminalPanel({
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
+
+    // Clickable links (HTTP/HTTPS URLs and file paths)
+    const webLinksAddon = new WebLinksAddon((e, uri) => {
+      if (uri.startsWith('http://') || uri.startsWith('https://')) {
+        window.open(uri, '_blank');
+      } else if (uri.startsWith('/')) {
+        // File path — navigate file browser
+        window.dispatchEvent(new CustomEvent('navigate-files', { detail: uri }));
+      }
+    });
+    term.loadAddon(webLinksAddon);
 
     // Create PTY session via IPC
     const api = window.nativesAPI;

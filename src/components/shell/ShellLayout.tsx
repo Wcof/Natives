@@ -301,6 +301,12 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       setActiveView('store');
     } else if (moduleId === '__notifications__') {
       toggleRightPanel('notifications');
+    } else if (moduleId.startsWith('__files__:')) {
+      // Navigate file browser to a specific path
+      const path = moduleId.slice(10);
+      setActiveView('files');
+      // Dispatch event for FileBrowser to pick up
+      window.dispatchEvent(new CustomEvent('navigate-files', { detail: path }));
     } else {
       setActiveView(`module:${moduleId}`);
     }

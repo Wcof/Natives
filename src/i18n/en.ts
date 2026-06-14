@@ -17,6 +17,8 @@ export const en = {
     collapse: 'Collapse sidebar',
     expand: 'Expand sidebar',
     dragToResize: 'Drag to resize',
+    quickAccess: 'Quick Access',
+    favorites: 'Favorites',
   },
 
   // Dashboard

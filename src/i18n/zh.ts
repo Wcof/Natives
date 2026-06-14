@@ -14,6 +14,8 @@ export const zh = {
     collapse: '折叠侧边栏',
     expand: '展开侧边栏',
     dragToResize: '拖拽调整大小',
+    quickAccess: '快速访问',
+    favorites: '收藏',
   },
 
   dashboard: {

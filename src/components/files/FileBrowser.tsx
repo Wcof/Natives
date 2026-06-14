@@ -55,6 +55,18 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     loadEntries();
   }, [loadEntries]);
 
+  // Listen for external navigation events (from sidebar quick access)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const path = (e as CustomEvent).detail;
+      if (typeof path === 'string') {
+        setCurrentPath(path);
+      }
+    };
+    window.addEventListener('navigate-files', handler);
+    return () => window.removeEventListener('navigate-files', handler);
+  }, []);
+
   const handleSelect = (entry: FileEntry) => {
     if (entry.isDir) {
       setCurrentPath(entry.path);
