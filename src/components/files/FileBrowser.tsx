@@ -53,6 +53,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     setFavorites(next);
     try {
       await window.nativesAPI?.db?.set?.('settings:favorites', JSON.stringify(next));
+      window.dispatchEvent(new CustomEvent('favorites-changed'));
       showToast(isFavorite ? 'Removed from favorites' : 'Added to favorites');
     } catch { /* ignore */ }
   }, [currentPath, favorites, isFavorite, showToast]);

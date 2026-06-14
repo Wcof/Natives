@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { t, type Locale } from '@/i18n';
+import { t } from '@/i18n';
 import Sidebar from './Sidebar';
 import ContentArea from './ContentArea';
 import RightPanel from './RightPanel';
@@ -399,6 +399,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         onModeChange={setRightPanelMode}
         width={state.rightPanelWidth}
         onResize={(w) => setState((prev) => ({ ...prev, rightPanelWidth: w }))}
+        title={state.rightPanelMode === 'file-preview' && selectedFile ? selectedFile.name : undefined}
       >
         {state.rightPanelMode === 'notifications' && (
           <NotificationPanel locale={locale} />

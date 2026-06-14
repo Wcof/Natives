@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Settings, Layers, ChevronRight, Square, ShoppingBag, Bell, Folder, Star, Home, Monitor, FileText, Download } from 'lucide-react';
+import { Settings, Layers, ChevronRight, Square, ShoppingBag, Bell, Star, Home, Monitor, FileText, Download } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
 interface ModuleItem {
@@ -57,6 +57,10 @@ export default function Sidebar({
 
   useEffect(() => {
     loadFavorites();
+    // Listen for favorites changes from FileBrowser
+    const handler = () => loadFavorites();
+    window.addEventListener('favorites-changed', handler);
+    return () => window.removeEventListener('favorites-changed', handler);
   }, [loadFavorites]);
 
   // Load modules on mount

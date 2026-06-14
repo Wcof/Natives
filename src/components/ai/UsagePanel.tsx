@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import { type ClaudeUsage, type CodexUsage, type RtkUsage } from '@/types/agent';
 
 export default function UsagePanel() {
   const [activeTab, setActiveTab] = useState<'claude' | 'codex' | 'rtk'>('claude');
