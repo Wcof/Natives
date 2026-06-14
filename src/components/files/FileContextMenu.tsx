@@ -8,9 +8,17 @@ interface FileContextMenuProps {
   x: number;
   y: number;
   onClose: () => void;
+  onOpen?: (entry: FileEntry) => void;
+  onRename?: (entry: FileEntry) => void;
+  onTrash?: (entry: FileEntry) => void;
+  onNewFile?: (parentDir: string) => void;
+  onNewFolder?: (parentDir: string) => void;
 }
 
-export default function FileContextMenu({ entry, x, y, onClose }: FileContextMenuProps) {
+export default function FileContextMenu({
+  entry, x, y, onClose,
+  onOpen, onRename, onTrash, onNewFile, onNewFolder,
+}: FileContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -30,14 +38,22 @@ export default function FileContextMenu({ entry, x, y, onClose }: FileContextMen
     };
   }, [onClose]);
 
+  const parentDir = entry.isDir ? entry.path : entry.path.substring(0, entry.path.lastIndexOf('/')) || '/';
+
   const items = [
-    { label: 'Open', action: () => { /* handled by parent */ } },
-    entry.isDir ? null : { label: 'Open With...', action: () => {} },
-    { label: 'Rename', action: () => {} },
-    { label: 'Move to Trash', action: () => {}, danger: true },
+    { label: 'Open', action: () => onOpen?.(entry) },
+    entry.isDir ? null : { label: 'Open With...', action: () => onOpen?.(entry) },
+    null, // divider
+    { label: 'Rename', action: () => onRename?.(entry) },
+    { label: 'Move to Trash', action: () => onTrash?.(entry), danger: true },
+    null, // divider
+    entry.isDir ? { label: 'New File', action: () => onNewFile?.(entry.path) } : null,
+    entry.isDir ? { label: 'New Folder', action: () => onNewFolder?.(entry.path) } : null,
+    entry.isDir ? null : { label: 'New File', action: () => onNewFile?.(parentDir) },
+    entry.isDir ? null : { label: 'New Folder', action: () => onNewFolder?.(parentDir) },
     null, // divider
     { label: 'Copy Path', action: () => { navigator.clipboard.writeText(entry.path); } },
-    entry.isDir ? { label: 'Copy as Terminal cd', action: () => { navigator.clipboard.writeText(`cd ${entry.path}`); } } : null,
+    entry.isDir ? { label: 'Copy as Terminal cd', action: () => { navigator.clipboard.writeText(`cd "${entry.path}"`); } } : null,
   ].filter(Boolean);
 
   return (
@@ -49,15 +65,15 @@ export default function FileContextMenu({ entry, x, y, onClose }: FileContextMen
         top: y,
         left: x,
         zIndex: 1000,
-        minWidth: 160,
+        minWidth: 168,
       }}
     >
-      {items.map((item: any, idx) =>
+      {items.map((item: { label: string; action: () => void; danger?: boolean } | null, idx) =>
         item === null ? (
           <div key={`div-${idx}`} className="context-menu-divider" />
         ) : (
           <div
-            key={item.label}
+            key={`${item.label}-${idx}`}
             className={`context-menu-item ${item.danger ? 'danger' : ''}`}
             onClick={() => { item.action(); onClose(); }}
           >

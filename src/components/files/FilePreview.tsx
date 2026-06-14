@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { type FileEntry } from '@/types/file';
 
 interface FilePreviewProps {
@@ -12,6 +12,52 @@ type PreviewTab = 'preview' | 'code' | 'git' | 'info';
 
 export default function FilePreview({ entry, onClose }: FilePreviewProps) {
   const [activeTab, setActiveTab] = useState<PreviewTab>('preview');
+  const [gitDiff, setGitDiff] = useState<string | null>(null);
+  const [gitLoading, setGitLoading] = useState(false);
+  const [gitStatus, setGitStatus] = useState<string | null>(null);
+
+  // Load git diff when git tab is selected
+  useEffect(() => {
+    if (activeTab !== 'git') return;
+    let cancelled = false;
+
+    async function loadGit() {
+      setGitLoading(true);
+      try {
+        const api = window.nativesAPI;
+        if (api?.git?.diff) {
+          const diff = await api.git.diff(entry.path);
+          if (!cancelled) {
+            setGitDiff(diff || 'No changes detected');
+          }
+        }
+        if (api?.git?.status) {
+          const dirPath = entry.isDir ? entry.path : entry.path.substring(0, entry.path.lastIndexOf('/')) || '/';
+          const status = await api.git.status(dirPath);
+          if (!cancelled && status) {
+            const fileStatus = (status.files || []).find(
+              (f: { path: string; status: string }) => f.path === entry.path || f.path === entry.name
+            );
+            if (fileStatus) {
+              const statusMap: Record<string, string> = {
+                'M': 'Modified', 'A': 'Added', 'D': 'Deleted',
+                'R': 'Renamed', '??': 'Untracked', 'UU': 'Conflict',
+              };
+              setGitStatus(statusMap[fileStatus.status] || fileStatus.status);
+            } else {
+              setGitStatus('Unchanged');
+            }
+          }
+        }
+      } catch {
+        if (!cancelled) setGitDiff('Not in a git repository');
+      } finally {
+        if (!cancelled) setGitLoading(false);
+      }
+    }
+    loadGit();
+    return () => { cancelled = true; };
+  }, [activeTab, entry.path, entry.name, entry.isDir]);
 
   const tabs: { id: PreviewTab; label: string }[] = [
     { id: 'preview', label: 'Preview' },
@@ -79,9 +125,7 @@ export default function FilePreview({ entry, onClose }: FilePreviewProps) {
           <CodePreview entry={entry} httpPort={httpPort} />
         )}
         {activeTab === 'git' && (
-          <div style={{ color: 'var(--text-dim, #9b9d8c)', fontSize: 12 }}>
-            Git status and diff for {entry.name} will appear here.
-          </div>
+          <GitDiffView diff={gitDiff} loading={gitLoading} status={gitStatus} fileName={entry.name} />
         )}
         {activeTab === 'info' && (
           <FileInfo entry={entry} />
@@ -184,5 +228,65 @@ function FileInfo({ entry }: { entry: FileEntry }) {
         ))}
       </tbody>
     </table>
+  );
+}
+
+function GitDiffView({ diff, loading, status, fileName }: {
+  diff: string | null;
+  loading: boolean;
+  status: string | null;
+  fileName: string;
+}) {
+  if (loading) {
+    return (
+      <div style={{ color: 'var(--text-faint)', fontSize: 12, padding: 20, textAlign: 'center' }}>
+        Loading git info...
+      </div>
+    );
+  }
+
+  if (!diff || diff === 'Not in a git repository') {
+    return (
+      <div style={{ color: 'var(--text-faint)', fontSize: 12, padding: 20, textAlign: 'center' }}>
+        Not in a git repository
+      </div>
+    );
+  }
+
+  const lines = diff.split('\n');
+
+  return (
+    <div>
+      {status && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10,
+          fontSize: 12, color: 'var(--text-dim)',
+        }}>
+          <span style={{
+            width: 8, height: 8, borderRadius: '50%',
+            background: status === 'Unchanged' ? 'var(--accent,#cdf24b)' : '#e6b800',
+          }} />
+          <span>{status}</span>
+        </div>
+      )}
+      <pre style={{
+        margin: 0, fontSize: 11, lineHeight: 1.5,
+        fontFamily: 'var(--font-mono, monospace)',
+        color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+      }}>
+        {lines.map((line, i) => {
+          let color = 'var(--text)';
+          if (line.startsWith('+') && !line.startsWith('+++')) color = '#4ec9b0';
+          else if (line.startsWith('-') && !line.startsWith('---')) color = '#d9534f';
+          else if (line.startsWith('@@')) color = '#5b9cf5';
+          else if (line.startsWith('diff') || line.startsWith('index')) color = 'var(--text-faint)';
+          return (
+            <div key={i} style={{ color, background: line.startsWith('+') && !line.startsWith('+++') ? '#4ec9b010' : line.startsWith('-') && !line.startsWith('---') ? '#d9534f10' : undefined }}>
+              {line || ' '}
+            </div>
+          );
+        })}
+      </pre>
+    </div>
   );
 }

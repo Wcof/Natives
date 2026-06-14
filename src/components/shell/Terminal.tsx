@@ -31,6 +31,7 @@ export default function TerminalPanel({
   onSessionCreated,
 }: TerminalPanelProps) {
   const [isDragging, setIsDragging] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
   const [sessions, setSessions] = useState<TerminalSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [locale, setLocale] = useState<Locale>('zh');
@@ -247,12 +248,51 @@ export default function TerminalPanel({
     };
   }, []);
 
+  // Drag-drop file support
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+
+    if (!activeSessionId) return;
+    const session = sessionMapRef.current.get(activeSessionId);
+    if (!session) return;
+
+    // Get file paths from the drop
+    const files = Array.from(e.dataTransfer.files);
+    const paths = files.map((f) => (f as unknown as { path?: string }).path || f.name).filter(Boolean);
+
+    if (paths.length > 0) {
+      // Insert quoted paths into the terminal
+      const pathStr = paths.map((p) => `"${p}"`).join(' ');
+      const api = window.nativesAPI;
+      if (api?.terminal?.write) {
+        api.terminal.write(activeSessionId, pathStr);
+      }
+    }
+  }, [activeSessionId]);
+
   return (
     <div
       className={`terminal-panel ${isCollapsed ? 'collapsed' : ''} ${isMaximized ? 'terminal-maximized' : ''}`}
       style={{ height: isMaximized ? '100%' : isCollapsed ? 0 : height }}
       role="region"
       aria-label="Terminal"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
       {/* Drag handle */}
       <div
@@ -319,12 +359,28 @@ export default function TerminalPanel({
         </div>
       </div>
 
-      <div
-        ref={terminalRef}
-        className="terminal-body"
-        id="terminal-container"
-        style={{ width: '100%', height: '100%', overflow: 'hidden', position: 'relative' }}
-      />
+      <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+        <div
+          ref={terminalRef}
+          className="terminal-body"
+          id="terminal-container"
+          style={{ width: '100%', height: '100%', overflow: 'hidden' }}
+        />
+        {/* Drop overlay */}
+        {isDragOver && (
+          <div style={{
+            position: 'absolute', inset: 0,
+            background: 'var(--accent-soft,#cdf24b1f)',
+            border: '2px dashed var(--accent,#cdf24b)',
+            borderRadius: 4,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: 'var(--accent,#cdf24b)', fontSize: 13, fontWeight: 600,
+            zIndex: 10, pointerEvents: 'none',
+          }}>
+            Drop files to insert path
+          </div>
+        )}
+      </div>
     </div>
   );
 }

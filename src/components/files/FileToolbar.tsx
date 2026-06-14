@@ -11,12 +11,16 @@ interface FileToolbarProps {
   onSortDirChange: (dir: 'asc' | 'desc') => void;
   onShowHiddenChange: (show: boolean) => void;
   onSearchChange: (query: string) => void;
+  onRefresh?: () => void;
+  onNewFile?: () => void;
+  onNewFolder?: () => void;
 }
 
 export default function FileToolbar({
   viewMode, sortBy, sortDir, showHidden, searchQuery,
   onViewModeChange, onSortChange, onSortDirChange,
   onShowHiddenChange, onSearchChange,
+  onRefresh, onNewFile, onNewFolder,
 }: FileToolbarProps) {
   return (
     <div style={{
@@ -85,6 +89,23 @@ export default function FileToolbar({
 
       {/* Spacer */}
       <div style={{ flex: 1 }} />
+
+      {/* Actions */}
+      {onNewFile && (
+        <button className="btn btn-ghost" onClick={onNewFile} style={{ fontSize: 11, padding: '3px 8px' }} title="New File">
+          + File
+        </button>
+      )}
+      {onNewFolder && (
+        <button className="btn btn-ghost" onClick={onNewFolder} style={{ fontSize: 11, padding: '3px 8px' }} title="New Folder">
+          + Folder
+        </button>
+      )}
+      {onRefresh && (
+        <button className="btn btn-ghost" onClick={onRefresh} style={{ fontSize: 11, padding: '3px 8px' }} title="Refresh">
+          ↻
+        </button>
+      )}
 
       {/* Search */}
       <input

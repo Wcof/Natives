@@ -527,7 +527,7 @@ html, body {
   to { opacity: 1; transform: scale(1); }
 }
 
-@keyframes edIn {
+@keyframes fadeIn {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
@@ -547,12 +547,18 @@ html, body {
   to { box-shadow: 0 0 20px 10px transparent; }
 }
 
+@keyframes termAwait {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent, #cdf24b); opacity: 1; }
+  50% { box-shadow: 0 0 12px 4px var(--accent-soft, #cdf24b33); opacity: 0.8; }
+}
+
 .anim-tipIn { animation: tipIn 0.12s ease; }
 .anim-dropIn { animation: dropIn 0.16s cubic-bezier(0.2,0.7,0.3,1); }
-.anim-edIn { animation: edIn 0.18s ease; }
+.anim-fadeIn { animation: fadeIn 0.18s ease; }
 .anim-shotIn { animation: shotIn 0.22s ease; }
 .anim-livePulse { animation: livePulse 1.1s ease-in-out infinite; }
 .anim-termCatch { animation: termCatch 0.5s ease; }
+.anim-termAwait { animation: termAwait 1.8s ease-in-out infinite; }
 
 /* ═══════════════════════════════════════════
    Accessibility
