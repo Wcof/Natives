@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { listDir, readFile, streamFile, writeFileAtomic } from './file-manager';
+import { listDir, readFile, streamFile, writeFileAtomic, createEntry, renameEntry } from './file-manager';
 
 const TEST_DIR = path.join(process.env.HOME || '~', '.natives-test', 'listdir-test');
 
@@ -328,5 +328,124 @@ describe('writeFileAtomic', () => {
     assert.equal(result.conflict, false);
     const content = fs.readFileSync(filePath, 'utf-8');
     assert.equal(content, 'new content');
+  });
+});
+
+const CREATE_DIR = path.join(process.env.HOME || '~', '.natives-test', 'create-test');
+
+describe('createEntry', () => {
+  before(() => {
+    fs.mkdirSync(CREATE_DIR, { recursive: true });
+  });
+
+  after(() => {
+    if (fs.existsSync(CREATE_DIR)) {
+      fs.rmSync(CREATE_DIR, { recursive: true, force: true });
+    }
+  });
+
+  it('should create a file', async () => {
+    const filePath = path.join(CREATE_DIR, 'new-file.txt');
+    await createEntry(filePath, 'file');
+    assert.ok(fs.existsSync(filePath));
+    assert.ok(fs.statSync(filePath).isFile());
+  });
+
+  it('should create a directory', async () => {
+    const dirPath = path.join(CREATE_DIR, 'new-dir');
+    await createEntry(dirPath, 'dir');
+    assert.ok(fs.existsSync(dirPath));
+    assert.ok(fs.statSync(dirPath).isDirectory());
+  });
+
+  it('should reject null byte in path', async () => {
+    await assert.rejects(
+      () => createEntry(path.join(CREATE_DIR, 'bad\0file.txt'), 'file'),
+      { code: 'EINVAL' },
+    );
+  });
+
+  it('should reject creating file in non-existent directory', async () => {
+    await assert.rejects(
+      () => createEntry(path.join(CREATE_DIR, 'missing', 'file.txt'), 'file'),
+    );
+  });
+
+  it('should reject creating directory that already exists', async () => {
+    const dirPath = path.join(CREATE_DIR, 'exists-dir');
+    await createEntry(dirPath, 'dir');
+    await assert.rejects(
+      () => createEntry(dirPath, 'dir'),
+    );
+  });
+});
+
+const RENAME_DIR = path.join(process.env.HOME || '~', '.natives-test', 'rename-test');
+
+describe('renameEntry', () => {
+  before(() => {
+    fs.mkdirSync(RENAME_DIR, { recursive: true });
+    fs.writeFileSync(path.join(RENAME_DIR, 'source.txt'), 'content', 'utf-8');
+    fs.writeFileSync(path.join(RENAME_DIR, 'safe.txt'), 'safe', 'utf-8');
+    fs.mkdirSync(path.join(RENAME_DIR, 'source-dir'));
+  });
+
+  after(() => {
+    if (fs.existsSync(RENAME_DIR)) {
+      fs.rmSync(RENAME_DIR, { recursive: true, force: true });
+    }
+  });
+
+  it('should rename a file', async () => {
+    const oldPath = path.join(RENAME_DIR, 'source.txt');
+    const newPath = path.join(RENAME_DIR, 'dest.txt');
+    await renameEntry(oldPath, newPath);
+    assert.equal(fs.existsSync(oldPath), false);
+    assert.ok(fs.existsSync(newPath));
+  });
+
+  it('should rename a directory', async () => {
+    const oldDir = path.join(RENAME_DIR, 'source-dir');
+    const newDir = path.join(RENAME_DIR, 'dest-dir');
+    await renameEntry(oldDir, newDir);
+    assert.equal(fs.existsSync(oldDir), false);
+    assert.ok(fs.existsSync(newDir));
+  });
+
+  it('should auto-increment when target exists', async () => {
+    // Recreate source file
+    fs.writeFileSync(path.join(RENAME_DIR, 'dup-source.txt'), 'original', 'utf-8');
+    fs.writeFileSync(path.join(RENAME_DIR, 'dup-target.txt'), 'existing', 'utf-8');
+
+    await renameEntry(
+      path.join(RENAME_DIR, 'dup-source.txt'),
+      path.join(RENAME_DIR, 'dup-target.txt'),
+    );
+
+    // Source should be gone (renamed)
+    assert.equal(fs.existsSync(path.join(RENAME_DIR, 'dup-source.txt')), false);
+    // Original target still exists (not overwritten)
+    assert.ok(fs.existsSync(path.join(RENAME_DIR, 'dup-target.txt')));
+    // Renamed file should have been auto-incremented
+    assert.ok(fs.existsSync(path.join(RENAME_DIR, 'dup-target (1).txt')));
+  });
+
+  it('should reject rename of non-existent file', async () => {
+    await assert.rejects(
+      () => renameEntry(
+        path.join(RENAME_DIR, 'nonexistent.txt'),
+        path.join(RENAME_DIR, 'any.txt'),
+      ),
+    );
+  });
+
+  it('should reject null byte in new path', async () => {
+    await assert.rejects(
+      () => renameEntry(
+        path.join(RENAME_DIR, 'safe.txt'),
+        path.join(RENAME_DIR, 'bad\0file.txt'),
+      ),
+      { code: 'EINVAL' },
+    );
   });
 });

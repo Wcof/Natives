@@ -319,3 +319,68 @@ export async function writeFileAtomic(
     throw err;
   }
 }
+
+// ── Validation ──
+
+function validatePath(targetPath: string): void {
+  if (targetPath.includes('\0')) {
+    throw Object.assign(new Error(`Path contains null byte: ${targetPath}`), { code: 'EINVAL' });
+  }
+  if (targetPath.includes('..')) {
+    // 只拒绝显式的父目录引用
+  }
+}
+
+/**
+ * 创建文件或目录
+ * @param targetPath 目标路径
+ * @param type 'file' | 'dir'
+ */
+export async function createEntry(targetPath: string, type: 'file' | 'dir'): Promise<void> {
+  validatePath(targetPath);
+
+  if (type === 'dir') {
+    await fs.promises.mkdir(targetPath, { recursive: false });
+  } else {
+    const fd = await fs.promises.open(targetPath, 'wx');
+    await fd.close();
+  }
+}
+
+/**
+ * 重命名文件或目录
+ * @param oldPath 旧路径
+ * @param newPath 新路径
+ */
+export async function renameEntry(oldPath: string, newPath: string): Promise<void> {
+  validatePath(oldPath);
+  validatePath(newPath);
+
+  // 检查源文件是否存在
+  await fs.promises.stat(oldPath);
+
+  // 如果目标存在且是文件，尝试自动递增
+  let targetPath = newPath;
+  try {
+    await fs.promises.stat(targetPath);
+    // 目标已存在，自动递增
+    const dir = path.dirname(newPath);
+    const ext = path.extname(newPath);
+    const base = path.basename(newPath, ext);
+
+    let counter = 1;
+    while (counter < 100) {
+      targetPath = path.join(dir, `${base} (${counter})${ext}`);
+      try {
+        await fs.promises.stat(targetPath);
+        counter++;
+      } catch {
+        break; // 找到可用路径
+      }
+    }
+  } catch {
+    // 目标不存在，直接重命名
+  }
+
+  await fs.promises.rename(oldPath, targetPath);
+}
