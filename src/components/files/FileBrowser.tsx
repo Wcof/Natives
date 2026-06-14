@@ -27,11 +27,35 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const [newItemTarget, setNewItemTarget] = useState<{ parentDir: string; type: 'file' | 'folder' } | null>(null);
   const [newItemName, setNewItemName] = useState('');
   const [toast, setToast] = useState<string | null>(null);
+  const [favorites, setFavorites] = useState<string[]>([]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
   }, []);
+
+  // Load favorites
+  useEffect(() => {
+    async function loadFavorites() {
+      try {
+        const stored = await window.nativesAPI?.db?.get?.('settings:favorites');
+        if (stored) setFavorites(JSON.parse(stored));
+      } catch { /* ignore */ }
+    }
+    loadFavorites();
+  }, []);
+
+  const isFavorite = favorites.includes(currentPath);
+  const toggleFavorite = useCallback(async () => {
+    const next = isFavorite
+      ? favorites.filter((f) => f !== currentPath)
+      : [...favorites, currentPath];
+    setFavorites(next);
+    try {
+      await window.nativesAPI?.db?.set?.('settings:favorites', JSON.stringify(next));
+      showToast(isFavorite ? 'Removed from favorites' : 'Added to favorites');
+    } catch { /* ignore */ }
+  }, [currentPath, favorites, isFavorite, showToast]);
 
   const loadEntries = useCallback(async () => {
     setLoading(true);
@@ -179,7 +203,12 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       background: 'var(--bg, #0b0c0a)',
     }}>
       {/* Navigation */}
-      <FileBreadcrumb segments={segments.length > 0 ? segments : ['/']} onNavigate={handleNavigate} />
+      <FileBreadcrumb
+        segments={segments.length > 0 ? segments : ['/']}
+        onNavigate={handleNavigate}
+        isFavorite={isFavorite}
+        onToggleFavorite={toggleFavorite}
+      />
       <FileToolbar
         viewMode={viewMode}
         sortBy={sortBy}

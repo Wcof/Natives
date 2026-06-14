@@ -1,11 +1,15 @@
 'use client';
 
+import { Star } from 'lucide-react';
+
 interface FileBreadcrumbProps {
   segments: string[];
   onNavigate: (path: string) => void;
+  isFavorite?: boolean;
+  onToggleFavorite?: () => void;
 }
 
-export default function FileBreadcrumb({ segments, onNavigate }: FileBreadcrumbProps) {
+export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onToggleFavorite }: FileBreadcrumbProps) {
   if (segments.length === 0) return null;
 
   return (
@@ -61,6 +65,22 @@ export default function FileBreadcrumb({ segments, onNavigate }: FileBreadcrumbP
           </span>
         );
       })}
+
+      {/* Favorite toggle */}
+      {onToggleFavorite && (
+        <button
+          onClick={onToggleFavorite}
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            padding: '2px 4px', marginLeft: 'auto', display: 'flex',
+            color: isFavorite ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
+          }}
+          title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+          aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+        >
+          <Star size={14} fill={isFavorite ? 'currentColor' : 'none'} />
+        </button>
+      )}
     </nav>
   );
 }
