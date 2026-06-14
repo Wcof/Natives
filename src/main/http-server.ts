@@ -21,6 +21,44 @@ export function setBridgeHandler(handler: (namespace: string, method: string, mo
   bridgeHandler = handler;
 }
 
+// ── Host Validation ──
+
+function extractHostname(host: string): string {
+  // 处理 IPv6: [::1]:8080 → ::1
+  if (host.startsWith('[')) {
+    const end = host.indexOf(']');
+    return end !== -1 ? host.slice(1, end) : host;
+  }
+  // 处理 IPv4/域名: localhost:8080 → localhost
+  return host.split(':')[0]!;
+}
+
+export function validateHost(host: string | undefined): boolean {
+  if (!host) return false;
+  const hostname = extractHostname(host);
+  const allowed = ['localhost', '127.0.0.1', '::1'];
+  return allowed.includes(hostname);
+}
+
+// ── Origin Validation ──
+
+export function validateOrigin(method: string | undefined, origin: string | undefined): boolean {
+  // GET 请求不需要验证
+  if (method === 'GET') return true;
+
+  // 没有 origin 头的是非浏览器请求（如 curl）
+  if (!origin) return true;
+
+  // 只允许来自 localhost 的请求
+  try {
+    const url = new URL(origin);
+    // URL.hostname 对 IPv6 返回带括号的格式：如 "[::1]"
+    return ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 function getMimeType(ext: string): string {
   const mime: Record<string, string> = {
     '.html': 'text/html',
@@ -58,11 +96,20 @@ let sdkScript: string | null = null;
 
 function getSdkScript(): string {
   if (sdkScript) return sdkScript;
-  try {
-    sdkScript = fs.readFileSync(SDK_PATH, 'utf-8');
-  } catch {
-    sdkScript = 'console.error("[Natives SDK] Failed to load bridge-sdk.js");';
+  const candidates = [
+    SDK_PATH,
+    path.join(__dirname, 'lib', 'bridge-sdk.js'),
+    path.join(__dirname, '..', '..', 'src', 'lib', 'bridge-sdk.js'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      sdkScript = fs.readFileSync(candidate, 'utf-8');
+      return sdkScript;
+    } catch {
+      // try next candidate
+    }
   }
+  sdkScript = 'console.error("[Natives SDK] Failed to load bridge-sdk.js");';
   return sdkScript;
 }
 
@@ -76,8 +123,22 @@ function readBody(req: http.IncomingMessage): Promise<string> {
 }
 
 async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-  // ── CSP Headers ──
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://localhost:*");
+  // ── Host Validation ──
+  if (!validateHost(req.headers.host)) {
+    res.writeHead(403);
+    res.end('Forbidden');
+    return;
+  }
+
+  // ── Origin Validation (POST only) ──
+  if (!validateOrigin(req.method, req.headers.origin)) {
+    res.writeHead(403);
+    res.end('Forbidden');
+    return;
+  }
+
+  // ── CSP Headers (enhanced) ──
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://localhost:* https:; frame-src 'self' https:; frame-ancestors 'none'; form-action 'none'");
 
   const url = new URL(req.url || '/', `http://localhost:${activePort}`);
   const pathname = decodeURIComponent(url.pathname);

@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { startServer, stopServer, getPort } from './http-server';
+import { startServer, stopServer, getPort, validateHost, validateOrigin } from './http-server';
 
 const TEST_MODULES_DIR = path.join(process.env.HOME || '~', '.natives', 'modules', 'test-module');
 
@@ -24,6 +24,53 @@ describe('HTTPServer', () => {
       fs.rmSync(path.join(process.env.HOME || '~', '.natives'), { recursive: true });
     }
   });
+
+  // ── Host Validation ──
+
+  it('should validate localhost host', () => {
+    assert.ok(validateHost('localhost'));
+    assert.ok(validateHost('localhost:3000'));
+    assert.ok(validateHost('127.0.0.1'));
+    assert.ok(validateHost('127.0.0.1:8080'));
+    assert.ok(validateHost('[::1]'));
+    assert.ok(validateHost('[::1]:3000'));
+  });
+
+  it('should reject non-localhost host', () => {
+    assert.equal(validateHost('example.com'), false);
+    assert.equal(validateHost('evil.com:80'), false);
+    assert.equal(validateHost('192.168.1.1'), false);
+    assert.equal(validateHost(''), false);
+  });
+
+  // ── Origin Validation ──
+
+  it('should skip origin validation for GET requests', () => {
+    assert.ok(validateOrigin('GET', undefined));
+    assert.ok(validateOrigin('GET', 'http://evil.com'));
+  });
+
+  it('should allow POST requests with no origin (non-browser)', () => {
+    assert.ok(validateOrigin('POST', undefined));
+  });
+
+  it('should allow POST requests from localhost origins', () => {
+    assert.ok(validateOrigin('POST', 'http://localhost:3000'));
+    assert.ok(validateOrigin('POST', 'http://127.0.0.1'));
+    assert.ok(validateOrigin('POST', 'http://[::1]:8080'));
+  });
+
+  it('should reject POST requests from non-localhost origins', () => {
+    assert.equal(validateOrigin('POST', 'http://evil.com'), false);
+    assert.equal(validateOrigin('POST', 'https://attacker.org'), false);
+    assert.equal(validateOrigin('POST', 'http://192.168.1.1'), false);
+  });
+
+  it('should reject POST requests with invalid origin URLs', () => {
+    assert.equal(validateOrigin('POST', 'not-a-url'), false);
+  });
+
+  // ── Security Integration Tests ──
 
   it('should serve SDK script at /natives-sdk.js', async () => {
     const res = await fetch(`http://localhost:${port}/natives-sdk.js`);
@@ -51,11 +98,14 @@ describe('HTTPServer', () => {
     assert.equal(res.status, 403);
   });
 
-  it('should include CSP headers', async () => {
+  it('should include CSP headers with frame-ancestors', async () => {
     const res = await fetch(`http://localhost:${port}/natives-sdk.js`);
     const csp = res.headers.get('content-security-policy');
     assert.ok(csp);
     assert.ok(csp!.includes("default-src 'self'"));
+    // Enhanced CSP: add frame-ancestors and form-action restrictions
+    assert.ok(csp!.includes("frame-ancestors 'none'"));
+    assert.ok(csp!.includes("form-action 'none'"));
   });
 
   it('should handle POST /api/bridge requests', async () => {
@@ -75,5 +125,28 @@ describe('HTTPServer', () => {
     const p = getPort();
     assert.ok(p > 0);
     assert.ok(p < 65536);
+  });
+
+  // ── Need to use direct HTTP request to override Host header ──
+
+  it('should reject requests with non-localhost Host header', async () => {
+    const res = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const http = require('http');
+      const req = http.request({
+        hostname: 'localhost',
+        port,
+        path: '/natives-sdk.js',
+        method: 'GET',
+        headers: { Host: 'evil.com' },
+      }, (resp: any) => {
+        let body = '';
+        resp.on('data', (chunk: string) => { body += chunk; });
+        resp.on('end', () => resolve({ status: resp.statusCode!, body }));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    assert.equal(res.status, 403);
+    assert.ok(res.body.includes('Forbidden'));
   });
 });
