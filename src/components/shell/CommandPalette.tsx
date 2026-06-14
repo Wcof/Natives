@@ -39,6 +39,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
   const [allCommands, setAllCommands] = useState<CommandItem[]>(STATIC_COMMANDS);
   const [results, setResults] = useState<CommandItem[]>(STATIC_COMMANDS);
   const [locale, setLocale] = useState<Locale>('zh');
+  const [searchScope, setSearchScope] = useState<'global' | 'local'>('global');
   const inputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -109,7 +110,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
     if (query.startsWith('content:') && query.length > 8) {
       const searchTerm = query.slice(8).trim();
       if (searchTerm.length >= 2) {
-        const root = process.env.HOME || '/';
+        const root = searchScope === 'local' ? (process.env.HOME || '/') : '/';
         window.nativesAPI?.search?.grep?.(searchTerm, root, { maxResults: 8 }).then((results) => {
           if (Array.isArray(results) && results.length > 0) {
             const contentCommands: CommandItem[] = results.map((r: { path: string; name: string; line?: number; match?: string }) => ({
@@ -132,7 +133,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
 
     // Also search files if query looks like a filename (has extension or starts with /)
     if (query.length >= 2 && (query.includes('.') || query.startsWith('/') || query.startsWith('~'))) {
-      const root = query.startsWith('~') || query.startsWith('/') ? '/' : (process.env.HOME || '/');
+      const root = query.startsWith('~') || query.startsWith('/') ? '/' : (searchScope === 'local' ? (process.env.HOME || '/') : '/');
       window.nativesAPI?.search?.files?.(query, root, { maxResults: 8 }).then((fileResults) => {
         if (Array.isArray(fileResults) && fileResults.length > 0) {
           const fileCommands: CommandItem[] = fileResults.map((f: { path: string; name: string }) => ({
@@ -339,11 +340,25 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
         <div style={{
           padding: '8px 16px', borderTop: '1px solid var(--border,#262920)',
           display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-faint,#62655a)',
+          alignItems: 'center',
         }}>
           <span>↑↓ Navigate</span>
           <span>↵ Select</span>
           <span>Esc Close</span>
           <span>Tab Cycle</span>
+          <div style={{ flex: 1 }} />
+          {/* Search scope toggle */}
+          <button
+            onClick={() => setSearchScope((s) => s === 'global' ? 'local' : 'global')}
+            style={{
+              background: 'none', border: '1px solid var(--border,#262920)', borderRadius: 4,
+              padding: '1px 6px', fontSize: 10, cursor: 'pointer',
+              color: searchScope === 'local' ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
+            }}
+            title={searchScope === 'global' ? 'Searching: Full disk' : 'Searching: Home directory'}
+          >
+            {searchScope === 'global' ? '🌐 Global' : '📁 Local'}
+          </button>
         </div>
       </div>
     </>
