@@ -59,6 +59,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   // File preview state
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null);
 
+  // Terminal follow mode
+  const [followMode, setFollowMode] = useState(false);
+
   // Phase 3: Screenshot state
   const [annotatingFile, setAnnotatingFile] = useState<string | null>(null);
   const [annotationImageUrl, setAnnotationImageUrl] = useState<string | null>(null);
@@ -198,6 +201,24 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
+
+  // Terminal follow mode: send cd to active terminal when file browser navigates
+  useEffect(() => {
+    if (!followMode) return;
+    const handler = (e: Event) => {
+      const dirPath = (e as CustomEvent).detail;
+      if (typeof dirPath !== 'string' || !dirPath.startsWith('/')) return;
+      const sessionId = terminalSessionIdRef.current;
+      if (!sessionId) return;
+      const api = window.nativesAPI;
+      if (api?.terminal?.write) {
+        // Send cd command with proper quoting
+        api.terminal.write(sessionId, `cd "${dirPath}"\r`);
+      }
+    };
+    window.addEventListener('navigate-files', handler);
+    return () => window.removeEventListener('navigate-files', handler);
+  }, [followMode]);
 
   // Listen for 'focus-base' messages from iframes (Cmd+Shift+K from iframe context)
   useEffect(() => {
@@ -400,6 +421,8 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         isMaximized={state.terminalMaximized}
         onMaximizeToggle={toggleMaximized}
         onSessionCreated={(id) => { terminalSessionIdRef.current = id; }}
+        followMode={followMode}
+        onFollowModeToggle={() => setFollowMode((prev) => !prev)}
       />
       <CommandPalette
         isOpen={state.cmdkOpen}

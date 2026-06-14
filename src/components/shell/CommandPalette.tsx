@@ -88,7 +88,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
     }
   }, [isOpen, allCommands]);
 
-  // Filter results
+  // Filter results + file search
   useEffect(() => {
     if (!query.trim()) {
       setResults(allCommands);
@@ -104,6 +104,28 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
     );
     setResults(filtered);
     setSelectedIndex(0);
+
+    // Also search files if query looks like a filename (has extension or starts with /)
+    if (query.length >= 2 && (query.includes('.') || query.startsWith('/') || query.startsWith('~'))) {
+      const root = query.startsWith('~') || query.startsWith('/') ? '/' : (process.env.HOME || '/');
+      window.nativesAPI?.search?.files?.(query, root, { maxResults: 8 }).then((fileResults) => {
+        if (Array.isArray(fileResults) && fileResults.length > 0) {
+          const fileCommands: CommandItem[] = fileResults.map((f: { path: string; name: string }) => ({
+            id: `__file__:${f.path}`,
+            label: f.name,
+            category: 'navigation' as const,
+            icon: '📄',
+            description: f.path,
+          }));
+          // Merge: commands first, then files
+          setResults((prev) => {
+            const cmdIds = new Set(prev.map((c) => c.id));
+            const newFiles = fileCommands.filter((f) => !cmdIds.has(f.id));
+            return [...prev, ...newFiles];
+          });
+        }
+      }).catch(() => { /* ignore */ });
+    }
   }, [query, allCommands]);
 
   // Focus trap
@@ -164,6 +186,12 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
     } else if (cmd.id.startsWith('module:')) {
       const moduleId = cmd.id.slice(7);
       onSelect(`module:${moduleId}`);
+    } else if (cmd.id.startsWith('__file__:')) {
+      // Navigate to file's directory and select it
+      const filePath = cmd.id.slice(9);
+      const dir = filePath.substring(0, filePath.lastIndexOf('/')) || '/';
+      onSelect('files');
+      window.dispatchEvent(new CustomEvent('navigate-files', { detail: dir }));
     } else {
       onSelect(cmd.id);
     }

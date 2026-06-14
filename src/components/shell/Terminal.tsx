@@ -19,6 +19,8 @@ interface TerminalPanelProps {
   isMaximized: boolean;
   onMaximizeToggle: () => void;
   onSessionCreated?: (sessionId: string) => void;
+  followMode?: boolean;
+  onFollowModeToggle?: () => void;
 }
 
 export default function TerminalPanel({
@@ -29,6 +31,8 @@ export default function TerminalPanel({
   isMaximized,
   onMaximizeToggle,
   onSessionCreated,
+  followMode,
+  onFollowModeToggle,
 }: TerminalPanelProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -350,6 +354,22 @@ export default function TerminalPanel({
           </button>
         </div>
         <div className="terminal-actions">
+          {/* Follow mode toggle */}
+          {onFollowModeToggle && (
+            <button
+              className="btn-ghost"
+              onClick={onFollowModeToggle}
+              style={{
+                fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                color: followMode ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
+                background: followMode ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
+              }}
+              title={followMode ? 'Follow mode: ON (terminal follows file browser)' : 'Follow mode: OFF'}
+              aria-label="Toggle follow mode"
+            >
+              🔗
+            </button>
+          )}
           <button className="btn-ghost" onClick={onMaximizeToggle} aria-label={isMaximized ? 'Restore terminal' : 'Maximize terminal'}>
             <svg className="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               {isMaximized ? (
