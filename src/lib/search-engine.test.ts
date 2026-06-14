@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { calculateScore, findSubsequence, findStreaks, grepContent } from './search-engine';
+import { calculateScore, findSubsequence, findStreaks, grepContent, searchFiles } from './search-engine';
 
 describe('SearchEngine', () => {
   describe('findSubsequence', () => {
@@ -148,6 +148,50 @@ describe('SearchEngine', () => {
       assert.ok(results.length >= 1);
       const allTs = results.every((r) => r.path.endsWith('.ts'));
       assert.ok(allTs);
+    });
+  });
+
+  describe('searchFiles', () => {
+    const SEARCH_DIR = path.join(process.env.HOME || '~', '.natives-test', 'search-test');
+
+    before(() => {
+      fs.mkdirSync(SEARCH_DIR, { recursive: true });
+      fs.writeFileSync(path.join(SEARCH_DIR, 'main.ts'), '', 'utf-8');
+      fs.writeFileSync(path.join(SEARCH_DIR, 'README.md'), '', 'utf-8');
+      fs.writeFileSync(path.join(SEARCH_DIR, 'image.png'), '', 'utf-8');
+      fs.writeFileSync(path.join(SEARCH_DIR, 'long-filename-document.txt'), '', 'utf-8');
+      fs.mkdirSync(path.join(SEARCH_DIR, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(SEARCH_DIR, 'src', 'index.ts'), '', 'utf-8');
+    });
+
+    after(() => {
+      if (fs.existsSync(SEARCH_DIR)) {
+        fs.rmSync(SEARCH_DIR, { recursive: true, force: true });
+      }
+    });
+
+    it('should return results sorted by score descending', async () => {
+      const results = await searchFiles('main', SEARCH_DIR);
+      assert.ok(results.length >= 1);
+      // Should be sorted by score descending
+      for (let i = 1; i < results.length; i++) {
+        assert.ok(results[i - 1]!.score >= results[i]!.score);
+      }
+    });
+
+    it('should find exact match first', async () => {
+      const results = await searchFiles('main', SEARCH_DIR);
+      assert.equal(results[0]!.name, 'main.ts');
+    });
+
+    it('should respect maxResults limit', async () => {
+      const results = await searchFiles('', SEARCH_DIR, { maxResults: 2 });
+      assert.ok(results.length <= 2);
+    });
+
+    it('should include directories when includeDirs is true', async () => {
+      const results = await searchFiles('src', SEARCH_DIR, { includeDirs: true });
+      assert.ok(results.some((r) => r.isDir));
     });
   });
 });

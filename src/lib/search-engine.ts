@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { type ContentSearchResult } from '../types/file';
+import { type ContentSearchResult, type SearchResult } from '../types/file';
 
 /**
  * 子序列匹配
@@ -229,4 +229,80 @@ export async function grepContent(
 
   await walkDir(root);
   return results;
+}
+
+// ── searchFiles ──
+
+interface SearchFilesOptions {
+  maxResults?: number;
+  includeDirs?: boolean;
+  recencyBonus?: boolean;
+}
+
+/**
+ * 模糊文件名搜索
+ * @param query 搜索词
+ * @param root 搜索根目录
+ * @param options 选项
+ * @returns 排序后的搜索结果
+ */
+export async function searchFiles(
+  query: string,
+  root: string,
+  options?: SearchFilesOptions,
+): Promise<SearchResult[]> {
+  const maxResults = options?.maxResults || 80;
+  const includeDirs = options?.includeDirs ?? true;
+  const results: SearchResult[] = [];
+
+  async function walk(dirPath: string): Promise<void> {
+    if (results.length >= maxResults * 2) return; // 收集更多以便排序
+
+    try {
+      const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+      for (const entry of entries) {
+        if (results.length >= maxResults * 2) break;
+        const fullPath = path.join(dirPath, entry.name);
+
+        if (entry.isDirectory()) {
+          // 跳过隐藏目录
+          if (entry.name.startsWith('.')) continue;
+          if (includeDirs) {
+            const score = calculateScore(query, entry.name, true);
+            if (score !== -1) {
+              results.push({
+                path: fullPath,
+                name: entry.name,
+                score,
+                isDir: true,
+                mtime: 0,
+                matchRanges: [],
+              });
+            }
+          }
+          await walk(fullPath);
+        } else if (entry.isFile()) {
+          const score = calculateScore(query, entry.name);
+          if (score !== -1) {
+            results.push({
+              path: fullPath,
+              name: entry.name,
+              score,
+              isDir: false,
+              mtime: 0,
+              matchRanges: [],
+            });
+          }
+        }
+      }
+    } catch {
+      // 跳过无权限目录
+    }
+  }
+
+  await walk(root);
+
+  // 按分数降序排序
+  results.sort((a, b) => b.score - a.score);
+  return results.slice(0, maxResults);
 }
