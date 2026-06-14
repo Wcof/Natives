@@ -1,34 +1,121 @@
 'use client';
 
-import { ReactNode } from 'react';
+import { ReactNode, useState, useCallback } from 'react';
+
+export type RightPanelMode = 'file-preview' | 'notifications' | 'module-details' | 'closed';
 
 interface RightPanelProps {
-  isOpen: boolean;
-  onToggle: () => void;
+  mode: RightPanelMode;
+  onModeChange: (mode: RightPanelMode) => void;
+  width: number;
+  onResize: (width: number) => void;
   title?: string;
   children?: ReactNode;
 }
 
-export default function RightPanel({ isOpen, onToggle, title = 'Panel', children }: RightPanelProps) {
+export default function RightPanel({
+  mode,
+  onModeChange,
+  width,
+  onResize,
+  title,
+  children,
+}: RightPanelProps) {
+  const [isDragging, setIsDragging] = useState(false);
+  const isOpen = mode !== 'closed';
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+    const startX = e.clientX;
+    const startW = width;
+
+    const handleMove = (ev: MouseEvent) => {
+      const delta = startX - ev.clientX;
+      const newWidth = Math.max(200, Math.min(400, startW + delta));
+      onResize(newWidth);
+    };
+    const handleUp = () => {
+      setIsDragging(false);
+      document.removeEventListener('mousemove', handleMove);
+      document.removeEventListener('mouseup', handleUp);
+    };
+    document.addEventListener('mousemove', handleMove);
+    document.addEventListener('mouseup', handleUp);
+  }, [width, onResize]);
+
+  const handleClose = () => onModeChange('closed');
+
+  const getTitle = () => {
+    if (title) return title;
+    switch (mode) {
+      case 'file-preview': return 'Preview';
+      case 'notifications': return 'Notifications';
+      case 'module-details': return 'Module Details';
+      default: return 'Panel';
+    }
+  };
+
   return (
     <aside
       className={`right-panel ${!isOpen ? 'collapsed' : ''}`}
       role="region"
-      aria-label={title}
+      aria-label={getTitle()}
+      style={{ width: isOpen ? width : 0, position: 'relative' }}
     >
+      {/* Resize drag handle */}
+      {isOpen && (
+        <div
+          className={`sidebar-drag-handle ${isDragging ? 'active' : ''}`}
+          style={{ left: -3, right: 'auto' }}
+          onMouseDown={handleMouseDown}
+        />
+      )}
+
       <div className="right-panel-header">
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-dim)' }}>
-          {title}
-        </span>
-        <button className="btn-ghost" onClick={onToggle} aria-label="Close panel">
-          <svg className="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {/* Mode tabs */}
+          <button
+            className={`btn-ghost ${mode === 'file-preview' ? 'active' : ''}`}
+            onClick={() => onModeChange('file-preview')}
+            style={{
+              fontSize: 11, padding: '3px 8px', borderRadius: 4,
+              color: mode === 'file-preview' ? 'var(--accent)' : 'var(--text-faint)',
+            }}
+            title="File Preview"
+          >
+            📄
+          </button>
+          <button
+            className={`btn-ghost ${mode === 'notifications' ? 'active' : ''}`}
+            onClick={() => onModeChange('notifications')}
+            style={{
+              fontSize: 11, padding: '3px 8px', borderRadius: 4,
+              color: mode === 'notifications' ? 'var(--accent)' : 'var(--text-faint)',
+            }}
+            title="Notifications"
+          >
+            🔔
+          </button>
+        </div>
+        <button className="btn-ghost" onClick={handleClose} aria-label="Close panel">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M18 6L6 18M6 6l12 12" />
           </svg>
         </button>
       </div>
+
       <div className="right-panel-content">
         {children || (
-          <p style={{ color: 'var(--text-faint)', fontSize: 13 }}>No content</p>
+          <div style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            height: 200, color: 'var(--text-faint)', fontSize: 13,
+          }}>
+            <div style={{ fontSize: 28, marginBottom: 8 }}>
+              {mode === 'notifications' ? '🔔' : '📄'}
+            </div>
+            <div>{mode === 'notifications' ? 'No notifications' : 'Select a file to preview'}</div>
+          </div>
         )}
       </div>
     </aside>

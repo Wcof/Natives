@@ -2,12 +2,14 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { applyTheme } from '@/lib/theme-engine';
+import { t, type Locale } from '@/i18n';
 
 interface CommandItem {
   id: string;
   label: string;
-  category: 'module' | 'action' | 'setting';
+  category: 'module' | 'action' | 'setting' | 'navigation';
   icon?: string;
+  description?: string;
 }
 
 interface CommandPaletteProps {
@@ -18,20 +20,63 @@ interface CommandPaletteProps {
   terminalSessionId?: string | null;
 }
 
-const DEFAULT_COMMANDS: CommandItem[] = [
-  { id: '__settings__', label: 'Open Settings', category: 'action' },
-  { id: '__workshop__', label: 'Open Workshop', category: 'action' },
-  { id: 'terminal:toggle', label: 'Toggle Terminal', category: 'action' },
-  { id: 'theme:terminal-volt', label: 'Theme: Terminal Volt', category: 'setting' },
-  { id: 'theme:warm-archive', label: 'Theme: Warm Archive', category: 'setting' },
+const STATIC_COMMANDS: CommandItem[] = [
+  { id: '__settings__', label: 'Open Settings', category: 'navigation', icon: '⚙️' },
+  { id: '__workshop__', label: 'Open Workshop', category: 'navigation', icon: '🔧' },
+  { id: '__store__', label: 'Open Store', category: 'navigation', icon: '🛒' },
+  { id: '__notifications__', label: 'Open Notifications', category: 'navigation', icon: '🔔' },
+  { id: 'files', label: 'File Browser', category: 'navigation', icon: '📁' },
+  { id: 'ai', label: 'AI Workbench', category: 'navigation', icon: '🤖' },
+  { id: 'tools', label: 'Tools', category: 'navigation', icon: '🛠' },
+  { id: 'terminal:toggle', label: 'Toggle Terminal', category: 'action', icon: '⬛' },
+  { id: 'theme:terminal-volt', label: 'Theme: Terminal Volt', category: 'setting', icon: '🌙' },
+  { id: 'theme:warm-archive', label: 'Theme: Warm Archive', category: 'setting', icon: '☀️' },
 ];
 
 export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerminal }: CommandPaletteProps) {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [results, setResults] = useState<CommandItem[]>(DEFAULT_COMMANDS);
+  const [allCommands, setAllCommands] = useState<CommandItem[]>(STATIC_COMMANDS);
+  const [results, setResults] = useState<CommandItem[]>(STATIC_COMMANDS);
+  const [locale, setLocale] = useState<Locale>('zh');
   const inputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Load locale
+  useEffect(() => {
+    async function loadLocale() {
+      try {
+        const saved = await window.nativesAPI?.getLocale?.();
+        if (saved) setLocale(saved === 'en' ? 'en' : 'zh');
+      } catch { /* ignore */ }
+    }
+    loadLocale();
+  }, []);
+
+  // Load dynamic module commands when opened
+  useEffect(() => {
+    if (!isOpen) return;
+
+    async function loadModuleCommands() {
+      try {
+        const api = window.nativesAPI;
+        if (api?.module?.list) {
+          const modules = await api.module.list();
+          if (Array.isArray(modules)) {
+            const moduleCommands: CommandItem[] = (modules as Array<{ id: string; name: string }>).map((m) => ({
+              id: `module:${m.id}`,
+              label: m.name,
+              category: 'module' as const,
+              icon: '📦',
+              description: m.id,
+            }));
+            setAllCommands([...STATIC_COMMANDS, ...moduleCommands]);
+          }
+        }
+      } catch { /* ignore */ }
+    }
+    loadModuleCommands();
+  }, [isOpen]);
 
   // Focus input when opened
   useEffect(() => {
@@ -39,31 +84,35 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
       setTimeout(() => inputRef.current?.focus(), 50);
       setQuery('');
       setSelectedIndex(0);
+      setResults(allCommands);
     }
-  }, [isOpen]);
+  }, [isOpen, allCommands]);
 
   // Filter results
   useEffect(() => {
     if (!query.trim()) {
-      setResults(DEFAULT_COMMANDS);
+      setResults(allCommands);
+      setSelectedIndex(0);
       return;
     }
     const q = query.toLowerCase();
-    setResults(
-      DEFAULT_COMMANDS.filter(
-        (cmd) => cmd.label.toLowerCase().includes(q) || cmd.id.toLowerCase().includes(q),
-      ),
+    const filtered = allCommands.filter(
+      (cmd) =>
+        cmd.label.toLowerCase().includes(q) ||
+        cmd.id.toLowerCase().includes(q) ||
+        (cmd.description && cmd.description.toLowerCase().includes(q)),
     );
+    setResults(filtered);
     setSelectedIndex(0);
-  }, [query]);
+  }, [query, allCommands]);
 
-  // Focus trap: collect focusable elements and cycle Tab
+  // Focus trap
   const getFocusableElements = useCallback(() => {
     if (!dialogRef.current) return [];
     return Array.from(
       dialogRef.current.querySelectorAll<HTMLElement>(
-        'input, [role="option"], button, [tabindex]:not([tabindex="-1"])'
-      )
+        'input, [role="option"], button, [tabindex]:not([tabindex="-1"])',
+      ),
     );
   }, []);
 
@@ -95,7 +144,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
       case 'Enter':
         e.preventDefault();
         if (results[selectedIndex]) {
-          handleSelect(results[selectedIndex]!.id);
+          handleSelect(results[selectedIndex]!);
         }
         break;
       case 'Escape':
@@ -105,17 +154,27 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
     }
   };
 
-  const handleSelect = (id: string) => {
-    if (id.startsWith('theme:')) {
-      const themeId = id.slice(6);
+  const handleSelect = (cmd: CommandItem) => {
+    if (cmd.id.startsWith('theme:')) {
+      const themeId = cmd.id.slice(6);
       applyTheme(themeId);
       window.nativesAPI?.setTheme?.(themeId);
-    } else if (id === 'terminal:toggle') {
+    } else if (cmd.id === 'terminal:toggle') {
       onToggleTerminal?.();
+    } else if (cmd.id.startsWith('module:')) {
+      const moduleId = cmd.id.slice(7);
+      onSelect(`module:${moduleId}`);
     } else {
-      onSelect(id);
+      onSelect(cmd.id);
     }
     onClose();
+  };
+
+  const categoryColors: Record<string, string> = {
+    module: 'var(--accent,#cdf24b)',
+    action: '#5b9cf5',
+    setting: '#e6b800',
+    navigation: '#a78bfa',
   };
 
   if (!isOpen) return null;
@@ -137,7 +196,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
       <div
         ref={dialogRef}
         role="dialog"
-        aria-label="Command palette"
+        aria-label={t(locale, 'commandPalette.placeholder')}
         aria-modal="true"
         onKeyDown={handleKeyDown}
         style={{
@@ -156,7 +215,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
           <input
             ref={inputRef}
             type="text"
-            placeholder="Search modules, settings, actions..."
+            placeholder={t(locale, 'commandPalette.placeholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -169,55 +228,58 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
               fontSize: 15,
               fontFamily: 'inherit',
             }}
-            aria-label="Search commands"
+            aria-label={t(locale, 'commandPalette.placeholder')}
           />
         </div>
 
-        <div style={{ maxHeight: 320, overflowY: 'auto', padding: '4px 0' }}>
+        <div style={{ maxHeight: 360, overflowY: 'auto', padding: '4px 0' }}>
           {results.length === 0 ? (
-            <div style={{ padding: '20px 16px', textAlign: 'center', color: 'var(--text-faint,#62655a)', fontSize: 13 }}>
-              No results found
+            <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--text-faint,#62655a)', fontSize: 13 }}>
+              {t(locale, 'commandPalette.noResults')}
             </div>
           ) : (
-            results.map((cmd, index) => {
-              const categoryColors: Record<string, string> = {
-                module: 'var(--accent,#cdf24b)',
-                action: '#5b9cf5',
-                setting: '#e6b800',
-              };
-              return (
-                <div
-                  key={cmd.id}
-                  role="option"
-                  aria-selected={index === selectedIndex}
-                  tabIndex={0}
-                  onClick={() => handleSelect(cmd.id)}
-                  onFocus={() => setSelectedIndex(index)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 10,
-                    padding: '8px 16px', cursor: 'pointer',
-                    background: index === selectedIndex ? 'var(--bg-3,#1c1e17)' : 'transparent',
-                    color: 'var(--text,#f2f2ea)',
-                    fontSize: 13,
-                    transition: 'background 0.1s',
-                  }}
-                >
-                  <span style={{
-                    width: 6, height: 6, borderRadius: '50%',
-                    background: categoryColors[cmd.category] || '#888',
-                    flexShrink: 0,
-                  }} />
-                  <span>{cmd.label}</span>
-                  <span style={{
-                    marginLeft: 'auto', fontSize: 10,
-                    color: 'var(--text-faint,#62655a)',
-                    textTransform: 'uppercase',
-                  }}>
-                    {cmd.category}
+            results.map((cmd, index) => (
+              <div
+                key={cmd.id}
+                role="option"
+                aria-selected={index === selectedIndex}
+                tabIndex={0}
+                onClick={() => handleSelect(cmd)}
+                onFocus={() => setSelectedIndex(index)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '8px 16px', cursor: 'pointer',
+                  background: index === selectedIndex ? 'var(--bg-3,#1c1e17)' : 'transparent',
+                  color: 'var(--text,#f2f2ea)',
+                  fontSize: 13,
+                  transition: 'background 0.1s',
+                }}
+              >
+                {/* Icon or category dot */}
+                <span style={{
+                  width: 20, textAlign: 'center', flexShrink: 0, fontSize: 14,
+                }}>
+                  {cmd.icon || (
+                    <span style={{
+                      display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
+                      background: categoryColors[cmd.category] || '#888',
+                    }} />
+                  )}
+                </span>
+                <span style={{ flex: 1 }}>{cmd.label}</span>
+                {cmd.description && (
+                  <span style={{ fontSize: 10, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)' }}>
+                    {cmd.description}
                   </span>
-                </div>
-              );
-            })
+                )}
+                <span style={{
+                  fontSize: 10, color: 'var(--text-faint,#62655a)',
+                  textTransform: 'uppercase', letterSpacing: 0.5,
+                }}>
+                  {cmd.category}
+                </span>
+              </div>
+            ))
           )}
         </div>
 

@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Settings, Layers, ChevronRight, Square, ShoppingBag } from 'lucide-react';
+import { Settings, Layers, ChevronRight, Square, ShoppingBag, Bell } from 'lucide-react';
+import { t, type Locale } from '@/i18n';
 
 interface ModuleItem {
   id: string;
@@ -16,6 +17,7 @@ interface SidebarProps {
   onResize: (width: number) => void;
   activeModuleId?: string;
   onModuleSelect: (moduleId: string) => void;
+  onNotificationClick?: () => void;
 }
 
 export default function Sidebar({
@@ -25,22 +27,47 @@ export default function Sidebar({
   onResize,
   activeModuleId,
   onModuleSelect,
+  onNotificationClick,
 }: SidebarProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [modules, setModules] = useState<ModuleItem[]>([]);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [locale, setLocale] = useState<Locale>('zh');
 
   // Load modules on mount
   useEffect(() => {
     async function loadModules() {
       try {
-        // Try to get modules from IPC
         const api = (window as unknown as Record<string, unknown>).nativesAPI as Record<string, unknown> | undefined;
+
+        // Load locale
+        if (api && typeof (api as Record<string, unknown>).getLocale === 'function') {
+          const savedLocale = await (api as { getLocale: () => Promise<string> }).getLocale();
+          if (savedLocale === 'en') setLocale('en');
+        }
+
+        // Load saved module order
+        let savedOrder: string[] = [];
+        if (api) {
+          const dbApi = (api as Record<string, unknown>).db as { get?: (key: string) => Promise<string | undefined> } | undefined;
+          if (dbApi?.get) {
+            const raw = await dbApi.get('settings:module_order');
+            if (raw) {
+              try { savedOrder = JSON.parse(raw); } catch { /* ignore */ }
+            }
+          }
+        }
+
+        // Try to get modules from IPC
         if (api && typeof (api as Record<string, unknown>).module === 'object') {
           const modApi = (api as Record<string, unknown>).module as { scan?: () => Promise<ModuleItem[]> };
           if (modApi.scan) {
             const result = await modApi.scan();
             if (Array.isArray(result)) {
+              if (savedOrder.length > 0) {
+                const idIndex = new Map(savedOrder.map((id, i) => [id, i]));
+                result.sort((a, b) => (idIndex.get(a.id) ?? Infinity) - (idIndex.get(b.id) ?? Infinity));
+              }
               setModules(result);
               return;
             }
@@ -88,8 +115,19 @@ export default function Sidebar({
     setDragIndex(index);
   };
 
-  const handleDragEnd = () => {
+  const handleDragEnd = async () => {
     setDragIndex(null);
+    // Persist new module order to database
+    try {
+      const api = (window as unknown as Record<string, unknown>).nativesAPI as Record<string, unknown> | undefined;
+      if (api) {
+        const db = (api as Record<string, unknown>).db as { set?: (key: string, value: unknown) => Promise<{ ok: boolean }> } | undefined;
+        if (db?.set) {
+          const orderedIds = modules.map((m) => m.id);
+          await db.set('settings:module_order', orderedIds);
+        }
+      }
+    } catch { /* browser dev mode */ }
   };
 
   return (
@@ -98,6 +136,7 @@ export default function Sidebar({
       style={{ width: isCollapsed ? 0 : width }}
       role="navigation"
       aria-label="Module sidebar"
+      data-sidebar
     >
       <div className="sidebar-header">
         <span className="sidebar-brand">NATIVES</span>
@@ -106,7 +145,7 @@ export default function Sidebar({
         </button>
       </div>
 
-      <div className="sidebar-section-title" id="sidebar-modules-label">Modules</div>
+      <div className="sidebar-section-title" id="sidebar-modules-label">{t(locale, 'nav.modules')}</div>
       <div
         className="sidebar-modules"
         role="listbox"
@@ -116,7 +155,7 @@ export default function Sidebar({
       >
         {modules.length === 0 ? (
           <div style={{ padding: '20px 12px', textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
-            No modules installed
+            {t(locale, 'modules.noModules')}
           </div>
         ) : (
           modules.map((mod, index) => (
@@ -147,17 +186,21 @@ export default function Sidebar({
       </div>
 
       <div className="sidebar-footer">
+        <button className="sidebar-item" onClick={onNotificationClick} style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', position: 'relative' }}>
+          <Bell size={18} />
+          {t(locale, 'notifications.title')}
+        </button>
         <button className="sidebar-item" onClick={() => onModuleSelect('__store__')} style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left' }}>
           <ShoppingBag size={18} />
-          Store
+          {t(locale, 'nav.store')}
         </button>
         <button className="sidebar-item" onClick={() => onModuleSelect('__settings__')} style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left' }}>
           <Settings size={18} />
-          Settings
+          {t(locale, 'nav.settings')}
         </button>
         <button className="sidebar-item" onClick={() => onModuleSelect('__workshop__')} style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left' }}>
           <Layers size={18} />
-          Workshop
+          {t(locale, 'nav.workshop')}
         </button>
       </div>
 
