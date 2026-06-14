@@ -64,7 +64,6 @@ export const zh = {
     about: '关于',
     themeTerminal: 'Terminal Volt（暗色）',
     themeWarm: 'Warm Archive（暖色亮色）',
-    themeEditorial: 'Editorial Index（编辑风格）',
     addProfile: '添加配置',
     deleteProfile: '删除配置',
     defaultProfile: '默认配置',

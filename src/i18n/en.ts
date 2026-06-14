@@ -72,7 +72,6 @@ export const en = {
     about: 'About',
     themeTerminal: 'Terminal Volt (Dark)',
     themeWarm: 'Warm Archive (Light)',
-    themeEditorial: 'Editorial Index (Light)',
     addProfile: 'Add Profile',
     deleteProfile: 'Delete Profile',
     defaultProfile: 'Default Profile',

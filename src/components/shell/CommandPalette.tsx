@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { applyTheme } from '@/lib/theme-engine';
 
 interface CommandItem {
@@ -15,6 +15,7 @@ interface CommandPaletteProps {
   onClose: () => void;
   onSelect: (id: string) => void;
   onToggleTerminal?: () => void;
+  terminalSessionId?: string | null;
 }
 
 const DEFAULT_COMMANDS: CommandItem[] = [
@@ -23,7 +24,6 @@ const DEFAULT_COMMANDS: CommandItem[] = [
   { id: 'terminal:toggle', label: 'Toggle Terminal', category: 'action' },
   { id: 'theme:terminal-volt', label: 'Theme: Terminal Volt', category: 'setting' },
   { id: 'theme:warm-archive', label: 'Theme: Warm Archive', category: 'setting' },
-  { id: 'theme:editorial-index', label: 'Theme: Editorial Index', category: 'setting' },
 ];
 
 export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerminal }: CommandPaletteProps) {
@@ -31,6 +31,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [results, setResults] = useState<CommandItem[]>(DEFAULT_COMMANDS);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   // Focus input when opened
   useEffect(() => {
@@ -56,26 +57,33 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
     setSelectedIndex(0);
   }, [query]);
 
+  // Focus trap: collect focusable elements and cycle Tab
+  const getFocusableElements = useCallback(() => {
+    if (!dialogRef.current) return [];
+    return Array.from(
+      dialogRef.current.querySelectorAll<HTMLElement>(
+        'input, [role="option"], button, [tabindex]:not([tabindex="-1"])'
+      )
+    );
+  }, []);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    switch (e.key) {
-      case 'Tab': {
-        e.preventDefault();
-        const focusable =
-          results.length > 0
-            ? document.querySelector('[role="option"]') as HTMLElement | null
-            : null;
-        if (e.shiftKey) {
-          // Shift+Tab: focus the input
-          inputRef.current?.focus();
-        } else if (focusable) {
-          // Tab: focus the first result
-          focusable.focus();
-        } else {
-          // No results, loop back to input
-          inputRef.current?.focus();
-        }
-        break;
+    if (e.key === 'Tab') {
+      const focusable = getFocusableElements();
+      if (focusable.length === 0) return;
+      e.preventDefault();
+      const currentIndex = focusable.indexOf(document.activeElement as HTMLElement);
+      if (e.shiftKey) {
+        const prev = currentIndex <= 0 ? focusable.length - 1 : currentIndex - 1;
+        focusable[prev]?.focus();
+      } else {
+        const next = currentIndex >= focusable.length - 1 ? 0 : currentIndex + 1;
+        focusable[next]?.focus();
       }
+      return;
+    }
+
+    switch (e.key) {
       case 'ArrowDown':
         e.preventDefault();
         setSelectedIndex((prev) => Math.min(prev + 1, results.length - 1));
@@ -101,6 +109,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
     if (id.startsWith('theme:')) {
       const themeId = id.slice(6);
       applyTheme(themeId);
+      window.nativesAPI?.setTheme?.(themeId);
     } else if (id === 'terminal:toggle') {
       onToggleTerminal?.();
     } else {
@@ -126,6 +135,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
 
       {/* Command Palette */}
       <div
+        ref={dialogRef}
         role="dialog"
         aria-label="Command palette"
         aria-modal="true"
@@ -180,7 +190,9 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
                   key={cmd.id}
                   role="option"
                   aria-selected={index === selectedIndex}
+                  tabIndex={0}
                   onClick={() => handleSelect(cmd.id)}
+                  onFocus={() => setSelectedIndex(index)}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 10,
                     padding: '8px 16px', cursor: 'pointer',
@@ -216,6 +228,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
           <span>↑↓ Navigate</span>
           <span>↵ Select</span>
           <span>Esc Close</span>
+          <span>Tab Cycle</span>
         </div>
       </div>
     </>

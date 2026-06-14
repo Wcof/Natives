@@ -50,20 +50,6 @@ export const THEMES: Record<string, Theme> = {
     radius: '9px',
     'font-display': '"Fraunces", Georgia, serif',
   },
-  'editorial-index': {
-    bg: '#f4f1ea',
-    'bg-2': '#ebe7de',
-    'bg-3': '#e2ddd2',
-    panel: '#efebe3',
-    border: '#c9c3b5',
-    text: '#1a1a1a',
-    'text-dim': '#555555',
-    'text-faint': '#888888',
-    accent: '#ff433d',
-    'accent-ink': '#f4f1ea',
-    radius: '0px',
-    'font-display': '-apple-system, BlinkMacSystemFont, "Inter", sans-serif',
-  },
 };
 
 // ── Terminal ANSI Colors ──
@@ -71,7 +57,6 @@ export const THEMES: Record<string, Theme> = {
 export const TERMINAL_THEMES: Record<string, { background: string; foreground: string; cursor: string }> = {
   'terminal-volt': { background: '#0b0c0a', foreground: '#d6dac9', cursor: '#cdf24b' },
   'warm-archive': { background: '#ece2d2', foreground: '#4a3f30', cursor: '#cc785c' },
-  'editorial-index': { background: '#eae5d8', foreground: '#1a1a1a', cursor: '#ff433d' },
 };
 
 // ── Theme Application ──

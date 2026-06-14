@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { validateTheme, THEMES, TERMINAL_THEMES } from './theme-engine';
 
 describe('ThemeEngine', () => {
-  it('should have all three themes', () => {
+  it('should have exactly two themes (editorial-index removed)', () => {
     const ids = Object.keys(THEMES);
-    assert.equal(ids.length, 3);
+    assert.equal(ids.length, 2);
     assert.ok(ids.includes('terminal-volt'));
     assert.ok(ids.includes('warm-archive'));
-    assert.ok(ids.includes('editorial-index'));
+    assert.equal(ids.includes('editorial-index'), false);
   });
 
   it('should validate a valid theme', () => {
@@ -35,6 +35,12 @@ describe('ThemeEngine', () => {
     }
   });
 
+  it('should have only 2 terminal ANSI themes', () => {
+    const ids = Object.keys(TERMINAL_THEMES);
+    assert.equal(ids.length, 2);
+    assert.equal(ids.includes('editorial-index'), false);
+  });
+
   it('should have valid hex colors in all themes', () => {
     const hexRegex = /^#[0-9a-fA-F]{6}$/;
     for (const [id, theme] of Object.entries(THEMES)) {
@@ -44,5 +50,10 @@ describe('ThemeEngine', () => {
         }
       }
     }
+  });
+
+  it('should not have editorial-index in the theme registry', () => {
+    assert.equal(THEMES['editorial-index'], undefined);
+    assert.equal(TERMINAL_THEMES['editorial-index'], undefined);
   });
 });
