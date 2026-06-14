@@ -29,6 +29,7 @@ const nativesAPI = {
     list: () => ipcRenderer.invoke('module:list'),
     enable: (moduleId: string) => ipcRenderer.invoke('module:enable', moduleId),
     disable: (moduleId: string) => ipcRenderer.invoke('module:disable', moduleId),
+    update: (moduleId: string) => ipcRenderer.invoke('module:update', moduleId),
   },
 
   // Environment
@@ -48,6 +49,10 @@ const nativesAPI = {
   getTheme: () => ipcRenderer.invoke('natives:getTheme'),
   setTheme: (theme: string) => ipcRenderer.invoke('natives:setTheme', theme),
 
+  // Locale
+  getLocale: () => ipcRenderer.invoke('natives:getLocale'),
+  setLocale: (locale: string) => ipcRenderer.invoke('natives:setLocale', locale),
+
   // Notifications
   notification: {
     send: (title: string, body: string, level?: string) =>
@@ -57,10 +62,85 @@ const nativesAPI = {
     markAllAsRead: () => ipcRenderer.invoke('notification:markAllRead'),
   },
 
+  // === File Manager IPC ===
+  fs: {
+    listDir: (dirPath: string, options?: any) => ipcRenderer.invoke('fs:listDir', dirPath, options),
+    readFile: (filePath: string) => ipcRenderer.invoke('fs:readFile', filePath),
+    writeFileAtomic: (filePath: string, content: string, expectedMtime?: number) =>
+      ipcRenderer.invoke('fs:writeFileAtomic', filePath, content, expectedMtime),
+    createEntry: (targetPath: string, type: string) => ipcRenderer.invoke('fs:createEntry', targetPath, type),
+    renameEntry: (oldPath: string, newPath: string) => ipcRenderer.invoke('fs:renameEntry', oldPath, newPath),
+    trashEntry: (filePath: string) => ipcRenderer.invoke('fs:trashEntry', filePath),
+    moveEntry: (from: string, to: string) => ipcRenderer.invoke('fs:moveEntry', from, to),
+    importFiles: (sourcePaths: string[], destDir: string) => ipcRenderer.invoke('fs:importFiles', sourcePaths, destDir),
+  },
+
+  // === Search IPC ===
+  search: {
+    grep: (query: string, root: string, options?: any) => ipcRenderer.invoke('search:grep', query, root, options),
+    files: (query: string, root: string, options?: any) => ipcRenderer.invoke('search:files', query, root, options),
+    spotlight: (query: string, root: string) => ipcRenderer.invoke('search:spotlight', query, root),
+  },
+
+  // === Git IPC ===
+  git: {
+    status: (dirPath: string) => ipcRenderer.invoke('git:status', dirPath),
+    diff: (filePath: string) => ipcRenderer.invoke('git:diff', filePath),
+  },
+
+  // === Disk Usage IPC ===
+  disk: {
+    usage: (dirPath: string) => ipcRenderer.invoke('disk:usage', dirPath),
+  },
+
+  // === Thumbnail IPC ===
+  thumbnail: {
+    generate: (filePath: string, width: number) => ipcRenderer.invoke('thumbnail:generate', filePath, width),
+  },
+
+  // === Agent IPC ===
+  agent: {
+    scanProjects: () => ipcRenderer.invoke('agent:scanProjects'),
+    getSessions: (projectPath: string) => ipcRenderer.invoke('agent:getSessions', projectPath),
+    scanSkills: () => ipcRenderer.invoke('agent:scanSkills'),
+    detectStatus: (output: string, exitCode?: number) => ipcRenderer.invoke('agent:detectStatus', output, exitCode),
+  },
+
   // Lifecycle
   onDbStateChanged: (callback: (_event: unknown, channel: string, data: unknown) => void) => {
     ipcRenderer.on('db-state-changed', callback);
     return () => ipcRenderer.removeListener('db-state-changed', callback);
+  },
+
+  // === Phase 3: Screenshot ===
+  screenshot: {
+    watch: (callback: (filePath: string) => void) => {
+      const channel = 'screenshot:detected';
+      const handler = (_event: unknown, filePath: string) => callback(filePath);
+      ipcRenderer.on(channel, handler);
+      ipcRenderer.send('screenshot:start-watching');
+      return () => {
+        ipcRenderer.send('screenshot:stop-watching');
+        ipcRenderer.removeListener(channel, handler);
+      };
+    },
+    saveAnnotated: (dataUrl: string, targetPath?: string) =>
+      ipcRenderer.invoke('screenshot:save-annotated', dataUrl, targetPath),
+  },
+
+  // === Phase 3: Release Wizard ===
+  release: {
+    inspect: (projectPath: string) => ipcRenderer.invoke('release:inspect', projectPath),
+    prepare: (projectPath: string, version: string) => ipcRenderer.invoke('release:prepare', projectPath, version),
+    getSequence: (projectPath: string, version: string) => ipcRenderer.invoke('release:getSequence', projectPath, version),
+    execute: (projectPath: string, command: string) => ipcRenderer.invoke('release:execute', projectPath, command),
+  },
+
+  // === Phase 3: Update Checker ===
+  update: {
+    check: () => ipcRenderer.invoke('update:check'),
+    mute: (version: string) => ipcRenderer.invoke('update:mute', version),
+    getMuted: () => ipcRenderer.invoke('update:getMuted'),
   },
 };
 
