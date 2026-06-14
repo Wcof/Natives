@@ -411,6 +411,284 @@
 
 ---
 
+## UI & Interaction Constraints
+
+> 视觉风格参考 FanBox 的三套主题系统。Natives 默认使用 Terminal Volt 暗色主题，支持用户切换。
+
+### 主题系统
+
+Natives 通过 `data-theme` 属性切换主题，所有颜色/间距/圆角通过 CSS 变量注入。
+
+#### 默认主题：Terminal Volt（暗色）
+
+| Token | 值 | 用途 |
+|-------|-----|------|
+| `--bg` | `#0b0c0a` | 主背景 |
+| `--bg-2` | `#131410` | 面板背景 |
+| `--bg-3` | `#1c1e17` | 悬浮/卡片背景 |
+| `--panel` | `#0e0f0c` | 侧边栏背景 |
+| `--border` | `#262920` | 边框 |
+| `--rule` | `#262920` | 分割线 |
+| `--text` | `#f2f2ea` | 主文字 |
+| `--text-dim` | `#9b9d8c` | 次要文字 |
+| `--text-faint` | `#62655a` | 弱化文字 |
+| `--accent` | `#cdf24b` | 强调色（Volt 绿） |
+| `--accent-soft` | `#cdf24b1f` | 强调色低透明度 |
+| `--accent-ink` | `#0b0c0a` | 强调色上文字 |
+| `--radius` | `4px` | 全局圆角 |
+| `--shadow` | `0 10px 40px rgba(0,0,0,0.6)` | 阴影 |
+
+#### 备选主题：Warm Archive（暖色亮色）
+
+| Token | 值 |
+|-------|-----|
+| `--bg` | `#f5f0e8` |
+| `--accent` | `#cc785c`（赤陶色） |
+| `--radius` | `9px` |
+| `--font-display` | `'Fraunces', Georgia, serif` |
+
+特殊效果：纸张微纹理（`radial-gradient` 点阵）。
+
+#### 备选主题：Editorial Index（编辑风格）
+
+| Token | 值 |
+|-------|-----|
+| `--bg` | `#f4f1ea` |
+| `--accent` | `#ff433d`（Bloomberg 红） |
+| `--radius` | `0px`（硬边，粗野主义） |
+
+特殊效果：列表行边框、反转表头、CSS 计数器行号、命令面板 2px 实边框 + 10px 偏移阴影。
+
+#### 终端 ANSI 配色（跟随主题）
+
+| 主题 | 背景 | 前景 | 光标 |
+|------|------|------|------|
+| Terminal | `#0b0c0a` | `#d6dac9` | `#cdf24b` |
+| Warm | `#ece2d2` | `#4a3f30` | `#cc785c` |
+| Editorial | `#eae5d8` | `#1a1a1a` | `#ff433d` |
+
+### 字体系统
+
+| Token | 值 |
+|-------|-----|
+| `--font-ui` | `-apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", "Inter", sans-serif` |
+| `--font-display` | 跟随主题（Terminal: 等宽, Warm: 衬线, Editorial: 无衬线） |
+| `--font-mono` | `ui-monospace, "SF Mono", "Menlo", "JetBrains Mono", monospace` |
+
+**字号规范**：
+
+| 元素 | 字号 | 字重 | 字间距 |
+|------|------|------|--------|
+| 品牌名 | 17px | 700 | 1px |
+| 导航标题 | 11px | — | 1px, uppercase |
+| 导航项 | 13px | — | — |
+| 模块卡片名 | 12px | — | —, 行高 1.4 |
+| 元信息 | 11-12px | — | — |
+| 正文 | 14px | — | — |
+| 代码 | 12.5px | — | 行高 1.6 |
+| Toast | 13px | — | — |
+| Kbd 标签 | 11px | — | padding 2px 6px |
+| 区域标签 | 10-11px | — | 1-1.5px, uppercase |
+
+### 布局约束
+
+**主布局**：CSS Grid，`grid-template-columns: {sidebarW}fr 1fr`，全屏 `100vh`。
+
+| 区域 | 默认尺寸 | 最小 | 最大 | 行为 |
+|------|----------|------|------|------|
+| 左侧边栏 | 248px | 190px | 420px | 可折叠（Cmd+B），拖拽调整 |
+| 主内容区 | 自适应 | — | — | iframe 容器 |
+| 右侧面板 | 320px | 0 | 400px | 可折叠，按需切换 |
+| 底部终端 | 280px 高 | 200px | 50% 窗口高 | 可折叠，可最大化 |
+
+**侧边栏折叠**：`grid-template-columns: 1fr`，侧边栏 `display: none`，状态持久化到 localStorage。
+
+**终端停靠**：支持底部（`flex-direction: column`）和右侧（`flex-direction: row`）两种模式。
+
+### 间距规范
+
+| 元素 | 间距 |
+|------|------|
+| 侧边栏内边距 | 16px 12px |
+| 导航区间距 | 18px margin-bottom |
+| 导航项内边距 | 7px 8px |
+| 顶栏内边距 | 10px 16px |
+| 内容区内边距 | 12px 16px 40px |
+| 网格间距 | 8px |
+| 网格项内边距 | 14px 10px 12px |
+| 列表行内边距 | 9px 10px |
+| 预览体内边距 | 16px |
+| 右键菜单内边距 | 5px |
+| 菜单项内边距 | 7px 12px |
+
+### 组件规范
+
+#### 按钮
+
+| 类型 | 样式 |
+|------|------|
+| **Ghost 按钮** | `border: 1px solid var(--border); background: var(--bg-3); padding: 5px 11px; border-radius: 7px; font-size: 12px` |
+| Ghost 悬停 | `color: var(--text); border-color: var(--accent)` |
+| **主按钮** | `background: var(--accent); color: var(--accent-ink); font-weight: 600` |
+| 主按钮悬停 | `filter: brightness(1.06)` |
+| **终端按钮** | `color: var(--accent); background: var(--accent-soft); font-weight: 700` |
+| 终端按钮悬停 | `background: var(--accent); color: var(--bg)` |
+
+#### 分段控件
+
+`border: 1px solid var(--border); border-radius: 7px; overflow: hidden`
+- 子项：`background: var(--bg-3); padding: 5px 10px; font-size: 12px`
+- 激活：`background: var(--accent); color: var(--accent-ink)`
+
+#### 输入框
+
+`background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 12px; font-size: 14px`
+- 焦点：`border-color: var(--accent)`
+
+#### 开关
+
+`width: 30px; height: 17px; border-radius: 99px`
+- 旋钮：11px 圆形，`left: 2px` → `15px`
+
+#### 右键菜单
+
+`background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; min-width: 168px`
+- 菜单项：`padding: 7px 12px; font-size: 13px; border-radius: 6px`
+- 危险项：`color: #e06a5b`
+- 分割线：`height: 1px; background: var(--border)`
+
+#### Toast 通知
+
+`position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--bg-3); border: 1px solid var(--border); padding: 10px 18px; border-radius: 10px; font-size: 13px; z-index: 200`
+- 错误：`border-color: #d9534f`
+- 自动隐藏：2200ms 后 `opacity: 0`
+
+#### 滚动条
+
+```css
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+  background-color: var(--border); border-radius: 5px;
+  background-clip: padding-box; border: 3px solid transparent;
+}
+::-webkit-scrollbar-thumb:hover { background-color: var(--text-faint); }
+```
+
+### 毛玻璃效果
+
+| 元素 | 背景 | 模糊 | 饱和 |
+|------|------|------|------|
+| 命令面板 | `color-mix(in srgb, var(--bg-2) 82%, transparent)` | `blur(24px)` | `saturate(1.5)` |
+| 右键菜单 | `color-mix(in srgb, var(--bg-2) 85%, transparent)` | `blur(20px)` | `saturate(1.4)` |
+| 输入对话框 | 同右键菜单 | `blur(20px)` | `saturate(1.4)` |
+| 状态栏 | `color-mix(in srgb, var(--bg) 86%, transparent)` | `blur(6px)` | — |
+| 侧边栏（桌面） | `color-mix(in srgb, var(--panel) 80%, transparent)` | — | — |
+
+**浮层双层阴影**：
+```css
+box-shadow: 0 0 0 0.5px rgba(0,0,0,0.12), 0 12px 40px rgba(0,0,0,0.22);
+```
+
+### 动画与过渡
+
+#### 主题切换
+
+所有主要表面：`background-color 0.28s ease, border-color 0.28s ease, color 0.28s ease`
+
+#### 布局动画
+
+面板展开/折叠：`.lay-anim` 类启用 `flex-basis 0.22s ease, width 0.22s ease, height 0.22s ease, opacity 0.2s ease`，持续 280ms。
+
+#### 关键帧动画
+
+| 名称 | 时长 | 缓动 | 用途 |
+|------|------|------|------|
+| `tipIn` | 0.12s | ease | 工具提示淡入 |
+| `dropIn` | 0.16s | cubic-bezier(0.2,0.7,0.3,1) | 拖放区域出现 |
+| `edIn` | 0.18s | ease | 面板入场（translateY(4px) + opacity） |
+| `shotIn` | 0.22s | ease | 卡片入场（translateY(14px) + opacity） |
+| `livePulse` | 1.1s | ease-in-out ∞ | 实时状态点脉冲 |
+| `tabpulse` | 1.1s | ease-in-out ∞ | 终端标签忙碌点 |
+| `liveZap` | 0.5s | ease | 网格项弹跳（scale 1→1.055→1） |
+| `liveZapRow` | 0.5s | ease | 列表行闪烁（背景色变化） |
+| `editRipple` | 0.7s | cubic-bezier(0.2,0.7,0.3,1) | 编辑涟漪（从图标中心扩散） |
+| `changedPulse` | 0.5s | ease | 变更徽章弹入 |
+| `changedBreath` | 2.2s | ease-in-out ∞ | 变更文件发光呼吸 |
+| `clFlash` | 1.3s | ease-out | 新代码行闪烁 |
+| `areaRipple` | 1.1s | cubic-bezier(0.2,0.7,0.3,1) | 完成涟漪（全区域扩散） |
+| `termCatch` | 0.5s | ease | 终端捕获闪光 |
+| `termAwait` | 1.8s | ease-in-out ∞ | 终端等待呼吸光晕 |
+
+#### 交互过渡
+
+| 元素 | 过渡 |
+|------|------|
+| 导航项悬停 | `0.12s` |
+| 按钮悬停 | `0.12s` |
+| 菜单项悬停 | `0.1s` |
+| 拖拽条出现 | `opacity 0.15s ease 0.08s`（80ms 延迟） |
+
+#### 无障碍
+
+`@media (prefers-reduced-motion: reduce)` 强制 `animation-duration: 0.01ms` 和 `transition-duration: 0.01ms`。
+
+### 交互模式
+
+#### 侧边栏
+
+- **折叠/展开**：Cmd+B 快捷键，状态持久化到 localStorage
+- **拖拽调整宽度**：拖拽条使用 `requestAnimationFrame` 平滑更新，钳制 190-420px
+- **模块拖拽排序**：`draggable="true"`，设置 `text/plain` MIME 类型
+- **模块图标悬停**：`transition: 0.12s`，显示模块名称 tooltip
+
+#### 终端
+
+- **展开/折叠**：动画 0.22s ease
+- **最大化**：`.term-max` 类隐藏文件区域，终端填满全部空间
+- **拖放文件**：`.term-drop` 类显示虚线边框覆盖层（`2px dashed var(--accent)`），`dropIn 0.16s`
+- **文字飞入**：选中文字创建 `.fling-ghost` 元素，`0.55s cubic-bezier(0.45,0,0.2,1)` 飞向终端中心
+- **终端捕获闪光**：`.term-catch` 动画 500ms 内发光
+
+#### iframe 切换
+
+- **切换过渡**：新 iframe 在隐藏状态加载，`onload` 后切换显示（参考 FanBox 双缓冲）
+- **加载状态**：居中 "loading..." 文字，`padding: 30px; color: var(--text-faint)`
+- **空状态**：`padding: 60px 20px; text-align: center; color: var(--text-faint)`，大图标 44px
+- **错误状态**：友好错误页面 + "重新加载" 按钮
+
+#### 模块安装
+
+- **拖入 ZIP/目录**：文件区域显示虚线覆盖层 + "release to install" 文字
+- **安装进度**：进度条或 spinner，完成后 `areaRipple` 涟漪动画
+- **安装完成**：Toast 通知 + 侧边栏自动刷新
+
+### Z-Index 层级
+
+| 层级 | z-index | 用途 |
+|------|---------|------|
+| 拖拽条 | 5 | 分割线拖拽 |
+| iframe 容器 | 10 | 插件内容 |
+| 右侧面板 | 20 | 工坊/设置 |
+| 终端 | 30 | 底部终端 |
+| 对话框覆盖层 | 60 | 模态对话框 |
+| 右键菜单 | 70 | 上下文菜单 |
+| 命令面板覆盖层 | 100 | Cmd+K |
+| Toast | 200 | 通知 |
+| 工具提示 | 300 | 悬停提示 |
+
+### 图标系统
+
+使用 `lucide-react` 图标库，通过 `<svg>` 渲染：
+- `viewBox="0 0 24 24"`
+- `stroke="currentColor"`
+- `stroke-width="2"`
+- `stroke-linecap="round"`
+- `stroke-linejoin="round"`
+
+图标颜色跟随 `currentColor`，自动适配主题。
+
+---
+
 ## Testing Decisions
 
 ### 测试原则
