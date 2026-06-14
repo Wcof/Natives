@@ -1,12 +1,8 @@
 node_modules/
-dist/
 .next/
+dist/
 out/
-*.db
-*.db-wal
-*.db-shm
 .env
 .env.local
-*.log
-.DS_Store
-Thumbs.db
+*.tsbuildinfo
+next-env.d.ts

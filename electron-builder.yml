@@ -1,0 +1,25 @@
+appId: com.natives.app
+productName: Natives
+copyright: Copyright © 2026
+directories:
+  output: dist
+  buildResources: build
+files:
+  - .next/standalone/**/*
+  - .next/static/**/*
+  - electron/**/*
+  - package.json
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+  artifactName: Natives-${version}.${ext}
+dmg:
+  title: Natives
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications

@@ -24,8 +24,8 @@ Interface styles and layouts should NOT be hardcoded by developers. They should 
 ### User Sovereignty ("自己玩自己的")
 The final aesthetic and layout decisions belong entirely to the user. The base only provides containers and connection standards — how to arrange, what colors to use, how to combine — all decided by user sovereignty.
 
-### "完全不写" (Don't Write At All)
-Do NOT reinvent wheels. Official/community tools (Cursor Cloud, Desktop APP, Codex APP, Tree Solo, etc.) are already polished. The core idea is "don't write" — directly invoke or embed official tools within the base container, enabling seamless switching in a unified interface.
+### "不造领域轮子" (No Domain Wheel Reinvention)
+The "don't write" principle applies to the **plugin layer**: don't build AI clients, code editors, etc. — embed existing tools (Claude Code, VS Code, etc.) directly. The **base layer must be built from scratch**: the container itself is the wheel, with no existing substitute (ADR-0007).
 
 - **CLI layer**: Environment injection — wrap native terminals with credentials (Provider Credentials) to run official CLI wrappers directly.
 - **APP layer**: Window stacking, network redirection, or sandbox container technology to embed official Web/desktop apps directly.
@@ -48,7 +48,7 @@ These are critical technical decisions that evolved through architectural review
 
 1. **Subprocess Lifecycle & PID Polling Watchdog**: Independent watchdog `watchdog.ts` injected via `node --require dist/watchdog.js`. Child process probes parent every 2 seconds with `process.kill(parentPid, 0)`; auto-exits on parent death. HTTP service auto-selects free port on startup.
 
-2. **iframe Sandbox Security**: Each plugin runs in an isolated iframe with `sandbox="allow-scripts allow-forms"` (no `allow-same-origin`). Path-prefix isolation (`/modules/{moduleId}/`) + Session Token authentication. Local HTTP server injects CSP headers.
+2. **iframe Sandbox Security**: Each plugin runs in an isolated iframe with `sandbox="allow-scripts allow-forms"` (no `allow-same-origin`). Path-prefix isolation (`/modules/{moduleId}/`) + two-phase Session Token handshake (ADR-0001) + MessageEvent.source verification (ADR-0002). Local HTTP server injects CSP headers.
 
 3. **PTY Terminal**: Use `node-pty` for full terminal experience (resize, TUI support). Graceful degradation to `child_process.spawn` if node-pty compilation fails. Frontend `@xterm/xterm` renders character stream; Session Token handshake prevents XSS hijacking IPC.
 

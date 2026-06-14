@@ -1,0 +1,45 @@
+{
+  "name": "natives",
+  "version": "0.1.0",
+  "description": "AI Steam Base — 桌面应用容器",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "test": "tsx --test src/**/*.test.ts",
+    "electron:dev": "electron electron/main.ts",
+    "electron:build": "next build && electron-builder",
+    "electron:rebuild": "electron-rebuild -f -w better-sqlite3",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "adm-zip": "^0.5.17",
+    "lucide-react": "^0.475.0",
+    "next": "^15.2.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "better-sqlite3": "^11.7.0",
+    "electron": "^34.0.0",
+    "electron-builder": "^25.0.0",
+    "electron-rebuild": "^3.2.0",
+    "node-pty": "^1.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "serverExternalPackages": [
+    "better-sqlite3",
+    "node-pty"
+  ]
+}

@@ -1,9 +1,9 @@
 # Natives — Product Requirements Document
 
-> **版本**: 1.0.0
+> **版本**: 1.2.0
 > **日期**: 2026-06-14
 > **状态**: Draft
-> **基于**: 32 个架构设计决策 (DESIGN_DISCUSSION.md Q1-Q32) + 架构规范 (ARCHITECTURE.md)
+> **基于**: 43 个架构设计决策 (DESIGN_DISCUSSION.md Q1-Q43) + 架构规范 (ARCHITECTURE.md)
 > **参考实现**: CodePilot (AI-native patterns) + FanBox (zero-dependency backend patterns)
 
 ---
@@ -182,6 +182,7 @@
 **关键接口**：
 - `startServer(port?)` — 启动 HTTP 服务（自动选择空闲端口）
 - `getPort()` — 返回实际监听端口
+- SDK 端口发现：基座注入 `<script src="http://localhost:{port}/natives-sdk.js">`，SDK 从 `document.currentScript.src` 自动提取端口，插件开发者无需关心
 - 路由表：
   - `GET /natives-sdk.js` — Bridge SDK 脚本
   - `GET /modules/{moduleId}/{path}` — 静态文件
@@ -191,6 +192,7 @@
 - CSP 头注入
 - Session Token 验证（X-Session-Token + X-Module-Id）
 - 路径前缀隔离
+- MessageEvent.source 窗口引用匹配（替代 origin 检查，详见 ADR-0002）
 
 **参考**：FanBox 的 `server.js` 零依赖 HTTP 服务模式。
 
@@ -220,12 +222,21 @@
 - 轻量操作：postMessage（主题变更、导航、生命周期、badge 更新）
 - 重操作：HTTP API（数据读写、环境变量、通知、IPC）
 
-**Session Token 机制**：
+**插件间通信（IPC）**：
+- sandbox iframe 无法使用 BroadcastChannel / SharedWorker，所有消息经主进程中转
+- `ipc.send(targetModuleId, payload)` — 定向发送，基座验证权限后路由到目标 iframe
+- `ipc.broadcast(payload)` — 广播到所有活跃 iframe
+- 基座可做权限检查和消息审计
+
+**Session Token 机制**（两阶段握手）：
 - 基座启动时生成 masterSecret
-- 每个插件实例化时生成唯一 sessionToken = HMAC(masterSecret, moduleId + timestamp)
-- 通过 postMessage 下发给 iframe（仅一次）
+- iframe 加载 SDK 后，主动向基座发送 `{ type: 'token-request', moduleId }`（消除竞态）
+- 基座验证 moduleId 合法性后，生成 sessionToken = HMAC(masterSecret, moduleId + timestamp)，通过 postMessage 下发
+- 插件重载时自动重新请求（SDK 初始化时始终先请求 token，不假设内存中有值）
+- 基座侧维护 moduleId → token 映射，同一 moduleId 可重新下发（旧 token 自动失效）
 - SDK 保存在内存变量中（非 localStorage）
 - 所有 postMessage 和 HTTP 请求需携带 token
+- 详见 [[ADR-0001-session-token-handshake]]
 
 ---
 
@@ -245,23 +256,37 @@
 - node-pty（主方案）+ child_process.spawn（降级方案）
 - @xterm/xterm 前端渲染
 - Session Token 握手防 XSS
+- 环境变量注入仅对新会话生效（已运行会话保持原有环境，用户需新开终端标签）
 
 ---
 
 #### M6: Module Manager (`src/main/module-manager.ts`)
 
-**职责**：模块生命周期管理（安装/卸载/启用/禁用）。
+**职责**：模块生命周期管理（安装/卸载/启用/禁用/更新）。
 
 **关键接口**：
-- `scanModules()` — 扫描 `~/.natives/modules/` 目录
+- `scanModules()` — 扫描 `~/.natives/modules/` 目录，检测版本变化
 - `installModule(pathOrZip)` — 安装模块（目录或 ZIP）
 - `uninstallModule(moduleId)` — 卸载模块
 - `enableModule(moduleId)` / `disableModule(moduleId)` — 启用/禁用
+- `updateModule(moduleId)` — 更新模块（备份数据 → 替换文件 → 保留数据 → 重载）
 - `validateManifest(manifest)` — Zod 校验 manifest.json
+- `checkCompatibility(manifest)` — 检查 minNativesVersion 与当前版本兼容性
 
 **Manifest 规范**：
 - 必填：id, name, version, entry, type, permissions
 - 可选：description, author, icon, minNativesVersion, api.bridge, lifecycle.heartbeatInterval, lifecycle.loadTimeout, i18n.name, i18n.description
+
+**更新机制**：
+- 启动扫描时比较 `manifest.json` 的 `version` 字段，检测到变化标记为"可更新"
+- 更新流程：备份 module_data → 替换插件文件 → 保留 module_data → 重新加载
+- Bridge API 版本不兼容时显示警告，不自动更新
+
+**版本兼容性检查**：
+- 基座通过 `window.natives.meta.nativesVersion` 暴露当前 Bridge API 版本
+- 插件在 `manifest.json` 中声明 `minNativesVersion`
+- 主版本号不同 → 阻止加载并提示；次版本号不同 → 警告但允许运行
+- 遵循语义化版本（SemVer）
 
 ---
 
@@ -283,8 +308,16 @@
 - unload 后 3s 未响应 → 强制销毁
 
 **内存管理**：
-- LRU 策略，默认最多 10 个后台 iframe
-- 系统内存压力大时自动回收最久未使用的
+- LRU 策略，默认最多 5 个后台 iframe
+- 单个 iframe 内存软上限 150MB
+- 系统可用内存 < 1GB 时自动回收最久未使用的
+- 前端显示内存使用指示器（可选，非 MVP 必需）
+
+**状态保持分层策略**：
+- 热层（当前可见）：iframe 保持活跃，JS 内存状态自然保留
+- 温层（最近 5 个）：iframe 保持在 DOM 中但隐藏，状态保留
+- 冷层（超出温层）：iframe 被销毁，状态丢失
+- 持久层（插件主动保存）：插件通过 `window.natives.db.set()` 将关键数据保存到 module_data，重载后通过 `get()` 恢复
 
 ---
 
@@ -359,7 +392,7 @@
 **组件**：
 - `shell/Sidebar.tsx` — 左侧边栏
 - `shell/ContentArea.tsx` — 中间主内容区
-- `shell/RightPanel.tsx` — 右侧面板
+- `shell/RightPanel.tsx` — 右侧面板（上下文感知：工坊/设置/插件详情，默认折叠，同一时间只有一种内容）
 - `shell/Terminal.tsx` — 底部终端
 - `iframe/IframeContainer.tsx` — iframe 渲染 + 切换
 
@@ -408,6 +441,17 @@
 | Q30 | 环境注入 | 多组环境配置 + electron.safeStorage |
 | Q31 | DB 迁移 | PRAGMA table_info 增量迁移 |
 | Q32 | Token 机制 | HMAC 生成 + postMessage 下发 + 内存存储 |
+| Q33 | Token 握手 | 两阶段握手（iframe 主动请求，消除竞态） |
+| Q34 | 来源验证 | MessageEvent.source 窗口引用匹配（替代 origin 检查） |
+| Q35 | 插件间通信 | 主进程中转（send + broadcast） |
+| Q36 | 终端环境注入 | 仅对新会话生效 |
+| Q37 | 状态保持 | 分层策略（热/温/冷/持久）+ 内存限制 |
+| Q38 | 崩溃检测 | 双层检测（心跳 + 主动报告） |
+| Q39 | 不造轮子 | 适用于插件层，基座层必须自建 |
+| Q40 | 无障碍 | 键盘导航 + ARIA + 焦点管理 + 高对比度 |
+| Q41 | 插件更新 | 扫描版本变化 → 备份数据 → 替换文件 → 保留数据 |
+| Q42 | 版本兼容 | SemVer + minNativesVersion 声明 + 主版本阻断 |
+| Q43 | 多窗口 | MVP 单窗口，后期扩展 |
 
 ---
 
@@ -630,7 +674,31 @@ box-shadow: 0 0 0 0.5px rgba(0,0,0,0.12), 0 12px 40px rgba(0,0,0,0.22);
 
 #### 无障碍
 
-`@media (prefers-reduced-motion: reduce)` 强制 `animation-duration: 0.01ms` 和 `transition-duration: 0.01ms`。
+**动画减弱**：`@media (prefers-reduced-motion: reduce)` 强制 `animation-duration: 0.01ms` 和 `transition-duration: 0.01ms`。
+
+**键盘导航**：
+- Tab 遍历所有可交互元素（侧边栏、按钮、输入框、iframe）
+- Enter 激活当前聚焦元素
+- Escape 关闭弹窗、右键菜单、命令面板
+- Arrow 键在列表/菜单中移动
+- Cmd+Shift+K 从 iframe 跳回基主导航（跳过链接）
+
+**焦点管理**：
+- 切换插件时焦点自动移入 iframe
+- 切换回基座时焦点回到侧边栏最后聚焦的元素
+- 弹窗打开时焦点锁定在弹窗内（焦点陷阱）
+- 弹窗关闭后焦点回到触发元素
+
+**ARIA 标注**：
+- 所有按钮使用 `role="button"` + `aria-label`
+- 面板使用 `role="region"` + `aria-label`
+- 状态区域使用 `aria-live="polite"`（非紧急）或 `aria-live="assertive"`（紧急）
+- 侧边栏使用 `role="navigation"` + `aria-label`
+- 终端使用 `role="terminal"` + `aria-label`
+
+**高对比度**：
+- `@media (prefers-contrast: high)` 自动增强边框（`border-width: 2px`）和文字对比度
+- 确保所有文字与背景的对比度 ≥ 4.5:1（WCAG AA 标准）
 
 ### 交互模式
 
@@ -737,6 +805,7 @@ box-shadow: 0 0 0 0.5px rgba(0,0,0,0.12), 0 12px 40px rgba(0,0,0,0.22);
 10. **xterm.js vendor patch**：keyCode 20/229 补丁验证。
 11. **跨平台打包**：Windows NSIS、Linux AppImage 打包。MVP 仅支持 macOS DMG。
 12. **组件级插件**：插件作为 UI 组件嵌入基座页面。MVP 仅支持页面级插件。
+13. **多窗口**：多个 BrowserWindow 并行。MVP 仅支持单窗口（数据库单写入者模型天然适合）。
 
 ---
 
@@ -749,7 +818,7 @@ Natives/
 ├── docs/
 │   ├── architecture/
 │   │   ├── ARCHITECTURE.md          # 架构规范
-│   │   └── DESIGN_DISCUSSION.md     # 设计讨论记录（32 个决策）
+│   │   └── DESIGN_DISCUSSION.md     # 设计讨论记录（43 个决策）
 │   └── PRD.md                       # 本文档
 ├── electron/
 │   ├── main.ts                      # Electron 入口

@@ -1,9 +1,9 @@
 # Natives 架构设计文档
 
-> **版本**: v0.1.0 (初始设计)
+> **版本**: v0.2.0
 > **日期**: 2026-06-14
 > **状态**: 已评审
-> **设计讨论**: [DESIGN_DISCUSSION.md](./DESIGN_DISCUSSION.md)
+> **设计讨论**: [DESIGN_DISCUSSION.md](./DESIGN_DISCUSSION.md)（43 个决策，Q1-Q43）
 
 ---
 
@@ -36,8 +36,9 @@
 | 前端框架 | Next.js (App Router, output: 'standalone') |
 | 语言 | TypeScript |
 | 数据库 | SQLite (better-sqlite3, WAL 模式) |
-| 终端 | @xterm/xterm + child_process.spawn (零原生依赖) |
+| 终端 | node-pty + @xterm/xterm（降级: child_process.spawn） |
 | 验证 | Zod |
+| 凭证加密 | electron.safeStorage |
 | 图标 | lucide-react |
 
 ---
@@ -69,7 +70,7 @@
 │   订阅应用 · 创意工坊模块 · 内置功能页              │
 ├─────────────────────────────────────────────────┤
 │               框架层 (Framework)                 │
-│   Shell 布局 · webview 管理 · Bridge API         │
+│   Shell 布局 · iframe 管理 · Bridge API         │
 ├─────────────────────────────────────────────────┤
 │               服务层 (Service)                   │
 │   DB CRUD · 环境注入 · 模块安装/卸载 · 搜索        │
@@ -120,7 +121,7 @@ SQLite (按 module_id 命名空间隔离)
 ```
 Electron Main Process
 ├── main.ts           — 入口: 窗口管理、FOUC 防护、端口分配
-├── database.ts       — SQLite: 5 张核心表、WAL、外键、迁移
+├── database.ts       — SQLite: 9 张表、WAL、外键、增量迁移
 ├── module-manager.ts — 模块生命周期: 安装/卸载/启用/禁用
 ├── bridge-host.ts    — Bridge API 宿主端: 请求路由 + 权限检查
 ├── shell.ts          — Shell 管理: 多会话终端 + Token 握手
@@ -157,19 +158,21 @@ iframe (N 个, 同进程 sandbox 隔离)
 |------|------|
 | sandbox 属性 | `sandbox="allow-scripts allow-forms"`，禁止 `allow-same-origin` |
 | 路径隔离 | 每个插件独立路径前缀 `/modules/{moduleId}/` |
-| Session Token | 基座启动时生成，通过 postMessage 下发，HTTP 请求需携带 |
+| Session Token | 两阶段握手（iframe 主动请求），HTTP 请求需携带 |
+| 来源验证 | MessageEvent.source 窗口引用匹配（替代 origin 检查，ADR-0002） |
 | CSP 策略 | HTTP 服务注入 Content-Security-Policy，限制插件网络范围 |
 | 导航拦截 | iframe `sandbox` 禁止 `allow-top-navigation`，插件无法导航父窗口 |
 | Bridge 通信 | postMessage（实时事件）+ HTTP API（重操作），无需 executeJavaScript |
 
-#### 防线 3: 零原生依赖 PTY 终端
+#### 防线 3: 完整 PTY 终端
 
 | 机制 | 实现 |
 |------|------|
-| Shell 启动 | `child_process.spawn('/bin/zsh' \| 'powershell.exe')` |
+| Shell 启动 | `node-pty.spawn('/bin/zsh')`（降级: `child_process.spawn`） |
+| 窗口调整 | `pty.resize(cols, rows)` 支持 TUI 程序 |
 | 前端渲染 | `@xterm/xterm` 字符流渲染 |
 | 安全握手 | Session Token 防 XSS 劫持 IPC |
-| 环境注入 | 运行 CLI 时自动注入 API Key 和环境变量 |
+| 环境注入 | 终端启动时自动注入 API Key 和环境变量（仅对新会话生效） |
 
 #### 防线 4: 数据库单向总线 & 状态广播
 
@@ -191,7 +194,7 @@ iframe (N 个, 同进程 sandbox 隔离)
 
 ### 4.3 SQLite 数据模型
 
-共 5 张核心表：
+共 9 张表：
 
 ```sql
 -- 1. 模块注册表
@@ -380,7 +383,7 @@ CREATE TABLE module_order (
 | 区域 | 宽度/高度 | 特性 |
 |------|-----------|------|
 | 左侧边栏 | 48-280px，可折叠 | 模块图标 + 名称，支持拖拽排序 |
-| 主内容区 | 自适应剩余空间 | webview 容器，支持标签页多开 |
+| 主内容区 | 自适应剩余空间 | iframe 容器，支持多插件切换 |
 | 右侧面板 | 0-400px，可折叠 | 工坊/设置/模块管理，按需切换 |
 | 底部终端 | 0-50% 窗口高度，可折叠 | xterm.js，多会话，环境变量注入 |
 
@@ -399,9 +402,13 @@ Zod 验证 manifest + 权限声明
     ↓
 创建 <iframe sandbox="allow-scripts allow-forms"> 元素
     ↓
-通过 postMessage 下发 Session Token
+保存 contentWindow 引用（用于 source 验证，ADR-0002）
     ↓
 加载 entry point (http://localhost:{port}/modules/{moduleId}/index.html)
+    ↓
+iframe SDK 主动请求 token（两阶段握手，ADR-0001）
+    ↓
+基座验证 source 引用后下发 Session Token
     ↓
 插件调用 natives.lifecycle.ready() → 基座切换显示
     ↓
@@ -674,10 +681,12 @@ Natives/
 
 在实现任何新功能前，验证：
 
-- [ ] 是否能通过嵌入现有官方工具实现（"完全不写" 原则）？
-- [ ] 是否尊重四大设计支柱（零代码嵌入、样式自定义、环境注入、子应用隔离）？
-- [ ] 是否维护五大防线？
+- [ ] 是否能通过嵌入现有官方工具实现（"不造领域轮子" — 适用于插件层，ADR-0007）？
+- [ ] 是否尊重四大设计支柱（iframe + 本地 HTTP、样式自定义、环境注入、子应用隔离）？
+- [ ] 是否维护五大防线（看门狗、iframe 沙箱、PTY 终端、DB 单向总线、FOUC Guard）？
 - [ ] 插件是否在沙箱中运行，不能直接访问 Node.js？
 - [ ] 数据是否按 module_id 命名空间隔离？
-- [ ] 是否有反假数据来源追溯？
+- [ ] postMessage 来源是否通过 MessageEvent.source 验证（ADR-0002）？
+- [ ] Session Token 是否通过两阶段握手下发（ADR-0001）？
+- [ ] 插件间通信是否经主进程中转（ADR-0003）？
 - [ ] 如果违反了任何原则，是否记录了 ADR（Architecture Decision Record）？

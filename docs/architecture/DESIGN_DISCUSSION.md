@@ -619,8 +619,8 @@ GET  /api/bridge/meta                → 获取模块元信息
 ```javascript
 // 插件代码中
 window.natives.lifecycle.ready();           // 通知基座：我准备好了
-window.natives.lifecycle.onUnload(() => {   // 注册卸载回调
-  localStorage.setItem('state', JSON.stringify(state));
+window.natives.lifecycle.onUnload(async () => {   // 注册卸载回调
+  await window.natives.db.set('state', JSON.stringify(state)); // sandbox 无 localStorage，用 db.set 持久化
 });
 window.natives.lifecycle.onHeartbeat(() => { // 响应心跳
   return { status: 'ok' };
@@ -774,6 +774,23 @@ CLI 工具自动获得 API Key
 | 29 | 错误分类 | 12 类结构化错误，含用户提示和操作建议 | CodePilot error-classifier |
 | 30 | 环境注入 | 多组环境配置，加密存储，终端启动时选择注入 | CodePilot Provider 简化 |
 | 31 | DB 迁移 | 增量迁移（PRAGMA table_info + ALTER TABLE） | CodePilot db.ts |
+| 32 | Token 机制 | HMAC 生成 + postMessage 下发 + 内存存储 | 安全模型 |
+
+### 第四轮决策 (Q33-Q39) — PRD 深度挑战
+
+| # | 决策项 | 决策结果 | 修正/补充 |
+|---|--------|----------|-----------|
+| 33 | Token 握手 | 两阶段握手（iframe 主动请求） | 修正 Q32 竞态和重载问题 |
+| 34 | 来源验证 | MessageEvent.source 窗口引用匹配 | 修正 Q32 origin=null 问题 |
+| 35 | 插件间通信 | 主进程中转（send + broadcast） | 补充 IPC 机制 |
+| 36 | 终端环境注入 | 仅对新会话生效 | 补充注入时机 |
+| 37 | 状态保持 | 分层策略（热/温/冷/持久）+ 内存限制 | 补充 LRU 细节 |
+| 38 | 崩溃检测 | 双层检测（心跳 + 主动报告） | 补充检测机制 |
+| 39 | 不造轮子 | 适用于插件层，基座层必须自建 | 澄清哲学范围 |
+| 40 | 无障碍 | 键盘导航 + ARIA + 焦点管理 + 高对比度 | 补充无障碍 |
+| 41 | 插件更新 | 数据保护式更新（备份 → 替换 → 保留） | 补充更新机制 |
+| 42 | 版本兼容 | SemVer + minNativesVersion + 主版本阻断 | 补充兼容性 |
+| 43 | 多窗口 | MVP 单窗口，后期扩展 | 补充窗口策略 |
 
 ### 文档一致性修正
 
@@ -849,6 +866,165 @@ window.addEventListener('message', (event) => {
 
 ---
 
+## 第四轮: PRD 深度挑战 (Q33-Q39)
+
+> 本轮基于对 PRD 的系统性挑战，发现安全漏洞、架构矛盾和设计空白。
+
+### Q33: Session Token 两阶段握手 ⚠️ 修正 Q32
+
+**问题**: Q32 的 token 下发机制存在三个致命问题：
+1. 竞态条件 — 基座创建 iframe 后立即 postMessage 发送 token，但 iframe 的 SDK 可能还没加载完 addEventListener
+2. 页面重载丢失 — 插件内部刷新后 JS 内存清空，token 丢失，插件变成"砖头"
+3. 无恢复路径 — token "仅下发一次"，没有重试机制
+
+**决策**: ✅ **两阶段握手**（由 iframe 主动请求 token）
+
+**流程**:
+```
+[iframe 加载 SDK]
+    ↓
+iframe → 基座: { type: 'token-request', moduleId }
+    ↓
+基座: 验证 source 引用 + moduleId 合法性，生成 token
+    ↓
+基座 → iframe: { type: 'token-response', token }
+    ↓
+SDK: 存入内存变量，标记 ready
+```
+
+**关键变化**:
+- 由 iframe 主动请求，而非基座主动推送 — 消除竞态
+- 重载后自动重新请求 — SDK 初始化时始终先请求 token
+- 基座侧维护 moduleId → token 映射，同一 moduleId 可重新下发（旧 token 自动失效）
+
+**ADR**: [[ADR-0001-session-token-handshake]]
+
+### Q34: postMessage 来源验证 ⚠️ 修正 Q32
+
+**问题**: sandbox iframe 的 origin 固定为 `"null"`，基座无法通过 event.origin 验证消息来源。恶意插件可以在 postMessage 中伪造 moduleId，越权访问其他模块数据。
+
+**决策**: ✅ **MessageEvent.source 窗口引用匹配**
+
+- 基座创建 iframe 时保存 `iframe.contentWindow` 引用到 `Map<moduleId, Window>`
+- 收到 postMessage 时，遍历映射表，检查 `event.source === savedContentWindow`
+- 匹配 → 处理请求（同时获得可信的 moduleId）；不匹配 → 丢弃
+
+**ADR**: [[ADR-0002-postmessage-origin-verification]]
+
+### Q35: 插件间通信机制
+
+**问题**: PRD 定义了 `window.natives.ipc.send/on/broadcast` 接口，但未说明底层通信机制。sandbox iframe 无法使用 BroadcastChannel 和 SharedWorker。
+
+**决策**: ✅ **主进程中转**
+
+- `ipc.send(targetModuleId, payload)` → postMessage 到基座 → 权限检查 → postMessage → 目标插件
+- `ipc.broadcast(payload)` → 基座向所有活跃 iframe 广播
+- 基座可做权限检查和消息审计
+
+**ADR**: [[ADR-0003-plugin-ipc-main-process-relay]]
+
+### Q36: 终端环境变量注入时机
+
+**问题**: 用户切换环境配置后，已打开的终端会话是否立即使用新配置？
+
+**决策**: ✅ **仅对新会话生效**
+
+- 已运行的终端保持原有环境，避免正在执行的命令因环境突变而出错
+- 与 VS Code、iTerm2 等主流终端行为一致
+- 切换配置后终端区域显示提示："新配置已生效，新开终端标签将使用新配置"
+
+**ADR**: [[ADR-0004-terminal-env-injection-new-sessions-only]]
+
+### Q37: 插件状态保持 vs LRU 回收
+
+**问题**: User Story 16 要求保留状态，LRU 最多保留 10 个后台 iframe。但 sandbox 无 allow-same-origin，无法使用 localStorage/IndexedDB。10 个后台 iframe 可能消耗 500MB+ 内存。
+
+**决策**: ✅ **分层状态策略 + 保守内存限制**
+
+| 层级 | 条件 | 行为 | 状态保留 |
+|------|------|------|----------|
+| 热层 | 当前可见 | 保持活跃 | ✅ JS 内存 |
+| 温层 | 最近 5 个后台 | 隐藏但保留 | ✅ JS 内存 |
+| 冷层 | 超出温层 | 销毁 | ❌ 丢失 |
+| 持久层 | 插件主动保存 | natives.db.set() | ✅ 持久化 |
+
+- 后台 iframe 上限从 10 降到 5
+- 单个 iframe 内存软上限 150MB
+- 系统可用内存 < 1GB 时自动回收
+
+**ADR**: [[ADR-0005-plugin-state-preservation-strategy]]
+
+### Q38: iframe 插件崩溃检测
+
+**问题**: iframe 崩溃时主进程无法收到 child_process 事件，需要其他方式检测。
+
+**决策**: ✅ **双层检测**
+
+- 心跳层：插件每 5s 发送 heartbeat，连续 3 次缺失（15s）→ 无响应，再 10s → 已崩溃
+- 主动报告：插件通过 `lifecycle.error()` 主动通知基座
+- iframe 事件：监听 load/error 事件检测页面级加载失败
+- 崩溃后显示友好错误页面 + "重新加载"按钮，不自动重载（避免崩溃循环）
+
+**ADR**: [[ADR-0006-iframe-crash-detection]]
+
+### Q39: "不造轮子"哲学适用范围
+
+**问题**: CLAUDE.md 说"不造轮子"，但 PRD 自建了终端、HTTP 服务器、数据库、Bridge 系统。
+
+**决策**: ✅ **"不造领域轮子"适用于插件层**
+
+| 层级 | 哲学 | 实践 |
+|------|------|------|
+| 插件层 | 不造领域轮子 | 嵌入 Claude Code、VS Code 等现有工具 |
+| 基座层 | 必须自建 | 容器本身就是轮子，没有现成替代品 |
+
+**ADR**: [[ADR-0007-domain-wheel-reinvention-clarification]]
+
+### Q40: 无障碍设计
+
+**问题**: PRD 仅有 `prefers-reduced-motion`，缺少键盘导航和屏幕阅读器支持。作为桌面应用，无障碍是基本要求。
+
+**决策**: ✅ **完整的无障碍支持**
+
+- **键盘导航**：Tab 遍历、Enter 激活、Escape 关闭、Arrow 键列表移动、Cmd+Shift+K 跳过链接
+- **焦点管理**：插件切换时焦点自动转移、弹窗焦点陷阱、关闭后焦点回到触发元素
+- **ARIA 标注**：按钮 `role="button"`、面板 `role="region"`、导航 `role="navigation"`、状态 `aria-live`
+- **高对比度**：`prefers-contrast: high` 增强边框，文字对比度 ≥ 4.5:1（WCAG AA）
+
+### Q41: 插件更新机制
+
+**问题**: PRD 提到启动扫描但未描述更新流程。插件更新时如何保护用户数据？
+
+**决策**: ✅ **数据保护式更新**
+
+- 启动扫描时比较 `manifest.json` 的 `version` 字段，检测到变化标记为"可更新"
+- 更新流程：备份 module_data → 替换插件文件 → 保留 module_data → 重新加载
+- Bridge API 版本不兼容时显示警告，不自动更新
+- 用户可在模块管理页面手动触发更新
+
+### Q42: 插件版本兼容性
+
+**问题**: Bridge API 升级后，旧版插件可能不兼容。如何处理版本差异？
+
+**决策**: ✅ **语义化版本 + minNativesVersion 声明**
+
+- 基座通过 `window.natives.meta.nativesVersion` 暴露当前版本
+- 插件在 `manifest.json` 中声明 `minNativesVersion`
+- 主版本号不同 → 阻止加载并提示；次版本号不同 → 警告但允许运行
+- 遵循语义化版本（SemVer）
+
+### Q43: 多窗口支持
+
+**问题**: Electron 支持多 BrowserWindow，Natives 是否需要多窗口？
+
+**决策**: ✅ **MVP 单窗口**
+
+- 数据库单写入者模型（Q28）天然适合单窗口
+- 多窗口需同步插件状态、终端会话、主题配置，复杂度高
+- MVP 仅支持单窗口，后期根据用户反馈决定是否扩展
+
+---
+
 ## 所有待确认事项已解决 ✅
 
 第一轮遗留的 4 个待确认事项已在第二轮全部解决：
@@ -858,3 +1034,7 @@ window.addEventListener('message', (event) => {
 4. ~~多语言方案~~ → Q16: 手写 en.ts + zh.ts
 
 第三轮通过交叉比对补充了 6 个决策（Q26-Q31），修正了 3 个文档的不一致。
+
+第四轮通过 PRD 深度挑战补充了 7 个决策（Q33-Q39），修正了 Session Token 机制的安全漏洞，补充了 IPC、状态保持、崩溃检测等设计空白。
+
+第五轮补充了 4 个决策（Q40-Q43），覆盖无障碍设计、插件更新机制、版本兼容性和多窗口策略。
