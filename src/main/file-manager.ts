@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { execFile } from 'child_process';
 import { Readable } from 'stream';
 import { type FileEntry, detectFileKind, detectProjectBadge } from '../types/file';
 
@@ -383,4 +384,28 @@ export async function renameEntry(oldPath: string, newPath: string): Promise<voi
   }
 
   await fs.promises.rename(oldPath, targetPath);
+}
+
+/**
+ * 删除到系统回收站（macOS osascript）
+ * @param filePath 文件路径
+ */
+export async function trashEntry(filePath: string): Promise<void> {
+  validatePath(filePath);
+  await fs.promises.stat(filePath); // 确保文件存在
+
+  // Use osascript to move to Finder's Trash
+  const escapedPath = filePath.replace(/"/g, '\\"');
+  await new Promise<void>((resolve, reject) => {
+    execFile('osascript', [
+      '-e',
+      `tell application "Finder" to delete POSIX file "${escapedPath}"`,
+    ], { timeout: 10000 }, (err, stdout, stderr) => {
+      if (err) {
+        reject(Object.assign(new Error(`Failed to trash: ${stderr || err.message}`), { code: 'ETRASH' }));
+      } else {
+        resolve();
+      }
+    });
+  });
 }

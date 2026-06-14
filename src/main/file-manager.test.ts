@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { listDir, readFile, streamFile, writeFileAtomic, createEntry, renameEntry } from './file-manager';
+import { listDir, readFile, streamFile, writeFileAtomic, createEntry, renameEntry, trashEntry } from './file-manager';
 
 const TEST_DIR = path.join(process.env.HOME || '~', '.natives-test', 'listdir-test');
 
@@ -445,6 +445,42 @@ describe('renameEntry', () => {
         path.join(RENAME_DIR, 'safe.txt'),
         path.join(RENAME_DIR, 'bad\0file.txt'),
       ),
+      { code: 'EINVAL' },
+    );
+  });
+});
+
+const TRASH_DIR = path.join(process.env.HOME || '~', '.natives-test', 'trash-test');
+
+describe('trashEntry', () => {
+  before(() => {
+    fs.mkdirSync(TRASH_DIR, { recursive: true });
+    fs.writeFileSync(path.join(TRASH_DIR, 'to-trash.txt'), 'delete me', 'utf-8');
+  });
+
+  after(() => {
+    if (fs.existsSync(TRASH_DIR)) {
+      fs.rmSync(TRASH_DIR, { recursive: true, force: true });
+    }
+  });
+
+  it('should move file to trash', async () => {
+    const filePath = path.join(TRASH_DIR, 'to-trash.txt');
+    assert.ok(fs.existsSync(filePath));
+    await trashEntry(filePath);
+    assert.equal(fs.existsSync(filePath), false);
+  });
+
+  it('should throw for non-existent file', async () => {
+    await assert.rejects(
+      () => trashEntry(path.join(TRASH_DIR, 'nonexistent.txt')),
+      { code: 'ENOENT' },
+    );
+  });
+
+  it('should throw for null byte in path', async () => {
+    await assert.rejects(
+      () => trashEntry(path.join(TRASH_DIR, 'bad\0file.txt')),
       { code: 'EINVAL' },
     );
   });
