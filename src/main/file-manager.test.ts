@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { listDir, readFile, streamFile } from './file-manager';
+import { listDir, readFile, streamFile, writeFileAtomic } from './file-manager';
 
 const TEST_DIR = path.join(process.env.HOME || '~', '.natives-test', 'listdir-test');
 
@@ -269,5 +269,64 @@ describe('streamFile', () => {
       () => streamFile(path.join(STREAM_DIR, 'nonexistent.txt')),
       { code: 'ENOENT' },
     );
+  });
+});
+
+const ATOMIC_DIR = path.join(process.env.HOME || '~', '.natives-test', 'atomic-test');
+
+describe('writeFileAtomic', () => {
+  before(() => {
+    fs.mkdirSync(ATOMIC_DIR, { recursive: true });
+  });
+
+  after(() => {
+    if (fs.existsSync(ATOMIC_DIR)) {
+      fs.rmSync(ATOMIC_DIR, { recursive: true, force: true });
+    }
+  });
+
+  it('should write file content atomically', async () => {
+    const filePath = path.join(ATOMIC_DIR, 'test.txt');
+    const result = await writeFileAtomic(filePath, 'Hello, Atomic World!');
+    assert.equal(result.conflict, false);
+    assert.equal(typeof result.mtime, 'number');
+    assert.ok(result.mtime > 0);
+
+    // Verify content was written
+    const content = fs.readFileSync(filePath, 'utf-8');
+    assert.equal(content, 'Hello, Atomic World!');
+  });
+
+  it('should detect mtime conflict when expectedMtime does not match', async () => {
+    const filePath = path.join(ATOMIC_DIR, 'conflict-test.txt');
+    // Create file first
+    await writeFileAtomic(filePath, 'original content');
+    const stat = fs.statSync(filePath);
+
+    // Write with wrong mtime
+    const wrongMtime = stat.mtimeMs - 1000;
+    const result = await writeFileAtomic(filePath, 'new content', wrongMtime);
+    assert.equal(result.conflict, true);
+  });
+
+  it('should write successfully when expectedMtime matches', async () => {
+    const filePath = path.join(ATOMIC_DIR, 'match-test.txt');
+    const first = await writeFileAtomic(filePath, 'first write');
+    assert.equal(first.conflict, false);
+
+    // Now write with the correct mtime
+    const result = await writeFileAtomic(filePath, 'second write', first.mtime);
+    assert.equal(result.conflict, false);
+    const content = fs.readFileSync(filePath, 'utf-8');
+    assert.equal(content, 'second write');
+  });
+
+  it('should handle new file with expectedMtime (file does not exist)', async () => {
+    const filePath = path.join(ATOMIC_DIR, 'new-file.txt');
+    const result = await writeFileAtomic(filePath, 'new content', 12345);
+    // File doesn't exist, so no conflict
+    assert.equal(result.conflict, false);
+    const content = fs.readFileSync(filePath, 'utf-8');
+    assert.equal(content, 'new content');
   });
 });

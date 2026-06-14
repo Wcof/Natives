@@ -257,3 +257,65 @@ export async function streamFile(
     contentType,
   };
 }
+
+// ── Atomic Write ──
+
+/**
+ * 原子写入文件（临时文件 + fsync + rename）
+ * @param filePath 目标路径
+ * @param content 文件内容
+ * @param expectedMtime 可选的期望 mtime（冲突检测）
+ * @returns 新的 mtime 和冲突标记
+ */
+export async function writeFileAtomic(
+  filePath: string,
+  content: string,
+  expectedMtime?: number,
+): Promise<{ mtime: number; conflict: boolean }> {
+  const dir = path.dirname(filePath);
+
+  // mtime 冲突检测
+  if (expectedMtime !== undefined) {
+    try {
+      const stat = await fs.promises.stat(filePath);
+      const actualMtime = stat.mtimeMs;
+      if (Math.abs(actualMtime - expectedMtime) > 1) {
+        return { mtime: actualMtime, conflict: true };
+      }
+    } catch (err: any) {
+      // 文件不存在，可以继续
+      if (err.code !== 'ENOENT') throw err;
+    }
+  }
+
+  // 写入临时文件
+  const tmpFile = path.join(
+    dir,
+    `.tmp-${path.basename(filePath)}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  );
+
+  try {
+    const fd = await fs.promises.open(tmpFile, 'wx');
+    try {
+      await fd.writeFile(content, 'utf-8');
+      await fd.sync(); // fsync 确保落盘
+    } finally {
+      await fd.close();
+    }
+
+    // 原子 rename
+    await fs.promises.rename(tmpFile, filePath);
+
+    // 获取新文件的 mtime
+    const newStat = await fs.promises.stat(filePath);
+    return { mtime: newStat.mtimeMs, conflict: false };
+  } catch (err) {
+    // 清理临时文件
+    try {
+      await fs.promises.unlink(tmpFile);
+    } catch {
+      // 临时文件可能不存在
+    }
+    throw err;
+  }
+}
