@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { t, type Locale } from '@/i18n';
 import Sidebar from './Sidebar';
 import ContentArea from './ContentArea';
 import RightPanel from './RightPanel';
@@ -53,6 +54,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   const terminalSessionIdRef = useRef<string | null>(null);
   const iframeContainerRef = useRef<HTMLDivElement>(null);
   const activeModuleRef = useRef<string | null>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   // File preview state
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null);
@@ -151,6 +153,13 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     return () => {
       window.removeEventListener('message', handleMessage);
     };
+  }, [activeView]);
+
+  // Focus management: move focus to content area when view changes
+  useEffect(() => {
+    if (contentRef.current) {
+      contentRef.current.focus();
+    }
   }, [activeView]);
 
   // Cmd+B toggle sidebar, Cmd+K command palette, Cmd+Shift+K focus sidebar
@@ -340,6 +349,10 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
   return (
     <div className={classNames} style={{ opacity: themeReady ? 1 : 0 }}>
+      {/* Skip to content — accessibility */}
+      <a href="#main-content" className="skip-to-content">
+        {t(locale, 'common.skipToContent')}
+      </a>
       <Sidebar
         isCollapsed={state.sidebarCollapsed}
         onToggle={toggleSidebar}
@@ -350,7 +363,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         onNotificationClick={() => toggleRightPanel('notifications')}
       />
       <ContentArea>
-        {renderMainContent()}
+        <div ref={contentRef} id="main-content" tabIndex={-1} style={{ height: '100%', outline: 'none' }}>
+          {renderMainContent()}
+        </div>
       </ContentArea>
       <RightPanel
         mode={state.rightPanelMode}

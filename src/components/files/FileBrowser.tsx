@@ -185,7 +185,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       />
 
       {/* File area */}
-      <div style={{ flex: 1, overflow: 'auto' }}>
+      <div style={{ flex: 1, overflow: 'auto' }} role="listbox" aria-label="Files" tabIndex={0}>
         {loading ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-faint, #62655a)' }}>
             Loading...
@@ -221,10 +221,17 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
 
       {/* Rename dialog */}
       {renameTarget && (
-        <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60,
-        }} onClick={() => setRenameTarget(null)}>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Rename"
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60,
+          }}
+          onClick={() => setRenameTarget(null)}
+          onKeyDown={(e) => e.key === 'Escape' && setRenameTarget(null)}
+        >
           <div style={{
             background: 'var(--bg-2,#131410)', border: '1px solid var(--border,#262920)',
             borderRadius: 10, padding: 20, width: 340,
@@ -254,10 +261,17 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
 
       {/* New file/folder dialog */}
       {newItemTarget && (
-        <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60,
-        }} onClick={() => setNewItemTarget(null)}>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`New ${newItemTarget.type === 'file' ? 'File' : 'Folder'}`}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60,
+          }}
+          onClick={() => setNewItemTarget(null)}
+          onKeyDown={(e) => e.key === 'Escape' && setNewItemTarget(null)}
+        >
           <div style={{
             background: 'var(--bg-2,#131410)', border: '1px solid var(--border,#262920)',
             borderRadius: 10, padding: 20, width: 340,
@@ -288,12 +302,16 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
 
       {/* Toast */}
       {toast && (
-        <div style={{
-          position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
-          background: 'var(--bg-3,#1c1e17)', border: '1px solid var(--border,#262920)',
-          padding: '10px 18px', borderRadius: 10, fontSize: 13, color: 'var(--text)',
-          zIndex: 200, animation: 'fadeIn 0.18s ease',
-        }}>
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+            background: 'var(--bg-3,#1c1e17)', border: '1px solid var(--border,#262920)',
+            padding: '10px 18px', borderRadius: 10, fontSize: 13, color: 'var(--text)',
+            zIndex: 200, animation: 'fadeIn 0.18s ease',
+          }}
+        >
           {toast}
         </div>
       )}

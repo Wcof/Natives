@@ -258,6 +258,7 @@ export const zh = {
     loading: '加载中...',
     error: '错误',
     success: '成功',
+    skipToContent: '跳转到内容',
   },
 
   // ── Phase 3: Screenshot ──

@@ -271,6 +271,7 @@ export const en = {
     loading: 'Loading...',
     error: 'Error',
     success: 'Success',
+    skipToContent: 'Skip to content',
   },
 
   // ── Phase 3: Screenshot ──
