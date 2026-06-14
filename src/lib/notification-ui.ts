@@ -60,7 +60,10 @@ export function renderNotificationCenter(
 
   const header = document.createElement('div');
   header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border,#262920);';
-  header.innerHTML = `<span style="font-size:13px;font-weight:600;color:var(--text-dim,#9b9d8c)">Notifications</span>`;
+  const titleSpan = document.createElement('span');
+  titleSpan.style.cssText = 'font-size:13px;font-weight:600;color:var(--text-dim,#9b9d8c)';
+  titleSpan.textContent = 'Notifications';
+  header.appendChild(titleSpan);
   const markAllBtn = document.createElement('button');
   markAllBtn.className = 'btn-ghost';
   markAllBtn.textContent = 'Mark all read';
@@ -91,27 +94,50 @@ export function renderNotificationCenter(
       error: '#d9534f',
     };
 
-    item.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-        <div>
-          <span style="font-size:12px;font-weight:600;color:var(--text,#f2f2ea)">${notif.title}</span>
-          ${notif.body ? `<p style="font-size:12px;color:var(--text-dim,#9b9d8c);margin:2px 0 0">${notif.body}</p>` : ''}
-          <span style="font-size:10px;color:var(--text-faint,#62655a);margin-top:4px;display:block">${notif.createdAt}</span>
-        </div>
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
-          <span style="width:8px;height:8px;border-radius:50%;background:${levelColors[notif.level] || levelColors.info}"></span>
-          ${!notif.read ? `<button class="btn-ghost" style="font-size:10px;color:var(--accent,#cdf24b);background:none;border:none;cursor:pointer;" data-id="${notif.id}">Mark read</button>` : ''}
-        </div>
-      </div>
-    `;
+    // Build notification item using DOM API (safe from XSS)
+    const content = document.createElement('div');
+    content.style.cssText = 'display:flex;justify-content:space-between;align-items:flex-start;';
 
-    const markBtn = item.querySelector('[data-id]');
-    if (markBtn) {
-      markBtn.addEventListener('click', () => onMarkRead(notif.id));
+    const left = document.createElement('div');
+    const titleEl = document.createElement('span');
+    titleEl.style.cssText = 'font-size:12px;font-weight:600;color:var(--text,#f2f2ea)';
+    titleEl.textContent = notif.title;
+    left.appendChild(titleEl);
+
+    if (notif.body) {
+      const bodyEl = document.createElement('p');
+      bodyEl.style.cssText = 'font-size:12px;color:var(--text-dim,#9b9d8c);margin:2px 0 0';
+      bodyEl.textContent = notif.body;
+      left.appendChild(bodyEl);
     }
 
-    list.appendChild(item);
+    const timeEl = document.createElement('span');
+    timeEl.style.cssText = 'font-size:10px;color:var(--text-faint,#62655a);margin-top:4px;display:block';
+    timeEl.textContent = notif.createdAt;
+    left.appendChild(timeEl);
+
+    content.appendChild(left);
+
+    const right = document.createElement('div');
+    right.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:4px;';
+
+    const dot = document.createElement('span');
+    dot.style.cssText = `width:8px;height:8px;border-radius:50%;background:${levelColors[notif.level] || levelColors.info}`;
+    right.appendChild(dot);
+
+    if (!notif.read) {
+      const markBtn = document.createElement('button');
+      markBtn.className = 'btn-ghost';
+      markBtn.style.cssText = 'font-size:10px;color:var(--accent,#cdf24b);background:none;border:none;cursor:pointer;';
+      markBtn.textContent = 'Mark read';
+      markBtn.addEventListener('click', () => onMarkRead(notif.id));
+      right.appendChild(markBtn);
+    }
+
+    content.appendChild(right);
+    item.appendChild(content);
   }
+
   container.appendChild(list);
 }
 

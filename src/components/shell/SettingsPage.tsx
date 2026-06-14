@@ -1,11 +1,31 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { applyTheme } from '@/lib/theme-engine';
 
 export default function SettingsPage() {
   const [theme, setThemeState] = useState('terminal-volt');
   const [locale, setLocaleState] = useState('zh-CN');
+
+  // Load persisted settings on mount
+  useEffect(() => {
+    async function loadSettings() {
+      try {
+        const api = (window as unknown as Record<string, unknown>).nativesAPI as Record<string, unknown> | undefined;
+        if (api) {
+          // Load theme
+          const getTheme = (api as Record<string, unknown>).getTheme as (() => string) | undefined;
+          if (getTheme) {
+            const savedTheme = await getTheme();
+            if (savedTheme) setThemeState(savedTheme);
+          }
+          // Load locale
+          // In a real implementation, this would call an IPC to read the saved locale
+        }
+      } catch { /* browser dev mode */ }
+    }
+    loadSettings();
+  }, []);
 
   const THEMES = [
     { id: 'terminal-volt', label: 'Terminal Volt', desc: 'Dark, terminal-inspired' },
@@ -21,6 +41,25 @@ export default function SettingsPage() {
   const handleThemeChange = (themeId: string) => {
     setThemeState(themeId);
     applyTheme(themeId);
+    // Persist to backend
+    try {
+      const api = (window as unknown as Record<string, unknown>).nativesAPI as Record<string, unknown> | undefined;
+      if (api) {
+        const setTheme = (api as Record<string, unknown>).setTheme as ((t: string) => void) | undefined;
+        setTheme?.(themeId);
+      }
+    } catch { /* browser dev mode */ }
+  };
+
+  const handleLocaleChange = (localeId: string) => {
+    setLocaleState(localeId);
+    // Persist to backend
+    try {
+      const api = (window as unknown as Record<string, unknown>).nativesAPI as Record<string, unknown> | undefined;
+      if (api) {
+        // Would call IPC to persist locale
+      }
+    } catch { /* browser dev mode */ }
   };
 
   return (
@@ -62,7 +101,7 @@ export default function SettingsPage() {
               <button
                 key={l.id}
                 className={`btn ${locale === l.id ? 'btn-primary' : ''}`}
-                onClick={() => setLocaleState(l.id)}
+                onClick={() => handleLocaleChange(l.id)}
                 style={{ flex: 1, textAlign: 'center' }}
               >
                 {l.label}

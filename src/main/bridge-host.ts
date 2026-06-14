@@ -1,4 +1,6 @@
 import { getDb, dbGet, dbSet, dbDelete, dbList } from './database';
+import { sendNotification, setBadge } from './bridge-notification';
+import { sendMessage, broadcastMessage } from './bridge-ipc';
 
 // ── HTTP Bridge Request Handler ──
 
@@ -65,6 +67,41 @@ export async function handleBridgeRequest(
         moduleId,
         nativesVersion: NATIVES_VERSION,
       };
+    }
+
+    // Environment variables
+    case 'env.get': {
+      if (!checkPermission(moduleId, 'env:read')) return { error: 'Permission denied' };
+      const { key } = data as { key: string };
+      return { value: null }; // Env injection occurs at terminal startup, not live query
+    }
+
+    // Notifications
+    case 'notification.send': {
+      if (!checkPermission(moduleId, 'notification')) return { error: 'Permission denied' };
+      const { title, body, level } = data as { title: string; body?: string; level?: string };
+      sendNotification(moduleId, title, body, (level || 'info') as 'info' | 'warning' | 'error');
+      return { ok: true };
+    }
+    case 'notification.badge': {
+      if (!checkPermission(moduleId, 'notification')) return { error: 'Permission denied' };
+      const { count } = data as { count: number };
+      setBadge(moduleId, count);
+      return { ok: true };
+    }
+
+    // IPC
+    case 'ipc.send': {
+      if (!checkPermission(moduleId, 'ipc:send')) return { error: 'Permission denied' };
+      const { target, payload } = data as { target: string; payload: unknown };
+      sendMessage(moduleId, target, 'bridge', payload);
+      return { ok: true };
+    }
+    case 'ipc.broadcast': {
+      if (!checkPermission(moduleId, 'ipc:send')) return { error: 'Permission denied' };
+      const { payload: bcPayload } = data as { payload: unknown };
+      broadcastMessage(moduleId, 'bridge', bcPayload);
+      return { ok: true };
     }
 
     default:

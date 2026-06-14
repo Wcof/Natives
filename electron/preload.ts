@@ -27,6 +27,8 @@ const nativesAPI = {
     install: (pathOrZip: string) => ipcRenderer.invoke('module:install', pathOrZip),
     uninstall: (moduleId: string) => ipcRenderer.invoke('module:uninstall', moduleId),
     list: () => ipcRenderer.invoke('module:list'),
+    enable: (moduleId: string) => ipcRenderer.invoke('module:enable', moduleId),
+    disable: (moduleId: string) => ipcRenderer.invoke('module:disable', moduleId),
   },
 
   // Environment
@@ -34,6 +36,10 @@ const nativesAPI = {
     getVariables: (profileId: string) => ipcRenderer.invoke('env:getVariables', profileId),
     getDefaultProfile: () => ipcRenderer.invoke('env:getDefaultProfile'),
     listProfiles: () => ipcRenderer.invoke('env:listProfiles'),
+    createProfile: (name: string) => ipcRenderer.invoke('env:createProfile', name),
+    deleteProfile: (name: string) => ipcRenderer.invoke('env:deleteProfile', name),
+    setVariable: (profileId: string, key: string, value: string) =>
+      ipcRenderer.invoke('env:setVariable', profileId, key, value),
     encrypt: (text: string) => ipcRenderer.invoke('env:encrypt', text),
     decrypt: (encrypted: string) => ipcRenderer.invoke('env:decrypt', encrypted),
   },
@@ -47,6 +53,8 @@ const nativesAPI = {
     send: (title: string, body: string, level?: string) =>
       ipcRenderer.invoke('notification:send', title, body, level || 'info'),
     list: (unreadOnly?: boolean) => ipcRenderer.invoke('notification:list', unreadOnly),
+    markRead: (id: number) => ipcRenderer.invoke('notification:markRead', id),
+    markAllAsRead: () => ipcRenderer.invoke('notification:markAllRead'),
   },
 
   // Lifecycle

@@ -120,7 +120,7 @@ function createPTYSession(shell: string, env: Record<string, string>): ShellSess
 
 // ── Public API ──
 
-export function createSession(env: Record<string, string> = {}): string {
+export async function createSession(env: Record<string, string> = {}): Promise<string> {
   const shell = process.env.SHELL || '/bin/zsh';
 
   // Merge default profile env vars if database is available
@@ -129,7 +129,7 @@ export function createSession(env: Record<string, string> = {}): string {
     const { getDefaultProfile, injectEnv } = require('./env-injector');
     const profile = getDefaultProfile();
     if (profile) {
-      env = injectEnv(profile, env);
+      await injectEnv(profile.name, env);
     }
   } catch {
     // env-injector / database unavailable, continue without injection

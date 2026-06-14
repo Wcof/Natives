@@ -112,7 +112,7 @@ function initializeServices(): void {
     // Wire token verifier
     if (sandbox) {
       http.setTokenVerifier((moduleId: string, token: string) => {
-        return sandbox.verifyToken(moduleId, token);
+        return sandbox.validateSessionToken(token, moduleId);
       });
     }
 
@@ -134,12 +134,16 @@ ipcMain.handle('db:get', (event, key: string) => {
 });
 ipcMain.handle('db:set', (event, key: string, value: unknown) => {
   const mod = lazyLoad('db');
-  if (mod) mod.dbSet('__renderer__', key, String(value));
+  if (!mod) return { ok: false, error: 'Database not available' };
+  mod.dbSet('__renderer__', key, String(value));
+  mainWindow?.webContents.send('db-state-changed', 'module_data', { key });
   return { ok: true };
 });
 ipcMain.handle('db:delete', (event, key: string) => {
   const mod = lazyLoad('db');
-  if (mod) mod.dbDelete('__renderer__', key);
+  if (!mod) return { ok: false, error: 'Database not available' };
+  mod.dbDelete('__renderer__', key);
+  mainWindow?.webContents.send('db-state-changed', 'module_data', { key });
   return { ok: true };
 });
 ipcMain.handle('db:list', (event, prefix?: string) => {
@@ -148,17 +152,17 @@ ipcMain.handle('db:list', (event, prefix?: string) => {
 });
 
 // Terminal control
-ipcMain.handle('terminal:create', () => {
+ipcMain.handle('terminal:create', async () => {
   const mod = lazyLoad('shell');
   if (!mod) return { sessionId: null, error: 'Shell not available' };
 
   // Inject default env profile if available
   const envMod = lazyLoad('envInjector');
-  let env: Record<string, string> = {};
+  const env: Record<string, string> = {};
   if (envMod) {
     const defaultProfile = envMod.getDefaultProfile();
     if (defaultProfile) {
-      env = envMod.getVariables(defaultProfile.name);
+      await envMod.injectEnv(defaultProfile.name, env);
     }
   }
 
@@ -229,10 +233,15 @@ ipcMain.handle('env:deleteProfile', (_event, name: string) => {
   if (mod) mod.deleteProfile(name);
   return { ok: true };
 });
-ipcMain.handle('env:setVariable', (_event, profileName: string, key: string, value: string) => {
-  const mod = lazyLoad('envInjector');
-  if (mod) mod.setVariable(profileName, key, value);
-  return { ok: true };
+ipcMain.handle('env:setVariable', async (_event, profileName: string, key: string, value: string) => {
+  try {
+    const mod = lazyLoad('envInjector');
+    if (!mod) return { ok: false, error: 'Env injector not available' };
+    await mod.setVariable(profileName, key, value);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
 });
 
 // Notifications
