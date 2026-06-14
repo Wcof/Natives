@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { listDir, readFile } from './file-manager';
+import { listDir, readFile, streamFile } from './file-manager';
 
 const TEST_DIR = path.join(process.env.HOME || '~', '.natives-test', 'listdir-test');
 
@@ -194,5 +194,80 @@ describe('readFile', () => {
     const result = await readFile(path.join(READ_DIR, 'small.txt'));
     assert.equal(typeof result.size, 'number');
     assert.ok(result.size > 0);
+  });
+});
+
+const STREAM_DIR = path.join(process.env.HOME || '~', '.natives-test', 'streamfile-test');
+
+describe('streamFile', () => {
+  before(() => {
+    fs.mkdirSync(STREAM_DIR, { recursive: true });
+    fs.writeFileSync(path.join(STREAM_DIR, 'hello.txt'), 'Hello, World! This is a test file.', 'utf-8');
+    fs.writeFileSync(path.join(STREAM_DIR, 'typescript.ts'), 'const x: number = 42;', 'utf-8');
+  });
+
+  after(() => {
+    if (fs.existsSync(STREAM_DIR)) {
+      fs.rmSync(STREAM_DIR, { recursive: true, force: true });
+    }
+  });
+
+  it('should return full file stream without range', async () => {
+    const result = await streamFile(path.join(STREAM_DIR, 'hello.txt'));
+    assert.equal(result.contentType, 'text/plain');
+    assert.equal(result.totalSize, 34);
+
+    // Collect stream data
+    const chunks: Buffer[] = [];
+    for await (const chunk of result.stream) {
+      chunks.push(chunk as Buffer);
+    }
+    result.stream.destroy();
+    const content = Buffer.concat(chunks).toString('utf-8');
+    assert.equal(content, 'Hello, World! This is a test file.');
+    assert.equal(result.contentRange, undefined);
+  });
+
+  it('should read a range with start only', async () => {
+    const result = await streamFile(path.join(STREAM_DIR, 'hello.txt'), { start: 7 });
+    assert.equal(result.contentType, 'text/plain');
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of result.stream) {
+      chunks.push(chunk as Buffer);
+    }
+    const content = Buffer.concat(chunks).toString('utf-8');
+    assert.equal(content, 'World! This is a test file.');
+    assert.ok(result.contentRange!.startsWith('bytes 7-33/34'));
+  });
+
+  it('should detect text content type for .md files', async () => {
+    fs.writeFileSync(path.join(STREAM_DIR, 'readme.md'), '# Hello', 'utf-8');
+    const result = await streamFile(path.join(STREAM_DIR, 'readme.md'));
+    assert.equal(result.contentType, 'text/markdown');
+    result.stream.destroy();
+  });
+
+  it('should detect image content type for .png files', async () => {
+    // Create a minimal valid PNG
+    const pngBuffer = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    fs.writeFileSync(path.join(STREAM_DIR, 'image.png'), pngBuffer);
+    const result = await streamFile(path.join(STREAM_DIR, 'image.png'));
+    assert.equal(result.contentType, 'image/png');
+    result.stream.destroy();
+  });
+
+  it('should return generic type for unknown extensions', async () => {
+    fs.writeFileSync(path.join(STREAM_DIR, 'data.bin'), 'binary', 'utf-8');
+    const result = await streamFile(path.join(STREAM_DIR, 'data.bin'));
+    assert.equal(result.contentType, 'application/octet-stream');
+    result.stream.destroy();
+  });
+
+  it('should throw ENOENT for non-existent file', async () => {
+    await assert.rejects(
+      () => streamFile(path.join(STREAM_DIR, 'nonexistent.txt')),
+      { code: 'ENOENT' },
+    );
   });
 });

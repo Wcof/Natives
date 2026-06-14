@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { Readable } from 'stream';
 import { type FileEntry, detectFileKind, detectProjectBadge } from '../types/file';
 
 // ── List Directory ──
@@ -159,4 +160,100 @@ export async function readFile(filePath: string): Promise<{
   }
 
   return { content, truncated, size: fileSize, encoding };
+}
+
+// ── MIME Types ──
+
+const MIME_TYPES: Record<string, string> = {
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.html': 'text/html',
+  '.htm': 'text/html',
+  '.css': 'text/css',
+  '.js': 'application/javascript',
+  '.mjs': 'application/javascript',
+  '.cjs': 'application/javascript',
+  '.json': 'application/json',
+  '.xml': 'application/xml',
+  '.yaml': 'text/yaml',
+  '.yml': 'text/yaml',
+  '.toml': 'text/toml',
+  '.ts': 'application/typescript',
+  '.tsx': 'application/typescript',
+  '.jsx': 'application/javascript',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.bmp': 'image/bmp',
+  '.pdf': 'application/pdf',
+  '.zip': 'application/zip',
+  '.tar': 'application/x-tar',
+  '.gz': 'application/gzip',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+};
+
+function getMimeType(filePath: string): string {
+  const lower = filePath.toLowerCase();
+  for (const [ext, mime] of Object.entries(MIME_TYPES)) {
+    if (lower.endsWith(ext)) return mime;
+  }
+  return 'application/octet-stream';
+}
+
+// ── Stream File ──
+
+interface StreamFileRange {
+  start: number;
+  end?: number;
+}
+
+interface StreamFileResult {
+  stream: Readable;
+  totalSize: number;
+  contentRange?: string;
+  contentType: string;
+}
+
+/**
+ * 流式读取文件（支持 Range 请求）
+ * @param filePath 文件路径
+ * @param range 可选的字节范围
+ */
+export async function streamFile(
+  filePath: string,
+  range?: StreamFileRange,
+): Promise<StreamFileResult> {
+  const stat = await fs.promises.stat(filePath);
+  if (!stat.isFile()) {
+    throw Object.assign(new Error(`Not a file: ${filePath}`), { code: 'EISDIR' });
+  }
+
+  const totalSize = stat.size;
+  const contentType = getMimeType(filePath);
+
+  if (range) {
+    const start = Math.max(0, range.start);
+    const end = range.end !== undefined ? Math.min(range.end, totalSize - 1) : totalSize - 1;
+    const chunkSize = end - start + 1;
+
+    const stream = fs.createReadStream(filePath, { start, end });
+    const contentRange = `bytes ${start}-${end}/${totalSize}`;
+
+    return { stream, totalSize, contentRange, contentType };
+  }
+
+  return {
+    stream: fs.createReadStream(filePath),
+    totalSize,
+    contentType,
+  };
 }
