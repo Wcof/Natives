@@ -480,3 +480,43 @@ async function copyDir(src: string, dest: string): Promise<void> {
     }
   }
 }
+
+/**
+ * 导入文件到目录（从拖放/复制）
+ * @param sourcePaths 源文件路径列表
+ * @param destDir 目标目录
+ * @returns 实际写入的文件路径列表
+ */
+export async function importFiles(sourcePaths: string[], destDir: string): Promise<string[]> {
+  const results: string[] = [];
+
+  for (const srcPath of sourcePaths) {
+    const baseName = path.basename(srcPath);
+    let destPath = path.join(destDir, baseName);
+
+    // 自动递增（如果目标已存在）
+    let counter = 1;
+    while (true) {
+      try {
+        await fs.promises.access(destPath);
+        const ext = path.extname(baseName);
+        const name = path.basename(baseName, ext);
+        destPath = path.join(destDir, `${name} (${counter})${ext}`);
+        counter++;
+      } catch {
+        break; // 目标不存在，可以使用
+      }
+    }
+
+    // 复制文件
+    const stat = await fs.promises.stat(srcPath);
+    if (stat.isDirectory()) {
+      await copyDir(srcPath, destPath);
+    } else {
+      await fs.promises.copyFile(srcPath, destPath);
+    }
+    results.push(destPath);
+  }
+
+  return results;
+}

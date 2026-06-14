@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
-import { listDir, readFile, streamFile, writeFileAtomic, createEntry, renameEntry, trashEntry, moveEntry } from './file-manager';
+import { listDir, readFile, streamFile, writeFileAtomic, createEntry, renameEntry, trashEntry, moveEntry, importFiles } from './file-manager';
 
 const TEST_DIR = path.join(process.env.HOME || '~', '.natives-test', 'listdir-test');
 
@@ -528,5 +528,42 @@ describe('moveEntry', () => {
     await assert.rejects(
       () => moveEntry('/nonexistent/source.txt', '/tmp/dest.txt'),
     );
+  });
+});
+
+const IMPORT_DIR = path.join(process.env.HOME || '~', '.natives-test', 'import-test');
+
+describe('importFiles', () => {
+  before(() => {
+    fs.mkdirSync(path.join(IMPORT_DIR, 'source'), { recursive: true });
+    fs.mkdirSync(path.join(IMPORT_DIR, 'target'), { recursive: true });
+    fs.writeFileSync(path.join(IMPORT_DIR, 'source', 'file1.txt'), 'content1', 'utf-8');
+    fs.writeFileSync(path.join(IMPORT_DIR, 'source', 'file2.txt'), 'content2', 'utf-8');
+    fs.writeFileSync(path.join(IMPORT_DIR, 'target', 'file1.txt'), 'existing', 'utf-8');
+  });
+
+  after(() => {
+    if (fs.existsSync(IMPORT_DIR)) {
+      fs.rmSync(IMPORT_DIR, { recursive: true, force: true });
+    }
+  });
+
+  it('should copy files to target directory', async () => {
+    const src = path.join(IMPORT_DIR, 'source', 'file2.txt');
+    const dstDir = path.join(IMPORT_DIR, 'target');
+    const result = await importFiles([src], dstDir);
+    assert.equal(result.length, 1);
+    assert.ok(result[0]!.endsWith('file2.txt'));
+    assert.ok(fs.existsSync(result[0]!));
+  });
+
+  it('should auto-increment when target exists', async () => {
+    const src = path.join(IMPORT_DIR, 'source', 'file1.txt');
+    const dstDir = path.join(IMPORT_DIR, 'target');
+    const result = await importFiles([src], dstDir);
+    assert.equal(result.length, 1);
+    // Should not overwrite file1.txt, should create file1 (1).txt
+    assert.ok(result[0]!.includes('(1)'));
+    assert.ok(fs.existsSync(result[0]!));
   });
 });
