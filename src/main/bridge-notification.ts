@@ -33,13 +33,13 @@ export function sendNotification(
 
 export function setBadge(moduleId: string, count: number): void {
   getDb()
-    .prepare("INSERT INTO settings (id, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(id) DO UPDATE SET value = excluded.value, updated_at = datetime('now')")
+    .prepare("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')")
     .run(`badge:${moduleId}`, String(count));
 }
 
 export function getBadge(moduleId: string): number {
   const row = getDb()
-    .prepare("SELECT value FROM settings WHERE id = ?")
+    .prepare("SELECT value FROM settings WHERE key = ?")
     .get(`badge:${moduleId}`) as { value: string } | undefined;
   return row ? parseInt(row.value, 10) : 0;
 }

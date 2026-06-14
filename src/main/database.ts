@@ -51,14 +51,14 @@ const TABLES: Record<string, string> = {
   )`,
 
   module_permissions: `CREATE TABLE IF NOT EXISTS module_permissions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
     module_id TEXT NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
     permission TEXT NOT NULL,
-    granted INTEGER DEFAULT 0
+    granted INTEGER DEFAULT 0,
+    PRIMARY KEY (module_id, permission)
   )`,
 
   settings: `CREATE TABLE IF NOT EXISTS settings (
-    id TEXT PRIMARY KEY,
+    key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
     updated_at TEXT
   )`,

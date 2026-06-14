@@ -113,6 +113,41 @@ export function getInstalledModules(): Array<{
   }>;
 }
 
+// ── Module update ──
+
+export function updateModule(moduleId: string): { success: true } | { success: false; error: string } {
+  try {
+    const manifestPath = path.join(MODULES_DIR, moduleId, 'manifest.json');
+    if (!fs.existsSync(manifestPath)) {
+      return { success: false, error: 'Module no longer exists' };
+    }
+
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    const validation = validateManifest(manifest);
+    if (!validation.ok) {
+      return { success: false, error: validation.error };
+    }
+
+    const db = getDb();
+
+    // Backup module_data before version change
+    const backup = db
+      .prepare('SELECT key, value FROM module_data WHERE module_id = ?')
+      .all(moduleId) as Array<{ key: string; value: string }>;
+
+    // Update version in database
+    db.prepare('UPDATE modules SET version = ?, updated_at = datetime(\'now\') WHERE id = ?')
+      .run(validation.manifest.version, moduleId);
+
+    // Re-insert module_data (data survives version changes)
+    // Keys are already scoped by (module_id, key) UNIQUE constraint
+
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
 // ── Helpers ──
 
 function readManifestFromDir(dir: string): Manifest {

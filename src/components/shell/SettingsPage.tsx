@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { applyTheme } from '@/lib/theme-engine';
 
 export default function SettingsPage() {
   const [theme, setThemeState] = useState('terminal-volt');
@@ -19,10 +20,7 @@ export default function SettingsPage() {
 
   const handleThemeChange = (themeId: string) => {
     setThemeState(themeId);
-    try {
-      const { applyTheme } = require('@/lib/theme-engine');
-      applyTheme(themeId);
-    } catch { /* SSR */ }
+    applyTheme(themeId);
   };
 
   return (

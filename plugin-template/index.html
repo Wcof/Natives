@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Plugin</title>
+  <script src="/natives-sdk.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: var(--font-ui, -apple-system, BlinkMacSystemFont, sans-serif);
+      background: var(--bg, #0b0c0a);
+      color: var(--text, #f2f2ea);
+      padding: 20px;
+    }
+    h1 { font-size: 24px; margin-bottom: 16px; }
+    .card {
+      background: var(--bg-3, #1c1e17);
+      border: 1px solid var(--border, #262920);
+      border-radius: var(--radius, 4px);
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    button {
+      background: var(--accent, #cdf24b);
+      color: var(--accent-ink, #0b0c0a);
+      border: none;
+      padding: 8px 16px;
+      border-radius: var(--radius, 4px);
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { filter: brightness(1.06); }
+    #status { color: var(--text-dim, #9b9d8c); font-size: 12px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>My Plugin</h1>
+  <div class="card">
+    <p>This is a sample Natives plugin template.</p>
+    <p>Edit this file to build your own plugin.</p>
+  </div>
+  <div class="card">
+    <h3>Data Storage Test</h3>
+    <input type="text" id="key" placeholder="Key" style="background:var(--bg);border:1px solid var(--border);padding:6px;border-radius:4px;color:var(--text);margin-right:8px;">
+    <input type="text" id="value" placeholder="Value" style="background:var(--bg);border:1px solid var(--border);padding:6px;border-radius:4px;color:var(--text);margin-right:8px;">
+    <button onclick="saveData()">Save</button>
+    <button onclick="loadData()" style="background:var(--bg-3);color:var(--text);border:1px solid var(--border);">Load</button>
+    <div id="status"></div>
+  </div>
+
+  <script>
+    // Notify base that plugin is ready
+    window.natives.lifecycle.ready();
+
+    // Set up heartbeat response
+    window.natives.lifecycle.onHeartbeat(() => {
+      return { status: 'ok' };
+    });
+
+    // Save state on unload
+    window.natives.lifecycle.onUnload(async () => {
+      await window.natives.db.set('last-state', JSON.stringify({
+        timestamp: Date.now(),
+        message: 'Plugin was unloaded'
+      }));
+    });
+
+    // Data storage demo
+    async function saveData() {
+      const key = document.getElementById('key').value;
+      const value = document.getElementById('value').value;
+      if (!key) return;
+      await window.natives.db.set(key, value);
+      document.getElementById('status').textContent = `Saved: ${key} = ${value}`;
+    }
+
+    async function loadData() {
+      const key = document.getElementById('key').value;
+      if (!key) return;
+      const value = await window.natives.db.get(key);
+      document.getElementById('value').value = value || '';
+      document.getElementById('status').textContent = value ? `Loaded: ${key} = ${value}` : `Key "${key}" not found`;
+    }
+
+    // Display module info
+    console.log('[My Plugin] Module ID:', window.natives.meta.moduleId);
+    console.log('[My Plugin] Natives Version:', window.natives.meta.nativesVersion);
+  </script>
+</body>
+</html>

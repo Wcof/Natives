@@ -122,6 +122,19 @@ function createPTYSession(shell: string, env: Record<string, string>): ShellSess
 
 export function createSession(env: Record<string, string> = {}): string {
   const shell = process.env.SHELL || '/bin/zsh';
+
+  // Merge default profile env vars if database is available
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getDefaultProfile, injectEnv } = require('./env-injector');
+    const profile = getDefaultProfile();
+    if (profile) {
+      env = injectEnv(profile, env);
+    }
+  } catch {
+    // env-injector / database unavailable, continue without injection
+  }
+
   const session = createPTYSession(shell, env);
   return session.id;
 }

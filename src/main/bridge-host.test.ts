@@ -25,13 +25,20 @@ import {
 describe('BridgeHost', () => {
   before(() => {
     if (fs.existsSync(TEST_DB_DIR)) {
-      fs.rmSync(TEST_DB_DIR, { recursive: true });
+      try { closeDb(); } catch { /* ignore */ }
+      fs.rmSync(TEST_DB_DIR, { recursive: true, force: true });
     }
     fs.mkdirSync(TEST_DB_DIR, { recursive: true });
     initDb();
 
-    // Ensure test module permissions exist
+    // Clean stale data
     const ddb = getDb();
+    ddb.exec('DELETE FROM module_permissions');
+    ddb.exec('DELETE FROM modules');
+    ddb.exec('DELETE FROM notifications');
+    ddb.exec("DELETE FROM settings WHERE key IN ('theme', 'locale')");
+
+    // Ensure test module permissions exist
     ddb.prepare("INSERT OR IGNORE INTO modules (id, name, version, entry, type) VALUES ('test-module', 'Test', '1.0.0', 'index.html', 'web')").run();
     ddb.prepare("INSERT OR IGNORE INTO module_permissions (module_id, permission, granted) VALUES ('test-module', 'db:read', 0), ('test-module', 'db:write', 0), ('test-module', 'notification', 0)").run();
   });

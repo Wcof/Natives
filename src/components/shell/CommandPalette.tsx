@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { applyTheme } from '@/lib/theme-engine';
 
 interface CommandItem {
   id: string;
@@ -13,6 +14,7 @@ interface CommandPaletteProps {
   isOpen: boolean;
   onClose: () => void;
   onSelect: (id: string) => void;
+  onToggleTerminal?: () => void;
 }
 
 const DEFAULT_COMMANDS: CommandItem[] = [
@@ -24,7 +26,7 @@ const DEFAULT_COMMANDS: CommandItem[] = [
   { id: 'theme:editorial-index', label: 'Theme: Editorial Index', category: 'setting' },
 ];
 
-export default function CommandPalette({ isOpen, onClose, onSelect }: CommandPaletteProps) {
+export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerminal }: CommandPaletteProps) {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [results, setResults] = useState<CommandItem[]>(DEFAULT_COMMANDS);
@@ -56,6 +58,24 @@ export default function CommandPalette({ isOpen, onClose, onSelect }: CommandPal
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     switch (e.key) {
+      case 'Tab': {
+        e.preventDefault();
+        const focusable =
+          results.length > 0
+            ? document.querySelector('[role="option"]') as HTMLElement | null
+            : null;
+        if (e.shiftKey) {
+          // Shift+Tab: focus the input
+          inputRef.current?.focus();
+        } else if (focusable) {
+          // Tab: focus the first result
+          focusable.focus();
+        } else {
+          // No results, loop back to input
+          inputRef.current?.focus();
+        }
+        break;
+      }
       case 'ArrowDown':
         e.preventDefault();
         setSelectedIndex((prev) => Math.min(prev + 1, results.length - 1));
@@ -80,13 +100,9 @@ export default function CommandPalette({ isOpen, onClose, onSelect }: CommandPal
   const handleSelect = (id: string) => {
     if (id.startsWith('theme:')) {
       const themeId = id.slice(6);
-      try {
-        const { applyTheme } = require('@/lib/theme-engine');
-        applyTheme(themeId);
-      } catch { /* ignore in SSR */ }
+      applyTheme(themeId);
     } else if (id === 'terminal:toggle') {
-      // Dispatch custom event that ShellLayout listens for
-      window.dispatchEvent(new CustomEvent('toggle-terminal'));
+      onToggleTerminal?.();
     } else {
       onSelect(id);
     }
@@ -112,6 +128,8 @@ export default function CommandPalette({ isOpen, onClose, onSelect }: CommandPal
       <div
         role="dialog"
         aria-label="Command palette"
+        aria-modal="true"
+        onKeyDown={handleKeyDown}
         style={{
           position: 'fixed', top: '20%', left: '50%', transform: 'translateX(-50%)',
           width: 520, maxWidth: '90vw',

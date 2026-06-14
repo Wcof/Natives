@@ -18,6 +18,13 @@ const ManifestSchema = z.object({
   icon: z.string().optional(),
   minNativesVersion: z.string().optional(),
   permissions: z.array(z.string()).default([]),
+  api: z.object({
+    bridge: z.string().optional(),
+  }).optional(),
+  lifecycle: z.object({
+    heartbeatInterval: z.number().optional(),
+    loadTimeout: z.number().optional(),
+  }).optional(),
   i18n: z.object({
     name: z.record(z.string()).optional(),
     description: z.record(z.string()).optional(),

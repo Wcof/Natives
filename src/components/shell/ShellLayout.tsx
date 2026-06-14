@@ -8,7 +8,10 @@ import TerminalPanel from './Terminal';
 import CommandPalette from './CommandPalette';
 import WorkshopPage from './WorkshopPage';
 import SettingsPage from './SettingsPage';
-import { applyTheme, onThemeChange } from '@/lib/theme-engine';
+import StorePage from '@/app/store/page';
+import { applyTheme } from '@/lib/theme-engine';
+import { getIframeManager } from '@/lib/iframe-manager';
+import '@/types'; // ensure Window.nativesAPI type
 
 interface ShellState {
   sidebarCollapsed: boolean;
@@ -35,22 +38,85 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
   const [activeView, setActiveView] = useState<string>('dashboard');
   const [themeReady, setThemeReady] = useState(false);
+  const iframeContainerRef = useRef<HTMLDivElement>(null);
+  const activeModuleRef = useRef<string | null>(null);
 
   // FOUC guard
   useEffect(() => {
     setThemeReady(true);
     applyTheme('terminal-volt');
 
-    // Notify Electron main process
+    // Notify Electron main process via IPC
     try {
-      const event = new CustomEvent('theme-applied-ready');
-      window.dispatchEvent(event);
+      if (window.nativesAPI?.themeReady) {
+        window.nativesAPI.themeReady();
+      }
     } catch {
       // Browser dev mode
     }
   }, []);
 
-  // Cmd+B toggle sidebar, Cmd+K command palette
+  // Manage iframe lifecycle when activeView changes
+  useEffect(() => {
+    const container = iframeContainerRef.current;
+    if (!container) return;
+
+    const manager = getIframeManager();
+    const moduleId = activeView.startsWith('module:') ? activeView.slice(7) : null;
+
+    // Hide previous iframe
+    if (activeModuleRef.current && activeModuleRef.current !== moduleId) {
+      manager.hideIframe(activeModuleRef.current);
+    }
+
+    activeModuleRef.current = moduleId;
+
+    if (!moduleId) {
+      // Remove any existing iframes from container (for non-module views)
+      const existingIframes = container.querySelectorAll('iframe');
+      existingIframes.forEach((f) => f.remove());
+      return;
+    }
+
+    // Check if iframe already exists
+    let iframe = manager.showIframe(moduleId);
+    if (!iframe) {
+      // Create new iframe
+      const port = window.__nativesHttpPort || 3000;
+      const url = `http://localhost:${port}/modules/${moduleId}/index.html`;
+      iframe = manager.createIframe(moduleId, url);
+
+      // Set up heartbeat monitoring
+      manager.startHeartbeat(moduleId, 5000);
+      manager.onHeartbeatTimeout(moduleId, () => {
+        console.warn(`[Shell] Heartbeat timeout for module ${moduleId}`);
+      });
+      manager.onCrash(moduleId, () => {
+        console.error(`[Shell] Module ${moduleId} crashed`);
+      });
+    }
+
+    // Move iframe into container
+    container.innerHTML = '';
+    container.appendChild(iframe);
+    iframe.style.width = '100%';
+    iframe.style.height = '100%';
+    iframe.style.border = 'none';
+
+    // Listen for heartbeat messages from the iframe
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'lifecycle:heartbeat' && event.data?.moduleId === moduleId) {
+        manager.onHeartbeatReceived(moduleId);
+      }
+    };
+    window.addEventListener('message', handleMessage);
+
+    return () => {
+      window.removeEventListener('message', handleMessage);
+    };
+  }, [activeView]);
+
+  // Cmd+B toggle sidebar, Cmd+K command palette, Cmd+Shift+K focus sidebar
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
@@ -60,6 +126,20 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         setState((prev) => ({ ...prev, cmdkOpen: !prev.cmdkOpen }));
+      }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'K') {
+        e.preventDefault();
+        // Blur current active element, focus sidebar's first focusable
+        if (document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+        const sidebar = document.querySelector<HTMLElement>('[data-sidebar]');
+        if (sidebar) {
+          const firstFocusable = sidebar.querySelector<HTMLElement>(
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+          );
+          firstFocusable?.focus();
+        }
       }
       if (e.key === 'Escape') {
         setState((prev) => ({ ...prev, cmdkOpen: false }));
@@ -81,6 +161,13 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     setState((prev) => ({ ...prev, terminalCollapsed: !prev.terminalCollapsed }));
   }, []);
 
+  // Listen for 'toggle-terminal' custom event (dispatched by CommandPalette)
+  useEffect(() => {
+    const handler = () => toggleTerminal();
+    window.addEventListener('toggle-terminal', handler);
+    return () => window.removeEventListener('toggle-terminal', handler);
+  }, [toggleTerminal]);
+
   const toggleMaximized = useCallback(() => {
     setState((prev) => ({ ...prev, terminalMaximized: !prev.terminalMaximized }));
   }, []);
@@ -89,11 +176,17 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     setState((prev) => ({ ...prev, cmdkOpen: true }));
   }, []);
 
+  const handleInstallModule = useCallback((source: string) => {
+    window.nativesAPI?.module?.install?.(source);
+  }, []);
+
   const handleModuleSelect = useCallback((moduleId: string) => {
     if (moduleId === '__settings__') {
       setActiveView('settings');
     } else if (moduleId === '__workshop__') {
       setActiveView('workshop');
+    } else if (moduleId === '__store__') {
+      setActiveView('store');
     } else {
       setActiveView(`module:${moduleId}`);
     }
@@ -114,20 +207,15 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       case 'settings':
         return <SettingsPage />;
       case 'workshop':
-        return <WorkshopPage onInstall={() => {}} />;
+        return <WorkshopPage onInstall={handleInstallModule} />;
+      case 'store':
+        return <StorePage />;
       case 'dashboard':
         return children;
       default:
         if (activeView.startsWith('module:')) {
-          const moduleId = activeView.slice(7);
-          return (
-            <iframe
-              sandbox="allow-scripts allow-forms"
-              src={`/modules/${moduleId}/index.html`}
-              style={{ width: '100%', height: '100%', border: 'none' }}
-              title={moduleId}
-            />
-          );
+          // iframe is managed by useEffect above, render container
+          return <div ref={iframeContainerRef} style={{ width: '100%', height: '100%' }} />;
         }
         return children;
     }

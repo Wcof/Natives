@@ -1,4 +1,76 @@
-import { getDb } from './database';
+import { getDb, dbGet, dbSet, dbDelete, dbList } from './database';
+
+// ── HTTP Bridge Request Handler ──
+
+export async function handleBridgeRequest(
+  namespace: string,
+  method: string,
+  moduleId: string,
+  data: unknown
+): Promise<unknown> {
+  const key = `${namespace}.${method}`;
+
+  switch (key) {
+    // Data operations
+    case 'db.get': {
+      if (!checkPermission(moduleId, 'db:read')) return { error: 'Permission denied' };
+      const { key: k } = data as { key: string };
+      const value = dbGet(moduleId, k);
+      return { value };
+    }
+    case 'db.set': {
+      if (!checkPermission(moduleId, 'db:write')) return { error: 'Permission denied' };
+      const { key: k, value: v } = data as { key: string; value: string };
+      dbSet(moduleId, k, v);
+      return { ok: true };
+    }
+    case 'db.delete': {
+      if (!checkPermission(moduleId, 'db:write')) return { error: 'Permission denied' };
+      const { key: k } = data as { key: string };
+      dbDelete(moduleId, k);
+      return { ok: true };
+    }
+    case 'db.list': {
+      if (!checkPermission(moduleId, 'db:read')) return { error: 'Permission denied' };
+      const { prefix } = data as { prefix?: string };
+      return { keys: dbList(moduleId, prefix) };
+    }
+
+    // Settings
+    case 'settings.getTheme': {
+      return getTheme();
+    }
+    case 'settings.getLocale': {
+      return getLocale();
+    }
+
+    // Lifecycle
+    case 'lifecycle.ready': {
+      markReady(moduleId);
+      return { ok: true };
+    }
+    case 'lifecycle.heartbeat': {
+      markHeartbeat(moduleId);
+      return { ok: true };
+    }
+    case 'lifecycle.error': {
+      const { message } = data as { message: string };
+      markError(moduleId, message);
+      return { ok: true };
+    }
+
+    // Meta
+    case 'meta.info': {
+      return {
+        moduleId,
+        nativesVersion: NATIVES_VERSION,
+      };
+    }
+
+    default:
+      return { error: `Unknown bridge method: ${key}` };
+  }
+}
 
 // ── Permission Checking ──
 
@@ -25,14 +97,14 @@ export function revokePermission(moduleId: string, permission: string): void {
 
 export function getTheme(): { theme: string } {
   const row = getDb()
-    .prepare("SELECT value FROM settings WHERE id = 'theme'")
+    .prepare("SELECT value FROM settings WHERE key = 'theme'")
     .get() as { value: string } | undefined;
   return { theme: row?.value || 'terminal-volt' };
 }
 
 export function setTheme(theme: string): void {
   getDb()
-    .prepare("INSERT INTO settings (id, value, updated_at) VALUES ('theme', ?, datetime('now')) ON CONFLICT(id) DO UPDATE SET value = excluded.value, updated_at = datetime('now')")
+    .prepare("INSERT INTO settings (key, value, updated_at) VALUES ('theme', ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')")
     .run(theme);
 }
 
@@ -40,14 +112,14 @@ export function setTheme(theme: string): void {
 
 export function getLocale(): { locale: string } {
   const row = getDb()
-    .prepare("SELECT value FROM settings WHERE id = 'locale'")
+    .prepare("SELECT value FROM settings WHERE key = 'locale'")
     .get() as { value: string } | undefined;
   return { locale: row?.value || 'zh-CN' };
 }
 
 export function setLocale(locale: string): void {
   getDb()
-    .prepare("INSERT INTO settings (id, value, updated_at) VALUES ('locale', ?, datetime('now')) ON CONFLICT(id) DO UPDATE SET value = excluded.value, updated_at = datetime('now')")
+    .prepare("INSERT INTO settings (key, value, updated_at) VALUES ('locale', ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')")
     .run(locale);
 }
 

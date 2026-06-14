@@ -42,18 +42,18 @@ describe('EnvInjector', () => {
     assert.ok(profiles.find((p) => p.name === 'Personal'));
   });
 
-  it('should set and get variables', () => {
-    setVariable('Work', 'API_KEY', 'sk-test-key');
-    setVariable('Work', 'MODEL', 'gpt-4');
+  it('should set and get variables', async () => {
+    await setVariable('Work', 'API_KEY', 'sk-test-key');
+    await setVariable('Work', 'MODEL', 'gpt-4');
 
-    const vars = getVariables('Work');
+    const vars = await getVariables('Work');
     assert.equal(vars.API_KEY, 'sk-test-key');
     assert.equal(vars.MODEL, 'gpt-4');
   });
 
-  it('should isolate variables between profiles', () => {
-    const workVars = getVariables('Work');
-    const personalVars = getVariables('Personal');
+  it('should isolate variables between profiles', async () => {
+    const workVars = await getVariables('Work');
+    const personalVars = await getVariables('Personal');
 
     assert.ok(Object.keys(workVars).length > 0);
     assert.equal(Object.keys(personalVars).length, 0);
@@ -62,8 +62,6 @@ describe('EnvInjector', () => {
   it('should set and get default profile', () => {
     getDefaultProfile(); // Should not throw
 
-    // Work is first created, should be default
-    // Set Personal as default
     const profiles = listProfiles();
     const work = profiles.find((p) => p.name === 'Work')!;
     const personal = profiles.find((p) => p.name === 'Personal')!;
@@ -77,9 +75,9 @@ describe('EnvInjector', () => {
     assert.equal(defaultProfile?.name, 'Personal');
   });
 
-  it('should inject env into target object', () => {
+  it('should inject env into target object', async () => {
     const env: Record<string, string> = { PATH: '/usr/bin' };
-    injectEnv('Work', env);
+    await injectEnv('Work', env);
 
     assert.equal(env.PATH, '/usr/bin');
     assert.equal(env.API_KEY, 'sk-test-key');
