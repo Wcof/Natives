@@ -52,7 +52,10 @@ export function wrapController<T>(
 
   return {
     enqueue(chunk: T): void {
-      if (closed) return;
+      if (closed) {
+        noteClosed('enqueue');
+        return;
+      }
       try {
         raw.enqueue(chunk);
       } catch (e) {
