@@ -2,6 +2,20 @@
 
 import React from 'react';
 
+// i18n messages for ErrorBoundary (class component can't use hooks)
+const MESSAGES = {
+  en: { title: 'Something went wrong', fallback: 'An unexpected error occurred', retry: 'Try Again' },
+  zh: { title: '出了点问题', fallback: '发生了意外错误', retry: '重试' },
+};
+
+function getLocale(): 'en' | 'zh' {
+  try {
+    const el = document.documentElement;
+    const lang = el.getAttribute('lang') || el.dataset.locale || '';
+    return lang.startsWith('zh') ? 'zh' : 'en';
+  } catch { return 'en'; }
+}
+
 interface Props {
   children: React.ReactNode;
   fallback?: React.ReactNode;
@@ -40,6 +54,8 @@ export default class ErrorBoundary extends React.Component<Props, State> {
     if (this.state.hasError) {
       if (this.props.fallback) return this.props.fallback;
 
+      const msg = MESSAGES[getLocale()] || MESSAGES.en;
+
       return (
         <div style={{
           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
@@ -47,9 +63,9 @@ export default class ErrorBoundary extends React.Component<Props, State> {
           color: 'var(--text, #f2f2ea)', background: 'var(--bg, #0b0c0a)',
         }}>
           <div style={{ fontSize: 32 }}>💥</div>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>Something went wrong</div>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>{msg.title}</div>
           <div style={{ fontSize: 12, color: 'var(--text-dim, #9b9d8c)', textAlign: 'center', maxWidth: 400 }}>
-            {this.state.error?.message || 'An unexpected error occurred'}
+            {this.state.error?.message || msg.fallback}
           </div>
           <button
             onClick={this.handleReset}
@@ -59,7 +75,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
               border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer',
             }}
           >
-            Try Again
+            {msg.retry}
           </button>
         </div>
       );
