@@ -55,5 +55,7 @@ describe('DiffUtils', () => {
     it('should format KB', () => assert.equal(formatSize(1536), '1.5 KB'));
     it('should format MB', () => assert.equal(formatSize(1048576), '1.0 MB'));
     it('should format GB', () => assert.equal(formatSize(1073741824), '1.0 GB'));
+    it('should handle zero', () => assert.equal(formatSize(0), '0 B'));
+    it('should handle exactly 1 KB', () => assert.equal(formatSize(1024), '1.0 KB'));
   });
 });
