@@ -8,6 +8,7 @@ import FileList from './FileList';
 import FileBreadcrumb from './FileBreadcrumb';
 import FileToolbar from './FileToolbar';
 import FileContextMenu from './FileContextMenu';
+import Skeleton from '@/components/ui/Skeleton';
 import { useFocusTrap } from '@/lib/useFocusTrap';
 
 interface FileBrowserProps {
@@ -282,8 +283,14 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       {/* File area */}
       <div style={{ flex: 1, overflow: 'auto' }} role="listbox" aria-label={t(locale, 'fileBrowser.ariaLabelFiles')} tabIndex={0}>
         {loading ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-faint, #62655a)' }}>
-            {t(locale, 'common.loading')}
+          <div style={{ padding: viewMode === 'grid' ? 12 : 0 }}>
+            {viewMode === 'grid' ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10 }}>
+                {Array.from({ length: 8 }, (_, i) => <Skeleton key={i} variant="card" />)}
+              </div>
+            ) : (
+              <Skeleton variant="table" lines={10} />
+            )}
           </div>
         ) : viewMode === 'grid' ? (
           <FileGrid entries={entries} onSelect={handleSelect} onContextMenu={handleContextMenu} />
