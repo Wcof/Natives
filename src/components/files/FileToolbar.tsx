@@ -9,6 +9,8 @@ interface FileToolbarProps {
   sortDir: 'asc' | 'desc';
   showHidden: boolean;
   searchQuery: string;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
   onViewModeChange: (mode: 'grid' | 'list') => void;
   onSortChange: (sortBy: 'name' | 'mtime' | 'size') => void;
   onSortDirChange: (dir: 'asc' | 'desc') => void;
@@ -17,13 +19,16 @@ interface FileToolbarProps {
   onRefresh?: () => void;
   onNewFile?: () => void;
   onNewFolder?: () => void;
+  onBack?: () => void;
+  onForward?: () => void;
 }
 
 export default function FileToolbar({
   viewMode, sortBy, sortDir, showHidden, searchQuery,
+  canGoBack, canGoForward,
   onViewModeChange, onSortChange, onSortDirChange,
   onShowHiddenChange, onSearchChange,
-  onRefresh, onNewFile, onNewFolder,
+  onRefresh, onNewFile, onNewFolder, onBack, onForward,
 }: FileToolbarProps) {
   const [locale, setLocale] = useState<Locale>('en');
   useEffect(() => {
@@ -45,6 +50,30 @@ export default function FileToolbar({
       borderBottom: '1px solid var(--border, #262920)',
       flexWrap: 'wrap',
     }}>
+      {/* Navigation: back / forward */}
+      {onBack && onForward && (
+        <div style={{ display: 'flex', gap: 2 }}>
+          <button
+            className="btn btn-ghost"
+            onClick={onBack}
+            disabled={!canGoBack}
+            title="Back (Cmd+[)"
+            style={{ padding: '2px 6px', fontSize: 14, opacity: canGoBack ? 1 : 0.3 }}
+          >
+            ←
+          </button>
+          <button
+            className="btn btn-ghost"
+            onClick={onForward}
+            disabled={!canGoForward}
+            title="Forward (Cmd+])"
+            style={{ padding: '2px 6px', fontSize: 14, opacity: canGoForward ? 1 : 0.3 }}
+          >
+            →
+          </button>
+        </div>
+      )}
+
       {/* View mode toggle */}
       <div className="segmented-control" style={{ display: 'flex' }}>
         <button

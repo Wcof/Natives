@@ -75,7 +75,7 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
           color: 'var(--text-faint, #62655a)',
           fontSize: 13,
         }}>
-          This folder is empty
+          📂 {t(locale, 'fileBrowser.empty')}
         </div>
       ) : (
         entries.map((entry) => (

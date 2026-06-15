@@ -1,6 +1,7 @@
 'use client';
 
 import { type FileEntry } from '@/types/file';
+import { t, useLocale } from '@/i18n';
 import FileCard from './FileCard';
 
 interface FileGridProps {
@@ -10,13 +11,16 @@ interface FileGridProps {
 }
 
 export default function FileGrid({ entries, onSelect, onContextMenu }: FileGridProps) {
+  const locale = useLocale();
+
   if (entries.length === 0) {
     return (
       <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        height: '100%', color: 'var(--text-faint, #62655a)', fontSize: 13,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        height: '100%', color: 'var(--text-faint, #62655a)', fontSize: 13, gap: 8,
       }}>
-        This folder is empty
+        <span style={{ fontSize: 28 }}>📂</span>
+        {t(locale, 'fileBrowser.empty')}
       </div>
     );
   }

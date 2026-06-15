@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { type FileEntry } from '@/types/file';
 import { t, type Locale } from '@/i18n';
 import FileGrid from './FileGrid';
@@ -33,6 +33,36 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const [toast, setToast] = useState<string | null>(null);
   const [favorites, setFavorites] = useState<string[]>([]);
   const [locale, setLocale] = useState<Locale>('zh');
+
+  // Navigation history for back/forward
+  const historyRef = useRef<string[]>(['/']);
+  const historyIndexRef = useRef(0);
+
+  const navigateTo = useCallback((path: string) => {
+    // Truncate forward history and append
+    const hist = historyRef.current.slice(0, historyIndexRef.current + 1);
+    hist.push(path);
+    historyRef.current = hist;
+    historyIndexRef.current = hist.length - 1;
+    setCurrentPath(path);
+  }, []);
+
+  const goBack = useCallback(() => {
+    if (historyIndexRef.current > 0) {
+      historyIndexRef.current--;
+      setCurrentPath(historyRef.current[historyIndexRef.current]!);
+    }
+  }, []);
+
+  const goForward = useCallback(() => {
+    if (historyIndexRef.current < historyRef.current.length - 1) {
+      historyIndexRef.current++;
+      setCurrentPath(historyRef.current[historyIndexRef.current]!);
+    }
+  }, []);
+
+  const canGoBack = historyIndexRef.current > 0;
+  const canGoForward = historyIndexRef.current < historyRef.current.length - 1;
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -89,12 +119,22 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     loadEntries();
   }, [loadEntries]);
 
+  // Keyboard shortcuts: Cmd+[ back, Cmd+] forward
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey && e.key === '[') { e.preventDefault(); goBack(); }
+      if (e.metaKey && e.key === ']') { e.preventDefault(); goForward(); }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [goBack, goForward]);
+
   // Listen for external navigation events (from sidebar quick access)
   useEffect(() => {
     const handler = (e: Event) => {
       const path = (e as CustomEvent).detail;
       if (typeof path === 'string') {
-        setCurrentPath(path);
+        navigateTo(path);
       }
     };
     window.addEventListener('navigate-files', handler);
@@ -103,14 +143,14 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
 
   const handleSelect = (entry: FileEntry) => {
     if (entry.isDir) {
-      setCurrentPath(entry.path);
+      navigateTo(entry.path);
     } else {
       onFileSelect?.(entry);
     }
   };
 
   const handleNavigate = (path: string) => {
-    setCurrentPath(path);
+    navigateTo(path);
   };
 
   const handleSort = (newSortBy: 'name' | 'mtime' | 'size') => {
@@ -130,11 +170,11 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   // Context menu actions
   const handleOpen = useCallback((entry: FileEntry) => {
     if (entry.isDir) {
-      setCurrentPath(entry.path);
+      navigateTo(entry.path);
     } else {
       onFileSelect?.(entry);
     }
-  }, [onFileSelect]);
+  }, [onFileSelect, navigateTo]);
 
   const handleRename = useCallback((entry: FileEntry) => {
     setRenameTarget(entry);
@@ -225,6 +265,8 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         sortDir={sortDir}
         showHidden={showHidden}
         searchQuery={searchQuery}
+        canGoBack={canGoBack}
+        canGoForward={canGoForward}
         onViewModeChange={setViewMode}
         onSortChange={handleSort}
         onSortDirChange={setSortDir}
@@ -233,6 +275,8 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         onRefresh={loadEntries}
         onNewFile={() => handleNewFile(currentPath)}
         onNewFolder={() => handleNewFolder(currentPath)}
+        onBack={goBack}
+        onForward={goForward}
       />
 
       {/* File area */}
