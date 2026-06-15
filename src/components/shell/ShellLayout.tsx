@@ -9,6 +9,7 @@ import type { RightPanelMode } from './RightPanel';
 import NotificationPanel from './NotificationPanel';
 import TerminalPanel from './Terminal';
 import CommandPalette from './CommandPalette';
+import ErrorBoundary from '@/components/ui/ErrorBoundary';
 import WorkshopPage from './WorkshopPage';
 import SettingsPage from './SettingsPage';
 import StorePage from '@/app/store/page';
@@ -537,7 +538,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       />
       <ContentArea>
         <div ref={contentRef} id="main-content" tabIndex={-1} style={{ height: '100%', outline: 'none' }}>
-          {renderMainContent()}
+          <ErrorBoundary>
+            {renderMainContent()}
+          </ErrorBoundary>
         </div>
       </ContentArea>
       <RightPanel

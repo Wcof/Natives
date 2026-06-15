@@ -46,6 +46,8 @@ export default function DashboardPage() {
     unreadNotifications: 0,
   });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   // LRU list of recently-opened module ids (ISSUE-3). Reactive: updates when
   // ShellLayout records a module open via pushRecentModule.
@@ -128,14 +130,14 @@ export default function DashboardPage() {
           diskUsage: diskUsageStr,
           unreadNotifications: unread,
         });
-      } catch {
-        // Browser dev mode
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
       } finally {
         setLoading(false);
       }
     }
     loadData();
-  }, []);
+  }, [retryCount]);
 
   // Derive "recently used" modules from the LRU id list, intersected with
   // actually-installed modules (ISSUE-3). Falls back to all modules when no
@@ -205,6 +207,26 @@ export default function DashboardPage() {
           {t(locale, 'tagline')}
         </p>
       </div>
+
+      {/* Error banner with retry */}
+      {error && (
+        <div style={{
+          marginBottom: 16, padding: '10px 16px', borderRadius: 6,
+          background: '#d9534f15', border: '1px solid #d9534f44',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+        }}>
+          <span style={{ fontSize: 12, color: '#d9534f' }}>⚠ {error}</span>
+          <button
+            onClick={() => { setError(null); setRetryCount(c => c + 1); }}
+            style={{
+              padding: '4px 12px', borderRadius: 4, border: '1px solid #d9534f44',
+              background: 'transparent', color: '#d9534f', fontSize: 11, cursor: 'pointer',
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* System Status Grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12, marginBottom: 24 }}>

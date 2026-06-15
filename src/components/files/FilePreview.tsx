@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
 import { type FileEntry } from '@/types/file';
 import { t, useLocale, type Locale } from '@/i18n';
 import { getExt, isMarkdownFile, isCsvFile, isArchiveFile } from '@/lib/follow-mode';
@@ -30,6 +30,17 @@ export default function FilePreview({ entry, onClose }: FilePreviewProps) {
   const locale = useLocale();
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Escape to close
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    const el = containerRef.current;
+    el?.addEventListener('keydown', handleKeyDown);
+    return () => el?.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 
   // Load git diff when git tab is selected
   useEffect(() => {
@@ -93,7 +104,7 @@ export default function FilePreview({ entry, onClose }: FilePreviewProps) {
   const isCode = entry.kind === 'text' && !isMarkdown && !isCsv;
 
   return (
-    <div style={{
+    <div ref={containerRef} tabIndex={-1} role="dialog" aria-label={entry.name} style={{
       display: 'flex',
       flexDirection: 'column',
       height: '100%',
@@ -125,6 +136,7 @@ export default function FilePreview({ entry, onClose }: FilePreviewProps) {
           <button
             className="btn btn-ghost"
             onClick={onClose}
+            aria-label="Close preview"
             style={{ fontSize: 16, padding: '0 6px', lineHeight: '24px' }}
           >
             ✕
@@ -133,10 +145,12 @@ export default function FilePreview({ entry, onClose }: FilePreviewProps) {
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', borderBottom: '1px solid var(--border, #262920)' }}>
+      <div role="tablist" style={{ display: 'flex', borderBottom: '1px solid var(--border, #262920)' }}>
         {tabs.map((tab) => (
           <button
             key={tab.id}
+            role="tab"
+            aria-selected={activeTab === tab.id}
             className="btn btn-ghost"
             onClick={() => setActiveTab(tab.id)}
             style={{
