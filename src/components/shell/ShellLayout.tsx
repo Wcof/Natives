@@ -10,6 +10,7 @@ import NotificationPanel from './NotificationPanel';
 import TerminalPanel from './Terminal';
 import CommandPalette from './CommandPalette';
 import ErrorBoundary from '@/components/ui/ErrorBoundary';
+import ShortcutHelp from '@/components/ui/ShortcutHelp';
 import WorkshopPage from './WorkshopPage';
 import SettingsPage from './SettingsPage';
 import StorePage from '@/app/store/page';
@@ -720,6 +721,9 @@ function ModuleDetails({ moduleId, locale }: { moduleId: string; locale: Locale 
           </div>
         </div>
       )}
+
+      {/* Keyboard shortcut help overlay (Cmd+/) */}
+      <ShortcutHelp />
     </div>
   );
 }
