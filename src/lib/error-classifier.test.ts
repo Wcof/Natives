@@ -9,10 +9,11 @@ describe('ErrorClassifier', () => {
     assert.equal(err.retryable, true);
     assert.ok(err.userMessage);
     assert.ok(err.actionHint);
+    assert.ok(err.recoveryActions && err.recoveryActions.length > 0);
   });
 
   it('should classify timeout', () => {
-    const err = classifyError('Request timed out after 30s');
+    const err = classifyError('Plugin timed out after 30s');
     assert.equal(err.category, 'PLUGIN_TIMEOUT');
     assert.equal(err.retryable, true);
   });
@@ -60,5 +61,59 @@ describe('ErrorClassifier', () => {
   it('should handle non-Error objects', () => {
     const err = classifyError({ code: 500, message: 'timeout' });
     assert.equal(err.category, 'PLUGIN_TIMEOUT');
+  });
+
+  // ── New pattern-matching tests ──
+
+  it('should classify auth rejected (401)', () => {
+    const err = classifyError('401 Unauthorized: invalid_api_key');
+    assert.equal(err.category, 'AUTH_REJECTED');
+    assert.equal(err.retryable, false);
+    assert.ok(err.recoveryActions && err.recoveryActions.length > 0);
+  });
+
+  it('should classify rate limited (429)', () => {
+    const err = classifyError('429 Too Many Requests');
+    assert.equal(err.category, 'RATE_LIMITED');
+    assert.equal(err.retryable, true);
+  });
+
+  it('should classify IPC timeout', () => {
+    const err = classifyError('IPC invoke timeout: module:scan');
+    assert.equal(err.category, 'IPC_TIMEOUT');
+    assert.equal(err.retryable, true);
+  });
+
+  it('should classify file write failed', () => {
+    const err = classifyError('ENOSPC: no space left on device');
+    assert.equal(err.category, 'FILE_WRITE_FAILED');
+    assert.equal(err.retryable, true);
+  });
+
+  it('should classify config corrupted', () => {
+    const err = classifyError('JSON parse error in config file');
+    assert.equal(err.category, 'CONFIG_CORRUPTED');
+    assert.equal(err.retryable, false);
+  });
+
+  it('should use ErrorContext with stderr', () => {
+    const err = classifyError(new Error('process exited'), {
+      error: new Error('process exited'),
+      stderr: 'SQLITE_ERROR: database is locked',
+    });
+    assert.equal(err.category, 'DB_ERROR');
+    assert.ok(err.details);
+  });
+
+  it('should provide recovery actions for retryable errors', () => {
+    const err = classifyError('ECONNREFUSED');
+    assert.ok(err.recoveryActions);
+    assert.ok(err.recoveryActions!.some(a => a.action === 'retry'));
+  });
+
+  it('should provide recovery actions for terminal crash', () => {
+    const err = classifyError('Terminal session exited');
+    assert.ok(err.recoveryActions);
+    assert.ok(err.recoveryActions!.some(a => a.action === 'new_session'));
   });
 });
