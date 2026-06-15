@@ -597,13 +597,13 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         }}
         onSaveToMaterial={async (filePath) => {
           try {
-            const fs = await import('fs');
-            const path = await import('path');
-            const desktop = process.env.HOME ? path.join(process.env.HOME, 'Desktop') : '/tmp';
-            const materialDir = path.join(desktop, '素材');
-            if (!fs.existsSync(materialDir)) fs.mkdirSync(materialDir, { recursive: true });
-            const basename = path.basename(filePath);
-            fs.copyFileSync(filePath, path.join(materialDir, basename));
+            // Copy file to Desktop/素材 via IPC
+            const api = window.nativesAPI;
+            if (!api?.fs?.readFile || !api?.fs?.writeFileAtomic) return;
+            const result = await api.fs.readFile(filePath);
+            if (!result?.content) return;
+            const fileName = filePath.split('/').pop() || filePath;
+            await api.fs.writeFileAtomic(`~/Desktop/素材/${fileName}`, result.content);
           } catch { /* ignore in browser mode */ }
         }}
         onAnnotate={(filePath) => {
