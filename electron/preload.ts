@@ -4,6 +4,11 @@ const nativesAPI = {
   // FOUC Guard — notify main process that theme is applied
   themeReady: () => ipcRenderer.send('theme-applied-ready'),
 
+  // App metadata
+  app: {
+    version: () => ipcRenderer.invoke('app:version'),
+  },
+
   // DB CRUD
   db: {
     get: (key: string) => ipcRenderer.invoke('db:get', key),
@@ -14,17 +19,24 @@ const nativesAPI = {
 
   // Terminal control
   terminal: {
-    create: () => ipcRenderer.invoke('terminal:create'),
+    create: (profileId?: string) => ipcRenderer.invoke('terminal:create', profileId),
     write: (sessionId: string, data: string) => ipcRenderer.invoke('terminal:write', sessionId, data),
     resize: (sessionId: string, cols: number, rows: number) =>
       ipcRenderer.invoke('terminal:resize', sessionId, cols, rows),
     kill: (sessionId: string) => ipcRenderer.invoke('terminal:kill', sessionId),
+    cwd: (sessionId: string) => ipcRenderer.invoke('terminal:cwd', sessionId),
   },
 
   // Module management
   module: {
     scan: () => ipcRenderer.invoke('module:scan'),
     install: (pathOrZip: string) => ipcRenderer.invoke('module:install', pathOrZip),
+    readManifest: (source: string) => ipcRenderer.invoke('module:readManifest', source),
+    grantPermission: (moduleId: string, permission: string) => ipcRenderer.invoke('module:grantPermission', moduleId, permission),
+    revokePermission: (moduleId: string, permission: string) => ipcRenderer.invoke('module:revokePermission', moduleId, permission),
+    listPermissions: (moduleId: string) => ipcRenderer.invoke('module:listPermissions', moduleId),
+    getAuditLog: (moduleId?: string, limit?: number) => ipcRenderer.invoke('module:getAuditLog', moduleId, limit),
+    approveAllPermissions: (moduleId: string) => ipcRenderer.invoke('module:approveAllPermissions', moduleId),
     uninstall: (moduleId: string) => ipcRenderer.invoke('module:uninstall', moduleId),
     list: () => ipcRenderer.invoke('module:list'),
     enable: (moduleId: string) => ipcRenderer.invoke('module:enable', moduleId),
@@ -39,8 +51,11 @@ const nativesAPI = {
     listProfiles: () => ipcRenderer.invoke('env:listProfiles'),
     createProfile: (name: string) => ipcRenderer.invoke('env:createProfile', name),
     deleteProfile: (name: string) => ipcRenderer.invoke('env:deleteProfile', name),
+    setDefaultProfile: (name: string) => ipcRenderer.invoke('env:setDefaultProfile', name),
     setVariable: (profileId: string, key: string, value: string) =>
       ipcRenderer.invoke('env:setVariable', profileId, key, value),
+    deleteVariable: (profileId: string, key: string) =>
+      ipcRenderer.invoke('env:deleteVariable', profileId, key),
     encrypt: (text: string) => ipcRenderer.invoke('env:encrypt', text),
     decrypt: (encrypted: string) => ipcRenderer.invoke('env:decrypt', encrypted),
   },
@@ -75,11 +90,23 @@ const nativesAPI = {
     importFiles: (sourcePaths: string[], destDir: string) => ipcRenderer.invoke('fs:importFiles', sourcePaths, destDir),
   },
 
+  // === Archive IPC ===
+  archive: {
+    list: (archivePath: string) => ipcRenderer.invoke('archive:list', archivePath),
+  },
+
   // === Search IPC ===
   search: {
     grep: (query: string, root: string, options?: any) => ipcRenderer.invoke('search:grep', query, root, options),
     files: (query: string, root: string, options?: any) => ipcRenderer.invoke('search:files', query, root, options),
     spotlight: (query: string, root: string) => ipcRenderer.invoke('search:spotlight', query, root),
+  },
+
+  // === State Persistence IPC (US16) ===
+  state: {
+    save: (moduleId: string, state: string) => ipcRenderer.invoke('state:save', moduleId, state),
+    load: (moduleId: string) => ipcRenderer.invoke('state:load', moduleId),
+    clear: (moduleId: string) => ipcRenderer.invoke('state:clear', moduleId),
   },
 
   // === Git IPC ===
@@ -104,6 +131,14 @@ const nativesAPI = {
     getSessions: (projectPath: string) => ipcRenderer.invoke('agent:getSessions', projectPath),
     scanSkills: () => ipcRenderer.invoke('agent:scanSkills'),
     detectStatus: (output: string, exitCode?: number) => ipcRenderer.invoke('agent:detectStatus', output, exitCode),
+  },
+
+  // Skills management
+  skills: {
+    enable: (path: string) => ipcRenderer.invoke('skills:enable', path),
+    disable: (path: string) => ipcRenderer.invoke('skills:disable', path),
+    getDeactivatedPath: (path: string) => ipcRenderer.invoke('skills:getDeactivatedPath', path),
+    uninstall: (path: string) => ipcRenderer.invoke('skills:uninstall', path),
   },
 
   // Lifecycle
@@ -141,6 +176,17 @@ const nativesAPI = {
     check: () => ipcRenderer.invoke('update:check'),
     mute: (version: string) => ipcRenderer.invoke('update:mute', version),
     getMuted: () => ipcRenderer.invoke('update:getMuted'),
+  },
+
+  // Clipboard
+  clipboard: {
+    write: (text: string) => ipcRenderer.invoke('clipboard:write', text),
+    read: () => ipcRenderer.invoke('clipboard:read'),
+  },
+
+  // Usage tracking
+  usage: {
+    refresh: () => ipcRenderer.invoke('usage:refresh'),
   },
 };
 

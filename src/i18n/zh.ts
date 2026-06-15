@@ -8,6 +8,13 @@ export const zh = {
     workshop: '创意工坊',
     modules: '模块管理',
     settings: '设置',
+    fileBrowser: '文件浏览器',
+    aiWorkbench: 'AI 工作台',
+    tools: '工具',
+    terminalToggle: '切换终端',
+    themeTerminalVolt: '主题：Terminal Volt',
+    themeWarmArchive: '主题：Warm Archive',
+    themeEditorial: '主题：Editorial',
   },
 
   sidebar: {
@@ -16,6 +23,14 @@ export const zh = {
     dragToResize: '拖拽调整大小',
     quickAccess: '快速访问',
     favorites: '收藏',
+    quickAccessDirs: {
+      home: '个人主页',
+      desktop: '桌面',
+      documents: '文档',
+      downloads: '下载',
+    },
+    ariaToggle: '切换侧边栏',
+    ariaResize: '调整侧边栏大小',
   },
 
   dashboard: {
@@ -28,6 +43,16 @@ export const zh = {
     openSettings: '打开设置',
     noModules: '还没有安装任何模块',
     lastUsed: '最近使用',
+    aiWorkbench: 'AI 工作台',
+    browseManageFiles: '浏览和管理本地文件',
+    statusDatabase: '数据库',
+    statusConnected: '已连接',
+    statusError: '异常',
+    statusDataUsage: '数据用量',
+    fileBrowser: '文件浏览器',
+    unreadNotifications: '未读通知',
+    enabledModules: '已启用模块',
+    recentActivity: '最近活动',
   },
 
   modules: {
@@ -39,6 +64,13 @@ export const zh = {
     noModules: '未找到模块',
     scanModules: '扫描模块',
     confirmUninstall: '确定要卸载这个模块吗？',
+    scan: '扫描',
+    emptyState: '没有安装模块，前往创意工坊安装模块',
+    confirmUninstallModule: '确定要卸载 "{name}" 吗？',
+    ariaScan: '扫描模块',
+    ariaEnable: '启用 {name}',
+    ariaDisable: '禁用 {name}',
+    ariaUninstall: '卸载 {name}',
   },
 
   store: {
@@ -58,6 +90,9 @@ export const zh = {
     goToWorkshop: '前往创意工坊',
     viewDetails: '查看详情',
     moduleCount: '已安装 {count} 个模块',
+    version: '版本',
+    author: '作者',
+    description: '描述',
   },
 
   workshop: {
@@ -70,6 +105,7 @@ export const zh = {
     noModulesDesc: '拖拽模块到上方区域安装，或创建一个新模块',
     installSuccess: '模块安装成功',
     installFailed: '模块安装失败',
+    invalidPackage: '无法读取模块清单（manifest.json 缺失或损坏），已取消安装：{name}',
     installed: '已安装',
     enabled: '已启用',
     disabled: '已禁用',
@@ -87,6 +123,21 @@ export const zh = {
     toggleModule: '切换模块状态',
     uninstallModule: '卸载模块',
     confirmUninstall: '确定要卸载此模块吗？',
+    dragDropPrompt: '拖拽 .zip 文件到此处，或浏览选择',
+    browseFiles: '浏览文件',
+    emptyState: '工坊中还没有模块',
+    permissionTitle: '模块请求以下权限',
+    permissionDesc: '"{name}" 请求以下权限：',
+    permissionAllowAll: '全部允许',
+    permissions: {
+      'db:read': '读取数据存储',
+      'db:write': '写入数据存储',
+      'env:read': '读取环境变量',
+      'notification': '发送通知',
+      'ipc:send': '模块间通信',
+      'lifecycle': '生命周期管理',
+      'settings': '访问设置',
+    },
   },
 
   settings: {
@@ -125,6 +176,10 @@ export const zh = {
     sidebarWidth: '侧边栏宽度',
     panelWidth: '面板宽度',
     terminalHeight: '终端高度',
+    themeDescTerminal: '暗色终端风格',
+    themeDescWarm: '暖色纸张风格',
+    themeDescEditorial: '高对比极简风格',
+    aboutVersion: 'Natives v0.1.0 — AI 时代的桌面应用容器',
   },
 
   terminal: {
@@ -136,6 +191,15 @@ export const zh = {
     collapse: '折叠终端',
     expand: '展开终端',
     newConfigActive: '新配置已生效，新开终端标签将使用新配置',
+    dropPrompt: '拖拽文件至此插入路径',
+    followModeOn: '跟随模式：已开启（终端跟随文件浏览器）',
+    followModeOff: '跟随模式：已关闭',
+    ariaToggleFollowMode: '切换跟随模式',
+    ariaMaximize: '最大化终端',
+    ariaRestore: '还原终端',
+    ariaOpen: '展开终端',
+    ariaClose: '折叠终端',
+    selectProfile: '选择环境配置',
   },
 
   notifications: {
@@ -145,9 +209,32 @@ export const zh = {
     clear: '清除',
   },
 
+  rightPanel: {
+    title: {
+      preview: '预览',
+      notifications: '通知',
+      moduleDetails: '模块详情',
+      panel: '面板',
+    },
+    empty: {
+      notifications: '暂无通知',
+      selectFile: '选择一个文件预览',
+    },
+    closePanel: '关闭面板',
+    filePreview: '文件预览',
+  },
+
   commandPalette: {
     placeholder: '搜索模块、文件... (content: 全文搜索)',
     noResults: '未找到结果',
+    navigate: '导航',
+    select: '选择',
+    close: '关闭',
+    cycle: '循环',
+    searchScopeGlobal: '搜索范围：全盘',
+    searchScopeLocal: '搜索范围：用户目录',
+    globalLabel: '全盘',
+    localLabel: '本地',
   },
 
   // 文件浏览器
@@ -186,6 +273,51 @@ export const zh = {
     trashFailed: '删除失败',
     addedToFavorites: '已添加到收藏',
     removedFromFavorites: '已从收藏移除',
+    hidden: '隐藏',
+    refresh: '刷新',
+    addToFavorites: '添加到收藏',
+    removeFromFavorites: '从收藏移除',
+    noChanges: '未检测到变更',
+    notInRepo: '不在 Git 仓库中',
+    workingTreeClean: '工作区干净',
+    loadingGitStatus: '加载 Git 状态...',
+    confirmMoveToTrash: '确定要将 "{name}" 移到废纸篓吗？',
+    dialogRename: '重命名',
+    dialogNewFile: '新建文件',
+    dialogNewFolder: '新建文件夹',
+    dialogCreate: '创建',
+    dialogRenameBtn: '重命名',
+    placeholderFileName: '文件名.txt',
+    placeholderFolderName: '文件夹名',
+    ariaLabelFiles: '文件浏览',
+  },
+
+  // 文件预览
+  filePreview: {
+    tabPreview: '预览',
+    tabCode: '代码',
+    tabGit: 'Git',
+    tabInfo: '信息',
+    noPreview: '暂不支持预览 {kind} 类型文件',
+    failedLoad: '文件加载失败',
+    infoName: '名称',
+    infoPath: '路径',
+    infoType: '类型',
+    infoSize: '大小',
+    infoModified: '修改时间',
+    infoCreated: '创建时间',
+    infoHidden: '隐藏',
+    infoDirectory: '目录',
+    infoSymlink: '符号链接',
+    infoProject: '项目',
+    gitLoading: '加载 Git 信息...',
+    gitModified: '已修改',
+    gitAdded: '已添加',
+    gitDeleted: '已删除',
+    gitRenamed: '已重命名',
+    gitUntracked: '未跟踪',
+    gitConflict: '冲突',
+    gitUnchanged: '未变更',
   },
 
   // AI 工作台
@@ -201,9 +333,17 @@ export const zh = {
     projectMemory: '项目记忆',
     noSessions: '未找到会话。开始使用 AI Agent 工作。',
     files: '文件',
-    skills: '技能',
+    skillsLabel: '技能',
     restoreSession: '恢复会话',
     skillsPanel: '技能',
+    skills: {
+      confirmUninstall: '确定要卸载此技能吗？',
+      enabled: '已启用',
+      disabled: '已禁用',
+      uninstall: '卸载',
+      healthy: '正常',
+      issues: '异常',
+    },
     noSkills: '未安装技能',
     triggered: '触发',
     claudeUsage: 'Claude Code',
@@ -223,10 +363,66 @@ export const zh = {
     execute: '执行',
     undoAll: '全部撤销',
     noSuggestions: '暂无建议',
-    followMode: '跟随模式',
     followOff: '跟随：关闭',
     followTerminal: '跟随：终端 → 文件',
     followFile: '跟随：文件 → 终端',
+    follow: {
+      cdPrefix: 'cd → ',
+    },
+    followMode: {
+      terminalCdSyncsBrowser: '终端切换路径自动同步浏览器',
+    },
+    // Tab labels
+    tabs: {
+      agents: '智能代理',
+      sessions: '历史会话',
+      skills: '技能面板',
+      memory: '项目记忆',
+      usage: '用量与费用',
+      inbox: '收件箱',
+      files: '文件管理',
+    },
+    // Dashboard labels
+    dashboard: {
+      all: '全部',
+      resume: '继续',
+      pause: '暂停',
+      clear: '清除',
+      paused: '已暂停',
+      changesCount: '{n} 项变更',
+      create: '新建',
+      modify: '修改',
+      delete: '删除',
+    },
+    // Organizer labels
+    organizer: {
+      analyzing: '分析中...',
+      description: 'AI 分析文件元数据以建议整理方案',
+      proposalReason: '将 {n} 个 {cat} 文件整理至 {folder}/',
+      deleteReason: '系统生成文件，可安全删除',
+      actions: {
+        move: '移动',
+        rename: '重命名',
+        delete: '删除',
+        archive: '归档',
+      },
+    },
+    // RTK panel
+    rtk: {
+      resumeTracking: '恢复 RTK 追踪',
+      pauseTracking: '暂停 RTK 追踪',
+      topCommands: '常用命令',
+      noData: '暂无 RTK 命令数据',
+      paused: 'RTK 追踪已暂停',
+    },
+    // Usage panel
+    usage: {
+      noRtkData: '暂无 RTK 用量数据',
+    },
+    // Session replay
+    replay: {
+      noFiles: '此会话没有文件修改',
+    },
   },
 
   // 工具
@@ -249,6 +445,12 @@ export const zh = {
     download: '下载',
     dismiss: '忽略',
     checking: '检查中...',
+    // Tool tab labels
+    tabs: {
+      screenshot: '截图',
+      releaseWizard: '发布向导',
+      updates: '更新通知',
+    },
   },
 
   errors: {
@@ -266,6 +468,10 @@ export const zh = {
     unknown: '发生未知错误',
     reload: '重新加载',
     retry: '重试',
+    crash: '崩溃',
+    crashes: '个崩溃',
+    recovered: '已恢复',
+    reloadAll: '全部重新加载',
   },
 
   common: {
@@ -277,7 +483,23 @@ export const zh = {
     loading: '加载中...',
     error: '错误',
     success: '成功',
+    close: '关闭',
+    on: 'ON',
+    off: 'OFF',
     skipToContent: '跳转到内容',
+    rename: '重命名',
+    create: '创建',
+    notificationTitle: '任务完成',
+    notificationBody: '长时间运行的任务已完成。',
+    welcome: '欢迎使用',
+    namePlaceholder: '输入你的名字',
+  },
+
+  // 未找到页面
+  notFound: {
+    title: '页面未找到',
+    description: '您查找的页面不存在。',
+    goHome: '返回首页',
   },
 
   // ── Phase 3: Screenshot ──
@@ -300,6 +522,7 @@ export const zh = {
     redo: '重做',
     clearAll: '清除全部',
     close: '关闭标注',
+    noImage: '未选择图片',
   },
 
   // ── Phase 3: Release Wizard ──

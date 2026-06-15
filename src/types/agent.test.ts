@@ -36,6 +36,7 @@ describe('AgentTypes', () => {
       startTime: Date.now(),
       endTime: Date.now() + 3600000,
       filesModified: ['src/login.ts', 'src/auth.ts'],
+      fileTimestamps: { 'src/login.ts': 0, 'src/auth.ts': 100 },
       skillsUsed: ['typescript', 'debugging'],
     };
     assert.equal(session.title, 'Fix login bug');
@@ -50,6 +51,7 @@ describe('AgentTypes', () => {
       title: 'Codex task',
       startTime: Date.now(),
       filesModified: [],
+      fileTimestamps: {},
       skillsUsed: [],
     };
     assert.equal(session.engine, 'codex');

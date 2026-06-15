@@ -14,8 +14,12 @@ export function readConfig<T>(filePath: string): T {
   if (!fs.existsSync(filePath)) {
     return {} as T;
   }
-  const raw = fs.readFileSync(filePath, 'utf-8');
-  return JSON.parse(raw) as T;
+  try {
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    return JSON.parse(raw) as T;
+  } catch {
+    return {} as T;
+  }
 }
 
 export function updateConfig<T>(

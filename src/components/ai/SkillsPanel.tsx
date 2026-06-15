@@ -9,6 +9,9 @@ export default function SkillsPanel() {
   const [filter, setFilter] = useState<'all' | 'healthy' | 'issues'>('all');
   const [loading, setLoading] = useState(true);
   const [locale, setLocale] = useState<Locale>('zh');
+  const [selectedSkill, setSelectedSkill] = useState<SkillInfo | null>(null);
+  const [showLogs, setShowLogs] = useState(false);
+  const [skillLogs, setSkillLogs] = useState<string[]>([]);
 
   useEffect(() => {
     async function loadLocale() {
@@ -37,6 +40,31 @@ export default function SkillsPanel() {
     }
   }, []);
 
+  const handleToggle = useCallback(async (skill: SkillInfo) => {
+    try {
+      const api = window.nativesAPI;
+      if (skill.enabled) {
+        await api?.skills?.disable(skill.path);
+      } else {
+        await api?.skills?.enable(skill.path);
+      }
+      await loadSkills();
+    } catch (err) {
+      console.error('[SkillsPanel] Failed to toggle skill:', err);
+    }
+  }, [loadSkills]);
+
+  const handleUninstall = useCallback(async (skill: SkillInfo) => {
+    if (!confirm(t(locale, 'aiWorkbench.skills.confirmUninstall'))) return;
+    try {
+      const api = window.nativesAPI;
+      await api?.skills?.uninstall(skill.path);
+      await loadSkills();
+    } catch (err) {
+      console.error('[SkillsPanel] Failed to uninstall skill:', err);
+    }
+  }, [loadSkills]);
+
   useEffect(() => {
     loadSkills();
   }, [loadSkills]);
@@ -61,7 +89,7 @@ export default function SkillsPanel() {
               background: filter === f ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
             }}
           >
-            {f === 'all' ? t(locale, 'aiWorkbench.skills') : f}
+            {f === 'all' ? t(locale, 'aiWorkbench.skillsLabel') : f === 'healthy' ? t(locale, 'aiWorkbench.skills.healthy') : t(locale, 'aiWorkbench.skills.issues')}
             {f !== 'all' && ` (${skills.filter((s) => f === 'healthy' ? s.health.ok : !s.health.ok).length})`}
           </button>
         ))}
@@ -91,10 +119,18 @@ export default function SkillsPanel() {
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                 <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{skill.name}</span>
-                <span style={{
-                  width: 8, height: 8, borderRadius: '50%',
-                  background: skill.health.ok ? '#4bcdf2' : '#f24b4b',
-                }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <button onClick={() => handleToggle(skill)} style={{
+                    fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                    border: '1px solid var(--border,#262920)',
+                    background: skill.enabled ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
+                    color: skill.enabled ? 'var(--accent,#cdf24b)' : 'var(--text-faint)',
+                    cursor: 'pointer',
+                  }}>
+                    {skill.enabled ? t(locale, 'aiWorkbench.skills.enabled') : t(locale, 'aiWorkbench.skills.disabled')}
+                  </button>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: skill.health.ok ? '#4bcdf2' : '#f24b4b' }} />
+                </div>
               </div>
               {skill.description && (
                 <div style={{ fontSize: 10, color: 'var(--text-faint)', marginBottom: 2 }}>
@@ -103,11 +139,43 @@ export default function SkillsPanel() {
               )}
               <div style={{ fontSize: 10, color: 'var(--text-dim)' }}>
                 {t(locale, 'aiWorkbench.triggered')} {skill.triggerCount}x · {skill.source}
+                {skill.lastTriggered ? <span> · last {new Date(skill.lastTriggered).toLocaleDateString()}</span> : null}
+              </div>
+              <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
+                <button onClick={() => { setSelectedSkill(skill); setShowLogs(true); const logs = [`[${new Date().toISOString()}] Skill loaded from ${skill.source}`, `[${new Date().toISOString()}] Health: ${skill.health.ok ? 'OK' : skill.health.issues.join(', ')}`, `[${new Date().toISOString()}] Trigger count: ${skill.triggerCount}`]; if (skill.lastTriggered) logs.push(`[${new Date().toISOString()}] Last execution: ${new Date(skill.lastTriggered).toLocaleString()}`); if (skill.description) logs.push(`[${new Date().toISOString()}] Description: ${skill.description.slice(0, 80)}`); setSkillLogs(logs); }} style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, border: '1px solid var(--border,#262920)', background: 'transparent', color: 'var(--text-faint)', cursor: 'pointer' }}>
+                  📋 Logs
+                </button>
+                <button onClick={() => handleUninstall(skill)} style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, border: '1px solid #f24b4b', background: 'transparent', color: '#f24b4b', cursor: 'pointer' }}>
+                  {t(locale, 'aiWorkbench.skills.uninstall')}
+                </button>
               </div>
             </div>
           ))
         )}
       </div>
+
+      {/* Log viewer overlay (TASK-012) */}
+      {showLogs && selectedSkill && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60,
+        }} onClick={() => setShowLogs(false)}>
+          <div style={{
+            background: 'var(--bg-2,#131410)', border: '1px solid var(--border,#262920)',
+            borderRadius: 10, padding: 16, width: 480, maxWidth: '90vw', maxHeight: '60vh',
+            overflow: 'auto',
+          }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 12 }}>
+              📋 {selectedSkill.name} — Skill Logs
+            </div>
+            <div style={{ fontSize: 11, lineHeight: 1.6, fontFamily: 'var(--font-mono)' }}>
+              {skillLogs.map((line, i) => (
+                <div key={i} style={{ color: 'var(--text-dim)', whiteSpace: 'pre-wrap' }}>{line}</div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

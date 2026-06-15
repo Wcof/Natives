@@ -19,8 +19,8 @@ export function sendNotification(
   body?: string,
   level: 'info' | 'warning' | 'error' = 'info',
 ): void {
-  // Permission check
-  if (!checkPermission(moduleId, 'notification')) {
+  // Permission check — skip for system notifications
+  if (moduleId !== '__system__' && !checkPermission(moduleId, 'notification')) {
     throw new Error(`Module '${moduleId}' does not have 'notification' permission`);
   }
 
@@ -41,7 +41,7 @@ export function getBadge(moduleId: string): number {
   const row = getDb()
     .prepare("SELECT value FROM settings WHERE key = ?")
     .get(`badge:${moduleId}`) as { value: string } | undefined;
-  return row ? parseInt(row.value, 10) : 0;
+  return row ? (parseInt(row.value, 10) || 0) : 0;
 }
 
 export function getNotifications(

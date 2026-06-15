@@ -27,8 +27,10 @@ export function parseClaudeSessionFile(
   lines: string[],
 ): AgentSession {
   const filesModified = new Set<string>();
+  const fileTimestamps: Record<string, number> = {};
   const skillsUsed = new Set<string>();
   const title = parseSessionTitle(lines);
+  let eventIndex = 0;
 
   for (const line of lines) {
     try {
@@ -37,7 +39,13 @@ export function parseClaudeSessionFile(
       if (event.type === 'tool_use') {
         if (['Edit', 'Write', 'NotebookEdit'].includes(event.name)) {
           const filePath = event.input?.file_path;
-          if (filePath) filesModified.add(filePath);
+          if (filePath) {
+            filesModified.add(filePath);
+            // Record first occurrence timestamp (relative to startTime)
+            if (!(filePath in fileTimestamps)) {
+              fileTimestamps[filePath] = eventIndex * 100; // 100ms per event step
+            }
+          }
         }
 
         if (event.name === 'Skill') {
@@ -47,6 +55,8 @@ export function parseClaudeSessionFile(
       }
     } catch {
       continue;
+    } finally {
+      eventIndex++;
     }
   }
 
@@ -57,6 +67,7 @@ export function parseClaudeSessionFile(
     title,
     startTime: Date.now(),
     filesModified: [...filesModified],
+    fileTimestamps,
     skillsUsed: [...skillsUsed],
   };
 }

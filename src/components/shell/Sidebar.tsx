@@ -63,19 +63,30 @@ export default function Sidebar({
     return () => window.removeEventListener('favorites-changed', handler);
   }, [loadFavorites]);
 
+  // Load locale reactively — listen for changes
+  const refreshLocale = useCallback(async () => {
+    try {
+      const api = window.nativesAPI;
+      if (api && typeof api.getLocale === 'function') {
+        const saved = await api.getLocale();
+        setLocale(saved === 'en' ? 'en' : 'zh');
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    refreshLocale();
+    window.addEventListener('locale-changed', refreshLocale);
+    return () => window.removeEventListener('locale-changed', refreshLocale);
+  }, [refreshLocale]);
+
   // Load modules on mount
   useEffect(() => {
     async function loadModules() {
       try {
         const api = (window as unknown as Record<string, unknown>).nativesAPI as Record<string, unknown> | undefined;
 
-        // Load locale
-        if (api && typeof (api as Record<string, unknown>).getLocale === 'function') {
-          const savedLocale = await (api as { getLocale: () => Promise<string> }).getLocale();
-          if (savedLocale === 'en') setLocale('en');
-        }
-
-        // Load saved module order
+        // Load saved module order (locale is loaded reactively via refreshLocale above)
         let savedOrder: string[] = [];
         if (api) {
           const dbApi = (api as Record<string, unknown>).db as { get?: (key: string) => Promise<string | undefined> } | undefined;
@@ -168,8 +179,8 @@ export default function Sidebar({
       data-sidebar
     >
       <div className="sidebar-header">
-        <span className="sidebar-brand">NATIVES</span>
-        <button className="btn-ghost" onClick={onToggle} aria-label="Toggle sidebar">
+        <span className="sidebar-brand" style={{ fontFamily: 'var(--font-display)' }}>NATIVES</span>
+        <button className="btn-ghost" onClick={onToggle} aria-label={t(locale, 'sidebar.ariaToggle')}>
           <ChevronRight size={14} />
         </button>
       </div>
@@ -208,7 +219,7 @@ export default function Sidebar({
                   <Square size={18} />
                 )}
               </span>
-              <span className="sidebar-module-name">{mod.name}</span>
+              <span className="sidebar-module-name" style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{mod.name}</span>
             </div>
           ))
         )}
@@ -226,7 +237,7 @@ export default function Sidebar({
             title={dir.path}
           >
             {dir.icon}
-            <span style={{ fontSize: 12 }}>{dir.label}</span>
+            <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)' }}>{t(locale, 'sidebar.quickAccessDirs.' + dir.id)}</span>
           </button>
         ))}
       </div>
@@ -245,7 +256,7 @@ export default function Sidebar({
                 title={fav}
               >
                 <Star size={14} style={{ color: 'var(--accent,#cdf24b)' }} />
-                <span style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <span style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>
                   {fav.split('/').pop() || fav}
                 </span>
               </button>
@@ -278,7 +289,7 @@ export default function Sidebar({
         onMouseDown={handleMouseDown}
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize sidebar"
+        aria-label={t(locale, 'sidebar.ariaResize')}
       />
     </aside>
   );

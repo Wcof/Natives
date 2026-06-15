@@ -649,7 +649,7 @@ box-shadow: 0 0 0 0.5px rgba(0,0,0,0.12), 0 12px 40px rgba(0,0,0,0.22);
 |------|------|------|------|
 | `tipIn` | 0.12s | ease | 工具提示淡入 |
 | `dropIn` | 0.16s | cubic-bezier(0.2,0.7,0.3,1) | 拖放区域出现 |
-| `edIn` | 0.18s | ease | 面板入场（translateY(4px) + opacity） |
+| `fadeIn` | 0.18s | ease | 面板入场（translateY(4px) + opacity） |
 | `shotIn` | 0.22s | ease | 卡片入场（translateY(14px) + opacity） |
 | `livePulse` | 1.1s | ease-in-out ∞ | 实时状态点脉冲 |
 | `tabpulse` | 1.1s | ease-in-out ∞ | 终端标签忙碌点 |

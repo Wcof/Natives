@@ -87,6 +87,7 @@ export default function ChangeInbox() {
                 <div
                   key={`${ch.path}-${i}`}
                   onClick={() => handleNavigate(ch.path)}
+                  className={i === 0 ? 'anim-changedPulse' : ''}
                   style={{
                     padding: '4px 8px', fontSize: 11, color: 'var(--text)',
                     borderRadius: 4, cursor: 'pointer', marginBottom: 2,
@@ -94,7 +95,7 @@ export default function ChangeInbox() {
                     borderLeft: `3px solid ${ch.type === 'create' ? '#4ec9b0' : ch.type === 'delete' ? '#d9534f' : '#e6b800'}`,
                   }}
                 >
-                  <span style={{ marginRight: 4 }}>
+                  <span className="anim-changedBreath" style={{ marginRight: 4 }}>
                     {ch.type === 'create' ? '🟢' : ch.type === 'delete' ? '🔴' : '🟡'}
                   </span>
                   {ch.path.split('/').pop()}

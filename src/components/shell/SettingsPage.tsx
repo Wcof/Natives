@@ -110,8 +110,9 @@ export default function SettingsPage() {
   }, [selectedProfile, loadVariables]);
 
   const THEMES = [
-    { id: 'terminal-volt', label: 'Terminal Volt', desc: 'Dark, terminal-inspired' },
-    { id: 'warm-archive', label: 'Warm Archive', desc: 'Warm, paper-like' },
+    { id: 'terminal-volt', label: 'Terminal Volt', desc: t(locale, 'settings.themeDescTerminal') },
+    { id: 'warm-archive', label: 'Warm Archive', desc: t(locale, 'settings.themeDescWarm') },
+    { id: 'editorial', label: 'Editorial', desc: t(locale, 'settings.themeDescEditorial') },
   ];
 
   const LOCALES = [
@@ -128,7 +129,11 @@ export default function SettingsPage() {
   const handleLocaleChange = (localeId: string) => {
     setLocaleState(localeId as Locale);
     document.documentElement.lang = localeId;
-    try { window.nativesAPI?.setLocale?.(localeId); } catch { /* browser dev mode */ }
+    try {
+      window.nativesAPI?.setLocale?.(localeId);
+      // Notify all locale-aware components to refresh
+      window.dispatchEvent(new CustomEvent('locale-changed'));
+    } catch { /* browser dev mode */ }
   };
 
   const saveLayoutSetting = (key: string, value: number) => {
@@ -186,11 +191,8 @@ export default function SettingsPage() {
   const handleDeleteVariable = async (key: string) => {
     if (!confirm(t(locale, 'settings.confirmDeleteVariable'))) return;
     try {
-      // Delete by setting to empty, then the DB ON CONFLICT handles it
-      // Actually we need a delete IPC. For now, set to empty marker.
-      // The env system doesn't have a delete variable IPC, so we'll note this limitation.
-      // For MVP, we can set the value to a sentinel.
-      await window.nativesAPI?.env?.setVariable(selectedProfile!, key, '');
+      // P2-1: Use dedicated deleteVariable IPC instead of setting empty value
+      await window.nativesAPI?.env?.deleteVariable?.(selectedProfile!, key);
       if (selectedProfile) await loadVariables(selectedProfile);
       showToast(t(locale, 'settings.variableDeleted'));
     } catch (err) {
@@ -357,11 +359,15 @@ export default function SettingsPage() {
                       <button
                         className="btn"
                         style={{ fontSize: 10, padding: '2px 6px' }}
-                        onClick={(e) => {
+                        onClick={async (e) => {
                           e.stopPropagation();
-                          // setDefault is not in the IPC yet, but we can use db.set
-                          window.nativesAPI?.db?.set?.('settings:default_env_profile', p.name);
-                          showToast(t(locale, 'settings.defaultSet'));
+                          try {
+                            await window.nativesAPI?.env?.setDefaultProfile?.(p.name);
+                            await loadProfiles();
+                            showToast(t(locale, 'settings.defaultSet'));
+                          } catch {
+                            showToast(t(locale, 'common.error'));
+                          }
                         }}
                         title={t(locale, 'settings.setDefault')}
                       >
@@ -545,7 +551,7 @@ export default function SettingsPage() {
             {t(locale, 'settings.about')}
           </h2>
           <p style={{ fontSize: 12, color: 'var(--text-faint)' }}>
-            Natives v0.1.0 — AI Steam Base
+            {t(locale, 'settings.aboutVersion')}
           </p>
         </section>
       </div>
@@ -564,7 +570,7 @@ export default function SettingsPage() {
           fontSize: 13,
           color: 'var(--text)',
           zIndex: 200,
-          animation: 'fadeIn 0.18s ease',
+          animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           {toast}
         </div>

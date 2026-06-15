@@ -76,3 +76,80 @@ function execPromise(cmd: string, args: string[], cwd: string): Promise<string> 
     });
   });
 }
+
+// ── Release Inspection ──
+
+export interface ReleaseInspection {
+  currentVersion: string;
+  checks: { name: string; ok: boolean; message: string }[];
+}
+
+/**
+ * 检查项目发布就绪状态
+ */
+export async function inspectProject(projectPath: string): Promise<ReleaseInspection> {
+  const pkgCheck = await checkPackageJson(projectPath);
+  const gitCheck = await checkGitStatus(projectPath);
+  const clCheck = await checkChangelog(projectPath);
+  const ghCheck = await checkGhCli();
+
+  let currentVersion = '0.0.0';
+  try {
+    const content = await fs.promises.readFile(path.join(projectPath, 'package.json'), 'utf-8');
+    const pkg = JSON.parse(content);
+    if (pkg.version) currentVersion = pkg.version;
+  } catch { /* ignore */ }
+
+  return {
+    currentVersion,
+    checks: [
+      { name: 'package.json', ...pkgCheck },
+      { name: 'git status', ...gitCheck },
+      { name: 'CHANGELOG.md', ...clCheck },
+      { name: 'gh CLI', ...ghCheck },
+    ],
+  };
+}
+
+// ── Command Sequence ──
+
+export interface CommandStep {
+  label: string;
+  command: string;
+}
+
+/**
+ * 生成发布命令序列
+ */
+export function getCommandSequence(projectPath: string, version: string): CommandStep[] {
+  return [
+    { label: 'Update version', command: `npm version ${version} --no-git-tag-version` },
+    { label: 'Git commit', command: `git add -A && git commit -m "release: v${version}"` },
+    { label: 'Git tag', command: `git tag v${version}` },
+    { label: 'Push', command: 'git push && git push --tags' },
+  ];
+}
+
+/**
+ * 准备发布（更新版本号 + CHANGELOG）
+ */
+export async function prepareRelease(projectPath: string, version: string): Promise<void> {
+  // 更新 package.json 版本
+  const pkgPath = path.join(projectPath, 'package.json');
+  const content = await fs.promises.readFile(pkgPath, 'utf-8');
+  const pkg = JSON.parse(content);
+  pkg.version = version;
+  await fs.promises.writeFile(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf-8');
+
+  // 更新 CHANGELOG.md 的 Unreleased 段落
+  const clPath = path.join(projectPath, 'CHANGELOG.md');
+  try {
+    let changelog = await fs.promises.readFile(clPath, 'utf-8');
+    const today = new Date().toISOString().slice(0, 10);
+    changelog = changelog.replace(
+      /## Unreleased/i,
+      `## Unreleased\n\n## [${version}] - ${today}`,
+    );
+    await fs.promises.writeFile(clPath, changelog, 'utf-8');
+  } catch { /* CHANGELOG.md may not exist */ }
+}

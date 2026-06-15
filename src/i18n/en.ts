@@ -10,6 +10,13 @@ export const en = {
     workshop: 'Workshop',
     modules: 'Modules',
     settings: 'Settings',
+    fileBrowser: 'File Browser',
+    aiWorkbench: 'AI Workbench',
+    tools: 'Tools',
+    terminalToggle: 'Toggle Terminal',
+    themeTerminalVolt: 'Theme: Terminal Volt',
+    themeWarmArchive: 'Theme: Warm Archive',
+    themeEditorial: 'Theme: Editorial',
   },
 
   // Sidebar
@@ -19,6 +26,14 @@ export const en = {
     dragToResize: 'Drag to resize',
     quickAccess: 'Quick Access',
     favorites: 'Favorites',
+    quickAccessDirs: {
+      home: 'Home',
+      desktop: 'Desktop',
+      documents: 'Documents',
+      downloads: 'Downloads',
+    },
+    ariaToggle: 'Toggle sidebar',
+    ariaResize: 'Resize sidebar',
   },
 
   // Dashboard
@@ -32,6 +47,11 @@ export const en = {
     openSettings: 'Open Settings',
     noModules: 'No modules installed yet',
     lastUsed: 'Last used',
+    aiWorkbench: 'AI Workbench',
+    browseManageFiles: 'Browse and manage local files',
+    unreadNotifications: 'Unread Notifications',
+    enabledModules: 'Enabled Modules',
+    recentActivity: 'Recent Activity',
   },
 
   // Module Manager
@@ -44,6 +64,13 @@ export const en = {
     noModules: 'No modules found',
     scanModules: 'Scan Modules',
     confirmUninstall: 'Are you sure you want to uninstall this module?',
+    scan: 'Scan',
+    emptyState: 'No modules installed. Visit the Workshop to install modules.',
+    confirmUninstallModule: 'Are you sure you want to uninstall "{name}"?',
+    ariaScan: 'Scan for modules',
+    ariaEnable: 'Enable {name}',
+    ariaDisable: 'Disable {name}',
+    ariaUninstall: 'Uninstall {name}',
   },
 
   // Store
@@ -64,6 +91,9 @@ export const en = {
     goToWorkshop: 'Go to Workshop',
     viewDetails: 'View Details',
     moduleCount: '{count} modules installed',
+    version: 'Version',
+    author: 'Author',
+    description: 'Description',
   },
 
   // Workshop
@@ -77,6 +107,7 @@ export const en = {
     noModulesDesc: 'Drag a module above to install, or create a new one',
     installSuccess: 'Module installed successfully',
     installFailed: 'Module installation failed',
+    invalidPackage: 'Cannot read module manifest (manifest.json missing or corrupt), installation cancelled: {name}',
     installed: 'Installed',
     enabled: 'Enabled',
     disabled: 'Disabled',
@@ -94,6 +125,21 @@ export const en = {
     toggleModule: 'Toggle module state',
     uninstallModule: 'Uninstall module',
     confirmUninstall: 'Are you sure you want to uninstall this module?',
+    dragDropPrompt: 'Drag & drop .zip files here, or browse',
+    browseFiles: 'Browse files',
+    emptyState: 'Workshop is empty',
+    permissionTitle: 'Module requests permissions',
+    permissionDesc: '"{name}" requests the following permissions:',
+    permissionAllowAll: 'Allow All',
+    permissions: {
+      'db:read': 'Read data store',
+      'db:write': 'Write to data store',
+      'env:read': 'Read environment variables',
+      'notification': 'Send notifications',
+      'ipc:send': 'Inter-module communication',
+      'lifecycle': 'Lifecycle management',
+      'settings': 'Access settings',
+    },
   },
 
   // Settings
@@ -133,6 +179,10 @@ export const en = {
     sidebarWidth: 'Sidebar Width',
     panelWidth: 'Panel Width',
     terminalHeight: 'Terminal Height',
+    themeDescTerminal: 'Dark, terminal-inspired',
+    themeDescWarm: 'Warm, paper-like',
+    themeDescEditorial: 'Brutalist, high contrast',
+    aboutVersion: 'Natives v0.1.0 — AI Steam Base',
   },
 
   // Terminal
@@ -145,6 +195,15 @@ export const en = {
     collapse: 'Collapse terminal',
     expand: 'Expand terminal',
     newConfigActive: 'New config active. New terminal tabs will use it.',
+    dropPrompt: 'Drop files to insert path',
+    followModeOn: 'Follow mode: ON (terminal follows file browser)',
+    followModeOff: 'Follow mode: OFF',
+    ariaToggleFollowMode: 'Toggle follow mode',
+    ariaMaximize: 'Maximize terminal',
+    ariaRestore: 'Restore terminal',
+    ariaOpen: 'Open terminal',
+    ariaClose: 'Close terminal',
+    selectProfile: 'Select environment profile',
   },
 
   // Notifications
@@ -155,10 +214,34 @@ export const en = {
     clear: 'Clear',
   },
 
+  // Right Panel
+  rightPanel: {
+    title: {
+      preview: 'Preview',
+      notifications: 'Notifications',
+      moduleDetails: 'Module Details',
+      panel: 'Panel',
+    },
+    empty: {
+      notifications: 'No notifications',
+      selectFile: 'Select a file to preview',
+    },
+    closePanel: 'Close panel',
+    filePreview: 'File Preview',
+  },
+
   // Command Palette
   commandPalette: {
     placeholder: 'Search modules, files... (content: for full-text)',
     noResults: 'No results found',
+    navigate: 'Navigate',
+    select: 'Select',
+    close: 'Close',
+    cycle: 'Cycle',
+    searchScopeGlobal: 'Searching: Full disk',
+    searchScopeLocal: 'Searching: Home directory',
+    globalLabel: 'Global',
+    localLabel: 'Local',
   },
 
   // File Browser
@@ -197,6 +280,51 @@ export const en = {
     trashFailed: 'Trash failed',
     addedToFavorites: 'Added to favorites',
     removedFromFavorites: 'Removed from favorites',
+    hidden: 'Hidden',
+    refresh: 'Refresh',
+    addToFavorites: 'Add to favorites',
+    removeFromFavorites: 'Remove from favorites',
+    noChanges: 'No changes detected',
+    notInRepo: 'Not in a git repository',
+    workingTreeClean: 'Working tree clean',
+    loadingGitStatus: 'Loading git status...',
+    confirmMoveToTrash: 'Move "{name}" to trash?',
+    dialogRename: 'Rename',
+    dialogNewFile: 'New File',
+    dialogNewFolder: 'New Folder',
+    dialogCreate: 'Create',
+    dialogRenameBtn: 'Rename',
+    placeholderFileName: 'filename.txt',
+    placeholderFolderName: 'folder-name',
+    ariaLabelFiles: 'Files',
+  },
+
+  // File Preview
+  filePreview: {
+    tabPreview: 'Preview',
+    tabCode: 'Code',
+    tabGit: 'Git',
+    tabInfo: 'Info',
+    noPreview: 'No preview available for {kind} files.',
+    failedLoad: 'Failed to load file',
+    infoName: 'Name',
+    infoPath: 'Path',
+    infoType: 'Type',
+    infoSize: 'Size',
+    infoModified: 'Modified',
+    infoCreated: 'Created',
+    infoHidden: 'Hidden',
+    infoDirectory: 'Directory',
+    infoSymlink: 'Symlink',
+    infoProject: 'Project',
+    gitLoading: 'Loading git info...',
+    gitModified: 'Modified',
+    gitAdded: 'Added',
+    gitDeleted: 'Deleted',
+    gitRenamed: 'Renamed',
+    gitUntracked: 'Untracked',
+    gitConflict: 'Conflict',
+    gitUnchanged: 'Unchanged',
   },
 
   // AI Workbench
@@ -212,9 +340,17 @@ export const en = {
     projectMemory: 'Project Memory',
     noSessions: 'No sessions found. Start working with an AI agent.',
     files: 'Files',
-    skills: 'Skills',
+    skillsLabel: 'Skills',
     restoreSession: 'Restore Session',
     skillsPanel: 'Skills',
+    skills: {
+      confirmUninstall: 'Are you sure you want to uninstall this skill?',
+      enabled: 'Enabled',
+      disabled: 'Disabled',
+      uninstall: 'Uninstall',
+      healthy: 'Healthy',
+      issues: 'Issues',
+    },
     noSkills: 'No skills installed',
     triggered: 'Triggered',
     claudeUsage: 'Claude Code',
@@ -234,10 +370,66 @@ export const en = {
     execute: 'Execute',
     undoAll: 'Undo All',
     noSuggestions: 'No suggestions yet',
-    followMode: 'Follow Mode',
     followOff: 'Follow: Off',
     followTerminal: 'Follow: Terminal → File',
     followFile: 'Follow: File → Terminal',
+    follow: {
+      cdPrefix: 'cd → ',
+    },
+    followMode: {
+      terminalCdSyncsBrowser: 'Terminal cd automatically syncs file browser',
+    },
+    // Tab labels
+    tabs: {
+      agents: 'Agents',
+      sessions: 'Sessions',
+      skills: 'Skills',
+      memory: 'Memory',
+      usage: 'Usage',
+      inbox: 'Inbox',
+      files: 'Files',
+    },
+    // Dashboard labels
+    dashboard: {
+      all: 'All',
+      resume: 'Resume',
+      pause: 'Pause',
+      clear: 'Clear',
+      paused: 'Paused',
+      changesCount: '{n} changes',
+      create: 'Create',
+      modify: 'Modify',
+      delete: 'Delete',
+    },
+    // Organizer labels
+    organizer: {
+      analyzing: 'Analyzing...',
+      description: 'AI analyzes file metadata to suggest organization',
+      proposalReason: 'Organize {n} {cat} files into {folder}/',
+      deleteReason: 'System-generated file, safe to delete',
+      actions: {
+        move: 'Move',
+        rename: 'Rename',
+        delete: 'Delete',
+        archive: 'Archive',
+      },
+    },
+    // RTK panel
+    rtk: {
+      resumeTracking: 'Resume RTK tracking',
+      pauseTracking: 'Pause RTK tracking',
+      topCommands: 'Top Commands',
+      noData: 'No RTK command data yet',
+      paused: 'RTK tracking paused',
+    },
+    // Usage panel
+    usage: {
+      noRtkData: 'No RTK usage data yet',
+    },
+    // Session replay
+    replay: {
+      noFiles: 'No files modified in this session',
+    },
   },
 
   // Tools
@@ -260,6 +452,12 @@ export const en = {
     download: 'Download',
     dismiss: 'Dismiss',
     checking: 'Checking...',
+    // Tool tab labels
+    tabs: {
+      screenshot: 'Screenshot',
+      releaseWizard: 'Release Wizard',
+      updates: 'Updates',
+    },
   },
 
   // Errors
@@ -278,6 +476,17 @@ export const en = {
     unknown: 'An unknown error occurred.',
     reload: 'Reload',
     retry: 'Retry',
+    crash: 'crash',
+    crashes: 'crashes',
+    recovered: 'Recovered',
+    reloadAll: 'Reload All',
+  },
+
+  // Not Found
+  notFound: {
+    title: 'Page Not Found',
+    description: 'The page you are looking for does not exist.',
+    goHome: 'Go Home',
   },
 
   // Common
@@ -290,7 +499,16 @@ export const en = {
     loading: 'Loading...',
     error: 'Error',
     success: 'Success',
+    close: 'Close',
+    on: 'ON',
+    off: 'OFF',
     skipToContent: 'Skip to content',
+    rename: 'Rename',
+    create: 'Create',
+    notificationTitle: 'Task Complete',
+    notificationBody: 'A long-running task has completed.',
+    welcome: 'Welcome',
+    namePlaceholder: 'Enter your name',
   },
 
   // ── Phase 3: Screenshot ──
@@ -313,6 +531,7 @@ export const en = {
     redo: 'Redo',
     clearAll: 'Clear All',
     close: 'Close Annotation',
+    noImage: 'No image selected',
   },
 
   // ── Phase 3: Release Wizard ──

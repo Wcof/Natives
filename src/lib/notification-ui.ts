@@ -1,4 +1,4 @@
-import { type ClassifiedError, type ErrorCategory, classifyError } from './error-classifier';
+import { type ClassifiedError, classifyError } from './error-classifier';
 
 // ── Toast Notifications ──
 
@@ -56,7 +56,7 @@ export function renderNotificationCenter(
   onMarkRead: (id: number) => void,
   onMarkAllRead: () => void,
 ): void {
-  container.innerHTML = '';
+  container.replaceChildren();
 
   const header = document.createElement('div');
   header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border,#262920);';
@@ -136,6 +136,7 @@ export function renderNotificationCenter(
 
     content.appendChild(right);
     item.appendChild(content);
+    list.appendChild(item);
   }
 
   container.appendChild(list);
@@ -148,7 +149,7 @@ export function renderErrorPage(
   error: ClassifiedError,
   onReload: () => void,
 ): void {
-  container.innerHTML = '';
+  container.replaceChildren();
   container.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:40px;text-align:center;';
 
   const icon = document.createElement('div');

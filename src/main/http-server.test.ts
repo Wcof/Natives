@@ -46,28 +46,34 @@ describe('HTTPServer', () => {
   // ── Origin Validation ──
 
   it('should skip origin validation for GET requests', () => {
-    assert.ok(validateOrigin('GET', undefined));
-    assert.ok(validateOrigin('GET', 'http://evil.com'));
+    assert.ok(validateOrigin('GET', undefined, undefined));
+    assert.ok(validateOrigin('GET', 'http://evil.com', undefined));
   });
 
-  it('should allow POST requests with no origin (non-browser)', () => {
-    assert.ok(validateOrigin('POST', undefined));
+  it('should reject POST requests with no origin or referer (CSRF protection)', () => {
+    assert.equal(validateOrigin('POST', undefined, undefined), false);
   });
 
   it('should allow POST requests from localhost origins', () => {
-    assert.ok(validateOrigin('POST', 'http://localhost:3000'));
-    assert.ok(validateOrigin('POST', 'http://127.0.0.1'));
-    assert.ok(validateOrigin('POST', 'http://[::1]:8080'));
+    assert.ok(validateOrigin('POST', 'http://localhost:3000', undefined));
+    assert.ok(validateOrigin('POST', 'http://127.0.0.1', undefined));
+    assert.ok(validateOrigin('POST', 'http://[::1]:8080', undefined));
+  });
+
+  it('should fall back to referer when origin is absent', () => {
+    assert.ok(validateOrigin('POST', undefined, 'http://localhost:3000/path'));
+    assert.ok(validateOrigin('POST', undefined, 'http://127.0.0.1/path'));
+    assert.equal(validateOrigin('POST', undefined, 'http://evil.com/path'), false);
   });
 
   it('should reject POST requests from non-localhost origins', () => {
-    assert.equal(validateOrigin('POST', 'http://evil.com'), false);
-    assert.equal(validateOrigin('POST', 'https://attacker.org'), false);
-    assert.equal(validateOrigin('POST', 'http://192.168.1.1'), false);
+    assert.equal(validateOrigin('POST', 'http://evil.com', undefined), false);
+    assert.equal(validateOrigin('POST', 'https://attacker.org', undefined), false);
+    assert.equal(validateOrigin('POST', 'http://192.168.1.1', undefined), false);
   });
 
   it('should reject POST requests with invalid origin URLs', () => {
-    assert.equal(validateOrigin('POST', 'not-a-url'), false);
+    assert.equal(validateOrigin('POST', 'not-a-url', undefined), false);
   });
 
   // ── Security Integration Tests ──
@@ -111,7 +117,10 @@ describe('HTTPServer', () => {
   it('should handle POST /api/bridge requests', async () => {
     const res = await fetch(`http://localhost:${port}/api/bridge/db/get`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Origin': 'http://localhost:3000',
+      },
       body: JSON.stringify({ key: 'test' }),
     });
     assert.equal(res.status, 200);

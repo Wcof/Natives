@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { t, type Locale } from '@/i18n';
+import { useFocusTrap } from '@/lib/useFocusTrap';
 
 interface ModuleInfo {
   id: string;
@@ -18,6 +19,10 @@ interface WorkshopPageProps {
 }
 
 export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
+  // onInstall (legacy direct-install callback) is intentionally unused: all
+  // installs now flow through the permission dialog to avoid bypassing
+  // authorization. Kept in the props type for ShellLayout compatibility.
+  void onInstall;
   const [dragOver, setDragOver] = useState(false);
   const [modules, setModules] = useState<ModuleInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -27,13 +32,31 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
   const [creating, setCreating] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [locale, setLocale] = useState<Locale>('zh');
+  const [currentUser, setCurrentUser] = useState('You');
+
+  // Permission dialog state (US12)
+  const [permDialog, setPermDialog] = useState<{
+    source: string;
+    moduleName: string;
+    permissions: string[];
+  } | null>(null);
+  const [installing, setInstalling] = useState(false);
+  // P1-3: Track which permissions the user has selected (checkboxes)
+  const [selectedPerms, setSelectedPerms] = useState<Set<string>>(new Set());
+
+  // Focus traps (STYLE-2)
+  const createDialogTrap = useFocusTrap();
+  const permDialogTrap = useFocusTrap();
+
+  // areaRipple animation state (STYLE-1)
+  const [showRipple, setShowRipple] = useState(false);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
   }, []);
 
-  // Load locale
+  // Load locale & current user
   useEffect(() => {
     async function loadLocale() {
       try {
@@ -41,7 +64,14 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
         if (saved) setLocale(saved === 'en' ? 'en' : 'zh');
       } catch { /* browser dev mode */ }
     }
+    async function loadUser() {
+      try {
+        const name = await window.nativesAPI?.db?.get?.('settings:username');
+        if (name) setCurrentUser(name as string);
+      } catch { /* ignore */ }
+    }
     loadLocale();
+    loadUser();
   }, []);
 
   const loadModules = useCallback(async () => {
@@ -75,14 +105,72 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
     setDragOver(false);
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
     const files = Array.from(e.dataTransfer.files);
     for (const file of files) {
       if (file.name.endsWith('.zip') || file.type === '') {
-        onInstall(file.path || file.name);
+        const source = file.path || file.name;
+        // Read manifest to show the permission dialog (US12).
+        // If the manifest cannot be read (corrupt zip / missing manifest.json)
+        // we must NOT silently install — that would bypass the permission
+        // confirmation. Instead surface the error and abort. See BUG-2.
+        try {
+          const api = window.nativesAPI;
+          const result = await api?.module?.readManifest?.(source);
+          if (result?.manifest) {
+            const perms = result.manifest.permissions || [];
+            setPermDialog({
+              source,
+              moduleName: result.manifest.name,
+              permissions: perms,
+            });
+            // P1-3: Default all permissions selected
+            setSelectedPerms(new Set(perms));
+          } else {
+            // Manifest unreadable: refuse to install rather than bypassing
+            // the permission step. Surface the error reason if available.
+            const reason = (result as { error?: string } | undefined)?.error;
+            showToast(
+              reason
+                ? t(locale, 'errors.installFailed').replace('{reason}', reason)
+                : t(locale, 'workshop.invalidPackage').replace('{name}', file.name)
+            );
+          }
+        } catch (err) {
+          const reason = (err as Error)?.message || String(err);
+          showToast(t(locale, 'errors.installFailed').replace('{reason}', reason));
+        }
       }
+    }
+  };
+
+  const handlePermInstall = async (allowAll: boolean) => {
+    if (!permDialog) return;
+    setInstalling(true);
+    try {
+      const api = window.nativesAPI;
+      const installResult = await api?.module?.install?.(permDialog.source);
+      if (installResult?.success) {
+        // Grant only selected permissions (or all if allowAll)
+        const toGrant = allowAll ? permDialog.permissions : Array.from(selectedPerms);
+        for (const perm of toGrant) {
+          await api?.module?.grantPermission?.(installResult.moduleId!, perm);
+        }
+        showToast(t(locale, 'workshop.installSuccess'));
+        setShowRipple(true);
+        setTimeout(() => setShowRipple(false), 1200);
+        await loadModules();
+      } else {
+        showToast(t(locale, 'workshop.installFailed'));
+      }
+    } catch (err) {
+      console.error('[Workshop] Install error:', err);
+      showToast(t(locale, 'workshop.installFailed'));
+    } finally {
+      setInstalling(false);
+      setPermDialog(null);
     }
   };
 
@@ -147,7 +235,7 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
         type: 'page',
         permissions: ['db', 'settings', 'lifecycle'],
         description: `${name} - A Natives module`,
-        author: 'You',
+        author: currentUser || 'Anonymous',
         lifecycle: {
           heartbeatInterval: 5000,
           loadTimeout: 10000,
@@ -272,7 +360,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px' }}>
+      <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px', position: 'relative' }}>
         {/* Drop zone */}
         <div
           onDragOver={handleDragOver}
@@ -301,6 +389,14 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
             </>
           )}
         </div>
+
+        {/* areaRipple overlay on install success (STYLE-1) */}
+        {showRipple && (
+          <div className="anim-areaRipple" style={{
+            position: 'absolute', inset: 0, borderRadius: 8,
+            pointerEvents: 'none', zIndex: 5,
+          }} />
+        )}
 
         {/* Module grid */}
         {loading ? (
@@ -339,12 +435,23 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
 
       {/* Create template dialog */}
       {showCreateDialog && (
-        <div style={{
-          position: 'fixed', inset: 0,
-          background: 'rgba(0,0,0,0.5)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          zIndex: 60,
-        }} onClick={() => setShowCreateDialog(false)}>
+        <div
+          ref={createDialogTrap.dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label={t(locale, 'workshop.createModule')}
+          style={{
+            position: 'fixed', inset: 0,
+            background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 60,
+          }}
+          onClick={() => setShowCreateDialog(false)}
+          onKeyDown={(e) => {
+            createDialogTrap.handleKeyDown(e);
+            if (e.key === 'Escape') setShowCreateDialog(false);
+          }}
+        >
           <div
             style={{
               background: 'var(--bg-2,#131410)',
@@ -405,13 +512,91 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
         </div>
       )}
 
+      {/* Permission dialog (US12) */}
+      {permDialog && (
+        <div
+          ref={permDialogTrap.dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label={t(locale, 'workshop.permissionTitle')}
+          style={{
+            position: 'fixed', inset: 0,
+            background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 60,
+          }}
+          onClick={() => setPermDialog(null)}
+          onKeyDown={(e) => {
+            permDialogTrap.handleKeyDown(e);
+            if (e.key === 'Escape') setPermDialog(null);
+          }}
+        >
+          <div style={{
+            background: 'var(--bg-2,#131410)',
+            border: '1px solid var(--border,#262920)',
+            borderRadius: 12,
+            padding: 24,
+            width: 420,
+            maxWidth: '90vw',
+          }}>
+            <h2 style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', margin: '0 0 16px' }}>
+              {t(locale, 'workshop.permissionTitle')}
+            </h2>
+            <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 16 }}>
+              {t(locale, 'workshop.permissionDesc').replace('{name}', permDialog.moduleName)}
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
+              {permDialog.permissions.map((perm) => (
+                <label key={perm} style={{
+                  display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+                  padding: '8px 10px',
+                  background: selectedPerms.has(perm) ? 'var(--accent-soft,#cdf24b1f)' : 'var(--bg-3,#1c1e17)',
+                  borderRadius: 6,
+                  fontSize: 12,
+                  transition: 'background 0.12s',
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedPerms.has(perm)}
+                    onChange={() => {
+                      setSelectedPerms((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(perm)) next.delete(perm); else next.add(perm);
+                        return next;
+                      });
+                    }}
+                  />
+                  <span style={{ color: 'var(--text)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                    {perm}
+                  </span>
+                  <span style={{ color: 'var(--text-faint)', marginLeft: 'auto', fontSize: 11 }}>
+                    {PERMISSION_DESC[perm as keyof typeof PERMISSION_DESC] || perm}
+                  </span>
+                </label>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button className="btn" onClick={() => { setPermDialog(null); setInstalling(false); }} disabled={installing}>
+                {t(locale, 'common.cancel')}
+              </button>
+              <button className="btn" onClick={() => handlePermInstall(false)} disabled={installing || selectedPerms.size === 0}>
+                {installing ? t(locale, 'common.loading') : `Allow Selected (${selectedPerms.size})`}
+              </button>
+              <button className="btn btn-primary" onClick={() => handlePermInstall(true)} disabled={installing}>
+                {installing ? t(locale, 'common.loading') : t(locale, 'workshop.permissionAllowAll')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Toast */}
       {toast && (
         <div style={{
           position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
           background: 'var(--bg-3,#1c1e17)', border: '1px solid var(--border,#262920)',
           padding: '10px 18px', borderRadius: 10, fontSize: 13, color: 'var(--text)',
-          zIndex: 200, animation: 'fadeIn 0.18s ease',
+          zIndex: 200, animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           {toast}
         </div>
@@ -419,6 +604,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
     </div>
   );
 }
+
 
 // ── Module Card ──
 
@@ -501,6 +687,18 @@ function ModuleCard({
     </div>
   );
 }
+
+// ── Permission descriptions (US12) ──
+
+const PERMISSION_DESC: Record<string, string> = {
+  'db:read': '读取数据存储',
+  'db:write': '写入数据存储',
+  'env:read': '读取环境变量',
+  'notification': '发送通知',
+  'ipc:send': '模块间通信',
+  'lifecycle': '生命周期管理',
+  'settings': '访问设置',
+};
 
 // ── Helpers ──
 

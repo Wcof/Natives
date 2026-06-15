@@ -52,6 +52,7 @@ export default function AIFileOrganizer() {
   const [executing, setExecuting] = useState(false);
   const [currentDir, setCurrentDir] = useState('~');
   const [locale, setLocale] = useState<Locale>('zh');
+  const [analysisMode, setAnalysisMode] = useState<'organize' | 'duplicates' | 'large-files'>('organize');
 
   const handleAnalyze = useCallback(async () => {
     setAnalyzing(true);
@@ -61,7 +62,6 @@ export default function AIFileOrganizer() {
       const api = window.nativesAPI;
       if (!api?.fs?.listDir) return;
 
-      // Get current directory from file browser
       const dir = currentDir || '~';
       const entries = await api.fs.listDir(dir, { sortBy: 'name', sortDir: 'asc', showHidden: false });
       if (!Array.isArray(entries)) return;
@@ -69,41 +69,84 @@ export default function AIFileOrganizer() {
       const newProposals: AIProposal[] = [];
       let id = 0;
 
-      // Group files by type
-      const typeGroups: Record<string, typeof entries> = {};
-      for (const entry of entries) {
-        if (entry.isDir) continue;
-        const cat = getFileCategory(entry.name);
-        if (cat === 'other') continue;
-        if (!typeGroups[cat]) typeGroups[cat] = [];
-        typeGroups[cat]!.push(entry);
-      }
+      if (analysisMode === 'organize') {
+        // Group files by type
+        const typeGroups: Record<string, typeof entries> = {};
+        for (const entry of entries) {
+          if (entry.isDir) continue;
+          const cat = getFileCategory(entry.name);
+          if (cat === 'other') continue;
+          if (!typeGroups[cat]) typeGroups[cat] = [];
+          typeGroups[cat]!.push(entry);
+        }
 
-      // Propose moving groups with 3+ files into type folders
-      for (const [cat, files] of Object.entries(typeGroups)) {
-        if (files.length >= 3) {
-          const folder = TYPE_FOLDERS[cat] || cat;
-          for (const file of files) {
+        // Propose moving groups with 3+ files into type folders
+        for (const [cat, files] of Object.entries(typeGroups)) {
+          if (files.length >= 3) {
+            const folder = TYPE_FOLDERS[cat] || cat;
+            for (const file of files) {
+              newProposals.push({
+                id: `move-${id++}`,
+                action: 'move',
+                filePath: file.path,
+                reason: t(locale, 'aiWorkbench.organizer.proposalReason')
+                  .replace('{n}', String(files.length))
+                  .replace('{cat}', cat)
+                  .replace('{folder}', folder),
+                targetPath: `${dir}/${folder}/${file.name}`,
+              });
+            }
+          }
+        }
+
+        // Propose deleting .DS_Store and thumbs.db
+        for (const entry of entries) {
+          if (entry.name === '.DS_Store' || entry.name === 'Thumbs.db' || entry.name === '.thumbs.db') {
             newProposals.push({
-              id: `move-${id++}`,
-              action: 'move',
-              filePath: file.path,
-              reason: `Organize ${files.length} ${cat} files into ${folder}/`,
-              targetPath: `${dir}/${folder}/${file.name}`,
+              id: `del-${id++}`,
+              action: 'delete',
+              filePath: entry.path,
+              reason: t(locale, 'aiWorkbench.organizer.deleteReason'),
             });
           }
         }
-      }
-
-      // Propose deleting .DS_Store and thumbs.db
-      for (const entry of entries) {
-        if (entry.name === '.DS_Store' || entry.name === 'Thumbs.db' || entry.name === '.thumbs.db') {
-          newProposals.push({
-            id: `del-${id++}`,
-            action: 'delete',
-            filePath: entry.path,
-            reason: 'System-generated file, safe to delete',
-          });
+      } else if (analysisMode === 'duplicates') {
+        // TASK-013: Find duplicate files by name pattern
+        const nameMap = new Map<string, typeof entries>();
+        for (const entry of entries) {
+          if (entry.isDir) continue;
+          // Normalize: remove (1), -copy, etc.
+          const base = entry.name.replace(/ \(\d+\)| copy( \d+)?|-copy(-\d+)?/i, '');
+          if (!nameMap.has(base)) nameMap.set(base, []);
+          nameMap.get(base)!.push(entry);
+        }
+        for (const [, files] of nameMap) {
+          if (files.length > 1) {
+            // Keep first, propose deleting/archiving the rest
+            for (let i = 1; i < files.length; i++) {
+              newProposals.push({
+                id: `dup-${id++}`,
+                action: 'delete',
+                filePath: files[i]!.path,
+                reason: `Duplicate of ${files[0]!.name}`,
+              });
+            }
+          }
+        }
+      } else if (analysisMode === 'large-files') {
+        // TASK-013: Find files > 10MB
+        for (const entry of entries) {
+          if (entry.isDir) continue;
+          const size = entry.size || 0;
+          if (size > 10 * 1024 * 1024) {
+            newProposals.push({
+              id: `large-${id++}`,
+              action: 'archive',
+              filePath: entry.path,
+              reason: `Large file (${(size / 1024 / 1024).toFixed(1)}MB) — consider archiving`,
+              targetPath: `${dir}/_Large/${entry.name}`,
+            });
+          }
         }
       }
 
@@ -113,7 +156,7 @@ export default function AIFileOrganizer() {
     } finally {
       setAnalyzing(false);
     }
-  }, [currentDir]);
+  }, [currentDir, analysisMode]);
 
   const handleExecute = useCallback(async () => {
     setExecuting(true);
@@ -157,7 +200,23 @@ export default function AIFileOrganizer() {
           {t(locale, 'aiWorkbench.aiFileOrganizer')}
         </div>
         <div style={{ fontSize: 10, color: 'var(--text-faint)', marginTop: 2 }}>
-          AI analyzes file metadata to suggest organization
+          {t(locale, 'aiWorkbench.organizer.description')}
+        </div>
+        <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
+          {(['organize', 'duplicates', 'large-files'] as const).map((mode) => (
+            <button
+              key={mode}
+              className="btn-ghost"
+              onClick={() => setAnalysisMode(mode)}
+              style={{
+                fontSize: 9, padding: '2px 6px', borderRadius: 3,
+                color: analysisMode === mode ? 'var(--accent,#cdf24b)' : 'var(--text-faint)',
+                background: analysisMode === mode ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
+              }}
+            >
+              {mode === 'organize' ? '📦 Organize' : mode === 'duplicates' ? '📋 Duplicates' : '📏 Large Files'}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -166,7 +225,7 @@ export default function AIFileOrganizer() {
         {proposals.length === 0 ? (
           <div style={{ textAlign: 'center', padding: 20 }}>
             <div style={{ fontSize: 12, color: 'var(--text-faint)', marginBottom: 12 }}>
-              {analyzing ? 'Analyzing...' : 'No suggestions yet'}
+              {analyzing ? t(locale, 'aiWorkbench.organizer.analyzing') : t(locale, 'aiWorkbench.noSuggestions')}
             </div>
             <button
               className="btn btn-primary"
@@ -174,7 +233,7 @@ export default function AIFileOrganizer() {
               onClick={handleAnalyze}
               disabled={analyzing}
             >
-              {analyzing ? '⏳ Analyzing...' : `🔍 ${t(locale, 'aiWorkbench.analyze')}`}
+              {analyzing ? `⏳ ${t(locale, 'aiWorkbench.organizer.analyzing')}` : `🔍 ${t(locale, 'aiWorkbench.analyze')}`}
             </button>
           </div>
         ) : (
@@ -200,7 +259,7 @@ export default function AIFileOrganizer() {
                   />
                   <div>
                     <div style={{ color: 'var(--text)' }}>
-                      {p.action === 'move' ? '📦 Move' : p.action === 'rename' ? '✏️ Rename' : p.action === 'delete' ? '🗑️ Delete' : '📁 Archive'}
+                      {p.action === 'move' ? `📦 ${t(locale, 'aiWorkbench.organizer.actions.move')}` : p.action === 'rename' ? `✏️ ${t(locale, 'aiWorkbench.organizer.actions.rename')}` : p.action === 'delete' ? `🗑️ ${t(locale, 'aiWorkbench.organizer.actions.delete')}` : `📁 ${t(locale, 'aiWorkbench.organizer.actions.archive')}`}
                       {' '}<span style={{ fontFamily: 'var(--font-mono)' }}>{p.filePath.split('/').pop()}</span>
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--text-faint)', marginTop: 2 }}>{p.reason}</div>
@@ -214,23 +273,23 @@ export default function AIFileOrganizer() {
               </div>
             ))}
 
-            <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
-              <button
-                className="btn btn-primary"
-                style={{ flex: 1, fontSize: 11 }}
-                disabled={approved.size === 0 || executing}
-                onClick={handleExecute}
-              >
-                {executing ? '⏳' : `✓ ${t(locale, 'aiWorkbench.execute')}`} ({approved.size})
-              </button>
-              <button
-                className="btn btn-ghost"
-                style={{ fontSize: 11 }}
-                onClick={handleUndo}
-              >
-                {t(locale, 'aiWorkbench.undoAll')}
-              </button>
-            </div>
+              <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+                <button
+                  className="btn btn-primary"
+                  style={{ flex: 1, fontSize: 11 }}
+                  disabled={approved.size === 0 || executing}
+                  onClick={handleExecute}
+                >
+                  {executing ? '⏳' : `✓ ${t(locale, 'aiWorkbench.execute')}`} ({approved.size})
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  style={{ fontSize: 11 }}
+                  onClick={handleUndo}
+                >
+                  {t(locale, 'aiWorkbench.undoAll')}
+                </button>
+              </div>
           </>
         )}
       </div>

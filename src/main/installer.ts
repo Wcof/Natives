@@ -113,13 +113,63 @@ export function getInstalledModules(): Array<{
   }>;
 }
 
+// ── Read manifest from source (for permission dialog) ──
+
+export function readManifestFromSource(source: string): { manifest: Manifest } | { error: string } {
+  try {
+    const stat = fs.statSync(source);
+    let manifestDir: string;
+    if (stat.isDirectory()) {
+      manifestDir = source;
+    } else if (stat.isFile() && source.endsWith('.zip')) {
+      const extracted = extractZip(source);
+      manifestDir = extracted;
+    } else {
+      return { error: 'Source must be a directory or .zip file' };
+    }
+    const manifest = readManifestFromDir(manifestDir);
+    return { manifest };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
 // ── Module update ──
 
-export function updateModule(moduleId: string): { success: true } | { success: false; error: string } {
+export function updateModule(moduleId: string, updateSource?: string): { success: true } | { success: false; error: string } {
   try {
-    const manifestPath = path.join(MODULES_DIR, moduleId, 'manifest.json');
+    const moduleDir = path.join(MODULES_DIR, moduleId);
+    const manifestPath = path.join(moduleDir, 'manifest.json');
+
+    // If an update source is provided, replace files first
+    if (updateSource) {
+      const sourceResult = readManifestFromSource(updateSource);
+      if ('error' in sourceResult) {
+        return { success: false, error: sourceResult.error };
+      }
+      // Validate the update source matches the module being updated
+      if (sourceResult.manifest.id !== moduleId) {
+        return { success: false, error: `Update source module ID "${sourceResult.manifest.id}" does not match "${moduleId}"` };
+      }
+      const stat = fs.statSync(updateSource);
+      let updateDir: string;
+      if (stat.isDirectory()) {
+        updateDir = updateSource;
+      } else if (stat.isFile() && updateSource.endsWith('.zip')) {
+        updateDir = extractZip(updateSource);
+      } else {
+        return { success: false, error: 'Update source must be a directory or .zip file' };
+      }
+      // Clean old module dir and copy new files
+      if (fs.existsSync(moduleDir)) {
+        fs.rmSync(moduleDir, { recursive: true });
+      }
+      copyDirSync(updateDir, moduleDir);
+    }
+
+    // Re-read manifest from the (now updated) module directory
     if (!fs.existsSync(manifestPath)) {
-      return { success: false, error: 'Module no longer exists' };
+      return { success: false, error: 'Module no longer exists after update' };
     }
 
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
@@ -135,12 +185,27 @@ export function updateModule(moduleId: string): { success: true } | { success: f
       .prepare('SELECT key, value FROM module_data WHERE module_id = ?')
       .all(moduleId) as Array<{ key: string; value: string }>;
 
-    // Update version in database
-    db.prepare('UPDATE modules SET version = ?, updated_at = datetime(\'now\') WHERE id = ?')
-      .run(validation.manifest.version, moduleId);
+    // Update all fields in database
+    db.prepare(`UPDATE modules SET
+      name = ?, version = ?, entry = ?, type = ?,
+      description = ?, author = ?, icon = ?, min_natives_version = ?,
+      updated_at = datetime('now') WHERE id = ?`)
+      .run(
+        validation.manifest.name, validation.manifest.version,
+        validation.manifest.entry, validation.manifest.type,
+        validation.manifest.description || null, validation.manifest.author || null,
+        validation.manifest.icon || null, validation.manifest.minNativesVersion || null,
+        moduleId,
+      );
 
     // Re-insert module_data (data survives version changes)
     // Keys are already scoped by (module_id, key) UNIQUE constraint
+
+    // Sync permissions from new manifest
+    db.prepare('DELETE FROM module_permissions WHERE module_id = ?').run(moduleId);
+    for (const perm of validation.manifest.permissions || []) {
+      db.prepare('INSERT INTO module_permissions (module_id, permission, granted) VALUES (?, ?, 0)').run(moduleId, perm);
+    }
 
     return { success: true };
   } catch (err) {
@@ -180,6 +245,18 @@ function copyDirSync(src: string, dest: string): void {
 function extractZip(zipPath: string): string {
   const zip = new AdmZip(zipPath);
   const extractDir = path.join(MODULES_DIR, `__extract_${Date.now()}`);
+  ensureModulesDir();
+
+  // TASK-006: Sanitize each zip entry against path traversal (Zip Slip).
+  // Reject entries with '..' or absolute paths.
+  const zipEntries = zip.getEntries();
+  for (const entry of zipEntries) {
+    const entryPath = entry.entryName || '';
+    if (entryPath.includes('..') || path.isAbsolute(entryPath)) {
+      throw new Error(`Zip Slip detected: rejected unsafe entry "${entryPath}"`);
+    }
+  }
+
   zip.extractAllTo(extractDir, true);
 
   // If zip has a single root directory, use that

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Power, Trash2, RefreshCw } from 'lucide-react';
+import { t, type Locale } from '@/i18n';
 
 interface ModuleInfo {
   id: string;
@@ -16,21 +17,35 @@ interface ModuleInfo {
 export default function ModulesPage() {
   const [modules, setModules] = useState<ModuleInfo[]>([]);
   const [loading, setLoading] = useState(true);
+  const [locale, setLocale] = useState<Locale>('zh');
+
+  useEffect(() => {
+    async function loadLocale() {
+      try {
+        const saved = await window.nativesAPI?.getLocale?.();
+        if (saved === 'en') setLocale('en'); else setLocale('zh');
+      } catch { /* ignore */ }
+    }
+    loadLocale();
+  }, []);
 
   async function loadModules() {
     setLoading(true);
+    const timeout = setTimeout(() => setLoading(false), 5000);
     try {
-      const api = (window as any).nativesAPI;
+      const api = window.nativesAPI;
       if (api?.module?.list) {
         const result = await api.module.list();
         if (Array.isArray(result)) {
-          setModules(result);
+          setModules(result as ModuleInfo[]);
         }
       }
     } catch (err) {
       console.error('[Modules] Failed to load modules:', err);
+    } finally {
+      clearTimeout(timeout);
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   useEffect(() => {
@@ -39,7 +54,7 @@ export default function ModulesPage() {
 
   async function handleToggle(mod: ModuleInfo) {
     try {
-      const api = (window as any).nativesAPI;
+      const api = window.nativesAPI;
       if (mod.enabled) {
         await api?.module?.disable?.(mod.id);
       } else {
@@ -52,9 +67,9 @@ export default function ModulesPage() {
   }
 
   async function handleUninstall(mod: ModuleInfo) {
-    if (!confirm(`Are you sure you want to uninstall "${mod.name}"?`)) return;
+    if (!confirm(t(locale, 'modules.confirmUninstallModule').replace('{name}', mod.name))) return;
     try {
-      const api = (window as any).nativesAPI;
+      const api = window.nativesAPI;
       await api?.module?.uninstall?.(mod.id);
       await loadModules();
     } catch (err) {
@@ -64,7 +79,7 @@ export default function ModulesPage() {
 
   async function handleScan() {
     try {
-      const api = (window as any).nativesAPI;
+      const api = window.nativesAPI;
       await api?.module?.scan?.();
       await loadModules();
     } catch (err) {
@@ -75,24 +90,24 @@ export default function ModulesPage() {
   return (
     <div style={{ height: '100%', overflow: 'auto' }} role="region" aria-label="Module manager">
       <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border,#262920)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <h1 style={{ fontSize: 17, fontWeight: 600, color: 'var(--text,#f2f2ea)', margin: 0 }}>Module Manager</h1>
+        <h1 style={{ fontSize: 17, fontWeight: 600, color: 'var(--text,#f2f2ea)', margin: 0 }}>{t(locale, 'modules.title')}</h1>
         <button
           onClick={handleScan}
           style={{ background: 'var(--bg-3,#1c1e17)', border: '1px solid var(--border,#262920)', color: 'var(--text,#f2f2ea)', padding: '6px 12px', borderRadius: 6, cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}
-          aria-label="Scan for modules"
+          aria-label={t(locale, 'modules.ariaScan')}
         >
           <RefreshCw size={14} />
-          Scan
+          {t(locale, 'modules.scan')}
         </button>
       </div>
 
       {loading ? (
         <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--text-faint,#62655a)', fontSize: 13 }}>
-          Loading...
+          {t(locale, 'common.loading')}
         </div>
       ) : modules.length === 0 ? (
         <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--text-faint,#62655a)', fontSize: 13 }}>
-          No modules installed. Visit the Workshop to install modules.
+          {t(locale, 'modules.emptyState')}
         </div>
       ) : (
         <div aria-live="polite">
@@ -111,19 +126,19 @@ export default function ModulesPage() {
                 background: mod.enabled ? 'var(--accent-soft,#cdf24b1f)' : 'var(--bg-3,#1c1e17)',
                 color: mod.enabled ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
               }}>
-                {mod.enabled ? 'Enabled' : 'Disabled'}
+                {mod.enabled ? t(locale, 'workshop.enabled') : t(locale, 'workshop.disabled')}
               </span>
               <button
                 onClick={() => handleToggle(mod)}
                 style={{ background: 'none', border: '1px solid var(--border,#262920)', color: 'var(--text-dim,#9b9d8c)', padding: '4px 8px', borderRadius: 4, cursor: 'pointer' }}
-                aria-label={mod.enabled ? `Disable ${mod.name}` : `Enable ${mod.name}`}
+                aria-label={mod.enabled ? t(locale, 'modules.ariaDisable').replace('{name}', mod.name) : t(locale, 'modules.ariaEnable').replace('{name}', mod.name)}
               >
                 <Power size={14} />
               </button>
               <button
                 onClick={() => handleUninstall(mod)}
                 style={{ background: 'none', border: '1px solid var(--border,#262920)', color: '#e06a5b', padding: '4px 8px', borderRadius: 4, cursor: 'pointer' }}
-                aria-label={`Uninstall ${mod.name}`}
+                aria-label={t(locale, 'modules.ariaUninstall').replace('{name}', mod.name)}
               >
                 <Trash2 size={14} />
               </button>

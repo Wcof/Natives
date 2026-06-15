@@ -4,7 +4,7 @@ import ShellLayout from '@/components/shell/ShellLayout';
 
 export const metadata: Metadata = {
   title: 'Natives',
-  description: 'AI Steam Base — 桌面应用容器',
+  description: 'Natives — AI Steam Base',
 };
 
 export default function RootLayout({
@@ -13,7 +13,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="zh-CN" data-theme="terminal-volt">
+    <html data-theme="terminal-volt">
       <body>
         <ShellLayout>{children}</ShellLayout>
       </body>

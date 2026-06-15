@@ -86,21 +86,20 @@ const ERROR_META: Record<ErrorCategory, { userMessage: string; actionHint: strin
 
 function classifyByMessage(raw: string): ErrorCategory {
   const lower = raw.toLowerCase();
-  // Check specific patterns FIRST, then fall through
   if (lower.includes('install fail') || (lower.includes('install') && lower.includes('invalid'))) return 'MODULE_INSTALL_FAILED';
   if (lower.includes('sqlite') || lower.includes('database') || lower.includes('db error')) return 'DB_ERROR';
+  if (lower.includes('terminal') && lower.includes('crash')) return 'TERMINAL_CRASH';
   if (lower.includes('spawn') || lower.includes('pty')) {
     if (lower.includes('fail') || lower.includes('error')) return 'TERMINAL_SPAWN_FAILED';
     return 'TERMINAL_CRASH';
   }
-  if (lower.includes('crash') || lower.includes('segfault')) return 'PLUGIN_CRASH';
   if (lower.includes('timeout') || lower.includes('timed out')) return 'PLUGIN_TIMEOUT';
   if (lower.includes('permission') || lower.includes('denied') || lower.includes('forbidden')) return 'BRIDGE_PERMISSION_DENIED';
   if (lower.includes('invalid') || lower.includes('malformed') || lower.includes('bad request')) return 'BRIDGE_INVALID_REQUEST';
   if (lower.includes('not found') || lower.includes('missing') || lower.includes('no such')) return 'MODULE_NOT_FOUND';
   if ((lower.includes('config') && (lower.includes('corrupt') || lower.includes('parse'))) || lower.includes('parse error')) return 'CONFIG_CORRUPTED';
   if (lower.includes('network') || lower.includes('econnrefused') || lower.includes('enotfound') || lower.includes('fetch')) return 'NETWORK_ERROR';
-  if (lower.includes('terminal') && lower.includes('crash')) return 'TERMINAL_CRASH';
+  if (lower.includes('crash') || lower.includes('segfault')) return 'PLUGIN_CRASH';
   return 'UNKNOWN';
 }
 

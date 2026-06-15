@@ -1,20 +1,47 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { FollowMode, useFollowMode } from '@/lib/follow-mode';
+import { t, type Locale } from '@/i18n';
 
 export default function FollowModeUI({
-  currentDir,
+  currentDir = '/',
   onNavigate,
 }: {
-  currentDir: string;
-  onNavigate: (path: string) => void;
+  currentDir?: string;
+  onNavigate?: (path: string) => void;
 }) {
   const { mode, cycleMode, terminalFollows, fileBrowserFollows } = useFollowMode();
+  const [locale, setLocale] = useState<Locale>('zh');
+
+  useEffect(() => {
+    async function loadLocale() {
+      try {
+        const saved = await window.nativesAPI?.getLocale?.();
+        if (saved) setLocale(saved === 'en' ? 'en' : 'zh');
+      } catch { /* ignore */ }
+    }
+    loadLocale();
+  }, []);
+
+  // 跟随模式切换时触发终端 cd 或文件浏览导航
+  useEffect(() => {
+    if (mode === 'terminal-follow' && currentDir) {
+      // Need a sessionId to write - dispatch event for ShellLayout to handle
+      window.dispatchEvent(
+        new CustomEvent('follow-cd', { detail: currentDir })
+      );
+    } else if (mode === 'file-follow' && currentDir) {
+      window.dispatchEvent(
+        new CustomEvent('navigate-files', { detail: { directory: currentDir } })
+      );
+    }
+  }, [mode, currentDir]);
 
   const modeLabel: Record<FollowMode, string> = {
-    off: 'Follow: Off',
-    'terminal-follow': 'Follow: Terminal → File',
-    'file-follow': 'Follow: File → Terminal',
+    off: t(locale, 'aiWorkbench.followOff'),
+    'terminal-follow': t(locale, 'aiWorkbench.followTerminal'),
+    'file-follow': t(locale, 'aiWorkbench.followFile'),
   };
 
   const modeIcon: Record<FollowMode, string> = {
@@ -38,18 +65,18 @@ export default function FollowModeUI({
           border: mode !== 'off' ? '1px solid var(--accent)' : '1px solid var(--border)',
         }}
       >
-        {modeIcon[mode]} {mode !== 'off' ? 'ON' : 'OFF'}
+        {modeIcon[mode]} {mode !== 'off' ? t(locale, 'common.on') : t(locale, 'common.off')}
       </button>
 
       {terminalFollows && (
         <span style={{ color: 'var(--text-faint)', fontSize: 10 }}>
-          cd → {currentDir || '/'}
+          {t(locale, 'aiWorkbench.follow.cdPrefix')}{currentDir || '/'}
         </span>
       )}
 
       {fileBrowserFollows && (
         <span style={{ color: 'var(--text-faint)', fontSize: 10 }}>
-          Terminal cd syncs browser
+          {t(locale, 'aiWorkbench.followMode.terminalCdSyncsBrowser')}
         </span>
       )}
     </div>

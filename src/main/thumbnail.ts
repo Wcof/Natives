@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { execFile } from 'child_process';
+import { execFilePromise } from '@/lib/exec-file';
 
 // ── Constants ──
 
@@ -146,11 +147,11 @@ export async function generateThumb(
       const qlOutput = path.join(tmpDir, `${basename}.png`);
       if (fs.existsSync(qlOutput)) {
         await execFilePromise('sips', ['-s', 'format', 'jpeg', qlOutput, '--out', tmpPath]);
-        try { fs.unlinkSync(qlOutput); } catch { /* ignore */ }
+        try { await fs.promises.unlink(qlOutput); } catch { /* ignore */ }
       }
     }
 
-    const buffer = fs.readFileSync(tmpPath);
+    const buffer = await fs.promises.readFile(tmpPath);
 
     // 写入缓存
     try {
@@ -166,20 +167,13 @@ export async function generateThumb(
       await enforceCacheLimit();
     } catch { /* 缓存写入失败不影响功能 */ }
 
-    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+    try { await fs.promises.unlink(tmpPath); } catch { /* ignore */ }
 
     return { buffer, contentType: 'image/jpeg', cached: false };
   } catch {
-    try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+    try { if (fs.existsSync(tmpPath)) await fs.promises.unlink(tmpPath); } catch { /* ignore */ }
     return null;
   }
 }
 
-function execFilePromise(cmd: string, args: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout: 15000 }, (err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  });
-}
+

@@ -1,5 +1,8 @@
 'use client';
 
+import { useState, useEffect } from 'react';
+import { t, type Locale } from '@/i18n';
+
 interface FileToolbarProps {
   viewMode: 'grid' | 'list';
   sortBy: 'name' | 'mtime' | 'size';
@@ -22,6 +25,17 @@ export default function FileToolbar({
   onShowHiddenChange, onSearchChange,
   onRefresh, onNewFile, onNewFolder,
 }: FileToolbarProps) {
+  const [locale, setLocale] = useState<Locale>('en');
+  useEffect(() => {
+    async function loadLocale() {
+      try {
+        const saved = await window.nativesAPI?.getLocale?.();
+        if (saved === 'en') setLocale('en'); else setLocale('zh');
+      } catch { /* ignore */ }
+    }
+    loadLocale();
+  }, []);
+
   return (
     <div style={{
       display: 'flex',
@@ -36,14 +50,14 @@ export default function FileToolbar({
         <button
           className={`seg-item ${viewMode === 'grid' ? 'active' : ''}`}
           onClick={() => onViewModeChange('grid')}
-          title="Grid view"
+          title={t(locale, 'fileBrowser.gridView')}
         >
           ▦
         </button>
         <button
           className={`seg-item ${viewMode === 'list' ? 'active' : ''}`}
           onClick={() => onViewModeChange('list')}
-          title="List view"
+          title={t(locale, 'fileBrowser.listView')}
         >
           ☰
         </button>
@@ -56,9 +70,9 @@ export default function FileToolbar({
         onChange={(e) => onSortChange(e.target.value as 'name' | 'mtime' | 'size')}
         style={{ width: 100, fontSize: 12, padding: '4px 6px' }}
       >
-        <option value="name">Name</option>
-        <option value="mtime">Modified</option>
-        <option value="size">Size</option>
+        <option value="name">{t(locale, 'fileBrowser.name')}</option>
+        <option value="mtime">{t(locale, 'fileBrowser.modified')}</option>
+        <option value="size">{t(locale, 'fileBrowser.size')}</option>
       </select>
 
       {/* Sort direction */}

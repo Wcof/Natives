@@ -58,6 +58,22 @@ export async function handleBridgeRequest(
     case 'lifecycle.error': {
       const { message } = data as { message: string };
       markError(moduleId, message);
+      // Write crash notification to DB
+      try {
+        sendNotification('__system__', `Plugin ${moduleId} crashed`, message || 'Heartbeat timeout', 'error');
+      } catch { /* ignore */ }
+      // Notify renderer about the crash
+      try {
+        const { BrowserWindow } = require('electron');
+        const win = BrowserWindow.getAllWindows()[0];
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('notification', {
+            type: 'crash',
+            moduleId,
+            message,
+          });
+        }
+      } catch { /* ignore */ }
       return { ok: true };
     }
 
@@ -73,7 +89,35 @@ export async function handleBridgeRequest(
     case 'env.get': {
       if (!checkPermission(moduleId, 'env:read')) return { error: 'Permission denied' };
       const { key } = data as { key: string };
-      return { value: null }; // Env injection occurs at terminal startup, not live query
+      try {
+        const db = getDb();
+        if (!db) return { error: 'Database not available' };
+        // P0-2: Use correct column names (profile_id / value_encrypted)
+        const profile = db.prepare('SELECT id FROM env_profiles WHERE name = ?').get('default') as { id: number } | undefined;
+        if (!profile) return { value: null };
+        const row = db.prepare('SELECT value_encrypted FROM env_variables WHERE profile_id = ? AND key = ?').get(profile.id, key) as { value_encrypted: string } | undefined;
+        if (!row) return { value: null };
+        // Use shared getEncryptionKey() for consistent decryption
+        const { getEncryptionKey } = require('../lib/env-injector');
+        const encryptionKey = getEncryptionKey();
+        // Try safeStorage decryption first, fall back to XOR cipher
+        try {
+          const { safeStorage } = require('electron');
+          if (safeStorage.isEncryptionAvailable()) {
+            const buf = Buffer.from(row.value_encrypted, 'base64');
+            return { value: safeStorage.decryptString(buf) };
+          }
+        } catch { /* safeStorage not available, use fallback */ }
+        // XOR fallback
+        const buf = Buffer.from(row.value_encrypted, 'base64');
+        const keyBuf = Buffer.from(encryptionKey, 'utf-8');
+        for (let i = 0; i < buf.length; i++) {
+          buf[i] = buf[i]! ^ keyBuf[i % keyBuf.length]!;
+        }
+        return { value: buf.toString('utf-8') };
+      } catch (err) {
+        return { error: `Failed to read env variable: ${(err as Error).message}` };
+      }
     }
 
     // Notifications

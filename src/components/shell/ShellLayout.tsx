@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { t } from '@/i18n';
+import { t, type Locale } from '@/i18n';
 import Sidebar from './Sidebar';
 import ContentArea from './ContentArea';
 import RightPanel from './RightPanel';
@@ -23,6 +23,10 @@ import ScreenshotCard from '@/components/screenshot/ScreenshotCard';
 import AnnotationEditor from '@/components/screenshot/AnnotationEditor';
 import ReleaseWizardDialog from '@/components/release/ReleaseWizardDialog';
 import UpdateNotification from '@/components/update/UpdateNotification';
+import UsernameOnboarding from '@/components/onboarding/UsernameOnboarding';
+import { classifyError } from '@/lib/error-classifier';
+import { useFollowMode } from '@/lib/follow-mode';
+import { pushRecentModule } from '@/lib/recent-modules';
 import '@/types'; // ensure Window.nativesAPI type
 
 interface ShellState {
@@ -50,7 +54,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
   const [activeView, setActiveView] = useState<string>('dashboard');
   const [themeReady, setThemeReady] = useState(false);
-  const [locale, setLocale] = useState<'zh' | 'en'>('zh');
+  const [locale, setLocale] = useState<Locale>('zh');
   const terminalSessionIdRef = useRef<string | null>(null);
   const iframeContainerRef = useRef<HTMLDivElement>(null);
   const activeModuleRef = useRef<string | null>(null);
@@ -59,8 +63,15 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   // File preview state
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null);
 
-  // Terminal follow mode
-  const [followMode, setFollowMode] = useState(false);
+  // Terminal follow mode — unified via useFollowMode hook
+  const { mode: followMode, cycleMode: cycleFollowMode } = useFollowMode();
+
+  // Crash state: track crashed modules for overlay display
+  const [crashedModules, setCrashedModules] = useState<Set<string>>(new Set());
+  const [iframeReloadKey, setIframeReloadKey] = useState(0);
+
+  // P1-5: Username onboarding
+  const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null);
 
   // Phase 3: Screenshot state
   const [annotatingFile, setAnnotatingFile] = useState<string | null>(null);
@@ -69,7 +80,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   // Phase 3: Release Wizard state
   const [releaseWizardOpen, setReleaseWizardOpen] = useState(false);
 
-  // FOUC guard + locale/theme init
+  // FOUC guard + locale/theme init + state persistence load
   useEffect(() => {
     setThemeReady(true);
 
@@ -84,11 +95,35 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         if (savedTheme) applyTheme(savedTheme);
         if (savedLocale) {
           document.documentElement.lang = savedLocale;
-          setLocale(savedLocale as 'zh' | 'en');
+          setLocale(savedLocale as Locale);
         }
       } catch {
         applyTheme('terminal-volt');
       }
+
+      // Restore persisted sidebar state
+      try {
+        const api = window.nativesAPI;
+        if (api?.db?.get) {
+          const savedStr = await api.db.get('_state:sidebar');
+          if (savedStr) {
+            const saved = JSON.parse(savedStr as string);
+            if (saved) {
+              setState((prev) => ({
+                ...prev,
+                ...(typeof saved.sidebarWidth === 'number' && { sidebarWidth: saved.sidebarWidth }),
+                ...(typeof saved.sidebarCollapsed === 'boolean' && { sidebarCollapsed: saved.sidebarCollapsed }),
+                ...(typeof saved.terminalHeight === 'number' && { terminalHeight: saved.terminalHeight }),
+                ...(typeof saved.terminalCollapsed === 'boolean' && { terminalCollapsed: saved.terminalCollapsed }),
+                ...(typeof saved.rightPanelWidth === 'number' && { rightPanelWidth: saved.rightPanelWidth }),
+              }));
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[Shell] Failed to load sidebar state:', err);
+      }
+
       try {
         window.nativesAPI?.themeReady();
       } catch {
@@ -96,6 +131,49 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       }
     }
     initSettings();
+
+    // Persist sidebar state on page unload
+    const handleBeforeUnload = () => {
+      try {
+        const api = window.nativesAPI;
+        if (api?.db?.set) {
+          api.db.set('_state:sidebar', JSON.stringify({
+            sidebarWidth: state.sidebarWidth,
+            sidebarCollapsed: state.sidebarCollapsed,
+            terminalHeight: state.terminalHeight,
+            terminalCollapsed: state.terminalCollapsed,
+            rightPanelWidth: state.rightPanelWidth,
+          }));
+        }
+      } catch (err) {
+        console.warn('[Shell] Failed to save sidebar state:', err);
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [state.sidebarWidth, state.sidebarCollapsed, state.terminalHeight, state.terminalCollapsed, state.rightPanelWidth]);
+
+  // Reactively update locale when SettingsPage changes language
+  useEffect(() => {
+    const handler = () => {
+      window.nativesAPI?.getLocale?.().then((saved) => {
+        if (saved) {
+          document.documentElement.lang = saved;
+          setLocale(saved as Locale);
+        }
+      }).catch(() => {});
+    };
+    window.addEventListener('locale-changed', handler);
+    return () => window.removeEventListener('locale-changed', handler);
+  }, []);
+
+  // P1-5: Check if username is set (first-run detection)
+  useEffect(() => {
+    window.nativesAPI?.db?.get?.('settings:username').then((value: unknown) => {
+      setNeedsOnboarding(!value);
+    }).catch(() => setNeedsOnboarding(false));
   }, []);
 
   // Manage iframe lifecycle when activeView changes
@@ -112,6 +190,12 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     }
 
     activeModuleRef.current = moduleId;
+
+    // Record this open in the LRU "recently used" list (US1 Dashboard). See
+    // ISSUE-3. Only meaningful for actual module views.
+    if (moduleId) {
+      pushRecentModule(moduleId);
+    }
 
     if (!moduleId) {
       // Remove any existing iframes from container (for non-module views)
@@ -135,6 +219,25 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       });
       manager.onCrash(moduleId, () => {
         console.error(`[Shell] Module ${moduleId} crashed`);
+        setCrashedModules((prev) => {
+          // Persist the crash to the notifications table so it shows up in
+          // the notification center (US20). Only fire once per crash to avoid
+          // duplicate rows when the callback fires repeatedly. See BUG-3.
+          if (!prev.has(moduleId)) {
+            try {
+              // P1-6: Use classifyError to enrich crash notification with actionHint
+              const classified = classifyError(new Error(`Plugin ${moduleId} crashed: Heartbeat timeout`), moduleId);
+              window.nativesAPI?.notification?.send?.(
+                `Plugin ${moduleId} crashed`,
+                `Heartbeat timeout — ${classified.actionHint}`,
+                'error',
+              );
+            } catch { /* notification persistence is best-effort */ }
+          }
+          const next = new Set(prev);
+          next.add(moduleId);
+          return next;
+        });
       });
     }
 
@@ -204,7 +307,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
   // Terminal follow mode: send cd to active terminal when file browser navigates
   useEffect(() => {
-    if (!followMode) return;
+    if (followMode !== 'terminal-follow') return;
     const handler = (e: Event) => {
       const dirPath = (e as CustomEvent).detail;
       if (typeof dirPath !== 'string' || !dirPath.startsWith('/')) return;
@@ -261,6 +364,42 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       window.removeEventListener('check-updates', handleUpdate);
       window.removeEventListener('navigate', handleNavigate);
     };
+  }, []);
+
+  // File flash animation: listen for file write events via IPC
+  useEffect(() => {
+    const handler = (_event: unknown, channel: string, data: unknown) => {
+      if (channel === 'file:changed') {
+        const filePath = typeof data === 'string' ? data : (data as { path?: string })?.path || '';
+        if (filePath) {
+          window.dispatchEvent(new CustomEvent('file-flash', { detail: filePath }));
+        }
+      }
+    };
+    const api = window.nativesAPI;
+    if (api?.onDbStateChanged) {
+      const unsub = api.onDbStateChanged(handler);
+      return () => { unsub?.(); };
+    }
+  }, []);
+
+  // System notification support: listen for long-task-complete events
+  useEffect(() => {
+    // Request notification permission on mount
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
+
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const title = detail?.title || t(locale, 'common.notificationTitle');
+      const body = detail?.message || t(locale, 'common.notificationBody');
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        new Notification(title, { body });
+      }
+    };
+    window.addEventListener('long-task-complete', handler);
+    return () => window.removeEventListener('long-task-complete', handler);
   }, []);
 
   const toggleSidebar = useCallback(() => {
@@ -330,8 +469,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       window.dispatchEvent(new CustomEvent('navigate-files', { detail: path }));
     } else {
       setActiveView(`module:${moduleId}`);
+      setRightPanelMode('module-details');
     }
-  }, [toggleRightPanel]);
+  }, [toggleRightPanel, setRightPanelMode]);
 
   // File selection handler — opens preview in right panel
   const handleFileSelect = useCallback((entry: FileEntry) => {
@@ -374,6 +514,12 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     }
   };
 
+  // P1-5: Show onboarding if no username is set
+  if (needsOnboarding === null) return null;
+  if (needsOnboarding) {
+    return <UsernameOnboarding locale={locale} onComplete={() => setNeedsOnboarding(false)} />;
+  }
+
   return (
     <div className={classNames} style={{ opacity: themeReady ? 1 : 0 }}>
       {/* Skip to content — accessibility */}
@@ -413,6 +559,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
             }}
           />
         )}
+        {state.rightPanelMode === 'module-details' && activeView.startsWith('module:') && (
+          <ModuleDetails moduleId={activeView.slice(7)} locale={locale} />
+        )}
       </RightPanel>
       <TerminalPanel
         isCollapsed={state.terminalCollapsed}
@@ -422,8 +571,8 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         isMaximized={state.terminalMaximized}
         onMaximizeToggle={toggleMaximized}
         onSessionCreated={(id) => { terminalSessionIdRef.current = id; }}
-        followMode={followMode}
-        onFollowModeToggle={() => setFollowMode((prev) => !prev)}
+        followMode={followMode !== 'off'}
+        onFollowModeToggle={cycleFollowMode}
       />
       <CommandPalette
         isOpen={state.cmdkOpen}
@@ -507,6 +656,76 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
       {/* Phase 3: Update Notification */}
       <UpdateNotification locale={locale} />
+    </div>
+  );
+}
+
+// ── Module Details panel (STYLE-3) ──
+
+function ModuleDetails({ moduleId, locale }: { moduleId: string; locale: Locale }) {
+  const [mod, setMod] = useState<{ name: string; version: string; enabled: number; state: string; description?: string; author?: string } | null>(null);
+  const [modulePerms, setModulePerms] = useState<Array<{ module_id: string; permission: string; granted: number }>>([]);
+  useEffect(() => {
+    async function load() {
+      try {
+        const api = window.nativesAPI;
+        if (!api?.module?.list) return;
+        const list = await api.module.list();
+        if (Array.isArray(list)) {
+          const found = (list as Array<{ id: string; name: string; version: string; enabled: number; state: string; description?: string; author?: string }>).find((m) => m.id === moduleId);
+          if (found) setMod(found);
+        }
+        // P1-4: Load permissions
+        if (api?.module?.listPermissions) {
+          const perms = await api.module.listPermissions(moduleId);
+          if (Array.isArray(perms)) setModulePerms(perms);
+        }
+      } catch { /* ignore */ }
+    }
+    load();
+  }, [moduleId]);
+  if (!mod) return <div style={{ padding: 16, color: 'var(--text-faint)', fontSize: 12 }}>{t(locale, 'common.loading')}</div>;
+  return (
+    <div style={{ padding: 16, fontSize: 12 }}>
+      <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 16 }}>{mod.name}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <InfoRow label={t(locale, 'workshop.templateId')} value={moduleId} />
+        <InfoRow label={t(locale, 'store.installed')} value={t(locale, mod.enabled ? 'workshop.enabled' : 'workshop.disabled')} />
+        {mod.version && <InfoRow label={t(locale, 'store.version')} value={'v' + mod.version} />}
+        {mod.author && <InfoRow label={t(locale, 'store.author')} value={mod.author} />}
+        {mod.description && <InfoRow label={t(locale, 'store.description')} value={mod.description} />}
+      </div>
+      {/* P1-4: Permissions list */}
+      {modulePerms.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+            Permissions
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {modulePerms.map((perm) => (
+              <div key={perm.permission} style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '6px 8px', background: 'var(--bg-3,#1c1e17)',
+                borderRadius: 4, fontSize: 11,
+              }}>
+                <span style={{ color: perm.granted ? 'var(--accent,#cdf24b)' : 'var(--text-faint)' }}>
+                  {perm.granted ? '✓' : '✗'}
+                </span>
+                <span style={{ color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>{perm.permission}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div style={{ fontSize: 10, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 }}>{label}</div>
+      <div style={{ color: 'var(--text)', wordBreak: 'break-all' }}>{value}</div>
     </div>
   );
 }

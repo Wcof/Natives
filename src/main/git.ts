@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import { execFilePromise } from '@/lib/exec-file';
 import * as path from 'path';
 import { type GitStatus, type GitFileStatus } from '../types/file';
 
@@ -9,7 +10,7 @@ import { type GitStatus, type GitFileStatus } from '../types/file';
  */
 export async function getGitStatus(dirPath: string): Promise<GitStatus | null> {
   try {
-    const output = await execFilePromise('git', ['status', '--porcelain', '-b'], dirPath);
+    const output = await execFilePromise('git', ['status', '--porcelain', '-b'], { cwd: dirPath });
     const lines = output.split('\n').filter((l) => l.trim());
 
     // 解析分支行: ## main...origin/main
@@ -78,14 +79,6 @@ function mapStatus(xy: string): GitFileStatus['status'] | null {
   return null;
 }
 
-function execFilePromise(cmd: string, args: string[], cwd: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(cmd, args, { cwd, timeout: 10000 }, (err, stdout) => {
-      if (err) reject(err);
-      else resolve(stdout);
-    });
-  });
-}
 
 /**
  * 获取文件的 Git diff（HEAD vs working tree）
@@ -97,13 +90,13 @@ export async function getGitDiff(filePath: string): Promise<string | null> {
 
   try {
     // 先检查是否在 git 仓库中
-    await execFilePromise('git', ['rev-parse', '--show-toplevel'], dir);
+    await execFilePromise('git', ['rev-parse', '--show-toplevel'], { cwd: dir });
   } catch {
     return null;
   }
 
   try {
-    const diff = await execFilePromise('git', ['diff', 'HEAD', '--', filePath], dir);
+    const diff = await execFilePromise('git', ['diff', 'HEAD', '--', filePath], { cwd: dir });
     if (!diff.trim()) return null;
     return diff;
   } catch {

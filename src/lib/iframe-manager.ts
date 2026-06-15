@@ -3,10 +3,46 @@ export interface IframeInstance {
   element: HTMLIFrameElement | null;
   createdAt: number;
   lastAccessed: number;
-  state: 'active' | 'background' | 'loading';
+  state: 'loading' | 'hot' | 'warm' | 'cold' | 'persistent';
 }
 
 const MAX_BACKGROUND = 5;
+
+// ── State persistence via unified IPC bridge (US16) ──
+// Delegates to state-persistence.ts on the main process through
+// the dedicated state:save / state:load / state:clear IPC channels.
+// This avoids the previous fragmentation where the renderer wrote to
+// module_data with module_id='__renderer__' while the main-process
+// state-persistence.ts used module_id='__system__'.
+
+function getStateApi() {
+  return (typeof window !== 'undefined' && (window as any).nativesAPI?.state) || null;
+}
+
+async function persistModuleState(moduleId: string, state: Record<string, unknown>): Promise<void> {
+  try {
+    const api = getStateApi();
+    if (api) await api.save(moduleId, JSON.stringify(state));
+  } catch { /* state preservation should not crash the app */ }
+}
+
+async function retrieveModuleState(moduleId: string): Promise<Record<string, unknown> | null> {
+  try {
+    const api = getStateApi();
+    if (api) {
+      const raw = await api.load(moduleId);
+      return raw ? JSON.parse(raw) : null;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+async function clearModuleState(moduleId: string): Promise<void> {
+  try {
+    const api = getStateApi();
+    if (api) await api.clear(moduleId);
+  } catch { /* ignore */ }
+}
 
 export class IframeManager {
   private instances = new Map<string, IframeInstance>();
@@ -15,6 +51,7 @@ export class IframeManager {
   private heartbeatTimeoutCallbacks = new Map<string, () => void>();
   private crashCallbacks = new Map<string, () => void>();
   private heartbeatMisses = new Map<string, number>();
+  private crashOverlays = new Map<string, HTMLDivElement>();
 
   createIframe(moduleId: string, url: string): HTMLIFrameElement {
     // If already exists, destroy old one
@@ -36,7 +73,7 @@ export class IframeManager {
     };
 
     iframe.onload = () => {
-      instance.state = 'active';
+      instance.state = 'hot';
       instance.lastAccessed = Date.now();
     };
 
@@ -50,9 +87,19 @@ export class IframeManager {
     const instance = this.instances.get(moduleId);
     if (!instance) return null;
 
-    instance.state = 'active';
+    const wasCold = instance.state === 'cold' || instance.state === 'persistent';
+    instance.state = 'hot';
     instance.lastAccessed = Date.now();
     this.touch(moduleId);
+
+    // Load persisted state on cold → hot transition
+    if (wasCold) {
+      retrieveModuleState(moduleId).then((saved) => {
+        if (saved) {
+          instance.lastAccessed = (saved as any).lastAccessed || Date.now();
+        }
+      });
+    }
 
     // Enforce LRU limit
     this.enforceLRU();
@@ -63,17 +110,30 @@ export class IframeManager {
   hideIframe(moduleId: string): void {
     const instance = this.instances.get(moduleId);
     if (instance) {
-      instance.state = 'background';
+      instance.state = 'warm';
+      // Persist state on hot → warm transition
+      persistModuleState(moduleId, { lastAccessed: Date.now(), state: 'warm' });
     }
   }
 
   destroyIframe(moduleId: string): void {
     const instance = this.instances.get(moduleId);
     if (instance?.element) {
+      // Persist state before destroying (warm → cold)
+      if (instance.state === 'warm' || instance.state === 'cold') {
+        persistModuleState(moduleId, { lastAccessed: Date.now(), state: 'cold' });
+      }
+      instance.element.onload = null;
       instance.element.remove();
     }
+    this.stopHeartbeat(moduleId);
+    this.heartbeatTimeoutCallbacks.delete(moduleId);
+    this.crashCallbacks.delete(moduleId);
+    this.removeCrashOverlay(moduleId);
     this.instances.delete(moduleId);
     this.accessOrder = this.accessOrder.filter((id) => id !== moduleId);
+    // Clear persisted state on full uninstall
+    clearModuleState(moduleId);
   }
 
   destroyAll(): void {
@@ -89,7 +149,7 @@ export class IframeManager {
   getActiveCount(): number {
     let count = 0;
     for (const instance of this.instances.values()) {
-      if (instance.state === 'active') count++;
+      if (instance.state === 'hot') count++;
     }
     return count;
   }
@@ -97,7 +157,7 @@ export class IframeManager {
   getBackgroundCount(): number {
     let count = 0;
     for (const instance of this.instances.values()) {
-      if (instance.state === 'background') count++;
+      if (instance.state === 'warm') count++;
     }
     return count;
   }
@@ -148,6 +208,12 @@ export class IframeManager {
           cb?.();
           const crashCb = this.crashCallbacks.get(moduleId);
           crashCb?.();
+          // Show crash overlay over the iframe container
+          const instance = this.instances.get(moduleId);
+          const container = instance?.element?.parentNode as HTMLElement | null;
+          if (container) {
+            this.showCrashOverlay(moduleId, container);
+          }
           this.destroyIframe(moduleId);
         }
       } else {
@@ -167,6 +233,61 @@ export class IframeManager {
     this.heartbeatMisses.delete(moduleId);
   }
 
+  showCrashOverlay(moduleId: string, container: HTMLElement): void {
+    this.removeCrashOverlay(moduleId);
+
+    const overlay = document.createElement('div');
+    overlay.style.position = 'absolute';
+    overlay.style.top = '0';
+    overlay.style.left = '0';
+    overlay.style.width = '100%';
+    overlay.style.height = '100%';
+    overlay.style.display = 'flex';
+    overlay.style.flexDirection = 'column';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
+    overlay.style.background = 'rgba(0,0,0,0.7)';
+    overlay.style.color = '#fff';
+    overlay.style.zIndex = '1000';
+    overlay.style.fontSize = '16px';
+    overlay.style.gap = '12px';
+
+    const message = document.createElement('span');
+    message.textContent = 'Plugin crashed. Click to reload.';
+    overlay.appendChild(message);
+
+    const reloadBtn = document.createElement('button');
+    reloadBtn.textContent = 'Reload';
+    reloadBtn.style.padding = '8px 20px';
+    reloadBtn.style.border = 'none';
+    reloadBtn.style.borderRadius = '4px';
+    reloadBtn.style.background = '#4f46e5';
+    reloadBtn.style.color = '#fff';
+    reloadBtn.style.cursor = 'pointer';
+    reloadBtn.style.fontSize = '14px';
+
+    reloadBtn.addEventListener('click', () => {
+      // Re-create the iframe by extracting the src from the existing iframe
+      const instance = this.instances.get(moduleId);
+      if (instance?.element?.src) {
+        this.createIframe(moduleId, instance.element.src);
+      }
+      this.removeCrashOverlay(moduleId);
+    });
+
+    overlay.appendChild(reloadBtn);
+    container.appendChild(overlay);
+    this.crashOverlays.set(moduleId, overlay);
+  }
+
+  removeCrashOverlay(moduleId: string): void {
+    const overlay = this.crashOverlays.get(moduleId);
+    if (overlay) {
+      overlay.remove();
+      this.crashOverlays.delete(moduleId);
+    }
+  }
+
   private touch(moduleId: string): void {
     this.accessOrder = this.accessOrder.filter((id) => id !== moduleId);
     this.accessOrder.push(moduleId);
@@ -176,7 +297,7 @@ export class IframeManager {
     // Count background instances
     const bgIds = this.accessOrder.filter((id) => {
       const inst = this.instances.get(id);
-      return inst?.state === 'background';
+      return inst?.state === 'warm';
     });
 
     if (bgIds.length <= MAX_BACKGROUND) return;
@@ -197,7 +318,7 @@ export class IframeManager {
     if (totalCount > MAX_BACKGROUND + 2 && backgroundCount > 0) {
       const oldestBg = this.accessOrder
         .map((id) => this.instances.get(id)!)
-        .filter((i) => i.state === 'background')
+        .filter((i) => i.state === 'warm' || i.state === 'cold')
         .sort((a, b) => a.lastAccessed - b.lastAccessed);
 
       if (oldestBg.length > 0) {

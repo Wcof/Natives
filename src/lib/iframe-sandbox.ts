@@ -1,146 +1,34 @@
-import * as crypto from 'crypto';
+// ── Bridge SDK Builder (P0-3: no Node.js crypto, renderer-safe) ──
+// Token management moved to token-manager.ts (main process)
+// IframeSandboxManager moved to iframe-sandbox-manager.ts (renderer)
 
-// ── Token Management ──
-
-const masterSecret = crypto.randomBytes(32).toString('hex');
-const tokenMap = new Map<string, { token: string; moduleId: string }>();
-
-export function generateSessionToken(moduleId: string): string {
-  const nonce = crypto.randomBytes(8).toString('hex');
-  const timestamp = Date.now().toString();
-  const data = `${moduleId}:${timestamp}:${nonce}`;
-  const token = crypto.createHmac('sha256', masterSecret).update(data).digest('hex');
-
-  // Store with moduleId reference
-  tokenMap.set(token, { token, moduleId });
-
-  // Return token + timestamp so the other side can reconstruct
-  return `${token}:${timestamp}`;
-}
-
-export function validateSessionToken(token: string, moduleId: string): boolean {
-  const [hash] = token.split(':');
-  if (!hash) return false;
-  const entry = tokenMap.get(hash);
-  if (!entry) return false;
-  return entry.moduleId === moduleId;
-}
-
-export function invalidateToken(token: string): void {
-  const [hash] = token.split(':');
-  if (hash) tokenMap.delete(hash);
-}
-
-export function invalidateModuleTokens(moduleId: string): void {
-  for (const [key, value] of tokenMap) {
-    if (value.moduleId === moduleId) {
-      tokenMap.delete(key);
-    }
-  }
-}
-
-export function invalidateAllTokens(): void {
-  tokenMap.clear();
-}
-
-export interface IframeRecord {
-  moduleId: string;
-  contentWindow: Window | null;
-  token: string;
-  sessionStart: number;
-  lastHeartbeat: number;
-}
-
-// Store for all active iframes with their contentWindow references
-// This runs in the browser/Next.js context, not main process
-export class IframeSandboxManager {
-  private iframes = new Map<string, IframeRecord>();
-  private sourceMap = new Map<string, Window | null>(); // moduleId → contentWindow
-
-  register(moduleId: string, contentWindow: Window | null): { token: string } {
-    // Invalidate old tokens for same moduleId first
-    invalidateModuleTokens(moduleId);
-
-    const token = generateSessionToken(moduleId);
-    const record: IframeRecord = {
-      moduleId,
-      contentWindow,
-      token,
-      sessionStart: Date.now(),
-      lastHeartbeat: Date.now(),
-    };
-
-    this.iframes.set(moduleId, record);
-    this.sourceMap.set(moduleId, contentWindow);
-
-    return { token };
-  }
-
-  unregister(moduleId: string): void {
-    const record = this.iframes.get(moduleId);
-    if (record) {
-      invalidateToken(record.token);
-      this.iframes.delete(moduleId);
-      this.sourceMap.delete(moduleId);
-    }
-  }
-
-  verifyMessageSource(moduleId: string, source: Window | null): boolean {
-    const expected = this.sourceMap.get(moduleId);
-    return expected === source;
-  }
-
-  getToken(moduleId: string): string | undefined {
-    return this.iframes.get(moduleId)?.token;
-  }
-
-  updateHeartbeat(moduleId: string): void {
-    const record = this.iframes.get(moduleId);
-    if (record) {
-      record.lastHeartbeat = Date.now();
-    }
-  }
-
-  getTimeoutCount(moduleId: string, timeoutMs: number): number {
-    const record = this.iframes.get(moduleId);
-    if (!record) return 0;
-    const elapsed = Date.now() - record.lastHeartbeat;
-    return Math.floor(elapsed / timeoutMs);
-  }
-}
-
-// ── Bridge SDK Builder ──
-
-export function buildBridgeSdkScript(port: number): string {
+export function buildBridgeSdkScript(port: number, targetOrigin: string): string {
   return `
 (function() {
   'use strict';
   var port = ${port};
+  var origin = ${JSON.stringify(targetOrigin)};
   var token = null;
   var moduleId = null;
   var pending = {};
   var msgId = 0;
 
-  // Request token from host
   function requestToken() {
-    window.parent.postMessage({ type: 'token-request' }, '*');
+    window.parent.postMessage({ type: 'token-request' }, origin);
   }
 
-  // Listen for token response
   window.addEventListener('message', function(event) {
+    if (event.origin !== origin) return;
     var data = event.data;
     if (!data || typeof data !== 'object') return;
-
     if (data.type === 'token-granted') {
       token = data.token;
       moduleId = data.moduleId;
     }
   });
 
-  // Request token on load
   requestToken();
 
-  // Bridge API
   window.natives = window.natives || {};
 
   window.natives.db = {
@@ -148,6 +36,11 @@ export function buildBridgeSdkScript(port: number): string {
     set: function(key, value) { return bridgeRequest('db', 'set', { key: key, value: value }); },
     delete: function(key) { return bridgeRequest('db', 'delete', { key: key }); },
     list: function(prefix) { return bridgeRequest('db', 'list', { prefix: prefix }); }
+  };
+
+  window.natives.settings = {
+    getTheme: function() { return bridgeRequest('settings', 'getTheme', {}); },
+    getLocale: function() { return bridgeRequest('settings', 'getLocale', {}); },
   };
 
   window.natives.meta = {
@@ -158,7 +51,7 @@ export function buildBridgeSdkScript(port: number): string {
 
   window.natives.lifecycle = {
     ready: function() {
-      window.parent.postMessage({ type: 'lifecycle:ready' }, '*');
+      window.parent.postMessage({ type: 'lifecycle:ready' }, origin);
     },
     onUnload: function(cb) {
       window._nativesOnUnload = cb;
@@ -167,12 +60,26 @@ export function buildBridgeSdkScript(port: number): string {
     onHeartbeat: function(cb) {
       setInterval(function() {
         cb();
-        window.parent.postMessage({ type: 'lifecycle:heartbeat' }, '*');
+        window.parent.postMessage({ type: 'lifecycle:heartbeat' }, origin);
       }, 5000);
     },
     error: function(info) {
-      window.parent.postMessage({ type: 'lifecycle:error', info: info }, '*');
+      window.parent.postMessage({ type: 'lifecycle:error', info: info }, origin);
     }
+  };
+
+  window.natives.env = {
+    get: function(key) { return bridgeRequest('env', 'get', { key: key }); },
+  };
+
+  window.natives.notification = {
+    send: function(title, body, level) { return bridgeRequest('notification', 'send', { title: title, body: body, level: level }); },
+    badge: function(count) { return bridgeRequest('notification', 'badge', { count: count }); },
+  };
+
+  window.natives.ipc = {
+    send: function(target, payload) { return bridgeRequest('ipc', 'send', { target: target, payload: payload }); },
+    broadcast: function(payload) { return bridgeRequest('ipc', 'broadcast', { payload: payload }); },
   };
 
   function bridgeRequest(namespace, method, body) {

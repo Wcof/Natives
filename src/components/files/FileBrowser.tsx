@@ -8,6 +8,7 @@ import FileList from './FileList';
 import FileBreadcrumb from './FileBreadcrumb';
 import FileToolbar from './FileToolbar';
 import FileContextMenu from './FileContextMenu';
+import { useFocusTrap } from '@/lib/useFocusTrap';
 
 interface FileBrowserProps {
   onFileSelect?: (entry: FileEntry) => void;
@@ -19,6 +20,8 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [sortBy, setSortBy] = useState<'name' | 'mtime' | 'size'>('name');
+  const renameTrap = useFocusTrap();
+  const newItemTrap = useFocusTrap();
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [showHidden, setShowHidden] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -233,10 +236,10 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       />
 
       {/* File area */}
-      <div style={{ flex: 1, overflow: 'auto' }} role="listbox" aria-label="Files" tabIndex={0}>
+      <div style={{ flex: 1, overflow: 'auto' }} role="listbox" aria-label={t(locale, 'fileBrowser.ariaLabelFiles')} tabIndex={0}>
         {loading ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-faint, #62655a)' }}>
-            Loading...
+            {t(locale, 'common.loading')}
           </div>
         ) : viewMode === 'grid' ? (
           <FileGrid entries={entries} onSelect={handleSelect} onContextMenu={handleContextMenu} />
@@ -270,22 +273,27 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       {/* Rename dialog */}
       {renameTarget && (
         <div
+          ref={renameTrap.dialogRef}
           role="dialog"
           aria-modal="true"
-          aria-label="Rename"
+          aria-label={t(locale, 'fileBrowser.dialogRename')}
+          className="anim-editRipple"
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
             display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60,
           }}
           onClick={() => setRenameTarget(null)}
-          onKeyDown={(e) => e.key === 'Escape' && setRenameTarget(null)}
+          onKeyDown={(e) => {
+            renameTrap.handleKeyDown(e);
+            if (e.key === 'Escape') setRenameTarget(null);
+          }}
         >
           <div style={{
             background: 'var(--bg-2,#131410)', border: '1px solid var(--border,#262920)',
             borderRadius: 10, padding: 20, width: 340,
           }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 12 }}>
-              Rename
+              {t(locale, 'fileBrowser.dialogRename')}
             </div>
             <input
               type="text"
@@ -300,8 +308,8 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
               autoFocus
             />
             <div style={{ display: 'flex', gap: 8, marginTop: 14, justifyContent: 'flex-end' }}>
-              <button className="btn" onClick={() => setRenameTarget(null)}>Cancel</button>
-              <button className="btn btn-primary" onClick={handleRenameConfirm}>Rename</button>
+              <button className="btn" onClick={() => setRenameTarget(null)}>{t(locale, 'common.cancel')}</button>
+              <button className="btn btn-primary" onClick={handleRenameConfirm}>{t(locale, 'fileBrowser.dialogRenameBtn')}</button>
             </div>
           </div>
         </div>
@@ -310,29 +318,34 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       {/* New file/folder dialog */}
       {newItemTarget && (
         <div
+          ref={newItemTrap.dialogRef}
           role="dialog"
           aria-modal="true"
-          aria-label={`New ${newItemTarget.type === 'file' ? 'File' : 'Folder'}`}
+          aria-label={newItemTarget.type === 'file' ? t(locale, 'fileBrowser.dialogNewFile') : t(locale, 'fileBrowser.dialogNewFolder')}
+          className="anim-editRipple"
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
             display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60,
           }}
           onClick={() => setNewItemTarget(null)}
-          onKeyDown={(e) => e.key === 'Escape' && setNewItemTarget(null)}
+          onKeyDown={(e) => {
+            newItemTrap.handleKeyDown(e);
+            if (e.key === 'Escape') setNewItemTarget(null);
+          }}
         >
           <div style={{
             background: 'var(--bg-2,#131410)', border: '1px solid var(--border,#262920)',
             borderRadius: 10, padding: 20, width: 340,
           }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 12 }}>
-              New {newItemTarget.type === 'file' ? 'File' : 'Folder'}
+              {newItemTarget.type === 'file' ? t(locale, 'fileBrowser.dialogNewFile') : t(locale, 'fileBrowser.dialogNewFolder')}
             </div>
             <input
               type="text"
               value={newItemName}
               onChange={(e) => setNewItemName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleNewItemConfirm()}
-              placeholder={newItemTarget.type === 'file' ? 'filename.txt' : 'folder-name'}
+              placeholder={newItemTarget.type === 'file' ? t(locale, 'fileBrowser.placeholderFileName') : t(locale, 'fileBrowser.placeholderFolderName')}
               style={{
                 width: '100%', padding: '8px 10px', background: 'var(--bg,#0b0c0a)',
                 border: '1px solid var(--border,#262920)', borderRadius: 6,
@@ -341,8 +354,8 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
               autoFocus
             />
             <div style={{ display: 'flex', gap: 8, marginTop: 14, justifyContent: 'flex-end' }}>
-              <button className="btn" onClick={() => setNewItemTarget(null)}>Cancel</button>
-              <button className="btn btn-primary" onClick={handleNewItemConfirm}>Create</button>
+              <button className="btn" onClick={() => setNewItemTarget(null)}>{t(locale, 'common.cancel')}</button>
+              <button className="btn btn-primary" onClick={handleNewItemConfirm}>{t(locale, 'fileBrowser.dialogCreate')}</button>
             </div>
           </div>
         </div>
@@ -357,7 +370,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
             background: 'var(--bg-3,#1c1e17)', border: '1px solid var(--border,#262920)',
             padding: '10px 18px', borderRadius: 10, fontSize: 13, color: 'var(--text)',
-            zIndex: 200, animation: 'fadeIn 0.18s ease',
+            zIndex: 200, animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
           }}
         >
           {toast}

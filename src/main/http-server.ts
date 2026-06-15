@@ -40,23 +40,34 @@ export function validateHost(host: string | undefined): boolean {
   return allowed.includes(hostname);
 }
 
-// ── Origin Validation ──
+// ── Origin Validation (TASK-004: CSRF protection) ──
 
-export function validateOrigin(method: string | undefined, origin: string | undefined): boolean {
+export function validateOrigin(method: string | undefined, origin: string | undefined, referer: string | undefined): boolean {
   // GET 请求不需要验证
   if (method === 'GET') return true;
 
-  // 没有 origin 头的是非浏览器请求（如 curl）
-  if (!origin) return true;
-
-  // 只允许来自 localhost 的请求
-  try {
-    const url = new URL(origin);
-    // URL.hostname 对 IPv6 返回带括号的格式：如 "[::1]"
-    return ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname);
-  } catch {
-    return false;
+  // 优先检查 Origin 头
+  if (origin) {
+    try {
+      const url = new URL(origin);
+      return ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname);
+    } catch {
+      return false;
+    }
   }
+
+  // 没有 Origin 时检查 Referer（非浏览器客户端如 curl）
+  if (referer) {
+    try {
+      const url = new URL(referer);
+      return ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname);
+    } catch {
+      return false;
+    }
+  }
+
+  // 既无 Origin 也无 Referer → 拒绝（防御 CSRF / 任意客户端）
+  return false;
 }
 
 function getMimeType(ext: string): string {
@@ -123,15 +134,15 @@ function readBody(req: http.IncomingMessage): Promise<string> {
 }
 
 async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-  // ── Host Validation ──
+  // ── Host Validation (TASK-003) ──
   if (!validateHost(req.headers.host)) {
     res.writeHead(403);
     res.end('Forbidden');
     return;
   }
 
-  // ── Origin Validation (POST only) ──
-  if (!validateOrigin(req.method, req.headers.origin)) {
+  // ── Origin Validation — POST only, checks Origin then Referer (TASK-004) ──
+  if (!validateOrigin(req.method, req.headers.origin, req.headers.referer)) {
     res.writeHead(403);
     res.end('Forbidden');
     return;

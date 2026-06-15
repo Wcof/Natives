@@ -44,9 +44,9 @@ window.natives.settings.onThemeChange((theme) => { /* ... */ });
 // Tell Natives you're ready
 window.natives.lifecycle.ready();
 
-// Respond to heartbeats
+// Respond to heartbeat
 window.natives.lifecycle.onHeartbeat(() => {
-  return { status: 'ok' };
+  // Acknowledge heartbeat (no return value needed)
 });
 
 // Save state before unload

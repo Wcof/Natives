@@ -1,6 +1,7 @@
 'use client';
 
-import { ReactNode, useState, useCallback } from 'react';
+import { ReactNode, useState, useCallback, useEffect } from 'react';
+import { t, type Locale } from '@/i18n';
 
 export type RightPanelMode = 'file-preview' | 'notifications' | 'module-details' | 'closed';
 
@@ -22,7 +23,18 @@ export default function RightPanel({
   children,
 }: RightPanelProps) {
   const [isDragging, setIsDragging] = useState(false);
+  const [locale, setLocale] = useState<Locale>('en');
   const isOpen = mode !== 'closed';
+
+  useEffect(() => {
+    async function loadLocale() {
+      try {
+        const saved = await window.nativesAPI?.getLocale?.();
+        if (saved === 'en') setLocale('en'); else setLocale('zh');
+      } catch { /* ignore */ }
+    }
+    loadLocale();
+  }, []);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -49,10 +61,10 @@ export default function RightPanel({
   const getTitle = () => {
     if (title) return title;
     switch (mode) {
-      case 'file-preview': return 'Preview';
-      case 'notifications': return 'Notifications';
-      case 'module-details': return 'Module Details';
-      default: return 'Panel';
+      case 'file-preview': return t(locale, 'rightPanel.title.preview');
+      case 'notifications': return t(locale, 'rightPanel.title.notifications');
+      case 'module-details': return t(locale, 'rightPanel.title.moduleDetails');
+      default: return t(locale, 'rightPanel.title.panel');
     }
   };
 
@@ -82,7 +94,7 @@ export default function RightPanel({
               fontSize: 11, padding: '3px 8px', borderRadius: 4,
               color: mode === 'file-preview' ? 'var(--accent)' : 'var(--text-faint)',
             }}
-            title="File Preview"
+            title={t(locale, 'rightPanel.filePreview')}
           >
             📄
           </button>
@@ -93,9 +105,20 @@ export default function RightPanel({
               fontSize: 11, padding: '3px 8px', borderRadius: 4,
               color: mode === 'notifications' ? 'var(--accent)' : 'var(--text-faint)',
             }}
-            title="Notifications"
+            title={t(locale, 'rightPanel.title.notifications')}
           >
             🔔
+          </button>
+          <button
+            className={`btn-ghost ${mode === 'module-details' ? 'active' : ''}`}
+            onClick={() => onModeChange('module-details')}
+            style={{
+              fontSize: 11, padding: '3px 8px', borderRadius: 4,
+              color: mode === 'module-details' ? 'var(--accent)' : 'var(--text-faint)',
+            }}
+            title={t(locale, 'rightPanel.title.moduleDetails')}
+          >
+            ℹ️
           </button>
         </div>
         <button className="btn-ghost" onClick={handleClose} aria-label="Close panel">
@@ -114,7 +137,7 @@ export default function RightPanel({
             <div style={{ fontSize: 28, marginBottom: 8 }}>
               {mode === 'notifications' ? '🔔' : '📄'}
             </div>
-            <div>{mode === 'notifications' ? 'No notifications' : 'Select a file to preview'}</div>
+            <div>{mode === 'notifications' ? t(locale, 'rightPanel.empty.notifications') : t(locale, 'rightPanel.empty.selectFile')}</div>
           </div>
         )}
       </div>

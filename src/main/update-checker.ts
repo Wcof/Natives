@@ -34,7 +34,10 @@ export async function checkForUpdate(
       headers: { Accept: 'application/vnd.github.v3+json' },
       signal: AbortSignal.timeout(10000),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.warn(`[UpdateChecker] GitHub API returned ${res.status}: ${res.statusText}`);
+      return null;
+    }
 
     const data = await res.json() as any;
     const latestVersion = parseGithubRelease(data.tag_name || '');
@@ -46,7 +49,49 @@ export async function checkForUpdate(
       };
     }
     return null;
-  } catch {
+  } catch (err) {
+    console.warn('[UpdateChecker] checkForUpdate failed:', (err as Error).message);
     return null;
   }
+}
+
+// ── Muted Versions ──
+
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+
+const MUTE_FILE = path.join(os.homedir(), '.natives', 'muted-versions.json');
+
+function readMutedVersions(): string[] {
+  try {
+    const content = fs.readFileSync(MUTE_FILE, 'utf-8');
+    return JSON.parse(content);
+  } catch {
+    return [];
+  }
+}
+
+function writeMutedVersions(versions: string[]): void {
+  const dir = path.dirname(MUTE_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(MUTE_FILE, JSON.stringify(versions, null, 2), 'utf-8');
+}
+
+/**
+ * 静默指定版本的更新通知
+ */
+export function muteVersion(version: string): void {
+  const muted = readMutedVersions();
+  if (!muted.includes(version)) {
+    muted.push(version);
+    writeMutedVersions(muted);
+  }
+}
+
+/**
+ * 获取已静默的版本列表
+ */
+export function getMutedVersions(): string[] {
+  return readMutedVersions();
 }

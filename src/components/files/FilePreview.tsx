@@ -1,7 +1,19 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { type FileEntry } from '@/types/file';
+import { t, useLocale, type Locale } from '@/i18n';
+import { getExt, isMarkdownFile, isCsvFile, isArchiveFile } from '@/lib/follow-mode';
+import { detectLanguage, highlightCode } from '@/lib/shiki-utils';
+import { parseUnifiedDiff } from '@/lib/diff-utils';
+import MonacoDiffView from './MonacoDiffView';
+import ImageLightbox from './ImageLightbox';
+import CsvTable from './CsvTable';
+import ArchivePreview from './ArchivePreview';
+
+// Lazy-loaded heavy components
+const MilkdownEditor = lazy(() => import('./MilkdownEditor'));
+const MonacoEditor = lazy(() => import('./MonacoEditor'));
 
 interface FilePreviewProps {
   entry: FileEntry;
@@ -15,6 +27,9 @@ export default function FilePreview({ entry, onClose }: FilePreviewProps) {
   const [gitDiff, setGitDiff] = useState<string | null>(null);
   const [gitLoading, setGitLoading] = useState(false);
   const [gitStatus, setGitStatus] = useState<string | null>(null);
+  const locale = useLocale();
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [editMode, setEditMode] = useState(false);
 
   // Load git diff when git tab is selected
   useEffect(() => {
@@ -28,7 +43,7 @@ export default function FilePreview({ entry, onClose }: FilePreviewProps) {
         if (api?.git?.diff) {
           const diff = await api.git.diff(entry.path);
           if (!cancelled) {
-            setGitDiff(diff || 'No changes detected');
+            setGitDiff(diff || t(locale, 'fileBrowser.noChanges'));
           }
         }
         if (api?.git?.status) {
@@ -40,33 +55,42 @@ export default function FilePreview({ entry, onClose }: FilePreviewProps) {
             );
             if (fileStatus) {
               const statusMap: Record<string, string> = {
-                'M': 'Modified', 'A': 'Added', 'D': 'Deleted',
-                'R': 'Renamed', '??': 'Untracked', 'UU': 'Conflict',
+                'M': t(locale, 'filePreview.gitModified'),
+                'A': t(locale, 'filePreview.gitAdded'),
+                'D': t(locale, 'filePreview.gitDeleted'),
+                'R': t(locale, 'filePreview.gitRenamed'),
+                '??': t(locale, 'filePreview.gitUntracked'),
+                'UU': t(locale, 'filePreview.gitConflict'),
               };
               setGitStatus(statusMap[fileStatus.status] || fileStatus.status);
             } else {
-              setGitStatus('Unchanged');
+              setGitStatus(t(locale, 'filePreview.gitUnchanged'));
             }
           }
         }
       } catch {
-        if (!cancelled) setGitDiff('Not in a git repository');
+        if (!cancelled) setGitDiff(t(locale, 'fileBrowser.notInRepo'));
       } finally {
         if (!cancelled) setGitLoading(false);
       }
     }
     loadGit();
     return () => { cancelled = true; };
-  }, [activeTab, entry.path, entry.name, entry.isDir]);
+  }, [activeTab, entry.path, entry.name, entry.isDir, locale]);
 
   const tabs: { id: PreviewTab; label: string }[] = [
-    { id: 'preview', label: 'Preview' },
-    { id: 'code', label: 'Code' },
-    { id: 'git', label: 'Git' },
-    { id: 'info', label: 'Info' },
+    { id: 'preview', label: t(locale, 'filePreview.tabPreview') },
+    { id: 'code', label: t(locale, 'filePreview.tabCode') },
+    { id: 'git', label: t(locale, 'filePreview.tabGit') },
+    { id: 'info', label: t(locale, 'filePreview.tabInfo') },
   ];
 
   const httpPort = window.__nativesHttpPort || 3001;
+  const ext = getExt(entry.name);
+  const isMarkdown = isMarkdownFile(entry.name);
+  const isCsv = isCsvFile(entry.name);
+  const isArchive = isArchiveFile(entry.name);
+  const isCode = entry.kind === 'text' && !isMarkdown && !isCsv;
 
   return (
     <div style={{
@@ -86,13 +110,26 @@ export default function FilePreview({ entry, onClose }: FilePreviewProps) {
         <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text, #f2f2ea)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {entry.name}
         </div>
-        <button
-          className="btn btn-ghost"
-          onClick={onClose}
-          style={{ fontSize: 16, padding: '0 6px', lineHeight: '24px' }}
-        >
-          ✕
-        </button>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          {/* Edit mode toggle for code files */}
+          {activeTab === 'code' && isCode && (
+            <button
+              className="btn btn-ghost"
+              onClick={() => setEditMode(!editMode)}
+              style={{ fontSize: 11, padding: '2px 8px' }}
+              title={editMode ? 'View mode' : 'Edit mode'}
+            >
+              {editMode ? '👁' : '✏️'}
+            </button>
+          )}
+          <button
+            className="btn btn-ghost"
+            onClick={onClose}
+            style={{ fontSize: 16, padding: '0 6px', lineHeight: '24px' }}
+          >
+            ✕
+          </button>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -100,7 +137,7 @@ export default function FilePreview({ entry, onClose }: FilePreviewProps) {
         {tabs.map((tab) => (
           <button
             key={tab.id}
-            className={`btn btn-ghost`}
+            className="btn btn-ghost"
             onClick={() => setActiveTab(tab.id)}
             style={{
               flex: 1,
@@ -117,35 +154,69 @@ export default function FilePreview({ entry, onClose }: FilePreviewProps) {
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, overflow: 'auto', padding: 12 }}>
+      <div style={{ flex: 1, overflow: 'auto', padding: isMarkdown || isCsv || (activeTab === 'code' && editMode) ? 0 : 12 }}>
         {activeTab === 'preview' && (
-          <PreviewContent entry={entry} httpPort={httpPort} />
+          <PreviewContent
+            entry={entry}
+            httpPort={httpPort}
+            locale={locale}
+            isMarkdown={isMarkdown}
+            isCsv={isCsv}
+            isArchive={isArchive}
+            onImageClick={setLightboxSrc}
+          />
         )}
         {activeTab === 'code' && (
-          <CodePreview entry={entry} httpPort={httpPort} />
+          <CodePreview
+            entry={entry}
+            httpPort={httpPort}
+            locale={locale}
+            editMode={editMode}
+            ext={ext}
+          />
         )}
         {activeTab === 'git' && (
-          <GitDiffView diff={gitDiff} loading={gitLoading} status={gitStatus} fileName={entry.name} />
+          <GitDiffView diff={gitDiff} loading={gitLoading} status={gitStatus} fileName={entry.name} locale={locale} />
         )}
         {activeTab === 'info' && (
-          <FileInfo entry={entry} />
+          <FileInfo entry={entry} locale={locale} />
         )}
       </div>
+
+      {/* Lightbox */}
+      {lightboxSrc && (
+        <ImageLightbox src={lightboxSrc} alt={entry.name} onClose={() => setLightboxSrc(null)} />
+      )}
     </div>
   );
 }
 
-function PreviewContent({ entry, httpPort }: { entry: FileEntry; httpPort: number }) {
+// ── Preview Content ──
+
+function PreviewContent({ entry, httpPort, locale, isMarkdown, isCsv, isArchive, onImageClick }: {
+  entry: FileEntry;
+  httpPort: number;
+  locale: Locale;
+  isMarkdown: boolean;
+  isCsv: boolean;
+  isArchive: boolean;
+  onImageClick: (src: string) => void;
+}) {
+  // Image with lightbox
   if (entry.kind === 'image') {
+    const src = `http://localhost:${httpPort}/api/fs/raw?path=${encodeURIComponent(entry.path)}`;
     return (
-      <img
-        src={`http://localhost:${httpPort}/api/fs/raw?path=${encodeURIComponent(entry.path)}`}
-        alt={entry.name}
-        style={{
-          maxWidth: '100%', maxHeight: '100%', objectFit: 'contain',
-          background: 'repeating-conic-gradient(#80808033 0% 25%, transparent 0% 50%) 50% / 20px 20px',
-        }}
-      />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', cursor: 'zoom-in' }}>
+        <img
+          src={src}
+          alt={entry.name}
+          onClick={() => onImageClick(src)}
+          style={{
+            maxWidth: '100%', maxHeight: '100%', objectFit: 'contain',
+            background: 'repeating-conic-gradient(#80808033 0% 25%, transparent 0% 50%) 50% / 20px 20px',
+          }}
+        />
+      </div>
     );
   }
 
@@ -174,88 +245,189 @@ function PreviewContent({ entry, httpPort }: { entry: FileEntry; httpPort: numbe
     );
   }
 
+  // CSV/TSV table
+  if (isCsv) {
+    return <CsvPreview path={entry.path} httpPort={httpPort} locale={locale} delimiter={entry.name.endsWith('.tsv') ? '\t' : ','} />;
+  }
+
+  // Markdown WYSIWYG (Milkdown Crepe)
+  if (isMarkdown) {
+    return <MdWysiwygPreview path={entry.path} httpPort={httpPort} locale={locale} />;
+  }
+
+  // HTML isolated preview
+  if (entry.name.endsWith('.html') || entry.name.endsWith('.htm')) {
+    return <HtmlFilePreview path={entry.path} httpPort={httpPort} locale={locale} />;
+  }
+
+  // Archive preview
+  if (isArchive) {
+    return <ArchivePreview path={entry.path} locale={locale} />;
+  }
+
   return (
     <div style={{ color: 'var(--text-dim, #9b9d8c)', fontSize: 12, padding: 20, textAlign: 'center' }}>
-      No preview available for {entry.kind} files.
+      {t(locale, 'filePreview.noPreview').replace('{kind}', entry.kind)}
     </div>
   );
 }
 
-function CodePreview({ entry, httpPort }: { entry: FileEntry; httpPort: number }) {
+// ── CSV Preview ──
+
+function CsvPreview({ path, httpPort, locale, delimiter }: { path: string; httpPort: number; locale: Locale; delimiter: string }) {
+  const [content, setContent] = useState<string | null>(null);
+  useEffect(() => {
+    fetch(`http://localhost:${httpPort}/api/fs/raw?path=${encodeURIComponent(path)}`)
+      .then(r => r.text())
+      .then(setContent)
+      .catch(() => setContent(null));
+  }, [path, httpPort]);
+  if (content === null) {
+    return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
+  }
+  return <CsvTable content={content} delimiter={delimiter} />;
+}
+
+// ── Markdown WYSIWYG Preview ──
+
+function MdWysiwygPreview({ path, httpPort, locale }: { path: string; httpPort: number; locale: Locale }) {
+  const [content, setContent] = useState<string | null>(null);
+  useEffect(() => {
+    fetch(`http://localhost:${httpPort}/api/fs/raw?path=${encodeURIComponent(path)}`)
+      .then(r => r.text())
+      .then(setContent)
+      .catch(() => setContent(null));
+  }, [path, httpPort]);
+
+  if (content === null) {
+    return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
+  }
+
+  return (
+    <Suspense fallback={<div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>Loading editor...</div>}>
+      <MilkdownEditor
+        content={content}
+        filePath={path}
+        onSave={async (newContent) => {
+          await window.nativesAPI?.fs?.writeFileAtomic?.(path, newContent);
+        }}
+      />
+    </Suspense>
+  );
+}
+
+function HtmlFilePreview({ path, httpPort, locale }: { path: string; httpPort: number; locale: Locale }) {
+  const [content, setContent] = useState<string | null>(null);
+  useEffect(() => {
+    fetch(`http://localhost:${httpPort}/api/fs/raw?path=${encodeURIComponent(path)}`)
+      .then((r) => r.text())
+      .then(setContent)
+      .catch(() => setContent(t(locale, 'filePreview.failedLoad')));
+  }, [path, httpPort, locale]);
+  if (content === null) {
+    return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
+  }
+  return (
+    <iframe
+      srcDoc={content}
+      sandbox="allow-scripts allow-forms allow-popups"
+      style={{ width: '100%', height: '100%', border: 'none', background: '#fff' }}
+    />
+  );
+}
+
+// ── Code Preview (shiki highlight + Monaco editor) ──
+
+function CodePreview({ entry, httpPort, locale, editMode, ext }: {
+  entry: FileEntry;
+  httpPort: number;
+  locale: Locale;
+  editMode: boolean;
+  ext: string;
+}) {
   const [code, setCode] = useState<string | null>(null);
-  const [highlighted, setHighlighted] = useState<string | null>(null);
+  const [highlightedHtml, setHighlightedHtml] = useState<string>('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      setLoading(true);
-      try {
-        // Fetch file content
-        const resp = await fetch(`http://localhost:${httpPort}/api/fs/raw?path=${encodeURIComponent(entry.path)}`);
-        if (!resp.ok) throw new Error('Failed to fetch');
-        const text = await resp.text();
-        if (cancelled) return;
+    setLoading(true);
+    fetch(`http://localhost:${httpPort}/api/fs/raw?path=${encodeURIComponent(entry.path)}`)
+      .then((r) => r.text())
+      .then((text) => {
         setCode(text);
+        setLoading(false);
+      })
+      .catch(() => {
+        setCode(null);
+        setLoading(false);
+      });
+  }, [entry.path, httpPort]);
 
-        // Detect language from extension
-        const ext = entry.name.split('.').pop()?.toLowerCase() || '';
-        const langMap: Record<string, string> = {
-          ts: 'typescript', tsx: 'tsx', js: 'javascript', jsx: 'jsx',
-          py: 'python', rb: 'ruby', rs: 'rust', go: 'go',
-          java: 'java', kt: 'kotlin', swift: 'swift',
-          css: 'css', scss: 'scss', less: 'less',
-          html: 'html', xml: 'xml', svg: 'svg',
-          json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'toml',
-          md: 'markdown', sh: 'bash', zsh: 'bash', fish: 'fish',
-          sql: 'sql', graphql: 'graphql',
-          c: 'c', cpp: 'cpp', h: 'c', hpp: 'cpp',
-          cs: 'csharp', php: 'php', lua: 'lua', vim: 'vim',
-          dockerfile: 'dockerfile', makefile: 'makefile',
-        };
-        const lang = langMap[ext] || 'text';
-
-        // Highlight with Shiki
-        try {
-          const { codeToHtml } = await import('shiki');
-          const html = await codeToHtml(text, {
-            lang,
-            theme: 'vitesse-dark',
-          });
-          if (!cancelled) setHighlighted(html);
-        } catch {
-          // Fallback: plain text in a pre block
-          if (!cancelled) setHighlighted(null);
-        }
-      } catch {
-        if (!cancelled) setCode('Failed to load file');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-    load();
+  // shiki syntax highlighting
+  useEffect(() => {
+    if (editMode || !code || ext === 'json') return;
+    let cancelled = false;
+    highlightCode(code, detectLanguage(entry.name)).then(html => {
+      if (!cancelled) setHighlightedHtml(html);
+    });
     return () => { cancelled = true; };
-  }, [entry.path, entry.name, httpPort]);
+  }, [code, ext, entry.name, editMode]);
 
-  if (loading) {
+  if (loading || code === null) {
     return (
-      <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
-        Loading...
+      <div style={{ color: 'var(--text-faint)', fontSize: 12, padding: 20, textAlign: 'center' }}>
+        {t(locale, 'common.loading')}
       </div>
     );
   }
 
-  if (highlighted) {
+  // JSON: pretty print
+  if (ext === 'json' && !editMode) {
+    try {
+      const pretty = JSON.stringify(JSON.parse(code), null, 2);
+      return (
+        <pre style={{
+          margin: 0, fontSize: 12, lineHeight: 1.6,
+          fontFamily: 'var(--font-mono, monospace)',
+          color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+          background: 'var(--bg-2, #131410)', padding: 12, borderRadius: 4,
+        }}>
+          {pretty}
+        </pre>
+      );
+    } catch { /* fall through to shiki */ }
+  }
+
+  // Edit mode: Monaco Editor
+  if (editMode) {
+    return (
+      <Suspense fallback={<div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>Loading editor...</div>}>
+        <MonacoEditor
+          content={code}
+          language={ext}
+          onSave={async (newContent) => {
+            await window.nativesAPI?.fs?.writeFileAtomic?.(entry.path, newContent);
+            setCode(newContent);
+          }}
+        />
+      </Suspense>
+    );
+  }
+
+  // View mode: shiki syntax highlighting
+  if (highlightedHtml) {
     return (
       <div
+        dangerouslySetInnerHTML={{ __html: highlightedHtml }}
         style={{
-          fontSize: 12, lineHeight: 1.6,
+          fontSize: 12,
+          lineHeight: 1.6,
           fontFamily: 'var(--font-mono, monospace)',
-          overflow: 'auto', height: '100%',
           background: 'var(--bg-2, #131410)',
+          padding: 12,
           borderRadius: 4,
+          overflow: 'auto',
         }}
-        dangerouslySetInnerHTML={{ __html: highlighted }}
       />
     );
   }
@@ -266,28 +438,29 @@ function CodePreview({ entry, httpPort }: { entry: FileEntry; httpPort: number }
       margin: 0, fontSize: 12, lineHeight: 1.6,
       fontFamily: 'var(--font-mono, monospace)',
       color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-      background: 'var(--bg-2, #131410)',
-      padding: 12, borderRadius: 4,
+      background: 'var(--bg-2, #131410)', padding: 12, borderRadius: 4,
     }}>
       {code}
     </pre>
   );
 }
 
-function FileInfo({ entry }: { entry: FileEntry }) {
+// ── File Info ──
+
+function FileInfo({ entry, locale }: { entry: FileEntry; locale: Locale }) {
   const rows: [string, string][] = [
-    ['Name', entry.name],
-    ['Path', entry.path],
-    ['Type', entry.kind],
-    ['Size', `${(entry.size / 1024).toFixed(1)} KB (${entry.size} bytes)`],
-    ['Modified', new Date(entry.mtime).toLocaleString()],
-    ['Created', new Date(entry.btime).toLocaleString()],
-    ['Hidden', entry.hidden ? 'Yes' : 'No'],
+    [t(locale, 'filePreview.infoName'), entry.name],
+    [t(locale, 'filePreview.infoPath'), entry.path],
+    [t(locale, 'filePreview.infoType'), entry.kind],
+    [t(locale, 'filePreview.infoSize'), `${(entry.size / 1024).toFixed(1)} KB (${entry.size} bytes)`],
+    [t(locale, 'filePreview.infoModified'), new Date(entry.mtime).toLocaleString()],
+    [t(locale, 'filePreview.infoCreated'), new Date(entry.btime).toLocaleString()],
+    [t(locale, 'filePreview.infoHidden'), entry.hidden ? 'Yes' : 'No'],
   ];
 
-  if (entry.isDir) rows.push(['Directory', 'Yes']);
-  if (entry.symlink) rows.push(['Symlink', entry.symlink]);
-  if (entry.projectBadge) rows.push(['Project', entry.projectBadge]);
+  if (entry.isDir) rows.push([t(locale, 'filePreview.infoDirectory'), 'Yes']);
+  if (entry.symlink) rows.push([t(locale, 'filePreview.infoSymlink'), entry.symlink]);
+  if (entry.projectBadge) rows.push([t(locale, 'filePreview.infoProject'), entry.projectBadge]);
 
   return (
     <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
@@ -307,62 +480,91 @@ function FileInfo({ entry }: { entry: FileEntry }) {
   );
 }
 
-function GitDiffView({ diff, loading, status, fileName }: {
+// ── Git Diff View ──
+
+function GitDiffView({ diff, loading, status, fileName, locale }: {
   diff: string | null;
   loading: boolean;
   status: string | null;
   fileName: string;
+  locale: Locale;
 }) {
   if (loading) {
     return (
       <div style={{ color: 'var(--text-faint)', fontSize: 12, padding: 20, textAlign: 'center' }}>
-        Loading git info...
+        {t(locale, 'filePreview.gitLoading')}
       </div>
     );
   }
 
-  if (!diff || diff === 'Not in a git repository') {
+  if (!diff || diff === t(locale, 'fileBrowser.notInRepo')) {
     return (
       <div style={{ color: 'var(--text-faint)', fontSize: 12, padding: 20, textAlign: 'center' }}>
-        Not in a git repository
+        {t(locale, 'fileBrowser.notInRepo')}
       </div>
     );
   }
 
-  const lines = diff.split('\n');
+  const parsed = parseUnifiedDiff(diff);
+  if (!parsed) {
+    const lines = diff.split('\n');
+    return (
+      <div>
+        {status && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10,
+            fontSize: 12, color: 'var(--text-dim)',
+          }}>
+            <span style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: status === t(locale, 'filePreview.gitUnchanged') ? 'var(--accent,#cdf24b)' : '#e6b800',
+            }} />
+            <span>{status}</span>
+          </div>
+        )}
+        <pre style={{ margin: 0, fontSize: 11, lineHeight: 1.5, fontFamily: 'var(--font-mono, monospace)', color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+          {lines.map((line, i) => {
+            let color = 'var(--text)';
+            const isChanged = line.startsWith('+') && !line.startsWith('+++');
+            const isRemoved = line.startsWith('-') && !line.startsWith('---');
+            if (isChanged) color = '#4ec9b0';
+            else if (isRemoved) color = '#d9534f';
+            else if (line.startsWith('@@')) color = '#5b9cf5';
+            else if (line.startsWith('diff') || line.startsWith('index')) color = 'var(--text-faint)';
+            return (
+              <div key={i} className={isChanged || isRemoved ? 'anim-clFlash' : ''} style={{ color, background: isChanged ? '#4ec9b010' : isRemoved ? '#d9534f10' : undefined }}>
+                {line || ' '}
+              </div>
+            );
+          })}
+        </pre>
+      </div>
+    );
+  }
 
   return (
-    <div>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {status && (
         <div style={{
-          display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10,
-          fontSize: 12, color: 'var(--text-dim)',
+          display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, padding: '4px 8px',
+          fontSize: 11, color: 'var(--text-dim)',
         }}>
           <span style={{
             width: 8, height: 8, borderRadius: '50%',
-            background: status === 'Unchanged' ? 'var(--accent,#cdf24b)' : '#e6b800',
+            background: status === t(locale, 'filePreview.gitUnchanged') ? 'var(--accent,#cdf24b)' : '#e6b800',
           }} />
           <span>{status}</span>
         </div>
       )}
-      <pre style={{
-        margin: 0, fontSize: 11, lineHeight: 1.5,
-        fontFamily: 'var(--font-mono, monospace)',
-        color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-      }}>
-        {lines.map((line, i) => {
-          let color = 'var(--text)';
-          if (line.startsWith('+') && !line.startsWith('+++')) color = '#4ec9b0';
-          else if (line.startsWith('-') && !line.startsWith('---')) color = '#d9534f';
-          else if (line.startsWith('@@')) color = '#5b9cf5';
-          else if (line.startsWith('diff') || line.startsWith('index')) color = 'var(--text-faint)';
-          return (
-            <div key={i} style={{ color, background: line.startsWith('+') && !line.startsWith('+++') ? '#4ec9b010' : line.startsWith('-') && !line.startsWith('---') ? '#d9534f10' : undefined }}>
-              {line || ' '}
-            </div>
-          );
-        })}
-      </pre>
+      <div style={{ flex: 1, minHeight: 200 }}>
+        <MonacoDiffView
+          original={parsed.original}
+          modified={parsed.modified}
+          language={detectLanguage(fileName)}
+          fileName={fileName}
+        />
+      </div>
     </div>
   );
 }
+

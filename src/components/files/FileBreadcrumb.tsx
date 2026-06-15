@@ -1,6 +1,8 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { Star } from 'lucide-react';
+import { t, type Locale } from '@/i18n';
 
 interface FileBreadcrumbProps {
   segments: string[];
@@ -10,11 +12,23 @@ interface FileBreadcrumbProps {
 }
 
 export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onToggleFavorite }: FileBreadcrumbProps) {
+  const [locale, setLocale] = useState<Locale>('zh');
+
+  useEffect(() => {
+    async function loadLocale() {
+      try {
+        const saved = await window.nativesAPI?.getLocale?.();
+        if (saved === 'en') setLocale('en'); else setLocale('zh');
+      } catch { /* ignore */ }
+    }
+    loadLocale();
+  }, []);
+
   if (segments.length === 0) return null;
 
   return (
     <nav
-      aria-label="Breadcrumb"
+      aria-label={t(locale, 'fileBrowser.breadcrumbLabel')}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -36,7 +50,7 @@ export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onTog
               <span style={{ color: 'var(--text-faint, #62655a)', fontSize: 12 }}>›</span>
             )}
             {isLast ? (
-              <span style={{ color: 'var(--accent, #cdf24b)', fontWeight: 600 }}>{segment}</span>
+              <span style={{ color: 'var(--accent, #cdf24b)', fontWeight: 600, fontFamily: 'var(--font-display)' }}>{segment}</span>
             ) : (
               <button
                 onClick={() => onNavigate(pathSoFar)}
@@ -75,8 +89,8 @@ export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onTog
             padding: '2px 4px', marginLeft: 'auto', display: 'flex',
             color: isFavorite ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
           }}
-          title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
-          aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+          title={t(locale, isFavorite ? 'fileBrowser.removeFromFavorites' : 'fileBrowser.addToFavorites')}
+          aria-label={t(locale, isFavorite ? 'fileBrowser.removeFromFavorites' : 'fileBrowser.addToFavorites')}
         >
           <Star size={14} fill={isFavorite ? 'currentColor' : 'none'} />
         </button>

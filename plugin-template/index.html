@@ -53,9 +53,9 @@
     // Notify base that plugin is ready
     window.natives.lifecycle.ready();
 
-    // Set up heartbeat response
+    // Respond to heartbeat
     window.natives.lifecycle.onHeartbeat(() => {
-      return { status: 'ok' };
+      // Acknowledge heartbeat (no return value needed)
     });
 
     // Save state on unload

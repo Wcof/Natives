@@ -327,8 +327,19 @@ function validatePath(targetPath: string): void {
   if (targetPath.includes('\0')) {
     throw Object.assign(new Error(`Path contains null byte: ${targetPath}`), { code: 'EINVAL' });
   }
-  if (targetPath.includes('..')) {
-    // 只拒绝显式的父目录引用
+  // 解析绝对路径并检查目录遍历
+  const resolved = path.resolve(targetPath);
+  if (resolved !== targetPath && !targetPath.startsWith('/')) {
+    // 相对路径：检查是否包含 ..
+    const normalized = path.normalize(targetPath);
+    if (normalized.startsWith('..') || normalized.includes(`..${path.sep}`)) {
+      throw Object.assign(new Error(`Path traversal denied: ${targetPath}`), { code: 'EACCES' });
+    }
+  }
+  // 绝对路径中的 .. 也会被 path.resolve 消除，确保最终路径不偏离预期
+  const containsTraversal = resolved.split(path.sep).some((part) => part === '..');
+  if (containsTraversal) {
+    throw Object.assign(new Error(`Path traversal denied: ${targetPath}`), { code: 'EACCES' });
   }
 }
 

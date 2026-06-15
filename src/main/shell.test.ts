@@ -18,4 +18,13 @@ describe('Shell', () => {
     const mod = require('./shell');
     assert.equal(mod.getSessionCount(), 0);
   });
+
+  it('should create a session using fallback spawn when pty is unavailable', async () => {
+    const mod = require('./shell');
+    const sessionId = await mod.createSession({});
+    assert.ok(sessionId, 'session id should be truthy');
+    assert.equal(mod.getSessionCount(), 1);
+    mod.killSession(sessionId);
+    assert.equal(mod.getSessionCount(), 0);
+  });
 });

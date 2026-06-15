@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { type FileEntry } from '@/types/file';
 
 interface FileRowProps {
@@ -40,10 +41,24 @@ function formatTime(ms: number): string {
 }
 
 export default function FileRow({ entry, onSelect, onContextMenu }: FileRowProps) {
+  const [flash, setFlash] = useState(false);
   const icon = entry.isDir ? '📁' : FILE_TYPE_ICONS[entry.kind] || '📄';
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail === entry.path) {
+        setFlash(true);
+        setTimeout(() => setFlash(false), 1200);
+      }
+    };
+    window.addEventListener('file-flash', handler);
+    return () => window.removeEventListener('file-flash', handler);
+  }, [entry.path]);
 
   return (
     <div
+      className={flash ? 'anim-liveZapRow' : ''}
       onClick={() => onSelect(entry)}
       onContextMenu={(e) => onContextMenu?.(e, entry)}
       role="button"
@@ -59,11 +74,13 @@ export default function FileRow({ entry, onSelect, onContextMenu }: FileRowProps
         fontSize: 13,
         color: 'var(--text, #f2f2ea)',
         borderBottom: '1px solid var(--border, #262920)',
-        transition: 'background 0.08s',
+        background: flash ? 'var(--accent-soft, #cdf24b1f)' : 'transparent',
+        transition: 'background 0.12s',
       }}
       onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-2, #131410)'; }}
       onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
     >
+      <span className="file-row-counter" />
       <span style={{ fontSize: 16 }}>{icon}</span>
       <div style={{
         overflow: 'hidden',
@@ -73,17 +90,17 @@ export default function FileRow({ entry, onSelect, onContextMenu }: FileRowProps
         alignItems: 'center',
         gap: 6,
       }}>
-        <span>{entry.name}</span>
+        <span style={{ fontFamily: 'var(--font-mono)' }}>{entry.name}</span>
         {entry.hidden && <span style={{ fontSize: 10, color: 'var(--text-faint, #62655a)' }}>(hidden)</span>}
         {entry.symlink && <span style={{ fontSize: 10, color: 'var(--text-faint, #62655a)' }}>→ link</span>}
       </div>
-      <div style={{ color: 'var(--text-dim, #9b9d8c)' }}>
+      <div style={{ color: 'var(--text-dim, #9b9d8c)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
         {entry.isDir ? '—' : formatSize(entry.size)}
       </div>
-      <div style={{ color: 'var(--text-dim, #9b9d8c)' }}>
+      <div style={{ color: 'var(--text-dim, #9b9d8c)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
         {formatTime(entry.mtime)}
       </div>
-      <div style={{ color: 'var(--text-faint, #62655a)', fontSize: 11 }}>
+      <div style={{ color: 'var(--text-faint, #62655a)', fontSize: 11, fontFamily: 'var(--font-mono)' }}>
         {entry.kind}
         {entry.projectBadge && (
           <span style={{ marginLeft: 6, color: 'var(--accent, #cdf24b)' }}>

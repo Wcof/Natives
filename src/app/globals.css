@@ -71,7 +71,8 @@ html, body {
   height: 100vh;
   width: 100vw;
   overflow: hidden;
-  transition: grid-template-columns 0.22s ease, grid-template-rows 0.22s ease;
+  transition: grid-template-columns 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+              grid-template-rows 0.28s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .shell.sidebar-collapsed {
@@ -101,7 +102,7 @@ html, body {
   display: flex;
   flex-direction: column;
   position: relative;
-  transition: all 0.22s ease;
+  transition: all 0.28s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .sidebar.collapsed {
@@ -146,6 +147,19 @@ html, body {
   transition: background 0.12s;
   font-size: 13px;
   color: var(--text-dim);
+  position: relative;
+}
+
+/* Active indicator: left accent bar (macOS native style) */
+.sidebar-item.active::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
 }
 
 .sidebar-item:hover {
@@ -177,10 +191,25 @@ html, body {
   transition: opacity 0.15s ease 0.08s;
 }
 
+/* Glowing accent bar on hover/drag */
+.sidebar-drag-handle::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
 .sidebar-drag-handle:hover,
 .sidebar-drag-handle.active {
   opacity: 1;
-  background: var(--accent);
+}
+
+.sidebar-drag-handle:hover::after,
+.sidebar-drag-handle.active::after {
+  opacity: 0.55;
 }
 
 /* ── Content Area (center) ── */
@@ -200,6 +229,7 @@ html, body {
   width: 100%;
   height: 100%;
   border: none;
+  animation: fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* ── Right Panel ── */
@@ -211,7 +241,7 @@ html, body {
   background: var(--bg-2);
   border-left: 1px solid var(--border);
   overflow-y: auto;
-  transition: all 0.22s ease;
+  transition: all 0.28s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .right-panel.collapsed {
@@ -244,7 +274,7 @@ html, body {
   flex-direction: column;
   overflow: hidden;
   z-index: var(--z-terminal);
-  transition: all 0.22s ease;
+  transition: all 0.28s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .terminal-panel.collapsed {
@@ -306,10 +336,24 @@ html, body {
   transition: opacity 0.15s ease 0.08s;
 }
 
+.terminal-drag-handle::after {
+  content: '';
+  position: absolute;
+  inset: 2px 0;
+  border-radius: 1px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
 .terminal-drag-handle:hover,
 .terminal-drag-handle.active {
   opacity: 1;
-  background: var(--accent);
+}
+
+.terminal-drag-handle:hover::after,
+.terminal-drag-handle.active::after {
+  opacity: 0.55;
 }
 
 /* ═══════════════════════════════════════════
@@ -505,6 +549,118 @@ html, body {
 }
 
 /* ═══════════════════════════════════════════
+   Theme overrides
+   ═══════════════════════════════════════════ */
+
+/* ── Warm-archive: paper texture ── */
+[data-theme="warm-archive"] body {
+  background-image: radial-gradient(rgba(140, 110, 70, 0.05) 1px, transparent 1px);
+  background-size: 4px 4px;
+}
+
+/* ── Editorial / Brutalist theme ── */
+[data-theme="editorial"] {
+  /* Zero radius across all components */
+  --radius: 0px;
+}
+
+[data-theme="editorial"] .shell {
+  transition: none;
+}
+
+[data-theme="editorial"] .sidebar-item {
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
+  margin: 0 0 0 4px;
+  padding: 9px 12px;
+  font-weight: 500;
+}
+
+[data-theme="editorial"] .sidebar-item.active {
+  background: #0a0a0a;
+  color: #ffffff;
+  border-bottom-color: #0a0a0a;
+}
+
+[data-theme="editorial"] .sidebar-item.active::before {
+  border-radius: 0;
+}
+
+[data-theme="editorial"] .sidebar-item:hover:not(.active) {
+  background: var(--bg-3);
+}
+
+[data-theme="editorial"] .sidebar-brand {
+  font-weight: 800;
+  letter-spacing: 2px;
+}
+
+[data-theme="editorial"] .btn,
+[data-theme="editorial"] .segmented-control,
+[data-theme="editorial"] .input,
+[data-theme="editorial"] .context-menu {
+  border-radius: 0;
+}
+
+[data-theme="editorial"] .terminal-tab {
+  border-radius: 0;
+}
+
+[data-theme="editorial"] .terminal-header {
+  border-bottom-width: 2px;
+}
+
+[data-theme="editorial"] .context-menu-item {
+  border-radius: 0;
+}
+
+[data-theme="editorial"] .right-panel-header {
+  border-bottom-width: 2px;
+}
+
+[data-theme="editorial"] ::-webkit-scrollbar-thumb {
+  border-radius: 0;
+}
+
+/* ── Editorial: CSS counters for file list rows ── */
+[data-theme="editorial"] .file-list-with-counters {
+  counter-reset: file-row;
+}
+
+[data-theme="editorial"] .file-row-counter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 28px;
+}
+
+[data-theme="editorial"] .file-row-counter::before {
+  counter-increment: file-row;
+  content: counter(file-row) ".";
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* ── Editorial: hard drop shadow for panels ── */
+[data-theme="editorial"] .context-menu {
+  box-shadow: 10px 10px 0 rgba(10, 10, 10, 0.9);
+  border: 2px solid #0a0a0a;
+}
+
+[data-theme="editorial"] .right-panel {
+  border-left-width: 2px;
+}
+
+[data-theme="editorial"] .sidebar {
+  border-right-width: 2px;
+}
+
+[data-theme="editorial"] .terminal-panel {
+  border-top-width: 2px;
+}
+
+/* ═══════════════════════════════════════════
    Theme transition
    ═══════════════════════════════════════════ */
 
@@ -516,6 +672,16 @@ html, body {
 /* ═══════════════════════════════════════════
    Animations
    ═══════════════════════════════════════════ */
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes edIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 
 @keyframes tipIn {
   from { opacity: 0; transform: translateY(4px); }
@@ -552,22 +718,92 @@ html, body {
   50% { box-shadow: 0 0 12px 4px var(--accent-soft, #cdf24b33); opacity: 0.8; }
 }
 
-.anim-tipIn { animation: tipIn 0.12s ease; }
-.anim-dropIn { animation: dropIn 0.16s cubic-bezier(0.2,0.7,0.3,1); }
-.anim-fadeIn { animation: fadeIn 0.18s ease; }
-.anim-shotIn { animation: shotIn 0.22s ease; }
+.anim-edIn { animation: edIn 0.24s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.anim-slideUp { animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+.anim-tipIn { animation: tipIn 0.12s cubic-bezier(0.16, 1, 0.3, 1); }
+.anim-fadeIn { animation: fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1); }
+.anim-shotIn { animation: shotIn 0.22s cubic-bezier(0.16, 1, 0.3, 1); }
+.anim-dropIn { animation: dropIn 0.16s cubic-bezier(0.2, 0.7, 0.3, 1); }
 .anim-livePulse { animation: livePulse 1.1s ease-in-out infinite; }
 .anim-termCatch { animation: termCatch 0.5s ease; }
 .anim-termAwait { animation: termAwait 1.8s ease-in-out infinite; }
 
 /* ═══════════════════════════════════════════
+   Phase 3 — V3 UI Animations (STYLE-1)
+   ═══════════════════════════════════════════ */
+
+@keyframes tabpulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.96); }
+}
+@keyframes liveZap {
+  0% { box-shadow: 0 0 0 0 var(--accent, #cdf24b); }
+  50% { box-shadow: 0 0 14px 6px var(--accent-soft, #cdf24b33); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@keyframes liveZapRow {
+  0% { background: var(--accent-soft, #cdf24b1f); }
+  50% { background: var(--accent-soft, #cdf24b33); }
+  100% { background: transparent; }
+}
+@keyframes editRipple {
+  0% { box-shadow: 0 0 0 0 var(--accent, #cdf24b); }
+  100% { box-shadow: 0 0 0 8px transparent; }
+}
+@keyframes changedPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+@keyframes changedBreath {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+@keyframes clFlash {
+  0% { background: var(--accent-soft, #cdf24b1f); }
+  100% { background: transparent; }
+}
+@keyframes areaRipple {
+  0% { box-shadow: 0 0 0 0 var(--accent, #cdf24b); opacity: 0.6; }
+  100% { box-shadow: 0 0 24px 12px transparent; opacity: 0; }
+}
+
+.anim-tabpulse { animation: tabpulse 1.1s ease-in-out infinite; }
+.anim-liveZap { animation: liveZap 0.5s ease-out; }
+.anim-liveZapRow { animation: liveZapRow 0.5s ease-out; }
+.anim-editRipple { animation: editRipple 0.7s ease-out; }
+.anim-changedPulse { animation: changedPulse 0.5s ease-out; }
+.anim-changedBreath { animation: changedBreath 2.2s ease-in-out infinite; }
+.anim-clFlash { animation: clFlash 1.3s ease-out; }
+.anim-areaRipple { animation: areaRipple 1.1s ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-tabpulse,
+  .anim-liveZap,
+  .anim-liveZapRow,
+  .anim-editRipple,
+  .anim-changedPulse,
+  .anim-changedBreath,
+  .anim-clFlash,
+  .anim-areaRipple {
+    animation: none !important;
+  }
+}
+
+/* ═══════════════════════════════════════════
    Accessibility
    ═══════════════════════════════════════════ */
 
-/* Focus visible */
+/* Focus visible — refined macOS keyboard focus */
 :focus-visible {
   outline: 2px solid var(--accent, #cdf24b);
   outline-offset: 2px;
+  border-radius: var(--radius, 4px);
+}
+
+/* Prevent focus ring on mouse clicks */
+:focus:not(:focus-visible) {
+  outline: none;
 }
 
 /* Skip to content (keyboard navigation) */
@@ -620,7 +856,3 @@ html, body {
 /* ═══════════════════════════════════════════
    Icon sizing (lucide)
    ═══════════════════════════════════════════ */
-
-.icon-sm { width: 14px; height: 14px; }
-.icon-md { width: 18px; height: 18px; }
-.icon-lg { width: 22px; height: 22px; }

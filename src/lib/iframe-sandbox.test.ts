@@ -6,9 +6,9 @@ import {
   invalidateToken,
   invalidateModuleTokens,
   invalidateAllTokens,
-  IframeSandboxManager,
-  buildBridgeSdkScript,
-} from './iframe-sandbox';
+} from './token-manager';
+import { IframeSandboxManager } from './iframe-sandbox-manager';
+import { buildBridgeSdkScript } from './iframe-sandbox';
 
 describe('IframeSandbox', () => {
   describe('SessionToken', () => {
@@ -112,11 +112,13 @@ describe('IframeSandbox', () => {
 
   describe('BridgeSdkScript', () => {
     it('should generate valid JS SDK script', () => {
-      const script = buildBridgeSdkScript(3456);
+      const script = buildBridgeSdkScript(3456, 'http://localhost:3456');
       assert.ok(script.includes('window.natives'));
       assert.ok(script.includes('3456'));
       assert.ok(script.includes('bridgeRequest'));
       assert.ok(script.includes('token-request'));
+      assert.ok(script.includes('http://localhost:3456'));
+      assert.ok(!script.includes("'*'"));
     });
   });
 });

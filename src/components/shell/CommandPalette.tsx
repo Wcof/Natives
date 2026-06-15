@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { applyTheme } from '@/lib/theme-engine';
 import { t, type Locale } from '@/i18n';
+import { useFocusTrap } from '@/lib/useFocusTrap';
 
 interface CommandItem {
   id: string;
@@ -20,30 +21,33 @@ interface CommandPaletteProps {
   terminalSessionId?: string | null;
 }
 
-const STATIC_COMMANDS: CommandItem[] = [
-  { id: '__settings__', label: 'Open Settings', category: 'navigation', icon: '⚙️' },
-  { id: '__workshop__', label: 'Open Workshop', category: 'navigation', icon: '🔧' },
-  { id: '__store__', label: 'Open Store', category: 'navigation', icon: '🛒' },
-  { id: '__notifications__', label: 'Open Notifications', category: 'navigation', icon: '🔔' },
-  { id: 'files', label: 'File Browser', category: 'navigation', icon: '📁' },
-  { id: 'ai', label: 'AI Workbench', category: 'navigation', icon: '🤖' },
-  { id: 'tools', label: 'Tools', category: 'navigation', icon: '🛠' },
-  { id: 'terminal:toggle', label: 'Toggle Terminal', category: 'action', icon: '⬛' },
-  { id: 'theme:terminal-volt', label: 'Theme: Terminal Volt', category: 'setting', icon: '🌙' },
-  { id: 'theme:warm-archive', label: 'Theme: Warm Archive', category: 'setting', icon: '☀️' },
-];
+function getStaticCommands(locale: Locale): CommandItem[] {
+  return [
+    { id: '__settings__', label: t(locale, 'nav.settings'), category: 'navigation', icon: '⚙️' },
+    { id: '__workshop__', label: t(locale, 'nav.workshop'), category: 'navigation', icon: '🔧' },
+    { id: '__store__', label: t(locale, 'nav.store'), category: 'navigation', icon: '🛒' },
+    { id: '__notifications__', label: t(locale, 'notifications.title'), category: 'navigation', icon: '🔔' },
+    { id: 'files', label: t(locale, 'nav.fileBrowser'), category: 'navigation', icon: '📁' },
+    { id: 'ai', label: t(locale, 'nav.aiWorkbench'), category: 'navigation', icon: '🤖' },
+    { id: 'tools', label: t(locale, 'nav.tools'), category: 'navigation', icon: '🛠' },
+    { id: 'terminal:toggle', label: t(locale, 'nav.terminalToggle'), category: 'action', icon: '⬛' },
+    { id: 'theme:terminal-volt', label: t(locale, 'nav.themeTerminalVolt'), category: 'setting', icon: '🌙' },
+    { id: 'theme:warm-archive', label: t(locale, 'nav.themeWarmArchive'), category: 'setting', icon: '☀️' },
+    { id: 'theme:editorial', label: t(locale, 'nav.themeEditorial'), category: 'setting', icon: '📰' },
+  ];
+}
 
 export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerminal }: CommandPaletteProps) {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [allCommands, setAllCommands] = useState<CommandItem[]>(STATIC_COMMANDS);
-  const [results, setResults] = useState<CommandItem[]>(STATIC_COMMANDS);
   const [locale, setLocale] = useState<Locale>('zh');
+  const [allCommands, setAllCommands] = useState<CommandItem[]>(() => getStaticCommands(locale));
+  const [results, setResults] = useState<CommandItem[]>(() => getStaticCommands(locale));
   const [searchScope, setSearchScope] = useState<'global' | 'local'>('global');
   const inputRef = useRef<HTMLInputElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
 
   // Load locale
+  const { dialogRef, handleKeyDown: trapKeyDown } = useFocusTrap();
   useEffect(() => {
     async function loadLocale() {
       try {
@@ -53,6 +57,16 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
     }
     loadLocale();
   }, []);
+
+  // Update static commands when locale changes
+  useEffect(() => {
+    setAllCommands(() => {
+      const statics = getStaticCommands(locale);
+      // Re-add module commands if any
+      return [...statics];
+    });
+    setResults(() => getStaticCommands(locale));
+  }, [locale]);
 
   // Load dynamic module commands when opened
   useEffect(() => {
@@ -71,7 +85,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
               icon: '📦',
               description: m.id,
             }));
-            setAllCommands([...STATIC_COMMANDS, ...moduleCommands]);
+            setAllCommands([...getStaticCommands(locale), ...moduleCommands]);
           }
         }
       } catch { /* ignore */ }
@@ -154,32 +168,8 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
     }
   }, [query, allCommands]);
 
-  // Focus trap
-  const getFocusableElements = useCallback(() => {
-    if (!dialogRef.current) return [];
-    return Array.from(
-      dialogRef.current.querySelectorAll<HTMLElement>(
-        'input, [role="option"], button, [tabindex]:not([tabindex="-1"])',
-      ),
-    );
-  }, []);
-
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Tab') {
-      const focusable = getFocusableElements();
-      if (focusable.length === 0) return;
-      e.preventDefault();
-      const currentIndex = focusable.indexOf(document.activeElement as HTMLElement);
-      if (e.shiftKey) {
-        const prev = currentIndex <= 0 ? focusable.length - 1 : currentIndex - 1;
-        focusable[prev]?.focus();
-      } else {
-        const next = currentIndex >= focusable.length - 1 ? 0 : currentIndex + 1;
-        focusable[next]?.focus();
-      }
-      return;
-    }
-
+    // Tab handled by shared useFocusTrap hook on the dialog container
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault();
@@ -252,7 +242,8 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
         role="dialog"
         aria-label={t(locale, 'commandPalette.placeholder')}
         aria-modal="true"
-        onKeyDown={handleKeyDown}
+        onKeyDown={(e) => { trapKeyDown(e); handleKeyDown(e); }}
+        className="anim-edIn"
         style={{
           position: 'fixed', top: '20%', left: '50%', transform: 'translateX(-50%)',
           width: 520, maxWidth: '90vw',
@@ -272,7 +263,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
             placeholder={t(locale, 'commandPalette.placeholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
+            onKeyDown={(e) => { trapKeyDown(e); handleKeyDown(e); }}
             style={{
               width: '100%',
               background: 'transparent',
@@ -342,10 +333,10 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
           display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-faint,#62655a)',
           alignItems: 'center',
         }}>
-          <span>↑↓ Navigate</span>
-          <span>↵ Select</span>
-          <span>Esc Close</span>
-          <span>Tab Cycle</span>
+          <span>{t(locale, 'commandPalette.navigate')}</span>
+          <span>{t(locale, 'commandPalette.select')}</span>
+          <span>Esc {t(locale, 'commandPalette.close')}</span>
+          <span>Tab {t(locale, 'commandPalette.cycle')}</span>
           <div style={{ flex: 1 }} />
           {/* Search scope toggle */}
           <button
@@ -355,9 +346,9 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
               padding: '1px 6px', fontSize: 10, cursor: 'pointer',
               color: searchScope === 'local' ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
             }}
-            title={searchScope === 'global' ? 'Searching: Full disk' : 'Searching: Home directory'}
+            title={searchScope === 'global' ? t(locale, 'commandPalette.searchScopeGlobal') : t(locale, 'commandPalette.searchScopeLocal')}
           >
-            {searchScope === 'global' ? '🌐 Global' : '📁 Local'}
+            {searchScope === 'global' ? `🌐 ${t(locale, 'commandPalette.globalLabel')}` : `📁 ${t(locale, 'commandPalette.localLabel')}`}
           </button>
         </div>
       </div>

@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { type FileEntry } from '@/types/file';
 
 interface FileCardProps {
@@ -37,13 +38,27 @@ const BADGE_COLORS: Record<string, { bg: string; text: string }> = {
 };
 
 export default function FileCard({ entry, onSelect, onContextMenu }: FileCardProps) {
+  const [flash, setFlash] = useState(false);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail === entry.path) {
+        setFlash(true);
+        setTimeout(() => setFlash(false), 1200);
+      }
+    };
+    window.addEventListener('file-flash', handler);
+    return () => window.removeEventListener('file-flash', handler);
+  }, [entry.path]);
+
   const icon = entry.isDir ? '📁' : FILE_TYPE_ICONS[entry.kind] || '📄';
   const badge = entry.projectBadge;
   const badgeStyle = badge ? BADGE_COLORS[badge] : null;
 
   return (
     <div
-      className="file-card"
+      className={'file-card' + (flash ? ' anim-liveZap' : '')}
       onClick={() => onSelect(entry)}
       onContextMenu={(e) => onContextMenu?.(e, entry)}
       role="button"
@@ -54,8 +69,9 @@ export default function FileCard({ entry, onSelect, onContextMenu }: FileCardPro
         borderRadius: 'var(--radius, 4px)',
         cursor: 'pointer',
         border: '1px solid var(--border, #262920)',
-        background: 'var(--bg-2, #131410)',
-        transition: 'background 0.12s, border-color 0.12s, transform 0.12s',
+        background: flash ? 'var(--accent-soft, #cdf24b1f)' : 'var(--bg-2, #131410)',
+        boxShadow: flash ? '0 0 12px 4px var(--accent-soft, #cdf24b33)' : 'none',
+        transition: 'background 0.12s, border-color 0.12s, transform 0.12s, box-shadow 0.12s',
         position: 'relative',
         overflow: 'hidden',
       }}

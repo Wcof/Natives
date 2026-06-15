@@ -50,13 +50,28 @@ export const THEMES: Record<string, Theme> = {
     radius: '9px',
     'font-display': '"Fraunces", Georgia, serif',
   },
+  'editorial': {
+    bg: '#f4f1ea',
+    'bg-2': '#ece8dd',
+    'bg-3': '#e4dfd2',
+    panel: '#f4f1ea',
+    border: '#d6d1c3',
+    text: '#0a0a0a',
+    'text-dim': '#57534a',
+    'text-faint': '#8a857a',
+    accent: '#ff433d',
+    'accent-ink': '#ffffff',
+    radius: '0px',
+    'font-display': 'var(--font-ui)',
+  },
 };
 
 // ── Terminal ANSI Colors ──
 
-export const TERMINAL_THEMES: Record<string, { background: string; foreground: string; cursor: string }> = {
-  'terminal-volt': { background: '#0b0c0a', foreground: '#d6dac9', cursor: '#cdf24b' },
-  'warm-archive': { background: '#ece2d2', foreground: '#4a3f30', cursor: '#cc785c' },
+export const TERMINAL_THEMES: Record<string, { background: string; foreground: string; cursor: string; selectionBackground?: string }> = {
+  'terminal-volt': { background: '#0b0c0a', foreground: '#d6dac9', cursor: '#cdf24b', selectionBackground: '#cdf24b33' },
+  'warm-archive': { background: '#ece2d2', foreground: '#4a3f30', cursor: '#cc785c', selectionBackground: '#cc785c33' },
+  'editorial': { background: '#f4f1ea', foreground: '#0a0a0a', cursor: '#ff433d', selectionBackground: '#ff433d33' },
 };
 
 // ── Theme Application ──

@@ -1,9 +1,46 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { t, type Locale } from '@/i18n';
+import type { ClaudeUsage, CodexUsage, RtkUsage } from '@/types/agent';
 
 export default function UsagePanel() {
   const [activeTab, setActiveTab] = useState<'claude' | 'codex' | 'rtk'>('claude');
+  const [locale, setLocale] = useState<Locale>('zh');
+  const [claudeUsage, setClaudeUsage] = useState<ClaudeUsage | null>(null);
+  const [codexUsage, setCodexUsage] = useState<CodexUsage | null>(null);
+  const [rtkUsage, setRtkUsage] = useState<RtkUsage | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    async function loadLocale() {
+      try {
+        const saved = await window.nativesAPI?.getLocale?.();
+        if (saved) setLocale(saved === 'en' ? 'en' : 'zh');
+      } catch { /* ignore */ }
+    }
+    loadLocale();
+  }, []);
+
+  const fetchUsage = useCallback(async () => {
+    setLoading(true);
+    try {
+      const api = window.nativesAPI;
+      if (!api?.usage?.refresh) return;
+
+      const result = await api.usage.refresh();
+      if (result.claude) setClaudeUsage(result.claude);
+      if (result.rtk) setRtkUsage(result.rtk);
+    } catch (err) {
+      console.error('[UsagePanel] Failed to fetch usage:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchUsage();
+  }, [fetchUsage]);
 
   const tabs = [
     { id: 'claude' as const, label: 'Claude Code' },
@@ -32,35 +69,63 @@ export default function UsagePanel() {
 
       {activeTab === 'claude' && (
         <div>
-          <ProgressBar label="5h Window" used={0} limit={50000} color="#cdf24b" />
-          <ProgressBar label="Weekly Quota" used={0} limit={500000} color="#4bcdf2" />
+          <ProgressBar
+            label={t(locale, 'aiWorkbench.fiveHourWindow')}
+            used={claudeUsage?.fiveHourWindow?.used ?? 0}
+            limit={claudeUsage?.fiveHourWindow?.limit ?? 50000}
+            color="#cdf24b"
+          />
+          <ProgressBar
+            label={t(locale, 'aiWorkbench.weeklyQuota')}
+            used={claudeUsage?.weeklyQuota?.used ?? 0}
+            limit={claudeUsage?.weeklyQuota?.limit ?? 500000}
+            color="#4bcdf2"
+          />
           <div style={{ marginTop: 12, fontSize: 11, color: 'var(--text-dim)' }}>
-            <div>Local 5h: 0 tokens</div>
-            <div>Today: 0 tokens</div>
-            <div>This week: 0 tokens</div>
+            <div>{t(locale, 'aiWorkbench.localTokens')} 5h: {claudeUsage?.localTokens?.last5h ?? 0} tokens</div>
+            <div>{t(locale, 'aiWorkbench.today')}: {claudeUsage?.localTokens?.today ?? 0} tokens</div>
+            <div>{t(locale, 'aiWorkbench.thisWeek')}: {claudeUsage?.localTokens?.thisWeek ?? 0} tokens</div>
           </div>
-          <button className="btn btn-ghost" style={{ marginTop: 8, fontSize: 11 }}>Refresh</button>
+          <button
+            className="btn btn-ghost"
+            onClick={fetchUsage}
+            disabled={loading}
+            style={{ marginTop: 8, fontSize: 11 }}
+          >
+            {loading ? '...' : t(locale, 'aiWorkbench.refresh')}
+          </button>
         </div>
       )}
 
       {activeTab === 'codex' && (
         <div>
-          <ProgressBar label="5h Window" used={0} limit={30000} color="#DEA584" />
-          <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-dim)' }}>Plan: Free</div>
+          <ProgressBar
+            label={t(locale, 'aiWorkbench.fiveHourWindow')}
+            used={codexUsage?.fiveHourWindow?.used ?? 0}
+            limit={codexUsage?.fiveHourWindow?.limit ?? 30000}
+            color="#DEA584"
+          />
+          <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-dim)' }}>
+            {t(locale, 'aiWorkbench.plan')}: {codexUsage?.planType ?? 'Free'}
+          </div>
         </div>
       )}
 
       {activeTab === 'rtk' && (
         <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
           <div style={{ marginBottom: 8 }}>
-            <span style={{ color: 'var(--text)', fontWeight: 600 }}>0</span> tokens saved
+            <span style={{ color: 'var(--text)', fontWeight: 600 }}>{rtkUsage?.totalSaved ?? 0}</span>{' '}
+            {t(locale, 'aiWorkbench.tokensSaved')}
           </div>
           <div style={{ marginBottom: 8 }}>
-            <span style={{ color: 'var(--text)', fontWeight: 600 }}>0</span> commands
+            <span style={{ color: 'var(--text)', fontWeight: 600 }}>{rtkUsage?.totalCommands ?? 0}</span>{' '}
+            {t(locale, 'aiWorkbench.commands')}
           </div>
-          <div style={{ fontSize: 10, color: 'var(--text-faint)' }}>
-            No RTK usage data yet
-          </div>
+          {(!rtkUsage || rtkUsage.totalCommands === 0) && (
+            <div style={{ fontSize: 10, color: 'var(--text-faint)' }}>
+              {t(locale, 'aiWorkbench.usage.noRtkData')}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -73,7 +138,7 @@ function ProgressBar({ label, used, limit, color }: { label: string; used: numbe
     <div style={{ marginBottom: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
         <span style={{ color: 'var(--text-dim)' }}>{label}</span>
-        <span style={{ color: 'var(--text)' }}>{Math.round(pct)}%</span>
+        <span style={{ color: 'var(--text)' }}>{Math.round(pct)}% ({used}/{limit})</span>
       </div>
       <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden' }}>
         <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 3, transition: 'width 0.3s ease' }} />

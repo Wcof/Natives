@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { type GitStatus } from '@/types/file';
+import { t, type Locale } from '@/i18n';
 
 interface GitPanelProps {
   repoPath: string;
@@ -10,7 +11,18 @@ interface GitPanelProps {
 export default function GitPanel({ repoPath }: GitPanelProps) {
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [locale, setLocale] = useState<Locale>('en');
   const httpPort = window.__nativesHttpPort || 3001;
+
+  useEffect(() => {
+    async function loadLocale() {
+      try {
+        const saved = await window.nativesAPI?.getLocale?.();
+        if (saved === 'en') setLocale('en'); else setLocale('zh');
+      } catch { /* ignore */ }
+    }
+    loadLocale();
+  }, []);
 
   useEffect(() => {
     async function load() {
@@ -27,11 +39,16 @@ export default function GitPanel({ repoPath }: GitPanelProps) {
     load();
   }, [repoPath, httpPort]);
 
-  if (loading) return <div style={{ padding: 12, color: 'var(--text-faint)' }}>Loading git status...</div>;
-  if (!status) return <div style={{ padding: 12, color: 'var(--text-faint)' }}>Not a git repository</div>;
+  if (loading) return <div style={{ padding: 12, color: 'var(--text-faint)' }}>{t(locale, 'fileBrowser.loadingGitStatus')}</div>;
+  if (!status) return <div style={{ padding: 12, color: 'var(--text-faint)' }}>{t(locale, 'fileBrowser.notInRepo')}</div>;
 
   const STATUS_LABELS: Record<string, string> = {
-    M: 'Modified', A: 'Added', D: 'Deleted', R: 'Renamed', '??': 'Untracked', UU: 'Conflicted',
+    M: t(locale, 'filePreview.gitModified'),
+    A: t(locale, 'filePreview.gitAdded'),
+    D: t(locale, 'filePreview.gitDeleted'),
+    R: t(locale, 'filePreview.gitRenamed'),
+    '??': t(locale, 'filePreview.gitUntracked'),
+    UU: t(locale, 'filePreview.gitConflict'),
   };
 
   const STATUS_COLORS: Record<string, string> = {
@@ -51,14 +68,14 @@ export default function GitPanel({ repoPath }: GitPanelProps) {
         <span>⎇</span>
         <span>{status.branch}</span>
         <span style={{ fontSize: 10, color: 'var(--text-faint, #62655a)' }}>
-          {status.files.length} file{status.files.length !== 1 ? 's' : ''}
+          {status.files.length}
         </span>
       </div>
 
       {/* File list */}
       {status.files.length === 0 ? (
         <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint, #62655a)', fontSize: 12 }}>
-          Working tree clean
+          {t(locale, 'fileBrowser.workingTreeClean')}
         </div>
       ) : (
         status.files.map((file) => (
@@ -71,7 +88,7 @@ export default function GitPanel({ repoPath }: GitPanelProps) {
               color: 'var(--text, #f2f2ea)',
             }}
           >
-            <span style={{
+            <span className="anim-changedBreath" style={{
               fontSize: 10, fontWeight: 700, padding: '1px 4px', borderRadius: 2,
               background: `${STATUS_COLORS[file.status] || '#888'}25`,
               color: STATUS_COLORS[file.status] || '#888',

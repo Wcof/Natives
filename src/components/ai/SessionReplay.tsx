@@ -61,12 +61,16 @@ export default function SessionReplay() {
       setCurrentStep(0);
       return;
     }
-    // Build steps from session's modified files
-    const fileSteps: ReplayStep[] = selectedSession.filesModified.map((f, i) => ({
+    // Build steps from session's modified files with real timestamps
+    const paths = selectedSession.filesModified;
+    const timestamps = selectedSession.fileTimestamps || {};
+    const fileSteps: ReplayStep[] = paths.map((f, i) => ({
       path: f,
-      timestamp: selectedSession.startTime + i * 1000, // Approximate timestamps
+      timestamp: selectedSession.startTime + (timestamps[f] ?? i * 250),
       action: 'modify',
     }));
+    // Sort by timestamp for chronological replay
+    fileSteps.sort((a, b) => a.timestamp - b.timestamp);
     setSteps(fileSteps);
     setCurrentStep(0);
   }, [selectedSession]);
@@ -248,7 +252,7 @@ export default function SessionReplay() {
 
       {selectedSession && steps.length === 0 && (
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
-          No files modified in this session
+          {t(locale, 'aiWorkbench.replay.noFiles')}
         </div>
       )}
     </div>

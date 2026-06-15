@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { execFile } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
 import { type ContentSearchResult, type SearchResult } from '../types/file';
+import { execFilePromise } from '@/lib/exec-file';
 
 /**
  * 子序列匹配
@@ -136,7 +137,127 @@ const TEXT_EXTENSIONS = new Set([
 
 const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB
 
-// ── grepContent ──
+// ── Ripgrep Detection (TASK-011) ──
+
+let _hasRipgrep: boolean | null = null;
+
+function hasRipgrep(): boolean {
+  if (_hasRipgrep !== null) return _hasRipgrep;
+  try {
+    execFileSync('rg', ['--version'], { stdio: 'ignore', timeout: 3000 });
+    _hasRipgrep = true;
+  } catch {
+    _hasRipgrep = false;
+  }
+  return _hasRipgrep;
+}
+
+// ── SQLite FTS5 Index (TASK-011) ──
+
+let _ftsDb: import('better-sqlite3').Database | null = null;
+
+function getFtsDb(): import('better-sqlite3').Database | null {
+  if (_ftsDb) return _ftsDb;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Database = require('better-sqlite3');
+    const dbPath = path.join(process.env.HOME || '/tmp', '.natives', 'search-index.db');
+    _ftsDb = new Database(dbPath);
+    _ftsDb!.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS file_contents USING fts5(
+        path UNINDEXED, content, tokenize='unicode61'
+      );
+    `);
+    return _ftsDb;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Index a file's content into the FTS5 search index.
+ */
+export function indexFileForSearch(filePath: string, content: string): void {
+  const db = getFtsDb();
+  if (!db) return;
+  const normalized = path.resolve(filePath);
+  db.prepare('INSERT OR REPLACE INTO file_contents (rowid, path, content) VALUES ((SELECT rowid FROM file_contents WHERE path = ?), ?, ?)')
+    .run(normalized, normalized, content);
+}
+
+/**
+ * Search the FTS5 index.
+ */
+export function searchFtsIndex(query: string, limit = 50): ContentSearchResult[] {
+  const db = getFtsDb();
+  if (!db) return [];
+  try {
+    const rows = db.prepare(
+      `SELECT path, snippet(file_contents, 1, '<mark>', '</mark>', '...', 40) AS preview
+       FROM file_contents WHERE file_contents MATCH ? ORDER BY rank LIMIT ?`
+    ).all(query, limit) as Array<{ path: string; preview: string }>;
+    return rows.map((r) => ({
+      path: r.path,
+      name: path.basename(r.path),
+      line: 1,
+      preview: r.preview,
+      matchStart: 0,
+      matchEnd: query.length,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+// ── Ripgrep-based content search (TASK-011) ──
+
+async function grepWithRipgrep(
+  query: string,
+  root: string,
+  options?: { maxResults?: number; fileExtensions?: string[]; contextLines?: number },
+): Promise<ContentSearchResult[]> {
+  const maxResults = options?.maxResults || 50;
+  const args: string[] = [
+    '--json',
+    '-i',                    // case-insensitive
+    '-g', '!.git',
+    '-g', '!node_modules',
+    '-g', '!.next',
+    '-g', '!dist',
+    '-g', '!build',
+    '--max-count', String(maxResults),
+  ];
+  if (options?.fileExtensions && options.fileExtensions.length > 0) {
+    for (const ext of options.fileExtensions) {
+      args.push('-g', `*.${ext}`);
+    }
+  }
+  args.push('--', query, root);
+
+  const output = execFileSync('rg', args, { encoding: 'utf-8', timeout: 30000, maxBuffer: 10 * 1024 * 1024 });
+  const results: ContentSearchResult[] = [];
+  const lines = output.trim().split('\n');
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed.type === 'match' && parsed.data?.path?.text) {
+        results.push({
+          path: parsed.data.path.text,
+          name: parsed.data.path.text.split('/').pop() || '',
+          line: parsed.data.line_number || 1,
+          preview: (parsed.data.lines?.text || '').trim(),
+          matchStart: 0,
+          matchEnd: query.length,
+        });
+        if (results.length >= maxResults) break;
+      }
+    } catch { /* skip unparseable lines */ }
+  }
+  return results;
+}
+
+// ── grepContent (TASK-011: ripgrep-first, FTS5 fallback) ──
 
 /**
  * 全文内容搜索
@@ -154,8 +275,19 @@ export async function grepContent(
     contextLines?: number;
   },
 ): Promise<ContentSearchResult[]> {
-  const results: ContentSearchResult[] = [];
   const maxResults = options?.maxResults || 50;
+
+  // TASK-011: Try ripgrep first (10x-100x faster for large codebases)
+  if (hasRipgrep()) {
+    try {
+      return await grepWithRipgrep(query, root, options);
+    } catch {
+      // Fall through to Node.js grep
+    }
+  }
+
+  // Fallback: Node.js line-by-line grep
+  const results: ContentSearchResult[] = [];
   const contextLines = options?.contextLines || 0;
   const allowedExts = options?.fileExtensions
     ? new Set(options.fileExtensions.map((e) => e.startsWith('.') ? e : `.${e}`))
@@ -216,8 +348,9 @@ export async function grepContent(
         if (results.length >= maxResults) return;
         const fullPath = path.join(dirPath, entry.name);
         if (entry.isDirectory()) {
-          // 跳过 node_modules, .git 等
           if (entry.name.startsWith('.')) continue;
+          // 跳过常见构建/依赖目录
+          if (['node_modules', 'dist', '.next', 'build', 'out', '__pycache__'].includes(entry.name)) continue;
           await walkDir(fullPath);
         } else if (entry.isFile()) {
           await searchFile(fullPath);
@@ -227,7 +360,6 @@ export async function grepContent(
       // 跳过无权限目录
     }
   }
-
   await walkDir(root);
   return results;
 }
@@ -268,31 +400,56 @@ export async function searchFiles(
         if (entry.isDirectory()) {
           // 跳过隐藏目录
           if (entry.name.startsWith('.')) continue;
+          if (['node_modules', 'dist', '.next', 'build', 'out', '__pycache__'].includes(entry.name)) continue;
           if (includeDirs) {
             const score = calculateScore(query, entry.name, true);
             if (score !== -1) {
-              results.push({
-                path: fullPath,
-                name: entry.name,
-                score,
-                isDir: true,
-                mtime: 0,
-                matchRanges: [],
-              });
+              try {
+                const stat = await fs.promises.stat(fullPath);
+                results.push({
+                  path: fullPath,
+                  name: entry.name,
+                  score,
+                  isDir: true,
+                  mtime: stat.mtimeMs,
+                  matchRanges: [],
+                });
+              } catch {
+                results.push({
+                  path: fullPath,
+                  name: entry.name,
+                  score,
+                  isDir: true,
+                  mtime: 0,
+                  matchRanges: [],
+                });
+              }
             }
           }
           await walk(fullPath);
         } else if (entry.isFile()) {
           const score = calculateScore(query, entry.name);
           if (score !== -1) {
-            results.push({
-              path: fullPath,
-              name: entry.name,
-              score,
-              isDir: false,
-              mtime: 0,
-              matchRanges: [],
-            });
+            try {
+              const stat = await fs.promises.stat(fullPath);
+              results.push({
+                path: fullPath,
+                name: entry.name,
+                score,
+                isDir: false,
+                mtime: stat.mtimeMs,
+                matchRanges: [],
+              });
+            } catch {
+              results.push({
+                path: fullPath,
+                name: entry.name,
+                score,
+                isDir: false,
+                mtime: 0,
+                matchRanges: [],
+              });
+            }
           }
         }
       }
@@ -344,11 +501,4 @@ export async function spotlightSearch(
   return grepContent(query, root);
 }
 
-function execFilePromise(cmd: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout: 15000 }, (err: Error | null, stdout: string) => {
-      if (err) reject(err);
-      else resolve(stdout);
-    });
-  });
-}
+

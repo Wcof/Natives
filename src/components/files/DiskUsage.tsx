@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { t, type Locale } from '@/i18n';
 import { type DiskUsageItem } from '@/types/file';
 
 interface DiskUsageProps {
@@ -11,6 +12,18 @@ interface DiskUsageProps {
 export default function DiskUsage({ dirPath, onNavigate }: DiskUsageProps) {
   const [items, setItems] = useState<DiskUsageItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [locale, setLocale] = useState<Locale>('zh');
+
+  useEffect(() => {
+    async function loadLocale() {
+      try {
+        const saved = await window.nativesAPI?.getLocale?.();
+        if (saved === 'en') setLocale('en'); else setLocale('zh');
+      } catch { /* ignore */ }
+    }
+    loadLocale();
+  }, []);
+
   const httpPort = window.__nativesHttpPort || 3001;
 
   useEffect(() => {
@@ -37,7 +50,7 @@ export default function DiskUsage({ dirPath, onNavigate }: DiskUsageProps) {
     <div style={{ padding: 8 }}>
       {items.length === 0 ? (
         <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint, #62655a)', fontSize: 12 }}>
-          No files to analyze
+          {t(locale, 'fileBrowser.empty')}
         </div>
       ) : (
         items.slice(0, 30).map((item) => {

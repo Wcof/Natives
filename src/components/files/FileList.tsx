@@ -1,5 +1,7 @@
 'use client';
 
+import { useState, useEffect } from 'react';
+import { t, type Locale } from '@/i18n';
 import { type FileEntry } from '@/types/file';
 import FileRow from './FileRow';
 
@@ -12,15 +14,27 @@ interface FileListProps {
   onContextMenu?: (e: React.MouseEvent, entry: FileEntry) => void;
 }
 
-const SORT_LABELS: Record<string, string> = {
-  name: 'Name',
-  mtime: 'Modified',
-  size: 'Size',
-};
-
 export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, onContextMenu }: FileListProps) {
+  const [locale, setLocale] = useState<Locale>('zh');
+
+  useEffect(() => {
+    async function loadLocale() {
+      try {
+        const saved = await window.nativesAPI?.getLocale?.();
+        if (saved === 'en') setLocale('en'); else setLocale('zh');
+      } catch { /* ignore */ }
+    }
+    loadLocale();
+  }, []);
+
+  const SORT_LABELS: Record<string, string> = {
+    name: t(locale, 'fileBrowser.name'),
+    mtime: t(locale, 'fileBrowser.modified'),
+    size: t(locale, 'fileBrowser.size'),
+  };
+
   return (
-    <div style={{ width: '100%', overflowX: 'auto' }}>
+    <div style={{ width: '100%', overflowX: 'auto' }} className="file-list-with-counters">
       {/* Header */}
       <div style={{
         display: 'grid',
@@ -30,6 +44,7 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
         borderBottom: '1px solid var(--border, #262920)',
         fontSize: 11,
         fontWeight: 600,
+        fontFamily: 'var(--font-mono)',
         color: 'var(--text-dim, #9b9d8c)',
         textTransform: 'uppercase',
         letterSpacing: '0.5px',

@@ -45,13 +45,25 @@ export default function ProjectMemory() {
     loadSessions();
   }, [loadSessions]);
 
-  const handleRestore = useCallback((session: AgentSession) => {
-    // Try to resume via terminal
+  const handleRestore = useCallback(async (session: AgentSession) => {
     const api = window.nativesAPI;
-    if (api?.terminal?.write) {
-      // Send claude --resume command
-      window.dispatchEvent(new CustomEvent('toggle-terminal'));
-      // The session will be restored when the terminal is ready
+    if (!api?.terminal?.write) return;
+
+    // Show terminal panel
+    window.dispatchEvent(new CustomEvent('toggle-terminal'));
+
+    try {
+      // Create a new terminal session (or get active one)
+      const result = await api.terminal.create() as { sessionId?: string; error?: string };
+      const sessionId = result?.sessionId;
+      if (!sessionId) {
+        console.error('[ProjectMemory] Failed to create terminal session:', result?.error);
+        return;
+      }
+      // Write the claude --resume command to restore the session
+      await api.terminal.write(sessionId, `claude --resume ${session.id}\n`);
+    } catch (err) {
+      console.error('[ProjectMemory] Failed to resume session via terminal:', err);
     }
   }, []);
 
@@ -117,7 +129,7 @@ export default function ProjectMemory() {
                   )}
                   {s.skillsUsed.length > 0 && (
                     <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}>
-                      <span style={{ fontWeight: 600 }}>{t(locale, 'aiWorkbench.skills')}:</span>{' '}
+                      <span style={{ fontWeight: 600 }}>{t(locale, 'aiWorkbench.skillsLabel')}:</span>{' '}
                       {s.skillsUsed.join(', ')}
                     </div>
                   )}

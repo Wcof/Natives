@@ -2,8 +2,9 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 
-const TEST_DIR = path.join(process.env.HOME || '~', '.natives-state-test');
+const TEST_DIR = path.join(os.tmpdir(), 'natives-state-test');
 process.env.NATIVES_DB_DIR = TEST_DIR;
 
 import { initDb, closeDb } from '../main/database';

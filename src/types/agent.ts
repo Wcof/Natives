@@ -41,6 +41,7 @@ export interface AgentSession {
   startTime: number;
   endTime?: number;
   filesModified: string[];
+  fileTimestamps: Record<string, number>;
   skillsUsed: string[];
 }
 

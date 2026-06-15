@@ -37,6 +37,8 @@ export function sendMessage(from: string, targetId: string, channel: string, pay
     timestamp: Date.now(),
   };
 
+  logMessage(message);
+
   // Deliver to target
   const targetListeners = listeners.get(targetId);
   if (targetListeners) {
@@ -60,6 +62,8 @@ export function broadcastMessage(from: string, channel: string, payload: unknown
     payload,
     timestamp: Date.now(),
   };
+
+  logMessage(message);
 
   // Deliver to all listeners
   for (const listener of broadcastListeners) {

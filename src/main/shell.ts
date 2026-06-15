@@ -46,29 +46,35 @@ function createPTYSession(shell: string, env: Record<string, string>): ShellSess
   const rows = 24;
 
   if (usePty && ptySpawn) {
-    const ptyProcess = ptySpawn(shell, [], {
-      name: 'xterm-256color',
-      cols,
-      rows,
-      cwd: process.env.HOME,
-      env: { ...process.env, ...env },
-    });
+    try {
+      const ptyProcess = ptySpawn(shell, [], {
+        name: 'xterm-256color',
+        cols,
+        rows,
+        cwd: process.env.HOME,
+        env: { ...process.env, ...env },
+      });
 
-    writeHandlers.set(id, (data: string) => ptyProcess.write(data));
-    killHandlers.set(id, () => ptyProcess.kill());
+      writeHandlers.set(id, (data: string) => ptyProcess.write(data));
+      killHandlers.set(id, () => ptyProcess.kill());
 
-    ptyProcess.onData((data: string) => {
-      const handlers = dataListeners.get(id);
-      if (handlers) handlers.forEach((h) => h(data));
-    });
+      ptyProcess.onData((data: string) => {
+        const handlers = dataListeners.get(id);
+        if (handlers) handlers.forEach((h) => h(data));
+      });
 
-    ptyProcess.onExit(({ exitCode, signal }: { exitCode: number; signal?: number }) => {
-      const handlers = exitListeners.get(id);
-      if (handlers) handlers.forEach((h) => h(exitCode, signal));
-      sessions.delete(id);
-    });
+      ptyProcess.onExit(({ exitCode, signal }: { exitCode: number; signal?: number }) => {
+        const handlers = exitListeners.get(id);
+        if (handlers) handlers.forEach((h) => h(exitCode, signal));
+        sessions.delete(id);
+      });
 
-    processMap.set(id, ptyProcess);
+      processMap.set(id, ptyProcess);
+    } catch {
+      // PTY spawn failed, fall through to child_process fallback
+      usePty = false;
+      return createPTYSession(shell, env);
+    }
   } else {
     // Fallback to child_process.spawn
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -120,16 +126,26 @@ function createPTYSession(shell: string, env: Record<string, string>): ShellSess
 
 // ── Public API ──
 
-export async function createSession(env: Record<string, string> = {}): Promise<string> {
+export async function createSession(env: Record<string, string> = {}, profileId?: string): Promise<string> {
   const shell = process.env.SHELL || '/bin/zsh';
 
-  // Merge default profile env vars if database is available
+  // Merge profile env vars if database is available.
+  // The frontend passes the profile ID (numeric), so we resolve by ID — not by
+  // name. Querying by name was the previous behaviour and silently failed
+  // because the id almost never equals the name. See BUG-1 / US25/US26/US29.
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { getDefaultProfile, injectEnv } = require('./env-injector');
-    const profile = getDefaultProfile();
-    if (profile) {
-      await injectEnv(profile.name, env);
+    const { getDefaultProfile, injectEnvById, injectEnv, getEncryptionKey } = require('../lib/env-injector');
+    const encryptionKey = getEncryptionKey();
+    if (profileId) {
+      // Explicit profile selected → inject by id.
+      await injectEnvById(profileId, env, encryptionKey);
+    } else {
+      // No profile specified → fall back to the default profile (by name).
+      const profile = getDefaultProfile();
+      if (profile) {
+        await injectEnv(profile.name, env, encryptionKey);
+      }
     }
   } catch {
     // env-injector / database unavailable, continue without injection

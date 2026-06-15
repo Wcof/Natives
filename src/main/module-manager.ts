@@ -151,11 +151,14 @@ export function syncModulesToDb(): void {
         updated_at = datetime('now')
     `).run(id, name, version, entry, type, description || null, author || null, icon || null, minNativesVersion || null);
 
-    // Sync permissions
-    db.prepare('DELETE FROM module_permissions WHERE module_id = ?').run(id);
-    for (const perm of permissions) {
-      db.prepare('INSERT INTO module_permissions (module_id, permission, granted) VALUES (?, ?, 0)').run(id, perm);
-    }
+    // Sync permissions (transaction to avoid partial state)
+    const syncPerms = db.transaction(() => {
+      db.prepare('DELETE FROM module_permissions WHERE module_id = ?').run(id);
+      for (const perm of permissions) {
+        db.prepare('INSERT INTO module_permissions (module_id, permission, granted) VALUES (?, ?, 0)').run(id, perm);
+      }
+    });
+    syncPerms();
 
     // Ensure module_order entry exists
     db.prepare('INSERT OR IGNORE INTO module_order (module_id, sort_order) VALUES (?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM module_order))').run(id);

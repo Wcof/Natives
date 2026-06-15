@@ -112,6 +112,17 @@ const TABLES: Record<string, string> = {
     module_id TEXT NOT NULL REFERENCES modules(id) ON DELETE CASCADE UNIQUE,
     sort_order INTEGER NOT NULL
   )`,
+
+  // TASK-001: Permission audit trail
+  permission_audit_log: `CREATE TABLE IF NOT EXISTS permission_audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    module_id TEXT NOT NULL,
+    permission TEXT NOT NULL,
+    action TEXT NOT NULL CHECK(action IN ('grant','revoke','deny','approve')),
+    granted INTEGER NOT NULL,
+    reason TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
 };
 
 // ── Migration ──

@@ -77,7 +77,7 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
                 background: filter === f ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
               }}
             >
-              {f === 'all' ? 'All' : `${typeIcons[f]} ${f}`}
+              {f === 'all' ? t(locale, 'aiWorkbench.dashboard.all') : `${typeIcons[f]} ${t(locale, 'aiWorkbench.dashboard.' + f)}`}
             </button>
           ))}
           {/* Pause/Resume */}
@@ -88,7 +88,7 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
               fontSize: 10, padding: '2px 6px', borderRadius: 3,
               color: paused ? '#e6b800' : 'var(--text-faint)',
             }}
-            title={paused ? 'Resume' : 'Pause'}
+            title={paused ? t(locale, 'aiWorkbench.dashboard.resume') : t(locale, 'aiWorkbench.dashboard.pause')}
           >
             {paused ? '▶' : '⏸'}
           </button>
@@ -97,7 +97,7 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
             className="btn-ghost"
             onClick={handleClear}
             style={{ fontSize: 10, padding: '2px 6px', borderRadius: 3, color: 'var(--text-faint)' }}
-            title="Clear"
+            title={t(locale, 'aiWorkbench.dashboard.clear')}
           >
             ✕
           </button>
@@ -108,7 +108,7 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
       <div style={{ flex: 1, overflow: 'auto', padding: 6 }}>
         {filtered.length === 0 ? (
           <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
-            {paused ? 'Paused' : t(locale, 'aiWorkbench.waitingForChanges')}
+            {paused ? t(locale, 'aiWorkbench.dashboard.paused') : t(locale, 'aiWorkbench.waitingForChanges')}
           </div>
         ) : (
           filtered.map((ch, i) => (
@@ -143,8 +143,8 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
         padding: '4px 10px', borderTop: '1px solid var(--border,#262920)',
         fontSize: 10, color: 'var(--text-faint)', display: 'flex', justifyContent: 'space-between',
       }}>
-        <span>{filtered.length} changes</span>
-        {paused && <span style={{ color: '#e6b800' }}>⏸ Paused</span>}
+        <span>{t(locale, 'aiWorkbench.dashboard.changesCount').replace('{n}', String(filtered.length))}</span>
+        {paused && <span style={{ color: '#e6b800' }}>⏸ {t(locale, 'aiWorkbench.dashboard.paused')}</span>}
       </div>
     </div>
   );
