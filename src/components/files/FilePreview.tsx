@@ -6,6 +6,7 @@ import { t, useLocale, type Locale } from '@/i18n';
 import { getExt, isMarkdownFile, isCsvFile, isArchiveFile } from '@/lib/follow-mode';
 import { detectLanguage, highlightCode } from '@/lib/shiki-utils';
 import { parseUnifiedDiff } from '@/lib/diff-utils';
+import { useFileContent } from '@/lib/useFileContent';
 import MonacoDiffView from './MonacoDiffView';
 import ImageLightbox from './ImageLightbox';
 import CsvTable from './CsvTable';
@@ -289,13 +290,7 @@ function PreviewContent({ entry, httpPort, locale, isMarkdown, isCsv, isArchive,
 // ── CSV Preview ──
 
 function CsvPreview({ path, httpPort, locale, delimiter }: { path: string; httpPort: number; locale: Locale; delimiter: string }) {
-  const [content, setContent] = useState<string | null>(null);
-  useEffect(() => {
-    fetch(`http://localhost:${httpPort}/api/fs/raw?path=${encodeURIComponent(path)}`)
-      .then(r => r.text())
-      .then(setContent)
-      .catch(() => setContent(null));
-  }, [path, httpPort]);
+  const { content } = useFileContent(path, httpPort);
   if (content === null) {
     return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
   }
@@ -305,14 +300,7 @@ function CsvPreview({ path, httpPort, locale, delimiter }: { path: string; httpP
 // ── Markdown WYSIWYG Preview ──
 
 function MdWysiwygPreview({ path, httpPort, locale }: { path: string; httpPort: number; locale: Locale }) {
-  const [content, setContent] = useState<string | null>(null);
-  useEffect(() => {
-    fetch(`http://localhost:${httpPort}/api/fs/raw?path=${encodeURIComponent(path)}`)
-      .then(r => r.text())
-      .then(setContent)
-      .catch(() => setContent(null));
-  }, [path, httpPort]);
-
+  const { content } = useFileContent(path, httpPort);
   if (content === null) {
     return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
   }
@@ -331,13 +319,7 @@ function MdWysiwygPreview({ path, httpPort, locale }: { path: string; httpPort: 
 }
 
 function HtmlFilePreview({ path, httpPort, locale }: { path: string; httpPort: number; locale: Locale }) {
-  const [content, setContent] = useState<string | null>(null);
-  useEffect(() => {
-    fetch(`http://localhost:${httpPort}/api/fs/raw?path=${encodeURIComponent(path)}`)
-      .then((r) => r.text())
-      .then(setContent)
-      .catch(() => setContent(t(locale, 'filePreview.failedLoad')));
-  }, [path, httpPort, locale]);
+  const { content } = useFileContent(path, httpPort);
   if (content === null) {
     return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
   }
@@ -359,23 +341,8 @@ function CodePreview({ entry, httpPort, locale, editMode, ext }: {
   editMode: boolean;
   ext: string;
 }) {
-  const [code, setCode] = useState<string | null>(null);
   const [highlightedHtml, setHighlightedHtml] = useState<string>('');
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setLoading(true);
-    fetch(`http://localhost:${httpPort}/api/fs/raw?path=${encodeURIComponent(entry.path)}`)
-      .then((r) => r.text())
-      .then((text) => {
-        setCode(text);
-        setLoading(false);
-      })
-      .catch(() => {
-        setCode(null);
-        setLoading(false);
-      });
-  }, [entry.path, httpPort]);
+  const { content: code, loading } = useFileContent(entry.path, httpPort);
 
   // shiki syntax highlighting
   useEffect(() => {
@@ -421,7 +388,6 @@ function CodePreview({ entry, httpPort, locale, editMode, ext }: {
           language={ext}
           onSave={async (newContent) => {
             await window.nativesAPI?.fs?.writeFileAtomic?.(entry.path, newContent);
-            setCode(newContent);
           }}
         />
       </Suspense>

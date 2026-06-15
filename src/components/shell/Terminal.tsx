@@ -312,6 +312,43 @@ export default function TerminalPanel({
     }
   }, [height, isCollapsed, isMaximized, activeSessionId]);
 
+  // Terminal keyboard shortcuts: Cmd+T new tab, Cmd+W close tab, Cmd+Shift+]/[ switch tabs
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!e.metaKey) return;
+      // Cmd+T: new terminal tab
+      if (e.key === 't' && !e.shiftKey && !e.ctrlKey) {
+        // Only if terminal panel is focused or visible
+        const termEl = terminalRef.current;
+        if (termEl && (termEl.contains(document.activeElement) || !isCollapsed)) {
+          e.preventDefault();
+          createSession();
+        }
+      }
+      // Cmd+W: close current tab
+      if (e.key === 'w' && !e.shiftKey) {
+        const termEl = terminalRef.current;
+        if (termEl && termEl.contains(document.activeElement) && sessions.length > 1 && activeSessionId) {
+          e.preventDefault();
+          closeSession(activeSessionId);
+        }
+      }
+      // Cmd+Shift+] / Cmd+Shift+[: next/prev tab
+      if (e.key === '}' || e.key === '{') {
+        const termEl = terminalRef.current;
+        if (termEl && (termEl.contains(document.activeElement) || !isCollapsed)) {
+          e.preventDefault();
+          const idx = sessions.findIndex(s => s.id === activeSessionId);
+          if (idx < 0) return;
+          const nextIdx = e.key === '}' ? (idx + 1) % sessions.length : (idx - 1 + sessions.length) % sessions.length;
+          if (sessions[nextIdx]) switchSession(sessions[nextIdx].id);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [sessions, activeSessionId, isCollapsed, createSession, closeSession, switchSession]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
