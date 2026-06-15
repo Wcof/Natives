@@ -61,4 +61,28 @@ describe('SafeStream', () => {
     ctrl.error(new Error('test error'));
     assert.equal(ctrl.closed, true);
   });
+
+  it('should not enqueue after error', () => {
+    const mock = createMockController();
+    const ctrl = wrapController(mock.raw as unknown as ReadableStreamDefaultController<string>);
+    ctrl.error(new Error('test'));
+    ctrl.enqueue('after-error');
+    assert.deepEqual(mock.chunks, []);
+  });
+
+  it('should not close twice', () => {
+    const mock = createMockController();
+    const ctrl = wrapController(mock.raw as unknown as ReadableStreamDefaultController<string>);
+    ctrl.close();
+    ctrl.close(); // Should not throw
+    assert.equal(ctrl.closed, true);
+  });
+
+  it('should not error after close', () => {
+    const mock = createMockController();
+    const ctrl = wrapController(mock.raw as unknown as ReadableStreamDefaultController<string>);
+    ctrl.close();
+    ctrl.error(new Error('late error')); // Should not throw
+    assert.equal(ctrl.closed, true);
+  });
 });
