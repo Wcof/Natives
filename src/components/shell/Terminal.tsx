@@ -6,6 +6,7 @@ import { onThemeChange, TERMINAL_THEMES } from '@/lib/theme-engine';
 import { recordTerminalActivity, setFileFollow, followChange } from '@/lib/follow-mode';
 import { playDoneChime, playAskChime } from '@/lib/chime';
 import { parseAgentAction } from '@/lib/agent-narration';
+import { copyToClipboard } from '@/lib/clipboard';
 
 interface TerminalSession {
   id: string;
@@ -555,6 +556,30 @@ export default function TerminalPanel({
               🔗
             </button>
           )}
+          {/* Copy selection to clipboard */}
+          <button
+            className="btn-ghost"
+            onClick={async () => {
+              const session = sessions.find(s => s.id === activeSessionId);
+              if (!session) return;
+              const term = session.term as { selectAll?: () => void; getSelection?: () => string; clearSelection?: () => void } | undefined;
+              if (!term) return;
+              try {
+                term.selectAll?.();
+                const text = term.getSelection?.() || '';
+                term.clearSelection?.();
+                if (text) {
+                  const ok = await copyToClipboard(text);
+                  if (ok) playDoneChime();
+                }
+              } catch { /* ignore */ }
+            }}
+            style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, color: 'var(--text-dim,#9b9d8c)' }}
+            title="Copy selection"
+            aria-label="Copy selection"
+          >
+            📋
+          </button>
           <button className="btn-ghost" onClick={onMaximizeToggle} aria-label={isMaximized ? t(locale, 'terminal.ariaRestore') : t(locale, 'terminal.ariaMaximize')}>
             <svg className="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               {isMaximized ? (
