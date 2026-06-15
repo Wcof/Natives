@@ -55,7 +55,8 @@ describe('IframeSandbox', () => {
     it('should register and provide a token', () => {
       const mgr = new IframeSandboxManager();
       const result = mgr.register('test-module', null);
-      assert.ok(result.token);
+      // Token generation moved to main process; renderer returns empty string
+      assert.equal(typeof result.token, 'string');
 
       const storedToken = mgr.getToken('test-module');
       assert.equal(storedToken, result.token);
@@ -84,7 +85,8 @@ describe('IframeSandbox', () => {
       const mgr = new IframeSandboxManager();
       mgr.register('test-module', null);
       const token = mgr.getToken('test-module');
-      assert.ok(token);
+      // Token may be empty string (generation moved to main process)
+      assert.equal(typeof token, 'string');
 
       mgr.unregister('test-module');
       assert.equal(mgr.getToken('test-module'), undefined);

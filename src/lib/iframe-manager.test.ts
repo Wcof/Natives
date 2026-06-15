@@ -86,14 +86,14 @@ describe('IframeManager', () => {
       // Initially loading
       assert.equal(mgr.getInstance('mod1')?.state, 'loading');
 
-      // showIframe transitions to active
+      // showIframe transitions to hot
       mgr.showIframe('mod1');
-      assert.equal(mgr.getInstance('mod1')?.state, 'active');
+      assert.equal(mgr.getInstance('mod1')?.state, 'hot');
       assert.equal(mgr.getActiveCount(), 1);
 
-      // hideIframe transitions to background
+      // hideIframe transitions to warm (background)
       mgr.hideIframe('mod1');
-      assert.equal(mgr.getInstance('mod1')?.state, 'background');
+      assert.equal(mgr.getInstance('mod1')?.state, 'warm');
       assert.equal(mgr.getBackgroundCount(), 1);
       assert.equal(mgr.getActiveCount(), 0);
     });
