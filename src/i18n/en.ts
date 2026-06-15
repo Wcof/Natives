@@ -580,4 +580,21 @@ export const en = {
     mutedVersions: 'Muted Versions',
     noUpdates: 'No updates available',
   },
+
+  // ── Keyboard Shortcuts ──
+  shortcuts: {
+    title: 'Keyboard Shortcuts',
+    toggleSidebar: 'Toggle sidebar',
+    commandPalette: 'Command palette',
+    focusSidebar: 'Focus sidebar',
+    notifications: 'Notifications',
+    back: 'Back (File Browser)',
+    forward: 'Forward (File Browser)',
+    newTerminalTab: 'New terminal tab',
+    closeTerminalTab: 'Close terminal tab',
+    nextTerminalTab: 'Next terminal tab',
+    prevTerminalTab: 'Previous terminal tab',
+    closePreview: 'Close preview / palette',
+    pressToToggle: 'Press {keys} to toggle',
+  },
 };

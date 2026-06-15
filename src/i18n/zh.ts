@@ -571,4 +571,21 @@ export const zh = {
     mutedVersions: '已静音版本',
     noUpdates: '暂无更新',
   },
+
+  // ── 键盘快捷键 ──
+  shortcuts: {
+    title: '键盘快捷键',
+    toggleSidebar: '切换侧边栏',
+    commandPalette: '命令面板',
+    focusSidebar: '聚焦侧边栏',
+    notifications: '通知',
+    back: '后退（文件浏览器）',
+    forward: '前进（文件浏览器）',
+    newTerminalTab: '新建终端标签',
+    closeTerminalTab: '关闭终端标签',
+    nextTerminalTab: '下一个终端标签',
+    prevTerminalTab: '上一个终端标签',
+    closePreview: '关闭预览 / 面板',
+    pressToToggle: '按 {keys} 切换',
+  },
 };

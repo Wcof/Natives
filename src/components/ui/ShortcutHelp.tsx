@@ -9,19 +9,21 @@ interface Shortcut {
   description: string;
 }
 
-const SHORTCUTS: Shortcut[] = [
-  { keys: ['⌘', 'B'], description: 'Toggle sidebar' },
-  { keys: ['⌘', 'K'], description: 'Command palette' },
-  { keys: ['⌘', 'Shift', 'K'], description: 'Focus sidebar' },
-  { keys: ['⌘', 'N'], description: 'Notifications' },
-  { keys: ['⌘', '['], description: 'Back (File Browser)' },
-  { keys: ['⌘', ']'], description: 'Forward (File Browser)' },
-  { keys: ['⌘', 'T'], description: 'New terminal tab' },
-  { keys: ['⌘', 'W'], description: 'Close terminal tab' },
-  { keys: ['⌘', 'Shift', ']'], description: 'Next terminal tab' },
-  { keys: ['⌘', 'Shift', '['], description: 'Previous terminal tab' },
-  { keys: ['Escape'], description: 'Close preview / palette' },
-];
+function getShortcuts(locale: string): Shortcut[] {
+  return [
+    { keys: ['⌘', 'B'], description: t(locale, 'shortcuts.toggleSidebar') },
+    { keys: ['⌘', 'K'], description: t(locale, 'shortcuts.commandPalette') },
+    { keys: ['⌘', 'Shift', 'K'], description: t(locale, 'shortcuts.focusSidebar') },
+    { keys: ['⌘', 'N'], description: t(locale, 'shortcuts.notifications') },
+    { keys: ['⌘', '['], description: t(locale, 'shortcuts.back') },
+    { keys: ['⌘', ']'], description: t(locale, 'shortcuts.forward') },
+    { keys: ['⌘', 'T'], description: t(locale, 'shortcuts.newTerminalTab') },
+    { keys: ['⌘', 'W'], description: t(locale, 'shortcuts.closeTerminalTab') },
+    { keys: ['⌘', 'Shift', ']'], description: t(locale, 'shortcuts.nextTerminalTab') },
+    { keys: ['⌘', 'Shift', '['], description: t(locale, 'shortcuts.prevTerminalTab') },
+    { keys: ['Escape'], description: t(locale, 'shortcuts.closePreview') },
+  ];
+}
 
 /**
  * Shortcut Help Overlay — shows all keyboard shortcuts.
@@ -72,7 +74,7 @@ export default function ShortcutHelp() {
           marginBottom: 20,
         }}>
           <h2 style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', margin: 0 }}>
-            ⌨️ Keyboard Shortcuts
+            ⌨️ {t(locale, 'shortcuts.title')}
           </h2>
           <button
             onClick={() => setVisible(false)}
@@ -86,11 +88,11 @@ export default function ShortcutHelp() {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {SHORTCUTS.map((s, i) => (
+          {getShortcuts(locale).map((s, i) => (
             <div key={i} style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               padding: '6px 0',
-              borderBottom: i < SHORTCUTS.length - 1 ? '1px solid var(--border, #262920)' : 'none',
+              borderBottom: i < getShortcuts(locale).length - 1 ? '1px solid var(--border, #262920)' : 'none',
             }}>
               <span style={{ fontSize: 13, color: 'var(--text-dim, #9b9d8c)' }}>
                 {s.description}
