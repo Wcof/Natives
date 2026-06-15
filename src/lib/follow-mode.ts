@@ -135,12 +135,21 @@ function boundAgentActive(): boolean {
  * @param filename Name of the changed file
  * @param scopeRoot The bound terminal's CWD (scope root)
  */
+// Noise patterns: skip system/generated files in follow mode
+const FOLLOW_NOISE = [
+  /\.git\//, /node_modules\//, /\.next\//, /dist\//, /build\//,
+  /__pycache__\//, /\.DS_Store$/, /\.db-wal$/, /\.db-shm$/, /\.lock$/,
+];
+
 export function followChange(dir: string, filename: string, scopeRoot: string | null) {
   if (!followState.on || !followState.boundSessionId) return;
 
   // Scope check
   const fullPath = dir.endsWith('/') ? dir + filename : dir + '/' + filename;
   if (!inFollowScope(fullPath, scopeRoot)) return;
+
+  // Noise filter
+  if (FOLLOW_NOISE.some(p => p.test(fullPath))) return;
 
   // Activity check
   if (!boundAgentActive()) return;

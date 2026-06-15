@@ -2,21 +2,32 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { type FileChangeEvent } from '@/types/agent';
-import { t, type Locale } from '@/i18n';
+import { t, useLocale } from '@/i18n';
+
+// ── Noise filter: exclude system/generated files ──
+const NOISE_PATTERNS = [
+  /\.git\//, /\.svn\//, /\.hg\//,
+  /node_modules\//, /\.next\//, /\.nuxt\//, /dist\//, /build\//, /out\//,
+  /__pycache__\//, /\.pyc$/, /\.pyo$/,
+  /\.DS_Store$/, /Thumbs\.db$/, /desktop\.ini$/,
+  /\.cache\//, /\.tmp\//, /\.temp\//,
+  /\.db-wal$/, /\.db-shm$/, /\.db-journal$/,
+  /\.lock$/, /package-lock\.json$/, /yarn\.lock$/, /pnpm-lock\.yaml$/,
+];
+
+function isNoisyChange(path: string): boolean {
+  return NOISE_PATTERNS.some(p => p.test(path));
+}
+
+interface ChangeItem extends FileChangeEvent {
+  project?: string;
+  count: number;
+}
 
 export default function ChangeInbox() {
-  const [items, setItems] = useState<(FileChangeEvent & { project?: string })[]>([]);
-  const [locale, setLocale] = useState<Locale>('zh');
-
-  useEffect(() => {
-    async function loadLocale() {
-      try {
-        const saved = await window.nativesAPI?.getLocale?.();
-        if (saved) setLocale(saved === 'en' ? 'en' : 'zh');
-      } catch { /* ignore */ }
-    }
-    loadLocale();
-  }, []);
+  const [items, setItems] = useState<ChangeItem[]>([]);
+  const [showFiltered, setShowFiltered] = useState(false);
+  const locale = useLocale();
 
   // Listen for file change events
   useEffect(() => {
@@ -25,20 +36,32 @@ export default function ChangeInbox() {
     const unsub = api.onDbStateChanged((_event, channel, data: unknown) => {
       if (channel === 'file:changed' && data && typeof data === 'object' && 'path' in data) {
         const d = data as { path?: string; type?: string; project?: string };
-        if (d.path) {
-          const eventType = (['create', 'modify', 'delete'].includes(d.type || '') ? d.type : 'modify') as 'create' | 'modify' | 'delete';
-          // Extract project name from path (parent of parent directory)
-          const parts = d.path.split('/');
-          const project = d.project || parts[parts.length - 2] || 'Unknown';
-          setItems((prev) => [
-            { path: d.path!, type: eventType, timestamp: Date.now(), project },
+        if (!d.path) return;
+
+        // Noise filter
+        if (!showFiltered && isNoisyChange(d.path)) return;
+
+        const eventType = (['create', 'modify', 'delete'].includes(d.type || '') ? d.type : 'modify') as 'create' | 'modify' | 'delete';
+        const parts = d.path.split('/');
+        const project = d.project || parts[parts.length - 2] || 'Unknown';
+
+        setItems((prev) => {
+          // Deduplicate by path: increment count if exists
+          const existing = prev.find(p => p.path === d.path);
+          if (existing) {
+            return prev.map(p =>
+              p.path === d.path ? { ...p, count: p.count + 1, timestamp: Date.now(), type: eventType } : p
+            );
+          }
+          return [
+            { path: d.path!, type: eventType, timestamp: Date.now(), project, count: 1 },
             ...prev,
-          ].slice(0, 200));
-        }
+          ].slice(0, 100);
+        });
       }
     });
     return unsub;
-  }, []);
+  }, [showFiltered]);
 
   const handleClear = useCallback(() => setItems([]), []);
 
@@ -47,7 +70,10 @@ export default function ChangeInbox() {
     window.dispatchEvent(new CustomEvent('navigate-files', { detail: dir }));
   }, []);
 
-  const groupedByProject = items.reduce<Record<string, typeof items>>((acc, item) => {
+  // Sort by timestamp (most recent first)
+  const sorted = [...items].sort((a, b) => b.timestamp - a.timestamp);
+
+  const groupedByProject = sorted.reduce<Record<string, ChangeItem[]>>((acc, item) => {
     const project = item.project || 'Unknown';
     if (!acc[project]) acc[project] = [];
     acc[project]!.push(item);
@@ -64,11 +90,21 @@ export default function ChangeInbox() {
         <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
           {t(locale, 'aiWorkbench.changeInbox')} ({items.length})
         </div>
-        {items.length > 0 && (
-          <button className="btn-ghost" onClick={handleClear} style={{ fontSize: 10, padding: '2px 6px', color: 'var(--text-faint)' }}>
-            {t(locale, 'notifications.clear')}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <button
+            className="btn-ghost"
+            onClick={() => setShowFiltered(!showFiltered)}
+            style={{ fontSize: 10, padding: '2px 6px', color: showFiltered ? 'var(--accent)' : 'var(--text-faint)' }}
+            title={showFiltered ? 'Hide system files' : 'Show system files'}
+          >
+            {showFiltered ? '👁' : '👁‍🗨'}
           </button>
-        )}
+          {items.length > 0 && (
+            <button className="btn-ghost" onClick={handleClear} style={{ fontSize: 10, padding: '2px 6px', color: 'var(--text-faint)' }}>
+              {t(locale, 'notifications.clear')}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Changes list */}
@@ -87,18 +123,29 @@ export default function ChangeInbox() {
                 <div
                   key={`${ch.path}-${i}`}
                   onClick={() => handleNavigate(ch.path)}
-                  className={i === 0 ? 'anim-changedPulse' : ''}
                   style={{
                     padding: '4px 8px', fontSize: 11, color: 'var(--text)',
                     borderRadius: 4, cursor: 'pointer', marginBottom: 2,
                     background: 'var(--bg-2,#131410)',
                     borderLeft: `3px solid ${ch.type === 'create' ? '#4ec9b0' : ch.type === 'delete' ? '#d9534f' : '#e6b800'}`,
+                    display: 'flex', alignItems: 'center', gap: 4,
                   }}
                 >
-                  <span className="anim-changedBreath" style={{ marginRight: 4 }}>
+                  <span style={{ flexShrink: 0 }}>
                     {ch.type === 'create' ? '🟢' : ch.type === 'delete' ? '🔴' : '🟡'}
                   </span>
-                  {ch.path.split('/').pop()}
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                    {ch.path.split('/').pop()}
+                  </span>
+                  {ch.count > 1 && (
+                    <span style={{
+                      fontSize: 9, fontWeight: 600, color: 'var(--accent)',
+                      background: 'var(--accent-soft)', padding: '0 4px', borderRadius: 3,
+                      flexShrink: 0,
+                    }}>
+                      ×{ch.count}
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
