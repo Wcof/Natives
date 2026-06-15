@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import ShellLayout from '@/components/shell/ShellLayout';
+import { ToastProvider } from '@/components/ui/Toast';
 
 export const metadata: Metadata = {
   title: 'Natives',
@@ -15,7 +16,9 @@ export default function RootLayout({
   return (
     <html data-theme="terminal-volt">
       <body>
-        <ShellLayout>{children}</ShellLayout>
+        <ToastProvider>
+          <ShellLayout>{children}</ShellLayout>
+        </ToastProvider>
       </body>
     </html>
   );
