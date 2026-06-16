@@ -4,6 +4,7 @@
  */
 
 import type { FileEntry } from '@/types/file';
+import type { DiskUsageItem } from '@/types/file';
 
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
@@ -61,5 +62,9 @@ export const webFsClient = {
     } catch (err: any) {
       return { ok: false, error: err.message };
     }
+  },
+
+  diskUsage(dirPath: string): Promise<DiskUsageItem[]> {
+    return fetchJSON<DiskUsageItem[]>(`/api/fs/du?path=${encodeURIComponent(dirPath)}`);
   },
 };

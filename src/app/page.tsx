@@ -1,10 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { Terminal, Package, Settings, Square, HardDrive, Database, Folder, Wrench, Rocket, RefreshCw, FileText } from 'lucide-react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
+import { Square, HardDrive, Database, FileText, Zap, Eye, Archive, AlertTriangle, RefreshCw } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import { useRecentModules } from '@/lib/recent-modules';
 import { useRecentFiles } from '@/lib/recent-files-client';
+import { useAsyncData } from '@/hooks/useAsyncData';
+import type { SkillInfo } from '@/types/agent';
 
 interface ModuleInfo {
   id: string;
@@ -50,12 +52,35 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
 
-  // LRU list of recently-opened module ids (ISSUE-3). Reactive: updates when
-  // ShellLayout records a module open via pushRecentModule.
+  // LRU list of recently-opened module ids
   const { ids: recentIds } = useRecentModules(8);
 
-  // LRU list of recently-opened files (P2). Reactive across the app.
+  // LRU list of recently-opened files
   const { paths: recentFilePaths, loading: recentFilesLoading } = useRecentFiles(8);
+
+  // Skill stats
+  const { data: skills, loading: skillsLoading } = useAsyncData(async () => {
+    const api = window.nativesAPI;
+    if (!api?.agent?.scanSkills) return [] as SkillInfo[];
+    return (await api.agent.scanSkills()) as SkillInfo[];
+  }, []);
+
+  const skillStats = useMemo(() => {
+    if (!Array.isArray(skills)) return { total: 0, active: 0, dust: 0, issues: 0, descChars: 0, descLimit: 15000 };
+    const total = skills.length;
+    const active = skills.filter((s) => s.triggerCount > 0).length;
+    const dust = skills.filter((s) => s.triggerCount === 0).length;
+    const issues = skills.filter((s) => !s.health?.ok).length;
+    const descChars = skills.reduce((sum, s) => sum + (s.description?.length || 0), 0);
+    return { total, active, dust, issues, descChars, descLimit: 15000 };
+  }, [skills]);
+
+  // Usage data
+  const { data: usageData, loading: usageLoading, reload: fetchUsage } = useAsyncData(async () => {
+    const api = window.nativesAPI;
+    if (!api?.usage?.refresh) return null;
+    return await api.usage.refresh();
+  }, []);
 
   useEffect(() => {
     async function loadData() {
@@ -67,13 +92,13 @@ export default function DashboardPage() {
         const savedLocale = await api.getLocale().catch(() => null);
         if (savedLocale === 'en') setLocale('en');
 
-        // App version from package.json (ISSUE-2) — single source of truth.
+        // App version from package.json
         let version = '...';
         try {
           if (api.app?.version) version = await api.app.version();
         } catch { /* keep '...' */ }
 
-        // Load modules — use list() for full metadata (enabled/version).
+        // Load modules
         const modules = await api.module.scan();
         let modList: ModuleInfo[] = [];
         if (Array.isArray(modules)) {
@@ -90,7 +115,7 @@ export default function DashboardPage() {
           setAllModules(modList);
         }
 
-        // DB health check — try to read a known key
+        // DB health check
         let dbOk = false;
         try {
           await api.db.get('__health_check__');
@@ -99,7 +124,7 @@ export default function DashboardPage() {
           dbOk = false;
         }
 
-        // Disk usage of ~/.natives/
+        // Disk usage
         let diskUsageStr = '—';
         try {
           if (api.disk?.usage) {
@@ -111,7 +136,7 @@ export default function DashboardPage() {
           }
         } catch { /* ignore */ }
 
-        // Recent notifications (last 5) + unread count (ISSUE-1, US20).
+        // Recent notifications + unread count
         let unread = 0;
         let recentNotifs: NotificationItem[] = [];
         try {
@@ -124,7 +149,7 @@ export default function DashboardPage() {
             const unreadList = await api.notification.list(true);
             unread = Array.isArray(unreadList) ? unreadList.length : 0;
           }
-        } catch { /* notifications unavailable in dev mode */ }
+        } catch { /* ignore */ }
 
         setStatus({
           dbOk,
@@ -143,9 +168,7 @@ export default function DashboardPage() {
     loadData();
   }, [retryCount]);
 
-  // Derive "recently used" modules from the LRU id list, intersected with
-  // actually-installed modules (ISSUE-3). Falls back to all modules when no
-  // access history exists yet.
+  // Derive "recently used" modules from LRU id list
   useEffect(() => {
     if (allModules.length === 0) {
       setRecentModules([]);
@@ -155,37 +178,11 @@ export default function DashboardPage() {
     const ordered = recentIds
       .map((id) => byId.get(id))
       .filter((m): m is ModuleInfo => Boolean(m));
-    // If no history yet, show first 5 installed modules as a graceful default.
     setRecentModules(ordered.length > 0 ? ordered : allModules.slice(0, 5));
   }, [recentIds, allModules]);
 
-  const handleOpenTerminal = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('toggle-terminal'));
-  }, []);
-
-  const handleInstallModule = useCallback(() => {
-    // P0-4: Redirect to Workshop for permission-gated install
-    window.dispatchEvent(new CustomEvent('navigate', { detail: '__workshop__' }));
-  }, []);
-
-  const handleSettings = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('navigate', { detail: '__settings__' }));
-  }, []);
-
-  const handleOpenFiles = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('navigate', { detail: 'files' }));
-  }, []);
-
-  const handleOpenWorkshop = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('navigate', { detail: '__workshop__' }));
-  }, []);
-
-  const handleOpenReleaseWizard = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('open-release-wizard'));
-  }, []);
-
-  const handleCheckUpdates = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('check-updates'));
+  const handleViewAllSkills = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('navigate', { detail: 'ai' }));
   }, []);
 
   const sectionTitleStyle: React.CSSProperties = {
@@ -241,7 +238,7 @@ export default function DashboardPage() {
           valueColor={loading ? 'var(--text-faint)' : status.dbOk ? 'var(--accent,#FFF5E6)' : 'var(--danger)'}
         />
         <StatusCard
-          icon={<Package size={16} />}
+          icon={<Square size={16} />}
           label={t(locale, 'dashboard.installedModules')}
           value={loading ? '...' : `${status.enabledCount}/${status.moduleCount}`}
           sublabel={loading ? undefined : t(locale, 'dashboard.enabledModules')}
@@ -252,27 +249,123 @@ export default function DashboardPage() {
           value={loading ? '...' : status.diskUsage}
         />
         <StatusCard
-          icon={<Terminal size={16} />}
+          icon={<RefreshCw size={16} />}
           label={t(locale, 'settings.version')}
           value={status.version}
         />
       </div>
 
-      {/* Quick Actions */}
+      {/* Skill Insights */}
       <div style={{ ...cardStyle, marginBottom: 24 }}>
-        <div style={sectionTitleStyle}>{t(locale, 'dashboard.quickActions')}</div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <ActionButton icon={<Terminal size={14} />} label={t(locale, 'dashboard.openTerminal')} onClick={handleOpenTerminal} primary />
-          <ActionButton icon={<Package size={14} />} label={t(locale, 'dashboard.installModule')} onClick={handleInstallModule} />
-          <ActionButton icon={<Folder size={14} />} label={t(locale, 'dashboard.fileBrowser')} onClick={handleOpenFiles} />
-          <ActionButton icon={<Wrench size={14} />} label={t(locale, 'nav.workshop')} onClick={handleOpenWorkshop} />
-          <ActionButton icon={<Settings size={14} />} label={t(locale, 'dashboard.openSettings')} onClick={handleSettings} />
-          <ActionButton icon={<Rocket size={14} />} label={t(locale, 'release.title')} onClick={handleOpenReleaseWizard} />
-          <ActionButton icon={<RefreshCw size={14} />} label={t(locale, 'update.title')} onClick={handleCheckUpdates} />
+        <div style={{ ...sectionTitleStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>{t(locale, 'dashboard.skillInsights')}</span>
+          <button
+            className="btn btn-ghost"
+            onClick={handleViewAllSkills}
+            style={{ fontSize: 10, padding: '2px 8px', textTransform: 'none', letterSpacing: 0 }}
+          >
+            {t(locale, 'dashboard.viewAllSkills')} →
+          </button>
         </div>
+        {skillsLoading ? (
+          <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>{t(locale, 'common.loading')}</div>
+        ) : skillStats.total === 0 ? (
+          <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>{t(locale, 'aiWorkbench.noSkills')}</div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+              <StatCard
+                label={t(locale, 'aiWorkbench.skills.total')}
+                value={skillStats.total}
+                icon={<Zap size={14} />}
+                color="var(--accent,#FFF5E6)"
+              />
+              <StatCard
+                label={t(locale, 'aiWorkbench.skills.active')}
+                value={skillStats.active}
+                icon={<Eye size={14} />}
+                color="var(--info)"
+              />
+              <StatCard
+                label={t(locale, 'aiWorkbench.skills.dust')}
+                value={skillStats.dust}
+                icon={<Archive size={14} />}
+                color="#9CA3AF"
+                sub={t(locale, 'aiWorkbench.skills.dustLabel')}
+              />
+              <StatCard
+                label={t(locale, 'aiWorkbench.skills.issues')}
+                value={skillStats.issues}
+                icon={<AlertTriangle size={14} />}
+                color={skillStats.issues > 0 ? 'var(--danger)' : 'var(--info)'}
+              />
+            </div>
+            {/* Budget bar */}
+            <BudgetBar used={skillStats.descChars} limit={skillStats.descLimit} locale={locale} />
+          </>
+        )}
       </div>
 
-      {/* Recent Modules (ISSUE-3: ordered by LRU access time) */}
+      {/* Usage Analysis */}
+      <div style={{ ...cardStyle, marginBottom: 24 }}>
+        <div style={{ ...sectionTitleStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>{t(locale, 'dashboard.usageAnalysis')}</span>
+          <button
+            className="btn btn-ghost"
+            onClick={fetchUsage}
+            disabled={usageLoading}
+            style={{ fontSize: 10, padding: '2px 8px', textTransform: 'none', letterSpacing: 0 }}
+          >
+            {usageLoading ? '...' : t(locale, 'aiWorkbench.refresh')}
+          </button>
+        </div>
+        {usageLoading ? (
+          <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>{t(locale, 'common.loading')}</div>
+        ) : usageData ? (
+          <div>
+            {/* Claude Code */}
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Claude Code</div>
+              <ProgressBar
+                label={t(locale, 'aiWorkbench.fiveHourWindow')}
+                used={(usageData as any)?.claude?.fiveHourWindow?.used ?? 0}
+                limit={(usageData as any)?.claude?.fiveHourWindow?.limit ?? 50000}
+                color="var(--accent,#FFF5E6)"
+              />
+              <ProgressBar
+                label={t(locale, 'aiWorkbench.weeklyQuota')}
+                used={(usageData as any)?.claude?.weeklyQuota?.used ?? 0}
+                limit={(usageData as any)?.claude?.weeklyQuota?.limit ?? 500000}
+                color="#4bcdf2"
+              />
+              <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
+                <TokenChip value={(usageData as any)?.claude?.localTokens?.last5h ?? 0} label={t(locale, 'aiWorkbench.localTokens') + ' 5h'} />
+                <TokenChip value={(usageData as any)?.claude?.localTokens?.today ?? 0} label={t(locale, 'aiWorkbench.today')} />
+                <TokenChip value={(usageData as any)?.claude?.localTokens?.thisWeek ?? 0} label={t(locale, 'aiWorkbench.thisWeek')} />
+              </div>
+            </div>
+            {/* Codex */}
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Codex</div>
+              <ProgressBar
+                label={t(locale, 'aiWorkbench.fiveHourWindow')}
+                used={(usageData as any)?.codex?.fiveHourWindow?.used ?? 0}
+                limit={(usageData as any)?.codex?.fiveHourWindow?.limit ?? 30000}
+                color="#DEA584"
+              />
+              <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>
+                {t(locale, 'aiWorkbench.plan')}: Free
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+            {t(locale, 'common.loading')}
+          </div>
+        )}
+      </div>
+
+      {/* Recent Modules */}
       <div style={{ ...cardStyle, marginBottom: 24 }}>
         <div style={{ ...sectionTitleStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span>{t(locale, 'dashboard.lastUsed')}</span>
@@ -315,7 +408,7 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* Recent Files (P2: LRU file open tracking) */}
+      {/* Recent Files */}
       <div style={{ ...cardStyle, marginBottom: 24 }}>
         <div style={sectionTitleStyle}>{t(locale, 'dashboard.recentFiles')}</div>
         {recentFilesLoading ? (
@@ -356,7 +449,7 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* Recent Activity (ISSUE-1: notifications, ported from dead Dashboard.tsx) */}
+      {/* Recent Activity */}
       {notifications.length > 0 && (
         <div style={cardStyle}>
           <div style={{ ...sectionTitleStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -429,21 +522,86 @@ function StatusCard({ icon, label, value, valueColor, sublabel }: {
   );
 }
 
-function ActionButton({ icon, label, onClick, primary }: {
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-  primary?: boolean;
+function StatCard({ label, value, icon, color, sub }: {
+  label: string; value: string | number; icon: React.ReactNode; color: string; sub?: string;
 }) {
   return (
-    <button
-      className={`btn ${primary ? 'btn-primary' : ''}`}
-      onClick={onClick}
-      style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}
-    >
-      {icon}
-      <span>{label}</span>
-    </button>
+    <div style={{
+      flex: 1, minWidth: 0, padding: '8px 10px', borderRadius: 8,
+      border: '1px solid var(--border,#262920)', background: 'var(--bg-2,#131410)',
+      display: 'flex', alignItems: 'center', gap: 8,
+    }}>
+      <div style={{
+        width: 28, height: 28, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: color + '18', color, flexShrink: 0,
+      }}>
+        {icon}
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', lineHeight: 1.2 }}>{value}</div>
+        <div style={{ fontSize: 9, color: 'var(--text-faint)', lineHeight: 1.3 }}>{label}</div>
+        {sub && <div style={{ fontSize: 8, color: 'var(--text-dim)', lineHeight: 1.2 }}>{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
+function BudgetBar({ used, limit, locale }: { used: number; limit: number; locale: Locale }) {
+  const pct = Math.min(100, (used / limit) * 100);
+  const over = pct > 100;
+  return (
+    <div style={{
+      padding: '6px 10px', borderRadius: 6,
+      border: '1px solid var(--border,#262920)', background: 'var(--bg-2,#131410)',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+        <span style={{ fontSize: 10, color: 'var(--text-faint)' }}>
+          {t(locale, 'aiWorkbench.skills.budget')}
+        </span>
+        <span style={{ fontSize: 10, color: over ? 'var(--danger)' : 'var(--text-dim)' }}>
+          {used.toLocaleString()} / {limit.toLocaleString()}
+        </span>
+      </div>
+      <div style={{ height: 4, borderRadius: 2, background: 'var(--bg-3,#1a1b16)', overflow: 'hidden' }}>
+        <div style={{
+          height: '100%', borderRadius: 2, transition: 'width 0.3s',
+          width: `${Math.min(pct, 100)}%`,
+          background: over ? 'var(--danger)' : pct > 80 ? 'var(--warning)' : 'var(--accent,#FFF5E6)',
+        }} />
+      </div>
+      {over && (
+        <div style={{ fontSize: 9, color: 'var(--danger)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 3 }}>
+          <AlertTriangle size={10} /> {t(locale, 'aiWorkbench.skills.budgetWarning')}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProgressBar({ label, used, limit, color }: { label: string; used: number; limit: number; color: string }) {
+  const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
+        <span style={{ color: 'var(--text-dim)' }}>{label}</span>
+        <span style={{ color: 'var(--text)' }}>{Math.round(pct)}% ({used}/{limit})</span>
+      </div>
+      <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden' }}>
+        <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 3, transition: 'width 0.3s ease' }} />
+      </div>
+    </div>
+  );
+}
+
+function TokenChip({ value, label }: { value: number; label: string }) {
+  return (
+    <span style={{
+      flex: 1, padding: '4px 8px', borderRadius: 6,
+      background: 'var(--bg-3,#1c1e17)', fontSize: 11, textAlign: 'center',
+      fontFamily: 'var(--font-mono)', color: 'var(--text)',
+    }}>
+      {value.toLocaleString()} <span style={{ color: 'var(--text-faint)', fontSize: 9 }}>{label}</span>
+    </span>
   );
 }
 
@@ -457,8 +615,6 @@ function formatBytes(bytes: number): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
 }
 
-// Render a SQLite datetime (UTC, "YYYY-MM-DD HH:MM:SS") as a short relative
-// label like "2m" / "3h" / "2d", falling back to the locale date string.
 function formatRelativeTime(createdAt: string): string {
   if (!createdAt) return '';
   try {

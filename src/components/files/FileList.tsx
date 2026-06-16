@@ -40,7 +40,7 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
       {/* Header */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: '24px 1fr 100px 80px 160px',
+        gridTemplateColumns: '24px 1fr 120px 80px 24px',
         gap: 8,
         padding: '8px 12px',
         borderBottom: '1px solid var(--border, #262920)',
@@ -59,14 +59,14 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
             style={{
               cursor: 'pointer',
               userSelect: 'none',
-              color: sortBy === key ? 'var(--accent, #FFF5E6)' : undefined,
+              color: sortBy === key ? 'var(--accent, #cdf24b)' : undefined,
             }}
           >
             {SORT_LABELS[key]}
             {sortBy === key && (sortDir === 'asc' ? ' ▲' : ' ▼')}
           </div>
         ))}
-        <div style={{ color: 'var(--text-faint, #62655a)' }}>Type</div>
+        <div />
       </div>
 
       {/* Rows */}

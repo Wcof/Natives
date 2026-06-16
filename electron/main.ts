@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, safeStorage } from 'electron';
+import { app, BrowserWindow, ipcMain, safeStorage, shell as electronShell } from 'electron';
 import * as path from 'path';
 
 let mainWindow: BrowserWindow | null = null;
@@ -1062,11 +1062,27 @@ ipcMain.handle('agent:scanSkills', async () => {
           try {
             const content = await fsp.readFile(skillPath, 'utf-8');
             const health = mod.checkSkillHealth(content);
+            // Extract description from frontmatter
+            let description = '';
+            const descMatch = content.match(/^---\n([\s\S]*?)\n---/);
+            if (descMatch) {
+              const descLine = descMatch[1]?.split('\n').find((l: string) => l.startsWith('description:'));
+              if (descLine) description = descLine.split(':').slice(1).join(':').trim();
+            }
+            const source = dir.includes('.atomcode')
+              ? '~/.atomcode/skills'
+              : dir.includes('.claude')
+                ? '~/.claude/skills'
+                : 'project/.claude/skills';
             skills.push({
               name: mod.getSkillNameFromPath(skillPath),
+              description,
+              source,
               path: skillPath,
-              source: dir.includes('.atomcode') ? 'atomcode' : 'claude',
-              ...health,
+              enabled: true,
+              health: { ok: health.ok, issues: health.issues },
+              triggerCount: 0,
+              lastTriggered: undefined,
             });
           } catch { /* skill without SKILL.md */ }
         }
@@ -1084,6 +1100,41 @@ ipcMain.handle('agent:scanSkills', async () => {
     } catch { /* stats unavailable, keep triggerCount at default */ }
     return skills;
   } catch { return []; }
+});
+
+// ── Shell IPC (Finder reveal, open in editor, terminal open in dir) ──
+
+ipcMain.handle('shell:showItemInFolder', async (_event, filePath: string) => {
+  try {
+    electronShell.showItemInFolder(filePath);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+});
+
+ipcMain.handle('shell:openPath', async (_event, filePath: string) => {
+  try {
+    const err = await electronShell.openPath(filePath);
+    return { ok: !err, error: err || undefined };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+});
+
+ipcMain.handle('terminal:openInDir', async (_event, dirPath: string) => {
+  try {
+    const mod = lazyLoad('shell');
+    if (!mod) return { sessionId: null, error: 'Shell not available' };
+    const env: Record<string, string> = {};
+    const sessionId = await mod.createSession(env);
+    if (sessionId) {
+      mod.write(sessionId, `cd "${dirPath}"\r`);
+    }
+    return { sessionId };
+  } catch (err) {
+    return { sessionId: null, error: (err as Error).message };
+  }
 });
 
 app.whenReady().then(() => {

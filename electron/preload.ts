@@ -64,6 +64,12 @@ const nativesAPI = {
   getTheme: () => ipcRenderer.invoke('natives:getTheme'),
   setTheme: (theme: string) => ipcRenderer.invoke('natives:setTheme', theme),
 
+  // Shell (Finder reveal, open in editor)
+  shell: {
+    showItemInFolder: (filePath: string) => ipcRenderer.invoke('shell:showItemInFolder', filePath),
+    openPath: (filePath: string) => ipcRenderer.invoke('shell:openPath', filePath),
+  },
+
   // Locale
   getLocale: () => ipcRenderer.invoke('natives:getLocale'),
   setLocale: (locale: string) => ipcRenderer.invoke('natives:setLocale', locale),

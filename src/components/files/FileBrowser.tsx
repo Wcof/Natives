@@ -8,11 +8,13 @@ import FileList from './FileList';
 import FileBreadcrumb from './FileBreadcrumb';
 import FileToolbar from './FileToolbar';
 import FileContextMenu from './FileContextMenu';
+import DiskUsagePanel from './DiskUsagePanel';
 import Skeleton from '@/components/ui/Skeleton';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useFocusTrap } from '@/lib/useFocusTrap';
 import { pushRecentFile } from '@/lib/recent-files-client';
 import { webFsClient } from '@/lib/web-fs-client';
+import { fmtSize } from '@/lib/format';
 
 /** Electron IPC 可用时用 nativesAPI.fs，否则降级到 webFsClient (Next.js API Routes) */
 function getFsApi() {
@@ -36,13 +38,14 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [showHidden, setShowHidden] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry: FileEntry } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry: FileEntry; mode: 'file' | 'dir' | 'blank' } | null>(null);
   const [renameTarget, setRenameTarget] = useState<FileEntry | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [newItemTarget, setNewItemTarget] = useState<{ parentDir: string; type: 'file' | 'folder' } | null>(null);
   const [newItemName, setNewItemName] = useState('');
   const [toast, setToast] = useState<string | null>(null);
   const [favorites, setFavorites] = useState<string[]>([]);
+  const [diskUsageTarget, setDiskUsageTarget] = useState<string | null>(null);
   const [locale, setLocale] = useState<Locale>('zh');
   const [recentMode, setRecentMode] = useState(false);
 
@@ -208,7 +211,9 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
 
   const handleContextMenu = (e: React.MouseEvent, entry: FileEntry) => {
     e.preventDefault();
-    setContextMenu({ x: e.clientX, y: e.clientY, entry });
+    // Stop propagation so the blank-area handler on the parent doesn't fire
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY, entry, mode: entry.isDir ? 'dir' : 'file' });
   };
 
   // Context menu actions
@@ -247,6 +252,44 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const handleTrash = useCallback((entry: FileEntry) => {
     setTrashTarget(entry);
     return;
+  }, []);
+
+  // Shell operations
+  const handleRevealInFinder = useCallback((entry: FileEntry) => {
+    const api = (window as any).nativesAPI?.shell;
+    if (api?.showItemInFolder) {
+      api.showItemInFolder(entry.path);
+    } else {
+      showToast(t(locale, 'fileBrowser.revealInFinder') + ': ' + entry.path);
+    }
+  }, [showToast]);
+
+  const handleOpenInEditor = useCallback((entry: FileEntry) => {
+    const api = (window as any).nativesAPI?.shell;
+    if (api?.openPath) {
+      api.openPath(entry.path);
+    } else {
+      navigator.clipboard.writeText(entry.path);
+      showToast(t(locale, 'fileBrowser.copyPath'));
+    }
+  }, [showToast]);
+
+  const handleOpenInTerminal = useCallback((dir: string) => {
+    const api = (window as any).nativesAPI;
+    if (api?.terminal?.write) {
+      // Create new terminal via event — ShellLayout handles it
+      window.dispatchEvent(new CustomEvent('toggle-terminal'));
+    }
+    navigator.clipboard.writeText(`cd "${dir}"`);
+    showToast(t(locale, 'fileBrowser.copyAsCd'));
+  }, [showToast]);
+
+  const handlePreview = useCallback((entry: FileEntry) => {
+    onFileSelect?.(entry);
+  }, [onFileSelect]);
+
+  const handleDiskUsage = useCallback((dir: string) => {
+    setDiskUsageTarget(dir);
   }, []);
 
   const doTrash = useCallback(async () => {
@@ -333,7 +376,20 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       />
 
       {/* File area */}
-      <div style={{ flex: 1, overflow: 'auto' }} role="listbox" aria-label={t(locale, 'fileBrowser.ariaLabelFiles')} tabIndex={0}>
+      <div
+        style={{ flex: 1, overflow: 'auto' }}
+        role="listbox"
+        aria-label={t(locale, 'fileBrowser.ariaLabelFiles')}
+        tabIndex={0}
+        onContextMenu={(e) => {
+          // Blank area right-click — only if not on a file/dir element
+          const target = e.target as HTMLElement;
+          if (!target.closest('[data-file-entry]')) {
+            e.preventDefault();
+            setContextMenu({ x: e.clientX, y: e.clientY, entry: null as any, mode: 'blank' as const });
+          }
+        }}
+      >
         {loading ? (
           <div style={{ padding: viewMode === 'grid' ? 12 : 0 }}>
             {viewMode === 'grid' ? (
@@ -359,18 +415,58 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         )}
       </div>
 
+      {/* Status bar (fanbox-style) */}
+      {!loading && entries.length > 0 && (() => {
+        const dirs = entries.filter(e => e.isDir).length;
+        const files = entries.length - dirs;
+        const totalSize = entries.reduce((sum, e) => sum + (e.isDir ? 0 : e.size), 0);
+        return (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 12,
+            padding: '4px 12px', fontSize: 11, fontFamily: 'var(--font-mono)',
+            color: 'var(--text-faint, #62655a)',
+            borderTop: '1px solid var(--border, #262920)',
+            background: 'var(--bg-2, #131410)',
+          }}>
+            <span>{entries.length} 项</span>
+            {dirs > 0 && <span>{dirs} 个文件夹</span>}
+            {files > 0 && <span>{files} 个文件</span>}
+            {totalSize > 0 && <span>{fmtSize(totalSize)}</span>}
+          </div>
+        );
+      })()}
+
       {/* Context menu */}
       {contextMenu && (
         <FileContextMenu
           entry={contextMenu.entry}
           x={contextMenu.x}
           y={contextMenu.y}
+          mode={contextMenu.mode}
+          parentDir={currentPath}
           onClose={() => setContextMenu(null)}
           onOpen={handleOpen}
+          onOpenInTerminal={handleOpenInTerminal}
+          onRevealInFinder={handleRevealInFinder}
+          onOpenInEditor={handleOpenInEditor}
+          onPreview={handlePreview}
+          onDiskUsage={handleDiskUsage}
           onRename={handleRename}
           onTrash={handleTrash}
           onNewFile={handleNewFile}
           onNewFolder={handleNewFolder}
+          onFavorite={(entry) => {
+            const api = (window as any).nativesAPI;
+            if (!isFavorite) {
+              toggleFavorite();
+            }
+          }}
+          onUnfavorite={(entry) => {
+            if (isFavorite) {
+              toggleFavorite();
+            }
+          }}
+          isFavorite={isFavorite}
         />
       )}
 
@@ -463,6 +559,15 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Disk Usage Panel (overlay) */}
+      {diskUsageTarget && (
+        <DiskUsagePanel
+          dirPath={diskUsageTarget}
+          onClose={() => setDiskUsageTarget(null)}
+          onNavigate={(path) => { setDiskUsageTarget(null); navigateTo(path); }}
+        />
       )}
 
       {/* Toast */}

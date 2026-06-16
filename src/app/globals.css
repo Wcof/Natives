@@ -889,3 +889,11 @@ html, body {
   0%, 100% { opacity: 0.4; }
   50% { opacity: 0.8; }
 }
+
+/* ── Header topbar responsive shrinking ── */
+.tb-hide { display: none !important; }
+.tb-sm .segmented-control { display: none !important; }
+.tb-xs .switch { display: none !important; }
+.tb-xxs .segmented-control,
+.tb-xxs .btn-ghost { display: none !important; }
+.tb-min .btn-ghost { display: none !important; }

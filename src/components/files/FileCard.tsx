@@ -78,6 +78,7 @@ export default function FileCard({ entry, onSelect, onContextMenu }: FileCardPro
     <div
       ref={cardRef}
       className={'file-card' + (flash ? ' anim-liveZap' : '') + (isChanged ? ' changed' : '')}
+      data-file-entry={entry.path}
       data-heat={heat.toFixed(2)}
       onClick={() => onSelect(entry)}
       onContextMenu={(e) => onContextMenu?.(e, entry)}
