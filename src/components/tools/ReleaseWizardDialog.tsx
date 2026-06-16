@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { Check, Loader2 } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
 interface ReleaseCheckItem {
@@ -53,7 +54,7 @@ export default function ReleaseWizardDialog({ onClose }: { onClose?: () => void 
         <div style={{ marginBottom: 12 }}>
           {checks.map((c, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', fontSize: 12, color: 'var(--text-dim)' }}>
-              <span>{c.ok ? '✅' : '⏳'}</span>
+              <span style={{display:'inline-flex'}}>{c.ok ? <Check size={12} style={{color:'var(--diff-add)'}} /> : <Loader2 size={12} className='anim-livePulse' />}</span>
               <span>{c.label}</span>
               <span style={{ fontSize: 10, color: 'var(--text-faint)' }}>{c.message}</span>
             </div>

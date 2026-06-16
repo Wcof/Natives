@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { Search } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
 interface OnboardingWizardProps {
@@ -95,7 +96,7 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
         {/* Environment Check */}
         {step === 'env-check' && (
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 48, marginBottom: 16 }}>🔍</div>
+            <Search size={48} style={{ color: 'var(--text-faint)', marginBottom: 16 }} />
             <h1 style={{ fontSize: 20, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' }}>
               {t(locale, 'onboarding.envCheck')}
             </h1>
