@@ -488,7 +488,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   }, []);
 
   const handleModuleSelect = useCallback((moduleId: string) => {
-    if (moduleId === '__settings__') {
+    if (moduleId === '__dashboard__') {
+      setActiveView('dashboard');
+    } else if (moduleId === '__settings__') {
       setActiveView('settings');
     } else if (moduleId === '__workshop__') {
       setActiveView('workshop');

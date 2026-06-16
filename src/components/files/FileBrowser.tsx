@@ -288,15 +288,19 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     }
   }, [showToast]);
 
-  const handleOpenInTerminal = useCallback((dir: string) => {
+  const handleOpenInTerminal = useCallback(async (dir: string) => {
     const api = (window as any).nativesAPI;
-    // Try terminal:openInDir IPC first (Electron)
-    if (api?.terminal?.write) {
-      window.dispatchEvent(new CustomEvent('toggle-terminal'));
-      // Also copy cd shortcut as fallback
+    if (api?.terminal?.openInDir) {
+      // Electron: create new PTY session and cd into dir
+      const result = await api.terminal.openInDir(dir);
+      if (result?.sessionId) {
+        window.dispatchEvent(new CustomEvent('toggle-terminal'));
+      }
+    } else {
+      // Web fallback: copy cd command
+      navigator.clipboard.writeText(`cd "${dir}"`);
+      showToast(t(locale, 'fileBrowser.copyAsCd'));
     }
-    navigator.clipboard.writeText(`cd "${dir}"`);
-    showToast(t(locale, 'fileBrowser.copyAsCd'));
   }, [showToast]);
 
   const handlePreview = useCallback((entry: FileEntry) => {

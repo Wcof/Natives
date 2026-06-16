@@ -11,7 +11,7 @@ interface ModuleItem {
 }
 
 const QUICK_ACCESS_DIRS = [
-  { id: 'home', label: 'Home', path: '~', icon: <Home size={16} /> },
+  { id: 'home', label: 'Home', path: '', icon: <Home size={16} />, isDashboard: true },
   { id: 'desktop', label: 'Desktop', path: '~/Desktop', icon: <Monitor size={16} /> },
   { id: 'documents', label: 'Documents', path: '~/Documents', icon: <FileText size={16} /> },
   { id: 'downloads', label: 'Downloads', path: '~/Downloads', icon: <Download size={16} /> },
@@ -192,7 +192,13 @@ export default function Sidebar({
           <button
             key={dir.id}
             className="sidebar-item"
-            onClick={() => onModuleSelect(`__files__:${dir.path}`)}
+            onClick={() => {
+              if ((dir as any).isDashboard) {
+                onModuleSelect('__dashboard__');
+              } else {
+                onModuleSelect(`__files__:${dir.path}`);
+              }
+            }}
             style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left' }}
             title={dir.path}
           >
