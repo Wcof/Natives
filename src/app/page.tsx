@@ -379,8 +379,8 @@ export default function DashboardPage() {
                 background: 'var(--bg-3,#1c1e17)', border: '1px solid var(--border,#262920)',
                 borderRadius: 6, fontSize: 12,
               }}>
-                <span style={{ fontSize: 10, flexShrink: 0 }}>
-                  {notif.level === 'error' ? '🔴' : notif.level === 'warning' ? '🟡' : '🔵'}
+                <span style={{ flexShrink: 0, display: 'inline-flex' }}>
+                  {notif.level === 'error' ? <span style={{ color: 'var(--danger)', fontSize: 10 }}>●</span> : notif.level === 'warning' ? <span style={{ color: 'var(--warning)', fontSize: 10 }}>●</span> : <span style={{ color: 'var(--info)', fontSize: 10 }}>●</span>}
                 </span>
                 <span style={{ color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {notif.title}

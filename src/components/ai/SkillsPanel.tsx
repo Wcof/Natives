@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { type SkillInfo } from '@/types/agent';
+import { Clipboard, RefreshCw } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -104,7 +105,7 @@ export default function SkillsPanel() {
         ))}
         <div style={{ flex: 1 }} />
         <button className="btn-ghost" onClick={loadSkills} style={{ fontSize: 10, padding: '3px 6px' }}>
-          ↻
+          <RefreshCw size={12} />
         </button>
       </div>
 
@@ -149,8 +150,8 @@ export default function SkillsPanel() {
                 {skill.lastTriggered ? <span> · last {new Date(skill.lastTriggered).toLocaleDateString()}</span> : null}
               </div>
               <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
-                <button onClick={() => { setSelectedSkill(skill); setShowLogs(true); const meta = [`Skill: ${skill.name}`, `Source: ${skill.source}`, `Path: ${skill.path}`, `Health: ${skill.health.ok ? 'OK' : skill.health.issues.join(', ') || 'unknown'}`, `Trigger count: ${skill.triggerCount}`, skill.lastTriggered ? `Last triggered: ${new Date(skill.lastTriggered).toLocaleString()}` : 'Last triggered: never']; if (skill.description) meta.push(`Description: ${skill.description.slice(0, 120)}`); setSkillLogs(meta); }} style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, border: '1px solid var(--border,#262920)', background: 'transparent', color: 'var(--text-faint)', cursor: 'pointer' }}>
-                  📋 Logs
+                <button onClick={() => { setSelectedSkill(skill); setShowLogs(true); const meta = [`Skill: ${skill.name}`, `Source: ${skill.source}`, `Path: ${skill.path}`, `Health: ${skill.health.ok ? 'OK' : skill.health.issues.join(', ') || 'unknown'}`, `Trigger count: ${skill.triggerCount}`, skill.lastTriggered ? `Last triggered: ${new Date(skill.lastTriggered).toLocaleString()}` : 'Last triggered: never']; if (skill.description) meta.push(`Description: ${skill.description.slice(0, 120)}`); setSkillLogs(meta); }} style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, border: '1px solid var(--border,#262920)', background: 'transparent', color: 'var(--text-faint)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                  <Clipboard size={10} /> Logs
                 </button>
                 <button onClick={() => handleUninstall(skill)} style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, border: '1px solid #f24b4b', background: 'transparent', color: 'var(--danger)', cursor: 'pointer' }}>
                   {t(locale, 'aiWorkbench.skills.uninstall')}
@@ -172,8 +173,8 @@ export default function SkillsPanel() {
             borderRadius: 10, padding: 'var(--space-md)', width: 480, maxWidth: '90vw', maxHeight: '60vh',
             overflow: 'auto',
           }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ fontSize: 'var(--fs-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 12 }}>
-              📋 {selectedSkill.name} — Skill Logs
+            <div style={{ fontSize: 'var(--fs-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Clipboard size={14} /> {selectedSkill.name} — Skill Logs
             </div>
             <div style={{ fontSize: 11, lineHeight: 1.6, fontFamily: 'var(--font-mono)' }}>
               {skillLogs.map((line, i) => (

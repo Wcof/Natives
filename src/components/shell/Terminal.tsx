@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { t, useLocale, type Locale } from '@/i18n';
+import { Clipboard, X, Plus, Zap, Link2 } from 'lucide-react';
 import { onThemeChange, TERMINAL_THEMES } from '@/lib/theme-engine';
 import { recordTerminalActivity, setFileFollow, followChange } from '@/lib/follow-mode';
 import { playDoneChime, playAskChime } from '@/lib/chime';
@@ -480,7 +481,7 @@ export default function TerminalPanel({
                   }}
                   title={t(locale, 'terminal.closeTab')}
                 >
-                  ✕
+                  <X size={10} />
                 </button>
               )}
             </div>
@@ -491,7 +492,7 @@ export default function TerminalPanel({
             style={{ cursor: 'pointer', opacity: 0.6, fontSize: 14, padding: '2px 8px' }}
             title={t(locale, 'terminal.newTab')}
           >
-            +
+            <Plus size={14} />
           </button>
         </div>
 
@@ -527,7 +528,7 @@ export default function TerminalPanel({
             }}
             title="Launch Claude Code"
           >
-            ⚡ Claude
+            <Zap size={11} style={{ marginRight: 2 }} /> Claude
           </button>
           <button
             className="btn-ghost"
@@ -538,7 +539,7 @@ export default function TerminalPanel({
             }}
             title="Launch Codex"
           >
-            ⚡ Codex
+            <Zap size={11} style={{ marginRight: 2 }} /> Codex
           </button>
           {/* Follow mode toggle */}
           {onFollowModeToggle && (
@@ -553,7 +554,7 @@ export default function TerminalPanel({
               title={followMode ? t(locale, 'terminal.followModeOn') : t(locale, 'terminal.followModeOff')}
               aria-label={t(locale, 'terminal.ariaToggleFollowMode')}
             >
-              🔗
+              <Link2 size={12} />
             </button>
           )}
           {/* Copy selection to clipboard */}
@@ -578,7 +579,7 @@ export default function TerminalPanel({
             title="Copy selection"
             aria-label="Copy selection"
           >
-            📋
+            <Clipboard size={12} />
           </button>
           <button className="btn-ghost" onClick={onMaximizeToggle} aria-label={isMaximized ? t(locale, 'terminal.ariaRestore') : t(locale, 'terminal.ariaMaximize')}>
             <svg className="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

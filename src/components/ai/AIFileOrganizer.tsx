@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { Package, Edit2, Trash2, Archive, Loader2 } from 'lucide-react';
+import { Package, Edit2, Trash2, Archive, Loader2, ClipboardList, Ruler } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
 interface AIProposal {
@@ -211,11 +211,12 @@ export default function AIFileOrganizer() {
               onClick={() => setAnalysisMode(mode)}
               style={{
                 fontSize: 9, padding: '2px 6px', borderRadius: 3,
+                display: 'inline-flex', alignItems: 'center', gap: 3,
                 color: analysisMode === mode ? 'var(--accent,#cdf24b)' : 'var(--text-faint)',
                 background: analysisMode === mode ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
               }}
             >
-              {mode === 'organize' ? '📦 Organize' : mode === 'duplicates' ? '📋 Duplicates' : '📏 Large Files'}
+              {mode === 'organize' ? <><Package size={10} /> Organize</> : mode === 'duplicates' ? <><ClipboardList size={10} /> Duplicates</> : <><Ruler size={10} /> Large Files</>}
             </button>
           ))}
         </div>
@@ -230,11 +231,11 @@ export default function AIFileOrganizer() {
             </div>
             <button
               className="btn btn-primary"
-              style={{ width: '100%', fontSize: 'var(--fs-sm)' }}
+              style={{ width: '100%', fontSize: 'var(--fs-sm)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
               onClick={handleAnalyze}
               disabled={analyzing}
             >
-              {analyzing ? `⏳ ${t(locale, 'aiWorkbench.organizer.analyzing')}` : `🔍 ${t(locale, 'aiWorkbench.analyze')}`}
+              {analyzing ? <><Loader2 size={12} className="anim-livePulse" /> {t(locale, 'aiWorkbench.organizer.analyzing')}</> : <><Package size={12} /> {t(locale, 'aiWorkbench.analyze')}</>}
             </button>
           </div>
         ) : (

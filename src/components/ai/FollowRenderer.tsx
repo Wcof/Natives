@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { Package } from 'lucide-react';
 import { followPriority, changedRange, getFollowState, recordTerminalActivity, getExt } from '@/lib/follow-mode';
 import { parseAgentAction, composeNarration } from '@/lib/agent-narration';
 import { highlightCode, extToLanguage } from '@/lib/shiki-utils';
@@ -85,7 +86,7 @@ export default function FollowRenderer({ filePath, httpPort }: FollowRendererPro
   if (prio === 0) {
     return (
       <div style={{ padding: 20, textAlign: 'center' }}>
-        <div style={{ fontSize: 32, marginBottom: 8 }}>📦</div>
+        <Package size={32} style={{ color: 'var(--accent,#cdf24b)', marginBottom: 8 }} />
         <div style={{ color: 'var(--text)', fontSize: 'var(--fs-md)', fontWeight: 600 }}>
           {filePath.split('/').pop()}
         </div>
