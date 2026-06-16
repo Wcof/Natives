@@ -228,7 +228,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
   };
 
   const categoryColors: Record<string, string> = {
-    module: 'var(--accent,#FFF5E6)',
+    module: 'var(--accent,#cdf24b)',
     action: 'var(--diff-mod,#5b9cf5)',
     setting: 'var(--warning,#e6b800)',
     navigation: 'var(--info,#4bcdf2)',
@@ -357,7 +357,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
             style={{
               background: 'none', border: '1px solid var(--border,#262920)', borderRadius: 4,
               padding: '2px 6px', fontSize: 10, cursor: 'pointer',
-              color: searchScope === 'local' ? 'var(--accent,#FFF5E6)' : 'var(--text-faint,#62655a)',
+              color: searchScope === 'local' ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
               display: 'inline-flex', alignItems: 'center', gap: 4,
             }}
             title={searchScope === 'global' ? t(locale, 'commandPalette.searchScopeGlobal') : t(locale, 'commandPalette.searchScopeLocal')}

@@ -42,7 +42,7 @@ export default function ToolsPage() {
               fontWeight: 500,
               background: 'none',
               border: 'none',
-              borderBottom: tab === t.id ? '2px solid var(--accent,#FFF5E6)' : '2px solid transparent',
+              borderBottom: tab === t.id ? '2px solid var(--accent,#cdf24b)' : '2px solid transparent',
               color: tab === t.id ? 'var(--text,#f2f2ea)' : 'var(--text-faint,#62655a)',
               cursor: 'pointer',
             }}

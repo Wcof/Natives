@@ -25,7 +25,6 @@ const nativesAPI = {
       ipcRenderer.invoke('terminal:resize', sessionId, cols, rows),
     kill: (sessionId: string) => ipcRenderer.invoke('terminal:kill', sessionId),
     cwd: (sessionId: string) => ipcRenderer.invoke('terminal:cwd', sessionId),
-    openInDir: (dirPath: string) => ipcRenderer.invoke('terminal:openInDir', dirPath),
   },
 
   // Module management

@@ -71,7 +71,7 @@ export default function DiskUsage({ dirPath, onNavigate }: DiskUsageProps) {
               onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
             >
               {/* Icon */}
-              <span style={{ fontSize: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: item.isDir ? 'var(--accent, #FFF5E6)' : 'var(--text-dim, #9b9d8c)' }}>
+              <span style={{ fontSize: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: item.isDir ? 'var(--accent, #cdf24b)' : 'var(--text-dim, #9b9d8c)' }}>
                 {item.isDir ? <Folder size={14} /> : <FileText size={14} />}
               </span>
 
@@ -100,7 +100,7 @@ export default function DiskUsage({ dirPath, onNavigate }: DiskUsageProps) {
                 <div style={{
                   width: barWidth, height: '100%',
                   background: item.isDir
-                    ? 'var(--accent, #FFF5E6)'
+                    ? 'var(--accent, #cdf24b)'
                     : 'var(--text-faint, #62655a)',
                   borderRadius: 5,
                   transition: 'width 0.3s ease',

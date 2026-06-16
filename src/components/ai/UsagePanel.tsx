@@ -56,7 +56,7 @@ export default function UsagePanel() {
             label={t(locale, 'aiWorkbench.fiveHourWindow')}
             used={usageData?.claude?.fiveHourWindow?.used ?? 0}
             limit={usageData?.claude?.fiveHourWindow?.limit ?? 50000}
-            color="#FFF5E6"
+            color="#cdf24b"
           />
           <ProgressBar
             label={t(locale, 'aiWorkbench.weeklyQuota')}

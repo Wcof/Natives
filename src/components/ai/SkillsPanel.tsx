@@ -95,8 +95,8 @@ export default function SkillsPanel() {
             onClick={() => setFilter(f)}
             style={{
               fontSize: 10, padding: '3px 8px', borderRadius: 4,
-              color: filter === f ? 'var(--accent,#FFF5E6)' : 'var(--text-faint)',
-              background: filter === f ? 'var(--accent-soft,#FFF5E61f)' : 'transparent',
+              color: filter === f ? 'var(--accent,#cdf24b)' : 'var(--text-faint)',
+              background: filter === f ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
             }}
           >
             {f === 'all' ? t(locale, 'aiWorkbench.skillsLabel') : f === 'healthy' ? t(locale, 'aiWorkbench.skills.healthy') : t(locale, 'aiWorkbench.skills.issues')}
@@ -131,8 +131,8 @@ export default function SkillsPanel() {
                   <button onClick={() => handleToggle(skill)} style={{
                     fontSize: 10, padding: '2px 6px', borderRadius: 4,
                     border: '1px solid var(--border,#262920)',
-                    background: skill.enabled ? 'var(--accent-soft,#FFF5E61f)' : 'transparent',
-                    color: skill.enabled ? 'var(--accent,#FFF5E6)' : 'var(--text-faint)',
+                    background: skill.enabled ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
+                    color: skill.enabled ? 'var(--accent,#cdf24b)' : 'var(--text-faint)',
                     cursor: 'pointer',
                   }}>
                     {skill.enabled ? t(locale, 'aiWorkbench.skills.enabled') : t(locale, 'aiWorkbench.skills.disabled')}

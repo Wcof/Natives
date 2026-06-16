@@ -348,8 +348,8 @@ export default function SettingsPage() {
                       padding: '8px 10px',
                       borderRadius: 6,
                       cursor: 'pointer',
-                      background: selectedProfile === p.name ? 'var(--accent-soft,#FFF5E61f)' : 'transparent',
-                      border: selectedProfile === p.name ? '1px solid var(--accent,#FFF5E6)' : '1px solid transparent',
+                      background: selectedProfile === p.name ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
+                      border: selectedProfile === p.name ? '1px solid var(--accent,#cdf24b)' : '1px solid transparent',
                       transition: 'all 0.12s',
                     }}
                   >
@@ -362,7 +362,7 @@ export default function SettingsPage() {
                           fontSize: 9,
                           padding: '1px 5px',
                           borderRadius: 3,
-                          background: 'var(--accent,#FFF5E6)',
+                          background: 'var(--accent,#cdf24b)',
                           color: 'var(--accent-ink,#0b0c0a)',
                           fontWeight: 600,
                           textTransform: 'uppercase',
@@ -478,7 +478,7 @@ export default function SettingsPage() {
                           }}
                         >
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent,#FFF5E6)', fontFamily: 'var(--font-mono)' }}>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent,#cdf24b)', fontFamily: 'var(--font-mono)' }}>
                               {v.key}
                             </div>
                             {editingVar === v.key ? (

@@ -52,7 +52,7 @@ export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onTog
   if (segments.length === 0 || (segments.length === 1 && segments[0] === '')) {
     return (
       <nav aria-label={t(locale, 'fileBrowser.breadcrumbLabel')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', fontSize: 13 }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--accent, #FFF5E6)', fontWeight: 600 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--accent, #cdf24b)', fontWeight: 600 }}>
           <Monitor size={14} /> /
         </span>
         {projectBadge && BADGE_COLORS[projectBadge] && (
@@ -100,10 +100,10 @@ export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onTog
               (e.currentTarget as HTMLElement).style.background = 'none';
             }}
           >
-            <Monitor size={13} style={{ color: 'var(--accent, #FFF5E6)' }} />
+            <Monitor size={13} style={{ color: 'var(--accent, #cdf24b)' }} />
           </button>
         ) : (
-          <Monitor size={13} style={{ color: 'var(--accent, #FFF5E6)' }} />
+          <Monitor size={13} style={{ color: 'var(--accent, #cdf24b)' }} />
         )}
       </span>
 
@@ -116,9 +116,9 @@ export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onTog
             <span style={{ color: 'var(--text-faint, #62655a)', fontSize: 12 }}>›</span>
             {isLast ? (
               <span style={{
-                color: 'var(--accent, #FFF5E6)', fontWeight: 600,
+                color: 'var(--accent, #cdf24b)', fontWeight: 600,
                 fontFamily: 'var(--font-display)',
-                background: 'var(--accent-soft, #FFF5E61f)',
+                background: 'var(--accent-soft, #cdf24b1f)',
                 padding: '2px 7px', borderRadius: 6,
               }}>
                 {segment}
@@ -166,7 +166,7 @@ export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onTog
           style={{
             background: 'none', border: 'none', cursor: 'pointer',
             padding: '2px 4px', marginLeft: 'auto', display: 'flex', flexShrink: 0,
-            color: isFavorite ? 'var(--accent,#FFF5E6)' : 'var(--text-faint,#62655a)',
+            color: isFavorite ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
           }}
           title={t(locale, isFavorite ? 'fileBrowser.removeFromFavorites' : 'fileBrowser.addToFavorites')}
           aria-label={t(locale, isFavorite ? 'fileBrowser.removeFromFavorites' : 'fileBrowser.addToFavorites')}

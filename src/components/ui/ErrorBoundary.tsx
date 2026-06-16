@@ -71,7 +71,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
             onClick={this.handleReset}
             style={{
               marginTop: 8, padding: '6px 16px', borderRadius: 6,
-              background: 'var(--accent, #FFF5E6)', color: 'var(--bg, #0b0c0a)',
+              background: 'var(--accent, #cdf24b)', color: 'var(--bg, #0b0c0a)',
               border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer',
             }}
           >

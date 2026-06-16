@@ -753,7 +753,7 @@ function ModuleDetails({ moduleId, locale }: { moduleId: string; locale: Locale 
                 padding: '6px 8px', background: 'var(--bg-3,#1c1e17)',
                 borderRadius: 4, fontSize: 11,
               }}>
-                <span style={{ color: perm.granted ? 'var(--accent,#FFF5E6)' : 'var(--text-faint)' }}>
+                <span style={{ color: perm.granted ? 'var(--accent,#cdf24b)' : 'var(--text-faint)' }}>
                   {perm.granted ? '✓' : '✗'}
                 </span>
                 <span style={{ color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>{perm.permission}</span>

@@ -74,7 +74,7 @@ export default function FileToolbar({
           onClick={onRecentModeToggle}
           style={{
             fontSize: 13, padding: '2px 6px',
-            color: recentMode ? 'var(--accent,#FFF5E6)' : undefined,
+            color: recentMode ? 'var(--accent,#cdf24b)' : undefined,
           }}
           title={t(locale, recentMode ? 'fileBrowser.recentModeTitle' : 'fileBrowser.recentMode')}
         >

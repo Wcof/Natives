@@ -470,7 +470,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             <span
               onClick={() => setDiskUsageTarget(currentPath)}
               style={{
-                cursor: 'pointer', color: 'var(--accent,#FFF5E6)',
+                cursor: 'pointer', color: 'var(--accent,#cdf24b)',
                 textDecoration: 'none', fontSize: 11,
               }}
               onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.textDecoration = 'underline'; }}

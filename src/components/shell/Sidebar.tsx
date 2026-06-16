@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Settings, Layers, ChevronRight, Square, Bell, Star, Home, Monitor, FileText, Download } from 'lucide-react';
+import { Settings, Layers, ChevronRight, Square, Bell, Star, LayoutDashboard, Monitor, FileText, Download } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
 interface ModuleItem {
@@ -11,7 +11,7 @@ interface ModuleItem {
 }
 
 const QUICK_ACCESS_DIRS = [
-  { id: 'home', label: 'Home', path: '', icon: <Home size={16} />, isDashboard: true },
+  { id: 'home', label: 'Home', path: '', icon: <LayoutDashboard size={16} />, isDashboard: true },
   { id: 'desktop', label: 'Desktop', path: '~/Desktop', icon: <Monitor size={16} /> },
   { id: 'documents', label: 'Documents', path: '~/Documents', icon: <FileText size={16} /> },
   { id: 'downloads', label: 'Downloads', path: '~/Downloads', icon: <Download size={16} /> },
@@ -266,7 +266,7 @@ export default function Sidebar({
                 style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left' }}
                 title={fav}
               >
-                <Star size={14} style={{ color: 'var(--accent,#FFF5E6)' }} />
+                <Star size={14} style={{ color: 'var(--accent,#cdf24b)' }} />
                 <span style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>
                   {fav.split('/').pop() || fav}
                 </span>

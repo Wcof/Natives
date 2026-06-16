@@ -155,7 +155,7 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
                 {prompt.tags.map((tag) => (
                   <span key={tag} style={{
                     fontSize: 9, padding: '1px 5px', borderRadius: 3,
-                    background: 'var(--accent-soft,#FFF5E61f)', color: 'var(--accent,#FFF5E6)',
+                    background: 'var(--accent-soft,#cdf24b1f)', color: 'var(--accent,#cdf24b)',
                   }}>
                     #{tag}
                   </span>

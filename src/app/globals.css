@@ -12,8 +12,8 @@
   --text: #f2f2ea;
   --text-dim: #9b9d8c;
   --text-faint: #62655a;
-  --accent: #FFF5E6;
-  --accent-soft: #FFF5E61f;
+  --accent: #cdf24b;
+  --accent-soft: #cdf24b1f;
   --accent-ink: #0b0c0a;
   --radius: 4px;
   --shadow: 0 10px 40px rgba(0,0,0,0.6);
@@ -734,13 +734,13 @@ html, body {
 }
 
 @keyframes termCatch {
-  from { box-shadow: 0 0 0 0 var(--accent, #FFF5E6); }
+  from { box-shadow: 0 0 0 0 var(--accent, #cdf24b); }
   to { box-shadow: 0 0 20px 10px transparent; }
 }
 
 @keyframes termAwait {
-  0%, 100% { box-shadow: 0 0 0 0 var(--accent, #FFF5E6); opacity: 1; }
-  50% { box-shadow: 0 0 12px 4px var(--accent-soft, #FFF5E633); opacity: 0.8; }
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent, #cdf24b); opacity: 1; }
+  50% { box-shadow: 0 0 12px 4px var(--accent-soft, #cdf24b33); opacity: 0.8; }
 }
 
 .anim-edIn { animation: edIn 0.24s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
@@ -762,17 +762,17 @@ html, body {
   50% { opacity: 0.5; transform: scale(0.96); }
 }
 @keyframes liveZap {
-  0% { box-shadow: 0 0 0 0 var(--accent, #FFF5E6); }
-  50% { box-shadow: 0 0 14px 6px var(--accent-soft, #FFF5E633); }
+  0% { box-shadow: 0 0 0 0 var(--accent, #cdf24b); }
+  50% { box-shadow: 0 0 14px 6px var(--accent-soft, #cdf24b33); }
   100% { box-shadow: 0 0 0 0 transparent; }
 }
 @keyframes liveZapRow {
-  0% { background: var(--accent-soft, #FFF5E61f); }
-  50% { background: var(--accent-soft, #FFF5E633); }
+  0% { background: var(--accent-soft, #cdf24b1f); }
+  50% { background: var(--accent-soft, #cdf24b33); }
   100% { background: transparent; }
 }
 @keyframes editRipple {
-  0% { box-shadow: 0 0 0 0 var(--accent, #FFF5E6); }
+  0% { box-shadow: 0 0 0 0 var(--accent, #cdf24b); }
   100% { box-shadow: 0 0 0 8px transparent; }
 }
 @keyframes changedPulse {
@@ -781,15 +781,15 @@ html, body {
   100% { transform: scale(1); }
 }
 @keyframes changedBreath {
-  0%, 100% { opacity: 0.6; box-shadow: inset 0 0 0 1.5px var(--accent, #FFF5E6), 0 0 calc(6px + 20px * var(--heat, 0.4)) color-mix(in srgb, var(--accent, #FFF5E6) calc(55% * var(--heat, 0.4)), transparent); }
-  50% { opacity: 1; box-shadow: inset 0 0 0 1.5px var(--accent, #FFF5E6), 0 0 calc(10px + 30px * var(--heat, 0.4)) color-mix(in srgb, var(--accent, #FFF5E6) calc(70% * var(--heat, 0.4)), transparent); }
+  0%, 100% { opacity: 0.6; box-shadow: inset 0 0 0 1.5px var(--accent, #cdf24b), 0 0 calc(6px + 20px * var(--heat, 0.4)) color-mix(in srgb, var(--accent, #cdf24b) calc(55% * var(--heat, 0.4)), transparent); }
+  50% { opacity: 1; box-shadow: inset 0 0 0 1.5px var(--accent, #cdf24b), 0 0 calc(10px + 30px * var(--heat, 0.4)) color-mix(in srgb, var(--accent, #cdf24b) calc(70% * var(--heat, 0.4)), transparent); }
 }
 @keyframes clFlash {
-  0% { background: var(--accent-soft, #FFF5E61f); }
+  0% { background: var(--accent-soft, #cdf24b1f); }
   100% { background: transparent; }
 }
 @keyframes areaRipple {
-  0% { box-shadow: 0 0 0 0 var(--accent, #FFF5E6); opacity: 0.6; }
+  0% { box-shadow: 0 0 0 0 var(--accent, #cdf24b); opacity: 0.6; }
   100% { box-shadow: 0 0 24px 12px transparent; opacity: 0; }
 }
 
@@ -821,7 +821,7 @@ html, body {
 
 /* Focus visible — refined macOS keyboard focus */
 :focus-visible {
-  outline: 2px solid var(--accent, #FFF5E6);
+  outline: 2px solid var(--accent, #cdf24b);
   outline-offset: 2px;
   border-radius: var(--radius, 4px);
 }
@@ -838,7 +838,7 @@ html, body {
   left: 8px;
   z-index: 999;
   padding: 8px 16px;
-  background: var(--accent, #FFF5E6);
+  background: var(--accent, #cdf24b);
   color: var(--accent-ink, #0b0c0a);
   font-size: 14px;
   font-weight: 600;

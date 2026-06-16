@@ -130,8 +130,8 @@ export default function TerminalPanel({
       theme: {
         background: 'var(--terminal-bg, #131410)',
         foreground: 'var(--terminal-fg, #f2f2ea)',
-        cursor: 'var(--terminal-cursor, #FFF5E6)',
-        selectionBackground: 'var(--accent-soft, #FFF5E633)',
+        cursor: 'var(--terminal-cursor, #cdf24b)',
+        selectionBackground: 'var(--accent-soft, #cdf24b33)',
       },
       cursorBlink: true,
       scrollback: 5000,
@@ -548,8 +548,8 @@ export default function TerminalPanel({
               onClick={onFollowModeToggle}
               style={{
                 fontSize: 10, padding: '2px 6px', borderRadius: 4,
-                color: followMode ? 'var(--accent,#FFF5E6)' : 'var(--text-faint,#62655a)',
-                background: followMode ? 'var(--accent-soft,#FFF5E61f)' : 'transparent',
+                color: followMode ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
+                background: followMode ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
               }}
               title={followMode ? t(locale, 'terminal.followModeOn') : t(locale, 'terminal.followModeOff')}
               aria-label={t(locale, 'terminal.ariaToggleFollowMode')}
@@ -613,11 +613,11 @@ export default function TerminalPanel({
         {isDragOver && (
           <div style={{
             position: 'absolute', inset: 0,
-            background: 'var(--accent-soft,#FFF5E61f)',
-            border: '2px dashed var(--accent,#FFF5E6)',
+            background: 'var(--accent-soft,#cdf24b1f)',
+            border: '2px dashed var(--accent,#cdf24b)',
             borderRadius: 4,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: 'var(--accent,#FFF5E6)', fontSize: 13, fontWeight: 600,
+            color: 'var(--accent,#cdf24b)', fontSize: 13, fontWeight: 600,
             zIndex: 10, pointerEvents: 'none',
           }}>
             {t(locale, 'terminal.dropPrompt')}

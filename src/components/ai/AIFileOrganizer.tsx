@@ -212,8 +212,8 @@ export default function AIFileOrganizer() {
               style={{
                 fontSize: 9, padding: '2px 6px', borderRadius: 3,
                 display: 'inline-flex', alignItems: 'center', gap: 3,
-                color: analysisMode === mode ? 'var(--accent,#FFF5E6)' : 'var(--text-faint)',
-                background: analysisMode === mode ? 'var(--accent-soft,#FFF5E61f)' : 'transparent',
+                color: analysisMode === mode ? 'var(--accent,#cdf24b)' : 'var(--text-faint)',
+                background: analysisMode === mode ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
               }}
             >
               {mode === 'organize' ? <><Package size={10} /> Organize</> : mode === 'duplicates' ? <><ClipboardList size={10} /> Duplicates</> : <><Ruler size={10} /> Large Files</>}
@@ -243,7 +243,7 @@ export default function AIFileOrganizer() {
             {proposals.map((p) => (
               <div key={p.id} style={{
                 padding: 'var(--space-sm)', marginBottom: 6, borderRadius: 6,
-                border: `1px solid ${approved.has(p.id) ? 'var(--accent,#FFF5E6)' : 'var(--border,#262920)'}`,
+                border: `1px solid ${approved.has(p.id) ? 'var(--accent,#cdf24b)' : 'var(--border,#262920)'}`,
                 background: approved.has(p.id) ? 'rgba(205,242,75,0.08)' : 'var(--bg-2,#131410)',
               }}>
                 <label style={{ display: 'flex', gap: 'var(--space-sm)', cursor: 'pointer', fontSize: 'var(--fs-sm)' }}>

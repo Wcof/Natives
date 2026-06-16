@@ -155,7 +155,7 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8,
                   padding: '6px 8px', borderRadius: 6, cursor: 'pointer',
-                  fontSize: 12, color: 'var(--accent,#FFF5E6)',
+                  fontSize: 12, color: 'var(--accent,#cdf24b)',
                   marginBottom: 4,
                 }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-3,#1c1e17)'; }}
@@ -186,14 +186,14 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
                   <div style={{
                     position: 'absolute', left: 0, top: 0, bottom: 0,
                     width: `${barWidth}%`, borderRadius: 4,
-                    background: 'var(--accent-soft, #FFF5E618)',
+                    background: 'var(--accent-soft, #cdf24b18)',
                     transition: 'width 0.3s ease',
                   }} />
 
                   {/* Icon */}
                   <span style={{
                     position: 'relative', zIndex: 1, display: 'inline-flex',
-                    color: item.isDir ? 'var(--accent,#FFF5E6)' : 'var(--text-dim,#9b9d8c)',
+                    color: item.isDir ? 'var(--accent,#cdf24b)' : 'var(--text-dim,#9b9d8c)',
                     flexShrink: 0,
                   }}>
                     {item.isDir ? <Folder size={14} /> : <FileText size={14} />}

@@ -44,7 +44,7 @@ export function LoadingState({ message = 'Loading...' }: LoadingStateProps) {
       padding: 40,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span className="anim-livePulse" style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--accent,#FFF5E6)' }} />
+        <span className="anim-livePulse" style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--accent,#cdf24b)' }} />
         <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>{message}</span>
       </div>
     </div>

@@ -236,7 +236,7 @@ export default function DashboardPage() {
           icon={<Database size={16} />}
           label={t(locale, 'dashboard.statusDatabase')}
           value={loading ? t(locale, 'common.loading') : status.dbOk ? t(locale, 'dashboard.statusConnected') : t(locale, 'dashboard.statusError')}
-          valueColor={loading ? 'var(--text-faint)' : status.dbOk ? 'var(--accent,#FFF5E6)' : 'var(--danger)'}
+          valueColor={loading ? 'var(--text-faint)' : status.dbOk ? 'var(--accent,#cdf24b)' : 'var(--danger)'}
         />
         <StatusCard
           icon={<Square size={16} />}
@@ -279,7 +279,7 @@ export default function DashboardPage() {
                 label={t(locale, 'aiWorkbench.skills.total')}
                 value={skillStats.total}
                 icon={<Zap size={14} />}
-                color="var(--accent,#FFF5E6)"
+                color="var(--accent,#cdf24b)"
               />
               <StatCard
                 label={t(locale, 'aiWorkbench.skills.active')}
@@ -331,7 +331,7 @@ export default function DashboardPage() {
                 label={t(locale, 'aiWorkbench.fiveHourWindow')}
                 used={(usageData as any)?.claude?.fiveHourWindow?.used ?? 0}
                 limit={(usageData as any)?.claude?.fiveHourWindow?.limit ?? 50000}
-                color="var(--accent,#FFF5E6)"
+                color="var(--accent,#cdf24b)"
               />
               <ProgressBar
                 label={t(locale, 'aiWorkbench.weeklyQuota')}
@@ -570,7 +570,7 @@ function BudgetBar({ used, limit, locale }: { used: number; limit: number; local
         <div style={{
           height: '100%', borderRadius: 2, transition: 'width 0.3s',
           width: `${Math.min(pct, 100)}%`,
-          background: over ? 'var(--danger)' : pct > 80 ? 'var(--warning)' : 'var(--accent,#FFF5E6)',
+          background: over ? 'var(--danger)' : pct > 80 ? 'var(--warning)' : 'var(--accent,#cdf24b)',
         }} />
       </div>
       {over && (
