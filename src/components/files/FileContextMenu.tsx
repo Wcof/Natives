@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { type FileEntry } from '@/types/file';
 import { t, type Locale } from '@/i18n';
+import { copyToClipboard } from '@/lib/clipboard';
 
 type MenuMode = 'file' | 'dir' | 'blank';
 
@@ -106,8 +107,8 @@ export default function FileContextMenu({
         mkItem({ label: t(locale, 'fileBrowser.diskUsage'), action: () => onDiskUsage?.(p) }),
         mkItem({ label: t(locale, 'fileBrowser.revealInFinder'), action: () => onRevealInFinder?.(entry) }),
         'sep',
-        mkItem({ label: t(locale, 'fileBrowser.copyPath'), action: () => { navigator.clipboard.writeText(p); } }),
-        mkItem({ label: t(locale, 'fileBrowser.copyAsCd'), action: () => { navigator.clipboard.writeText(`cd "${p}"`); } }),
+        mkItem({ label: t(locale, 'fileBrowser.copyPath'), action: () => { copyToClipboard(p); } }),
+        mkItem({ label: t(locale, 'fileBrowser.copyAsCd'), action: () => { copyToClipboard(`cd "${p}"`); } }),
         'sep',
         mkItem({ label: t(locale, isFavorite ? 'fileBrowser.unfavorite' : 'fileBrowser.favorite'), action: () => {
           if (isFavorite) onUnfavorite?.(entry); else onFavorite?.(entry);
@@ -125,8 +126,8 @@ export default function FileContextMenu({
       mkItem({ label: t(locale, 'fileBrowser.openInEditor'), action: () => onOpenInEditor?.(entry) }),
       mkItem({ label: t(locale, 'fileBrowser.revealInFinder'), action: () => onRevealInFinder?.(entry) }),
       'sep',
-      mkItem({ label: t(locale, 'fileBrowser.copyPath'), action: () => { navigator.clipboard.writeText(p); } }),
-      mkItem({ label: t(locale, 'fileBrowser.copyAsCd'), action: () => { navigator.clipboard.writeText(`cd "${parent}"`); } }),
+      mkItem({ label: t(locale, 'fileBrowser.copyPath'), action: () => { copyToClipboard(p); } }),
+      mkItem({ label: t(locale, 'fileBrowser.copyAsCd'), action: () => { copyToClipboard(`cd "${parent}"`); } }),
       'sep',
       mkItem({ label: t(locale, isFavorite ? 'fileBrowser.unfavorite' : 'fileBrowser.favorite'), action: () => {
         if (isFavorite) onUnfavorite?.(entry); else onFavorite?.(entry);
