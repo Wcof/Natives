@@ -52,7 +52,7 @@ export default function GitPanel({ repoPath }: GitPanelProps) {
   };
 
   const STATUS_COLORS: Record<string, string> = {
-    M: '#cdf24b', A: '#4bcdf2', D: '#f24b4b', R: '#f2a14b', '??': '#9b9d8c', UU: '#f24b4b',
+    M: 'var(--diff-mod)', A: 'var(--diff-add)', D: 'var(--diff-del)', R: 'var(--diff-mod)', '??': 'var(--text-faint)', UU: 'var(--danger)',
   };
 
   return (

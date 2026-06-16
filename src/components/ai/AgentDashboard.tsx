@@ -51,7 +51,7 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
   const getIntensity = (idx: number) => Math.max(0.2, 1 - idx * 0.03);
 
   const typeIcons: Record<string, string> = { create: '+', delete: '−', modify: '✎' };
-  const typeColors: Record<string, string> = { create: '#4ec9b0', delete: '#d9534f', modify: 'var(--accent,#cdf24b)' };
+  const typeColors: Record<string, string> = { create: 'var(--diff-add)', delete: 'var(--danger)', modify: 'var(--accent,#cdf24b)' };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -86,7 +86,7 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
             onClick={() => setPaused(!paused)}
             style={{
               fontSize: 10, padding: '2px 6px', borderRadius: 3,
-              color: paused ? '#e6b800' : 'var(--text-faint)',
+              color: paused ? 'var(--warning)' : 'var(--text-faint)',
             }}
             title={paused ? t(locale, 'aiWorkbench.dashboard.resume') : t(locale, 'aiWorkbench.dashboard.pause')}
           >
@@ -144,7 +144,7 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
         fontSize: 10, color: 'var(--text-faint)', display: 'flex', justifyContent: 'space-between',
       }}>
         <span>{t(locale, 'aiWorkbench.dashboard.changesCount').replace('{n}', String(filtered.length))}</span>
-        {paused && <span style={{ color: '#e6b800' }}>⏸ {t(locale, 'aiWorkbench.dashboard.paused')}</span>}
+        {paused && <span style={{ color: 'var(--warning)' }}>⏸ {t(locale, 'aiWorkbench.dashboard.paused')}</span>}
       </div>
     </div>
   );

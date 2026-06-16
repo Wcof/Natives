@@ -381,7 +381,7 @@ export default function SettingsPage() {
                       </button>
                       <button
                         className="btn"
-                        style={{ fontSize: 10, padding: '2px 6px', color: '#e06a5b' }}
+                        style={{ fontSize: 10, padding: '2px 6px', color: 'var(--danger)' }}
                         onClick={(e) => {
                           e.stopPropagation();
                           handleDeleteProfile(p.name);
@@ -504,7 +504,7 @@ export default function SettingsPage() {
                             </button>
                             <button
                               className="btn"
-                              style={{ fontSize: 10, padding: '2px 6px', color: '#e06a5b' }}
+                              style={{ fontSize: 10, padding: '2px 6px', color: 'var(--danger)' }}
                               onClick={() => handleDeleteVariable(v.key)}
                               title={t(locale, 'common.delete')}
                             >

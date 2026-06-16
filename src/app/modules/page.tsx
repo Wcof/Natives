@@ -129,7 +129,7 @@ export default function ModulesPage() {
               </button>
               <button
                 onClick={() => handleUninstall(mod)}
-                style={{ background: 'none', border: '1px solid var(--border,#262920)', color: '#e06a5b', padding: '4px 8px', borderRadius: 4, cursor: 'pointer' }}
+                style={{ background: 'none', border: '1px solid var(--border,#262920)', color: 'var(--danger)', padding: '4px 8px', borderRadius: 4, cursor: 'pointer' }}
                 aria-label={t(locale, 'modules.ariaUninstall').replace('{name}', mod.name)}
               >
                 <Trash2 size={14} />

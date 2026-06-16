@@ -20,8 +20,6 @@ interface ConfirmDialogProps {
  * - Tab / Shift+Tab 在按钮间循环
  * - Enter 触发确认
  * - Escape 触发取消
- *
- * TODO: 按钮颜色改用语义令牌 --danger（Round 2 任务 2.2）
  */
 export default function ConfirmDialog({
   open, title, message, confirmLabel, cancelLabel, danger, onConfirm, onCancel,
@@ -104,7 +102,7 @@ export default function ConfirmDialog({
             className="btn"
             onClick={onConfirm}
             style={{
-              background: danger ? '#d9534f' : 'var(--accent)', // TODO: 改用 --danger（见 Round 2 2.2）
+              background: danger ? 'var(--danger)' : 'var(--accent)',
               color: danger ? '#fff' : 'var(--accent-ink)',
               border: 'none', padding: '6px 14px', borderRadius: 6, cursor: 'pointer',
             }}

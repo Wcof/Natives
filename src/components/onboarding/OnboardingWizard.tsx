@@ -113,7 +113,7 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
               </div>
             ) : (
               <div>
-                <div style={{ fontSize: 14, color: '#e06a5b', marginBottom: 16 }}>⚠️ Some checks failed — you can continue and fix later.</div>
+                <div style={{ fontSize: 14, color: 'var(--danger)', marginBottom: 16 }}>⚠️ Some checks failed — you can continue and fix later.</div>
                 <button className="btn btn-primary" onClick={handleNext} style={{ fontSize: 12 }}>Continue Anyway →</button>
               </div>
             )}

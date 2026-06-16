@@ -15,6 +15,14 @@ const ThemeSchema = z.object({
   'accent-ink': z.string().regex(/^#[0-9a-fA-F]{6}$/),
   radius: z.string(),
   'font-display': z.string().optional(),
+  // 语义颜色令牌（Round 2 任务 2.2）
+  danger: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  'danger-soft': z.string().regex(/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/).optional(),
+  warning: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  info: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  'diff-add': z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  'diff-del': z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  'diff-mod': z.string().regex(/^#[0-9a-fA-F]{6}$/),
 });
 
 export type Theme = z.infer<typeof ThemeSchema>;
@@ -35,6 +43,13 @@ export const THEMES: Record<string, Theme> = {
     'accent-ink': '#0b0c0a',
     radius: '4px',
     'font-display': 'ui-monospace, "SF Mono", "JetBrains Mono", monospace',
+    danger: '#f24b4b',
+    'danger-soft': '#f24b4b15',
+    warning: '#e6b800',
+    info: '#4bcdf2',
+    'diff-add': '#4ec9b0',
+    'diff-del': '#f24b4b',
+    'diff-mod': '#5b9cf5',
   },
   'warm-archive': {
     bg: '#f5f0e8',
@@ -49,6 +64,13 @@ export const THEMES: Record<string, Theme> = {
     'accent-ink': '#f5f0e8',
     radius: '9px',
     'font-display': '"Fraunces", Georgia, serif',
+    danger: '#c0392b',
+    'danger-soft': '#c0392b15',
+    warning: '#b8860b',
+    info: '#3a7ca5',
+    'diff-add': '#5a8a5a',
+    'diff-del': '#a04040',
+    'diff-mod': '#5a6a9a',
   },
   'editorial': {
     bg: '#f4f1ea',
@@ -63,6 +85,13 @@ export const THEMES: Record<string, Theme> = {
     'accent-ink': '#ffffff',
     radius: '0px',
     'font-display': 'var(--font-ui)',
+    danger: '#ff433d',
+    'danger-soft': '#ff433d15',
+    warning: '#000000',
+    info: '#0a0a0a',
+    'diff-add': '#0a0a0a',
+    'diff-del': '#ff433d',
+    'diff-mod': '#5a5a5a',
   },
 };
 

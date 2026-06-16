@@ -686,7 +686,7 @@ function ModuleCard({
         <button
           className="btn"
           onClick={onUninstall}
-          style={{ fontSize: 11, padding: '4px 8px', color: '#e06a5b' }}
+          style={{ fontSize: 11, padding: '4px 8px', color: 'var(--danger)' }}
           title={t(locale, 'workshop.uninstallModule')}
         >
           🗑

@@ -261,7 +261,7 @@ export class IframeManager {
     reloadBtn.style.padding = '8px 20px';
     reloadBtn.style.border = 'none';
     reloadBtn.style.borderRadius = '4px';
-    reloadBtn.style.background = '#4f46e5';
+    reloadBtn.style.background = 'var(--accent)';
     reloadBtn.style.color = '#fff';
     reloadBtn.style.cursor = 'pointer';
     reloadBtn.style.fontSize = '14px';

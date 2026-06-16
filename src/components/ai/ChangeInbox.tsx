@@ -127,7 +127,7 @@ export default function ChangeInbox() {
                     padding: '4px 8px', fontSize: 11, color: 'var(--text)',
                     borderRadius: 4, cursor: 'pointer', marginBottom: 2,
                     background: 'var(--bg-2,#131410)',
-                    borderLeft: `3px solid ${ch.type === 'create' ? '#4ec9b0' : ch.type === 'delete' ? '#d9534f' : '#e6b800'}`,
+                    borderLeft: `3px solid ${ch.type === 'create' ? 'var(--diff-add)' : ch.type === 'delete' ? 'var(--danger)' : 'var(--warning)'}`,
                     display: 'flex', alignItems: 'center', gap: 4,
                   }}
                 >

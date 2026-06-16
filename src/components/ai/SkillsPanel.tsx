@@ -137,7 +137,7 @@ export default function SkillsPanel() {
                   }}>
                     {skill.enabled ? t(locale, 'aiWorkbench.skills.enabled') : t(locale, 'aiWorkbench.skills.disabled')}
                   </button>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: skill.health.ok ? '#4bcdf2' : '#f24b4b' }} />
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: skill.health.ok ? 'var(--info)' : 'var(--danger)' }} />
                 </div>
               </div>
               {skill.description && (
@@ -153,7 +153,7 @@ export default function SkillsPanel() {
                 <button onClick={() => { setSelectedSkill(skill); setShowLogs(true); const meta = [`Skill: ${skill.name}`, `Source: ${skill.source}`, `Path: ${skill.path}`, `Health: ${skill.health.ok ? 'OK' : skill.health.issues.join(', ') || 'unknown'}`, `Trigger count: ${skill.triggerCount}`, skill.lastTriggered ? `Last triggered: ${new Date(skill.lastTriggered).toLocaleString()}` : 'Last triggered: never']; if (skill.description) meta.push(`Description: ${skill.description.slice(0, 120)}`); setSkillLogs(meta); }} style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, border: '1px solid var(--border,#262920)', background: 'transparent', color: 'var(--text-faint)', cursor: 'pointer' }}>
                   📋 Logs
                 </button>
-                <button onClick={() => handleUninstall(skill)} style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, border: '1px solid #f24b4b', background: 'transparent', color: '#f24b4b', cursor: 'pointer' }}>
+                <button onClick={() => handleUninstall(skill)} style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, border: '1px solid #f24b4b', background: 'transparent', color: 'var(--danger)', cursor: 'pointer' }}>
                   {t(locale, 'aiWorkbench.skills.uninstall')}
                 </button>
               </div>

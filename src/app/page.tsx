@@ -215,12 +215,12 @@ export default function DashboardPage() {
           background: '#d9534f15', border: '1px solid #d9534f44',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
         }}>
-          <span style={{ fontSize: 12, color: '#d9534f' }}>⚠ {error}</span>
+          <span style={{ fontSize: 12, color: 'var(--danger)' }}>⚠ {error}</span>
           <button
             onClick={() => { setError(null); setRetryCount(c => c + 1); }}
             style={{
               padding: '4px 12px', borderRadius: 4, border: '1px solid #d9534f44',
-              background: 'transparent', color: '#d9534f', fontSize: 11, cursor: 'pointer',
+              background: 'transparent', color: 'var(--danger)', fontSize: 11, cursor: 'pointer',
             }}
           >
             Retry
@@ -234,7 +234,7 @@ export default function DashboardPage() {
           icon={<Database size={16} />}
           label={t(locale, 'dashboard.statusDatabase')}
           value={loading ? t(locale, 'common.loading') : status.dbOk ? t(locale, 'dashboard.statusConnected') : t(locale, 'dashboard.statusError')}
-          valueColor={loading ? 'var(--text-faint)' : status.dbOk ? 'var(--accent,#cdf24b)' : '#d9534f'}
+          valueColor={loading ? 'var(--text-faint)' : status.dbOk ? 'var(--accent,#cdf24b)' : 'var(--danger)'}
         />
         <StatusCard
           icon={<Package size={16} />}
@@ -319,7 +319,7 @@ export default function DashboardPage() {
             {status.unreadNotifications > 0 && (
               <span style={{
                 fontSize: 10, padding: '1px 6px', borderRadius: 9,
-                background: '#e06a5b22', color: '#e06a5b',
+                background: 'var(--danger-soft)', color: 'var(--danger)',
                 fontWeight: 600, textTransform: 'none', letterSpacing: 0,
               }}>
                 {status.unreadNotifications} {t(locale, 'dashboard.unreadNotifications')}

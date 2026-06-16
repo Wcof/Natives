@@ -43,7 +43,7 @@ export default function RtkPanel() {
             onClick={() => setPaused(!paused)}
             style={{
               fontSize: 10, padding: '2px 6px', borderRadius: 3,
-              color: paused ? '#e6b800' : 'var(--text-faint)',
+              color: paused ? 'var(--warning)' : 'var(--text-faint)',
             }}
             title={paused ? t(locale, 'aiWorkbench.rtk.resumeTracking') : t(locale, 'aiWorkbench.rtk.pauseTracking')}
           >
@@ -116,7 +116,7 @@ export default function RtkPanel() {
       {/* Status */}
       {paused && (
         <div style={{
-          fontSize: 10, color: '#e6b800', textAlign: 'center', padding: 4,
+          fontSize: 10, color: 'var(--warning)', textAlign: 'center', padding: 4,
           marginTop: 8, borderTop: '1px solid var(--border)',
         }}>
           ⏸ {t(locale, 'aiWorkbench.rtk.paused')}

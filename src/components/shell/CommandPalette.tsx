@@ -217,7 +217,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
   const categoryColors: Record<string, string> = {
     module: 'var(--accent,#cdf24b)',
     action: '#5b9cf5',
-    setting: '#e6b800',
+    setting: 'var(--warning)',
     navigation: '#a78bfa',
   };
 

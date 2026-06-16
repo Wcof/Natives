@@ -497,7 +497,7 @@ function GitDiffView({ diff, loading, status, fileName, locale }: {
           }}>
             <span style={{
               width: 8, height: 8, borderRadius: '50%',
-              background: status === t(locale, 'filePreview.gitUnchanged') ? 'var(--accent,#cdf24b)' : '#e6b800',
+              background: status === t(locale, 'filePreview.gitUnchanged') ? 'var(--accent,#cdf24b)' : 'var(--warning)',
             }} />
             <span>{status}</span>
           </div>
@@ -507,8 +507,8 @@ function GitDiffView({ diff, loading, status, fileName, locale }: {
             let color = 'var(--text)';
             const isChanged = line.startsWith('+') && !line.startsWith('+++');
             const isRemoved = line.startsWith('-') && !line.startsWith('---');
-            if (isChanged) color = '#4ec9b0';
-            else if (isRemoved) color = '#d9534f';
+            if (isChanged) color = 'var(--diff-add)';
+            else if (isRemoved) color = 'var(--danger)';
             else if (line.startsWith('@@')) color = '#5b9cf5';
             else if (line.startsWith('diff') || line.startsWith('index')) color = 'var(--text-faint)';
             return (
@@ -531,7 +531,7 @@ function GitDiffView({ diff, loading, status, fileName, locale }: {
         }}>
           <span style={{
             width: 8, height: 8, borderRadius: '50%',
-            background: status === t(locale, 'filePreview.gitUnchanged') ? 'var(--accent,#cdf24b)' : '#e6b800',
+            background: status === t(locale, 'filePreview.gitUnchanged') ? 'var(--accent,#cdf24b)' : 'var(--warning)',
           }} />
           <span>{status}</span>
         </div>

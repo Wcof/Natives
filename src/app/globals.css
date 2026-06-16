@@ -506,7 +506,7 @@ html, body {
 }
 
 .context-menu-item.danger {
-  color: #e06a5b;
+  color: var(--danger);
 }
 
 .context-menu-divider {

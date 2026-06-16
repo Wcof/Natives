@@ -60,8 +60,8 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
 
   const levelColors: Record<string, string> = {
     info: 'var(--accent,#cdf24b)',
-    warning: '#e6b800',
-    error: '#d9534f',
+    warning: 'var(--warning)',
+    error: 'var(--danger)',
   };
 
   const unreadCount = (notifications ?? []).filter((n) => !n.read).length;
@@ -206,7 +206,7 @@ export function NotificationBadge({ locale }: { locale: Locale }) {
       position: 'absolute', top: -4, right: -4,
       minWidth: 14, height: 14,
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: '#d9534f', color: '#fff',
+      background: 'var(--danger)', color: '#fff',
       fontSize: 9, fontWeight: 700, borderRadius: 7,
       padding: '0 3px',
     }}>

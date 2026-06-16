@@ -75,9 +75,9 @@ export default function CrashMonitor() {
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '8px 10px', borderBottom: '1px solid var(--border,#262920)',
-        background: '#f24b4b15',
+        background: 'var(--danger-soft)',
       }}>
-        <span style={{ fontSize: 11, fontWeight: 600, color: '#f24b4b' }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--danger)' }}>
           ⚠️ {activeCrashes.length} {activeCrashes.length !== 1 ? t(locale, 'errors.crashes') : t(locale, 'errors.crash')}
         </span>
         {activeCrashes.length > 1 && (

@@ -140,7 +140,7 @@ export default function PromptLibrary() {
                 <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{prompt.title}</div>
                 <div style={{ display: 'flex', gap: 4 }}>
                   <button className="btn-ghost" onClick={() => handleEdit(prompt)} style={{ fontSize: 9, padding: '1px 4px' }}>✏️</button>
-                  <button className="btn-ghost" onClick={() => handleDelete(prompt.id)} style={{ fontSize: 9, padding: '1px 4px', color: '#f24b4b' }}>🗑</button>
+                  <button className="btn-ghost" onClick={() => handleDelete(prompt.id)} style={{ fontSize: 9, padding: '1px 4px', color: 'var(--danger)' }}>🗑</button>
                 </div>
               </div>
               <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 4, whiteSpace: 'pre-wrap', maxHeight: 40, overflow: 'hidden' }}>
