@@ -63,7 +63,7 @@ export default function StorePage() {
         justifyContent: 'space-between',
       }}>
         <div>
-          <h1 style={{ fontSize: 17, fontWeight: 600, color: 'var(--text,#f2f2ea)', margin: 0 }}>
+          <h1 style={{ fontSize: 17, fontWeight: 600, color: 'var(--text,#f2f2ea)', margin: 0, fontFamily: 'var(--font-display)' }}>
             {t(locale, 'store.title')}
           </h1>
           <p style={{ fontSize: 12, color: 'var(--text-dim,#9b9d8c)', margin: '2px 0 0' }}>

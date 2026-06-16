@@ -83,7 +83,7 @@ export default function ModulesPage() {
   return (
     <div style={{ height: '100%', overflow: 'auto' }} role="region" aria-label="Module manager">
       <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border,#262920)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <h1 style={{ fontSize: 17, fontWeight: 600, color: 'var(--text,#f2f2ea)', margin: 0 }}>{t(locale, 'modules.title')}</h1>
+        <h1 style={{ fontSize: 17, fontWeight: 600, color: 'var(--text,#f2f2ea)', margin: 0, fontFamily: 'var(--font-display)' }}>{t(locale, 'modules.title')}</h1>
         <button
           onClick={handleScan}
           style={{ background: 'var(--bg-3,#1c1e17)', border: '1px solid var(--border,#262920)', color: 'var(--text,#f2f2ea)', padding: '6px 12px', borderRadius: 6, cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}

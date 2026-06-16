@@ -227,7 +227,7 @@ export default function SettingsPage() {
   return (
     <div style={{ height: '100%', overflow: 'auto', position: 'relative' }}>
       <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border,#262920)' }}>
-        <h1 style={{ fontSize: 17, fontWeight: 600, color: 'var(--text,#f2f2ea)', margin: 0 }}>
+        <h1 style={{ fontSize: 17, fontWeight: 600, color: 'var(--text,#f2f2ea)', margin: 0, fontFamily: 'var(--font-display)' }}>
           {t(locale, 'settings.title')}
         </h1>
       </div>
