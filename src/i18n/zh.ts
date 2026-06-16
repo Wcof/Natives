@@ -50,6 +50,7 @@ export const zh = {
     statusError: '异常',
     statusDataUsage: '数据用量',
     fileBrowser: '文件浏览器',
+    recentlyOpened: '最近打开',
     unreadNotifications: '未读通知',
     enabledModules: '已启用模块',
     recentActivity: '最近活动',
