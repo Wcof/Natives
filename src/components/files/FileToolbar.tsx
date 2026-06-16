@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { t, type Locale } from '@/i18n';
+import { ArrowLeft, ArrowRight, Grid3x3, List, ArrowUp, ArrowDown, RefreshCw, Clock } from 'lucide-react';
 
 interface FileToolbarProps {
   viewMode: 'grid' | 'list';
@@ -62,7 +63,7 @@ export default function FileToolbar({
             title={t(locale,'fileBrowser.back')}
             style={{ padding: '2px 6px', fontSize: 14, opacity: canGoBack ? 1 : 0.3 }}
           >
-            ←
+            <ArrowLeft size={14} />
           </button>
           <button
             className="btn btn-ghost"
@@ -71,7 +72,7 @@ export default function FileToolbar({
             title={t(locale,'fileBrowser.forward')}
             style={{ padding: '2px 6px', fontSize: 14, opacity: canGoForward ? 1 : 0.3 }}
           >
-            →
+            <ArrowRight size={14} />
           </button>
         </div>
       )}
@@ -83,14 +84,14 @@ export default function FileToolbar({
           onClick={() => onViewModeChange('grid')}
           title={t(locale, 'fileBrowser.gridView')}
         >
-          ▦
+          <Grid3x3 size={14} />
         </button>
         <button
           className={`seg-item ${viewMode === 'list' ? 'active' : ''}`}
           onClick={() => onViewModeChange('list')}
           title={t(locale, 'fileBrowser.listView')}
         >
-          ☰
+          <List size={14} />
         </button>
       </div>
 
@@ -113,7 +114,7 @@ export default function FileToolbar({
         style={{ fontSize: 14, padding: '2px 6px' }}
         title={t(locale, sortDir === 'asc' ? 'fileBrowser.ascending' : 'fileBrowser.descending')}
       >
-        {sortDir === 'asc' ? '↑' : '↓'}
+        {sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
       </button>
 
       {/* Show hidden toggle */}
@@ -143,7 +144,7 @@ export default function FileToolbar({
           }}
           title={t(locale, recentMode ? 'fileBrowser.recentModeTitle' : 'fileBrowser.recentMode')}
         >
-          🕐
+          <Clock size={14} />
         </button>
       )}
 
@@ -163,7 +164,7 @@ export default function FileToolbar({
       )}
       {onRefresh && (
         <button className="btn btn-ghost" onClick={onRefresh} style={{ fontSize: 11, padding: '3px 8px' }} title={t(locale,'fileBrowser.refresh')}>
-          ↻
+          <RefreshCw size={12} />
         </button>
       )}
 

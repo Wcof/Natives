@@ -62,7 +62,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
           height: '100%', padding: 32, gap: 12,
           color: 'var(--text, #f2f2ea)', background: 'var(--bg, #0b0c0a)',
         }}>
-          <div style={{ fontSize: 32 }}>💥</div>
+          <div style={{ fontSize: 32, color: 'var(--danger)' }}>⚠</div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>{msg.title}</div>
           <div style={{ fontSize: 12, color: 'var(--text-dim, #9b9d8c)', textAlign: 'center', maxWidth: 400 }}>
             {this.state.error?.message || msg.fallback}

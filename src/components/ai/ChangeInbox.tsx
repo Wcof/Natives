@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { type FileChangeEvent } from '@/types/agent';
+import { PlusCircle, XCircle, Edit3, Folder } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
 
 // ── Noise filter: exclude system/generated files ──
@@ -117,7 +118,7 @@ export default function ChangeInbox() {
           Object.entries(groupedByProject).map(([project, changes]) => (
             <div key={project} style={{ marginBottom: 10 }}>
               <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-dim)', marginBottom: 4, padding: '0 4px' }}>
-                📂 {project}
+                <Folder size={12} style={{ marginRight: 4, color: 'var(--text-dim)' }} /> {project}
               </div>
               {changes.map((ch, i) => (
                 <div
@@ -131,8 +132,8 @@ export default function ChangeInbox() {
                     display: 'flex', alignItems: 'center', gap: 4,
                   }}
                 >
-                  <span style={{ flexShrink: 0 }}>
-                    {ch.type === 'create' ? '🟢' : ch.type === 'delete' ? '🔴' : '🟡'}
+                  <span style={{ flexShrink: 0, display: 'inline-flex' }}>
+                    {ch.type === 'create' ? <PlusCircle size={12} style={{ color: 'var(--diff-add)' }} /> : ch.type === 'delete' ? <XCircle size={12} style={{ color: 'var(--danger)' }} /> : <Edit3 size={12} style={{ color: 'var(--warning)' }} />}
                   </span>
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                     {ch.path.split('/').pop()}

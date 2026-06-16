@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { FolderOpen } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import { type FileEntry } from '@/types/file';
 import FileRow from './FileRow';
@@ -76,7 +77,8 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
           color: 'var(--text-faint, #62655a)',
           fontSize: 13,
         }}>
-          📂 {t(locale, 'fileBrowser.empty')}
+          <FolderOpen size={20} style={{ color: 'var(--text-faint)', marginBottom: 4 }} />
+          <div>{t(locale, 'fileBrowser.empty')}</div>
         </div>
       ) : (
         entries.map((entry) => (

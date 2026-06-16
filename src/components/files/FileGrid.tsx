@@ -1,6 +1,7 @@
 'use client';
 
 import { type FileEntry } from '@/types/file';
+import { FolderOpen } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
 import FileCard from './FileCard';
 
@@ -19,7 +20,7 @@ export default function FileGrid({ entries, onSelect, onContextMenu }: FileGridP
         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
         height: '100%', color: 'var(--text-faint, #62655a)', fontSize: 13, gap: 8,
       }}>
-        <span style={{ fontSize: 28 }}>📂</span>
+        <FolderOpen size={24} style={{ color: 'var(--text-faint, #62655a)' }} />
         {t(locale, 'fileBrowser.empty')}
       </div>
     );

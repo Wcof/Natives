@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Terminal, Package, Settings, Square, HardDrive, Database, Folder, Wrench, Rocket, RefreshCw } from 'lucide-react';
+import { Terminal, Package, Settings, Square, HardDrive, Database, Folder, Wrench, Rocket, RefreshCw, FileText } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import { useRecentModules } from '@/lib/recent-modules';
 import { useRecentFiles } from '@/lib/recent-files-client';
@@ -340,7 +340,9 @@ export default function DashboardPage() {
                     width: '100%', textAlign: 'left' as const,
                   }}
                 >
-                  <span style={{ flexShrink: 0 }}>📄</span>
+                  <span style={{ flexShrink: 0, display: 'inline-flex', color: 'var(--text-faint)' }}>
+                    <FileText size={14} />
+                  </span>
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>
                     {name}
                   </span>
