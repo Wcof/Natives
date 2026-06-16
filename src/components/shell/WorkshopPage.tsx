@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { t, type Locale } from '@/i18n';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useFocusTrap } from '@/lib/useFocusTrap';
 
 interface ModuleInfo {
@@ -43,6 +44,7 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
   const [installing, setInstalling] = useState(false);
   // P1-3: Track which permissions the user has selected (checkboxes)
   const [selectedPerms, setSelectedPerms] = useState<Set<string>>(new Set());
+  const [uninstallTarget, setUninstallTarget] = useState<ModuleInfo | null>(null);
 
   // Focus traps (STYLE-2)
   const createDialogTrap = useFocusTrap();
@@ -189,14 +191,20 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
     }
   };
 
-  const handleUninstall = async (mod: ModuleInfo) => {
-    if (!confirm(t(locale, 'workshop.confirmUninstall'))) return;
+  const handleUninstall = (mod: ModuleInfo) => {
+    setUninstallTarget(mod);
+  };
+
+  const doUninstall = async () => {
+    if (!uninstallTarget) return;
     try {
-      await window.nativesAPI?.module?.uninstall?.(mod.id);
+      await window.nativesAPI?.module?.uninstall?.(uninstallTarget.id);
       await loadModules();
       showToast(t(locale, 'modules.uninstall'));
     } catch (err) {
       console.error('[Workshop] Uninstall failed:', err);
+    } finally {
+      setUninstallTarget(null);
     }
   };
 
@@ -589,6 +597,22 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
           </div>
         </div>
       )}
+
+      {/* Confirm uninstall dialog */}
+      <ConfirmDialog
+        open={!!uninstallTarget}
+        danger
+        title={t(locale, 'workshop.confirmUninstallTitle')}
+        message={
+          uninstallTarget
+            ? t(locale, 'workshop.confirmUninstallDesc').replace('{name}', uninstallTarget.name)
+            : ''
+        }
+        confirmLabel={t(locale, 'common.confirm')}
+        cancelLabel={t(locale, 'common.cancel')}
+        onConfirm={doUninstall}
+        onCancel={() => setUninstallTarget(null)}
+      />
 
       {/* Toast */}
       {toast && (

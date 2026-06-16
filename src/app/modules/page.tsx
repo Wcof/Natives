@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Power, Trash2, RefreshCw } from 'lucide-react';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { t, type Locale } from '@/i18n';
 
 interface ModuleInfo {
@@ -17,6 +18,7 @@ interface ModuleInfo {
 export default function ModulesPage() {
   const [modules, setModules] = useState<ModuleInfo[]>([]);
   const [loading, setLoading] = useState(true);
+  const [uninstallTarget, setUninstallTarget] = useState<ModuleInfo | null>(null);
   const [locale, setLocale] = useState<Locale>('zh');
 
   useEffect(() => {
@@ -66,15 +68,21 @@ export default function ModulesPage() {
     }
   }
 
-  async function handleUninstall(mod: ModuleInfo) {
-    if (!confirm(t(locale, 'modules.confirmUninstallModule').replace('{name}', mod.name))) return;
+  async function doUninstall() {
+    if (!uninstallTarget) return;
     try {
       const api = window.nativesAPI;
-      await api?.module?.uninstall?.(mod.id);
+      await api?.module?.uninstall?.(uninstallTarget.id);
       await loadModules();
     } catch (err) {
       console.error('[Modules] Uninstall failed:', err);
+    } finally {
+      setUninstallTarget(null);
     }
+  }
+
+  function handleUninstall(mod: ModuleInfo) {
+    setUninstallTarget(mod);
   }
 
   async function handleScan() {

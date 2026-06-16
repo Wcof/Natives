@@ -9,6 +9,7 @@ import FileBreadcrumb from './FileBreadcrumb';
 import FileToolbar from './FileToolbar';
 import FileContextMenu from './FileContextMenu';
 import Skeleton from '@/components/ui/Skeleton';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useFocusTrap } from '@/lib/useFocusTrap';
 
 interface FileBrowserProps {
@@ -23,6 +24,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const [sortBy, setSortBy] = useState<'name' | 'mtime' | 'size'>('name');
   const renameTrap = useFocusTrap();
   const newItemTrap = useFocusTrap();
+  const [trashTarget, setTrashTarget] = useState<FileEntry | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [showHidden, setShowHidden] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -201,10 +203,15 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     setRenameValue('');
   }, [renameTarget, renameValue, loadEntries, showToast]);
 
-  const handleTrash = useCallback(async (entry: FileEntry) => {
-    if (!confirm(`Move "${entry.name}" to trash?`)) return;
+  const handleTrash = useCallback((entry: FileEntry) => {
+    setTrashTarget(entry);
+    return;
+  }, []);
+
+  const doTrash = useCallback(async () => {
+    if (!trashTarget) return;
     try {
-      const result = await window.nativesAPI?.fs?.trashEntry?.(entry.path);
+      const result = await window.nativesAPI?.fs?.trashEntry?.(trashTarget.path);
       if (result?.ok) {
         showToast(t(locale, 'fileBrowser.trashed'));
         await loadEntries();
@@ -213,8 +220,10 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       }
     } catch (err) {
       showToast(t(locale, 'fileBrowser.trashFailed'));
+    } finally {
+      setTrashTarget(null);
     }
-  }, [loadEntries, showToast]);
+  }, [trashTarget, loadEntries, showToast, locale]);
 
   const handleNewFile = useCallback((parentDir: string) => {
     setNewItemTarget({ parentDir, type: 'file' });

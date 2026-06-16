@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { type SkillInfo } from '@/types/agent';
 import { t, type Locale } from '@/i18n';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 
 export default function SkillsPanel() {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -12,6 +13,7 @@ export default function SkillsPanel() {
   const [selectedSkill, setSelectedSkill] = useState<SkillInfo | null>(null);
   const [showLogs, setShowLogs] = useState(false);
   const [skillLogs, setSkillLogs] = useState<string[]>([]);
+  const [uninstallTarget, setUninstallTarget] = useState<SkillInfo | null>(null);
 
   useEffect(() => {
     async function loadLocale() {
@@ -54,16 +56,22 @@ export default function SkillsPanel() {
     }
   }, [loadSkills]);
 
-  const handleUninstall = useCallback(async (skill: SkillInfo) => {
-    if (!confirm(t(locale, 'aiWorkbench.skills.confirmUninstall'))) return;
+  const handleUninstall = useCallback((skill: SkillInfo) => {
+    setUninstallTarget(skill);
+  }, []);
+
+  const doUninstall = useCallback(async () => {
+    if (!uninstallTarget) return;
     try {
       const api = window.nativesAPI;
-      await api?.skills?.uninstall(skill.path);
+      await api?.skills?.uninstall(uninstallTarget.path);
       await loadSkills();
     } catch (err) {
       console.error('[SkillsPanel] Failed to uninstall skill:', err);
+    } finally {
+      setUninstallTarget(null);
     }
-  }, [loadSkills]);
+  }, [uninstallTarget, loadSkills]);
 
   useEffect(() => {
     loadSkills();
@@ -176,6 +184,16 @@ export default function SkillsPanel() {
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={!!uninstallTarget}
+        title={t(locale,'aiWorkbench.skills.uninstall')}
+        message={t(locale,'aiWorkbench.skills.confirmUninstall')}
+        confirmLabel={t(locale,'aiWorkbench.skills.uninstall')}
+        cancelLabel={t(locale,'common.cancel')}
+        danger
+        onConfirm={doUninstall}
+        onCancel={() => setUninstallTarget(null)}
+      />
     </div>
   );
 }

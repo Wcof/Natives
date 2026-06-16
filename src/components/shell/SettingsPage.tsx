@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { applyTheme } from '@/lib/theme-engine';
 import { t, type Locale } from '@/i18n';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 
 interface EnvProfile {
   id: number;
@@ -35,6 +36,8 @@ export default function SettingsPage() {
   const [editingVar, setEditingVar] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const [toast, setToast] = useState<string | null>(null);
+  const [deleteProfileTarget, setDeleteProfileTarget] = useState<string | null>(null);
+  const [deleteVarTarget, setDeleteVarTarget] = useState<string | null>(null);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -156,8 +159,7 @@ export default function SettingsPage() {
     }
   };
 
-  const handleDeleteProfile = async (name: string) => {
-    if (!confirm(t(locale, 'settings.confirmDeleteProfile'))) return;
+  const doDeleteProfile = async (name: string) => {
     try {
       await window.nativesAPI?.env?.deleteProfile(name);
       if (selectedProfile === name) {
@@ -169,6 +171,10 @@ export default function SettingsPage() {
     } catch (err) {
       console.error('[Settings] Delete profile failed:', err);
     }
+  };
+
+  const handleDeleteProfile = (name: string) => {
+    setDeleteProfileTarget(name);
   };
 
   // Variable CRUD
