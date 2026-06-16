@@ -897,3 +897,5 @@ html, body {
 .tb-xxs .segmented-control,
 .tb-xxs .btn-ghost { display: none !important; }
 .tb-min .btn-ghost { display: none !important; }
+/* Terminal toggle always visible */
+.tb-min #btn-terminal { display: inline-flex !important; }
