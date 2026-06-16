@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { Folder, FileText } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import { type DiskUsageItem } from '@/types/file';
 
@@ -70,7 +71,9 @@ export default function DiskUsage({ dirPath, onNavigate }: DiskUsageProps) {
               onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
             >
               {/* Icon */}
-              <span style={{ fontSize: 14 }}>{item.isDir ? '📁' : '📄'}</span>
+              <span style={{ fontSize: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: item.isDir ? 'var(--accent, #cdf24b)' : 'var(--text-dim, #9b9d8c)' }}>
+                {item.isDir ? <Folder size={14} /> : <FileText size={14} />}
+              </span>
 
               {/* Name */}
               <div style={{

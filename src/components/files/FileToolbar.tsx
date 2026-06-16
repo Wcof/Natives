@@ -9,6 +9,7 @@ interface FileToolbarProps {
   sortDir: 'asc' | 'desc';
   showHidden: boolean;
   searchQuery: string;
+  recentMode?: boolean;
   canGoBack?: boolean;
   canGoForward?: boolean;
   onViewModeChange: (mode: 'grid' | 'list') => void;
@@ -16,6 +17,7 @@ interface FileToolbarProps {
   onSortDirChange: (dir: 'asc' | 'desc') => void;
   onShowHiddenChange: (show: boolean) => void;
   onSearchChange: (query: string) => void;
+  onRecentModeToggle?: () => void;
   onRefresh?: () => void;
   onNewFile?: () => void;
   onNewFolder?: () => void;
@@ -24,11 +26,11 @@ interface FileToolbarProps {
 }
 
 export default function FileToolbar({
-  viewMode, sortBy, sortDir, showHidden, searchQuery,
+  viewMode, sortBy, sortDir, showHidden, searchQuery, recentMode,
   canGoBack, canGoForward,
   onViewModeChange, onSortChange, onSortDirChange,
   onShowHiddenChange, onSearchChange,
-  onRefresh, onNewFile, onNewFolder, onBack, onForward,
+  onRecentModeToggle, onRefresh, onNewFile, onNewFolder, onBack, onForward,
 }: FileToolbarProps) {
   const [locale, setLocale] = useState<Locale>('en');
   useEffect(() => {
@@ -129,6 +131,21 @@ export default function FileToolbar({
           {t(locale,'fileBrowser.hidden')}
         </span>
       </label>
+
+      {/* Recent mode toggle */}
+      {onRecentModeToggle && (
+        <button
+          className="btn btn-ghost"
+          onClick={onRecentModeToggle}
+          style={{
+            fontSize: 13, padding: '2px 6px',
+            color: recentMode ? 'var(--accent,#cdf24b)' : undefined,
+          }}
+          title={t(locale, recentMode ? 'fileBrowser.recentModeTitle' : 'fileBrowser.recentMode')}
+        >
+          🕐
+        </button>
+      )}
 
       {/* Spacer */}
       <div style={{ flex: 1 }} />

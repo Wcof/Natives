@@ -2,9 +2,10 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { getDiskUsage } from './disk-usage';
 
-const DU_DIR = path.join(process.env.HOME || '~', '.natives-test', 'disk-usage-test');
+const DU_DIR = path.join(os.tmpdir(), 'natives-disk-usage-test');
 
 describe('getDiskUsage', () => {
   before(() => {

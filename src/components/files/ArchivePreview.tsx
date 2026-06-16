@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { Folder, FileText } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import { formatSize } from '@/lib/diff-utils';
 
@@ -79,8 +80,8 @@ export default function ArchivePreview({ path, locale }: ArchivePreviewProps) {
             padding: '3px 10px',
             borderBottom: '1px solid var(--border, #262920)',
           }}>
-            <span style={{ color: entry.isDir ? 'var(--accent, #cdf24b)' : 'var(--text-dim)', fontSize: 14 }}>
-              {entry.isDir ? '📁' : '📄'}
+            <span style={{ color: entry.isDir ? 'var(--accent, #cdf24b)' : 'var(--text-dim)', fontSize: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+              {entry.isDir ? <Folder size={14} /> : <FileText size={14} />}
             </span>
             <span style={{
               flex: 1,

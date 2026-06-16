@@ -29,7 +29,12 @@ export interface ModuleUpdateInfo {
 import * as fs from 'fs';
 import * as path from 'path';
 
-const MODULES_DIR = path.join(process.env.HOME || '~', '.natives', 'modules');
+function getModulesDir() {
+  if (process.env.NATIVES_DB_DIR) {
+    return path.join(process.env.NATIVES_DB_DIR, 'modules');
+  }
+  return path.join(process.env.HOME || '~', '.natives', 'modules');
+}
 
 export function checkForUpdates(): ModuleUpdateInfo[] {
   const db = getDb();
@@ -42,7 +47,7 @@ export function checkForUpdates(): ModuleUpdateInfo[] {
   const results: ModuleUpdateInfo[] = [];
 
   for (const mod of modules) {
-    const manifestPath = path.join(MODULES_DIR, mod.id, 'manifest.json');
+    const manifestPath = path.join(getModulesDir(), mod.id, 'manifest.json');
     if (!fs.existsSync(manifestPath)) continue;
 
     try {
@@ -84,7 +89,7 @@ export function checkForUpdates(): ModuleUpdateInfo[] {
 export function applyUpdate(moduleId: string): { success: true } | { success: false; error: string } {
   try {
     const db = getDb();
-    const manifestPath = path.join(MODULES_DIR, moduleId, 'manifest.json');
+    const manifestPath = path.join(getModulesDir(), moduleId, 'manifest.json');
     if (!fs.existsSync(manifestPath)) {
       return { success: false, error: 'Module no longer exists' };
     }

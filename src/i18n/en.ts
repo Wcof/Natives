@@ -58,6 +58,8 @@ export const en = {
     unreadNotifications: 'Unread Notifications',
     enabledModules: 'Enabled Modules',
     recentActivity: 'Recent Activity',
+    recentFiles: 'Recent Files',
+    recentFilesEmpty: 'No files opened yet',
   },
 
   // Module Manager
@@ -93,7 +95,7 @@ export const en = {
     allModules: 'All Modules',
     searchPlaceholder: 'Search modules...',
     comingSoon: 'Online Store Coming Soon',
-    comingSoonDesc: 'Currently supports local module installation. Head to the Workshop to drag-and-drop install.',
+    comingSoonDesc: 'Currently supports local module installation. Drag-and-drop install under the "Manage Installed" tab.',
     goToWorkshop: 'Go to Workshop',
     viewDetails: 'View Details',
     moduleCount: '{count} modules installed',
@@ -106,6 +108,8 @@ export const en = {
   workshop: {
     title: 'Workshop',
     subtitle: 'Browse, create, and manage your modules',
+    tabInstalled: 'Manage Installed',
+    tabBrowse: 'Browse Workshop',
     dragToInstall: 'Drag a ZIP file or folder here to install',
     releaseToInstall: 'Release to install module',
     createModule: 'Create New Module',
@@ -157,6 +161,7 @@ export const en = {
     about: 'About',
     themeTerminal: 'Terminal Volt (Dark)',
     themeWarm: 'Warm Archive (Light)',
+    themeEditorial: 'Editorial (Light)',
     addProfile: 'Add Profile',
     deleteProfile: 'Delete Profile',
     defaultProfile: 'Default Profile',
@@ -305,6 +310,8 @@ export const en = {
     back: 'Back',
     forward: 'Forward',
     ariaLabelFiles: 'Files',
+    recentMode: 'Recently modified files',
+    recentModeTitle: 'Exit recent files view',
   },
 
   // File Preview

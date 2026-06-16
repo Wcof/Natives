@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { Layers, Pause, Play, Trash2, Package, Rocket } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -27,12 +28,25 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
   // authorization. Kept in the props type for ShellLayout compatibility.
   void onInstall;
   const [dragOver, setDragOver] = useState(false);
+  const [activeTab, setActiveTab] = useState<'installed' | 'browse'>('installed');
+  const [searchQuery, setSearchQuery] = useState('');
+
   const { data: modules, loading, error, reload: loadModules } = useAsyncData(async () => {
     const api = window.nativesAPI;
     const result = await api?.module?.list?.();
     if (Array.isArray(result)) return result as ModuleInfo[];
     return [];
   }, []);
+
+  const filteredModules = (modules ?? []).filter((m) => {
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      m.name.toLowerCase().includes(q) ||
+      m.id.toLowerCase().includes(q) ||
+      (m.description && m.description.toLowerCase().includes(q))
+    );
+  });
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [templateName, setTemplateName] = useState('');
   const [templateId, setTemplateId] = useState('');
@@ -343,77 +357,198 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn" onClick={handleScan} style={{ fontSize: 12 }}>
-            ↻ {t(locale, 'workshop.scanModules')}
-          </button>
-          <button className="btn btn-primary" onClick={() => setShowCreateDialog(true)} style={{ fontSize: 12 }}>
-            + {t(locale, 'workshop.createModule')}
-          </button>
+          {activeTab === 'installed' && (
+            <>
+              <button className="btn" onClick={handleScan} style={{ fontSize: 12 }}>
+                ↻ {t(locale, 'workshop.scanModules')}
+              </button>
+              <button className="btn btn-primary" onClick={() => setShowCreateDialog(true)} style={{ fontSize: 12 }}>
+                + {t(locale, 'workshop.createModule')}
+              </button>
+            </>
+          )}
         </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{
+        display: 'flex',
+        gap: 16,
+        padding: '0 20px',
+        borderBottom: '1px solid var(--border,#262920)',
+        flexShrink: 0,
+      }}>
+        <button
+          onClick={() => setActiveTab('installed')}
+          style={{
+            padding: '10px 4px',
+            border: 'none',
+            background: 'none',
+            color: activeTab === 'installed' ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
+            borderBottom: activeTab === 'installed' ? '2px solid var(--accent,#cdf24b)' : '2px solid transparent',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            transition: 'all 0.12s',
+          }}
+        >
+          {t(locale, 'workshop.tabInstalled')}
+        </button>
+        <button
+          onClick={() => setActiveTab('browse')}
+          style={{
+            padding: '10px 4px',
+            border: 'none',
+            background: 'none',
+            color: activeTab === 'browse' ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
+            borderBottom: activeTab === 'browse' ? '2px solid var(--accent,#cdf24b)' : '2px solid transparent',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            transition: 'all 0.12s',
+          }}
+        >
+          {t(locale, 'workshop.tabBrowse')}
+        </button>
       </div>
 
       {/* Content */}
       <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px', position: 'relative' }}>
-        {/* Drop zone */}
-        <div
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          style={{
-            padding: dragOver ? 36 : 28,
-            border: `2px dashed ${dragOver ? 'var(--accent,#cdf24b)' : 'var(--border,#262920)'}`,
-            borderRadius: 8,
-            textAlign: 'center',
-            color: 'var(--text-faint,#62655a)',
-            fontSize: 13,
-            transition: 'all 0.16s cubic-bezier(0.2,0.7,0.3,1)',
-            background: dragOver ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
-            marginBottom: 20,
-          }}
-        >
-          {dragOver ? (
-            <span style={{ color: 'var(--accent,#cdf24b)', fontWeight: 600 }}>
-              {t(locale, 'workshop.releaseToInstall')}
-            </span>
-          ) : (
-            <>
-              <div style={{ fontSize: 24, marginBottom: 6 }}>📦</div>
-              <div>{t(locale, 'workshop.dragToInstall')}</div>
-            </>
-          )}
-        </div>
+        {activeTab === 'installed' ? (
+          <>
+            {/* Drop zone */}
+            <div
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              style={{
+                padding: dragOver ? 36 : 28,
+                border: `2px dashed ${dragOver ? 'var(--accent,#cdf24b)' : 'var(--border,#262920)'}`,
+                borderRadius: 8,
+                textAlign: 'center',
+                color: 'var(--text-faint,#62655a)',
+                fontSize: 13,
+                transition: 'all 0.16s cubic-bezier(0.2,0.7,0.3,1)',
+                background: dragOver ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
+                marginBottom: 20,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              {dragOver ? (
+                <span style={{ color: 'var(--accent,#cdf24b)', fontWeight: 600 }}>
+                  {t(locale, 'workshop.releaseToInstall')}
+                </span>
+              ) : (
+                <>
+                  <div style={{ marginBottom: 6, display: 'flex', justifyContent: 'center', color: 'var(--text-faint)' }}>
+                    <Package size={24} />
+                  </div>
+                  <div>{t(locale, 'workshop.dragToInstall')}</div>
+                </>
+              )}
+            </div>
 
-        {/* areaRipple overlay on install success (STYLE-1) */}
-        {showRipple && (
-          <div className="anim-areaRipple" style={{
-            position: 'absolute', inset: 0, borderRadius: 8,
-            pointerEvents: 'none', zIndex: 5,
-          }} />
-        )}
+            {/* areaRipple overlay on install success (STYLE-1) */}
+            {showRipple && (
+              <div className="anim-areaRipple" style={{
+                position: 'absolute', inset: 0, borderRadius: 8,
+                pointerEvents: 'none', zIndex: 5,
+              }} />
+            )}
 
-        {/* Module grid */}
-        {loading ? (
-          <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-faint)', fontSize: 13 }}>
-            {t(locale, 'common.loading')}
-          </div>
-        ) : (modules ?? []).length === 0 ? (
-          <EmptyState title={t(locale, 'workshop.emptyState')} />
+            {/* Module grid */}
+            {loading ? (
+              <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-faint)', fontSize: 13 }}>
+                {t(locale, 'common.loading')}
+              </div>
+            ) : (modules ?? []).length === 0 ? (
+              <EmptyState title={t(locale, 'workshop.emptyState')} />
+            ) : (
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+                gap: 12,
+              }}>
+                {(modules ?? []).map((mod) => (
+                  <ModuleCard
+                    key={mod.id}
+                    module={mod}
+                    locale={locale}
+                    onToggle={() => handleToggle(mod)}
+                    onUninstall={() => handleUninstall(mod)}
+                  />
+                ))}
+              </div>
+            )}
+          </>
         ) : (
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-            gap: 12,
-          }}>
-            {(modules ?? []).map((mod) => (
-              <ModuleCard
-                key={mod.id}
-                module={mod}
-                locale={locale}
-                onToggle={() => handleToggle(mod)}
-                onUninstall={() => handleUninstall(mod)}
+          /* Browse Online Workshop Tab (merged from StorePage) */
+          <>
+            {/* Search bar */}
+            <div style={{ marginBottom: 16 }}>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={t(locale, 'store.searchPlaceholder')}
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  background: 'var(--bg,#0b0c0a)',
+                  border: '1px solid var(--border,#262920)',
+                  borderRadius: 6,
+                  color: 'var(--text)',
+                  fontSize: 13,
+                  outline: 'none',
+                }}
               />
-            ))}
-          </div>
+            </div>
+
+            {/* Coming soon banner */}
+            <div style={{
+              padding: '16px 20px',
+              background: 'linear-gradient(135deg, var(--accent-soft,#cdf24b1f), transparent)',
+              border: '1px solid var(--border,#262920)',
+              borderRadius: 8,
+              marginBottom: 20,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 16,
+            }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Rocket size={14} style={{ color: 'var(--accent,#cdf24b)' }} />
+                  <span>{t(locale, 'store.comingSoon')}</span>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                  {t(locale, 'store.comingSoonDesc')}
+                </div>
+              </div>
+            </div>
+
+            {/* Catalog Modules List */}
+            {loading ? (
+              <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-faint)', fontSize: 13 }}>
+                {t(locale, 'common.loading')}
+              </div>
+            ) : filteredModules.length === 0 ? (
+              <EmptyState title={t(locale, 'store.noModules')} />
+            ) : (
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+                gap: 12,
+              }}>
+                {filteredModules.map((mod) => (
+                  <StoreModuleCard key={mod.id} module={mod} locale={locale} />
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -670,18 +805,18 @@ function ModuleCard({
         <button
           className="btn"
           onClick={onToggle}
-          style={{ flex: 1, fontSize: 11, padding: '4px 8px' }}
+          style={{ flex: 1, fontSize: 11, padding: '4px 8px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
           title={t(locale, 'workshop.toggleModule')}
         >
-          {mod.enabled ? '⏸' : '▶'} {mod.enabled ? t(locale, 'modules.disable') : t(locale, 'modules.enable')}
+          {mod.enabled ? <Pause size={10} /> : <Play size={10} />} {mod.enabled ? t(locale, 'modules.disable') : t(locale, 'modules.enable')}
         </button>
         <button
           className="btn"
           onClick={onUninstall}
-          style={{ fontSize: 11, padding: '4px 8px', color: 'var(--danger)' }}
+          style={{ fontSize: 11, padding: '4px 8px', color: 'var(--danger)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
           title={t(locale, 'workshop.uninstallModule')}
         >
-          🗑
+          <Trash2 size={10} />
         </button>
       </div>
     </div>
@@ -720,3 +855,80 @@ const dialogInputStyle: React.CSSProperties = {
   fontSize: 13,
   outline: 'none',
 };
+
+// ── Store Module Card ──
+
+function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: Locale }) {
+  const [hovered, setHovered] = useState(false);
+
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        background: 'var(--bg-2,#131410)',
+        border: '1px solid var(--border,#262920)',
+        borderRadius: 8,
+        padding: '14px 14px 12px',
+        transition: 'all 0.12s',
+        borderColor: hovered ? 'var(--accent,#cdf24b)' : undefined,
+        cursor: 'default',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 8 }}>
+        {/* Module icon placeholder */}
+        <div style={{
+          width: 36, height: 36, borderRadius: 8,
+          background: 'var(--bg-3,#1c1e17)',
+          border: '1px solid var(--border,#262920)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 16, flexShrink: 0,
+        }}>
+          {mod.name.charAt(0).toUpperCase()}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontSize: 13, fontWeight: 600, color: 'var(--text)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {mod.name}
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', marginTop: 1 }}>
+            v{mod.version}
+          </div>
+        </div>
+        <span style={{
+          fontSize: 9, padding: '1px 5px', borderRadius: 3,
+          background: mod.enabled ? 'var(--accent-soft,#cdf24b1f)' : 'var(--bg-3,#1c1e17)',
+          color: mod.enabled ? 'var(--accent,#cdf24b)' : 'var(--text-faint)',
+          fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0,
+        }}>
+          {mod.enabled ? t(locale, 'workshop.enabled') : t(locale, 'workshop.disabled')}
+        </span>
+      </div>
+
+      {mod.description && (
+        <div style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.4, marginBottom: 8 }}>
+          {mod.description}
+        </div>
+      )}
+
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        fontSize: 10, color: 'var(--text-faint)',
+      }}>
+        <span style={{ fontFamily: 'var(--font-mono)' }}>{mod.id}</span>
+        <span style={{
+          padding: '2px 6px',
+          borderRadius: 3,
+          background: 'var(--bg-3,#1c1e17)',
+          border: '1px solid var(--border,#262920)',
+          fontSize: 9,
+          textTransform: 'uppercase',
+        }}>
+          {t(locale, 'store.installed')}
+        </span>
+      </div>
+    </div>
+  );
+}

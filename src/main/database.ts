@@ -3,9 +3,15 @@ import * as path from 'path';
 import * as fs from 'fs';
 
 // Allow test override via environment variable
-const DB_DIR = process.env.NATIVES_DB_DIR || path.join(process.env.HOME || '~', '.natives');
-const DB_PATH = path.join(DB_DIR, 'natives.db');
-const LOCK_PATH = path.join(DB_DIR, 'natives.lock');
+function getDbDir(): string {
+  return process.env.NATIVES_DB_DIR || path.join(process.env.HOME || '~', '.natives');
+}
+function getDbPath(): string {
+  return path.join(getDbDir(), 'natives.db');
+}
+function getLockPath(): string {
+  return path.join(getDbDir(), 'natives.lock');
+}
 
 let db: Database.Database | null = null;
 let lockFd: number | null = null;
@@ -13,11 +19,12 @@ let lockFd: number | null = null;
 // ── File lock ──
 
 function acquireLock(): void {
-  if (!fs.existsSync(DB_DIR)) {
-    fs.mkdirSync(DB_DIR, { recursive: true });
+  const dbDir = getDbDir();
+  if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
   }
   try {
-    lockFd = fs.openSync(LOCK_PATH, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR, 0o644);
+    lockFd = fs.openSync(getLockPath(), fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR, 0o644);
   } catch {
     throw new Error('Another instance is already running with this database.');
   }
@@ -27,7 +34,7 @@ function releaseLock(): void {
   if (lockFd !== null) {
     fs.closeSync(lockFd);
     lockFd = null;
-    try { fs.unlinkSync(LOCK_PATH); } catch { /* ignore */ }
+    try { fs.unlinkSync(getLockPath()); } catch { /* ignore */ }
   }
 }
 
@@ -148,7 +155,7 @@ export function initDb(): Database.Database {
 
   acquireLock();
 
-  db = new Database(DB_PATH);
+  db = new Database(getDbPath());
 
   // WAL mode
   db.pragma('journal_mode = WAL');

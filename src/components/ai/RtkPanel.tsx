@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { t, type Locale } from '@/i18n';
+import { BarChart2 } from 'lucide-react';
 import { EmptyState } from '@/components/ui/EmptyState';
 import type { RtkUsage, RtkCommandStat } from '@/types/agent';
 import { useAsyncData } from '@/hooks/useAsyncData';
@@ -93,7 +94,7 @@ export default function RtkPanel() {
       </div>
       <div style={{ flex: 1, overflow: 'auto' }}>
         {topCommands.length === 0 ? (
-          <EmptyState icon='📊' title={t(locale, 'aiWorkbench.rtk.noData')} />
+          <EmptyState icon={<BarChart2 size={32} />} title={t(locale, 'aiWorkbench.rtk.noData')} />
         ) : (
           topCommands.map((cmd, i) => (
             <div key={cmd.command} style={{

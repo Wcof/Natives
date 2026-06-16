@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { Edit2, ArrowRight, Type, EyeOff } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
 export default function ImageAnnotator({ imageUrl, onClose }: { imageUrl?: string; onClose: () => void }) {
@@ -36,8 +37,17 @@ export default function ImageAnnotator({ imageUrl, onClose }: { imageUrl?: strin
       {/* Toolbar */}
       <div style={{ display: 'flex', gap: 4, padding: 8, background: 'var(--panel)', borderBottom: '1px solid var(--border)', alignItems: 'center' }}>
         {(['pen', 'arrow', 'text', 'blur'] as const).map((toolType) => (
-          <button key={toolType} className={`btn ${tool === toolType ? 'btn-primary' : 'btn-ghost'}`} style={{ fontSize: 11, padding: '4px 10px' }} onClick={() => setTool(toolType)}>
-            {toolType === 'pen' ? '✏️' : toolType === 'arrow' ? '→' : toolType === 'text' ? 'T' : '🌫️'} {toolType === 'pen' ? t(locale, 'screenshot.brush') : t(locale, `screenshot.${toolType}`)}
+          <button
+            key={toolType}
+            className={`btn ${tool === toolType ? 'btn-primary' : 'btn-ghost'}`}
+            style={{ fontSize: 11, padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+            onClick={() => setTool(toolType)}
+          >
+            {toolType === 'pen' && <Edit2 size={12} />}
+            {toolType === 'arrow' && <ArrowRight size={12} />}
+            {toolType === 'text' && <Type size={12} />}
+            {toolType === 'blur' && <EyeOff size={12} />}
+            <span>{toolType === 'pen' ? t(locale, 'screenshot.brush') : t(locale, `screenshot.${toolType}`)}</span>
           </button>
         ))}
         <div style={{ flex: 1 }} />

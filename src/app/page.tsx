@@ -1,9 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Terminal, Package, Settings, Square, HardDrive, Database } from 'lucide-react';
+import { Terminal, Package, Settings, Square, HardDrive, Database, Folder, Wrench, Rocket, RefreshCw } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import { useRecentModules } from '@/lib/recent-modules';
+import { useRecentFiles } from '@/lib/recent-files-client';
 
 interface ModuleInfo {
   id: string;
@@ -52,6 +53,9 @@ export default function DashboardPage() {
   // LRU list of recently-opened module ids (ISSUE-3). Reactive: updates when
   // ShellLayout records a module open via pushRecentModule.
   const { ids: recentIds } = useRecentModules(8);
+
+  // LRU list of recently-opened files (P2). Reactive across the app.
+  const { paths: recentFilePaths, loading: recentFilesLoading } = useRecentFiles(8);
 
   useEffect(() => {
     async function loadData() {
@@ -260,11 +264,11 @@ export default function DashboardPage() {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <ActionButton icon={<Terminal size={14} />} label={t(locale, 'dashboard.openTerminal')} onClick={handleOpenTerminal} primary />
           <ActionButton icon={<Package size={14} />} label={t(locale, 'dashboard.installModule')} onClick={handleInstallModule} />
-          <ActionButton icon="📁" label={t(locale, 'dashboard.fileBrowser')} onClick={handleOpenFiles} />
-          <ActionButton icon="🔧" label={t(locale, 'nav.workshop')} onClick={handleOpenWorkshop} />
+          <ActionButton icon={<Folder size={14} />} label={t(locale, 'dashboard.fileBrowser')} onClick={handleOpenFiles} />
+          <ActionButton icon={<Wrench size={14} />} label={t(locale, 'nav.workshop')} onClick={handleOpenWorkshop} />
           <ActionButton icon={<Settings size={14} />} label={t(locale, 'dashboard.openSettings')} onClick={handleSettings} />
-          <ActionButton icon="🚀" label={t(locale, 'release.title')} onClick={handleOpenReleaseWizard} />
-          <ActionButton icon="🔄" label={t(locale, 'update.title')} onClick={handleCheckUpdates} />
+          <ActionButton icon={<Rocket size={14} />} label={t(locale, 'release.title')} onClick={handleOpenReleaseWizard} />
+          <ActionButton icon={<RefreshCw size={14} />} label={t(locale, 'update.title')} onClick={handleCheckUpdates} />
         </div>
       </div>
 
@@ -307,6 +311,45 @@ export default function DashboardPage() {
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{mod.name}</span>
               </button>
             ))}
+          </div>
+        )}
+      </div>
+
+      {/* Recent Files (P2: LRU file open tracking) */}
+      <div style={{ ...cardStyle, marginBottom: 24 }}>
+        <div style={sectionTitleStyle}>{t(locale, 'dashboard.recentFiles')}</div>
+        {recentFilesLoading ? (
+          <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>{t(locale, 'common.loading')}</div>
+        ) : recentFilePaths.length === 0 ? (
+          <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+            {t(locale, 'dashboard.recentFilesEmpty')}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {recentFilePaths.map((filePath) => {
+              const name = filePath.split('/').pop() || filePath;
+              const dir = filePath.substring(0, filePath.lastIndexOf('/')) || '/';
+              return (
+                <button
+                  key={filePath}
+                  className="btn btn-ghost"
+                  onClick={() => window.dispatchEvent(new CustomEvent('navigate', { detail: `files?path=${encodeURIComponent(dir)}&select=${encodeURIComponent(filePath)}` }))}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    padding: '6px 10px', fontSize: 12, justifyContent: 'flex-start',
+                    width: '100%', textAlign: 'left' as const,
+                  }}
+                >
+                  <span style={{ flexShrink: 0 }}>📄</span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>
+                    {name}
+                  </span>
+                  <span style={{ color: 'var(--text-faint,#62655a)', fontSize: 10, marginLeft: 'auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>
+                    {dir}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         )}
       </div>

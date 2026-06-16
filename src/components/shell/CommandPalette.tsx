@@ -1,15 +1,30 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import { applyTheme } from '@/lib/theme-engine';
 import { t, type Locale } from '@/i18n';
 import { useFocusTrap } from '@/lib/useFocusTrap';
+import {
+  Settings,
+  Wrench,
+  Bell,
+  Folder,
+  Bot,
+  Sliders,
+  Terminal,
+  Sun,
+  BookOpen,
+  Package,
+  Search,
+  FileText,
+  Globe,
+} from 'lucide-react';
 
 interface CommandItem {
   id: string;
   label: string;
   category: 'module' | 'action' | 'setting' | 'navigation';
-  icon?: string;
+  icon?: ReactNode;
   description?: string;
 }
 
@@ -23,17 +38,15 @@ interface CommandPaletteProps {
 
 function getStaticCommands(locale: Locale): CommandItem[] {
   return [
-    { id: '__settings__', label: t(locale, 'nav.settings'), category: 'navigation', icon: '⚙️' },
-    { id: '__workshop__', label: t(locale, 'nav.workshop'), category: 'navigation', icon: '🔧' },
-    { id: '__store__', label: t(locale, 'nav.store'), category: 'navigation', icon: '🛒' },
-    { id: '__notifications__', label: t(locale, 'notifications.title'), category: 'navigation', icon: '🔔' },
-    { id: 'files', label: t(locale, 'nav.fileBrowser'), category: 'navigation', icon: '📁' },
-    { id: 'ai', label: t(locale, 'nav.aiWorkbench'), category: 'navigation', icon: '🤖' },
-    { id: 'tools', label: t(locale, 'nav.tools'), category: 'navigation', icon: '🛠' },
-    { id: 'terminal:toggle', label: t(locale, 'nav.terminalToggle'), category: 'action', icon: '⬛' },
-    { id: 'theme:terminal-volt', label: t(locale, 'nav.themeTerminalVolt'), category: 'setting', icon: '🌙' },
-    { id: 'theme:warm-archive', label: t(locale, 'nav.themeWarmArchive'), category: 'setting', icon: '☀️' },
-    { id: 'theme:editorial', label: t(locale, 'nav.themeEditorial'), category: 'setting', icon: '📰' },
+    { id: '__settings__', label: t(locale, 'nav.settings'), category: 'navigation', icon: <Settings size={14} /> },
+    { id: '__workshop__', label: t(locale, 'nav.workshop'), category: 'navigation', icon: <Wrench size={14} /> },
+    { id: '__notifications__', label: t(locale, 'notifications.title'), category: 'navigation', icon: <Bell size={14} /> },
+    { id: 'files', label: t(locale, 'nav.fileBrowser'), category: 'navigation', icon: <Folder size={14} /> },
+    { id: 'ai', label: t(locale, 'nav.aiWorkbench'), category: 'navigation', icon: <Bot size={14} /> },
+    { id: 'tools', label: t(locale, 'nav.tools'), category: 'navigation', icon: <Sliders size={14} /> },
+    { id: 'terminal:toggle', label: t(locale, 'nav.terminalToggle'), category: 'action', icon: <Terminal size={14} /> },
+    { id: 'theme:warm-archive', label: t(locale, 'nav.themeWarmArchive'), category: 'setting', icon: <Sun size={14} /> },
+    { id: 'theme:editorial', label: t(locale, 'nav.themeEditorial'), category: 'setting', icon: <BookOpen size={14} /> },
   ];
 }
 
@@ -82,7 +95,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
               id: `module:${m.id}`,
               label: m.name,
               category: 'module' as const,
-              icon: '📦',
+              icon: <Package size={14} />,
               description: m.id,
             }));
             setAllCommands([...getStaticCommands(locale), ...moduleCommands]);
@@ -131,7 +144,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
               id: `__file__:${r.path}`,
               label: `${r.name}${r.line ? `:${r.line}` : ''}`,
               category: 'navigation' as const,
-              icon: '🔍',
+              icon: <Search size={14} />,
               description: r.match || r.path,
             }));
             setResults((prev) => {
@@ -154,7 +167,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
             id: `__file__:${f.path}`,
             label: f.name,
             category: 'navigation' as const,
-            icon: '📄',
+            icon: <FileText size={14} />,
             description: f.path,
           }));
           // Merge: commands first, then files
@@ -302,7 +315,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
               >
                 {/* Icon or category dot */}
                 <span style={{
-                  width: 20, textAlign: 'center', flexShrink: 0, fontSize: 14,
+                  width: 20, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 14,
                 }}>
                   {cmd.icon || (
                     <span style={{
@@ -343,12 +356,23 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
             onClick={() => setSearchScope((s) => s === 'global' ? 'local' : 'global')}
             style={{
               background: 'none', border: '1px solid var(--border,#262920)', borderRadius: 4,
-              padding: '1px 6px', fontSize: 10, cursor: 'pointer',
+              padding: '2px 6px', fontSize: 10, cursor: 'pointer',
               color: searchScope === 'local' ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
+              display: 'inline-flex', alignItems: 'center', gap: 4,
             }}
             title={searchScope === 'global' ? t(locale, 'commandPalette.searchScopeGlobal') : t(locale, 'commandPalette.searchScopeLocal')}
           >
-            {searchScope === 'global' ? `🌐 ${t(locale, 'commandPalette.globalLabel')}` : `📁 ${t(locale, 'commandPalette.localLabel')}`}
+            {searchScope === 'global' ? (
+              <>
+                <Globe size={11} />
+                <span>{t(locale, 'commandPalette.globalLabel')}</span>
+              </>
+            ) : (
+              <>
+                <Folder size={11} />
+                <span>{t(locale, 'commandPalette.localLabel')}</span>
+              </>
+            )}
           </button>
         </div>
       </div>

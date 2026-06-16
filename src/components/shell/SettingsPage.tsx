@@ -18,7 +18,7 @@ interface EnvVariable {
 }
 
 export default function SettingsPage() {
-  const [theme, setThemeState] = useState('terminal-volt');
+  const [theme, setThemeState] = useState('editorial');
   const [locale, setLocaleState] = useState<Locale>('zh');
   const [sidebarWidth, setSidebarWidth] = useState(248);
   const [panelWidth, setPanelWidth] = useState(320);
@@ -58,7 +58,7 @@ export default function SettingsPage() {
           setThemeState(savedTheme);
           applyTheme(savedTheme);
         }
-        if (savedLocale) setLocaleState(savedLocale === 'en' ? 'en' : 'zh');
+        if (savedLocale) setLocaleState(savedLocale as Locale);
 
         const db = api.db;
         if (db?.get) {
@@ -113,7 +113,6 @@ export default function SettingsPage() {
   }, [selectedProfile, loadVariables]);
 
   const THEMES = [
-    { id: 'terminal-volt', label: 'Terminal Volt', desc: t(locale, 'settings.themeDescTerminal') },
     { id: 'warm-archive', label: 'Warm Archive', desc: t(locale, 'settings.themeDescWarm') },
     { id: 'editorial', label: 'Editorial', desc: t(locale, 'settings.themeDescEditorial') },
   ];
@@ -129,13 +128,13 @@ export default function SettingsPage() {
     try { window.nativesAPI?.setTheme?.(themeId); } catch { /* browser dev mode */ }
   };
 
-  const handleLocaleChange = (localeId: string) => {
+  const handleLocaleChange = async (localeId: string) => {
     setLocaleState(localeId as Locale);
     document.documentElement.lang = localeId;
     try {
-      window.nativesAPI?.setLocale?.(localeId);
+      await window.nativesAPI?.setLocale?.(localeId);
       // Notify all locale-aware components to refresh
-      window.dispatchEvent(new CustomEvent('locale-changed'));
+      window.dispatchEvent(new CustomEvent('locale-changed', { detail: localeId }));
     } catch { /* browser dev mode */ }
   };
 

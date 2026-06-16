@@ -2,16 +2,13 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { type FileEntry } from '@/types/file';
+import { Folder, FileText, Image as ImageIcon, Video, Music, BookOpen, Archive, File } from 'lucide-react';
 
 interface FileCardProps {
   entry: FileEntry;
   onSelect: (entry: FileEntry) => void;
   onContextMenu?: (e: React.MouseEvent, entry: FileEntry) => void;
 }
-
-const FILE_TYPE_ICONS: Record<string, string> = {
-  text: '📄', image: '🖼️', video: '🎬', audio: '🎵', pdf: '📕', archive: '📦', other: '📎',
-};
 
 const BADGE_LABELS: Record<string, string> = {
   node: 'Node', web: 'Web', python: 'Py', rust: 'Rust', go: 'Go', git: 'Git',
@@ -59,7 +56,20 @@ export default function FileCard({ entry, onSelect, onContextMenu }: FileCardPro
     };
   }, [entry.path]);
 
-  const icon = entry.isDir ? '📁' : FILE_TYPE_ICONS[entry.kind] || '📄';
+  const renderIcon = () => {
+    const size = 36;
+    if (entry.isDir) return <Folder size={size} style={{ color: 'var(--accent,#cdf24b)' }} />;
+    switch (entry.kind) {
+      case 'text': return <FileText size={size} />;
+      case 'image': return <ImageIcon size={size} />;
+      case 'video': return <Video size={size} />;
+      case 'audio': return <Music size={size} />;
+      case 'pdf': return <BookOpen size={size} />;
+      case 'archive': return <Archive size={size} />;
+      default: return <File size={size} />;
+    }
+  };
+
   const badge = entry.projectBadge;
   const badgeStyle = badge ? BADGE_COLORS[badge] : null;
   const isChanged = heat > 0;
@@ -113,7 +123,9 @@ export default function FileCard({ entry, onSelect, onContextMenu }: FileCardPro
             loading="lazy"
           />
         ) : (
-          <span>{icon}</span>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim,#9b9d8c)' }}>
+            {renderIcon()}
+          </div>
         )}
 
         {/* Edit ripple — expanding ring from icon center */}

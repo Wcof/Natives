@@ -24,6 +24,8 @@ export interface FileEntry {
   btime: number;
   projectBadge?: ProjectBadge;
   symlink?: string;
+  /** 文件所在目录（用于最近修改视图） */
+  dirHint?: string;
 }
 
 /** 搜索结果 */

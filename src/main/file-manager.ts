@@ -63,9 +63,9 @@ export async function listDir(dirPath: string, options?: ListDirOptions): Promis
       const isDir = targetStat.isDirectory();
       const kind = isDir ? 'other' : detectFileKind(name);
 
-      // 检测项目徽章（仅在目录中检测）
+      // 检测项目徽章（仅在目录中检测，最多检测 80 个子目录）
       let projectBadge: string | undefined;
-      if (isDir) {
+      if (isDir && entries.length <= 80) {
         try {
           const childFiles = await fs.promises.readdir(fullPath);
           const hasGit = childFiles.includes('.git');

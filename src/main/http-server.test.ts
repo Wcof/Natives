@@ -2,14 +2,20 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { startServer, stopServer, getPort, validateHost, validateOrigin } from './http-server';
 
-const TEST_MODULES_DIR = path.join(process.env.HOME || '~', '.natives', 'modules', 'test-module');
+const TEST_DB_DIR = path.join(os.tmpdir(), 'natives-http-server-test');
+const TEST_MODULES_DIR = path.join(TEST_DB_DIR, 'modules', 'test-module');
 
 describe('HTTPServer', () => {
   let port: number;
 
   before(async () => {
+    process.env.NATIVES_DB_DIR = TEST_DB_DIR;
+    if (fs.existsSync(TEST_DB_DIR)) {
+      fs.rmSync(TEST_DB_DIR, { recursive: true, force: true });
+    }
     // Create test module files
     fs.mkdirSync(TEST_MODULES_DIR, { recursive: true });
     fs.writeFileSync(path.join(TEST_MODULES_DIR, 'index.html'), '<h1>Hello</h1>', 'utf-8');
@@ -20,8 +26,8 @@ describe('HTTPServer', () => {
 
   after(() => {
     stopServer();
-    if (fs.existsSync(path.join(process.env.HOME || '~', '.natives'))) {
-      fs.rmSync(path.join(process.env.HOME || '~', '.natives'), { recursive: true });
+    if (fs.existsSync(TEST_DB_DIR)) {
+      fs.rmSync(TEST_DB_DIR, { recursive: true, force: true });
     }
   });
 

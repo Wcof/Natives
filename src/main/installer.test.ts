@@ -12,12 +12,12 @@ process.env.NATIVES_DB_DIR = TEST_DB_DIR;
 import { initDb, closeDb } from './database';
 import { installModule, uninstallModule, enableModule, disableModule, getInstalledModules } from './installer';
 
-const TEST_MODULES_DIR = path.join(process.env.HOME || '~', '.natives', 'modules');
+const TEST_MODULES_DIR = path.join(TEST_DB_DIR, 'modules');
 
 describe('Installer', () => {
   before(() => {
     if (fs.existsSync(TEST_DB_DIR)) {
-      fs.rmSync(TEST_DB_DIR, { recursive: true });
+      fs.rmSync(TEST_DB_DIR, { recursive: true, force: true });
     }
     fs.mkdirSync(TEST_DB_DIR, { recursive: true });
     initDb();
@@ -26,10 +26,7 @@ describe('Installer', () => {
   after(() => {
     closeDb();
     if (fs.existsSync(TEST_DB_DIR)) {
-      fs.rmSync(TEST_DB_DIR, { recursive: true });
-    }
-    if (fs.existsSync(TEST_MODULES_DIR)) {
-      fs.rmSync(TEST_MODULES_DIR, { recursive: true });
+      fs.rmSync(TEST_DB_DIR, { recursive: true, force: true });
     }
   });
 

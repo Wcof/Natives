@@ -78,6 +78,7 @@ declare global {
         trashEntry: (filePath: string) => Promise<{ ok: boolean; error?: string }>;
         moveEntry: (from: string, to: string) => Promise<{ ok: boolean; error?: string }>;
         importFiles: (sourcePaths: string[], destDir: string) => Promise<{ ok: boolean; count?: number; error?: string }>;
+        recentFiles: (root: string) => Promise<Array<{ path: string; mtime: number; size: number }>>;
       };
 
       // Search

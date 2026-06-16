@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState, useCallback, useEffect } from 'react';
+import { Edit2, ArrowRight, Type, EyeOff, Square } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import { useFocusTrap } from '@/lib/useFocusTrap';
 
@@ -187,13 +188,14 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
             key={toolName}
             className={`btn btn-sm ${tool === toolName ? 'btn-primary' : ''}`}
             onClick={() => setTool(toolName)}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
           >
-            {toolName === 'brush' && '✏️'}
-            {toolName === 'arrow' && '➡️'}
-            {toolName === 'text' && '🔤'}
-            {toolName === 'blur' && '🌫️'}
-            {toolName === 'mask' && '⬛'}
-            {' '}{t(locale, `screenshot.${toolName}`)}
+            {toolName === 'brush' && <Edit2 size={12} />}
+            {toolName === 'arrow' && <ArrowRight size={12} />}
+            {toolName === 'text' && <Type size={12} />}
+            {toolName === 'blur' && <EyeOff size={12} />}
+            {toolName === 'mask' && <Square size={12} />}
+            <span>{t(locale, `screenshot.${toolName}`)}</span>
           </button>
         ))}
 

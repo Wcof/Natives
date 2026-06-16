@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
+import { Eye, Edit2 } from 'lucide-react';
 import { type FileEntry } from '@/types/file';
 import { t, useLocale, type Locale } from '@/i18n';
 import { getExt, isMarkdownFile, isCsvFile, isArchiveFile } from '@/lib/follow-mode';
@@ -128,10 +129,10 @@ export default function FilePreview({ entry, onClose }: FilePreviewProps) {
             <button
               className="btn btn-ghost"
               onClick={() => setEditMode(!editMode)}
-              style={{ fontSize: 11, padding: '2px 8px' }}
+              style={{ padding: '2px 8px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
               title={editMode ? 'View mode' : 'Edit mode'}
             >
-              {editMode ? '👁' : '✏️'}
+              {editMode ? <Eye size={12} /> : <Edit2 size={12} />}
             </button>
           )}
           <button

@@ -22,15 +22,32 @@ export function t(locale: string, key: string): string {
 
 export function useLocale(): Locale {
   const [locale, setLocale] = useState<Locale>('zh');
+
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const saved = await window.nativesAPI?.getLocale?.();
-        if (!cancelled && saved) setLocale(saved === 'en' ? 'en' : 'zh');
-      } catch { /* ignore */ }
-    })();
-    return () => { cancelled = true; };
+    const refreshLocale = async (e?: Event) => {
+      const customEvent = e as CustomEvent<string>;
+      const newLocale = customEvent?.detail;
+      if (newLocale) {
+        if (!cancelled) {
+          setLocale(newLocale === 'en' ? 'en' : 'zh');
+        }
+      } else {
+        try {
+          const saved = await window.nativesAPI?.getLocale?.();
+          if (!cancelled && saved) {
+            setLocale(saved === 'en' ? 'en' : 'zh');
+          }
+        } catch { /* ignore */ }
+      }
+    };
+
+    refreshLocale();
+    window.addEventListener('locale-changed', refreshLocale as EventListener);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('locale-changed', refreshLocale as EventListener);
+    };
   }, []);
   return locale;
 }

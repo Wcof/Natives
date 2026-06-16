@@ -2,8 +2,9 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 
-const TEST_DB_DIR = path.join(process.env.HOME || '~', '.natives-test');
+const TEST_DB_DIR = path.join(os.tmpdir(), 'natives-database-test');
 
 describe('Database', () => {
   let db: import('better-sqlite3').Database;
@@ -31,7 +32,7 @@ describe('Database', () => {
     }
   });
 
-  it('should initialize with all 9 tables', () => {
+  it('should initialize with all 10 tables', () => {
     const tables = db.pragma('table_list') as Array<{ name: string }>;
     const names = tables.map((t) => t.name).filter((n) => !n.startsWith('sqlite_'));
     assert.ok(names.includes('modules'));
@@ -43,7 +44,8 @@ describe('Database', () => {
     assert.ok(names.includes('env_variables'));
     assert.ok(names.includes('notifications'));
     assert.ok(names.includes('module_order'));
-    assert.equal(names.length, 9);
+    assert.ok(names.includes('permission_audit_log'));
+    assert.equal(names.length, 10);
   });
 
   it('should support CRUD operations on module_data', () => {
@@ -87,7 +89,7 @@ describe('Database', () => {
     const db2 = mod.initDb();
     const tables = db2.pragma('table_list') as Array<{ name: string }>;
     const names = tables.map((t) => t.name).filter((n) => !n.startsWith('sqlite_'));
-    assert.equal(names.length, 9);
+    assert.equal(names.length, 10);
 
     // Data still accessible
     assert.equal(mod.dbGet('test-module', 'count'), '42');

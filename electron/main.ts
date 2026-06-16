@@ -84,6 +84,7 @@ let usageTracker: typeof import('../src/main/usage-tracker') | null = null;
 let permissionCenter: typeof import('../src/main/permission-center') | null = null;
 let statePersistence: typeof import('../src/lib/state-persistence') | null = null;
 let archiveModule: typeof import('../src/main/archive') | null = null;
+let recentFilesModule: typeof import('../src/main/recent-files') | null = null;
 
 function lazyLoad(module: string): any {
   switch (module) {
@@ -176,6 +177,9 @@ function lazyLoad(module: string): any {
     case 'archive':
       if (!archiveModule) archiveModule = require('../src/main/archive');
       return archiveModule;
+    case 'recentFiles':
+      if (!recentFilesModule) recentFilesModule = require('../src/main/recent-files');
+      return recentFilesModule;
   }
 }
 
@@ -482,7 +486,7 @@ ipcMain.handle('notification:markAllRead', (_event) => {
 // Theme
 ipcMain.handle('natives:getTheme', () => {
   const mod = lazyLoad('bridgeHost');
-  return mod ? mod.getTheme().theme : 'terminal-volt';
+  return mod ? mod.getTheme().theme : 'editorial';
 });
 ipcMain.handle('natives:setTheme', (_event, theme: string) => {
   const mod = lazyLoad('bridgeHost');
@@ -902,6 +906,13 @@ ipcMain.handle('fs:importFiles', async (_event, sourcePaths: string[], destDir: 
   if (!mod) return { ok: false, error: 'File manager not available' };
   try { const count = await mod.importFiles(sourcePaths, destDir); return { ok: true, count }; }
   catch (err) { return { ok: false, error: (err as Error).message }; }
+});
+
+ipcMain.handle('fs:recentFiles', async (_event, root: string) => {
+  const mod = lazyLoad('recentFiles');
+  if (!mod) return [];
+  try { return await mod.getRecentModifiedFiles(root); }
+  catch (err) { console.error('[Main] fs:recentFiles error:', err); return []; }
 });
 
 // ════════════════════════════════════════

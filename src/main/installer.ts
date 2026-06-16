@@ -4,11 +4,17 @@ import AdmZip from 'adm-zip';
 import { getDb } from './database';
 import { validateManifest, type Manifest } from './module-manager';
 
-const MODULES_DIR = path.join(process.env.HOME || '~', '.natives', 'modules');
+function getModulesDir(): string {
+  if (process.env.NATIVES_DB_DIR) {
+    return path.join(process.env.NATIVES_DB_DIR, 'modules');
+  }
+  return path.join(process.env.HOME || '~', '.natives', 'modules');
+}
 
 function ensureModulesDir(): void {
-  if (!fs.existsSync(MODULES_DIR)) {
-    fs.mkdirSync(MODULES_DIR, { recursive: true });
+  const modulesDir = getModulesDir();
+  if (!fs.existsSync(modulesDir)) {
+    fs.mkdirSync(modulesDir, { recursive: true });
   }
 }
 
@@ -24,7 +30,7 @@ export function installModule(source: string): { success: true; moduleId: string
 
     if (stat.isDirectory()) {
       manifest = readManifestFromDir(source);
-      const dest = path.join(MODULES_DIR, manifest.id);
+      const dest = path.join(getModulesDir(), manifest.id);
       if (fs.existsSync(dest)) {
         fs.rmSync(dest, { recursive: true });
       }
@@ -33,7 +39,7 @@ export function installModule(source: string): { success: true; moduleId: string
     } else if (stat.isFile() && source.endsWith('.zip')) {
       const extracted = extractZip(source);
       manifest = readManifestFromDir(extracted);
-      const dest = path.join(MODULES_DIR, manifest.id);
+      const dest = path.join(getModulesDir(), manifest.id);
       if (fs.existsSync(dest)) {
         fs.rmSync(dest, { recursive: true });
       }
@@ -80,7 +86,7 @@ export function installModule(source: string): { success: true; moduleId: string
 
 export function uninstallModule(moduleId: string): { success: true } | { success: false; error: string } {
   try {
-    const moduleDir = path.join(MODULES_DIR, moduleId);
+    const moduleDir = path.join(getModulesDir(), moduleId);
     if (fs.existsSync(moduleDir)) {
       fs.rmSync(moduleDir, { recursive: true });
     }
@@ -138,7 +144,7 @@ export function readManifestFromSource(source: string): { manifest: Manifest } |
 
 export function updateModule(moduleId: string, updateSource?: string): { success: true } | { success: false; error: string } {
   try {
-    const moduleDir = path.join(MODULES_DIR, moduleId);
+    const moduleDir = path.join(getModulesDir(), moduleId);
     const manifestPath = path.join(moduleDir, 'manifest.json');
 
     // If an update source is provided, replace files first
@@ -244,7 +250,7 @@ function copyDirSync(src: string, dest: string): void {
 
 function extractZip(zipPath: string): string {
   const zip = new AdmZip(zipPath);
-  const extractDir = path.join(MODULES_DIR, `__extract_${Date.now()}`);
+  const extractDir = path.join(getModulesDir(), `__extract_${Date.now()}`);
   ensureModulesDir();
 
   // TASK-006: Sanitize each zip entry against path traversal (Zip Slip).

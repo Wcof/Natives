@@ -6,20 +6,20 @@ describe('ThemeEngine', () => {
   it('should have exactly two themes (editorial-index removed)', () => {
     const ids = Object.keys(THEMES);
     assert.equal(ids.length, 2);
-    assert.ok(ids.includes('terminal-volt'));
+    assert.ok(ids.includes('editorial'));
     assert.ok(ids.includes('warm-archive'));
     assert.equal(ids.includes('editorial-index'), false);
   });
 
   it('should validate a valid theme', () => {
-    const theme = validateTheme(THEMES['terminal-volt']!);
-    assert.equal(theme.accent, '#cdf24b');
-    assert.equal(theme.bg, '#0b0c0a');
+    const theme = validateTheme(THEMES['editorial']!);
+    assert.equal(theme.accent, '#ff433d');
+    assert.equal(theme.bg, '#f4f1ea');
   });
 
   it('should reject invalid hex color', () => {
     assert.throws(() => {
-      validateTheme({ ...THEMES['terminal-volt'], accent: 'not-a-color' });
+      validateTheme({ ...THEMES['editorial'], accent: 'not-a-color' });
     });
   });
 

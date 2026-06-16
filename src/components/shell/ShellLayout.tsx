@@ -13,7 +13,6 @@ import ErrorBoundary from '@/components/ui/ErrorBoundary';
 import ShortcutHelp from '@/components/ui/ShortcutHelp';
 import WorkshopPage from './WorkshopPage';
 import SettingsPage from './SettingsPage';
-import StorePage from '@/app/store/page';
 import FileBrowser from '@/components/files/FileBrowser';
 import FilePreview from '@/components/files/FilePreview';
 import { type FileEntry } from '@/types/file';
@@ -87,20 +86,25 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     setThemeReady(true);
 
     async function initSettings() {
+      const api = window.nativesAPI;
+      if (!api) return;
+
       try {
-        const api = window.nativesAPI;
-        if (!api) return;
-        const [savedTheme, savedLocale] = await Promise.all([
-          api.getTheme(),
-          api.getLocale(),
-        ]);
+        const savedTheme = await api.getTheme();
         if (savedTheme) applyTheme(savedTheme);
+      } catch (err) {
+        console.error('[Shell] Failed to load saved theme:', err);
+        applyTheme('editorial');
+      }
+
+      try {
+        const savedLocale = await api.getLocale();
         if (savedLocale) {
           document.documentElement.lang = savedLocale;
           setLocale(savedLocale as Locale);
         }
-      } catch {
-        applyTheme('terminal-volt');
+      } catch (err) {
+        console.error('[Shell] Failed to load saved locale:', err);
       }
 
       // Restore persisted sidebar state
@@ -159,21 +163,34 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
   // Reactively update locale when SettingsPage changes language
   useEffect(() => {
-    const handler = () => {
-      window.nativesAPI?.getLocale?.().then((saved) => {
-        if (saved) {
-          document.documentElement.lang = saved;
-          setLocale(saved as Locale);
-        }
-      }).catch(() => {});
+    const handler = (e: Event) => {
+      const customEvent = e as CustomEvent<string>;
+      const newLocale = customEvent.detail;
+      if (newLocale) {
+        document.documentElement.lang = newLocale;
+        setLocale(newLocale as Locale);
+      } else {
+        window.nativesAPI?.getLocale?.().then((saved) => {
+          if (saved) {
+            document.documentElement.lang = saved;
+            setLocale(saved as Locale);
+          }
+        }).catch(() => {});
+      }
     };
-    window.addEventListener('locale-changed', handler);
-    return () => window.removeEventListener('locale-changed', handler);
+    window.addEventListener('locale-changed', handler as EventListener);
+    return () => window.removeEventListener('locale-changed', handler as EventListener);
   }, []);
 
   // P1-5: Check if username is set (first-run detection)
   useEffect(() => {
-    window.nativesAPI?.db?.get?.('settings:username').then((value: unknown) => {
+    const api = window.nativesAPI;
+    if (!api?.db?.get) {
+      // No native API (browser dev mode) — skip onboarding
+      setNeedsOnboarding(false);
+      return;
+    }
+    api.db.get('settings:username').then((value: unknown) => {
       setNeedsOnboarding(!value);
     }).catch(() => setNeedsOnboarding(false));
   }, []);
@@ -354,7 +371,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       const view = (e as CustomEvent).detail;
       if (view === '__settings__') setActiveView('settings');
       else if (view === '__workshop__') setActiveView('workshop');
-      else if (view === '__store__') setActiveView('store');
+      else if (view === '__store__') setActiveView('workshop');
       else if (['files', 'ai', 'tools'].includes(view)) setActiveView(view);
     };
 
@@ -460,7 +477,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     } else if (moduleId === '__workshop__') {
       setActiveView('workshop');
     } else if (moduleId === '__store__') {
-      setActiveView('store');
+      setActiveView('workshop');
     } else if (moduleId === '__notifications__') {
       toggleRightPanel('notifications');
     } else if (moduleId.startsWith('__files__:')) {
@@ -497,8 +514,6 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         return <SettingsPage />;
       case 'workshop':
         return <WorkshopPage onInstall={handleInstallModule} />;
-      case 'store':
-        return <StorePage />;
       case 'files':
         return <FileBrowser onFileSelect={handleFileSelect} />;
       case 'ai':
@@ -536,6 +551,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         activeModuleId={activeView}
         onModuleSelect={handleModuleSelect}
         onNotificationClick={() => toggleRightPanel('notifications')}
+        locale={locale}
       />
       <ContentArea>
         <div ref={contentRef} id="main-content" tabIndex={-1} style={{ height: '100%', outline: 'none' }}>

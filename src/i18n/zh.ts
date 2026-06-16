@@ -54,6 +54,8 @@ export const zh = {
     unreadNotifications: '未读通知',
     enabledModules: '已启用模块',
     recentActivity: '最近活动',
+    recentFiles: '最近打开的文件',
+    recentFilesEmpty: '还没有打开过文件',
   },
 
   modules: {
@@ -87,7 +89,7 @@ export const zh = {
     allModules: '所有模块',
     searchPlaceholder: '搜索模块...',
     comingSoon: '在线商店即将上线',
-    comingSoonDesc: '目前支持本地模块安装，请前往创意工坊拖拽安装',
+    comingSoonDesc: '目前支持本地模块安装，请在“管理已下载”标签页拖拽安装',
     goToWorkshop: '前往创意工坊',
     viewDetails: '查看详情',
     moduleCount: '已安装 {count} 个模块',
@@ -99,6 +101,8 @@ export const zh = {
   workshop: {
     title: '创意工坊',
     subtitle: '浏览、创建和管理你的模块',
+    tabInstalled: '管理已下载',
+    tabBrowse: '浏览工坊',
     dragToInstall: '拖拽 ZIP 文件或文件夹到此处安装',
     releaseToInstall: '释放以安装模块',
     createModule: '创建新模块',
@@ -149,6 +153,7 @@ export const zh = {
     about: '关于',
     themeTerminal: 'Terminal Volt（暗色）',
     themeWarm: 'Warm Archive（暖色亮色）',
+    themeEditorial: 'Editorial（极简亮色）',
     addProfile: '添加配置',
     deleteProfile: '删除配置',
     defaultProfile: '默认配置',
@@ -293,6 +298,8 @@ export const zh = {
     back: '后退',
     forward: '前进',
     ariaLabelFiles: '文件浏览',
+    recentMode: '最近修改的文件',
+    recentModeTitle: '退出最近修改视图',
   },
 
   // 文件预览

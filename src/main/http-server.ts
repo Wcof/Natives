@@ -1,8 +1,14 @@
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
+import { streamFile } from './file-manager';
 
-const MODULES_DIR = path.join(process.env.HOME || '~', '.natives', 'modules');
+function getModulesDir() {
+  if (process.env.NATIVES_DB_DIR) {
+    return path.join(process.env.NATIVES_DB_DIR, 'modules');
+  }
+  return path.join(process.env.HOME || '~', '.natives', 'modules');
+}
 const SDK_PATH = path.join(__dirname, '..', 'lib', 'bridge-sdk.js');
 let server: http.Server | null = null;
 let activePort = 0;
@@ -91,7 +97,7 @@ function sanitizePath(moduleId: string, filePath: string): string | null {
     return null;
   }
 
-  const moduleRoot = path.resolve(MODULES_DIR, moduleId);
+  const moduleRoot = path.resolve(getModulesDir(), moduleId);
   const fullPath = path.resolve(moduleRoot, normalized);
 
   if (!fullPath.startsWith(moduleRoot + path.sep) && fullPath !== moduleRoot) {
@@ -226,6 +232,68 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     } catch (err) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Invalid JSON or handler error' }));
+    }
+    return;
+  }
+
+  // ── GET /api/fs/raw?path=... — 文件预览支持（P0 修复）──
+  if (req.method === 'GET' && pathname === '/api/fs/raw') {
+    const filePath = url.searchParams.get('path');
+    if (!filePath) {
+      res.writeHead(400);
+      res.end('Missing path parameter');
+      return;
+    }
+
+    // 安全校验：拒绝空字节和路径穿越
+    if (filePath.includes('\0') || filePath.includes('..')) {
+      res.writeHead(403);
+      res.end('Forbidden');
+      return;
+    }
+
+    try {
+      const rangeHeader = req.headers.range;
+      let range: { start: number; end?: number } | undefined;
+
+      if (rangeHeader) {
+        const match = rangeHeader.match(/bytes=(\d+)-(\d*)/);
+        if (match) {
+          range = { start: parseInt(match[1]!, 10) };
+          if (match[2] !== '') range.end = parseInt(match[2]!, 10);
+        }
+      }
+
+      const result = await streamFile(filePath, range);
+
+      res.writeHead(range ? 206 : 200, {
+        'Content-Type': result.contentType,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': range
+          ? String(result.totalSize - (range.start || 0))
+          : String(result.totalSize),
+        'Cache-Control': 'no-cache',
+        ...(result.contentRange ? { 'Content-Range': result.contentRange } : {}),
+      });
+
+      result.stream.pipe(res);
+      result.stream.on('error', () => {
+        if (!res.headersSent) {
+          res.writeHead(500);
+          res.end('Internal Server Error');
+        }
+      });
+    } catch (err: any) {
+      if (err?.code === 'ENOENT') {
+        res.writeHead(404);
+        res.end('File not found');
+      } else if (err?.code === 'EISDIR') {
+        res.writeHead(400);
+        res.end('Path is a directory');
+      } else {
+        res.writeHead(500);
+        res.end('Internal Server Error');
+      }
     }
     return;
   }

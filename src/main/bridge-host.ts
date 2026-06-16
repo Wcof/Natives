@@ -180,7 +180,7 @@ export function getTheme(): { theme: string } {
   const row = getDb()
     .prepare("SELECT value FROM settings WHERE key = 'theme'")
     .get() as { value: string } | undefined;
-  return { theme: row?.value || 'terminal-volt' };
+  return { theme: row?.value || 'editorial' };
 }
 
 export function setTheme(theme: string): void {

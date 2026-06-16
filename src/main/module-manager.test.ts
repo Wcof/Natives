@@ -2,24 +2,26 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import { validateManifest, checkCompatibility, scanModules, syncModulesToDb } from './module-manager';
 
-const TEST_MODULES_DIR = path.join(process.env.HOME || '~', '.natives', 'modules');
+const TEST_DB_DIR = path.join(os.tmpdir(), 'natives-module-manager-test');
+const TEST_MODULES_DIR = path.join(TEST_DB_DIR, 'modules');
 
 describe('ModuleManager', () => {
   const testModuleDir = path.join(TEST_MODULES_DIR, 'test-module');
 
   before(() => {
-    // Clean and create test module directory
-    if (fs.existsSync(TEST_MODULES_DIR)) {
-      fs.rmSync(TEST_MODULES_DIR, { recursive: true });
+    process.env.NATIVES_DB_DIR = TEST_DB_DIR;
+    if (fs.existsSync(TEST_DB_DIR)) {
+      fs.rmSync(TEST_DB_DIR, { recursive: true, force: true });
     }
     fs.mkdirSync(testModuleDir, { recursive: true });
   });
 
   after(() => {
-    if (fs.existsSync(TEST_MODULES_DIR)) {
-      fs.rmSync(TEST_MODULES_DIR, { recursive: true });
+    if (fs.existsSync(TEST_DB_DIR)) {
+      fs.rmSync(TEST_DB_DIR, { recursive: true, force: true });
     }
   });
 

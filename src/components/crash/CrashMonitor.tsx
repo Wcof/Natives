@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { AlertTriangle } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
 interface CrashRecord {
@@ -77,8 +78,9 @@ export default function CrashMonitor() {
         padding: '8px 10px', borderBottom: '1px solid var(--border,#262920)',
         background: 'var(--danger-soft)',
       }}>
-        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--danger)' }}>
-          ⚠️ {activeCrashes.length} {activeCrashes.length !== 1 ? t(locale, 'errors.crashes') : t(locale, 'errors.crash')}
+        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--danger)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <AlertTriangle size={12} />
+          {activeCrashes.length} {activeCrashes.length !== 1 ? t(locale, 'errors.crashes') : t(locale, 'errors.crash')}
         </span>
         {activeCrashes.length > 1 && (
           <button onClick={handleReloadAll} style={{ fontSize: 9, padding: '2px 6px', borderRadius: 3, border: '1px solid var(--border,#262920)', background: 'transparent', color: 'var(--text-faint)', cursor: 'pointer' }}>

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Settings, Layers, ChevronRight, Square, ShoppingBag, Bell, Star, Home, Monitor, FileText, Download } from 'lucide-react';
+import { Settings, Layers, ChevronRight, Square, Bell, Star, Home, Monitor, FileText, Download } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
 interface ModuleItem {
@@ -25,6 +25,7 @@ interface SidebarProps {
   activeModuleId?: string;
   onModuleSelect: (moduleId: string) => void;
   onNotificationClick?: () => void;
+  locale?: Locale;
 }
 
 export default function Sidebar({
@@ -35,11 +36,11 @@ export default function Sidebar({
   activeModuleId,
   onModuleSelect,
   onNotificationClick,
+  locale = 'zh',
 }: SidebarProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [modules, setModules] = useState<ModuleItem[]>([]);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
-  const [locale, setLocale] = useState<Locale>('zh');
   const [favorites, setFavorites] = useState<string[]>([]);
 
   // Load favorites from DB
@@ -62,23 +63,6 @@ export default function Sidebar({
     window.addEventListener('favorites-changed', handler);
     return () => window.removeEventListener('favorites-changed', handler);
   }, [loadFavorites]);
-
-  // Load locale reactively — listen for changes
-  const refreshLocale = useCallback(async () => {
-    try {
-      const api = window.nativesAPI;
-      if (api && typeof api.getLocale === 'function') {
-        const saved = await api.getLocale();
-        setLocale(saved === 'en' ? 'en' : 'zh');
-      }
-    } catch { /* ignore */ }
-  }, []);
-
-  useEffect(() => {
-    refreshLocale();
-    window.addEventListener('locale-changed', refreshLocale);
-    return () => window.removeEventListener('locale-changed', refreshLocale);
-  }, [refreshLocale]);
 
   // Load modules on mount
   useEffect(() => {
@@ -155,6 +139,22 @@ export default function Sidebar({
     setDragIndex(index);
   };
 
+  const getModuleId = (m: any) => {
+    return m.manifest?.id || m.id || m.moduleId || '';
+  };
+
+  const getModuleName = (m: any) => {
+    if (m.manifest) {
+      const norm = locale.startsWith('zh') ? 'zh' : 'en';
+      return m.manifest.i18n?.name?.[norm] || m.manifest.name || m.moduleId;
+    }
+    return m.name || m.moduleId || m.id || '';
+  };
+
+  const getModuleIcon = (m: any) => {
+    return m.manifest?.icon || m.icon;
+  };
+
   const handleDragEnd = async () => {
     setDragIndex(null);
     // Persist new module order to database
@@ -163,7 +163,7 @@ export default function Sidebar({
       if (api) {
         const db = (api as Record<string, unknown>).db as { set?: (key: string, value: unknown) => Promise<{ ok: boolean }> } | undefined;
         if (db?.set) {
-          const orderedIds = modules.map((m) => m.id);
+          const orderedIds = modules.map((m) => getModuleId(m));
           await db.set('settings:module_order', orderedIds);
         }
       }
@@ -185,6 +185,23 @@ export default function Sidebar({
         </button>
       </div>
 
+      {/* Quick Access */}
+      <div className="sidebar-section-title">{t(locale, 'sidebar.quickAccess')}</div>
+      <div style={{ padding: '0 4px', marginBottom: 16 }}>
+        {QUICK_ACCESS_DIRS.map((dir) => (
+          <button
+            key={dir.id}
+            className="sidebar-item"
+            onClick={() => onModuleSelect(`__files__:${dir.path}`)}
+            style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left' }}
+            title={dir.path}
+          >
+            {dir.icon}
+            <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)' }}>{t(locale, 'sidebar.quickAccessDirs.' + dir.id)}</span>
+          </button>
+        ))}
+      </div>
+
       <div className="sidebar-section-title" id="sidebar-modules-label">{t(locale, 'nav.modules')}</div>
       <div
         className="sidebar-modules"
@@ -198,48 +215,36 @@ export default function Sidebar({
             {t(locale, 'modules.noModules')}
           </div>
         ) : (
-          modules.map((mod, index) => (
-            <div
-              key={mod.id}
-              className={`sidebar-item ${activeModuleId === mod.id ? 'active' : ''}`}
-              role="option"
-              aria-selected={activeModuleId === mod.id}
-              tabIndex={0}
-              draggable
-              onDragStart={() => handleDragStart(index)}
-              onDragOver={(e) => handleDragOver(e, index)}
-              onClick={() => onModuleSelect(mod.id)}
-              onKeyDown={(e) => { if (e.key === 'Enter') onModuleSelect(mod.id); }}
-              title={mod.name}
-            >
-              <span className="sidebar-module-icon">
-                {mod.icon ? (
-                  <img src={mod.icon} alt="" style={{ width: 18, height: 18 }} />
-                ) : (
-                  <Square size={18} />
-                )}
-              </span>
-              <span className="sidebar-module-name" style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{mod.name}</span>
-            </div>
-          ))
+          modules.map((mod, index) => {
+            const mId = getModuleId(mod);
+            const mName = getModuleName(mod);
+            const mIcon = getModuleIcon(mod);
+            return (
+              <div
+                key={mId}
+                className={`sidebar-item ${activeModuleId === mId ? 'active' : ''}`}
+                role="option"
+                aria-selected={activeModuleId === mId}
+                tabIndex={0}
+                draggable
+                onDragStart={() => handleDragStart(index)}
+                onDragOver={(e) => handleDragOver(e, index)}
+                onClick={() => onModuleSelect(mId)}
+                onKeyDown={(e) => { if (e.key === 'Enter') onModuleSelect(mId); }}
+                title={mName}
+              >
+                <span className="sidebar-module-icon">
+                  {mIcon ? (
+                    <img src={mIcon} alt="" style={{ width: 18, height: 18 }} />
+                  ) : (
+                    <Square size={18} />
+                  )}
+                </span>
+                <span className="sidebar-module-name" style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{mName}</span>
+              </div>
+            );
+          })
         )}
-      </div>
-
-      {/* Quick Access */}
-      <div className="sidebar-section-title">{t(locale, 'sidebar.quickAccess')}</div>
-      <div style={{ padding: '0 4px' }}>
-        {QUICK_ACCESS_DIRS.map((dir) => (
-          <button
-            key={dir.id}
-            className="sidebar-item"
-            onClick={() => onModuleSelect(`__files__:${dir.path}`)}
-            style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left' }}
-            title={dir.path}
-          >
-            {dir.icon}
-            <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)' }}>{t(locale, 'sidebar.quickAccessDirs.' + dir.id)}</span>
-          </button>
-        ))}
       </div>
 
       {/* Favorites */}
@@ -269,10 +274,6 @@ export default function Sidebar({
         <button className="sidebar-item" onClick={onNotificationClick} style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', position: 'relative' }}>
           <Bell size={18} />
           {t(locale, 'notifications.title')}
-        </button>
-        <button className="sidebar-item" onClick={() => onModuleSelect('__store__')} style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left' }}>
-          <ShoppingBag size={18} />
-          {t(locale, 'nav.store')}
         </button>
         <button className="sidebar-item" onClick={() => onModuleSelect('__settings__')} style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left' }}>
           <Settings size={18} />

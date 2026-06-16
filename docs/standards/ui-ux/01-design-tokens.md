@@ -71,9 +71,21 @@ Natives 同时维护两套令牌，各有用途：
 #### R-U5 · 标题/品牌/激活态消费 `--font-display`
 - **等级**：SHOULD
 - **分类**：主题、命名
-- **规则**：侧栏品牌、主标题、面包屑激活态、卡片标题等「展示性」文字**应该**用 `font-family: var(--font-display)`，让字体随皮肤变化呈现不同语境。代码文件名、数值、终端数据**应该**用等宽（`var(--font-mono)` 或 `design-tokens` 中的 mono 栈）。正文 UI 用 `var(--font-ui)`。
+- **规则**：侧栏品牌、主标题、面包屑激活态、卡片标题等「展示性」文字**应该**用 `font-family: var(--font-display);`，让字体随皮肤变化呈现不同语境。代码文件名、数值、终端数据**应该**用等宽（`var(--font-mono)` 或 `design-tokens` 中的 mono 栈）。正文 UI 用 `var(--font-ui)`。
 - **为什么**：见 `STYLE_GUIDE_AUDIT.md` 的 typography 缺口分析——字体不随皮肤绑定会丧失 warm-archive 的出版物感与 editorial 的块状冲击力。
 - **检查方法**：标题类元素核对字体来源。
+
+#### R-U6 · 统一使用专业 SVG 图标，禁止使用 UI 字符 Emoji
+- **等级**：MUST
+- **分类**：主题、组件
+- **规则**：项目中所有 UI 交互元素、文件类型标识、状态提示、操作按钮处的图标，**必须**统一使用来自 `lucide-react` 的专业 SVG 图标组件，**绝对禁止**使用原生 Emoji 字符（如 `📁`、`⚙️`、`⚠️`、`❌`、`✅` 等）作为 UI 图标。
+- **正例**：
+  - ActionButton 使用 `<Folder size={14} />` 代替 `"📁"`
+  - Toast 使用 `<XCircle size={14} />` 代替 `"❌ "`
+  - EmptyState 的 icon 属性默认值为 `<Inbox size={32} />`
+- **反例**：`<button>⚙️ 设置</button>`（不仅在不同操作系统下渲染不一致，且破坏专业精致感）。
+- **为什么**：原生 Emoji 字符在不同系统平台（macOS、Windows、Linux）中外观差异极大，且与专业的现代应用界面（如 Steam 风格或 Warm 风格）不搭，会极大地拉低应用的视觉档次与一致性。使用 Lucide 矢量图标能保证跨平台的高清、风格一致及完美的对齐方式。
+- **检查方法**：核对组件 UI 定义及状态标识，确保没有任何裸 Emoji 用作操作按钮或图标显示。
 
 ---
 
@@ -84,3 +96,4 @@ Natives 同时维护两套令牌，各有用途：
 - [ ] 主题切换走 `applyTheme` + Zod 校验（R-U3）。
 - [ ] 终端配色随皮肤联动（R-U4）。
 - [ ] 展示性文字消费 `--font-display`（R-U5）。
+- [ ] 所有的 UI 图标均使用 `lucide-react` 的 SVG 图标，无任何 Emoji 字符用作 UI 图标（R-U6）。

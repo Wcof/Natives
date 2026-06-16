@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect } from 'react';
+import { Edit2, Trash2 } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
 interface PromptItem {
@@ -138,9 +139,13 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
                 <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 600, color: 'var(--text)' }}>{prompt.title}</div>
-                <div style={{ display: 'flex', gap: 4 }}>
-                  <button className="btn-ghost" onClick={() => handleEdit(prompt)} style={{ fontSize: 9, padding: '1px 4px' }}>✏️</button>
-                  <button className="btn-ghost" onClick={() => handleDelete(prompt.id)} style={{ fontSize: 9, padding: '1px 4px', color: 'var(--danger)' }}>🗑</button>
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <button className="btn-ghost" onClick={() => handleEdit(prompt)} style={{ padding: '2px 4px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }} title="Edit">
+                    <Edit2 size={10} />
+                  </button>
+                  <button className="btn-ghost" onClick={() => handleDelete(prompt.id)} style={{ padding: '2px 4px', color: 'var(--danger)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }} title="Delete">
+                    <Trash2 size={10} />
+                  </button>
                 </div>
               </div>
               <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 4, whiteSpace: 'pre-wrap', maxHeight: 40, overflow: 'hidden' }}>

@@ -30,26 +30,26 @@ export type Theme = z.infer<typeof ThemeSchema>;
 // ── Built-in Themes ──
 
 export const THEMES: Record<string, Theme> = {
-  'terminal-volt': {
-    bg: '#0b0c0a',
-    'bg-2': '#131410',
-    'bg-3': '#1c1e17',
-    panel: '#0e0f0c',
-    border: '#262920',
-    text: '#f2f2ea',
-    'text-dim': '#9b9d8c',
-    'text-faint': '#62655a',
-    accent: '#cdf24b',
-    'accent-ink': '#0b0c0a',
-    radius: '4px',
-    'font-display': 'ui-monospace, "SF Mono", "JetBrains Mono", monospace',
-    danger: '#f24b4b',
-    'danger-soft': '#f24b4b15',
-    warning: '#e6b800',
-    info: '#4bcdf2',
-    'diff-add': '#4ec9b0',
-    'diff-del': '#f24b4b',
-    'diff-mod': '#5b9cf5',
+  'editorial': {
+    bg: '#f4f1ea',
+    'bg-2': '#ece8dd',
+    'bg-3': '#e4dfd2',
+    panel: '#f4f1ea',
+    border: '#d6d1c3',
+    text: '#0a0a0a',
+    'text-dim': '#57534a',
+    'text-faint': '#8a857a',
+    accent: '#ff433d',
+    'accent-ink': '#ffffff',
+    radius: '0px',
+    'font-display': 'var(--font-ui)',
+    danger: '#ff433d',
+    'danger-soft': '#ff433d15',
+    warning: '#000000',
+    info: '#0a0a0a',
+    'diff-add': '#0a0a0a',
+    'diff-del': '#ff433d',
+    'diff-mod': '#5a5a5a',
   },
   'warm-archive': {
     bg: '#f5f0e8',
@@ -72,35 +72,13 @@ export const THEMES: Record<string, Theme> = {
     'diff-del': '#a04040',
     'diff-mod': '#5a6a9a',
   },
-  'editorial': {
-    bg: '#f4f1ea',
-    'bg-2': '#ece8dd',
-    'bg-3': '#e4dfd2',
-    panel: '#f4f1ea',
-    border: '#d6d1c3',
-    text: '#0a0a0a',
-    'text-dim': '#57534a',
-    'text-faint': '#8a857a',
-    accent: '#ff433d',
-    'accent-ink': '#ffffff',
-    radius: '0px',
-    'font-display': 'var(--font-ui)',
-    danger: '#ff433d',
-    'danger-soft': '#ff433d15',
-    warning: '#000000',
-    info: '#0a0a0a',
-    'diff-add': '#0a0a0a',
-    'diff-del': '#ff433d',
-    'diff-mod': '#5a5a5a',
-  },
 };
 
 // ── Terminal ANSI Colors ──
 
 export const TERMINAL_THEMES: Record<string, { background: string; foreground: string; cursor: string; selectionBackground?: string }> = {
-  'terminal-volt': { background: '#0b0c0a', foreground: '#d6dac9', cursor: '#cdf24b', selectionBackground: '#cdf24b33' },
-  'warm-archive': { background: '#ece2d2', foreground: '#4a3f30', cursor: '#cc785c', selectionBackground: '#cc785c33' },
   'editorial': { background: '#f4f1ea', foreground: '#0a0a0a', cursor: '#ff433d', selectionBackground: '#ff433d33' },
+  'warm-archive': { background: '#ece2d2', foreground: '#4a3f30', cursor: '#cc785c', selectionBackground: '#cc785c33' },
 };
 
 // ── Theme Application ──
@@ -115,8 +93,8 @@ export function validateTheme(theme: Record<string, unknown>): Theme {
 export function applyTheme(themeId: string): void {
   const theme = THEMES[themeId];
   if (!theme) {
-    console.warn(`Theme '${themeId}' not found, falling back to terminal-volt`);
-    return applyTheme('terminal-volt');
+    console.warn(`Theme '${themeId}' not found, falling back to editorial`);
+    return applyTheme('editorial');
   }
 
   const root = document.documentElement;
@@ -150,5 +128,5 @@ export function onThemeChange(cb: ThemeListeners): () => void {
 }
 
 export function getThemeId(): string {
-  return document.documentElement.getAttribute('data-theme') || 'terminal-volt';
+  return document.documentElement.getAttribute('data-theme') || 'editorial';
 }

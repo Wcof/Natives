@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { Package, Edit2, Trash2, Archive, Loader2 } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
 interface AIProposal {
@@ -257,10 +258,13 @@ export default function AIFileOrganizer() {
                       });
                     }}
                   />
-                  <div>
-                    <div style={{ color: 'var(--text)' }}>
-                      {p.action === 'move' ? `📦 ${t(locale, 'aiWorkbench.organizer.actions.move')}` : p.action === 'rename' ? `✏️ ${t(locale, 'aiWorkbench.organizer.actions.rename')}` : p.action === 'delete' ? `🗑️ ${t(locale, 'aiWorkbench.organizer.actions.delete')}` : `📁 ${t(locale, 'aiWorkbench.organizer.actions.archive')}`}
-                      {' '}<span style={{ fontFamily: 'var(--font-mono)' }}>{p.filePath.split('/').pop()}</span>
+                   <div>
+                    <div style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--accent)' }}>
+                        {p.action === 'move' ? <Package size={12} /> : p.action === 'rename' ? <Edit2 size={12} /> : p.action === 'delete' ? <Trash2 size={12} /> : <Archive size={12} />}
+                        <span>{t(locale, `aiWorkbench.organizer.actions.${p.action}`)}</span>
+                      </span>
+                      <span style={{ fontFamily: 'var(--font-mono)' }}>{p.filePath.split('/').pop()}</span>
                     </div>
                     <div style={{ fontSize: 10, color: 'var(--text-faint)', marginTop: 2 }}>{p.reason}</div>
                     {p.targetPath && (
@@ -276,11 +280,18 @@ export default function AIFileOrganizer() {
               <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
                 <button
                   className="btn btn-primary"
-                  style={{ flex: 1, fontSize: 11 }}
+                  style={{ flex: 1, fontSize: 11, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}
                   disabled={approved.size === 0 || executing}
                   onClick={handleExecute}
                 >
-                  {executing ? '⏳' : `✓ ${t(locale, 'aiWorkbench.execute')}`} ({approved.size})
+                  {executing ? (
+                    <>
+                      <Loader2 size={11} className="anim-livePulse" style={{ display: 'inline-block' }} />
+                      <span>{t(locale, 'aiWorkbench.execute')}</span>
+                    </>
+                  ) : (
+                    `✓ ${t(locale, 'aiWorkbench.execute')}`
+                  )} ({approved.size})
                 </button>
                 <button
                   className="btn btn-ghost"

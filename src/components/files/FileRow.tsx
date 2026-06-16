@@ -2,22 +2,14 @@
 
 import { useState, useEffect } from 'react';
 import { type FileEntry } from '@/types/file';
+import { Folder, FileText, Image as ImageIcon, Video, Music, BookOpen, Archive, File } from 'lucide-react';
 
 interface FileRowProps {
   entry: FileEntry;
   onSelect: (entry: FileEntry) => void;
   onContextMenu?: (e: React.MouseEvent, entry: FileEntry) => void;
+  showDir?: boolean;
 }
-
-const FILE_TYPE_ICONS: Record<string, string> = {
-  text: '📄',
-  image: '🖼️',
-  video: '🎬',
-  audio: '🎵',
-  pdf: '📕',
-  archive: '📦',
-  other: '📎',
-};
 
 function formatSize(bytes: number): string {
   const units = ['B', 'KB', 'MB', 'GB'];
@@ -40,9 +32,21 @@ function formatTime(ms: number): string {
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-export default function FileRow({ entry, onSelect, onContextMenu }: FileRowProps) {
+export default function FileRow({ entry, onSelect, onContextMenu, showDir }: FileRowProps) {
   const [flash, setFlash] = useState(false);
-  const icon = entry.isDir ? '📁' : FILE_TYPE_ICONS[entry.kind] || '📄';
+  const renderIcon = () => {
+    const size = 16;
+    if (entry.isDir) return <Folder size={size} style={{ color: 'var(--accent,#cdf24b)' }} />;
+    switch (entry.kind) {
+      case 'text': return <FileText size={size} />;
+      case 'image': return <ImageIcon size={size} />;
+      case 'video': return <Video size={size} />;
+      case 'audio': return <Music size={size} />;
+      case 'pdf': return <BookOpen size={size} />;
+      case 'archive': return <Archive size={size} />;
+      default: return <File size={size} />;
+    }
+  };
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -81,7 +85,9 @@ export default function FileRow({ entry, onSelect, onContextMenu }: FileRowProps
       onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
     >
       <span className="file-row-counter" />
-      <span style={{ fontSize: 16 }}>{icon}</span>
+      <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim,#9b9d8c)' }}>
+        {renderIcon()}
+      </span>
       <div style={{
         overflow: 'hidden',
         textOverflow: 'ellipsis',
@@ -91,6 +97,11 @@ export default function FileRow({ entry, onSelect, onContextMenu }: FileRowProps
         gap: 6,
       }}>
         <span style={{ fontFamily: 'var(--font-mono)' }}>{entry.name}</span>
+        {showDir && entry.dirHint && (
+          <span style={{ fontSize: 10, color: 'var(--text-faint, #62655a)', marginLeft: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>
+            — {entry.dirHint}
+          </span>
+        )}
         {entry.hidden && <span style={{ fontSize: 10, color: 'var(--text-faint, #62655a)' }}>(hidden)</span>}
         {entry.symlink && <span style={{ fontSize: 10, color: 'var(--text-faint, #62655a)' }}>→ link</span>}
       </div>

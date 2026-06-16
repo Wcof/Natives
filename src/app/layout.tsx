@@ -14,7 +14,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html data-theme="terminal-volt">
+    <html data-theme="editorial">
       <body>
         <ToastProvider>
           <ShellLayout>{children}</ShellLayout>

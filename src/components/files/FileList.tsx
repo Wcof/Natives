@@ -12,9 +12,10 @@ interface FileListProps {
   onSort: (sortBy: 'name' | 'mtime' | 'size') => void;
   onSelect: (entry: FileEntry) => void;
   onContextMenu?: (e: React.MouseEvent, entry: FileEntry) => void;
+  showDir?: boolean;
 }
 
-export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, onContextMenu }: FileListProps) {
+export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, onContextMenu, showDir }: FileListProps) {
   const [locale, setLocale] = useState<Locale>('zh');
 
   useEffect(() => {
@@ -84,6 +85,7 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
             entry={entry}
             onSelect={onSelect}
             onContextMenu={onContextMenu}
+            showDir={showDir}
           />
         ))
       )}

@@ -3,7 +3,12 @@ import * as path from 'path';
 import { z } from 'zod';
 import { getDb } from './database';
 
-const MODULES_DIR = path.join(process.env.HOME || '~', '.natives', 'modules');
+function getModulesDir(): string {
+  if (process.env.NATIVES_DB_DIR) {
+    return path.join(process.env.NATIVES_DB_DIR, 'modules');
+  }
+  return path.join(process.env.HOME || '~', '.natives', 'modules');
+}
 
 // ── Manifest Schema ──
 
@@ -91,17 +96,18 @@ export function validateManifest(data: unknown): { ok: true; manifest: Manifest 
 // ── Directory scanning ──
 
 export function scanModules(): ScanResult[] {
-  if (!fs.existsSync(MODULES_DIR)) {
-    fs.mkdirSync(MODULES_DIR, { recursive: true });
+  const modulesDir = getModulesDir();
+  if (!fs.existsSync(modulesDir)) {
+    fs.mkdirSync(modulesDir, { recursive: true });
     return [];
   }
 
-  const entries = fs.readdirSync(MODULES_DIR, { withFileTypes: true });
+  const entries = fs.readdirSync(modulesDir, { withFileTypes: true });
   const results: ScanResult[] = [];
 
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const moduleDir = path.join(MODULES_DIR, entry.name);
+    const moduleDir = path.join(modulesDir, entry.name);
     const manifestPath = path.join(moduleDir, 'manifest.json');
 
     if (!fs.existsSync(manifestPath)) {

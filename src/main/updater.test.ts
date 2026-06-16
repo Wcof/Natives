@@ -2,10 +2,11 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import { compareVersions, checkForUpdates } from './updater';
 
-const TEST_DIR = path.join(process.env.HOME || '~', '.natives-update-test');
-const MODULES_DIR = path.join(process.env.HOME || '~', '.natives', 'modules', 'update-module');
+const TEST_DIR = path.join(os.tmpdir(), 'natives-updater-test');
+const MODULES_DIR = path.join(TEST_DIR, 'modules', 'update-module');
 
 describe('Updater', () => {
   before(() => {
@@ -19,9 +20,6 @@ describe('Updater', () => {
     try { const { closeDb } = require('./database'); closeDb(); } catch { /* ignore */ }
     if (fs.existsSync(TEST_DIR)) {
       fs.rmSync(TEST_DIR, { recursive: true, force: true });
-    }
-    if (fs.existsSync(path.join(process.env.HOME || '~', '.natives'))) {
-      fs.rmSync(path.join(process.env.HOME || '~', '.natives'), { recursive: true, force: true });
     }
   });
 

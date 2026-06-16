@@ -88,6 +88,7 @@ const nativesAPI = {
     trashEntry: (filePath: string) => ipcRenderer.invoke('fs:trashEntry', filePath),
     moveEntry: (from: string, to: string) => ipcRenderer.invoke('fs:moveEntry', from, to),
     importFiles: (sourcePaths: string[], destDir: string) => ipcRenderer.invoke('fs:importFiles', sourcePaths, destDir),
+    recentFiles: (root: string) => ipcRenderer.invoke('fs:recentFiles', root),
   },
 
   // === Archive IPC ===

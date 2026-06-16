@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, createContext, useContext, useRef } from 'react';
+import { XCircle, CheckCircle, AlertTriangle } from 'lucide-react';
 
 export type ToastType = 'info' | 'success' | 'error' | 'warning';
 
@@ -75,12 +76,14 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               pointerEvents: 'auto',
               cursor: 'pointer',
               maxWidth: 360,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              display: 'inline-flex', alignItems: 'center', gap: 6,
             }}
             onClick={() => removeToast(t.id)}
           >
-            {t.type === 'error' ? '❌ ' : t.type === 'success' ? '✅ ' : t.type === 'warning' ? '⚠️ ' : ''}
-            {t.message}
+            {t.type === 'error' && <XCircle size={14} style={{ flexShrink: 0 }} />}
+            {t.type === 'success' && <CheckCircle size={14} style={{ flexShrink: 0 }} />}
+            {t.type === 'warning' && <AlertTriangle size={14} style={{ flexShrink: 0 }} />}
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.message}</span>
           </div>
         ))}
       </div>

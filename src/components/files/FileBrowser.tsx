@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { type FileEntry } from '@/types/file';
+import { type FileEntry, type FileKind } from '@/types/file';
 import { t, type Locale } from '@/i18n';
 import FileGrid from './FileGrid';
 import FileList from './FileList';
@@ -11,6 +11,7 @@ import FileContextMenu from './FileContextMenu';
 import Skeleton from '@/components/ui/Skeleton';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useFocusTrap } from '@/lib/useFocusTrap';
+import { pushRecentFile } from '@/lib/recent-files-client';
 
 interface FileBrowserProps {
   onFileSelect?: (entry: FileEntry) => void;
@@ -36,6 +37,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const [toast, setToast] = useState<string | null>(null);
   const [favorites, setFavorites] = useState<string[]>([]);
   const [locale, setLocale] = useState<Locale>('zh');
+  const [recentMode, setRecentMode] = useState(false);
 
   // Navigation history for back/forward
   const historyRef = useRef<string[]>(['/']);
@@ -104,7 +106,32 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     setLoading(true);
     try {
       const api = window.nativesAPI;
-      if (api?.fs?.listDir) {
+
+      if (recentMode) {
+        // 最近修改模式：调用后端递归扫描，返回按 mtime 降序的文件
+        const recentData = await api?.fs?.recentFiles?.(currentPath);
+        if (recentData && Array.isArray(recentData)) {
+          // 转换 WalkFile 格式 → FileEntry，填入 dirHint
+          const recentEntries: FileEntry[] = recentData.map((f: any) => {
+            const dir = f.path.substring(0, f.path.lastIndexOf('/')) || '/';
+            const name = f.path.split('/').pop() || '';
+            return {
+              name,
+              path: f.path,
+              isDir: false,
+              kind: 'text' as FileKind,
+              hidden: name.startsWith('.'),
+              size: f.size || 0,
+              mtime: f.mtime || 0,
+              btime: 0,
+              dirHint: dir === currentPath ? undefined : dir,
+            };
+          });
+          setEntries(recentEntries);
+        } else {
+          setEntries([]);
+        }
+      } else if (api?.fs?.listDir) {
         const options = { sortBy, sortDir, showHidden };
         const data = await api.fs.listDir(currentPath, options);
         setEntries(data || []);
@@ -116,7 +143,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     } finally {
       setLoading(false);
     }
-  }, [currentPath, sortBy, sortDir, showHidden]);
+  }, [currentPath, sortBy, sortDir, showHidden, recentMode]);
 
   useEffect(() => {
     loadEntries();
@@ -148,6 +175,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     if (entry.isDir) {
       navigateTo(entry.path);
     } else {
+      pushRecentFile(entry.path);
       onFileSelect?.(entry);
     }
   };
@@ -275,6 +303,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         sortDir={sortDir}
         showHidden={showHidden}
         searchQuery={searchQuery}
+        recentMode={recentMode}
         canGoBack={canGoBack}
         canGoForward={canGoForward}
         onViewModeChange={setViewMode}
@@ -282,6 +311,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         onSortDirChange={setSortDir}
         onShowHiddenChange={setShowHidden}
         onSearchChange={setSearchQuery}
+        onRecentModeToggle={() => setRecentMode((v) => !v)}
         onRefresh={loadEntries}
         onNewFile={() => handleNewFile(currentPath)}
         onNewFolder={() => handleNewFolder(currentPath)}
@@ -311,6 +341,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             onSort={handleSort}
             onSelect={handleSelect}
             onContextMenu={handleContextMenu}
+            showDir={recentMode}
           />
         )}
       </div>

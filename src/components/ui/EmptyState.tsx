@@ -1,23 +1,25 @@
 'use client';
 
 import { type ReactNode } from 'react';
+import { Inbox, AlertTriangle } from 'lucide-react';
 
 // ── Empty State (TASK-017) ──
 
 interface EmptyStateProps {
-  icon?: string;
+  icon?: ReactNode;
   title: string;
   description?: string;
   action?: { label: string; onClick: () => void };
 }
 
-export function EmptyState({ icon = '📭', title, description, action }: EmptyStateProps) {
+export function EmptyState({ icon, title, description, action }: EmptyStateProps) {
+  const renderedIcon = icon !== undefined ? icon : <Inbox size={32} />;
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       padding: '40px 20px', textAlign: 'center',
     }}>
-      <div style={{ fontSize: 32, marginBottom: 12 }}>{icon}</div>
+      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>{renderedIcon}</div>
       <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>{title}</div>
       {description && <div style={{ fontSize: 12, color: 'var(--text-faint)', marginBottom: 16, maxWidth: 280 }}>{description}</div>}
       {action && (
@@ -54,16 +56,17 @@ export function LoadingState({ message = 'Loading...' }: LoadingStateProps) {
 interface ErrorStateProps {
   message: string;
   onRetry?: () => void;
-  icon?: string;
+  icon?: ReactNode;
 }
 
-export function ErrorState({ message, onRetry, icon = '⚠️' }: ErrorStateProps) {
+export function ErrorState({ message, onRetry, icon }: ErrorStateProps) {
+  const renderedIcon = icon !== undefined ? icon : <AlertTriangle size={28} style={{ color: 'var(--warning)' }} />;
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       padding: 40, textAlign: 'center',
     }}>
-      <div style={{ fontSize: 28, marginBottom: 8 }}>{icon}</div>
+      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}>{renderedIcon}</div>
       <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 12 }}>{message}</div>
       {onRetry && (
         <button className="btn" onClick={onRetry} style={{ fontSize: 11 }}>

@@ -1,6 +1,7 @@
 'use client';
 
 import { ReactNode, useState, useCallback, useEffect } from 'react';
+import { FileText, Bell, Info } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
 export type RightPanelMode = 'file-preview' | 'notifications' | 'module-details' | 'closed';
@@ -91,37 +92,40 @@ export default function RightPanel({
             className={`btn-ghost ${mode === 'file-preview' ? 'active' : ''}`}
             onClick={() => onModeChange('file-preview')}
             style={{
-              fontSize: 11, padding: '3px 8px', borderRadius: 4,
+              padding: '4px 8px', borderRadius: 4,
               color: mode === 'file-preview' ? 'var(--accent)' : 'var(--text-faint)',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
             }}
             title={t(locale, 'rightPanel.filePreview')}
           >
-            📄
+            <FileText size={16} />
           </button>
           <button
             className={`btn-ghost ${mode === 'notifications' ? 'active' : ''}`}
             onClick={() => onModeChange('notifications')}
             style={{
-              fontSize: 11, padding: '3px 8px', borderRadius: 4,
+              padding: '4px 8px', borderRadius: 4,
               color: mode === 'notifications' ? 'var(--accent)' : 'var(--text-faint)',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
             }}
             title={t(locale, 'rightPanel.title.notifications')}
           >
-            🔔
+            <Bell size={16} />
           </button>
           <button
             className={`btn-ghost ${mode === 'module-details' ? 'active' : ''}`}
             onClick={() => onModeChange('module-details')}
             style={{
-              fontSize: 11, padding: '3px 8px', borderRadius: 4,
+              padding: '4px 8px', borderRadius: 4,
               color: mode === 'module-details' ? 'var(--accent)' : 'var(--text-faint)',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
             }}
             title={t(locale, 'rightPanel.title.moduleDetails')}
           >
-            ℹ️
+            <Info size={16} />
           </button>
         </div>
-        <button className="btn-ghost" onClick={handleClose} aria-label="Close panel">
+        <button className="btn-ghost" onClick={handleClose} aria-label="Close panel" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M18 6L6 18M6 6l12 12" />
           </svg>
@@ -134,8 +138,8 @@ export default function RightPanel({
             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
             height: 200, color: 'var(--text-faint)', fontSize: 13,
           }}>
-            <div style={{ fontSize: 28, marginBottom: 8 }}>
-              {mode === 'notifications' ? '🔔' : '📄'}
+            <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'center', color: 'var(--text-faint)' }}>
+              {mode === 'notifications' ? <Bell size={28} /> : <FileText size={28} />}
             </div>
             <div>{mode === 'notifications' ? t(locale, 'rightPanel.empty.notifications') : t(locale, 'rightPanel.empty.selectFile')}</div>
           </div>
