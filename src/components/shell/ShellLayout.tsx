@@ -7,6 +7,7 @@ import ContentArea from './ContentArea';
 import RightPanel from './RightPanel';
 import type { RightPanelMode } from './RightPanel';
 import NotificationPanel from './NotificationPanel';
+import Header from './Header';
 import TerminalPanel from './Terminal';
 import CommandPalette from './CommandPalette';
 import ErrorBoundary from '@/components/ui/ErrorBoundary';
@@ -47,7 +48,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     sidebarWidth: 248,
     rightPanelMode: 'closed',
     rightPanelWidth: 320,
-    terminalCollapsed: false,
+    terminalCollapsed: true,
     terminalHeight: 280,
     terminalMaximized: false,
     cmdkOpen: false,
@@ -569,6 +570,11 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         onModuleSelect={handleModuleSelect}
         onNotificationClick={() => toggleRightPanel('notifications')}
         locale={locale}
+      />
+      <Header
+        activeView={activeView}
+        onToggleSidebar={toggleSidebar}
+        onToggleTerminal={toggleTerminal}
       />
       <ContentArea>
         <div ref={contentRef} id="main-content" tabIndex={-1} style={{ height: '100%', outline: 'none' }}>
