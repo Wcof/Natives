@@ -290,6 +290,8 @@ export const zh = {
     dialogRenameBtn: '重命名',
     placeholderFileName: '文件名.txt',
     placeholderFolderName: '文件夹名',
+    back: '后退',
+    forward: '前进',
     ariaLabelFiles: '文件浏览',
   },
 
@@ -423,6 +425,19 @@ export const zh = {
     // Session replay
     replay: {
       noFiles: '此会话没有文件修改',
+    },
+    // 提示词库
+    promptLibrary: {
+      title: '💬 提示词库',
+      searchPlaceholder: '搜索提示词...',
+      newPrompt: '+ 新建',
+      noMatching: '没有匹配的提示词',
+      empty: '还没有提示词。创建你的第一个提示词！',
+      edit: '编辑',
+      save: '保存',
+      cancel: '取消',
+      delete: '删除',
+      tags: '标签',
     },
   },
 
@@ -588,5 +603,32 @@ export const zh = {
     prevTerminalTab: '上一个终端标签',
     closePreview: '关闭预览 / 面板',
     pressToToggle: '按 {keys} 切换',
+  },
+
+  // ── 新手引导 ──
+  onboarding: {
+    welcome: '欢迎使用 Natives',
+    welcomeDesc: '你的 AI 原生桌面应用容器。5 分钟内即可完成设置。',
+    skip: '跳过',
+    getStarted: '开始使用 →',
+    envCheck: '环境检查',
+    envCheckDesc: '正在验证你的系统是否准备好运行 Natives。',
+    runCheck: '运行检查',
+    checking: '检查中...',
+    allReady: '✅ 一切就绪！',
+    continue: '继续 →',
+    checksFailed: '⚠️ 部分检查未通过 — 你可以稍后修复并继续。',
+    continueAnyway: '继续 →',
+    aiConfig: 'AI 配置',
+    aiConfigDesc: '设置你的 AI 提供商 API 密钥以启用 AI 功能。',
+    apiKeyLabel: 'API 密钥',
+    saveAndContinue: '保存并继续',
+    moduleInstall: '安装模块',
+    moduleInstallDesc: '安装推荐模块以扩展 Natives 的功能。',
+    installRecommended: '安装推荐',
+    openWorkshop: '打开创意工坊',
+    allSet: '全部就绪！',
+    allSetDesc: '你已准备好开始使用 Natives。享受吧！',
+    finish: '完成',
   },
 };

@@ -57,7 +57,7 @@ export default function FileToolbar({
             className="btn btn-ghost"
             onClick={onBack}
             disabled={!canGoBack}
-            title="Back (Cmd+[)"
+            title={t(locale,'fileBrowser.back')}
             style={{ padding: '2px 6px', fontSize: 14, opacity: canGoBack ? 1 : 0.3 }}
           >
             ←
@@ -66,7 +66,7 @@ export default function FileToolbar({
             className="btn btn-ghost"
             onClick={onForward}
             disabled={!canGoForward}
-            title="Forward (Cmd+])"
+            title={t(locale,'fileBrowser.forward')}
             style={{ padding: '2px 6px', fontSize: 14, opacity: canGoForward ? 1 : 0.3 }}
           >
             →
@@ -109,7 +109,7 @@ export default function FileToolbar({
         className="btn btn-ghost"
         onClick={() => onSortDirChange(sortDir === 'asc' ? 'desc' : 'asc')}
         style={{ fontSize: 14, padding: '2px 6px' }}
-        title={sortDir === 'asc' ? 'Ascending' : 'Descending'}
+        title={t(locale, sortDir === 'asc' ? 'fileBrowser.ascending' : 'fileBrowser.descending')}
       >
         {sortDir === 'asc' ? '↑' : '↓'}
       </button>
@@ -126,7 +126,7 @@ export default function FileToolbar({
           <span className="switch-knob" />
         </span>
         <span style={{ marginLeft: 6, fontSize: 11, color: 'var(--text-dim, #9b9d8c)' }}>
-          Hidden
+          {t(locale,'fileBrowser.hidden')}
         </span>
       </label>
 
@@ -135,17 +135,17 @@ export default function FileToolbar({
 
       {/* Actions */}
       {onNewFile && (
-        <button className="btn btn-ghost" onClick={onNewFile} style={{ fontSize: 11, padding: '3px 8px' }} title="New File">
+        <button className="btn btn-ghost" onClick={onNewFile} style={{ fontSize: 11, padding: '3px 8px' }} title={t(locale,'fileBrowser.newFile')}>
           + File
         </button>
       )}
       {onNewFolder && (
-        <button className="btn btn-ghost" onClick={onNewFolder} style={{ fontSize: 11, padding: '3px 8px' }} title="New Folder">
+        <button className="btn btn-ghost" onClick={onNewFolder} style={{ fontSize: 11, padding: '3px 8px' }} title={t(locale,'fileBrowser.newFolder')}>
           + Folder
         </button>
       )}
       {onRefresh && (
-        <button className="btn btn-ghost" onClick={onRefresh} style={{ fontSize: 11, padding: '3px 8px' }} title="Refresh">
+        <button className="btn btn-ghost" onClick={onRefresh} style={{ fontSize: 11, padding: '3px 8px' }} title={t(locale,'fileBrowser.refresh')}>
           ↻
         </button>
       )}

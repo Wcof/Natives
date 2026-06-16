@@ -104,14 +104,14 @@ export default function PromptLibrary() {
       {/* Header */}
       <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border,#262920)' }}>
         <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
-          💬 Prompt Library
+          {t(locale,'aiWorkbench.promptLibrary.title')}
         </div>
         <div style={{ display: 'flex', gap: 4 }}>
           <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search prompts..."
+placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
             style={{
               flex: 1, fontSize: 11, padding: '4px 8px',
               background: 'var(--bg,#0b0c0a)', border: '1px solid var(--border,#262920)',
@@ -119,7 +119,7 @@ export default function PromptLibrary() {
             }}
           />
           <button className="btn btn-primary" onClick={() => { setEditId(null); setEditTitle(''); setEditContent(''); setEditTags(''); setShowEditor(true); }} style={{ fontSize: 10, padding: '3px 8px' }}>
-            + New
+            {t(locale,'aiWorkbench.promptLibrary.newPrompt')}
           </button>
         </div>
       </div>
@@ -128,7 +128,7 @@ export default function PromptLibrary() {
       <div style={{ flex: 1, overflow: 'auto', padding: 6 }}>
         {filtered.length === 0 ? (
           <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
-            {search ? 'No matching prompts' : 'No prompts yet. Create your first prompt!'}
+            {search ? t(locale,'aiWorkbench.promptLibrary.noMatching') : t(locale,'aiWorkbench.promptLibrary.empty')}
           </div>
         ) : (
           filtered.map((prompt) => (

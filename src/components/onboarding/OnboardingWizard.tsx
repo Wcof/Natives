@@ -80,14 +80,14 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 48, marginBottom: 16 }}>🚀</div>
             <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--text)', margin: '0 0 8px' }}>
-              Welcome to Natives
+              {t(locale, 'onboarding.welcome')}
             </h1>
             <p style={{ fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.5, marginBottom: 24 }}>
-              Your AI-native desktop app container. Let's get you set up in under 5 minutes.
+              {t(locale, 'onboarding.welcomeDesc')}
             </p>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-              <button className="btn" onClick={handleSkip} style={{ fontSize: 12 }}>Skip</button>
-              <button className="btn btn-primary" onClick={handleNext} style={{ fontSize: 12 }}>Get Started →</button>
+              <button className="btn" onClick={handleSkip} style={{ fontSize: 12 }}>{t(locale, 'onboarding.skip')}</button>
+              <button className="btn btn-primary" onClick={handleNext} style={{ fontSize: 12 }}>{t(locale, 'onboarding.getStarted')}</button>
             </div>
           </div>
         )}
@@ -97,24 +97,24 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 48, marginBottom: 16 }}>🔍</div>
             <h1 style={{ fontSize: 20, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' }}>
-              Environment Check
+              {t(locale, 'onboarding.envCheck')}
             </h1>
             <p style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 24 }}>
-              Verifying your system is ready for Natives.
+              {t(locale, 'onboarding.envCheckDesc')}
             </p>
             {envOk === null ? (
               <button className="btn btn-primary" onClick={handleEnvCheck} disabled={checking} style={{ fontSize: 12 }}>
-                {checking ? 'Checking...' : 'Run Check'}
+                {checking ? t(locale, 'onboarding.checking') : t(locale, 'onboarding.runCheck')}
               </button>
             ) : envOk ? (
               <div>
-                <div style={{ fontSize: 14, color: 'var(--accent,#cdf24b)', marginBottom: 16 }}>✅ All systems ready!</div>
-                <button className="btn btn-primary" onClick={handleNext} style={{ fontSize: 12 }}>Continue →</button>
+                <div style={{ fontSize: 14, color: 'var(--accent,#cdf24b)', marginBottom: 16 }}>{t(locale, 'onboarding.allReady')}</div>
+                <button className="btn btn-primary" onClick={handleNext} style={{ fontSize: 12 }}>{t(locale, 'onboarding.continue')}</button>
               </div>
             ) : (
               <div>
-                <div style={{ fontSize: 14, color: 'var(--danger)', marginBottom: 16 }}>⚠️ Some checks failed — you can continue and fix later.</div>
-                <button className="btn btn-primary" onClick={handleNext} style={{ fontSize: 12 }}>Continue Anyway →</button>
+                <div style={{ fontSize: 14, color: 'var(--danger)', marginBottom: 16 }}>{t(locale, 'onboarding.checksFailed')}</div>
+                <button className="btn btn-primary" onClick={handleNext} style={{ fontSize: 12 }}>{t(locale, 'onboarding.continueAnyway')}</button>
               </div>
             )}
           </div>
@@ -125,10 +125,10 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 48, marginBottom: 16 }}>🤖</div>
             <h1 style={{ fontSize: 20, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' }}>
-              AI Configuration
+              {t(locale, 'onboarding.aiConfig')}
             </h1>
             <p style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 16 }}>
-              Set your Anthropic API key to enable AI features. Your key is stored encrypted.
+              {t(locale, 'onboarding.aiConfigDesc')}
             </p>
             <input
               type="password"
@@ -143,9 +143,9 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
               }}
             />
             <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-              <button className="btn" onClick={handleNext} style={{ fontSize: 12 }}>Skip</button>
+              <button className="btn" onClick={handleNext} style={{ fontSize: 12 }}>{t(locale, 'onboarding.skip')}</button>
               <button className="btn btn-primary" onClick={() => { handleSaveApiKey(); handleNext(); }} style={{ fontSize: 12 }} disabled={!apiKey.trim()}>
-                Save & Continue
+                {t(locale, 'onboarding.saveAndContinue')}
               </button>
             </div>
           </div>
@@ -156,15 +156,15 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 48, marginBottom: 16 }}>🧩</div>
             <h1 style={{ fontSize: 20, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' }}>
-              Install Modules
+              {t(locale, 'onboarding.moduleInstall')}
             </h1>
             <p style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 24 }}>
-              Drag & drop module ZIP files to install them, or skip and do it later from the Workshop.
+              {t(locale, 'onboarding.moduleInstallDesc')}
             </p>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-              <button className="btn" onClick={handleNext} style={{ fontSize: 12 }}>Skip</button>
+              <button className="btn" onClick={handleNext} style={{ fontSize: 12 }}>{t(locale, 'onboarding.skip')}</button>
               <button className="btn btn-primary" onClick={() => { window.dispatchEvent(new CustomEvent('navigate', { detail: '__workshop__' })); onComplete(); }} style={{ fontSize: 12 }}>
-                Open Workshop
+                {t(locale, 'onboarding.openWorkshop')}
               </button>
             </div>
           </div>
@@ -175,13 +175,13 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 48, marginBottom: 16 }}>🎉</div>
             <h1 style={{ fontSize: 20, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' }}>
-              You're All Set!
+              {t(locale, 'onboarding.allSet')}
             </h1>
             <p style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 24 }}>
-              Natives is ready to use. Start by exploring the dashboard or opening the terminal.
+              {t(locale, 'onboarding.allSetDesc')}
             </p>
             <button className="btn btn-primary" onClick={onComplete} style={{ fontSize: 12 }}>
-              Start Using Natives →
+              {t(locale, 'onboarding.finish')}
             </button>
           </div>
         )}
