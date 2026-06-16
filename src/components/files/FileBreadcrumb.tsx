@@ -1,18 +1,34 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Star } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Star, Monitor } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
+import type { ProjectBadge } from '@/types/file';
+
+const BADGE_LABELS: Record<string, string> = {
+  node: 'Node', web: 'Web', python: 'Py', rust: 'Rust', go: 'Go', git: 'Git',
+};
+
+const BADGE_COLORS: Record<string, { bg: string; text: string }> = {
+  node: { bg: '#33993320', text: '#339933' },
+  web: { bg: '#E44D2620', text: '#E44D26' },
+  python: { bg: '#3776AB20', text: '#3776AB' },
+  rust: { bg: '#DEA58420', text: '#DEA584' },
+  go: { bg: '#00ADD820', text: '#00ADD8' },
+  git: { bg: '#F0503320', text: '#F05033' },
+};
 
 interface FileBreadcrumbProps {
   segments: string[];
   onNavigate: (path: string) => void;
   isFavorite?: boolean;
   onToggleFavorite?: () => void;
+  projectBadge?: ProjectBadge | null;
 }
 
-export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onToggleFavorite }: FileBreadcrumbProps) {
+export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onToggleFavorite, projectBadge }: FileBreadcrumbProps) {
   const [locale, setLocale] = useState<Locale>('zh');
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     async function loadLocale() {
@@ -24,11 +40,34 @@ export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onTog
     loadLocale();
   }, []);
 
-  if (segments.length === 0) return null;
+  // Auto-scroll to end on mount / segment change
+  useEffect(() => {
+    if (scrollRef.current) {
+      requestAnimationFrame(() => {
+        scrollRef.current!.scrollLeft = scrollRef.current!.scrollWidth;
+      });
+    }
+  }, [segments]);
+
+  if (segments.length === 0 || (segments.length === 1 && segments[0] === '')) {
+    return (
+      <nav aria-label={t(locale, 'fileBrowser.breadcrumbLabel')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', fontSize: 13 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--accent, #FFF5E6)', fontWeight: 600 }}>
+          <Monitor size={14} /> /
+        </span>
+        {projectBadge && BADGE_COLORS[projectBadge] && (
+          <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 20, background: BADGE_COLORS[projectBadge].bg, color: BADGE_COLORS[projectBadge].text }}>
+            {BADGE_LABELS[projectBadge]}
+          </span>
+        )}
+      </nav>
+    );
+  }
 
   return (
     <nav
       aria-label={t(locale, 'fileBrowser.breadcrumbLabel')}
+      ref={scrollRef}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -36,33 +75,62 @@ export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onTog
         padding: '8px 12px',
         fontSize: 13,
         color: 'var(--text, #f2f2ea)',
-        overflow: 'hidden',
+        overflowX: 'auto',
+        scrollbarWidth: 'none',
+        whiteSpace: 'nowrap',
       }}
     >
+      {/* Root segment with monitor icon */}
+      <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        {segments.length > 0 ? (
+          <button
+            onClick={() => onNavigate('/')}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: 'var(--text-dim, #9b9d8c)', padding: '2px 4px', borderRadius: 3,
+              fontSize: 13, display: 'flex', alignItems: 'center', gap: 3,
+              transition: 'color 0.1s, background 0.1s',
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLElement).style.color = 'var(--text, #f2f2ea)';
+              (e.currentTarget as HTMLElement).style.background = 'var(--bg-2, #131410)';
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLElement).style.color = 'var(--text-dim, #9b9d8c)';
+              (e.currentTarget as HTMLElement).style.background = 'none';
+            }}
+          >
+            <Monitor size={13} style={{ color: 'var(--accent, #FFF5E6)' }} />
+          </button>
+        ) : (
+          <Monitor size={13} style={{ color: 'var(--accent, #FFF5E6)' }} />
+        )}
+      </span>
+
       {segments.map((segment, idx) => {
-        // Build cumulative path
         const pathSoFar = '/' + segments.slice(0, idx + 1).join('/');
         const isLast = idx === segments.length - 1;
 
         return (
           <span key={pathSoFar} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            {idx > 0 && (
-              <span style={{ color: 'var(--text-faint, #62655a)', fontSize: 12 }}>›</span>
-            )}
+            <span style={{ color: 'var(--text-faint, #62655a)', fontSize: 12 }}>›</span>
             {isLast ? (
-              <span style={{ color: 'var(--accent, #FFF5E6)', fontWeight: 600, fontFamily: 'var(--font-display)' }}>{segment}</span>
+              <span style={{
+                color: 'var(--accent, #FFF5E6)', fontWeight: 600,
+                fontFamily: 'var(--font-display)',
+                background: 'var(--accent-soft, #FFF5E61f)',
+                padding: '2px 7px', borderRadius: 6,
+              }}>
+                {segment}
+              </span>
             ) : (
               <button
                 onClick={() => onNavigate(pathSoFar)}
                 style={{
-                  background: 'none',
-                  border: 'none',
+                  background: 'none', border: 'none',
                   color: 'var(--text-dim, #9b9d8c)',
-                  cursor: 'pointer',
-                  padding: '2px 4px',
-                  borderRadius: 3,
-                  fontSize: 13,
-                  transition: 'color 0.1s, background 0.1s',
+                  cursor: 'pointer', padding: '2px 4px', borderRadius: 3,
+                  fontSize: 13, transition: 'color 0.1s, background 0.1s',
                 }}
                 onMouseEnter={(e) => {
                   (e.currentTarget as HTMLElement).style.color = 'var(--text, #f2f2ea)';
@@ -80,13 +148,24 @@ export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onTog
         );
       })}
 
+      {/* Project badge */}
+      {projectBadge && BADGE_COLORS[projectBadge] && (
+        <span style={{
+          fontSize: 9, fontWeight: 600, padding: '1px 5px', borderRadius: 3,
+          background: BADGE_COLORS[projectBadge].bg, color: BADGE_COLORS[projectBadge].text,
+          marginLeft: 4, lineHeight: '16px', flexShrink: 0,
+        }}>
+          {BADGE_LABELS[projectBadge]}
+        </span>
+      )}
+
       {/* Favorite toggle */}
       {onToggleFavorite && (
         <button
           onClick={onToggleFavorite}
           style={{
             background: 'none', border: 'none', cursor: 'pointer',
-            padding: '2px 4px', marginLeft: 'auto', display: 'flex',
+            padding: '2px 4px', marginLeft: 'auto', display: 'flex', flexShrink: 0,
             color: isFavorite ? 'var(--accent,#FFF5E6)' : 'var(--text-faint,#62655a)',
           }}
           title={t(locale, isFavorite ? 'fileBrowser.removeFromFavorites' : 'fileBrowser.addToFavorites')}

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useAsyncData } from '@/hooks/useAsyncData';
 import { t, type Locale } from '@/i18n';
+import { ProgressBar } from '@/components/ui/ProgressBar';
 
 export default function UsagePanel() {
   const [activeTab, setActiveTab] = useState<'claude' | 'codex' | 'rtk'>('claude');
@@ -110,21 +111,6 @@ export default function UsagePanel() {
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-function ProgressBar({ label, used, limit, color }: { label: string; used: number; limit: number; color: string }) {
-  const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
-  return (
-    <div style={{ marginBottom: 10 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
-        <span style={{ color: 'var(--text-dim)' }}>{label}</span>
-        <span style={{ color: 'var(--text)' }}>{Math.round(pct)}% ({used}/{limit})</span>
-      </div>
-      <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden' }}>
-        <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 3, transition: 'width 0.3s ease' }} />
-      </div>
     </div>
   );
 }

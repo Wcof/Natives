@@ -6,6 +6,7 @@ import { t, type Locale } from '@/i18n';
 import { useRecentModules } from '@/lib/recent-modules';
 import { useRecentFiles } from '@/lib/recent-files-client';
 import { useAsyncData } from '@/hooks/useAsyncData';
+import { ProgressBar, TokenChip } from '@/components/ui/ProgressBar';
 import type { SkillInfo } from '@/types/agent';
 
 interface ModuleInfo {
@@ -338,6 +339,9 @@ export default function DashboardPage() {
                 limit={(usageData as any)?.claude?.weeklyQuota?.limit ?? 500000}
                 color="#4bcdf2"
               />
+              <div style={{ fontSize: 10, color: 'var(--text-faint,#62655a)', marginTop: -6, marginBottom: 8 }}>
+                {t(locale, 'aiWorkbench.nextReset')}: {formatNextWednesday()}
+              </div>
               <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
                 <TokenChip value={(usageData as any)?.claude?.localTokens?.last5h ?? 0} label={t(locale, 'aiWorkbench.localTokens') + ' 5h'} />
                 <TokenChip value={(usageData as any)?.claude?.localTokens?.today ?? 0} label={t(locale, 'aiWorkbench.today')} />
@@ -578,34 +582,6 @@ function BudgetBar({ used, limit, locale }: { used: number; limit: number; local
   );
 }
 
-function ProgressBar({ label, used, limit, color }: { label: string; used: number; limit: number; color: string }) {
-  const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
-  const isDanger = pct >= 85;
-  return (
-    <div style={{ marginBottom: 10 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
-        <span style={{ color: 'var(--text-dim)' }}>{label}</span>
-        <span style={{ color: isDanger ? '#d4453a' : 'var(--text)', fontWeight: isDanger ? 700 : undefined }}>{Math.round(pct)}% ({used}/{limit})</span>
-      </div>
-      <div style={{ height: 4, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden' }}>
-        <div style={{ width: `${pct}%`, height: '100%', background: isDanger ? '#d4453a' : color, borderRadius: 3, transition: 'width 0.3s ease' }} />
-      </div>
-    </div>
-  );
-}
-
-function TokenChip({ value, label }: { value: number; label: string }) {
-  return (
-    <span style={{
-      flex: 1, padding: '4px 8px', borderRadius: 6,
-      background: 'var(--bg-3,#1c1e17)', fontSize: 11, textAlign: 'center',
-      fontFamily: 'var(--font-mono)', color: 'var(--text)',
-    }}>
-      {value.toLocaleString()} <span style={{ color: 'var(--text-faint)', fontSize: 9 }}>{label}</span>
-    </span>
-  );
-}
-
 // ── Helpers ──
 
 function formatBytes(bytes: number): string {
@@ -632,4 +608,16 @@ function formatRelativeTime(createdAt: string): string {
   } catch {
     return '';
   }
+}
+
+/** 计算下一个周三 18:00 的格式化字符串 */
+function formatNextWednesday(): string {
+  const now = new Date();
+  const day = now.getDay(); // 0=Sun, 3=Wed
+  const daysUntilWed = (3 - day + 7) % 7;
+  const nextWed = new Date(now);
+  nextWed.setDate(now.getDate() + (daysUntilWed === 0 ? 7 : daysUntilWed));
+  nextWed.setHours(18, 0, 0, 0);
+  const days = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+  return `${days[nextWed.getDay()]} ${String(nextWed.getHours()).padStart(2, '0')}:${String(nextWed.getMinutes()).padStart(2, '0')}`;
 }

@@ -25,6 +25,7 @@ interface FileState {
   segments: string[];
   isFavorite: boolean;
   breadcrumbPath: string;
+  projectBadge?: string | null;
 }
 
 export default function Header({
@@ -117,10 +118,8 @@ export default function Header({
               window.dispatchEvent(new CustomEvent('navigate-files', { detail: path }));
             }}
             isFavorite={fs.isFavorite}
-            onToggleFavorite={() => {
-              // Favorite toggle triggers a re-render via event bridge
-              // Re-reading from the page's own state is simpler
-            }}
+            onToggleFavorite={() => {}}
+            projectBadge={fs.projectBadge as any}
           />
         ) : (
           <span style={{ fontSize: 13, color: 'var(--text, #f2f2ea)', fontWeight: 500, whiteSpace: 'nowrap' }}>

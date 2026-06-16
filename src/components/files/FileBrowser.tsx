@@ -354,15 +354,27 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
 
   const segments = currentPath.split('/').filter(Boolean);
 
+  // Detect project badge from current directory entries
+  const detectedProject = (() => {
+    const names = new Set(entries.filter(e => !e.isDir).map(e => e.name.toLowerCase()));
+    if (names.has('package.json')) return 'node' as const;
+    if (names.has('index.html')) return 'web' as const;
+    if (names.has('requirements.txt') || names.has('pyproject.toml')) return 'python' as const;
+    if (names.has('cargo.toml')) return 'rust' as const;
+    if (names.has('go.mod')) return 'go' as const;
+    if (entries.some(e => e.isDir && e.name === '.git')) return 'git' as const;
+    return null;
+  })();
+
   // ── Event bridge: broadcast file-browser state for Header ──
   useEffect(() => {
     const detail = {
       viewMode, sortBy, sortDir, showHidden,
       segments: segments.length > 0 ? segments : ['/'],
-      isFavorite, breadcrumbPath: currentPath,
+      isFavorite, breadcrumbPath: currentPath, projectBadge: detectedProject,
     };
     window.dispatchEvent(new CustomEvent('header-file-state', { detail }));
-  }, [viewMode, sortBy, sortDir, showHidden, segments, isFavorite, currentPath]);
+  }, [viewMode, sortBy, sortDir, showHidden, segments, isFavorite, currentPath, detectedProject]);
 
   return (
     <div style={{
@@ -377,6 +389,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         onNavigate={handleNavigate}
         isFavorite={isFavorite}
         onToggleFavorite={toggleFavorite}
+        projectBadge={detectedProject}
       />
       <FileToolbar
         searchQuery={searchQuery}
