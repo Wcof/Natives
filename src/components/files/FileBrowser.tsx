@@ -12,6 +12,13 @@ import Skeleton from '@/components/ui/Skeleton';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useFocusTrap } from '@/lib/useFocusTrap';
 import { pushRecentFile } from '@/lib/recent-files-client';
+import { webFsClient } from '@/lib/web-fs-client';
+
+/** Electron IPC 可用时用 nativesAPI.fs，否则降级到 webFsClient (Next.js API Routes) */
+function getFsApi() {
+  const native = (window as any).nativesAPI?.fs;
+  return native || webFsClient;
+}
 
 interface FileBrowserProps {
   onFileSelect?: (entry: FileEntry) => void;
@@ -105,11 +112,11 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const loadEntries = useCallback(async () => {
     setLoading(true);
     try {
-      const api = window.nativesAPI;
+      const fsApi = getFsApi();
 
       if (recentMode) {
         // 最近修改模式：调用后端递归扫描，返回按 mtime 降序的文件
-        const recentData = await api?.fs?.recentFiles?.(currentPath);
+        const recentData = await fsApi.recentFiles(currentPath);
         if (recentData && Array.isArray(recentData)) {
           // 转换 WalkFile 格式 → FileEntry，填入 dirHint
           const recentEntries: FileEntry[] = recentData.map((f: any) => {
@@ -131,14 +138,13 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         } else {
           setEntries([]);
         }
-      } else if (api?.fs?.listDir) {
-        const options = { sortBy, sortDir, showHidden };
-        const data = await api.fs.listDir(currentPath, options);
-        setEntries(data || []);
       } else {
-        setEntries([]);
+        const options = { sortBy, sortDir, showHidden };
+        const data = await fsApi.listDir(currentPath, options);
+        setEntries(data || []);
       }
-    } catch {
+    } catch (err) {
+      console.error('[FileBrowser] loadEntries error:', err);
       setEntries([]);
     } finally {
       setLoading(false);
@@ -161,6 +167,13 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
 
   // Listen for external navigation events (from sidebar quick access)
   useEffect(() => {
+    // Check for pending path set before mount (race condition fix)
+    const pending = (window as any).__pendingNavigateFiles;
+    if (typeof pending === 'string') {
+      navigateTo(pending);
+      delete (window as any).__pendingNavigateFiles;
+    }
+
     const handler = (e: Event) => {
       const path = (e as CustomEvent).detail;
       if (typeof path === 'string') {
@@ -217,7 +230,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     const parentDir = renameTarget.path.substring(0, renameTarget.path.lastIndexOf('/')) || '/';
     const newPath = `${parentDir}/${renameValue.trim()}`;
     try {
-      const result = await window.nativesAPI?.fs?.renameEntry?.(renameTarget.path, newPath);
+      const result = await getFsApi().renameEntry(renameTarget.path, newPath);
       if (result?.ok) {
         showToast(t(locale, 'fileBrowser.renamed'));
         await loadEntries();
@@ -239,7 +252,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const doTrash = useCallback(async () => {
     if (!trashTarget) return;
     try {
-      const result = await window.nativesAPI?.fs?.trashEntry?.(trashTarget.path);
+      const result = await getFsApi().trashEntry(trashTarget.path);
       if (result?.ok) {
         showToast(t(locale, 'fileBrowser.trashed'));
         await loadEntries();
@@ -267,7 +280,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     if (!newItemTarget || !newItemName.trim()) return;
     const targetPath = `${newItemTarget.parentDir}/${newItemName.trim()}`;
     try {
-      const result = await window.nativesAPI?.fs?.createEntry?.(targetPath, newItemTarget.type);
+      const result = await getFsApi().createEntry(targetPath, newItemTarget.type);
       if (result?.ok) {
         showToast(t(locale, 'fileBrowser.created'));
         await loadEntries();

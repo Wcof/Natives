@@ -67,7 +67,7 @@ export function renderNotificationCenter(
   const markAllBtn = document.createElement('button');
   markAllBtn.className = 'btn-ghost';
   markAllBtn.textContent = 'Mark all read';
-  markAllBtn.style.cssText = 'font-size:11px;color:var(--accent,#cdf24b);background:none;border:none;cursor:pointer;';
+  markAllBtn.style.cssText = 'font-size:11px;color:var(--accent,#FFF5E6);background:none;border:none;cursor:pointer;';
   markAllBtn.onclick = onMarkAllRead;
   header.appendChild(markAllBtn);
   container.appendChild(header);
@@ -89,7 +89,7 @@ export function renderNotificationCenter(
     `;
 
     const levelColors: Record<string, string> = {
-      info: 'var(--accent,#cdf24b)',
+      info: 'var(--accent,#FFF5E6)',
       warning: '#e6b800',
       error: '#d9534f',
     };
@@ -128,7 +128,7 @@ export function renderNotificationCenter(
     if (!notif.read) {
       const markBtn = document.createElement('button');
       markBtn.className = 'btn-ghost';
-      markBtn.style.cssText = 'font-size:10px;color:var(--accent,#cdf24b);background:none;border:none;cursor:pointer;';
+      markBtn.style.cssText = 'font-size:10px;color:var(--accent,#FFF5E6);background:none;border:none;cursor:pointer;';
       markBtn.textContent = 'Mark read';
       markBtn.addEventListener('click', () => onMarkRead(notif.id));
       right.appendChild(markBtn);

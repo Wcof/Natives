@@ -107,7 +107,7 @@ export default function StorePage() {
         {/* Coming soon banner */}
         <div style={{
           padding: '20px 24px',
-          background: 'linear-gradient(135deg, var(--accent-soft,#cdf24b1f), transparent)',
+          background: 'linear-gradient(135deg, var(--accent-soft,#FFF5E61f), transparent)',
           border: '1px solid var(--border,#262920)',
           borderRadius: 10,
           marginBottom: 20,
@@ -183,7 +183,7 @@ function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: 
         borderRadius: 8,
         padding: '14px 14px 12px',
         transition: 'all 0.12s',
-        borderColor: hovered ? 'var(--accent,#cdf24b)' : undefined,
+        borderColor: hovered ? 'var(--accent,#FFF5E6)' : undefined,
         cursor: 'default',
       }}
     >
@@ -211,8 +211,8 @@ function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: 
         </div>
         <span style={{
           fontSize: 9, padding: '1px 5px', borderRadius: 3,
-          background: mod.enabled ? 'var(--accent-soft,#cdf24b1f)' : 'var(--bg-3,#1c1e17)',
-          color: mod.enabled ? 'var(--accent,#cdf24b)' : 'var(--text-faint)',
+          background: mod.enabled ? 'var(--accent-soft,#FFF5E61f)' : 'var(--bg-3,#1c1e17)',
+          color: mod.enabled ? 'var(--accent,#FFF5E6)' : 'var(--text-faint)',
           fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0,
         }}>
           {mod.enabled ? t(locale, 'workshop.enabled') : t(locale, 'workshop.disabled')}

@@ -36,7 +36,7 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir }: Fil
   const [flash, setFlash] = useState(false);
   const renderIcon = () => {
     const size = 16;
-    if (entry.isDir) return <Folder size={size} style={{ color: 'var(--accent,#cdf24b)' }} />;
+    if (entry.isDir) return <Folder size={size} style={{ color: 'var(--accent,#FFF5E6)' }} />;
     switch (entry.kind) {
       case 'text': return <FileText size={size} />;
       case 'image': return <ImageIcon size={size} />;
@@ -78,7 +78,7 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir }: Fil
         fontSize: 13,
         color: 'var(--text, #f2f2ea)',
         borderBottom: '1px solid var(--border, #262920)',
-        background: flash ? 'var(--accent-soft, #cdf24b1f)' : 'transparent',
+        background: flash ? 'var(--accent-soft, #FFF5E61f)' : 'transparent',
         transition: 'background 0.12s',
       }}
       onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-2, #131410)'; }}
@@ -114,7 +114,7 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir }: Fil
       <div style={{ color: 'var(--text-faint, #62655a)', fontSize: 11, fontFamily: 'var(--font-mono)' }}>
         {entry.kind}
         {entry.projectBadge && (
-          <span style={{ marginLeft: 6, color: 'var(--accent, #cdf24b)' }}>
+          <span style={{ marginLeft: 6, color: 'var(--accent, #FFF5E6)' }}>
             [{entry.projectBadge}]
           </span>
         )}

@@ -58,8 +58,8 @@ export const THEME_TOKENS = {
   textFaint: 'var(--text-faint, #62655a)',
 
   // Accent
-  accent: 'var(--accent, #cdf24b)',
-  accentSoft: 'var(--accent-soft, #cdf24b1f)',
+  accent: 'var(--accent, #FFF5E6)',
+  accentSoft: 'var(--accent-soft, #FFF5E61f)',
   accentInk: 'var(--accent-ink, #0b0c0a)',
 
   // Borders

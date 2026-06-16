@@ -204,7 +204,7 @@ export default function SessionReplay() {
                 background: 'var(--bg-2,#131410)', border: '1px solid var(--border,#262920)',
               }}
             >
-              <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--accent,#cdf24b)', fontFamily: 'var(--font-mono)', marginBottom: 4 }}>
+              <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--accent,#FFF5E6)', fontFamily: 'var(--font-mono)', marginBottom: 4 }}>
                 {steps[currentStep]!.path.split('/').pop()}
               </div>
               <div style={{ fontSize: 10, color: 'var(--text-faint)' }}>
@@ -224,8 +224,8 @@ export default function SessionReplay() {
                 onClick={() => { setCurrentStep(i); handleNavigateToFile(step.path); }}
                 style={{
                   padding: '3px 8px', fontSize: 10, cursor: 'pointer', borderRadius: 3,
-                  color: i === currentStep ? 'var(--accent,#cdf24b)' : 'var(--text-dim)',
-                  background: i === currentStep ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
+                  color: i === currentStep ? 'var(--accent,#FFF5E6)' : 'var(--text-dim)',
+                  background: i === currentStep ? 'var(--accent-soft,#FFF5E61f)' : 'transparent',
                 }}
               >
                 {step.path.split('/').pop()}

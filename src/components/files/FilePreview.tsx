@@ -159,8 +159,8 @@ export default function FilePreview({ entry, onClose }: FilePreviewProps) {
               flex: 1,
               fontSize: 11,
               padding: '6px 8px',
-              borderBottom: activeTab === tab.id ? '2px solid var(--accent, #cdf24b)' : '2px solid transparent',
-              color: activeTab === tab.id ? 'var(--accent, #cdf24b)' : 'var(--text-dim, #9b9d8c)',
+              borderBottom: activeTab === tab.id ? '2px solid var(--accent, #FFF5E6)' : '2px solid transparent',
+              color: activeTab === tab.id ? 'var(--accent, #FFF5E6)' : 'var(--text-dim, #9b9d8c)',
               borderRadius: 0,
             }}
           >
@@ -498,7 +498,7 @@ function GitDiffView({ diff, loading, status, fileName, locale }: {
           }}>
             <span style={{
               width: 8, height: 8, borderRadius: '50%',
-              background: status === t(locale, 'filePreview.gitUnchanged') ? 'var(--accent,#cdf24b)' : 'var(--warning)',
+              background: status === t(locale, 'filePreview.gitUnchanged') ? 'var(--accent,#FFF5E6)' : 'var(--warning)',
             }} />
             <span>{status}</span>
           </div>
@@ -532,7 +532,7 @@ function GitDiffView({ diff, loading, status, fileName, locale }: {
         }}>
           <span style={{
             width: 8, height: 8, borderRadius: '50%',
-            background: status === t(locale, 'filePreview.gitUnchanged') ? 'var(--accent,#cdf24b)' : 'var(--warning)',
+            background: status === t(locale, 'filePreview.gitUnchanged') ? 'var(--accent,#FFF5E6)' : 'var(--warning)',
           }} />
           <span>{status}</span>
         </div>

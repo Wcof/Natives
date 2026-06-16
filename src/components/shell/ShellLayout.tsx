@@ -372,7 +372,22 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       if (view === '__settings__') setActiveView('settings');
       else if (view === '__workshop__') setActiveView('workshop');
       else if (view === '__store__') setActiveView('workshop');
-      else if (['files', 'ai', 'tools'].includes(view)) setActiveView(view);
+      else if (view === 'ai') setActiveView('ai');
+      else if (view === 'tools') setActiveView('tools');
+      else if (typeof view === 'string' && view.startsWith('files')) {
+        setActiveView('files');
+        // Parse query params for path navigation (e.g. files?path=/dir&select=/file)
+        const qIndex = view.indexOf('?');
+        if (qIndex >= 0) {
+          const params = new URLSearchParams(view.slice(qIndex + 1));
+          const navPath = params.get('path');
+          if (navPath) {
+            // Store for FileBrowser to pick up after mount
+            (window as any).__pendingNavigateFiles = navPath;
+            window.dispatchEvent(new CustomEvent('navigate-files', { detail: navPath }));
+          }
+        }
+      }
     };
 
     window.addEventListener('open-release-wizard', handleRelease);
@@ -484,7 +499,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       // Navigate file browser to a specific path
       const path = moduleId.slice(10);
       setActiveView('files');
-      // Dispatch event for FileBrowser to pick up
+      // Store path for FileBrowser to pick up after mount (race condition fix)
+      (window as any).__pendingNavigateFiles = path;
+      // Also dispatch event for already-mounted FileBrowser
       window.dispatchEvent(new CustomEvent('navigate-files', { detail: path }));
     } else {
       setActiveView(`module:${moduleId}`);
@@ -728,7 +745,7 @@ function ModuleDetails({ moduleId, locale }: { moduleId: string; locale: Locale 
                 padding: '6px 8px', background: 'var(--bg-3,#1c1e17)',
                 borderRadius: 4, fontSize: 11,
               }}>
-                <span style={{ color: perm.granted ? 'var(--accent,#cdf24b)' : 'var(--text-faint)' }}>
+                <span style={{ color: perm.granted ? 'var(--accent,#FFF5E6)' : 'var(--text-faint)' }}>
                   {perm.granted ? '✓' : '✗'}
                 </span>
                 <span style={{ color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>{perm.permission}</span>

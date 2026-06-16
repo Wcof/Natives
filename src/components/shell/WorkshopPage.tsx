@@ -262,9 +262,9 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
   <title>${name}</title>
   <style>
     body { font-family: -apple-system, sans-serif; padding: 20px; color: #f2f2ea; background: #0b0c0a; }
-    h1 { color: #cdf24b; }
+    h1 { color: #FFF5E6; }
     .card { background: #131410; border: 1px solid #262920; border-radius: 8px; padding: 16px; margin: 12px 0; }
-    button { background: #cdf24b; color: #0b0c0a; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+    button { background: #FFF5E6; color: #0b0c0a; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; }
     button:hover { filter: brightness(1.1); }
   </style>
 </head>
@@ -384,8 +384,8 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
             padding: '10px 4px',
             border: 'none',
             background: 'none',
-            color: activeTab === 'installed' ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
-            borderBottom: activeTab === 'installed' ? '2px solid var(--accent,#cdf24b)' : '2px solid transparent',
+            color: activeTab === 'installed' ? 'var(--accent,#FFF5E6)' : 'var(--text-faint,#62655a)',
+            borderBottom: activeTab === 'installed' ? '2px solid var(--accent,#FFF5E6)' : '2px solid transparent',
             fontSize: 13,
             fontWeight: 600,
             cursor: 'pointer',
@@ -400,8 +400,8 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
             padding: '10px 4px',
             border: 'none',
             background: 'none',
-            color: activeTab === 'browse' ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
-            borderBottom: activeTab === 'browse' ? '2px solid var(--accent,#cdf24b)' : '2px solid transparent',
+            color: activeTab === 'browse' ? 'var(--accent,#FFF5E6)' : 'var(--text-faint,#62655a)',
+            borderBottom: activeTab === 'browse' ? '2px solid var(--accent,#FFF5E6)' : '2px solid transparent',
             fontSize: 13,
             fontWeight: 600,
             cursor: 'pointer',
@@ -423,13 +423,13 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
               onDrop={handleDrop}
               style={{
                 padding: dragOver ? 36 : 28,
-                border: `2px dashed ${dragOver ? 'var(--accent,#cdf24b)' : 'var(--border,#262920)'}`,
+                border: `2px dashed ${dragOver ? 'var(--accent,#FFF5E6)' : 'var(--border,#262920)'}`,
                 borderRadius: 8,
                 textAlign: 'center',
                 color: 'var(--text-faint,#62655a)',
                 fontSize: 13,
                 transition: 'all 0.16s cubic-bezier(0.2,0.7,0.3,1)',
-                background: dragOver ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
+                background: dragOver ? 'var(--accent-soft,#FFF5E61f)' : 'transparent',
                 marginBottom: 20,
                 display: 'flex',
                 flexDirection: 'column',
@@ -438,7 +438,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
               }}
             >
               {dragOver ? (
-                <span style={{ color: 'var(--accent,#cdf24b)', fontWeight: 600 }}>
+                <span style={{ color: 'var(--accent,#FFF5E6)', fontWeight: 600 }}>
                   {t(locale, 'workshop.releaseToInstall')}
                 </span>
               ) : (
@@ -510,7 +510,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
             {/* Coming soon banner */}
             <div style={{
               padding: '16px 20px',
-              background: 'linear-gradient(135deg, var(--accent-soft,#cdf24b1f), transparent)',
+              background: 'linear-gradient(135deg, var(--accent-soft,#FFF5E61f), transparent)',
               border: '1px solid var(--border,#262920)',
               borderRadius: 8,
               marginBottom: 20,
@@ -521,7 +521,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
             }}>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Rocket size={14} style={{ color: 'var(--accent,#cdf24b)' }} />
+                  <Rocket size={14} style={{ color: 'var(--accent,#FFF5E6)' }} />
                   <span>{t(locale, 'store.comingSoon')}</span>
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
@@ -669,7 +669,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
                 <label key={perm} style={{
                   display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
                   padding: '8px 10px',
-                  background: selectedPerms.has(perm) ? 'var(--accent-soft,#cdf24b1f)' : 'var(--bg-3,#1c1e17)',
+                  background: selectedPerms.has(perm) ? 'var(--accent-soft,#FFF5E61f)' : 'var(--bg-3,#1c1e17)',
                   borderRadius: 6,
                   fontSize: 12,
                   transition: 'background 0.12s',
@@ -766,7 +766,7 @@ function ModuleCard({
         borderRadius: 8,
         padding: '14px 12px',
         transition: 'all 0.12s',
-        borderColor: hovered ? 'var(--accent,#cdf24b)' : undefined,
+        borderColor: hovered ? 'var(--accent,#FFF5E6)' : undefined,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -783,8 +783,8 @@ function ModuleCard({
         </div>
         <span style={{
           fontSize: 9, padding: '1px 5px', borderRadius: 3,
-          background: mod.enabled ? 'var(--accent-soft,#cdf24b1f)' : 'var(--bg-3,#1c1e17)',
-          color: mod.enabled ? 'var(--accent,#cdf24b)' : 'var(--text-faint)',
+          background: mod.enabled ? 'var(--accent-soft,#FFF5E61f)' : 'var(--bg-3,#1c1e17)',
+          color: mod.enabled ? 'var(--accent,#FFF5E6)' : 'var(--text-faint)',
           fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0,
         }}>
           {mod.enabled ? t(locale, 'workshop.enabled') : t(locale, 'workshop.disabled')}
@@ -871,7 +871,7 @@ function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: 
         borderRadius: 8,
         padding: '14px 14px 12px',
         transition: 'all 0.12s',
-        borderColor: hovered ? 'var(--accent,#cdf24b)' : undefined,
+        borderColor: hovered ? 'var(--accent,#FFF5E6)' : undefined,
         cursor: 'default',
       }}
     >
@@ -899,8 +899,8 @@ function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: 
         </div>
         <span style={{
           fontSize: 9, padding: '1px 5px', borderRadius: 3,
-          background: mod.enabled ? 'var(--accent-soft,#cdf24b1f)' : 'var(--bg-3,#1c1e17)',
-          color: mod.enabled ? 'var(--accent,#cdf24b)' : 'var(--text-faint)',
+          background: mod.enabled ? 'var(--accent-soft,#FFF5E61f)' : 'var(--bg-3,#1c1e17)',
+          color: mod.enabled ? 'var(--accent,#FFF5E6)' : 'var(--text-faint)',
           fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0,
         }}>
           {mod.enabled ? t(locale, 'workshop.enabled') : t(locale, 'workshop.disabled')}

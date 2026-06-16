@@ -114,8 +114,8 @@ export default function ModulesPage() {
               </div>
               <span style={{
                 fontSize: 11, padding: '2px 8px', borderRadius: 4,
-                background: mod.enabled ? 'var(--accent-soft,#cdf24b1f)' : 'var(--bg-3,#1c1e17)',
-                color: mod.enabled ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
+                background: mod.enabled ? 'var(--accent-soft,#FFF5E61f)' : 'var(--bg-3,#1c1e17)',
+                color: mod.enabled ? 'var(--accent,#FFF5E6)' : 'var(--text-faint,#62655a)',
               }}>
                 {mod.enabled ? t(locale, 'workshop.enabled') : t(locale, 'workshop.disabled')}
               </span>

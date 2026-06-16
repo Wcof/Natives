@@ -86,7 +86,7 @@ export default function ProjectMemory() {
                 padding: '8px 10px', marginBottom: 4,
                 borderRadius: 6, cursor: 'pointer',
                 background: selected === s.id ? 'var(--bg-3,#1c1e17)' : 'var(--bg-2,#131410)',
-                border: `1px solid ${selected === s.id ? 'var(--accent,#cdf24b)' : 'var(--border,#262920)'}`,
+                border: `1px solid ${selected === s.id ? 'var(--accent,#FFF5E6)' : 'var(--border,#262920)'}`,
                 transition: 'all 0.12s',
               }}
             >
@@ -104,7 +104,7 @@ export default function ProjectMemory() {
                       {s.filesModified.slice(0, 5).map((f, i) => (
                         <span key={f}>
                           {i > 0 && ', '}
-                          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent,#cdf24b)' }}>
+                          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent,#FFF5E6)' }}>
                             {f.split('/').pop()}
                           </span>
                         </span>

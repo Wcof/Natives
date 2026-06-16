@@ -80,7 +80,7 @@ export default function ArchivePreview({ path, locale }: ArchivePreviewProps) {
             padding: '3px 10px',
             borderBottom: '1px solid var(--border, #262920)',
           }}>
-            <span style={{ color: entry.isDir ? 'var(--accent, #cdf24b)' : 'var(--text-dim)', fontSize: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+            <span style={{ color: entry.isDir ? 'var(--accent, #FFF5E6)' : 'var(--text-dim)', fontSize: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
               {entry.isDir ? <Folder size={14} /> : <FileText size={14} />}
             </span>
             <span style={{

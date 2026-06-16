@@ -260,7 +260,7 @@ export default function Sidebar({
                 style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left' }}
                 title={fav}
               >
-                <Star size={14} style={{ color: 'var(--accent,#cdf24b)' }} />
+                <Star size={14} style={{ color: 'var(--accent,#FFF5E6)' }} />
                 <span style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>
                   {fav.split('/').pop() || fav}
                 </span>

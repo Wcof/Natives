@@ -1,5 +1,16 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
+
+/**
+ * 展开路径中的 ~ 为用户主目录
+ */
+function expandTilde(p: string): string {
+  if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) {
+    return path.join(os.homedir(), p.slice(1));
+  }
+  return p;
+}
 
 // ── Constants ──
 
@@ -39,6 +50,7 @@ export function walk(
   onDir?: (dir: string) => void,
   options?: { limit?: number; deadline?: number },
 ): void {
+  root = expandTilde(root);
   const fileLimit = options?.limit ?? MAX_FILES;
   const deadline = options?.deadline ?? (Date.now() + MAX_TIME_MS);
   let count = 0;

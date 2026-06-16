@@ -238,7 +238,7 @@ export default function DashboardPage() {
           icon={<Database size={16} />}
           label={t(locale, 'dashboard.statusDatabase')}
           value={loading ? t(locale, 'common.loading') : status.dbOk ? t(locale, 'dashboard.statusConnected') : t(locale, 'dashboard.statusError')}
-          valueColor={loading ? 'var(--text-faint)' : status.dbOk ? 'var(--accent,#cdf24b)' : 'var(--danger)'}
+          valueColor={loading ? 'var(--text-faint)' : status.dbOk ? 'var(--accent,#FFF5E6)' : 'var(--danger)'}
         />
         <StatusCard
           icon={<Package size={16} />}

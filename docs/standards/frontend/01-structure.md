@@ -75,7 +75,7 @@ src/
 - **分类**：主题、命名
 - **规则**：`components/ui/` 与所有组件的视觉值（颜色、圆角、间距、字号）**必须**引用 `design-tokens.ts` 的常量或 CSS 变量（`var(--xxx)`）。**禁止**硬编码十六进制色值、魔法数字尺寸。
 - **正例**：`borderRadius: BORDER_RADIUS.md`、`color: 'var(--accent)'`。
-- **反例**：`background: '#cdf24b'` 直接写死 → 换主题失效。
+- **反例**：`background: '#FFF5E6'` 直接写死 → 换主题失效。
 - **为什么**：主题系统（见 `ui-ux/01`）依赖令牌统一；硬编码会让三皮肤失效。
 - **检查方法**：`grep -rn "#[0-9a-fA-F]\{6\}" src/components` 应只出现在 token 定义文件与受控 fallback 中。
 

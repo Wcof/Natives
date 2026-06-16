@@ -59,7 +59,7 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
             style={{
               cursor: 'pointer',
               userSelect: 'none',
-              color: sortBy === key ? 'var(--accent, #cdf24b)' : undefined,
+              color: sortBy === key ? 'var(--accent, #FFF5E6)' : undefined,
             }}
           >
             {SORT_LABELS[key]}

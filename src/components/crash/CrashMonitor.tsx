@@ -99,9 +99,9 @@ export default function CrashMonitor() {
             {crash.title}
           </span>
           {crash.recovered ? (
-            <span style={{ fontSize: 9, color: 'var(--accent,#cdf24b)' }}>✓ {t(locale, 'errors.recovered')}</span>
+            <span style={{ fontSize: 9, color: 'var(--accent,#FFF5E6)' }}>✓ {t(locale, 'errors.recovered')}</span>
           ) : (
-            <button onClick={() => handleReload(crash.moduleId)} style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, border: '1px solid var(--accent,#cdf24b)', background: 'transparent', color: 'var(--accent,#cdf24b)', cursor: 'pointer' }}>
+            <button onClick={() => handleReload(crash.moduleId)} style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, border: '1px solid var(--accent,#FFF5E6)', background: 'transparent', color: 'var(--accent,#FFF5E6)', cursor: 'pointer' }}>
               <RefreshCw size={9} /> {t(locale, 'errors.reload')}
             </button>
           )}

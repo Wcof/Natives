@@ -78,7 +78,7 @@ export default function FileSearch({ onClose, onNavigate }: FileSearchProps) {
             />
             <span style={{
               fontSize: 10, padding: '2px 6px', borderRadius: 3,
-              background: mode === 'content' ? 'var(--accent, #cdf24b)' : 'var(--bg-3, #1c1e17)',
+              background: mode === 'content' ? 'var(--accent, #FFF5E6)' : 'var(--bg-3, #1c1e17)',
               color: mode === 'content' ? 'var(--accent-ink, #0b0c0a)' : 'var(--text-dim, #9b9d8c)',
             }}>
               {mode === 'content' ? 'content' : 'name'}

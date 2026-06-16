@@ -70,7 +70,7 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
           {STEPS.map((s) => (
             <div key={s} style={{
               width: 8, height: 8, borderRadius: '50%',
-              background: STEPS.indexOf(s) <= STEPS.indexOf(step) ? 'var(--accent,#cdf24b)' : 'var(--bg-3,#1c1e17)',
+              background: STEPS.indexOf(s) <= STEPS.indexOf(step) ? 'var(--accent,#FFF5E6)' : 'var(--bg-3,#1c1e17)',
               transition: 'background 0.2s',
             }} />
           ))}
@@ -109,7 +109,7 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
               </button>
             ) : envOk ? (
               <div>
-                <div style={{ fontSize: 14, color: 'var(--accent,#cdf24b)', marginBottom: 16 }}>{t(locale, 'onboarding.allReady')}</div>
+                <div style={{ fontSize: 14, color: 'var(--accent,#FFF5E6)', marginBottom: 16 }}>{t(locale, 'onboarding.allReady')}</div>
                 <button className="btn btn-primary" onClick={handleNext} style={{ fontSize: 12 }}>{t(locale, 'onboarding.continue')}</button>
               </div>
             ) : (

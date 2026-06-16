@@ -58,7 +58,7 @@ export default function FileCard({ entry, onSelect, onContextMenu }: FileCardPro
 
   const renderIcon = () => {
     const size = 36;
-    if (entry.isDir) return <Folder size={size} style={{ color: 'var(--accent,#cdf24b)' }} />;
+    if (entry.isDir) return <Folder size={size} style={{ color: 'var(--accent,#FFF5E6)' }} />;
     switch (entry.kind) {
       case 'text': return <FileText size={size} />;
       case 'image': return <ImageIcon size={size} />;
@@ -88,10 +88,10 @@ export default function FileCard({ entry, onSelect, onContextMenu }: FileCardPro
         padding: 12,
         borderRadius: 'var(--radius, 4px)',
         cursor: 'pointer',
-        border: `1px solid ${isChanged ? 'var(--accent, #cdf24b)' : 'var(--border, #262920)'}`,
-        background: flash ? 'var(--accent-soft, #cdf24b1f)' : 'var(--bg-2, #131410)',
+        border: `1px solid ${isChanged ? 'var(--accent, #FFF5E6)' : 'var(--border, #262920)'}`,
+        background: flash ? 'var(--accent-soft, #FFF5E61f)' : 'var(--bg-2, #131410)',
         boxShadow: isChanged
-          ? `0 0 calc(6px + 20px * ${heat}) color-mix(in srgb, var(--accent, #cdf24b) calc(55% * ${heat}), transparent)`
+          ? `0 0 calc(6px + 20px * ${heat}) color-mix(in srgb, var(--accent, #FFF5E6) calc(55% * ${heat}), transparent)`
           : 'none',
         transition: 'background 0.12s, border-color 0.12s, transform 0.12s, box-shadow 0.3s',
         position: 'relative',
@@ -100,12 +100,12 @@ export default function FileCard({ entry, onSelect, onContextMenu }: FileCardPro
       }}
       onMouseEnter={(e) => {
         (e.currentTarget as HTMLElement).style.background = 'var(--bg-3, #1c1e17)';
-        (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent, #cdf24b)';
+        (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent, #FFF5E6)';
         (e.currentTarget as HTMLElement).style.transform = 'translateY(-1px)';
       }}
       onMouseLeave={(e) => {
-        (e.currentTarget as HTMLElement).style.background = isChanged ? 'var(--accent-soft, #cdf24b1f)' : 'var(--bg-2, #131410)';
-        (e.currentTarget as HTMLElement).style.borderColor = isChanged ? 'var(--accent, #cdf24b)' : 'var(--border, #262920)';
+        (e.currentTarget as HTMLElement).style.background = isChanged ? 'var(--accent-soft, #FFF5E61f)' : 'var(--bg-2, #131410)';
+        (e.currentTarget as HTMLElement).style.borderColor = isChanged ? 'var(--accent, #FFF5E6)' : 'var(--border, #262920)';
         (e.currentTarget as HTMLElement).style.transform = 'translateY(0)';
       }}
     >
@@ -132,7 +132,7 @@ export default function FileCard({ entry, onSelect, onContextMenu }: FileCardPro
         {showRipple && (
           <span style={{
             position: 'absolute', inset: 0, borderRadius: '50%',
-            border: '2px solid var(--accent, #cdf24b)',
+            border: '2px solid var(--accent, #FFF5E6)',
             animation: 'editRipple 0.8s ease-out forwards',
             pointerEvents: 'none',
           }} />
@@ -167,7 +167,7 @@ export default function FileCard({ entry, onSelect, onContextMenu }: FileCardPro
         <div style={{
           position: 'absolute', top: 6, left: 6,
           width: 16, height: 16, borderRadius: '50%',
-          background: 'var(--accent, #cdf24b)', color: 'var(--bg, #0b0c0a)',
+          background: 'var(--accent, #FFF5E6)', color: 'var(--bg, #0b0c0a)',
           fontSize: 9, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
           animation: 'changedPulse 0.5s ease-out',
         }}>

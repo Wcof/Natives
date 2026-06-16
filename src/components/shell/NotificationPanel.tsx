@@ -60,7 +60,7 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
   };
 
   const levelColors: Record<string, string> = {
-    info: 'var(--accent,#cdf24b)',
+    info: 'var(--accent,#FFF5E6)',
     warning: 'var(--warning)',
     error: 'var(--danger)',
   };
@@ -89,7 +89,7 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
           {unreadCount > 0 && (
             <span style={{
               fontSize: 10, padding: '1px 5px', borderRadius: 3,
-              background: 'var(--accent,#cdf24b)', color: 'var(--accent-ink,#0b0c0a)',
+              background: 'var(--accent,#FFF5E6)', color: 'var(--accent-ink,#0b0c0a)',
               fontWeight: 600,
             }}>
               {unreadCount}
@@ -101,7 +101,7 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
             <button
               className="btn-ghost"
               onClick={handleMarkAllRead}
-              style={{ fontSize: 10, color: 'var(--accent,#cdf24b)', padding: '2px 6px' }}
+              style={{ fontSize: 10, color: 'var(--accent,#FFF5E6)', padding: '2px 6px' }}
             >
               {t(locale, 'notifications.markAllRead')}
             </button>

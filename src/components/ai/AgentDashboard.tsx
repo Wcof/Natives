@@ -52,7 +52,7 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
   const getIntensity = (idx: number) => Math.max(0.2, 1 - idx * 0.03);
 
   const typeIcons: Record<string, string> = { create: '+', delete: '−', modify: '✎' };
-  const typeColors: Record<string, string> = { create: 'var(--diff-add)', delete: 'var(--danger)', modify: 'var(--accent,#cdf24b)' };
+  const typeColors: Record<string, string> = { create: 'var(--diff-add)', delete: 'var(--danger)', modify: 'var(--accent,#FFF5E6)' };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -74,8 +74,8 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
               onClick={() => setFilter(f)}
               style={{
                 fontSize: 10, padding: '2px 6px', borderRadius: 3,
-                color: filter === f ? 'var(--accent,#cdf24b)' : 'var(--text-faint)',
-                background: filter === f ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
+                color: filter === f ? 'var(--accent,#FFF5E6)' : 'var(--text-faint)',
+                background: filter === f ? 'var(--accent-soft,#FFF5E61f)' : 'transparent',
               }}
             >
               {f === 'all' ? t(locale, 'aiWorkbench.dashboard.all') : `${typeIcons[f]} ${t(locale, 'aiWorkbench.dashboard.' + f)}`}

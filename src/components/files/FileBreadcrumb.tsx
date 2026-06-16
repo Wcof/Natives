@@ -50,7 +50,7 @@ export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onTog
               <span style={{ color: 'var(--text-faint, #62655a)', fontSize: 12 }}>›</span>
             )}
             {isLast ? (
-              <span style={{ color: 'var(--accent, #cdf24b)', fontWeight: 600, fontFamily: 'var(--font-display)' }}>{segment}</span>
+              <span style={{ color: 'var(--accent, #FFF5E6)', fontWeight: 600, fontFamily: 'var(--font-display)' }}>{segment}</span>
             ) : (
               <button
                 onClick={() => onNavigate(pathSoFar)}
@@ -87,7 +87,7 @@ export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onTog
           style={{
             background: 'none', border: 'none', cursor: 'pointer',
             padding: '2px 4px', marginLeft: 'auto', display: 'flex',
-            color: isFavorite ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
+            color: isFavorite ? 'var(--accent,#FFF5E6)' : 'var(--text-faint,#62655a)',
           }}
           title={t(locale, isFavorite ? 'fileBrowser.removeFromFavorites' : 'fileBrowser.addToFavorites')}
           aria-label={t(locale, isFavorite ? 'fileBrowser.removeFromFavorites' : 'fileBrowser.addToFavorites')}

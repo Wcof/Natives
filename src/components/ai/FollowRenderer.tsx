@@ -86,7 +86,7 @@ export default function FollowRenderer({ filePath, httpPort }: FollowRendererPro
   if (prio === 0) {
     return (
       <div style={{ padding: 20, textAlign: 'center' }}>
-        <Package size={32} style={{ color: 'var(--accent,#cdf24b)', marginBottom: 8 }} />
+        <Package size={32} style={{ color: 'var(--accent,#FFF5E6)', marginBottom: 8 }} />
         <div style={{ color: 'var(--text)', fontSize: 'var(--fs-md)', fontWeight: 600 }}>
           {filePath.split('/').pop()}
         </div>

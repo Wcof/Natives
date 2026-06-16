@@ -1,8 +1,19 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { execFile } from 'child_process';
 import { Readable } from 'stream';
 import { type FileEntry, detectFileKind, detectProjectBadge } from '../types/file';
+
+/**
+ * 展开路径中的 ~ 为用户主目录
+ */
+function expandTilde(p: string): string {
+  if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) {
+    return path.join(os.homedir(), p.slice(1));
+  }
+  return p;
+}
 
 // ── List Directory ──
 
@@ -21,6 +32,7 @@ const DS_STORE = '.DS_Store';
  * @returns 文件条目列表
  */
 export async function listDir(dirPath: string, options?: ListDirOptions): Promise<FileEntry[]> {
+  dirPath = expandTilde(dirPath);
   const stat = await fs.promises.stat(dirPath);
   if (!stat.isDirectory()) {
     throw Object.assign(new Error(`Not a directory: ${dirPath}`), { code: 'ENOTDIR' });
