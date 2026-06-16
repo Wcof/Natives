@@ -1044,6 +1044,16 @@ ipcMain.handle('agent:scanSkills', async () => {
         }
       } catch { /* dir may not exist */ }
     }
+    // 合并真实会话统计（不造假，缺数据为 0）
+    try {
+      const { getSkillStats } = require('../src/main/skill-stats');
+      const stats = await getSkillStats();
+      for (const s of skills) {
+        const st = stats[s.name];
+        s.triggerCount = st?.count ?? 0;
+        s.lastTriggered = st?.lastTriggered;
+      }
+    } catch { /* stats unavailable, keep triggerCount at default */ }
     return skills;
   } catch { return []; }
 });
