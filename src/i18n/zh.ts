@@ -279,6 +279,7 @@ export const zh = {
     diskUsageLoading: '计算中（大目录会慢几秒）',
     favorite: '收藏',
     unfavorite: '取消收藏',
+    openInPreview: '预览',
     renamed: '已重命名',
     renameFailed: '重命名失败',
     created: '已创建',
@@ -336,6 +337,11 @@ export const zh = {
     gitUntracked: '未跟踪',
     gitConflict: '冲突',
     gitUnchanged: '未变更',
+  },
+
+  header: {
+    personal: '个人主页',
+    aiWorkbench: 'AI 工作台',
   },
 
   // AI 工作台

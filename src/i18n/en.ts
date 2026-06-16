@@ -291,6 +291,7 @@ export const en = {
     diskUsageLoading: 'Calculating (large dirs may be slow)',
     favorite: 'Favorite',
     unfavorite: 'Unfavorite',
+    openInPreview: 'Preview',
     renamed: 'Renamed',
     renameFailed: 'Rename failed',
     created: 'Created',
@@ -348,6 +349,11 @@ export const en = {
     gitUntracked: 'Untracked',
     gitConflict: 'Conflict',
     gitUnchanged: 'Unchanged',
+  },
+
+  header: {
+    personal: 'Home',
+    aiWorkbench: 'AI Workbench',
   },
 
   // AI Workbench

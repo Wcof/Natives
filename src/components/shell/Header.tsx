@@ -6,9 +6,9 @@ import { Grid3x3, List, ArrowUp, ArrowDown, Terminal, EyeOff, Eye, Menu } from '
 import FileBreadcrumb from '@/components/files/FileBreadcrumb';
 
 const VIEW_LABELS: Record<string, string> = {
-  dashboard: 'dashboard.title',
+  dashboard: 'header.personal',
   files: '',
-  ai: 'nav.aiWorkbench',
+  ai: 'header.aiWorkbench',
   workshop: 'nav.workshop',
   settings: 'nav.settings',
   tools: 'nav.tools',
