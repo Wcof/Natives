@@ -38,9 +38,7 @@ export default function RtkPanel() {
     fetchUsage();
   }, [fetchUsage]);
 
-  const topCommands: RtkCommandStat[] = usage?.topCommands ?? [
-    { command: 'rtk gain', count: 0, totalSaved: 0 },
-  ];
+  const topCommands: RtkCommandStat[] = usage?.topCommands ?? [];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 8 }}>
