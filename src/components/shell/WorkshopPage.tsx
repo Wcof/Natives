@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { useAsyncData } from '@/hooks/useAsyncData';
 import { useFocusTrap } from '@/lib/useFocusTrap';
 
@@ -396,16 +397,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
             {t(locale, 'common.loading')}
           </div>
         ) : (modules ?? []).length === 0 ? (
-          <div style={{
-            padding: '40px 0',
-            textAlign: 'center',
-            color: 'var(--text-faint,#62655a)',
-            fontSize: 13,
-          }}>
-            <div style={{ fontSize: 32, marginBottom: 8 }}>🧩</div>
-            <div>{t(locale, 'workshop.noModules')}</div>
-            <div style={{ fontSize: 11, marginTop: 4 }}>{t(locale, 'workshop.noModulesDesc')}</div>
-          </div>
+          <EmptyState title={t(locale, 'workshop.emptyState')} />
         ) : (
           <div style={{
             display: 'grid',

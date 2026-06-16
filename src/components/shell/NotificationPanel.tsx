@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useAsyncData } from '@/hooks/useAsyncData';
 import { t, type Locale } from '@/i18n';
+import { EmptyState } from '@/components/ui/EmptyState';
 
 interface Notification {
   id: number;
@@ -117,13 +118,7 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
 
       {/* Notification list */}
       {(notifications ?? []).length === 0 ? (
-        <div style={{
-          padding: '40px 16px', textAlign: 'center',
-          color: 'var(--text-faint,#62655a)', fontSize: 13,
-        }}>
-          <div style={{ fontSize: 28, marginBottom: 8 }}>🔔</div>
-          <div>{t(locale, 'notifications.noNotifications')}</div>
-        </div>
+        <EmptyState title={t(locale, 'notifications.empty')} />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {(notifications ?? []).map((notif) => (

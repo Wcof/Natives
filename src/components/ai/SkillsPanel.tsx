@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { type SkillInfo } from '@/types/agent';
 import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { EmptyState } from '@/components/ui/EmptyState';
 
 export default function SkillsPanel() {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -114,9 +115,7 @@ export default function SkillsPanel() {
             {t(locale, 'common.loading')}
           </div>
         ) : filtered.length === 0 ? (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
-            {t(locale, 'aiWorkbench.noSkills')}
-          </div>
+          <EmptyState title={t(locale, 'aiWorkbench.noSkills')} />
         ) : (
           filtered.map((skill) => (
             <div key={skill.name} style={{

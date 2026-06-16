@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAsyncData } from '@/hooks/useAsyncData';
 import { type AgentSession } from '@/types/agent';
 import { t, type Locale } from '@/i18n';
+import { EmptyState } from '@/components/ui/EmptyState';
 
 export default function ProjectMemory() {
   const [selected, setSelected] = useState<string | null>(null);
@@ -74,9 +75,7 @@ export default function ProjectMemory() {
             {t(locale, 'common.loading')}
           </div>
         ) : (sessions ?? []).length === 0 ? (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
-            {t(locale, 'aiWorkbench.noSessions')}
-          </div>
+          <EmptyState title={t(locale, 'aiWorkbench.projectMemoryEmpty')} />
         ) : (
           (sessions ?? []).map((s) => (
             <div

@@ -5,6 +5,7 @@ import { useAsyncData } from '@/hooks/useAsyncData';
 import { Power, Trash2, RefreshCw } from 'lucide-react';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { t, type Locale } from '@/i18n';
+import { EmptyState } from '@/components/ui/EmptyState';
 
 interface ModuleInfo {
   id: string;
@@ -98,9 +99,7 @@ export default function ModulesPage() {
           {t(locale, 'common.loading')}
         </div>
       ) : (modules ?? []).length === 0 ? (
-        <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--text-faint,#62655a)', fontSize: 13 }}>
-          {t(locale, 'modules.emptyState')}
-        </div>
+        <EmptyState title={t(locale, 'modules.emptyState')} />
       ) : (
         <div aria-live="polite">
           {(modules ?? []).map((mod) => (

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useAsyncData } from '@/hooks/useAsyncData';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { t, type Locale } from '@/i18n';
 
 interface ModuleInfo {
@@ -149,31 +150,7 @@ export default function StorePage() {
             {t(locale, 'common.loading')}
           </div>
         ) : filteredModules.length === 0 ? (
-          <div style={{
-            padding: '40px 0',
-            textAlign: 'center',
-            color: 'var(--text-faint,#62655a)',
-            fontSize: 13,
-          }}>
-            {searchQuery ? (
-              <>
-                <div style={{ fontSize: 24, marginBottom: 8 }}>🔍</div>
-                <div>{t(locale, 'store.noModules')}</div>
-              </>
-            ) : (
-              <>
-                <div style={{ fontSize: 32, marginBottom: 8 }}>📦</div>
-                <div>{t(locale, 'store.noModules')}</div>
-                <button
-                  className="btn"
-                  onClick={handleNavigateToWorkshop}
-                  style={{ marginTop: 12, fontSize: 12 }}
-                >
-                  {t(locale, 'store.goToWorkshop')}
-                </button>
-              </>
-            )}
-          </div>
+          <EmptyState title={t(locale, 'store.noModules')} />
         ) : (
           <div style={{
             display: 'grid',

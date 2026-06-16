@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { t, type Locale } from '@/i18n';
+import { EmptyState } from '@/components/ui/EmptyState';
 import type { RtkUsage, RtkCommandStat } from '@/types/agent';
 import { useAsyncData } from '@/hooks/useAsyncData';
 
@@ -92,9 +93,7 @@ export default function RtkPanel() {
       </div>
       <div style={{ flex: 1, overflow: 'auto' }}>
         {topCommands.length === 0 ? (
-          <div style={{ fontSize: 11, color: 'var(--text-faint)', padding: 8 }}>
-            {t(locale, 'aiWorkbench.rtk.noData')}
-          </div>
+          <EmptyState icon='📊' title={t(locale, 'aiWorkbench.rtk.noData')} />
         ) : (
           topCommands.map((cmd, i) => (
             <div key={cmd.command} style={{
