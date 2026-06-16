@@ -177,6 +177,12 @@ export default function SettingsPage() {
     setDeleteProfileTarget(name);
   };
 
+  const handleConfirmDeleteProfile = async () => {
+    if (!deleteProfileTarget) return;
+    await doDeleteProfile(deleteProfileTarget);
+    setDeleteProfileTarget(null);
+  };
+
   // Variable CRUD
   const handleAddVariable = async () => {
     const key = newVarKey.trim();
@@ -194,15 +200,20 @@ export default function SettingsPage() {
     }
   };
 
-  const handleDeleteVariable = async (key: string) => {
-    if (!confirm(t(locale, 'settings.confirmDeleteVariable'))) return;
+  const handleDeleteVariable = (key: string) => {
+    setDeleteVarTarget(key);
+  };
+
+  const handleConfirmDeleteVariable = async () => {
+    if (!deleteVarTarget || !selectedProfile) return;
     try {
-      // P2-1: Use dedicated deleteVariable IPC instead of setting empty value
-      await window.nativesAPI?.env?.deleteVariable?.(selectedProfile!, key);
+      await window.nativesAPI?.env?.deleteVariable?.(selectedProfile, deleteVarTarget);
       if (selectedProfile) await loadVariables(selectedProfile);
       showToast(t(locale, 'settings.variableDeleted'));
     } catch (err) {
       console.error('[Settings] Delete variable failed:', err);
+    } finally {
+      setDeleteVarTarget(null);
     }
   };
 
@@ -561,6 +572,28 @@ export default function SettingsPage() {
           </p>
         </section>
       </div>
+
+      {/* Confirm dialogs */}
+      <ConfirmDialog
+        open={deleteProfileTarget !== null}
+        title={t(locale, 'settings.confirmDeleteProfile')}
+        message={t(locale, 'settings.confirmDeleteProfile')}
+        confirmLabel={t(locale, 'common.delete')}
+        cancelLabel={t(locale, 'common.cancel')}
+        danger
+        onConfirm={handleConfirmDeleteProfile}
+        onCancel={() => setDeleteProfileTarget(null)}
+      />
+      <ConfirmDialog
+        open={deleteVarTarget !== null}
+        title={t(locale, 'settings.confirmDeleteVariable')}
+        message={t(locale, 'settings.confirmDeleteVariable')}
+        confirmLabel={t(locale, 'common.delete')}
+        cancelLabel={t(locale, 'common.cancel')}
+        danger
+        onConfirm={handleConfirmDeleteVariable}
+        onCancel={() => setDeleteVarTarget(null)}
+      />
 
       {/* Toast */}
       {toast && (
