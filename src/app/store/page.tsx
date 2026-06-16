@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { Rocket } from 'lucide-react';
 import { useAsyncData } from '@/hooks/useAsyncData';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { t, type Locale } from '@/i18n';
@@ -117,7 +118,7 @@ export default function StorePage() {
         }}>
           <div>
             <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>
-              🚀 {t(locale, 'store.comingSoon')}
+              <Rocket size={16} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }} /> {t(locale, 'store.comingSoon')}
             </div>
             <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
               {t(locale, 'store.comingSoonDesc')}

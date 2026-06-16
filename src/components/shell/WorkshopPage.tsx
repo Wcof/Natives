@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Layers, Pause, Play, Trash2, Package, Rocket } from 'lucide-react';
+import { Layers, Pause, Play, RefreshCw, Trash2, Package, Rocket } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -359,8 +359,8 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
         <div style={{ display: 'flex', gap: 8 }}>
           {activeTab === 'installed' && (
             <>
-              <button className="btn" onClick={handleScan} style={{ fontSize: 12 }}>
-                ↻ {t(locale, 'workshop.scanModules')}
+              <button className="btn" onClick={handleScan} style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <RefreshCw size={14} /> {t(locale, 'workshop.scanModules')}
               </button>
               <button className="btn btn-primary" onClick={() => setShowCreateDialog(true)} style={{ fontSize: 12 }}>
                 + {t(locale, 'workshop.createModule')}

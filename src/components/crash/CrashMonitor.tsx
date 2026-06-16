@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
 interface CrashRecord {
@@ -102,7 +102,7 @@ export default function CrashMonitor() {
             <span style={{ fontSize: 9, color: 'var(--accent,#cdf24b)' }}>✓ {t(locale, 'errors.recovered')}</span>
           ) : (
             <button onClick={() => handleReload(crash.moduleId)} style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, border: '1px solid var(--accent,#cdf24b)', background: 'transparent', color: 'var(--accent,#cdf24b)', cursor: 'pointer' }}>
-              ↻ {t(locale, 'errors.reload')}
+              <RefreshCw size={9} /> {t(locale, 'errors.reload')}
             </button>
           )}
         </div>

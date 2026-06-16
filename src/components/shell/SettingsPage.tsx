@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { applyTheme } from '@/lib/theme-engine';
 import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { X, Check, Star, Edit2 } from 'lucide-react';
 
 interface EnvProfile {
   id: number;
@@ -387,7 +388,7 @@ export default function SettingsPage() {
                         }}
                         title={t(locale, 'settings.setDefault')}
                       >
-                        ★
+                        <Star size={12} />
                       </button>
                       <button
                         className="btn"
@@ -398,7 +399,7 @@ export default function SettingsPage() {
                         }}
                         title={t(locale, 'settings.deleteProfile')}
                       >
-                        ✕
+                        <X size={12} />
                       </button>
                     </div>
                   </div>
@@ -491,10 +492,10 @@ export default function SettingsPage() {
                                   autoFocus
                                 />
                                 <button className="btn btn-primary" style={{ fontSize: 10, padding: '2px 6px' }} onClick={() => handleEditVariable(v.key)}>
-                                  ✓
+                                  <Check size={12} />
                                 </button>
                                 <button className="btn" style={{ fontSize: 10, padding: '2px 6px' }} onClick={() => { setEditingVar(null); setEditValue(''); }}>
-                                  ✕
+                                  <X size={12} />
                                 </button>
                               </div>
                             ) : (
@@ -510,7 +511,7 @@ export default function SettingsPage() {
                               onClick={() => { setEditingVar(v.key); setEditValue(v.value); }}
                               title="Edit"
                             >
-                              ✎
+                              <Edit2 size={12} />
                             </button>
                             <button
                               className="btn"
@@ -518,7 +519,7 @@ export default function SettingsPage() {
                               onClick={() => handleDeleteVariable(v.key)}
                               title={t(locale, 'common.delete')}
                             >
-                              ✕
+                              <X size={12} />
                             </button>
                           </div>
                         </div>

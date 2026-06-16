@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { Zap } from 'lucide-react';
 
 interface FlingToTerminalProps {
   /** Ref to the terminal panel element for targeting the flight animation */
@@ -115,7 +116,7 @@ export default function FlingToTerminal({ terminalRef, onFling }: FlingToTermina
             whiteSpace: 'nowrap',
           }}
         >
-          ⚡ Send to Terminal
+          <Zap size={14} /> Send to Terminal
         </button>
       )}
 

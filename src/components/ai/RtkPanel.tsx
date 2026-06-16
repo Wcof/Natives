@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { t, type Locale } from '@/i18n';
-import { BarChart2 } from 'lucide-react';
+import { BarChart2, RefreshCw } from 'lucide-react';
 import { EmptyState } from '@/components/ui/EmptyState';
 import type { RtkUsage, RtkCommandStat } from '@/types/agent';
 import { useAsyncData } from '@/hooks/useAsyncData';
@@ -57,7 +57,7 @@ export default function RtkPanel() {
             disabled={loading}
             style={{ fontSize: 10, padding: '2px 6px', borderRadius: 3 }}
           >
-            {loading ? '...' : '↻'}
+            {loading ? '...' : <RefreshCw size={12} />}
           </button>
         </div>
       </div>

@@ -1,7 +1,7 @@
 'use client';
 
 import { type ReactNode } from 'react';
-import { Inbox, AlertTriangle } from 'lucide-react';
+import { Inbox, AlertTriangle, RefreshCw } from 'lucide-react';
 
 // ── Empty State (TASK-017) ──
 
@@ -70,7 +70,7 @@ export function ErrorState({ message, onRetry, icon }: ErrorStateProps) {
       <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 12 }}>{message}</div>
       {onRetry && (
         <button className="btn" onClick={onRetry} style={{ fontSize: 11 }}>
-          ↻ Retry
+          <RefreshCw size={14} style={{ marginRight: 4 }} /> Retry
         </button>
       )}
     </div>

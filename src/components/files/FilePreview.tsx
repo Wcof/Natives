@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
-import { Eye, Edit2 } from 'lucide-react';
+import { Eye, Edit2, X } from 'lucide-react';
 import { type FileEntry } from '@/types/file';
 import { t, useLocale, type Locale } from '@/i18n';
 import { getExt, isMarkdownFile, isCsvFile, isArchiveFile } from '@/lib/follow-mode';
@@ -141,7 +141,7 @@ export default function FilePreview({ entry, onClose }: FilePreviewProps) {
             aria-label="Close preview"
             style={{ fontSize: 16, padding: '0 6px', lineHeight: '24px' }}
           >
-            ✕
+            <X size={16} />
           </button>
         </div>
       </div>

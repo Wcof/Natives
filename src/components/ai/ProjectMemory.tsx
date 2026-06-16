@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAsyncData } from '@/hooks/useAsyncData';
 import { type AgentSession } from '@/types/agent';
 import { t, type Locale } from '@/i18n';
+import { RefreshCw } from 'lucide-react';
 import { EmptyState } from '@/components/ui/EmptyState';
 
 export default function ProjectMemory() {
@@ -64,7 +65,7 @@ export default function ProjectMemory() {
           {t(locale, 'aiWorkbench.projectMemory')} ({(sessions ?? []).length})
         </div>
         <button className="btn-ghost" onClick={loadSessions} style={{ fontSize: 10, padding: '3px 6px' }}>
-          ↻
+          <RefreshCw size={14} />
         </button>
       </div>
 

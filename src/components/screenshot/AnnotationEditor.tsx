@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, useCallback, useEffect } from 'react';
-import { Edit2, ArrowRight, Type, EyeOff, Square, Trash2 } from 'lucide-react';
+import { Edit2, ArrowRight, Type, EyeOff, Square, Trash2, X } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import { useFocusTrap } from '@/lib/useFocusTrap';
 
@@ -242,7 +242,7 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
           💾 {t(locale, 'common.save')}
         </button>
         <button className="btn btn-sm" onClick={onClose}>
-          ✕ {t(locale, 'screenshot.close')}
+          <X size={12} /> {t(locale, 'screenshot.close')}
         </button>
       </div>
 

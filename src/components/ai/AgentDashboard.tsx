@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { X } from 'lucide-react';
 import { type FileChangeEvent } from '@/types/agent';
 import { t, type Locale } from '@/i18n';
 
@@ -99,7 +100,7 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
             style={{ fontSize: 10, padding: '2px 6px', borderRadius: 3, color: 'var(--text-faint)' }}
             title={t(locale, 'aiWorkbench.dashboard.clear')}
           >
-            ✕
+            <X size={12} />
           </button>
         </div>
       </div>

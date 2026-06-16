@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { Keyboard, X } from 'lucide-react';
 import { useLocale } from '@/i18n';
 import { t } from '@/i18n';
 
@@ -74,7 +75,7 @@ export default function ShortcutHelp() {
           marginBottom: 20,
         }}>
           <h2 style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', margin: 0 }}>
-            ⌨️ {t(locale, 'shortcuts.title')}
+            <Keyboard size={16} /> {t(locale, 'shortcuts.title')}
           </h2>
           <button
             onClick={() => setVisible(false)}
@@ -83,7 +84,7 @@ export default function ShortcutHelp() {
               fontSize: 18, cursor: 'pointer', padding: '0 4px',
             }}
           >
-            ✕
+            <X size={16} />
           </button>
         </div>
 

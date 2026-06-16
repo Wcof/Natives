@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Search } from 'lucide-react';
+import { Search, Rocket } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
 interface OnboardingWizardProps {
@@ -79,7 +79,7 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
         {/* Welcome */}
         {step === 'welcome' && (
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 48, marginBottom: 16 }}>🚀</div>
+            <Rocket size={48} style={{ marginBottom: 16 }} />
             <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--text)', margin: '0 0 8px' }}>
               {t(locale, 'onboarding.welcome')}
             </h1>
