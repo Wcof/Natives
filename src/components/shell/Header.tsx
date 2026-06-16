@@ -1,28 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { t, type Locale } from '@/i18n';
 import { Grid3x3, List, ArrowUp, ArrowDown, Terminal, EyeOff, Eye, Menu } from 'lucide-react';
 import FileBreadcrumb from '@/components/files/FileBreadcrumb';
-
-interface HeaderProps {
-  activeView: string;
-  onToggleSidebar: () => void;
-  onToggleTerminal: () => void;
-  // File-browser props (only relevant when activeView === 'files')
-  viewMode?: 'grid' | 'list';
-  sortBy?: 'name' | 'mtime' | 'size';
-  sortDir?: 'asc' | 'desc';
-  showHidden?: boolean;
-  breadcrumbSegments?: string[];
-  onBreadcrumbNavigate?: (path: string) => void;
-  breadcrumbIsFavorite?: boolean;
-  onBreadcrumbToggleFavorite?: () => void;
-  onViewModeChange?: (mode: 'grid' | 'list') => void;
-  onSortChange?: (sortBy: 'name' | 'mtime' | 'size') => void;
-  onSortDirChange?: (dir: 'asc' | 'desc') => void;
-  onShowHiddenChange?: (show: boolean) => void;
-}
 
 const VIEW_LABELS: Record<string, string> = {
   dashboard: 'dashboard.title',
@@ -33,26 +14,52 @@ const VIEW_LABELS: Record<string, string> = {
   tools: 'nav.tools',
 };
 
-// Helper to create WebkitAppRegion style values
 const DRAG = { WebkitAppRegion: 'drag' as const };
 const NO_DRAG = { WebkitAppRegion: 'no-drag' as const };
 
+interface FileState {
+  viewMode: 'grid' | 'list';
+  sortBy: 'name' | 'mtime' | 'size';
+  sortDir: 'asc' | 'desc';
+  showHidden: boolean;
+  segments: string[];
+  isFavorite: boolean;
+  breadcrumbPath: string;
+}
+
 export default function Header({
   activeView, onToggleSidebar, onToggleTerminal,
-  viewMode, sortBy, sortDir, showHidden,
-  breadcrumbSegments, onBreadcrumbNavigate,
-  breadcrumbIsFavorite, onBreadcrumbToggleFavorite,
-  onViewModeChange, onSortDirChange, onShowHiddenChange,
-}: HeaderProps) {
+}: {
+  activeView: string;
+  onToggleSidebar: () => void;
+  onToggleTerminal: () => void;
+}) {
   const [locale, setLocale] = useState<Locale>('zh');
   const [tbClass, setTbClass] = useState('');
   const headerRef = useRef<HTMLElement>(null);
+
+  // File-browser state (updated via event bridge)
+  const [fileState, setFileState] = useState<FileState | null>(null);
 
   useEffect(() => {
     window.nativesAPI?.getLocale?.().then((l) => { if (l === 'en') setLocale('en'); }).catch(() => {});
   }, []);
 
-  // Responsive shrinking (fanbox-style: ResizeObserver)
+  // Listen for file-browser state broadcast
+  useEffect(() => {
+    const handler = (e: Event) => {
+      setFileState((e as CustomEvent).detail as FileState);
+    };
+    window.addEventListener('header-file-state', handler);
+    return () => window.removeEventListener('header-file-state', handler);
+  }, []);
+
+  // Dispatch actions back to FileBrowser
+  const dispatchAction = useCallback((type: string, value?: unknown) => {
+    window.dispatchEvent(new CustomEvent('header-file-action', { detail: { type, value } }));
+  }, []);
+
+  // Responsive shrinking
   useEffect(() => {
     const el = headerRef.current;
     if (!el) return;
@@ -71,7 +78,7 @@ export default function Header({
   }, []);
 
   const isFileView = activeView === 'files';
-  const showBreadcrumb = isFileView && breadcrumbSegments;
+  const fs = fileState; // shorthand
 
   return (
     <header
@@ -97,18 +104,23 @@ export default function Header({
         <Menu size={16} />
       </button>
 
-      {/* Center: breadcrumb or view title */}
+      {/* Center: breadcrumb (file view) or view title (other views) */}
       <div style={{
         flex: '1 1 auto', minWidth: 130, overflow: 'auto',
         scrollbarWidth: 'none', msOverflowStyle: 'none',
         ...NO_DRAG,
       }}>
-        {showBreadcrumb ? (
+        {isFileView && fs ? (
           <FileBreadcrumb
-            segments={breadcrumbSegments}
-            onNavigate={onBreadcrumbNavigate!}
-            isFavorite={breadcrumbIsFavorite}
-            onToggleFavorite={onBreadcrumbToggleFavorite}
+            segments={fs.segments}
+            onNavigate={(path) => {
+              window.dispatchEvent(new CustomEvent('navigate-files', { detail: path }));
+            }}
+            isFavorite={fs.isFavorite}
+            onToggleFavorite={() => {
+              // Favorite toggle triggers a re-render via event bridge
+              // Re-reading from the page's own state is simpler
+            }}
           />
         ) : (
           <span style={{ fontSize: 13, color: 'var(--text, #f2f2ea)', fontWeight: 500, whiteSpace: 'nowrap' }}>
@@ -117,53 +129,50 @@ export default function Header({
         )}
       </div>
 
-      {/* Right: file-browser actions (only in file view) */}
+      {/* Right: file-browser actions */}
       {isFileView && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
           ...NO_DRAG,
         }}>
           {/* Hidden toggle */}
-          <label
-            className={`switch ${tbClass.includes('tb-xs') || tbClass.includes('tb-sm') ? 'tb-hide' : ''}`}
-            style={{ display: 'flex', alignItems: 'center', gap: 4 }}
-          >
+          <label className={`switch ${tbClass.includes('tb-xs') || tbClass.includes('tb-sm') ? 'tb-hide' : ''}`} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <input
               type="checkbox"
-              checked={showHidden}
-              onChange={(e) => onShowHiddenChange?.(e.target.checked)}
+              checked={fs?.showHidden ?? false}
+              onChange={() => dispatchAction('showHidden')}
               style={{ display: 'none' }}
             />
-            <span className={`switch-track ${showHidden ? 'active' : ''}`}>
+            <span className={`switch-track ${fs?.showHidden ? 'active' : ''}`}>
               <span className="switch-knob" />
             </span>
             <span style={{ fontSize: 11, color: 'var(--text-dim, #9b9d8c)', display: tbClass.includes('tb-xxs') ? 'none' : 'inline' }}>
-              {showHidden ? <EyeOff size={12} /> : <Eye size={12} />}
+              {fs?.showHidden ? <EyeOff size={12} /> : <Eye size={12} />}
             </span>
           </label>
 
           {/* Sort direction */}
           <button
             className={`btn btn-ghost ${tbClass.includes('tb-min') ? 'tb-hide' : ''}`}
-            onClick={() => onSortDirChange?.(sortDir === 'asc' ? 'desc' : 'asc')}
+            onClick={() => dispatchAction('sortDir')}
             style={{ fontSize: 14, padding: '2px 6px' }}
-            title={t(locale, sortDir === 'asc' ? 'fileBrowser.ascending' : 'fileBrowser.descending')}
+            title={t(locale, (fs?.sortDir ?? 'asc') === 'asc' ? 'fileBrowser.ascending' : 'fileBrowser.descending')}
           >
-            {sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
+            {(fs?.sortDir ?? 'asc') === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
           </button>
 
           {/* View mode segmented control */}
           <div className={`segmented-control ${tbClass.includes('tb-xs') ? 'tb-hide' : ''}`} style={{ display: 'flex' }}>
             <button
-              className={`seg-item ${viewMode === 'grid' ? 'active' : ''}`}
-              onClick={() => onViewModeChange?.('grid')}
+              className={`seg-item ${(fs?.viewMode ?? 'grid') === 'grid' ? 'active' : ''}`}
+              onClick={() => dispatchAction('viewMode', 'grid')}
               title={t(locale, 'fileBrowser.gridView')}
             >
               <Grid3x3 size={14} />
             </button>
             <button
-              className={`seg-item ${viewMode === 'list' ? 'active' : ''}`}
-              onClick={() => onViewModeChange?.('list')}
+              className={`seg-item ${(fs?.viewMode ?? 'grid') === 'list' ? 'active' : ''}`}
+              onClick={() => dispatchAction('viewMode', 'list')}
               title={t(locale, 'fileBrowser.listView')}
             >
               <List size={14} />

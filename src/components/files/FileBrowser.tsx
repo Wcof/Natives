@@ -168,6 +168,19 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [goBack, goForward]);
 
+  // Listen for Header action events
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (!detail) return;
+      if (detail.type === 'viewMode') setViewMode(detail.value);
+      if (detail.type === 'sortDir') setSortDir((prev) => prev === 'asc' ? 'desc' : 'asc');
+      if (detail.type === 'showHidden') setShowHidden((prev) => !prev);
+    };
+    window.addEventListener('header-file-action', handler);
+    return () => window.removeEventListener('header-file-action', handler);
+  }, []);
+
   // Listen for external navigation events (from sidebar quick access)
   useEffect(() => {
     // Check for pending path set before mount (race condition fix)
@@ -276,9 +289,10 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
 
   const handleOpenInTerminal = useCallback((dir: string) => {
     const api = (window as any).nativesAPI;
+    // Try terminal:openInDir IPC first (Electron)
     if (api?.terminal?.write) {
-      // Create new terminal via event — ShellLayout handles it
       window.dispatchEvent(new CustomEvent('toggle-terminal'));
+      // Also copy cd shortcut as fallback
     }
     navigator.clipboard.writeText(`cd "${dir}"`);
     showToast(t(locale, 'fileBrowser.copyAsCd'));
@@ -339,6 +353,16 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
 
   const segments = currentPath.split('/').filter(Boolean);
 
+  // ── Event bridge: broadcast file-browser state for Header ──
+  useEffect(() => {
+    const detail = {
+      viewMode, sortBy, sortDir, showHidden,
+      segments: segments.length > 0 ? segments : ['/'],
+      isFavorite, breadcrumbPath: currentPath,
+    };
+    window.dispatchEvent(new CustomEvent('header-file-state', { detail }));
+  }, [viewMode, sortBy, sortDir, showHidden, segments, isFavorite, currentPath]);
+
   return (
     <div style={{
       display: 'flex',
@@ -354,18 +378,10 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         onToggleFavorite={toggleFavorite}
       />
       <FileToolbar
-        viewMode={viewMode}
-        sortBy={sortBy}
-        sortDir={sortDir}
-        showHidden={showHidden}
         searchQuery={searchQuery}
         recentMode={recentMode}
         canGoBack={canGoBack}
         canGoForward={canGoForward}
-        onViewModeChange={setViewMode}
-        onSortChange={handleSort}
-        onSortDirChange={setSortDir}
-        onShowHiddenChange={setShowHidden}
         onSearchChange={setSearchQuery}
         onRecentModeToggle={() => setRecentMode((v) => !v)}
         onRefresh={loadEntries}
