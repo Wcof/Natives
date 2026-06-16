@@ -1,13 +1,18 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { t, type Locale } from '@/i18n';
 import type { RtkUsage, RtkCommandStat } from '@/types/agent';
+import { useAsyncData } from '@/hooks/useAsyncData';
 
 export default function RtkPanel() {
-  const [usage, setUsage] = useState<RtkUsage | null>(null);
+  const { data: usage, loading, error, reload: fetchUsage } = useAsyncData(async () => {
+    const api = window.nativesAPI;
+    if (!api?.usage?.refresh) return null;
+    const result = await api.usage.refresh();
+    return (result?.rtk ?? null) as RtkUsage | null;
+  }, []);
   const [paused, setPaused] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [locale, setLocale] = useState<Locale>('zh');
 
   useEffect(() => {
@@ -19,24 +24,6 @@ export default function RtkPanel() {
     }
     loadLocale();
   }, []);
-
-  const fetchUsage = useCallback(async () => {
-    setLoading(true);
-    try {
-      const api = window.nativesAPI;
-      if (!api?.usage?.refresh) return;
-      const result = await api.usage.refresh();
-      if (result.rtk) setUsage(result.rtk);
-    } catch (err) {
-      console.error('[RtkPanel] Failed to fetch usage:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchUsage();
-  }, [fetchUsage]);
 
   const topCommands: RtkCommandStat[] = usage?.topCommands ?? [];
 

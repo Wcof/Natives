@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
+import { useAsyncData } from '@/hooks/useAsyncData';
 import { t, type Locale } from '@/i18n';
 
 interface Notification {
@@ -18,24 +19,13 @@ interface NotificationPanelProps {
 }
 
 export default function NotificationPanel({ locale }: NotificationPanelProps) {
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const loadNotifications = useCallback(async () => {
-    setLoading(true);
-    try {
-      const api = window.nativesAPI;
-      if (api?.notification?.list) {
-        const list = await api.notification.list();
-        if (Array.isArray(list)) {
-          setNotifications(list as Notification[]);
-        }
-      }
-    } catch (err) {
-      console.error('[Notifications] Failed to load:', err);
-    } finally {
-      setLoading(false);
+  const { data: notifications, loading, error, reload: loadNotifications } = useAsyncData(async () => {
+    const api = window.nativesAPI;
+    if (api?.notification?.list) {
+      const list = await api.notification.list();
+      if (Array.isArray(list)) return list as Notification[];
     }
+    return [];
   }, []);
 
   useEffect(() => {
@@ -48,9 +38,7 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
   const handleMarkRead = async (id: number) => {
     try {
       await window.nativesAPI?.notification?.markRead(id);
-      setNotifications((prev) =>
-        prev.map((n) => (n.id === id ? { ...n, read: 1 } : n))
-      );
+      loadNotifications();
     } catch (err) {
       console.error('[Notifications] Mark read failed:', err);
     }
@@ -59,7 +47,7 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
   const handleMarkAllRead = async () => {
     try {
       await window.nativesAPI?.notification?.markAllAsRead();
-      setNotifications((prev) => prev.map((n) => ({ ...n, read: 1 })));
+      loadNotifications();
     } catch (err) {
       console.error('[Notifications] Mark all read failed:', err);
     }
@@ -76,7 +64,7 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
     error: '#d9534f',
   };
 
-  const unreadCount = notifications.filter((n) => !n.read).length;
+  const unreadCount = (notifications ?? []).filter((n) => !n.read).length;
 
   if (loading) {
     return (
@@ -128,7 +116,7 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
       </div>
 
       {/* Notification list */}
-      {notifications.length === 0 ? (
+      {(notifications ?? []).length === 0 ? (
         <div style={{
           padding: '40px 16px', textAlign: 'center',
           color: 'var(--text-faint,#62655a)', fontSize: 13,
@@ -138,7 +126,7 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {notifications.map((notif) => (
+          {(notifications ?? []).map((notif) => (
             <div
               key={notif.id}
               style={{

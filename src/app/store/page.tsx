@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useAsyncData } from '@/hooks/useAsyncData';
 import { t, type Locale } from '@/i18n';
 
 interface ModuleInfo {
@@ -14,8 +15,6 @@ interface ModuleInfo {
 }
 
 export default function StorePage() {
-  const [modules, setModules] = useState<ModuleInfo[]>([]);
-  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [locale, setLocale] = useState<Locale>('zh');
 
@@ -29,28 +28,16 @@ export default function StorePage() {
     init();
   }, []);
 
-  const loadModules = useCallback(async () => {
-    setLoading(true);
-    try {
-      const api = window.nativesAPI;
-      if (api?.module?.list) {
-        const result = await api.module.list();
-        if (Array.isArray(result)) {
-          setModules(result as ModuleInfo[]);
-        }
-      }
-    } catch (err) {
-      console.error('[Store] Failed to load modules:', err);
-    } finally {
-      setLoading(false);
+  const { data: modules, loading, error, reload: loadModules } = useAsyncData(async () => {
+    const api = window.nativesAPI;
+    if (api?.module?.list) {
+      const result = await api.module.list();
+      if (Array.isArray(result)) return result as ModuleInfo[];
     }
+    return [];
   }, []);
 
-  useEffect(() => {
-    loadModules();
-  }, [loadModules]);
-
-  const filteredModules = modules.filter((m) => {
+  const filteredModules = (modules ?? []).filter((m) => {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
     return (
@@ -90,7 +77,7 @@ export default function StorePage() {
           borderRadius: 6,
           border: '1px solid var(--border,#262920)',
         }}>
-          {t(locale, 'store.moduleCount').replace('{count}', String(modules.length))}
+          {t(locale, 'store.moduleCount').replace('{count}', String(modules?.length ?? 0))}
         </div>
       </div>
 

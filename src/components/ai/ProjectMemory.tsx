@@ -1,14 +1,24 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useAsyncData } from '@/hooks/useAsyncData';
 import { type AgentSession } from '@/types/agent';
 import { t, type Locale } from '@/i18n';
 
 export default function ProjectMemory() {
-  const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [locale, setLocale] = useState<Locale>('zh');
+  const { data: sessions, loading, error, reload: loadSessions } = useAsyncData(async () => {
+    const api = window.nativesAPI;
+    if (api?.agent?.scanProjects && api?.agent?.getSessions) {
+      const projects = await api.agent.scanProjects();
+      if (Array.isArray(projects) && projects.length > 0) {
+        const result = await api.agent.getSessions(projects[0]!);
+        if (Array.isArray(result)) return result as AgentSession[];
+      }
+    }
+    return [];
+  }, []);
 
   useEffect(() => {
     async function loadLocale() {
@@ -19,31 +29,6 @@ export default function ProjectMemory() {
     }
     loadLocale();
   }, []);
-
-  const loadSessions = useCallback(async () => {
-    setLoading(true);
-    try {
-      const api = window.nativesAPI;
-      if (api?.agent?.scanProjects && api?.agent?.getSessions) {
-        const projects = await api.agent.scanProjects();
-        if (Array.isArray(projects) && projects.length > 0) {
-          // Get sessions from the first project
-          const result = await api.agent.getSessions(projects[0]!);
-          if (Array.isArray(result)) {
-            setSessions(result as AgentSession[]);
-          }
-        }
-      }
-    } catch (err) {
-      console.error('[ProjectMemory] Failed to load sessions:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadSessions();
-  }, [loadSessions]);
 
   const handleRestore = useCallback(async (session: AgentSession) => {
     const api = window.nativesAPI;
@@ -75,7 +60,7 @@ export default function ProjectMemory() {
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       }}>
         <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-          {t(locale, 'aiWorkbench.projectMemory')} ({sessions.length})
+          {t(locale, 'aiWorkbench.projectMemory')} ({(sessions ?? []).length})
         </div>
         <button className="btn-ghost" onClick={loadSessions} style={{ fontSize: 10, padding: '3px 6px' }}>
           ↻
@@ -88,12 +73,12 @@ export default function ProjectMemory() {
           <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
             {t(locale, 'common.loading')}
           </div>
-        ) : sessions.length === 0 ? (
+        ) : (sessions ?? []).length === 0 ? (
           <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
             {t(locale, 'aiWorkbench.noSessions')}
           </div>
         ) : (
-          sessions.map((s) => (
+          (sessions ?? []).map((s) => (
             <div
               key={s.id}
               onClick={() => setSelected(selected === s.id ? null : s.id)}

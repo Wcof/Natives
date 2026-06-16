@@ -1,16 +1,18 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
+import { useAsyncData } from '@/hooks/useAsyncData';
 import { t, type Locale } from '@/i18n';
-import type { ClaudeUsage, CodexUsage, RtkUsage } from '@/types/agent';
 
 export default function UsagePanel() {
   const [activeTab, setActiveTab] = useState<'claude' | 'codex' | 'rtk'>('claude');
   const [locale, setLocale] = useState<Locale>('zh');
-  const [claudeUsage, setClaudeUsage] = useState<ClaudeUsage | null>(null);
-  const [codexUsage, setCodexUsage] = useState<CodexUsage | null>(null);
-  const [rtkUsage, setRtkUsage] = useState<RtkUsage | null>(null);
-  const [loading, setLoading] = useState(false);
+
+  const { data: usageData, loading, error, reload: fetchUsage } = useAsyncData(async () => {
+    const api = window.nativesAPI;
+    if (!api?.usage?.refresh) return null;
+    return await api.usage.refresh();
+  }, []);
 
   useEffect(() => {
     async function loadLocale() {
@@ -21,26 +23,6 @@ export default function UsagePanel() {
     }
     loadLocale();
   }, []);
-
-  const fetchUsage = useCallback(async () => {
-    setLoading(true);
-    try {
-      const api = window.nativesAPI;
-      if (!api?.usage?.refresh) return;
-
-      const result = await api.usage.refresh();
-      if (result.claude) setClaudeUsage(result.claude);
-      if (result.rtk) setRtkUsage(result.rtk);
-    } catch (err) {
-      console.error('[UsagePanel] Failed to fetch usage:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchUsage();
-  }, [fetchUsage]);
 
   const tabs = [
     { id: 'claude' as const, label: 'Claude Code' },
@@ -71,20 +53,20 @@ export default function UsagePanel() {
         <div>
           <ProgressBar
             label={t(locale, 'aiWorkbench.fiveHourWindow')}
-            used={claudeUsage?.fiveHourWindow?.used ?? 0}
-            limit={claudeUsage?.fiveHourWindow?.limit ?? 50000}
+            used={usageData?.claude?.fiveHourWindow?.used ?? 0}
+            limit={usageData?.claude?.fiveHourWindow?.limit ?? 50000}
             color="#cdf24b"
           />
           <ProgressBar
             label={t(locale, 'aiWorkbench.weeklyQuota')}
-            used={claudeUsage?.weeklyQuota?.used ?? 0}
-            limit={claudeUsage?.weeklyQuota?.limit ?? 500000}
+            used={usageData?.claude?.weeklyQuota?.used ?? 0}
+            limit={usageData?.claude?.weeklyQuota?.limit ?? 500000}
             color="#4bcdf2"
           />
           <div style={{ marginTop: 12, fontSize: 11, color: 'var(--text-dim)' }}>
-            <div>{t(locale, 'aiWorkbench.localTokens')} 5h: {claudeUsage?.localTokens?.last5h ?? 0} tokens</div>
-            <div>{t(locale, 'aiWorkbench.today')}: {claudeUsage?.localTokens?.today ?? 0} tokens</div>
-            <div>{t(locale, 'aiWorkbench.thisWeek')}: {claudeUsage?.localTokens?.thisWeek ?? 0} tokens</div>
+            <div>{t(locale, 'aiWorkbench.localTokens')} 5h: {usageData?.claude?.localTokens?.last5h ?? 0} tokens</div>
+            <div>{t(locale, 'aiWorkbench.today')}: {usageData?.claude?.localTokens?.today ?? 0} tokens</div>
+            <div>{t(locale, 'aiWorkbench.thisWeek')}: {usageData?.claude?.localTokens?.thisWeek ?? 0} tokens</div>
           </div>
           <button
             className="btn btn-ghost"
@@ -101,12 +83,12 @@ export default function UsagePanel() {
         <div>
           <ProgressBar
             label={t(locale, 'aiWorkbench.fiveHourWindow')}
-            used={codexUsage?.fiveHourWindow?.used ?? 0}
-            limit={codexUsage?.fiveHourWindow?.limit ?? 30000}
+            used={0}
+            limit={30000}
             color="#DEA584"
           />
           <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-dim)' }}>
-            {t(locale, 'aiWorkbench.plan')}: {codexUsage?.planType ?? 'Free'}
+            {t(locale, 'aiWorkbench.plan')}: Free
           </div>
         </div>
       )}
@@ -114,14 +96,14 @@ export default function UsagePanel() {
       {activeTab === 'rtk' && (
         <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
           <div style={{ marginBottom: 8 }}>
-            <span style={{ color: 'var(--text)', fontWeight: 600 }}>{rtkUsage?.totalSaved ?? 0}</span>{' '}
+            <span style={{ color: 'var(--text)', fontWeight: 600 }}>{usageData?.rtk?.totalSaved ?? 0}</span>{' '}
             {t(locale, 'aiWorkbench.tokensSaved')}
           </div>
           <div style={{ marginBottom: 8 }}>
-            <span style={{ color: 'var(--text)', fontWeight: 600 }}>{rtkUsage?.totalCommands ?? 0}</span>{' '}
+            <span style={{ color: 'var(--text)', fontWeight: 600 }}>{usageData?.rtk?.totalCommands ?? 0}</span>{' '}
             {t(locale, 'aiWorkbench.commands')}
           </div>
-          {(!rtkUsage || rtkUsage.totalCommands === 0) && (
+          {(!usageData?.rtk || usageData?.rtk?.totalCommands === 0) && (
             <div style={{ fontSize: 10, color: 'var(--text-faint)' }}>
               {t(locale, 'aiWorkbench.usage.noRtkData')}
             </div>

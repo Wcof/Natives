@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useAsyncData } from '@/hooks/useAsyncData';
 import { useFocusTrap } from '@/lib/useFocusTrap';
 
 interface ModuleInfo {
@@ -25,8 +26,12 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
   // authorization. Kept in the props type for ShellLayout compatibility.
   void onInstall;
   const [dragOver, setDragOver] = useState(false);
-  const [modules, setModules] = useState<ModuleInfo[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data: modules, loading, error, reload: loadModules } = useAsyncData(async () => {
+    const api = window.nativesAPI;
+    const result = await api?.module?.list?.();
+    if (Array.isArray(result)) return result as ModuleInfo[];
+    return [];
+  }, []);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [templateName, setTemplateName] = useState('');
   const [templateId, setTemplateId] = useState('');
@@ -75,27 +80,6 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
     loadLocale();
     loadUser();
   }, []);
-
-  const loadModules = useCallback(async () => {
-    setLoading(true);
-    try {
-      const api = window.nativesAPI;
-      if (api?.module?.list) {
-        const result = await api.module.list();
-        if (Array.isArray(result)) {
-          setModules(result as ModuleInfo[]);
-        }
-      }
-    } catch (err) {
-      console.error('[Workshop] Failed to load modules:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadModules();
-  }, [loadModules]);
 
   // Drag & drop
   const handleDragOver = (e: React.DragEvent) => {
@@ -212,7 +196,7 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
     try {
       await window.nativesAPI?.module?.scan?.();
       await loadModules();
-      showToast(t(locale, 'workshop.modulesFound').replace('{count}', String(modules.length)));
+      showToast(t(locale, 'workshop.modulesFound').replace('{count}', String((modules ?? []).length)));
     } catch (err) {
       console.error('[Workshop] Scan failed:', err);
     }
@@ -411,7 +395,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
           <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-faint)', fontSize: 13 }}>
             {t(locale, 'common.loading')}
           </div>
-        ) : modules.length === 0 ? (
+        ) : (modules ?? []).length === 0 ? (
           <div style={{
             padding: '40px 0',
             textAlign: 'center',
@@ -428,7 +412,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
             gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
             gap: 12,
           }}>
-            {modules.map((mod) => (
+            {(modules ?? []).map((mod) => (
               <ModuleCard
                 key={mod.id}
                 module={mod}

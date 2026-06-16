@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useAsyncData } from '@/hooks/useAsyncData';
 import { Power, Trash2, RefreshCw } from 'lucide-react';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { t, type Locale } from '@/i18n';
@@ -16,8 +17,14 @@ interface ModuleInfo {
 }
 
 export default function ModulesPage() {
-  const [modules, setModules] = useState<ModuleInfo[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data: modules, loading, error, reload: loadModules } = useAsyncData(async () => {
+    const api = window.nativesAPI;
+    if (api?.module?.list) {
+      const result = await api.module.list();
+      if (Array.isArray(result)) return result as ModuleInfo[];
+    }
+    return [];
+  }, []);
   const [uninstallTarget, setUninstallTarget] = useState<ModuleInfo | null>(null);
   const [locale, setLocale] = useState<Locale>('zh');
 
@@ -29,29 +36,6 @@ export default function ModulesPage() {
       } catch { /* ignore */ }
     }
     loadLocale();
-  }, []);
-
-  async function loadModules() {
-    setLoading(true);
-    const timeout = setTimeout(() => setLoading(false), 5000);
-    try {
-      const api = window.nativesAPI;
-      if (api?.module?.list) {
-        const result = await api.module.list();
-        if (Array.isArray(result)) {
-          setModules(result as ModuleInfo[]);
-        }
-      }
-    } catch (err) {
-      console.error('[Modules] Failed to load modules:', err);
-    } finally {
-      clearTimeout(timeout);
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    loadModules();
   }, []);
 
   async function handleToggle(mod: ModuleInfo) {
@@ -113,13 +97,13 @@ export default function ModulesPage() {
         <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--text-faint,#62655a)', fontSize: 13 }}>
           {t(locale, 'common.loading')}
         </div>
-      ) : modules.length === 0 ? (
+      ) : (modules ?? []).length === 0 ? (
         <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--text-faint,#62655a)', fontSize: 13 }}>
           {t(locale, 'modules.emptyState')}
         </div>
       ) : (
         <div aria-live="polite">
-          {modules.map((mod) => (
+          {(modules ?? []).map((mod) => (
             <div key={mod.id} style={{
               display: 'flex', alignItems: 'center', gap: 12,
               padding: '12px 20px', borderBottom: '1px solid var(--border,#262920)',

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useAsyncData } from '@/hooks/useAsyncData';
 import { type AgentSession } from '@/types/agent';
 import { t, type Locale } from '@/i18n';
 
@@ -11,12 +12,21 @@ interface ReplayStep {
 }
 
 export default function SessionReplay() {
-  const [sessions, setSessions] = useState<AgentSession[]>([]);
+  const { data: sessions, loading, error, reload: loadSessions } = useAsyncData(async () => {
+    const api = window.nativesAPI;
+    if (api?.agent?.scanProjects && api?.agent?.getSessions) {
+      const projects = await api.agent.scanProjects();
+      if (Array.isArray(projects) && projects.length > 0) {
+        const result = await api.agent.getSessions(projects[0]!);
+        if (Array.isArray(result)) return result as AgentSession[];
+      }
+    }
+    return [];
+  }, []);
   const [selectedSession, setSelectedSession] = useState<AgentSession | null>(null);
   const [steps, setSteps] = useState<ReplayStep[]>([]);
   const [currentStep, setCurrentStep] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [locale, setLocale] = useState<Locale>('zh');
 
   useEffect(() => {
@@ -28,31 +38,6 @@ export default function SessionReplay() {
     }
     loadLocale();
   }, []);
-
-  // Load sessions
-  const loadSessions = useCallback(async () => {
-    setLoading(true);
-    try {
-      const api = window.nativesAPI;
-      if (api?.agent?.scanProjects && api?.agent?.getSessions) {
-        const projects = await api.agent.scanProjects();
-        if (Array.isArray(projects) && projects.length > 0) {
-          const result = await api.agent.getSessions(projects[0]!);
-          if (Array.isArray(result)) {
-            setSessions(result as AgentSession[]);
-          }
-        }
-      }
-    } catch (err) {
-      console.error('[SessionReplay] Failed to load sessions:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadSessions();
-  }, [loadSessions]);
 
   // When session selected, build replay steps
   useEffect(() => {
@@ -119,12 +104,12 @@ export default function SessionReplay() {
             <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
               {t(locale, 'common.loading')}
             </div>
-          ) : sessions.length === 0 ? (
+          ) : (sessions ?? []).length === 0 ? (
             <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
               {t(locale, 'aiWorkbench.selectSession')}
             </div>
           ) : (
-            sessions.map((s) => (
+            (sessions ?? []).map((s) => (
               <div
                 key={s.id}
                 onClick={() => handleSelectSession(s)}
