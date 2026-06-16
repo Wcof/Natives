@@ -216,9 +216,9 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
 
   const categoryColors: Record<string, string> = {
     module: 'var(--accent,#cdf24b)',
-    action: '#5b9cf5',
-    setting: 'var(--warning)',
-    navigation: '#a78bfa',
+    action: 'var(--diff-mod,#5b9cf5)',
+    setting: 'var(--warning,#e6b800)',
+    navigation: 'var(--info,#4bcdf2)',
   };
 
   if (!isOpen) return null;
