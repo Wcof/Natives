@@ -1122,6 +1122,21 @@ ipcMain.handle('shell:openPath', async (_event, filePath: string) => {
   }
 });
 
+ipcMain.handle('terminal:openInDir', async (_event, dirPath: string) => {
+  try {
+    const mod = lazyLoad('shell');
+    if (!mod) return { sessionId: null, error: 'Shell not available' };
+    const env: Record<string, string> = {};
+    const sessionId = await mod.createSession(env);
+    if (sessionId) {
+      mod.write(sessionId, `cd "${dirPath}"\r`);
+    }
+    return { sessionId };
+  } catch (err) {
+    return { sessionId: null, error: (err as Error).message };
+  }
+});
+
 app.whenReady().then(() => {
   createWindow();
   initializeServices();

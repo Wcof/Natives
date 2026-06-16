@@ -15,7 +15,6 @@ import { useFocusTrap } from '@/lib/useFocusTrap';
 import { pushRecentFile } from '@/lib/recent-files-client';
 import { webFsClient } from '@/lib/web-fs-client';
 import { fmtSize } from '@/lib/format';
-import { copyToClipboard } from '@/lib/clipboard';
 
 /** Electron IPC 可用时用 nativesAPI.fs，否则降级到 webFsClient (Next.js API Routes) */
 function getFsApi() {
@@ -279,32 +278,29 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     }
   }, [showToast]);
 
-  const handleOpenInEditor = useCallback(async (entry: FileEntry) => {
+  const handleOpenInEditor = useCallback((entry: FileEntry) => {
     const api = (window as any).nativesAPI?.shell;
     if (api?.openPath) {
       api.openPath(entry.path);
     } else {
-      await copyToClipboard(entry.path);
+      navigator.clipboard.writeText(entry.path);
       showToast(t(locale, 'fileBrowser.copyPath'));
     }
   }, [showToast]);
 
   const handleOpenInTerminal = useCallback(async (dir: string) => {
     const api = (window as any).nativesAPI;
-    if (api?.terminal?.create && api?.terminal?.write) {
-      // Electron: compose existing primitives
-      try {
-        const result = await api.terminal.create();
-        if (result?.sessionId) {
-          await api.terminal.write(result.sessionId, `cd "${dir}"\r`);
-          window.dispatchEvent(new CustomEvent('toggle-terminal'));
-          return;
-        }
-      } catch { /* fall through to clipboard */ }
+    if (api?.terminal?.openInDir) {
+      // Electron: create new PTY session and cd into dir
+      const result = await api.terminal.openInDir(dir);
+      if (result?.sessionId) {
+        window.dispatchEvent(new CustomEvent('toggle-terminal'));
+      }
+    } else {
+      // Web fallback: copy cd command
+      navigator.clipboard.writeText(`cd "${dir}"`);
+      showToast(t(locale, 'fileBrowser.copyAsCd'));
     }
-    // Web fallback: copy cd command
-    await copyToClipboard(`cd "${dir}"`);
-    showToast(t(locale, 'fileBrowser.copyAsCd'));
   }, [showToast]);
 
   const handlePreview = useCallback((entry: FileEntry) => {
