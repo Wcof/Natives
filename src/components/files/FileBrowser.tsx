@@ -174,6 +174,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       const detail = (e as CustomEvent).detail;
       if (!detail) return;
       if (detail.type === 'viewMode') setViewMode(detail.value);
+      if (detail.type === 'sortBy') setSortBy(detail.value);
       if (detail.type === 'sortDir') setSortDir((prev) => prev === 'asc' ? 'desc' : 'asc');
       if (detail.type === 'showHidden') setShowHidden((prev) => !prev);
     };
@@ -448,6 +449,18 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             {dirs > 0 && <span>{dirs} 个文件夹</span>}
             {files > 0 && <span>{files} 个文件</span>}
             {totalSize > 0 && <span>{fmtSize(totalSize)}</span>}
+            <div style={{ flex: 1 }} />
+            <span
+              onClick={() => setDiskUsageTarget(currentPath)}
+              style={{
+                cursor: 'pointer', color: 'var(--accent,#FFF5E6)',
+                textDecoration: 'none', fontSize: 11,
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.textDecoration = 'underline'; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.textDecoration = 'none'; }}
+            >
+              {t(locale, 'fileBrowser.diskUsage')} →
+            </span>
           </div>
         );
       })()}

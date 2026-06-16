@@ -580,14 +580,15 @@ function BudgetBar({ used, limit, locale }: { used: number; limit: number; local
 
 function ProgressBar({ label, used, limit, color }: { label: string; used: number; limit: number; color: string }) {
   const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0;
+  const isDanger = pct >= 85;
   return (
     <div style={{ marginBottom: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
         <span style={{ color: 'var(--text-dim)' }}>{label}</span>
-        <span style={{ color: 'var(--text)' }}>{Math.round(pct)}% ({used}/{limit})</span>
+        <span style={{ color: isDanger ? '#d4453a' : 'var(--text)', fontWeight: isDanger ? 700 : undefined }}>{Math.round(pct)}% ({used}/{limit})</span>
       </div>
-      <div style={{ height: 6, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden' }}>
-        <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 3, transition: 'width 0.3s ease' }} />
+      <div style={{ height: 4, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden' }}>
+        <div style={{ width: `${pct}%`, height: '100%', background: isDanger ? '#d4453a' : color, borderRadius: 3, transition: 'width 0.3s ease' }} />
       </div>
     </div>
   );

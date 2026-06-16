@@ -48,7 +48,7 @@ export default function FileContextMenu({
     window.nativesAPI?.getLocale?.().then((l) => { if (l === 'en') setLocale('en'); }).catch(() => {});
   }, []);
 
-  // Click outside → close
+  // Click outside + Escape → close
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) {
@@ -65,6 +65,18 @@ export default function FileContextMenu({
       document.removeEventListener('keydown', handleEsc);
     };
   }, [onClose]);
+
+  // Viewport clamping
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const clamped: { top?: number; left?: number } = {};
+    if (rect.right > window.innerWidth) clamped.left = Math.max(0, window.innerWidth - rect.width - 8);
+    if (rect.bottom > window.innerHeight) clamped.top = Math.max(0, window.innerHeight - rect.height - 8);
+    if (clamped.top !== undefined) el.style.top = `${clamped.top}px`;
+    if (clamped.left !== undefined) el.style.left = `${clamped.left}px`;
+  }, []);
 
   // Wrap each action to also close the menu
   const mkItem = useCallback((item: ContextMenuItemBase): ContextMenuItemBase => ({

@@ -151,6 +151,20 @@ export default function Header({
             </span>
           </label>
 
+          {/* Sort-by segmented control (name / time / size) */}
+          <div className={`segmented-control ${tbClass.includes('tb-xxs') ? 'tb-hide' : ''}`} style={{ display: 'flex' }}>
+            {(['name', 'mtime', 'size'] as const).map((key) => (
+              <button
+                key={key}
+                className={`seg-item ${(fs?.sortBy ?? 'name') === key ? 'active' : ''}`}
+                onClick={() => dispatchAction('sortBy', key)}
+                style={{ fontSize: 10, padding: '2px 6px', lineHeight: '16px' }}
+              >
+                {key === 'name' ? 'A-Z' : key === 'mtime' ? t(locale, 'fileBrowser.modified') : t(locale, 'fileBrowser.size')}
+              </button>
+            ))}
+          </div>
+
           {/* Sort direction */}
           <button
             className={`btn btn-ghost ${tbClass.includes('tb-min') ? 'tb-hide' : ''}`}
