@@ -29,7 +29,7 @@ export default function RtkPanel() {
   const topCommands: RtkCommandStat[] = usage?.topCommands ?? [];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 'var(--space-sm)' }}>
       {/* Header */}
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -62,7 +62,7 @@ export default function RtkPanel() {
       </div>
 
       {/* Stats cards */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+      <div style={{ display: 'flex', gap: 'var(--space-sm)', marginBottom: 12 }}>
         <div style={{
           flex: 1, padding: 10, borderRadius: 6,
           background: 'var(--bg-2)', border: '1px solid var(--border)',

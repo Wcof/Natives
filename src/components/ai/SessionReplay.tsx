@@ -101,11 +101,11 @@ export default function SessionReplay() {
       {!selectedSession && (
         <div style={{ flex: 1, overflow: 'auto', padding: 6 }}>
           {loading ? (
-            <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
+            <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
               {t(locale, 'common.loading')}
             </div>
           ) : (sessions ?? []).length === 0 ? (
-            <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
+            <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
               {t(locale, 'aiWorkbench.selectSession')}
             </div>
           ) : (
@@ -119,7 +119,7 @@ export default function SessionReplay() {
                   transition: 'border-color 0.12s',
                 }}
               >
-                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{s.title}</div>
+                <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 600, color: 'var(--text)' }}>{s.title}</div>
                 <div style={{ fontSize: 10, color: 'var(--text-faint)' }}>
                   {s.engine} · {s.filesModified.length} {t(locale, 'aiWorkbench.files')} · {new Date(s.startTime).toLocaleDateString()}
                 </div>
@@ -131,7 +131,7 @@ export default function SessionReplay() {
 
       {/* Replay view */}
       {selectedSession && steps.length > 0 && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 8 }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 'var(--space-sm)' }}>
           {/* Back button */}
           <button
             className="btn-ghost"
@@ -154,7 +154,7 @@ export default function SessionReplay() {
           </div>
 
           {/* Controls */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)', marginBottom: 8 }}>
             <button
               className="btn-ghost"
               onClick={() => setCurrentStep(0)}
@@ -204,7 +204,7 @@ export default function SessionReplay() {
                 background: 'var(--bg-2,#131410)', border: '1px solid var(--border,#262920)',
               }}
             >
-              <div style={{ fontSize: 12, color: 'var(--accent,#cdf24b)', fontFamily: 'var(--font-mono)', marginBottom: 4 }}>
+              <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--accent,#cdf24b)', fontFamily: 'var(--font-mono)', marginBottom: 4 }}>
                 {steps[currentStep]!.path.split('/').pop()}
               </div>
               <div style={{ fontSize: 10, color: 'var(--text-faint)' }}>
@@ -236,7 +236,7 @@ export default function SessionReplay() {
       )}
 
       {selectedSession && steps.length === 0 && (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
           {t(locale, 'aiWorkbench.replay.noFiles')}
         </div>
       )}

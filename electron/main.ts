@@ -19,21 +19,38 @@ function createWindow(): void {
     },
   });
 
+  // FOUC: show window fallback — prevent permanent black screen
+  const showTimeout = setTimeout(() => {
+    if (mainWindow && !mainWindow.isVisible()) {
+      console.warn('[Main] FOUC timeout — forcing window show');
+      mainWindow.show();
+    }
+  }, 10_000);
+
   if (isDev) {
-    mainWindow.loadURL('http://localhost:3000');
+    mainWindow.loadURL('http://localhost:3000').catch((err) => {
+      console.error('[Main] Failed to load dev URL:', err);
+      // Show window anyway so user can see the error
+      if (mainWindow) mainWindow.show();
+    });
     mainWindow.webContents.openDevTools();
   } else {
-    mainWindow.loadFile(path.join(__dirname, '..', '.next', 'standalone', 'index.html'));
+    mainWindow.loadFile(path.join(__dirname, '..', '.next', 'standalone', 'index.html')).catch((err) => {
+      console.error('[Main] Failed to load production build:', err);
+      if (mainWindow) mainWindow.show();
+    });
   }
 
   // FOUC: wait for renderer to apply theme before showing
   ipcMain.on('theme-applied-ready', () => {
+    clearTimeout(showTimeout);
     if (mainWindow && !mainWindow.isVisible()) {
       mainWindow.show();
     }
   });
 
   mainWindow.on('closed', () => {
+    clearTimeout(showTimeout);
     mainWindow = null;
   });
 }

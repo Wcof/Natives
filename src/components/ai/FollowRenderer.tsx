@@ -69,7 +69,7 @@ export default function FollowRenderer({ filePath, httpPort }: FollowRendererPro
     return (
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        height: '100%', color: 'var(--text-faint)', fontSize: 12,
+        height: '100%', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)',
       }}>
         Follow mode active — waiting for agent edits...
       </div>
@@ -86,7 +86,7 @@ export default function FollowRenderer({ filePath, httpPort }: FollowRendererPro
     return (
       <div style={{ padding: 20, textAlign: 'center' }}>
         <div style={{ fontSize: 32, marginBottom: 8 }}>📦</div>
-        <div style={{ color: 'var(--text)', fontSize: 13, fontWeight: 600 }}>
+        <div style={{ color: 'var(--text)', fontSize: 'var(--fs-md)', fontWeight: 600 }}>
           {filePath.split('/').pop()}
         </div>
         <div style={{ color: 'var(--text-faint)', fontSize: 11, marginTop: 4 }}>
@@ -111,7 +111,7 @@ export default function FollowRenderer({ filePath, httpPort }: FollowRendererPro
   if (isMd && content) {
     return (
       <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
+        <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-md)' }}>
           <LiveMarkdownPreview content={content} />
         </div>
         {narration && <NarrationBar text={narration} />}
@@ -238,7 +238,7 @@ function LiveMarkdownPreview({ content }: { content: string }) {
       className="markdown-body"
       dangerouslySetInnerHTML={{ __html: renderedHtml }}
       style={{
-        fontSize: 13, lineHeight: 1.7, color: 'var(--text)',
+        fontSize: 'var(--fs-md)', lineHeight: 1.7, color: 'var(--text)',
         fontFamily: 'var(--font-sans, system-ui)',
       }}
     />
@@ -278,7 +278,7 @@ function LiveCodePreview({ content, highlightedLines, ext }: {
         dangerouslySetInnerHTML={{ __html: highlightedHtml }}
         style={{
           flex: 1, overflow: 'auto', padding: 12,
-          fontSize: 12, lineHeight: 1.6,
+          fontSize: 'var(--fs-sm)', lineHeight: 1.6,
           fontFamily: 'var(--font-mono, monospace)',
           background: 'var(--bg-2, #131410)',
         }}
@@ -289,7 +289,7 @@ function LiveCodePreview({ content, highlightedLines, ext }: {
   return (
     <pre ref={containerRef as any} style={{
       flex: 1, overflow: 'auto', margin: 0, padding: 12,
-      fontSize: 12, lineHeight: 1.6,
+      fontSize: 'var(--fs-sm)', lineHeight: 1.6,
       fontFamily: 'var(--font-mono, monospace)',
       color: 'var(--text)', whiteSpace: 'pre-wrap',
       background: 'var(--bg-2, #131410)',

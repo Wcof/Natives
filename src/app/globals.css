@@ -26,6 +26,12 @@
   /* ── Typography ── */
   --font-ui: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", "Inter", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Menlo", "JetBrains Mono", monospace;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+
+  /* ── Spacing ── */
+  --space-sm: 8px;
+  --space-md: 16px;
 
   /* ── Layout ── */
   --sidebar-width: 248px;

@@ -47,7 +47,7 @@ export default function AiWorkbench() {
             onClick={() => setTab(t.id)}
             style={{
               padding: '10px 14px',
-              fontSize: 12,
+              fontSize: 'var(--fs-sm)',
               fontWeight: 500,
               background: 'none',
               border: 'none',
@@ -60,7 +60,7 @@ export default function AiWorkbench() {
           </button>
         ))}
       </div>
-      <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
+      <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-md)' }}>
         {tab === 'agents' && <AgentDashboard />}
         {tab === 'sessions' && <SessionReplay />}
         {tab === 'skills' && <SkillsPanel />}

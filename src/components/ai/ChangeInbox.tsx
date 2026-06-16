@@ -110,7 +110,7 @@ export default function ChangeInbox() {
       {/* Changes list */}
       <div style={{ flex: 1, overflow: 'auto', padding: 6 }}>
         {items.length === 0 ? (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
+          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
             {t(locale, 'aiWorkbench.noChanges')}
           </div>
         ) : (

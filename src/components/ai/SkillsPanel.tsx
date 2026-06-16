@@ -111,7 +111,7 @@ export default function SkillsPanel() {
       {/* Skills list */}
       <div style={{ flex: 1, overflow: 'auto', padding: 6 }}>
         {loading ? (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
+          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
             {t(locale, 'common.loading')}
           </div>
         ) : filtered.length === 0 ? (
@@ -125,7 +125,7 @@ export default function SkillsPanel() {
               background: 'var(--bg-2,#131410)',
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{skill.name}</span>
+                <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 600, color: 'var(--text)' }}>{skill.name}</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <button onClick={() => handleToggle(skill)} style={{
                     fontSize: 10, padding: '2px 6px', borderRadius: 4,
@@ -169,10 +169,10 @@ export default function SkillsPanel() {
         }} onClick={() => setShowLogs(false)}>
           <div style={{
             background: 'var(--bg-2,#131410)', border: '1px solid var(--border,#262920)',
-            borderRadius: 10, padding: 16, width: 480, maxWidth: '90vw', maxHeight: '60vh',
+            borderRadius: 10, padding: 'var(--space-md)', width: 480, maxWidth: '90vw', maxHeight: '60vh',
             overflow: 'auto',
           }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 12 }}>
+            <div style={{ fontSize: 'var(--fs-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 12 }}>
               📋 {selectedSkill.name} — Skill Logs
             </div>
             <div style={{ fontSize: 11, lineHeight: 1.6, fontFamily: 'var(--font-mono)' }}>

@@ -221,15 +221,15 @@ export default function AIFileOrganizer() {
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, overflow: 'auto', padding: 8 }}>
+      <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-sm)' }}>
         {proposals.length === 0 ? (
           <div style={{ textAlign: 'center', padding: 20 }}>
-            <div style={{ fontSize: 12, color: 'var(--text-faint)', marginBottom: 12 }}>
+            <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-faint)', marginBottom: 12 }}>
               {analyzing ? t(locale, 'aiWorkbench.organizer.analyzing') : t(locale, 'aiWorkbench.noSuggestions')}
             </div>
             <button
               className="btn btn-primary"
-              style={{ width: '100%', fontSize: 12 }}
+              style={{ width: '100%', fontSize: 'var(--fs-sm)' }}
               onClick={handleAnalyze}
               disabled={analyzing}
             >
@@ -240,11 +240,11 @@ export default function AIFileOrganizer() {
           <>
             {proposals.map((p) => (
               <div key={p.id} style={{
-                padding: 8, marginBottom: 6, borderRadius: 6,
+                padding: 'var(--space-sm)', marginBottom: 6, borderRadius: 6,
                 border: `1px solid ${approved.has(p.id) ? 'var(--accent,#cdf24b)' : 'var(--border,#262920)'}`,
                 background: approved.has(p.id) ? 'rgba(205,242,75,0.08)' : 'var(--bg-2,#131410)',
               }}>
-                <label style={{ display: 'flex', gap: 8, cursor: 'pointer', fontSize: 12 }}>
+                <label style={{ display: 'flex', gap: 'var(--space-sm)', cursor: 'pointer', fontSize: 'var(--fs-sm)' }}>
                   <input
                     type="checkbox"
                     checked={approved.has(p.id)}

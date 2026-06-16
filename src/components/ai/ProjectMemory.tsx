@@ -71,7 +71,7 @@ export default function ProjectMemory() {
       {/* Sessions list */}
       <div style={{ flex: 1, overflow: 'auto', padding: 6 }}>
         {loading ? (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
+          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
             {t(locale, 'common.loading')}
           </div>
         ) : (sessions ?? []).length === 0 ? (
@@ -89,7 +89,7 @@ export default function ProjectMemory() {
                 transition: 'all 0.12s',
               }}
             >
-              <div style={{ fontSize: 12, color: 'var(--text)', fontWeight: 600, marginBottom: 2 }}>
+              <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text)', fontWeight: 600, marginBottom: 2 }}>
                 {s.title}
               </div>
               <div style={{ fontSize: 10, color: 'var(--text-faint)' }}>

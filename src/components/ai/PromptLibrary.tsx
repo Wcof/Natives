@@ -127,7 +127,7 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
       {/* Prompt list */}
       <div style={{ flex: 1, overflow: 'auto', padding: 6 }}>
         {filtered.length === 0 ? (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
+          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
             {search ? t(locale,'aiWorkbench.promptLibrary.noMatching') : t(locale,'aiWorkbench.promptLibrary.empty')}
           </div>
         ) : (
@@ -137,7 +137,7 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
               border: '1px solid var(--border,#262920)', background: 'var(--bg-2,#131410)',
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>{prompt.title}</div>
+                <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 600, color: 'var(--text)' }}>{prompt.title}</div>
                 <div style={{ display: 'flex', gap: 4 }}>
                   <button className="btn-ghost" onClick={() => handleEdit(prompt)} style={{ fontSize: 9, padding: '1px 4px' }}>✏️</button>
                   <button className="btn-ghost" onClick={() => handleDelete(prompt.id)} style={{ fontSize: 9, padding: '1px 4px', color: 'var(--danger)' }}>🗑</button>
@@ -169,19 +169,19 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
         }} onClick={() => setShowEditor(false)}>
           <div style={{
             background: 'var(--bg-2,#131410)', border: '1px solid var(--border,#262920)',
-            borderRadius: 10, padding: 16, width: 440, maxWidth: '90vw',
+            borderRadius: 10, padding: 'var(--space-md)', width: 440, maxWidth: '90vw',
           }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 12 }}>
+            <div style={{ fontSize: 'var(--fs-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 12 }}>
               {editId ? 'Edit Prompt' : 'New Prompt'}
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)' }}>
               <input
                 type="text"
                 value={editTitle}
                 onChange={(e) => setEditTitle(e.target.value)}
                 placeholder="Prompt title"
                 style={{
-                  width: '100%', padding: '6px 8px', fontSize: 12,
+                  width: '100%', padding: '6px 8px', fontSize: 'var(--fs-sm)',
                   background: 'var(--bg,#0b0c0a)', border: '1px solid var(--border,#262920)',
                   borderRadius: 4, color: 'var(--text)', outline: 'none',
                 }}
@@ -210,7 +210,7 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
                 }}
               />
             </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: 'var(--space-sm)', marginTop: 12, justifyContent: 'flex-end' }}>
               <button className="btn" onClick={() => setShowEditor(false)} style={{ fontSize: 11 }}>Cancel</button>
               <button className="btn btn-primary" onClick={handleSave} style={{ fontSize: 11 }} disabled={!editTitle.trim() || !editContent.trim()}>
                 Save

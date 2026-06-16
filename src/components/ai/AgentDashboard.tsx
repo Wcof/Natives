@@ -107,7 +107,7 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
       {/* Changes list */}
       <div style={{ flex: 1, overflow: 'auto', padding: 6 }}>
         {filtered.length === 0 ? (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
+          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
             {paused ? t(locale, 'aiWorkbench.dashboard.paused') : t(locale, 'aiWorkbench.waitingForChanges')}
           </div>
         ) : (

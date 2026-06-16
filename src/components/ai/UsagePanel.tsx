@@ -31,7 +31,7 @@ export default function UsagePanel() {
   ];
 
   return (
-    <div style={{ padding: 8 }}>
+    <div style={{ padding: 'var(--space-sm)' }}>
       <div style={{ display: 'flex', gap: 4, marginBottom: 8, borderBottom: '1px solid var(--border)' }}>
         {tabs.map((t) => (
           <button
@@ -94,7 +94,7 @@ export default function UsagePanel() {
       )}
 
       {activeTab === 'rtk' && (
-        <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+        <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-dim)' }}>
           <div style={{ marginBottom: 8 }}>
             <span style={{ color: 'var(--text)', fontWeight: 600 }}>{usageData?.rtk?.totalSaved ?? 0}</span>{' '}
             {t(locale, 'aiWorkbench.tokensSaved')}
