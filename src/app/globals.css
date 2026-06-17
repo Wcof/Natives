@@ -12,18 +12,18 @@
    ═══════════════════════════════════════════ */
 
 :root {
-  /* ── Base palette (Terminal Volt dark) ── */
-  --bg: #0b0c0a;
-  --bg-2: #131410;
-  --bg-3: #1c1e17;
-  --panel: #0e0f0c;
-  --border: #262920;
-  --text: #f2f2ea;
-  --text-dim: #9b9d8c;
-  --text-faint: #62655a;
-  --accent: #cdf24b;
-  --accent-soft: #cdf24b1f;
-  --accent-ink: #0b0c0a;
+  /* ── Base palette (Liquid Glass olive) ── */
+  --bg: rgba(38, 41, 32, 0.45);
+  --bg-2: rgba(30, 33, 26, 0.4);
+  --bg-3: rgba(22, 24, 19, 0.35);
+  --panel: rgba(30, 33, 26, 0.45);
+  --border: rgba(255, 255, 255, 0.08);
+  --text: #F2FFD2;
+  --text-dim: rgba(242, 255, 210, 0.68);
+  --text-faint: rgba(242, 255, 210, 0.38);
+  --accent: #F2FFD2;
+  --accent-soft: rgba(242, 255, 210, 0.12);
+  --accent-ink: #161813;
   --radius: 4px;
   --shadow: 0 10px 40px rgba(0,0,0,0.6);
 
@@ -76,14 +76,22 @@
   box-sizing: border-box;
 }
 
-html, body {
+html, body, #root, #app {
+  background: transparent !important;
+  background-color: transparent !important;
+  margin: 0;
+  padding: 0;
+  width: 100%;
   height: 100%;
-  overflow: hidden;
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--font-ui);
-  font-size: 14px;
-  -webkit-font-smoothing: antialiased;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+main {
+  background: transparent !important;
+  background-color: transparent !important;
 }
 
 /* ═══════════════════════════════════════════
@@ -91,17 +99,17 @@ html, body {
    ═══════════════════════════════════════════ */
 
 [data-theme="liquid-glass"] {
-  --bg: #0b0c0a;
-  --bg-2: #131410;
-  --bg-3: #1c1e17;
-  --panel: #1E211A;
-  --border: #262920;
-  --text: #f2f2ea;
-  --text-dim: #9b9d8c;
-  --text-faint: #62655a;
-  --accent: #cdf24b;
-  --accent-soft: #cdf24b1f;
-  --accent-ink: #0b0c0a;
+  --bg: rgba(28, 28, 30, 0.35);
+  --bg-2: rgba(44, 44, 46, 0.4);
+  --bg-3: rgba(58, 58, 60, 0.45);
+  --panel: rgba(28, 28, 30, 0.45);
+  --border: rgba(255, 255, 255, 0.08);
+  --text: #ffffff;
+  --text-dim: rgba(255, 255, 255, 0.7);
+  --text-faint: rgba(255, 255, 255, 0.4);
+  --accent: #007aff;
+  --accent-soft: rgba(0, 122, 255, 0.15);
+  --accent-ink: #ffffff;
   --radius: 4px;
   --danger: #ef4444;
   --warning: #eab308;
@@ -114,11 +122,11 @@ html, body {
    ═══════════════════════════════════════════ */
 
 [data-theme="liquid-glass-light"] {
-  --bg: #f4f1ea;
-  --bg-2: #ece8dd;
-  --bg-3: #e4dfd2;
-  --panel: #f4f1ea;
-  --border: #d6d1c3;
+  --bg: rgba(244, 241, 234, 0.5);
+  --bg-2: rgba(236, 232, 221, 0.55);
+  --bg-3: rgba(228, 223, 210, 0.6);
+  --panel: rgba(244, 241, 234, 0.5);
+  --border: rgba(38, 41, 32, 0.12);
   --text: #0a0a0a;
   --text-dim: #57534a;
   --text-faint: #8a857a;
@@ -149,6 +157,9 @@ html, body {
     grid-template-rows: 1fr var(--terminal-height);
     transition: grid-template-columns 0.28s cubic-bezier(0.16, 1, 0.3, 1),
                 grid-template-rows 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+    background: rgba(255, 255, 255, 0.18) !important;
+    backdrop-filter: blur(40px) saturate(210%) contrast(110%);
+    -webkit-backdrop-filter: blur(40px) saturate(210%) contrast(110%);
   }
 
   .shell.sidebar-collapsed {
@@ -952,3 +963,301 @@ html, body {
 .tb-xxs .btn-ghost { display: none !important; }
 .tb-min .btn-ghost { display: none !important; }
 .tb-min #btn-terminal { display: inline-flex !important; }
+
+/* ==========================================================================
+   Liquid Glass Theme Enhancements
+   ========================================================================== */
+
+:root {
+  --blob-mix-blend: screen;
+  --blob-opacity: 0.45;
+  --glass-bg: rgba(30, 33, 26, 0.45);
+  --glass-border: rgba(255, 255, 255, 0.07);
+  --glass-border-hover: rgba(242, 255, 210, 0.22);
+  --glass-glow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  --glass-glow-hover: 0 12px 40px 0 rgba(205, 242, 75, 0.12), 0 8px 32px 0 rgba(0, 0, 0, 0.45);
+}
+
+[data-theme="liquid-glass-light"] {
+  --blob-mix-blend: multiply;
+  --blob-opacity: 0.22;
+  --glass-bg: rgba(244, 241, 234, 0.55);
+  --glass-border: rgba(38, 41, 32, 0.09);
+  --glass-border-hover: rgba(38, 41, 32, 0.25);
+  --glass-glow: 0 8px 32px 0 rgba(38, 41, 32, 0.08);
+  --glass-glow-hover: 0 12px 40px 0 rgba(38, 41, 32, 0.15);
+}
+
+/* Container defining the context for liquid layout and hidden overflow */
+.liquid-glass-container {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--bg);
+  min-height: 100%;
+  width: 100%;
+}
+
+/* Background Animated Blobs */
+.liquid-blob-wrapper {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.liquid-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(200px);
+  mix-blend-mode: var(--blob-mix-blend);
+  opacity: var(--blob-opacity);
+  will-change: transform;
+}
+
+.liquid-blob-1 {
+  background: radial-gradient(circle, #ff2d55 0%, rgba(255,45,85,0) 70%);
+  width: 380px;
+  height: 380px;
+  top: -80px;
+  left: -50px;
+  animation: float-blob-1 25s infinite alternate ease-in-out;
+}
+
+.liquid-blob-2 {
+  background: radial-gradient(circle, #007aff 0%, rgba(0,122,255,0) 70%);
+  width: 420px;
+  height: 420px;
+  bottom: -100px;
+  right: -50px;
+  animation: float-blob-2 30s infinite alternate ease-in-out;
+}
+
+.liquid-blob-3 {
+  background: radial-gradient(circle, #5856d6 0%, rgba(88,86,214,0) 70%);
+  width: 320px;
+  height: 320px;
+  top: 45%;
+  left: 40%;
+  animation: float-blob-3 22s infinite alternate ease-in-out;
+}
+
+@keyframes float-blob-1 {
+  0% {
+    transform: translate(0px, 0px) scale(1);
+  }
+  50% {
+    transform: translate(80px, 60px) scale(1.15);
+  }
+  100% {
+    transform: translate(-40px, 120px) scale(0.9);
+  }
+}
+
+@keyframes float-blob-2 {
+  0% {
+    transform: translate(0px, 0px) scale(1);
+  }
+  50% {
+    transform: translate(-100px, -80px) scale(0.85);
+  }
+  100% {
+    transform: translate(60px, 40px) scale(1.1);
+  }
+}
+
+@keyframes float-blob-3 {
+  0% {
+    transform: translate(0px, 0px) scale(1);
+  }
+  33% {
+    transform: translate(70px, -110px) scale(1.2);
+  }
+  66% {
+    transform: translate(-120px, 50px) scale(0.8);
+  }
+  100% {
+    transform: translate(0px, 0px) scale(1);
+  }
+}
+
+/* Premium Frosted Glass Cards */
+.glass-card-premium {
+  position: relative;
+  background: var(--glass-bg);
+  backdrop-filter: blur(28px) saturate(170%);
+  -webkit-backdrop-filter: blur(28px) saturate(170%);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-glow);
+  border-radius: 16px;
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 1;
+}
+
+.glass-card-premium:hover {
+  border-color: var(--glass-border-hover);
+  box-shadow: var(--glass-glow-hover);
+  transform: translateY(-2px);
+}
+
+/* Light reflection shimmer overlay effect */
+.glass-card-premium::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 16px;
+  background: linear-gradient(
+    125deg,
+    rgba(255, 255, 255, 0.08) 0%,
+    rgba(255, 255, 255, 0.03) 40%,
+    rgba(255, 255, 255, 0) 70%
+  );
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* Glass Buttons and Interactive Elements */
+.glass-btn-premium {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-radius: 10px;
+  color: var(--text);
+  font-weight: 500;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.glass-btn-premium:hover {
+  background: var(--accent-soft);
+  border-color: var(--glass-border-hover);
+  color: var(--accent);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
+  transform: scale(1.02);
+}
+
+.glass-btn-premium:active {
+  transform: scale(0.98);
+}
+
+/* ==========================================================================
+   Frameless Window Dragging and Glassmorphic Homepage Card
+   ========================================================================== */
+
+.main-card {
+  position: relative;
+  overflow: hidden;
+  
+  /* 1. iOS Curvature: Slightly increased to 28px to better mimic the native Squircle continuous curvature */
+  border-radius: 28px; 
+  padding: 32px;
+  width: 380px;
+  color: #ffffff; /* Pure white text */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.15); /* Subpixel text shadow for white text readability on light glass */
+  
+  /* 2. Base Matrix: Light-colored translucent crystalline gradient */
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.24) 0%, rgba(255, 255, 255, 0.06) 100%);
+  
+  /* 3. Color Distillation: Heavy blur coupled with extreme saturation to capture wallpaper colors */
+  backdrop-filter: blur(200px) saturate(280%) contrast(110%);
+  -webkit-backdrop-filter: blur(200px) saturate(280%) contrast(110%);
+  
+  /* 4. iOS Soft Anti-Aliased Border: Softened stroke opacity to prevent hard, artificial vector borders */
+  border: 0.5px solid rgba(255, 255, 255, 0.22);
+  
+  /* 5. iOS Multi-Tiered Shadow Cascades: 
+     Optimized soft shadows to smoothly blend the container boundary on top of dynamic desktop backgrounds. */
+  box-shadow: 
+    inset 0 1.5px 0 0 rgba(255, 255, 255, 0.75),   /* Perfected razor-sharp top specular sheen */
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.12),   /* CRITICAL: Microscopic subpixel ring to smooth out sharp edge aliasing */
+    inset 0 -1.5px 2px 0 rgba(0, 0, 0, 0.02),       /* Soft bottom dark occlusion */
+    0 1px 2px rgba(0, 0, 0, 0.015),                /* Micro fringe shadow to blend the edge vector pixels */
+    0 8px 22px rgba(0, 0, 0, 0.035),               /* Smooth intermediate wrap shadow */
+    0 24px 60px rgba(0, 0, 0, 0.06);               /* Deep Apple HIG ambient layout drop shadow */
+  
+  text-align: center;
+  -webkit-app-region: drag; 
+}
+
+
+
+/* 7. Micro-Grain Texture (晶粒纹理) */
+.main-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  pointer-events: none;
+  mix-blend-mode: overlay;
+}
+
+/* Typography and button positioning setup */
+.main-card h1,
+.main-card p,
+.main-card button, 
+.main-card input, 
+.main-card a {
+  position: relative;
+  z-index: 1;
+}
+
+/* Minimalist styled Light-mode Action Buttons to test the transition */
+.main-card button {
+  -webkit-app-region: no-drag; 
+  background: rgba(255, 255, 255, 0.12);
+  border: 0.5px solid rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+  padding: 10px 20px;
+  border-radius: 12px;
+  font-weight: 500;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+}
+.main-card button:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+.main-card button:active {
+  transform: scale(0.97);
+}
+
+/* ==========================================================================
+   Popup/Widget Mode: Hide all app chrome & make backgrounds transparent
+   ========================================================================== */
+html, body, #__next, [data-theme], .shell, .content-area, .liquid-glass-container {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+.shell {
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
+  height: 100vh !important;
+  width: 100vw !important;
+  overflow: hidden !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.sidebar, .header, .right-panel, .terminal-panel, .skip-to-content {
+  display: none !important;
+}
+
+.content-area {
+  width: 100% !important;
+  height: 100% !important;
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
+}
+
+/* Override titlebar safe area padding for liquid-glass themes to prevent content clipping */
+[data-theme="liquid-glass"] body > div,
+[data-theme="liquid-glass-light"] body > div {
+  padding-top: 0 !important;
+}
+

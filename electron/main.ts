@@ -1,5 +1,7 @@
 import { app, BrowserWindow, ipcMain, safeStorage, shell as electronShell } from 'electron';
 import * as path from 'path';
+import * as fs from 'fs';
+import * as os from 'os';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -7,11 +9,16 @@ const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    minWidth: 900,
-    minHeight: 600,
+    width: 500,
+    height: 620,
     show: false, // FOUC guard
+    transparent: true,
+    frame: false,
+    hasShadow: true,
+    resizable: true,
+    minWidth: 420,
+    minHeight: 450,
+    backgroundColor: '#00000000',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -33,7 +40,7 @@ function createWindow(): void {
       // Show window anyway so user can see the error
       if (mainWindow) mainWindow.show();
     });
-    mainWindow.webContents.openDevTools();
+    // mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', '.next', 'standalone', 'index.html')).catch((err) => {
       console.error('[Main] Failed to load production build:', err);
@@ -618,9 +625,21 @@ ipcMain.handle('state:clear', async (_event, moduleId: string) => {
 // Usage Tracking IPC (US72-74)
 // ════════════════════════════════════════
 
+// 结果缓存（对标 fanbox 的 30s 缓存，避免频繁磁盘 I/O）
+let usageCache: { at: number; data: unknown } | null = null;
+const USAGE_CACHE_TTL = 30_000; // 30 秒
+
+// stats-cache.json 文件元数据缓存（跳过未变更文件的重解析）
+let statsCacheMeta: { size: number; mtimeMs: number; data: unknown } | null = null;
+
 ipcMain.handle('usage:refresh', async () => {
   const mod = lazyLoad('usageTracker');
   if (!mod) return { claude: null, rtk: null, error: 'Usage tracker not available' };
+
+  // 检查结果缓存
+  if (usageCache && Date.now() - usageCache.at < USAGE_CACHE_TTL) {
+    return usageCache.data;
+  }
 
   const result: { claude: unknown; rtk: unknown; codex: string; error?: string } = {
     claude: null,
@@ -628,15 +647,22 @@ ipcMain.handle('usage:refresh', async () => {
     codex: 'Not available',
   };
 
-  // Claude Usage — parse from ~/.claude/usage.json
+  // Claude Usage — parse from ~/.claude/stats-cache.json（真实数据源）
+  // 使用 mtime+size 检查，文件未变更时跳过重解析
   try {
     const os = require('os');
     const path = require('path');
     const fs = require('fs');
-    const usagePath = path.join(os.homedir(), '.claude', 'usage.json');
-    if (fs.existsSync(usagePath)) {
-      const raw = JSON.parse(fs.readFileSync(usagePath, 'utf-8'));
-      result.claude = mod.parseClaudeUsage(raw);
+    const statsPath = path.join(os.homedir(), '.claude', 'stats-cache.json');
+    if (fs.existsSync(statsPath)) {
+      const st = fs.statSync(statsPath);
+      if (statsCacheMeta && statsCacheMeta.size === st.size && statsCacheMeta.mtimeMs === st.mtimeMs) {
+        result.claude = statsCacheMeta.data;
+      } else {
+        const raw = JSON.parse(fs.readFileSync(statsPath, 'utf-8'));
+        result.claude = mod.parseClaudeStatsCache(raw);
+        statsCacheMeta = { size: st.size, mtimeMs: st.mtimeMs, data: result.claude };
+      }
       const dbMod = lazyLoad('db');
       if (dbMod) {
         dbMod.dbSet('__system__', 'usage:claude', JSON.stringify(result.claude));
@@ -646,10 +672,15 @@ ipcMain.handle('usage:refresh', async () => {
     console.warn('[Main] usage:refresh claude error:', err);
   }
 
-  // RTK Usage — execute `rtk gain --history`
+  // RTK Usage — execute `rtk gain --history`（异步，不阻塞主进程）
   try {
-    const { execSync } = require('child_process');
-    const output = execSync('rtk gain --history', { encoding: 'utf-8', timeout: 5000 });
+    const { exec } = require('child_process');
+    const output: string = await new Promise((resolve, reject) => {
+      exec('rtk gain --history', { encoding: 'utf-8', timeout: 5000 }, (err: Error | null, stdout: string) => {
+        if (err) reject(err);
+        else resolve(stdout);
+      });
+    });
     result.rtk = mod.parseRtkUsage(output);
     const dbMod = lazyLoad('db');
     if (dbMod) {
@@ -659,26 +690,17 @@ ipcMain.handle('usage:refresh', async () => {
     console.warn('[Main] usage:refresh rtk error:', err);
   }
 
+  // 更新结果缓存
+  usageCache = { at: Date.now(), data: result };
   return result;
 });
 
-// Skills management
+// Skills management — 使用 skills-manager 的 symlink-safe toggleSkill（对标 fanbox）
 ipcMain.handle('skills:enable', async (_event, skillPath: string) => {
   try {
     const skillsMod = lazyLoad('skillsManager');
     if (!skillsMod) return { success: false, error: 'Skills manager not available' };
-    // Move from _disabled/ back to original location
-    const deactivatedPath = skillsMod.getDeactivatedPath(skillPath);
-    const fs = require('fs');
-    // If the skill is currently in _disabled/, move it back
-    if (deactivatedPath && fs.existsSync(deactivatedPath)) {
-      const targetDir = deactivatedPath.replace('_disabled/skills/', 'skills/').replace(/\/SKILL\.md$/, '');
-      if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, { recursive: true });
-      }
-      fs.cpSync(deactivatedPath, skillPath, { recursive: true, force: true });
-      fs.rmSync(deactivatedPath.substring(0, deactivatedPath.lastIndexOf('SKILL.md')), { recursive: true, force: true });
-    }
+    await skillsMod.toggleSkill(skillPath, true);
     return { success: true };
   } catch (err) {
     return { success: false, error: (err as Error).message };
@@ -688,19 +710,7 @@ ipcMain.handle('skills:disable', async (_event, skillPath: string) => {
   try {
     const skillsMod = lazyLoad('skillsManager');
     if (!skillsMod) return { success: false, error: 'Skills manager not available' };
-    const deactivatedPath = skillsMod.getDeactivatedPath(skillPath);
-    const fs = require('fs');
-    const path = require('path');
-    if (deactivatedPath) {
-      const targetDir = path.dirname(deactivatedPath);
-      if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, { recursive: true });
-      }
-      // Move the entire skill directory to _disabled/
-      const srcDir = path.dirname(skillPath);
-      fs.cpSync(srcDir, targetDir, { recursive: true, force: true });
-      fs.rmSync(srcDir, { recursive: true, force: true });
-    }
+    await skillsMod.toggleSkill(skillPath, false);
     return { success: true };
   } catch (err) {
     return { success: false, error: (err as Error).message };
@@ -1048,38 +1058,63 @@ ipcMain.handle('agent:scanSkills', async () => {
     const { promises: fsp } = require('fs') as typeof import('fs');
     const path = require('path') as typeof import('path');
     const homedir = require('os').homedir();
-    const skillDirs = [
-      path.join(homedir, '.atomcode', 'skills'),
-      path.join(homedir, '.claude', 'skills'),
+
+    // 扫描所有 SKILL_SOURCES 声明的来源（对标 fanbox 的 5 源扫描）
+    const skillDirs: { dir: string; source: import('../src/types/agent').SkillSource }[] = [
+      { dir: path.join(homedir, '.claude', 'skills'), source: '~/.claude/skills' },
+      { dir: path.join(homedir, '.codex', 'skills'), source: '~/.codex/skills' },
+      { dir: path.join(homedir, '.agents', 'skills'), source: '~/.agents/skills' },
     ];
+
+    // project/.claude/skills — 扫描最近活跃的项目目录
+    try {
+      const projectsDir = path.join(homedir, '.claude', 'projects');
+      const projectEntries = await fsp.readdir(projectsDir, { withFileTypes: true });
+      for (const pe of projectEntries) {
+        if (!pe.isDirectory()) continue;
+        const projectSkillsDir = path.join(projectsDir, pe.name, '.claude', 'skills');
+        try {
+          await fsp.access(projectSkillsDir);
+          skillDirs.push({ dir: projectSkillsDir, source: 'project/.claude/skills' });
+        } catch { /* no skills dir in this project */ }
+      }
+    } catch { /* ~/.claude/projects may not exist */ }
+
     const skills: any[] = [];
-    for (const dir of skillDirs) {
+    const seenPaths = new Set<string>(); // 去重（跨源可能指向同一技能）
+
+    for (const { dir, source } of skillDirs) {
       try {
         const entries = await fsp.readdir(dir, { withFileTypes: true });
         for (const entry of entries) {
           if (!entry.isDirectory()) continue;
           const skillPath = path.join(dir, entry.name, 'SKILL.md');
           try {
+            // 去重：跳过已扫描过的路径
+            const realPath = await fsp.realpath(skillPath).catch(() => skillPath);
+            if (seenPaths.has(realPath)) continue;
+            seenPaths.add(realPath);
+
             const content = await fsp.readFile(skillPath, 'utf-8');
             const health = mod.checkSkillHealth(content);
-            // Extract description from frontmatter
+            // Extract description from frontmatter（支持 BOM 和 CRLF）
             let description = '';
-            const descMatch = content.match(/^---\n([\s\S]*?)\n---/);
+            const clean = content.replace(/^﻿/, '');
+            const descMatch = clean.match(/^---\r?\n([\s\S]*?)\r?\n---/);
             if (descMatch) {
               const descLine = descMatch[1]?.split('\n').find((l: string) => l.startsWith('description:'));
-              if (descLine) description = descLine.split(':').slice(1).join(':').trim();
+              if (descLine) description = descLine.split(':').slice(1).join(':').trim().replace(/^["']|["']$/g, '');
             }
-            const source = dir.includes('.atomcode')
-              ? '~/.atomcode/skills'
-              : dir.includes('.claude')
-                ? '~/.claude/skills'
-                : 'project/.claude/skills';
+            // 检查是否已禁用（_disabled/ 目录）
+            const deactivatedPath = mod.getDeactivatedPath(skillPath);
+            const enabled = !await fsp.access(deactivatedPath).then(() => true).catch(() => false);
+
             skills.push({
               name: mod.getSkillNameFromPath(skillPath),
               description,
               source,
               path: skillPath,
-              enabled: true,
+              enabled,
               health: { ok: health.ok, issues: health.issues },
               triggerCount: 0,
               lastTriggered: undefined,
@@ -1088,6 +1123,7 @@ ipcMain.handle('agent:scanSkills', async () => {
         }
       } catch { /* dir may not exist */ }
     }
+
     // 合并真实会话统计（不造假，缺数据为 0）
     try {
       const { getSkillStats } = require('../src/main/skill-stats');
@@ -1137,7 +1173,20 @@ ipcMain.handle('terminal:openInDir', async (_event, dirPath: string) => {
   }
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Version-based cache clearing（对标 CodePilot：升级后清除 Chromium 缓存）
+  try {
+    const versionFile = path.join(app.getPath('userData'), 'last-version.txt');
+    const currentVersion = app.getVersion();
+    const lastVersion = fs.existsSync(versionFile) ? fs.readFileSync(versionFile, 'utf-8').trim() : '';
+    if (lastVersion && lastVersion !== currentVersion) {
+      const { session } = require('electron');
+      await session.defaultSession.clearCache();
+      await session.defaultSession.clearStorageData({ storages: ['cachestorage', 'serviceworkers'] });
+    }
+    fs.writeFileSync(versionFile, currentVersion, 'utf-8');
+  } catch { /* non-fatal */ }
+
   createWindow();
   initializeServices();
 });
@@ -1162,6 +1211,18 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
+  // 1. Kill all terminal sessions（防止孤儿进程）
+  try {
+    const shellMod = lazyLoad('shell');
+    if (shellMod) {
+      const sessions = shellMod.getActiveSessions();
+      for (const sess of sessions) {
+        try { shellMod.killSession(sess.id); } catch { /* already dead */ }
+      }
+    }
+  } catch { /* shell module not loaded */ }
+
+  // 2. SQLite WAL checkpoint + close
   const dbMod = lazyLoad('db');
   if (dbMod) {
     try {
@@ -1169,4 +1230,47 @@ app.on('before-quit', () => {
     } catch { /* DB may not be initialized */ }
     dbMod.closeDb();
   }
+});
+
+// ── Crash Breadcrumbs（对标 CodePilot 的 uncaughtExceptionMonitor） ──
+// 使用 uncaughtExceptionMonitor 而非 uncaughtException —— 不抑制默认退出行为
+const CRASH_DIR = path.join(os.homedir(), '.natives');
+const CRASH_FILE = path.join(CRASH_DIR, 'crash-breadcrumbs.jsonl');
+
+function logCrashBreadcrumb(type: string, detail: Record<string, unknown>): void {
+  try {
+    if (!fs.existsSync(CRASH_DIR)) fs.mkdirSync(CRASH_DIR, { recursive: true });
+    const entry = JSON.stringify({
+      ts: new Date().toISOString(),
+      type,
+      pid: process.pid,
+      mem: process.memoryUsage(),
+      ...detail,
+    });
+    fs.appendFileSync(CRASH_FILE, entry + '\n');
+  } catch { /* best-effort, non-fatal */ }
+}
+
+process.on('uncaughtExceptionMonitor', (err) => {
+  logCrashBreadcrumb('uncaughtException', {
+    name: err?.name,
+    message: String(err?.message ?? '').slice(0, 200),
+    stack: String(err?.stack ?? '').slice(0, 500),
+  });
+});
+
+// Electron-specific crash events
+app.on('child-process-gone', (_event, details) => {
+  logCrashBreadcrumb('child-process-gone', {
+    reason: details.reason,
+    name: details.name,
+    serviceName: (details as any).serviceName,
+  });
+});
+
+app.on('render-process-gone', (_event, webContents, details) => {
+  logCrashBreadcrumb('render-process-gone', {
+    reason: details.reason,
+    url: webContents?.getURL?.()?.slice(0, 200),
+  });
 });
