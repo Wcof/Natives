@@ -4,10 +4,12 @@ use tauri::Manager;
 
 mod commands;
 mod db;
+mod env_manager;
 mod error;
 mod http_server;
 mod module_manager;
 mod permission_center;
+mod terminal;
 mod token_manager;
 
 pub use error::{Error, Result};
@@ -17,6 +19,7 @@ pub struct AppState {
     pub db: Mutex<Option<rusqlite::Connection>>,
     pub token_manager: std::sync::Arc<token_manager::TokenManager>,
     pub http_port: Mutex<u16>,
+    pub terminal_manager: terminal::TerminalManager,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -75,6 +78,7 @@ pub fn run() {
                 db: Mutex::new(Some(conn)),
                 token_manager: tm,
                 http_port: Mutex::new(port),
+                terminal_manager: terminal::TerminalManager::new(),
             });
 
             // FOUC guard: window starts hidden (tauri.conf.json has visible: false)

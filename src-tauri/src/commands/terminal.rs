@@ -1,5 +1,8 @@
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
+use tauri::State;
+
+use crate::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TerminalData {
@@ -14,31 +17,39 @@ pub struct TerminalExit {
 }
 
 #[tauri::command]
-pub fn terminal_create(profile_id: Option<String>) -> Result<String> {
-    // TODO: Implement in Loop 7 — create PTY session
-    Err(Error::NotImplemented(format!("terminal:create({profile_id:?})")))
+pub fn terminal_create(
+    app: tauri::AppHandle,
+    profile_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<String> {
+    let env_overrides = None; // TODO: inject env from profile
+    let (session_id, _pid) = state
+        .terminal_manager
+        .create_session(app, profile_id.as_deref(), env_overrides)?;
+    Ok(session_id)
 }
 
 #[tauri::command]
-pub fn terminal_write(session_id: String, data: String) -> Result<()> {
-    // TODO: Implement in Loop 7 — write to PTY
-    Err(Error::NotImplemented(format!("terminal:write({session_id})")))
+pub fn terminal_write(session_id: String, data: String, state: State<'_, AppState>) -> Result<()> {
+    state.terminal_manager.write(&session_id, &data)
 }
 
 #[tauri::command]
-pub fn terminal_resize(session_id: String, cols: u32, rows: u32) -> Result<()> {
-    // TODO: Implement in Loop 7 — resize PTY
-    Err(Error::NotImplemented(format!("terminal:resize({session_id}, {cols}x{rows})")))
+pub fn terminal_resize(
+    session_id: String,
+    cols: u16,
+    rows: u16,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    state.terminal_manager.resize(&session_id, cols, rows)
 }
 
 #[tauri::command]
-pub fn terminal_kill(session_id: String) -> Result<()> {
-    // TODO: Implement in Loop 7 — kill PTY
-    Err(Error::NotImplemented(format!("terminal:kill({session_id})")))
+pub fn terminal_kill(session_id: String, state: State<'_, AppState>) -> Result<()> {
+    state.terminal_manager.kill(&session_id)
 }
 
 #[tauri::command]
-pub fn terminal_cwd(session_id: String) -> Result<String> {
-    // TODO: Implement in Loop 7 — get PTY cwd
-    Err(Error::NotImplemented(format!("terminal:cwd({session_id})")))
+pub fn terminal_cwd(session_id: String, state: State<'_, AppState>) -> Result<String> {
+    state.terminal_manager.cwd(&session_id)
 }
