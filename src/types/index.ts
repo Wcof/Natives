@@ -173,6 +173,17 @@ declare global {
         }>;
       };
 
+      // Window controls
+      windowControls: {
+        minimize: () => Promise<void>;
+        maximize: () => Promise<void>;
+        close: () => Promise<void>;
+        isMaximized: () => Promise<boolean>;
+      };
+
+      // Widget window launcher
+      openWidgetWindow: () => void;
+
       // State persistence (US16)
       state: {
         save: (moduleId: string, state: string) => Promise<{ ok: boolean; error?: string }>;

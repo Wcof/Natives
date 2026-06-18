@@ -349,10 +349,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
         flexShrink: 0,
       }}>
         <div>
-          <h1 style={{ fontSize: 17, fontWeight: 600, color: 'var(--text,#f2f2ea)', margin: 0, fontFamily: 'var(--font-display)' }}>
-            {t(locale, 'workshop.title')}
-          </h1>
-          <p style={{ fontSize: 12, color: 'var(--text-dim,#9b9d8c)', margin: '2px 0 0' }}>
+          <p style={{ fontSize: 12, color: 'var(--text-dim,#9b9d8c)', margin: 0 }}>
             {t(locale, 'workshop.subtitle')}
           </p>
         </div>

@@ -25,6 +25,17 @@ const nativesAPI = {
       ipcRenderer.invoke('terminal:resize', sessionId, cols, rows),
     kill: (sessionId: string) => ipcRenderer.invoke('terminal:kill', sessionId),
     cwd: (sessionId: string) => ipcRenderer.invoke('terminal:cwd', sessionId),
+    // 专用终端数据通道（对标 CodePilot — 绕过 db-state-changed 的事件风暴）
+    onData: (callback: (data: { sessionId: string; data: string }) => void) => {
+      const handler = (_event: unknown, payload: { sessionId: string; data: string }) => callback(payload);
+      ipcRenderer.on('terminal:data', handler);
+      return () => ipcRenderer.removeListener('terminal:data', handler);
+    },
+    onExit: (callback: (data: { sessionId: string; exitCode: number }) => void) => {
+      const handler = (_event: unknown, payload: { sessionId: string; exitCode: number }) => callback(payload);
+      ipcRenderer.on('terminal:exit', handler);
+      return () => ipcRenderer.removeListener('terminal:exit', handler);
+    },
   },
 
   // Module management
@@ -195,6 +206,17 @@ const nativesAPI = {
   usage: {
     refresh: () => ipcRenderer.invoke('usage:refresh'),
   },
+
+  // Window controls（frame:false 自定义交通灯按钮）
+  windowControls: {
+    minimize: () => ipcRenderer.invoke('window:minimize'),
+    maximize: () => ipcRenderer.invoke('window:maximize'),
+    close: () => ipcRenderer.invoke('window:close'),
+    isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+  },
+
+  // Widget window launcher
+  openWidgetWindow: () => ipcRenderer.send('open-widget-window'),
 };
 
 contextBridge.exposeInMainWorld('nativesAPI', nativesAPI);

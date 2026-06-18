@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, safeStorage, shell as electronShell } from 'electron';
+import { app, BrowserWindow, ipcMain, safeStorage, shell as electronShell, Notification, session } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -7,10 +7,54 @@ let mainWindow: BrowserWindow | null = null;
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
+// ── Window State Persistence（对标 fanbox — 窗口位置/大小持久化）──
+const WINDOW_STATE_PATH = path.join(app.getPath('userData'), 'window-state.json');
+
+interface WindowState {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  maximized?: boolean;
+}
+
+function loadWindowState(): WindowState {
+  try {
+    if (fs.existsSync(WINDOW_STATE_PATH)) {
+      return JSON.parse(fs.readFileSync(WINDOW_STATE_PATH, 'utf-8'));
+    }
+  } catch { /* ignore corrupt file */ }
+  return {};
+}
+
+function saveWindowState(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    const bounds = mainWindow.getBounds();
+    const state: WindowState = {
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+      maximized: mainWindow.isMaximized(),
+    };
+    fs.writeFileSync(WINDOW_STATE_PATH, JSON.stringify(state, null, 2), 'utf-8');
+  } catch { /* best-effort, non-fatal */ }
+}
+
+let saveWindowStateTimer: ReturnType<typeof setTimeout> | null = null;
+function debouncedSaveWindowState(): void {
+  if (saveWindowStateTimer) clearTimeout(saveWindowStateTimer);
+  saveWindowStateTimer = setTimeout(saveWindowState, 400);
+}
+
 function createWindow(): void {
+  const saved = loadWindowState();
   mainWindow = new BrowserWindow({
-    width: 500,
-    height: 620,
+    width: saved.width || 1280,
+    height: saved.height || 800,
+    x: saved.x,
+    y: saved.y,
     show: false, // FOUC guard
     transparent: true,
     frame: false,
@@ -18,13 +62,107 @@ function createWindow(): void {
     resizable: true,
     minWidth: 420,
     minHeight: 450,
-    backgroundColor: '#00000000',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
   });
+
+  // 恢复最大化状态
+  if (saved.maximized) {
+    mainWindow.maximize();
+  }
+
+  // 窗口移动/调整大小时持久化（debounced 400ms，对标 fanbox）
+  mainWindow.on('move', debouncedSaveWindowState);
+  mainWindow.on('resize', debouncedSaveWindowState);
+
+  // ── 后台通知轮询（对标 CodePilot — 窗口隐藏时显示原生系统通知）──
+  // 当窗口隐藏/最小化时，轮询未读通知并显示 OS 原生 Notification 横幅。
+  // 窗口恢复可见时自动停止（渲染层接管轮询）。
+  let bgNotifTimer: ReturnType<typeof setInterval> | null = null;
+  const shownNotifIds = new Set<number>();
+
+  function startBgNotifPolling(): void {
+    if (bgNotifTimer) return; // 已在轮询
+    bgNotifTimer = setInterval(() => {
+      try {
+        const notifMod = lazyLoad('bridgeNotif');
+        if (!notifMod) return;
+        const unread = notifMod.getNotifications({ unreadOnly: true });
+        for (const n of unread) {
+          if (shownNotifIds.has(n.id)) continue;
+          shownNotifIds.add(n.id);
+          // 显示原生系统通知
+          if (Notification.isSupported()) {
+            const osNotif = new Notification({
+              title: n.title || 'Natives',
+              body: n.body || '',
+              silent: false,
+            });
+            osNotif.on('click', () => {
+              // 点击通知 → 聚焦主窗口
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.show();
+                mainWindow.focus();
+              }
+            });
+            osNotif.show();
+          }
+        }
+      } catch { /* non-fatal */ }
+    }, 5000);
+  }
+
+  function stopBgNotifPolling(): void {
+    if (bgNotifTimer) {
+      clearInterval(bgNotifTimer);
+      bgNotifTimer = null;
+    }
+  }
+
+  mainWindow.on('hide', startBgNotifPolling);
+  mainWindow.on('minimize', startBgNotifPolling);
+  mainWindow.on('show', stopBgNotifPolling);
+  mainWindow.on('restore', stopBgNotifPolling);
+
+  // ── External Link Handler（对标 fanbox + CodePilot — 防止 iframe 打开新窗口）──
+  // 拦截 window.open 和 <a target="_blank">，http/https 用系统浏览器打开，
+  // 其他协议拒绝。防止模块 iframe 创建不受控的 Electron 窗口。
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      electronShell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+
+  // 防止导航离开应用（will-navigate guard）
+  // 模块 iframe 或意外脚本不应让主窗口跳转到外部 URL。
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const parsed = new URL(url);
+    // 允许 localhost（开发服务器）和 file://（生产模式）
+    if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.protocol === 'file:') return;
+    event.preventDefault();
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      electronShell.openExternal(url);
+    }
+  });
+
+  // ── Loading Splash（对标 CodePilot — 启动时立即显示加载动画）──
+  // 避免用户看到空白窗口。加载完成后由 theme-applied-ready 替换。
+  const LOADING_HTML = `data:text/html;charset=utf-8,${encodeURIComponent(`
+    <html><head><style>
+      body { margin:0; display:flex; align-items:center; justify-content:center;
+             height:100vh; background:transparent; font-family:-apple-system,sans-serif; }
+      .spinner { width:32px; height:32px; border:3px solid rgba(255,255,255,0.15);
+                 border-top-color:rgba(255,255,255,0.6); border-radius:50%;
+                 animation:spin .8s linear infinite; }
+      @keyframes spin { to { transform:rotate(360deg); } }
+    </style></head><body><div class="spinner"></div></body></html>
+  `)}`;
+
+  mainWindow.loadURL(LOADING_HTML);
 
   // FOUC: show window fallback — prevent permanent black screen
   const showTimeout = setTimeout(() => {
@@ -34,19 +172,23 @@ function createWindow(): void {
     }
   }, 10_000);
 
-  if (isDev) {
-    mainWindow.loadURL('http://localhost:3000').catch((err) => {
-      console.error('[Main] Failed to load dev URL:', err);
-      // Show window anyway so user can see the error
-      if (mainWindow) mainWindow.show();
-    });
-    // mainWindow.webContents.openDevTools();
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '..', '.next', 'standalone', 'index.html')).catch((err) => {
-      console.error('[Main] Failed to load production build:', err);
-      if (mainWindow) mainWindow.show();
-    });
-  }
+  // 加载真实 URL（splash 替换）
+  const loadRealUrl = (): void => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (isDev) {
+      mainWindow.loadURL('http://localhost:3000').catch((err) => {
+        console.error('[Main] Failed to load dev URL:', err);
+        if (mainWindow) mainWindow.show();
+      });
+    } else {
+      mainWindow.loadFile(path.join(__dirname, '..', '.next', 'standalone', 'index.html')).catch((err) => {
+        console.error('[Main] Failed to load production build:', err);
+        if (mainWindow) mainWindow.show();
+      });
+    }
+  };
+  // 短延迟让 splash 先渲染，再加载真实内容
+  setTimeout(loadRealUrl, 150);
 
   // FOUC: wait for renderer to apply theme before showing
   ipcMain.on('theme-applied-ready', () => {
@@ -58,6 +200,7 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     clearTimeout(showTimeout);
+    saveWindowState(); // 关闭前保存窗口状态
     mainWindow = null;
   });
 }
@@ -190,7 +333,108 @@ function lazyLoad(module: string): any {
   }
 }
 
+// ── Single-Instance Lock（对标 CodePilot — 防止多实例 DB 冲突）──
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    // 第二个实例启动时，聚焦主窗口
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
 // ── Startup ──
+
+// ── Shell Environment Inheritance（对标 CodePilot — Dock 启动时获取完整 env）──
+// 从 Dock/Finder 启动时 process.env 极简（无 Homebrew PATH、nvm、API keys 等）。
+// 通过 login shell 获取用户完整环境并注入到 process.env。
+async function inheritShellEnv(): Promise<void> {
+  if (process.platform !== 'darwin') return; // 仅 macOS
+  // 如果已有 HOME 和完整 PATH，跳过（从终端启动时不需要）
+  if (process.env.PATH && process.env.PATH.includes('/usr/local/bin')) return;
+
+  try {
+    const { execFile } = require('child_process');
+    const shell = process.env.SHELL || '/bin/zsh';
+    const output: string = await new Promise((resolve, reject) => {
+      execFile(shell, ['-ilc', 'env'], {
+        encoding: 'utf-8',
+        timeout: 10_000,
+        env: {}, // 空 env 强制 login shell 加载所有 profile
+      }, (err: Error | null, stdout: string) => {
+        if (err) reject(err);
+        else resolve(stdout);
+      });
+    });
+
+    // 解析 KEY=VALUE 行，合并到 process.env（不覆盖已有的）
+    for (const line of output.split('\n')) {
+      const eqIdx = line.indexOf('=');
+      if (eqIdx <= 0) continue;
+      const key = line.slice(0, eqIdx);
+      const val = line.slice(eqIdx + 1);
+      if (!process.env[key]) {
+        process.env[key] = val;
+      }
+    }
+    console.log('[Main] Shell env inherited from login shell');
+  } catch (err) {
+    console.warn('[Main] Failed to inherit shell env (non-fatal):', err);
+  }
+}
+
+// ── System Proxy Detection（对标 CodePilot — 支持 Clash/Surge 等中国 VPN 工具）──
+// macOS 系统级代理（System Settings > Network > Proxies）不在 shell env 中。
+// 使用 Chromium 的 resolveProxy API 检测并注入到 process.env。
+async function resolveSystemProxy(): Promise<void> {
+  // 如果已有代理设置，跳过
+  if (process.env.HTTP_PROXY || process.env.HTTPS_PROXY || process.env.http_proxy || process.env.https_proxy) return;
+
+  try {
+    const proxyList = await session.defaultSession.resolveProxy('https://registry.npmjs.org');
+    if (!proxyList || proxyList === 'DIRECT') return;
+
+    // Chromium 返回有序列表: "PROXY host:port; SOCKS5 host:port; DIRECT"
+    for (const entry of proxyList.split(';')) {
+      const trimmed = entry.trim();
+      if (!trimmed || trimmed === 'DIRECT') continue;
+
+      const httpMatch = trimmed.match(/^(?:PROXY|HTTPS)\s+([\w.-]+:\d+)$/i);
+      if (httpMatch) {
+        process.env.HTTP_PROXY = `http://${httpMatch[1]}`;
+        process.env.HTTPS_PROXY = `http://${httpMatch[1]}`;
+        console.log('[Main] System proxy detected:', process.env.HTTPS_PROXY);
+        return;
+      }
+
+      const socksMatch = trimmed.match(/^SOCKS5?\s+([\w.-]+:\d+)$/i);
+      if (socksMatch) {
+        process.env.HTTP_PROXY = `socks5://${socksMatch[1]}`;
+        process.env.HTTPS_PROXY = `socks5://${socksMatch[1]}`;
+        console.log('[Main] System SOCKS proxy detected:', process.env.HTTPS_PROXY);
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn('[Main] Failed to resolve system proxy (non-fatal):', err);
+  }
+}
+
+// ── Env Sanitization（对标 CodePilot — 防止 __NEXT_PRIVATE_* 泄漏到子进程）──
+// Next.js 运行时设置的 __NEXT_PRIVATE_* 变量如果泄漏到其他 Next.js 项目，
+// 会导致那些项目跳过自身配置加载。
+function sanitizedProcessEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, val] of Object.entries(process.env)) {
+    if (key.startsWith('__NEXT_PRIVATE_')) continue;
+    if (val !== undefined) env[key] = val;
+  }
+  return env;
+}
 
 function initializeServices(): void {
   // Initialize database
@@ -282,11 +526,14 @@ ipcMain.handle('terminal:create', async (_event, profileId?: string) => {
   const env: Record<string, string> = {};
   const sessionId = await mod.createSession(env, profileId);
 
-  // ★ P0-1: Forward PTY output to renderer via db-state-changed IPC
+  // ★ 专用终端 IPC 通道（对标 CodePilot — 避免 db-state-changed 的事件风暴）
+  // 同时发送到专用通道和旧 db-state-changed 通道（向后兼容）
   mod.onData(sessionId, (data: string) => {
+    mainWindow?.webContents.send('terminal:data', { sessionId, data });
     mainWindow?.webContents.send('db-state-changed', 'terminal:data', { sessionId, data });
   });
   mod.onExit(sessionId, (exitCode: number) => {
+    mainWindow?.webContents.send('terminal:exit', { sessionId, exitCode });
     mainWindow?.webContents.send('db-state-changed', 'terminal:exit', { sessionId, exitCode });
   });
 
@@ -317,6 +564,8 @@ ipcMain.handle('archive:list', (_event, archivePath: string) => {
 });
 
 // Terminal CWD detection (macOS — uses lsof)
+// 对标 fanbox：GUI 启动的 app 不继承 shell locale，lsof 对 CJK 路径输出 \xe8 字节。
+// 修复：传 LC_ALL=en_US.UTF-8 + \xNN 解码回退。
 ipcMain.handle('terminal:cwd', async (_event, sessionId: string) => {
   const mod = lazyLoad('shell');
   if (!mod) return { ok: false };
@@ -327,9 +576,27 @@ ipcMain.handle('terminal:cwd', async (_event, sessionId: string) => {
     const { execSync } = require('child_process');
     const output = execSync(
       `lsof -p ${session.pid} -Fn 2>/dev/null | grep '^n/' | tail -1 | sed 's/^n//'`,
-      { encoding: 'utf8', timeout: 3000 }
+      { encoding: 'utf8', timeout: 3000, env: { ...process.env, LC_ALL: 'en_US.UTF-8' } }
     ).trim();
-    return output ? { ok: true, cwd: output } : { ok: false };
+    if (!output) return { ok: false };
+    // \xNN 解码回退（lsof 可能输出原始字节而非 UTF-8）
+    // 对标 fanbox decodeLsofPath：收集字节到 Buffer 再整体 UTF-8 解码
+    // String.fromCharCode 对多字节 CJK（如 用=\xe7\x94\xa8）会产出乱码
+    let decoded = output;
+    if (/\\x[0-9a-fA-F]{2}/.test(output)) {
+      const parts = output.split(/(\\x[0-9a-fA-F]{2})/);
+      const raw: number[] = [];
+      for (const part of parts) {
+        const m = part.match(/^\\x([0-9a-fA-F]{2})$/);
+        if (m) {
+          raw.push(parseInt(m[1]!, 16));
+        } else {
+          for (let j = 0; j < part.length; j++) raw.push(part.charCodeAt(j));
+        }
+      }
+      decoded = Buffer.from(raw).toString('utf8');
+    }
+    return { ok: true, cwd: decoded };
   } catch {
     return { ok: false };
   }
@@ -951,6 +1218,46 @@ ipcMain.handle('search:spotlight', async (_event, query: string, root: string) =
 });
 
 // ════════════════════════════════════════
+// File Watcher IPC（对标 fanbox — 激活 file-watcher.ts 的多目录监听）
+// ════════════════════════════════════════
+
+const fileWatchers = new Map<string, () => void>(); // dir -> stop function
+
+function startFileWatch(dir: string): void {
+  if (fileWatchers.has(dir) || !dir) return;
+  try {
+    const mod = lazyLoad('fileWatcher');
+    if (!mod) return;
+    const stop = mod.startFileWatcher(dir, (event: any) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('fs:changed', event);
+      }
+    });
+    fileWatchers.set(dir, stop);
+  } catch { /* 无权限等，跳过 */ }
+}
+
+ipcMain.handle('fs:watch-set', (_event, { dirs }: { dirs: string[] }) => {
+  const want = new Set((dirs || []).filter(Boolean));
+  // 关闭不再需要的
+  for (const [dir, stop] of fileWatchers) {
+    if (!want.has(dir)) { try { stop(); } catch { /* */ } fileWatchers.delete(dir); }
+  }
+  // 启动新增的
+  for (const dir of want) startFileWatch(dir);
+  return { ok: true, count: fileWatchers.size };
+});
+
+ipcMain.handle('fs:watch', (_event, { dir }: { dir: string }) => {
+  // 兼容旧单目录接口
+  for (const [d, stop] of fileWatchers) {
+    if (d !== dir) { try { stop(); } catch { /* */ } fileWatchers.delete(d); }
+  }
+  startFileWatch(dir);
+  return { ok: true };
+});
+
+// ════════════════════════════════════════
 // Git IPC (Phase 2)
 // ════════════════════════════════════════
 
@@ -1173,8 +1480,9 @@ ipcMain.handle('terminal:openInDir', async (_event, dirPath: string) => {
   }
 });
 
+if (gotLock) {
 app.whenReady().then(async () => {
-  // Version-based cache clearing（对标 CodePilot：升级后清除 Chromium 缓存）
+  // Version-based cache clearing
   try {
     const versionFile = path.join(app.getPath('userData'), 'last-version.txt');
     const currentVersion = app.getVersion();
@@ -1187,8 +1495,77 @@ app.whenReady().then(async () => {
     fs.writeFileSync(versionFile, currentVersion, 'utf-8');
   } catch { /* non-fatal */ }
 
+  // Widget window (secondary transparent floating window)
+  let widgetWindow: BrowserWindow | null = null;
+
+  ipcMain.on('open-widget-window', () => {
+    if (widgetWindow) {
+      widgetWindow.focus();
+      return;
+    }
+
+    widgetWindow = new BrowserWindow({
+      width: 500,
+      height: 620,
+      transparent: true,
+      frame: false,
+      resizable: false,
+      hasShadow: true,
+      webPreferences: {
+        preload: path.join(__dirname, 'preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    });
+
+    if (isDev) {
+      widgetWindow.loadURL('http://localhost:3000/?mode=widget');
+    } else {
+      widgetWindow.loadURL(`file://${path.join(__dirname, '..', '.next', 'standalone', 'index.html')}?mode=widget`);
+    }
+
+    widgetWindow.on('closed', () => {
+      widgetWindow = null;
+    });
+  });
+
+  // 日志轮转（对标 CodePilot — 50MB 上限，防止磁盘无限增长）
+  try {
+    const logRotate = require('../src/main/log-rotate');
+    logRotate.interceptConsole();
+  } catch { /* non-fatal */ }
+
+  // 先继承 shell 环境（从 Dock 启动时关键），再检测系统代理，最后初始化服务
+  await inheritShellEnv();
+  await resolveSystemProxy();
+
+  // ── Localhost Proxy Bypass（对标 fanbox — 防止内部 HTTP 服务被代理拦截）──
+  // Clash/Surge 等工具可能劫持 localhost 请求，导致模块 iframe 加载失败。
+  try {
+    await session.defaultSession.setProxy({
+      mode: 'system',
+      proxyBypassRules: 'localhost;127.0.0.1;[::1]',
+    });
+  } catch { /* non-fatal */ }
+
   createWindow();
   initializeServices();
+
+  // ── Window Controls（frame:false 下自定义交通灯按钮的 IPC）──
+  ipcMain.handle('window:minimize', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize();
+  });
+  ipcMain.handle('window:maximize', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMaximized()) mainWindow.unmaximize();
+    else mainWindow.maximize();
+  });
+  ipcMain.handle('window:close', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+  });
+  ipcMain.handle('window:isMaximized', () => {
+    return mainWindow ? mainWindow.isMaximized() : false;
+  });
 });
 
 app.on('window-all-closed', () => {
@@ -1210,17 +1587,66 @@ app.on('activate', () => {
   }
 });
 
-app.on('before-quit', () => {
-  // 1. Kill all terminal sessions（防止孤儿进程）
+// ── Quit Confirmation（对标 fanbox — 有终端运行时确认退出）──
+let isQuitting = false;
+
+app.on('before-quit', async (event) => {
+  // 已确认退出，直接清理
+  if (isQuitting) {
+    // 0. 关闭日志流
+    try {
+      const logRotate = require('../src/main/log-rotate');
+      logRotate.close();
+    } catch { /* non-fatal */ }
+
+    // 1. Kill all terminal sessions
+    try {
+      const shellMod = lazyLoad('shell');
+      if (shellMod) {
+        const sessions = shellMod.getActiveSessions();
+        for (const sess of sessions) {
+          try { shellMod.killSession(sess.id); } catch { /* already dead */ }
+        }
+      }
+    } catch { /* shell module not loaded */ }
+
+    // 2. SQLite WAL checkpoint + close
+    const dbMod = lazyLoad('db');
+    if (dbMod) {
+      try { dbMod.getDb().pragma('wal_checkpoint(TRUNCATE)'); } catch { /* */ }
+      dbMod.closeDb();
+    }
+    return;
+  }
+
+  // 检查是否有活跃终端
   try {
     const shellMod = lazyLoad('shell');
     if (shellMod) {
       const sessions = shellMod.getActiveSessions();
-      for (const sess of sessions) {
-        try { shellMod.killSession(sess.id); } catch { /* already dead */ }
+      if (sessions.length > 0) {
+        event.preventDefault();
+        const { dialog } = require('electron');
+        const result = await dialog.showMessageBox(mainWindow!, {
+          type: 'warning',
+          buttons: ['Quit', 'Cancel'],
+          defaultId: 1,
+          cancelId: 1,
+          title: 'Active Terminal Sessions',
+          message: `${sessions.length} terminal session(s) still running`,
+          detail: 'Quitting will terminate running agent tasks. Quit anyway?',
+        });
+        if (result.response === 0) {
+          isQuitting = true;
+          app.quit();
+        }
+        return;
       }
     }
-  } catch { /* shell module not loaded */ }
+  } catch { /* shell module not loaded, proceed with quit */ }
+
+  // 无活跃终端，直接退出
+  isQuitting = true;
 
   // 2. SQLite WAL checkpoint + close
   const dbMod = lazyLoad('db');
@@ -1274,3 +1700,4 @@ app.on('render-process-gone', (_event, webContents, details) => {
     url: webContents?.getURL?.()?.slice(0, 200),
   });
 });
+} // end if (gotLock)
