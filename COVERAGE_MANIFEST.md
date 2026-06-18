@@ -302,20 +302,20 @@ Target: `/Users/ldh/Downloads/project/AiNative/Natives2/`
 
 ---
 
-## Loop 10: Search And Git
+## Loop 10: Search And Git ✅
 
 ### Search
-- [ ] `src/lib/search-engine.ts`
-- [ ] `search:grep` command
-- [ ] `search:files` command
-- [ ] `search:spotlight` command
-- [ ] CommandPalette content search
+- [x] Search (Rust) — file name search, content grep (ripgrep/grep), Spotlight
+- [x] `search:grep` — content search with line numbers
+- [x] `search:files` — file name search with scoring
+- [x] `search:spotlight` — macOS mdfind integration
+- [x] CommandPalette — pure frontend, uses window.nativesAPI
 
 ### Git
-- [ ] `src/main/git.ts`
-- [ ] `src/components/files/GitPanel.tsx`
-- [ ] `git:status` command
-- [ ] `git:diff` command
+- [x] Git (Rust) — status (porcelain v1), diff
+- [x] `src/components/files/GitPanel.tsx` — pure frontend
+- [x] `git:status` — branch + entries (staged/unstaged)
+- [x] `git:diff` — per-file diff output
 
 ---
 
