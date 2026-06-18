@@ -369,30 +369,30 @@ Target: `/Users/ldh/Downloads/project/AiNative/Natives2/`
 
 ---
 
-## Loop 13: Popups, Accessibility, Visual Parity
+## Loop 13: Popups, Accessibility, Visual Parity ✅
 
 ### UI Components
-- [ ] `src/components/ui/ConfirmDialog.tsx`
-- [ ] `src/components/ui/Modal.tsx`
-- [ ] `src/components/ui/Portal.tsx`
-- [ ] `src/components/ui/Toast.tsx`
-- [ ] `src/components/ui/ShortcutHelp.tsx`
-- [ ] `src/components/ui/ErrorBoundary.tsx`
-- [ ] `src/components/ui/Skeleton.tsx`
-- [ ] `src/components/ui/ProgressBar.tsx`
-- [ ] `src/components/ui/EmptyState.tsx`
-- [ ] `src/components/ui/LiquidGlass.tsx`
+- [x] `src/components/ui/ConfirmDialog.tsx` — Electron-free, pure React
+- [x] `src/components/ui/Modal.tsx` — Electron-free, pure React
+- [x] `src/components/ui/Portal.tsx` — Electron-free, pure React
+- [x] `src/components/ui/Toast.tsx` — Electron-free, pure React
+- [x] `src/components/ui/ShortcutHelp.tsx` — Electron-free, pure React
+- [x] `src/components/ui/ErrorBoundary.tsx` — Electron-free, pure React
+- [x] `src/components/ui/Skeleton.tsx` — Electron-free, pure React
+- [x] `src/components/ui/ProgressBar.tsx` — Electron-free, pure React
+- [x] `src/components/ui/EmptyState.tsx` — Electron-free, pure React
+- [x] `src/components/ui/LiquidGlass.tsx` — Electron-free, pure React
 
 ### Onboarding
-- [ ] `src/components/onboarding/OnboardingWizard.tsx`
-- [ ] `src/components/onboarding/UsernameOnboarding.tsx`
+- [x] `src/components/onboarding/OnboardingWizard.tsx` — uses window.nativesAPI
+- [x] `src/components/onboarding/UsernameOnboarding.tsx` — uses window.nativesAPI
 
 ### Settings
-- [ ] `src/components/shell/SettingsPage.tsx`
+- [x] `src/components/shell/SettingsPage.tsx` — pure frontend
 
 ### Other
-- [ ] `src/components/files/ImageLightbox.tsx`
-- [ ] `src/app/store/page.tsx`
+- [x] `src/components/files/ImageLightbox.tsx` — pure frontend
+- [x] `src/app/store/page.tsx` — pure frontend
 
 ---
 
