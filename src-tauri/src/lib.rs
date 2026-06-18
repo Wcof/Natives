@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::Manager;
 
+mod agent;
 mod archive;
 mod commands;
 mod db;
