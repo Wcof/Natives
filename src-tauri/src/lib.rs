@@ -14,10 +14,13 @@ mod git;
 mod http_server;
 mod module_manager;
 mod permission_center;
+mod release_wizard;
+mod screenshot;
 mod search;
 mod terminal;
 mod thumbnail;
 mod token_manager;
+mod update_checker;
 
 pub use error::{Error, Result};
 

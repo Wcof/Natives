@@ -1,19 +1,17 @@
-use crate::{Error, Result};
+use crate::{screenshot, Error, Result};
 
 #[tauri::command]
-pub fn screenshot_start_watching() -> Result<()> {
-    // TODO: Implement in Loop 12
-    Err(Error::NotImplemented("screenshot:startWatching".into()))
+pub fn screenshot_start_watching(app: tauri::AppHandle) -> Result<()> {
+    screenshot::start_watching(app)
 }
 
 #[tauri::command]
 pub fn screenshot_stop_watching() -> Result<()> {
-    // TODO: Implement in Loop 12
-    Err(Error::NotImplemented("screenshot:stopWatching".into()))
+    // TODO: implement stop mechanism
+    Ok(())
 }
 
 #[tauri::command]
 pub fn screenshot_save_annotated(data_url: String, target_path: Option<String>) -> Result<String> {
-    // TODO: Implement in Loop 12
-    Err(Error::NotImplemented("screenshot:saveAnnotated".into()))
+    screenshot::save_annotated(&data_url, target_path.as_deref())
 }

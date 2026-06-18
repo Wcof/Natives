@@ -1,26 +1,23 @@
-use crate::{Error, Result};
+use crate::{release_wizard, Error, Result};
 use serde_json::Value as JsonValue;
 
 #[tauri::command]
 pub fn release_inspect(project_path: String) -> Result<JsonValue> {
-    // TODO: Implement in Loop 12
-    Err(Error::NotImplemented(format!("release:inspect({project_path})")))
+    let inspection = release_wizard::inspect_project(&project_path)?;
+    serde_json::to_value(inspection).map_err(|e| Error::Internal(e.to_string()))
 }
 
 #[tauri::command]
 pub fn release_prepare(project_path: String, version: String) -> Result<JsonValue> {
-    // TODO: Implement in Loop 12
-    Err(Error::NotImplemented(format!("release:prepare({project_path}, {version})")))
+    release_wizard::prepare_release(&project_path, &version)
 }
 
 #[tauri::command]
 pub fn release_get_sequence(project_path: String, version: String) -> Result<JsonValue> {
-    // TODO: Implement in Loop 12
-    Err(Error::NotImplemented(format!("release:getSequence({project_path}, {version})")))
+    release_wizard::get_sequence(&project_path, &version)
 }
 
 #[tauri::command]
 pub fn release_execute(project_path: String, command: String) -> Result<JsonValue> {
-    // TODO: Implement in Loop 12
-    Err(Error::NotImplemented(format!("release:execute({project_path}, {command})")))
+    release_wizard::execute_command(&project_path, &command)
 }
