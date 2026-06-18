@@ -1,20 +1,76 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
-import { Settings, Layers, ChevronRight, Square, Bell, Star, LayoutDashboard, Monitor, FileText, Download } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import type {
+  ButtonHTMLAttributes,
+  DragEvent,
+  MouseEvent,
+  ReactNode,
+} from 'react';
+import type { LucideIcon } from 'lucide-react';
+import {
+  Bell,
+  Download,
+  FileText,
+  Layers,
+  LayoutDashboard,
+  Minus,
+  Monitor,
+  Search,
+  Settings,
+  Square,
+  Star,
+  X,
+  Zap,
+} from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
-interface ModuleItem {
+interface ModuleManifest {
   id: string;
   name: string;
   icon?: string;
+  i18n?: {
+    name?: Record<string, string>;
+  };
 }
 
-const QUICK_ACCESS_DIRS = [
-  { id: 'home', label: 'Home', path: '', icon: <LayoutDashboard size={16} />, isDashboard: true },
-  { id: 'desktop', label: 'Desktop', path: '~/Desktop', icon: <Monitor size={16} /> },
-  { id: 'documents', label: 'Documents', path: '~/Documents', icon: <FileText size={16} /> },
-  { id: 'downloads', label: 'Downloads', path: '~/Downloads', icon: <Download size={16} /> },
+interface ModuleItem {
+  moduleId: string;
+  manifest: ModuleManifest | null;
+  error?: string;
+}
+
+interface QuickAccessItem {
+  id: 'home' | 'desktop' | 'documents' | 'downloads';
+  target: string;
+  path?: string;
+  icon: LucideIcon;
+}
+
+const QUICK_ACCESS_ITEMS: readonly QuickAccessItem[] = [
+  {
+    id: 'home',
+    target: '__dashboard__',
+    icon: LayoutDashboard,
+  },
+  {
+    id: 'desktop',
+    target: '__files__:~/Desktop',
+    path: '~/Desktop',
+    icon: Monitor,
+  },
+  {
+    id: 'documents',
+    target: '__files__:~/.natives',
+    path: '~/.natives',
+    icon: FileText,
+  },
+  {
+    id: 'downloads',
+    target: '__files__:~/Downloads',
+    path: '~/Downloads',
+    icon: Download,
+  },
 ];
 
 interface SidebarProps {
@@ -23,9 +79,69 @@ interface SidebarProps {
   width: number;
   onResize: (width: number) => void;
   activeModuleId?: string;
-  onModuleSelect: (moduleId: string) => void;
-  onNotificationClick?: () => void;
+  onModuleSelect: (target: string) => void;
+  onNotificationClick: () => void;
   locale?: Locale;
+}
+
+function getModuleId(module: ModuleItem): string {
+  return module.manifest?.id ?? module.moduleId;
+}
+
+function getNavigationId(activeModuleId?: string): string | null {
+  if (!activeModuleId) return null;
+  if (activeModuleId === 'dashboard' || activeModuleId === '__dashboard__') return '__dashboard__';
+  if (activeModuleId === 'settings' || activeModuleId === '__settings__') return '__settings__';
+  if (activeModuleId === 'workshop' || activeModuleId === '__workshop__') return '__workshop__';
+  if (activeModuleId.startsWith('module:')) return activeModuleId;
+  if (activeModuleId.startsWith('__files__:')) return activeModuleId;
+  if (activeModuleId === 'files') return null;
+  return `module:${activeModuleId}`;
+}
+
+function SidebarNavItem({
+  isActive,
+  icon,
+  label,
+  title,
+  onClick,
+  role,
+  'aria-selected': ariaSelected,
+  draggable,
+  onDragStart,
+  onDragOver,
+}: {
+  isActive: boolean;
+  icon: ReactNode;
+  label: string;
+  title?: string;
+  onClick: () => void;
+  role?: string;
+  'aria-selected'?: boolean;
+  draggable?: boolean;
+  onDragStart?: (e: DragEvent<HTMLButtonElement>) => void;
+  onDragOver?: (e: DragEvent<HTMLButtonElement>) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role={role}
+      aria-selected={ariaSelected}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onClick={onClick}
+      title={title}
+      className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-sm transition-all ${
+        isActive
+          ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)] font-medium'
+          : 'text-[var(--text-dim)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+      }`}
+    >
+      <span className="shrink-0">{icon}</span>
+      <span className="truncate">{label}</span>
+    </button>
+  );
 }
 
 export default function Sidebar({
@@ -42,255 +158,358 @@ export default function Sidebar({
   const [modules, setModules] = useState<ModuleItem[]>([]);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [favorites, setFavorites] = useState<string[]>([]);
+  const [activeNavigationId, setActiveNavigationId] = useState<string | null>(
+    () => getNavigationId(activeModuleId),
+  );
 
-  // Load favorites from DB
+  useEffect(() => {
+    if (activeModuleId === 'files') return;
+    setActiveNavigationId(getNavigationId(activeModuleId));
+  }, [activeModuleId]);
+
+  const selectNavigation = useCallback(
+    (navigationId: string, target: string) => {
+      setActiveNavigationId(navigationId);
+      onModuleSelect(target);
+    },
+    [onModuleSelect],
+  );
+
   const loadFavorites = useCallback(async () => {
     try {
-      const api = window.nativesAPI;
-      if (api?.db?.get) {
-        const stored = await api.db.get('settings:favorites');
-        if (stored) {
-          setFavorites(JSON.parse(stored));
-        }
-      }
-    } catch { /* ignore */ }
+      const stored = await window.nativesAPI?.db?.get('settings:favorites');
+      setFavorites(stored ? JSON.parse(stored as string) : []);
+    } catch {
+      setFavorites([]);
+    }
   }, []);
 
   useEffect(() => {
-    loadFavorites();
-    // Listen for favorites changes from FileBrowser
-    const handler = () => loadFavorites();
-    window.addEventListener('favorites-changed', handler);
-    return () => window.removeEventListener('favorites-changed', handler);
+    void loadFavorites();
+    const handleFavoritesChanged = () => void loadFavorites();
+    window.addEventListener('favorites-changed', handleFavoritesChanged);
+    return () => window.removeEventListener('favorites-changed', handleFavoritesChanged);
   }, [loadFavorites]);
 
-  // Load modules on mount
+  // ── 窗口控制（关闭 / 最小化 / 最大化）──
+  const [isMaximized, setIsMaximized] = useState(false);
+
   useEffect(() => {
-    async function loadModules() {
+    const poll = setInterval(async () => {
       try {
-        const api = (window as unknown as Record<string, unknown>).nativesAPI as Record<string, unknown> | undefined;
-
-        // Load saved module order (locale is loaded reactively via refreshLocale above)
-        let savedOrder: string[] = [];
-        if (api) {
-          const dbApi = (api as Record<string, unknown>).db as { get?: (key: string) => Promise<string | undefined> } | undefined;
-          if (dbApi?.get) {
-            const raw = await dbApi.get('settings:module_order');
-            if (raw) {
-              try { savedOrder = JSON.parse(raw); } catch { /* ignore */ }
-            }
-          }
-        }
-
-        // Try to get modules from IPC
-        if (api && typeof (api as Record<string, unknown>).module === 'object') {
-          const modApi = (api as Record<string, unknown>).module as { scan?: () => Promise<ModuleItem[]> };
-          if (modApi.scan) {
-            const result = await modApi.scan();
-            if (Array.isArray(result)) {
-              if (savedOrder.length > 0) {
-                const idIndex = new Map(savedOrder.map((id, i) => [id, i]));
-                result.sort((a, b) => (idIndex.get(a.id) ?? Infinity) - (idIndex.get(b.id) ?? Infinity));
-              }
-              setModules(result);
-              return;
-            }
-          }
-        }
-      } catch {
-        // Fallback: no IPC available (browser dev mode)
-      }
-    }
-    loadModules();
+        const m = await window.nativesAPI?.windowControls?.isMaximized?.();
+        if (m !== undefined) setIsMaximized(m);
+      } catch { /* ignore */ }
+    }, 300);
+    return () => clearInterval(poll);
   }, []);
 
-  // ── Drag resize ──
-  const handleMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-    const startX = e.clientX;
-    const startW = width;
-
-    const handleMove = (ev: MouseEvent) => {
-      const newWidth = Math.max(190, Math.min(420, startW + (ev.clientX - startX)));
-      onResize(newWidth);
-    };
-    const handleUp = () => {
-      setIsDragging(false);
-      document.removeEventListener('mousemove', handleMove);
-      document.removeEventListener('mouseup', handleUp);
-    };
-    document.addEventListener('mousemove', handleMove);
-    document.addEventListener('mouseup', handleUp);
-  };
-
-  // ── Module drag reorder ──
-  const handleDragStart = (index: number) => {
-    setDragIndex(index);
-  };
-
-  const handleDragOver = (e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    if (dragIndex === null || dragIndex === index) return;
-    const newModules = [...modules];
-    const [moved] = newModules.splice(dragIndex, 1);
-    newModules.splice(index, 0, moved!);
-    setModules(newModules);
-    setDragIndex(index);
-  };
-
-  const getModuleId = (m: any) => {
-    return m.manifest?.id || m.id || m.moduleId || '';
-  };
-
-  const getModuleName = (m: any) => {
-    if (m.manifest) {
-      const norm = locale.startsWith('zh') ? 'zh' : 'en';
-      return m.manifest.i18n?.name?.[norm] || m.manifest.name || m.moduleId;
+  const handleWindowAction = useCallback(async (action: 'minimize' | 'maximize' | 'close') => {
+    const ctrl = window.nativesAPI?.windowControls;
+    if (!ctrl) return;
+    if (action === 'minimize') await ctrl.minimize();
+    else if (action === 'close') await ctrl.close();
+    else {
+      await ctrl.maximize();
+      try { setIsMaximized(await ctrl.isMaximized()); } catch { /* ignore */ }
     }
-    return m.name || m.moduleId || m.id || '';
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadModules = async () => {
+      try {
+        const api = window.nativesAPI;
+        if (!api?.module?.scan) return;
+        const rawOrder = await api.db?.get('settings:module_order');
+        const savedOrder = rawOrder ? JSON.parse(rawOrder as string) : [];
+        const scannedModules = (await api.module.scan()) as ModuleItem[];
+        const orderedModules = [...scannedModules];
+        if (savedOrder.length > 0) {
+          const orderIndex = new Map(savedOrder.map((id: string, index: number) => [id, index]));
+          orderedModules.sort(
+            (left, right) =>
+              ((orderIndex.get(getModuleId(left)) ?? Infinity) as number) -
+              ((orderIndex.get(getModuleId(right)) ?? Infinity) as number),
+          );
+        }
+        if (!cancelled) setModules(orderedModules);
+      } catch {
+        if (!cancelled) setModules([]);
+      }
+    };
+    void loadModules();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleMouseDown = (event: MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragging(true);
+    const startX = event.clientX;
+    const startWidth = width;
+    const handleMouseMove = (moveEvent: globalThis.MouseEvent) => {
+      const nextWidth = Math.max(190, Math.min(420, startWidth + moveEvent.clientX - startX));
+      onResize(nextWidth);
+    };
+    const handleMouseUp = () => {
+      setIsDragging(false);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
   };
 
-  const getModuleIcon = (m: any) => {
-    return m.manifest?.icon || m.icon;
+  const handleDragOver = (event: DragEvent<HTMLButtonElement>, index: number) => {
+    event.preventDefault();
+    if (dragIndex === null || dragIndex === index) return;
+    setModules((currentModules) => {
+      const nextModules = [...currentModules];
+      const [movedModule] = nextModules.splice(dragIndex, 1);
+      if (!movedModule) return currentModules;
+      nextModules.splice(index, 0, movedModule);
+      return nextModules;
+    });
+    setDragIndex(index);
   };
 
   const handleDragEnd = async () => {
     setDragIndex(null);
-    // Persist new module order to database
     try {
-      const api = (window as unknown as Record<string, unknown>).nativesAPI as Record<string, unknown> | undefined;
-      if (api) {
-        const db = (api as Record<string, unknown>).db as { set?: (key: string, value: unknown) => Promise<{ ok: boolean }> } | undefined;
-        if (db?.set) {
-          const orderedIds = modules.map((m) => getModuleId(m));
-          await db.set('settings:module_order', orderedIds);
-        }
-      }
-    } catch { /* browser dev mode */ }
+      await window.nativesAPI?.db?.set('settings:module_order', modules.map(getModuleId));
+    } catch { /* session-only fallback */ }
   };
+
+  const normalizedLocale = locale.startsWith('zh') ? 'zh' : 'en';
+
+  if (isCollapsed) {
+    return (
+      <aside style={{ width: 0, overflow: 'hidden' }} role="navigation" aria-label={t(locale, 'nav.modules')}>
+      </aside>
+    );
+  }
 
   return (
     <aside
-      className={`sidebar ${isCollapsed ? 'collapsed' : ''}`}
-      style={{ width: isCollapsed ? 0 : width }}
+      className="vibe-sidebar flex flex-col h-full overflow-hidden"
+      style={{ width }}
       role="navigation"
-      aria-label="Module sidebar"
+      aria-label={t(locale, 'nav.modules')}
       data-sidebar
     >
-      <div className="sidebar-header">
-        <span className="sidebar-brand" style={{ fontFamily: 'var(--font-display)' }}>NATIVES</span>
-        <button className="btn-ghost" onClick={onToggle} aria-label={t(locale, 'sidebar.ariaToggle')}>
-          <ChevronRight size={14} />
-        </button>
-      </div>
-
-      {/* Quick Access */}
-      <div className="sidebar-section-title">{t(locale, 'sidebar.quickAccess')}</div>
-      <div style={{ padding: '0 4px', marginBottom: 16 }}>
-        {QUICK_ACCESS_DIRS.map((dir) => (
+      {/* ── 窗口控制 + Brand Header ── */}
+      <div className="shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
+        {/* 窗口控制按钮行 */}
+        <div className="flex items-center justify-start gap-1 px-3 pt-2 pb-1">
+          {/* 关闭 */}
           <button
-            key={dir.id}
-            className="sidebar-item"
-            onClick={() => {
-              if ((dir as any).isDashboard) {
-                onModuleSelect('__dashboard__');
-              } else {
-                onModuleSelect(`__files__:${dir.path}`);
-              }
-            }}
-            style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left' }}
-            title={dir.path}
+            onClick={() => handleWindowAction('close')}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-faint)] hover:bg-red-500/15 hover:text-red-400 transition-all"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            aria-label="关闭"
+            title="关闭"
           >
-            {dir.icon}
-            <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)' }}>{t(locale, 'sidebar.quickAccessDirs.' + dir.id)}</span>
+            <X size={13} />
           </button>
-        ))}
+          {/* 最小化 */}
+          <button
+            onClick={() => handleWindowAction('minimize')}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-faint)] hover:bg-[var(--vibe-btn-bg)] hover:text-[var(--text)] transition-all"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            aria-label="最小化"
+            title="最小化"
+          >
+            <Minus size={12} />
+          </button>
+          {/* 最大化 / 还原 */}
+          <button
+            onClick={() => handleWindowAction('maximize')}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-faint)] hover:bg-[var(--vibe-btn-bg)] hover:text-[var(--text)] transition-all"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            aria-label={isMaximized ? '还原' : '最大化'}
+            title={isMaximized ? '还原' : '最大化'}
+          >
+            <Square size={10} className={isMaximized ? 'opacity-60' : ''} />
+          </button>
+        </div>
+
+        {/* Brand Header */}
+        <div className="flex items-center gap-3 px-4 pb-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--vibe-search-border)] bg-[var(--vibe-search-bg)]">
+            <Zap size={18} className="text-[var(--vibe-nav-icon)]" />
+          </div>
+          <div>
+            <h1 className="text-lg font-bold text-[var(--vibe-brand-text)] leading-tight">Natives</h1>
+            <p className="text-[0.6875rem] text-[var(--vibe-brand-sub)]">personal desktop</p>
+          </div>
+        </div>
       </div>
 
-      <div className="sidebar-section-title" id="sidebar-modules-label">{t(locale, 'nav.modules')}</div>
-      <div
-        className="sidebar-modules"
-        role="listbox"
-        aria-labelledby="sidebar-modules-label"
-        aria-live="polite"
-        onDragEnd={handleDragEnd}
-      >
-        {modules.length === 0 ? (
-          <div style={{ padding: '20px 12px', textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>
-            {t(locale, 'modules.noModules')}
+      {/* 中间可滚动区域 */}
+      <div className="flex-1 overflow-y-auto min-h-0">
+        {/* Search Capsule */}
+        <div className="px-4 pb-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+          <div className="flex h-10 items-center gap-2 rounded-xl border border-[var(--vibe-search-border)] bg-[var(--vibe-search-bg)] px-3">
+            <Search size={14} className="text-[var(--vibe-search-placeholder)] shrink-0" />
+            <input
+              type="text"
+              placeholder={t(locale, 'sidebar.searchPlaceholder')}
+              className="flex-1 bg-transparent text-sm text-[var(--vibe-brand-text)] outline-none focus-visible:outline-none placeholder:text-[var(--vibe-search-placeholder)]"
+              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            />
+            <span className="rounded-md bg-[var(--vibe-btn-bg)] px-1.5 py-0.5 text-[0.6875rem] font-medium text-[var(--vibe-search-placeholder)]">
+              ⌘K
+            </span>
           </div>
-        ) : (
-          modules.map((mod, index) => {
-            const mId = getModuleId(mod);
-            const mName = getModuleName(mod);
-            const mIcon = getModuleIcon(mod);
+        </div>
+
+        {/* Quick Access List */}
+        <div className="px-3 pb-1 pt-0 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--vibe-section-header)]">
+          {t(locale, 'sidebar.quickAccess')}
+        </div>
+        <div className="mb-3 flex flex-col gap-0.5 px-3">
+          {QUICK_ACCESS_ITEMS.map((item) => {
+            const Icon = item.icon;
+            const isActive = activeNavigationId === item.target;
             return (
-              <div
-                key={mId}
-                className={`sidebar-item ${activeModuleId === mId ? 'active' : ''}`}
-                role="option"
-                aria-selected={activeModuleId === mId}
-                tabIndex={0}
-                draggable
-                onDragStart={() => handleDragStart(index)}
-                onDragOver={(e) => handleDragOver(e, index)}
-                onClick={() => onModuleSelect(mId)}
-                onKeyDown={(e) => { if (e.key === 'Enter') onModuleSelect(mId); }}
-                title={mName}
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  if (item.target.startsWith('__files__:')) {
+                    const path = item.target.slice(10);
+                    window.dispatchEvent(new CustomEvent('navigate-files', { detail: path }));
+                  }
+                  selectNavigation(item.target, item.target);
+                }}
+                className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-all ${
+                  isActive
+                    ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)] font-medium'
+                    : 'text-[var(--text-dim)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+                }`}
+                title={item.id}
               >
-                <span className="sidebar-module-icon">
-                  {mIcon ? (
-                    <img src={mIcon} alt="" style={{ width: 18, height: 18 }} />
-                  ) : (
-                    <Square size={18} />
-                  )}
+                <Icon size={15} className="shrink-0" />
+                <span className="truncate text-sm">
+                  {t(locale, 'sidebar.quickAccessDirs.' + item.id)}
                 </span>
-                <span className="sidebar-module-name" style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{mName}</span>
-              </div>
+              </button>
             );
-          })
+          })}
+        </div>
+
+        {/* Modules section (existing modules from scanning) */}
+        {modules.length > 0 && (
+          <>
+            <div className="px-4 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--vibe-section-header)]">
+              {t(locale, 'nav.modules')}
+            </div>
+            <div
+              className="flex flex-col gap-0.5 px-3"
+              role="listbox"
+              aria-label={t(locale, 'nav.modules')}
+              aria-live="polite"
+              onDragEnd={() => void handleDragEnd()}
+            >
+              {modules.map((module, index) => {
+                const moduleId = getModuleId(module);
+                const moduleName =
+                  module.manifest?.i18n?.name?.[normalizedLocale] ??
+                  module.manifest?.name ??
+                  module.moduleId;
+                const moduleIcon = module.manifest?.icon;
+                const navigationId = `module:${moduleId}`;
+                return (
+                  <SidebarNavItem
+                    key={moduleId}
+                    isActive={activeNavigationId === navigationId}
+                    icon={
+                      moduleIcon ? (
+                        <img src={moduleIcon} alt="" draggable={false} className="h-[18px] w-[18px] object-contain" />
+                      ) : (
+                        <Square size={18} />
+                      )
+                    }
+                    label={moduleName}
+                    role="option"
+                    aria-selected={activeNavigationId === navigationId}
+                    draggable
+                    onDragStart={() => setDragIndex(index)}
+                    onDragOver={(event) => handleDragOver(event, index)}
+                    onClick={() => selectNavigation(navigationId, moduleId)}
+                    title={moduleName}
+                  />
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        {/* Favorites */}
+        {favorites.length > 0 && (
+          <>
+            <div className="px-4 pb-1 pt-3 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--vibe-section-header)]">
+              {t(locale, 'sidebar.favorites')}
+            </div>
+            <div className="flex flex-col gap-0.5 px-3">
+              {favorites.map((favoritePath) => {
+                const navigationId = `__files__:${favoritePath}`;
+                const label = favoritePath.split('/').pop() || favoritePath;
+                return (
+                  <SidebarNavItem
+                    key={favoritePath}
+                    isActive={activeNavigationId === navigationId}
+                    icon={<Star size={15} />}
+                    label={label}
+                    onClick={() => selectNavigation(navigationId, navigationId)}
+                    title={favoritePath}
+                  />
+                );
+              })}
+            </div>
+          </>
         )}
       </div>
 
-      {/* Favorites */}
-      {favorites.length > 0 && (
-        <>
-          <div className="sidebar-section-title">{t(locale, 'sidebar.favorites')}</div>
-          <div style={{ padding: '0 4px' }}>
-            {favorites.map((fav) => (
-              <button
-                key={fav}
-                className="sidebar-item"
-                onClick={() => onModuleSelect(`__files__:${fav}`)}
-                style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left' }}
-                title={fav}
-              >
-                <Star size={14} style={{ color: 'var(--accent,#cdf24b)' }} />
-                <span style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>
-                  {fav.split('/').pop() || fav}
-                </span>
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-
-      <div className="sidebar-footer">
-        <button className="sidebar-item" onClick={onNotificationClick} style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', position: 'relative' }}>
-          <Bell size={18} />
-          {t(locale, 'notifications.title')}
+      {/* 底部固定区域：通知、设置、创意工坊 */}
+      <div className="shrink-0 px-3 py-2 border-t border-[var(--vibe-border-subtle)]">
+        <button
+          type="button"
+          onClick={onNotificationClick}
+          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm text-[var(--text-dim)] transition-all hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]"
+        >
+          <Bell size={16} />
+          <span>{t(locale, 'notifications.title')}</span>
         </button>
-        <button className="sidebar-item" onClick={() => onModuleSelect('__settings__')} style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left' }}>
-          <Settings size={18} />
-          {t(locale, 'nav.settings')}
+        <button
+          type="button"
+          onClick={() => selectNavigation('__settings__', '__settings__')}
+          className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
+            activeNavigationId === '__settings__'
+              ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)] font-medium'
+              : 'text-[var(--text-dim)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+          }`}
+        >
+          <Settings size={16} />
+          <span>{t(locale, 'nav.settings')}</span>
         </button>
-        <button className="sidebar-item" onClick={() => onModuleSelect('__workshop__')} style={{ width: '100%', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left' }}>
-          <Layers size={18} />
-          {t(locale, 'nav.workshop')}
+        <button
+          type="button"
+          onClick={() => selectNavigation('__workshop__', '__workshop__')}
+          className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
+            activeNavigationId === '__workshop__'
+              ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)] font-medium'
+              : 'text-[var(--text-dim)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+          }`}
+        >
+          <Layers size={16} />
+          <span>{t(locale, 'nav.workshop')}</span>
         </button>
       </div>
 
+
+
+      {/* Resize Handle */}
       <div
         className={`sidebar-drag-handle ${isDragging ? 'active' : ''}`}
         onMouseDown={handleMouseDown}

@@ -45,8 +45,8 @@ function getStaticCommands(locale: Locale): CommandItem[] {
     { id: 'ai', label: t(locale, 'nav.aiWorkbench'), category: 'navigation', icon: <Bot size={14} /> },
     { id: 'tools', label: t(locale, 'nav.tools'), category: 'navigation', icon: <Sliders size={14} /> },
     { id: 'terminal:toggle', label: t(locale, 'nav.terminalToggle'), category: 'action', icon: <Terminal size={14} /> },
-    { id: 'theme:warm-archive', label: t(locale, 'nav.themeWarmArchive'), category: 'setting', icon: <Sun size={14} /> },
-    { id: 'theme:editorial', label: t(locale, 'nav.themeEditorial'), category: 'setting', icon: <BookOpen size={14} /> },
+    { id: 'theme:terminal-volt', label: t(locale, 'nav.themeTerminalVolt'), category: 'setting', icon: <Terminal size={14} /> },
+    { id: 'theme:frosted-jasmine', label: t(locale, 'nav.themeFrostedJasmine'), category: 'setting', icon: <Sun size={14} /> },
   ];
 }
 
@@ -290,7 +290,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
           />
         </div>
 
-        <div style={{ maxHeight: 360, overflowY: 'auto', padding: '4px 0' }}>
+        <div style={{ maxHeight: 360, overflowY: 'auto', overflowX: 'hidden', padding: '4px 0' }}>
           {results.length === 0 ? (
             <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--text-faint,#62655a)', fontSize: 13 }}>
               {t(locale, 'commandPalette.noResults')}
@@ -324,15 +324,15 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
                     }} />
                   )}
                 </span>
-                <span style={{ flex: 1 }}>{cmd.label}</span>
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cmd.label}</span>
                 {cmd.description && (
-                  <span style={{ fontSize: 10, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)' }}>
+                  <span style={{ fontSize: 10, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0 }}>
                     {cmd.description}
                   </span>
                 )}
                 <span style={{
                   fontSize: 10, color: 'var(--text-faint,#62655a)',
-                  textTransform: 'uppercase', letterSpacing: 0.5,
+                  textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0,
                 }}>
                   {cmd.category}
                 </span>

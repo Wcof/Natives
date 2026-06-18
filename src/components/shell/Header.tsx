@@ -400,7 +400,7 @@ export default function Header({
                   <input
                     ref={searchRef}
                     type="text"
-                    className="bg-transparent border-none outline-none text-xs text-[var(--text)] w-[120px] placeholder:text-[var(--text-faint)]"
+                    className="bg-transparent border-none outline-none focus-visible:outline-none text-xs text-[var(--text)] w-[120px] placeholder:text-[var(--text-faint)]"
                     placeholder={t(locale, 'fileBrowser.searchPlaceholder')}
                     onChange={(e) => dispatchAction('search', e.target.value)}
                     onKeyDown={(e) => e.key === 'Escape' && setSearchOpen(false)}
