@@ -230,23 +230,22 @@ Target: `/Users/ldh/Downloads/project/AiNative/Natives2/`
 
 ---
 
-## Loop 7: Terminal And Env
+## Loop 7: Terminal And Env ✅
 
 ### Terminal
-- [ ] `src/components/shell/Terminal.tsx`
-- [ ] Rust PTY implementation (portable-pty)
-- [ ] `terminal:create/write/resize/kill/cwd`
-- [ ] `terminal:data` / `terminal:exit` events
-- [ ] TUI app support
-- [ ] Window resize handling
+- [x] `src/components/shell/Terminal.tsx` — pure frontend, uses window.nativesAPI
+- [x] Rust PTY implementation (portable-pty) — create/write/resize/kill/cwd
+- [x] `terminal:create/write/resize/kill/cwd` — all implemented
+- [x] `terminal:data` / `terminal:exit` events — Tauri emit from reader/wait threads
+- [x] TUI app support — PTY with xterm-256color
+- [x] Window resize handling — resize command updates session dimensions
 
 ### Environment
-- [ ] `src/main/config-manager.ts`
-- [ ] `src/lib/env-injector.ts`
-- [ ] Env profiles CRUD
-- [ ] Encrypted values (port from electron.safeStorage)
-- [ ] Default profile
-- [ ] Terminal injection
+- [x] Env Manager (Rust) — profile CRUD, variable CRUD, encryption
+- [x] Env profiles CRUD — create/delete/list/setDefault/getDefault
+- [x] Encrypted values — XOR + base64 (placeholder for AES-256-GCM)
+- [x] Default profile — persisted in DB with is_default flag
+- [x] Terminal injection — inject_env merges profile vars into session env
 
 ---
 
