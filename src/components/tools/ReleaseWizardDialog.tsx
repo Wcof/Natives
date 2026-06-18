@@ -32,15 +32,24 @@ export default function ReleaseWizardDialog({ onClose }: { onClose?: () => void 
 
   return (
     <div style={{
-      position: 'fixed', inset: 0, zIndex: 1000,
+      position: 'fixed', inset: 0, zIndex: 60,
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: 'rgba(0,0,0,0.6)',
+      background: 'rgba(0,0,0,0.45)',
+      backdropFilter: 'blur(24px) saturate(150%)',
+      WebkitBackdropFilter: 'blur(24px) saturate(150%)',
+      animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
     }} onClick={(e) => { if (e.target === e.currentTarget) onClose?.(); }}>
       <div style={{
-        width: 400, background: 'var(--panel)', borderRadius: 'var(--radius)',
-        border: '1px solid var(--border)', padding: 20,
+        width: 400, background: 'var(--vibe-toolbar-bg)',
+        backdropFilter: 'blur(28px) saturate(145%)',
+        WebkitBackdropFilter: 'blur(28px) saturate(145%)',
+        border: '0.0625rem solid var(--vibe-toolbar-border)',
+        borderRadius: '1rem',
+        boxShadow: 'var(--vibe-toolbar-shadow)',
+        padding: 20,
+        animation: 'dropIn 0.16s cubic-bezier(0.2, 0.7, 0.3, 1)',
       }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 16 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--vibe-brand-text)', marginBottom: 16 }}>
           {t(locale, 'release.title')}
         </div>
 

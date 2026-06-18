@@ -241,9 +241,12 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
       {/* Overlay */}
       <div
         style={{
-          position: 'fixed', inset: 0, zIndex: 100,
-          background: 'rgba(0,0,0,0.4)',
-          backdropFilter: 'blur(4px)',
+          position: 'fixed', inset: 0, zIndex: 60,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0,0,0,0.45)',
+          backdropFilter: 'blur(24px) saturate(150%)',
+          WebkitBackdropFilter: 'blur(24px) saturate(150%)',
+          animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
         }}
         onClick={onClose}
         aria-hidden="true"
@@ -256,7 +259,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
         aria-label={t(locale, 'commandPalette.placeholder')}
         aria-modal="true"
         onKeyDown={(e) => { trapKeyDown(e); handleKeyDown(e); }}
-        className="anim-edIn"
+        className="anim-dropIn"
         style={{
           position: 'fixed', top: '20%', left: '50%', transform: 'translateX(-50%)',
           width: 520, maxWidth: '90vw',

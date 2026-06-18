@@ -405,7 +405,7 @@ main {
     top: 0;
     bottom: 0;
     width: 6px;
-    cursor: col-resize;
+    cursor: default;
     z-index: var(--z-dragbar);
     opacity: 0;
     transition: opacity 0.15s ease 0.08s;

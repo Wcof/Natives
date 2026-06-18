@@ -19,7 +19,6 @@ import {
   PanelLeft,
 } from 'lucide-react';
 
-const DRAG = { WebkitAppRegion: 'drag' as const };
 const NO_DRAG = { WebkitAppRegion: 'no-drag' as const } as React.CSSProperties;
 
 const VIEW_LABELS: Record<string, string> = {
@@ -222,7 +221,6 @@ export default function Header({
       ref={headerRef}
       className={`vibe-toolbar flex items-center gap-3 px-4 ${tbClass}`}
       style={{
-        ...DRAG,
         userSelect: 'none',
       }}
     >

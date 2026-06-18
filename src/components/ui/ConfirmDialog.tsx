@@ -75,8 +75,12 @@ export default function ConfirmDialog({
     <Portal>
       <div
         style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60,
+          position: 'fixed', inset: 0, zIndex: 60,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0,0,0,0.45)',
+          backdropFilter: 'blur(24px) saturate(150%)',
+          WebkitBackdropFilter: 'blur(24px) saturate(150%)',
+          animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
         }}
         onClick={onCancel}
       >
@@ -86,11 +90,15 @@ export default function ConfirmDialog({
           aria-modal="true"
           aria-label={title}
           tabIndex={-1}
+          className="anim-dropIn"
           style={{
             background: 'var(--vibe-toolbar-bg)',
+            backdropFilter: 'blur(28px) saturate(145%)',
+            WebkitBackdropFilter: 'blur(28px) saturate(145%)',
             border: '0.0625rem solid var(--vibe-toolbar-border)',
-            borderRadius: '1rem', padding: 20, maxWidth: 400, width: '90vw',
+            borderRadius: '1rem',
             boxShadow: 'var(--vibe-toolbar-shadow)',
+            padding: 20, maxWidth: 400, width: '90vw',
           }}
           onClick={(e) => e.stopPropagation()}
           onKeyDown={handleKeyDown}

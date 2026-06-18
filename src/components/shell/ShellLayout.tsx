@@ -643,6 +643,12 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
   return (
     <div className="vibe-canvas w-screen h-screen p-[1.125rem] flex gap-4 overflow-visible box-border relative isolate" style={{ opacity: themeReady ? 1 : 0 }}>
+      {/* ── 全宽透明拖拽条 — 始终可用 ── */}
+      <div
+        className="absolute top-0 left-0 right-0 h-3 z-30"
+        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+      />
+
       {/* ── Global Dynamic Background Layer ── */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-[1.125rem] z-0" style={{ zIndex: 0 }}>
         {visualConfig.showWallpaper && (

@@ -88,23 +88,26 @@ export default function UpdateNotification({ onClose }: { onClose?: () => void }
   return (
     <div style={{
       position: 'fixed', bottom: 20, right: 20, zIndex: 1000,
-      padding: '12px 16px', background: 'var(--panel)', borderRadius: 'var(--radius)',
-      border: '1px solid var(--accent)', maxWidth: 320,
-      boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+      padding: '12px 16px', background: 'var(--vibe-toolbar-bg)',
+      backdropFilter: 'blur(20px) saturate(145%)',
+      WebkitBackdropFilter: 'blur(20px) saturate(145%)',
+      border: '1px solid var(--accent)', borderRadius: '0.75rem', maxWidth: 320,
+      boxShadow: 'var(--vibe-toolbar-shadow)',
+      animation: 'slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
         <Bell size={16} style={{ color: 'var(--accent)' }} />
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', flex: 1 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--vibe-brand-text)', flex: 1 }}>
           {t(locale, 'update.newVersionAvailable').replace('{version}', update.latestVersion)}
         </span>
         <button
           onClick={handleDismiss}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-faint)', padding: 2 }}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--vibe-btn-text)', padding: 2 }}
         >
           <X size={14} />
         </button>
       </div>
-      <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 10, maxHeight: 60, overflow: 'hidden' }}>
+      <div style={{ fontSize: 11, color: 'var(--vibe-btn-text)', marginBottom: 10, maxHeight: 60, overflow: 'hidden' }}>
         {update.body.slice(0, 150)}{update.body.length > 150 ? '...' : ''}
       </div>
       <div style={{ display: 'flex', gap: 6 }}>

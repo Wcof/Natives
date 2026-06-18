@@ -154,7 +154,6 @@ export default function Sidebar({
   onNotificationClick,
   locale = 'zh',
 }: SidebarProps) {
-  const [isDragging, setIsDragging] = useState(false);
   const [modules, setModules] = useState<ModuleItem[]>([]);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [favorites, setFavorites] = useState<string[]>([]);
@@ -217,6 +216,7 @@ export default function Sidebar({
 
   // ── 长按 Zoom 弹出菜单（macOS 原生行为）──
   const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
+  const [zoomMenuPos, setZoomMenuPos] = useState<{ x: number; y: number } | null>(null);
   const zoomTimerRef = useRef<number | null>(null);
   const zoomPopupRef = useRef<HTMLDivElement>(null);
   const zoomBtnRef = useRef<HTMLButtonElement>(null);
@@ -305,24 +305,6 @@ export default function Sidebar({
     return () => { cancelled = true; };
   }, []);
 
-  const handleMouseDown = (event: MouseEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    setIsDragging(true);
-    const startX = event.clientX;
-    const startWidth = width;
-    const handleMouseMove = (moveEvent: globalThis.MouseEvent) => {
-      const nextWidth = Math.max(190, Math.min(420, startWidth + moveEvent.clientX - startX));
-      onResize(nextWidth);
-    };
-    const handleMouseUp = () => {
-      setIsDragging(false);
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-  };
-
   const handleDragOver = (event: DragEvent<HTMLButtonElement>, index: number) => {
     event.preventDefault();
     if (dragIndex === null || dragIndex === index) return;
@@ -389,8 +371,11 @@ export default function Sidebar({
           <button
             ref={zoomBtnRef}
             onClick={() => handleWindowAction('maximize')}
-            onMouseDown={() => {
+            onMouseDown={(e) => {
+              const cx = e.clientX;
+              const cy = e.clientY;
               zoomTimerRef.current = window.setTimeout(() => {
+                setZoomMenuPos({ x: cx, y: cy });
                 setZoomMenuOpen(true);
               }, 500);
             }}
@@ -411,7 +396,6 @@ export default function Sidebar({
             aria-label={isMaximized ? '还原' : '最大化'}
             title={isMaximized ? '还原' : '最大化'}
           >
-              {/* macOS Zoom 图标：双对角外扩箭头 */}
               <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className={isMaximized ? 'opacity-60' : ''}>
                 <path d="M7 1h2v2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
                 <path d="M9 1l-4 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
@@ -420,11 +404,11 @@ export default function Sidebar({
               </svg>
             </button>
 
-            {/* 长按弹出菜单 — macOS 窗口管理 */}
-            {zoomMenuOpen && (
+            {/* 长按弹出菜单 — macOS 窗口管理，跟随鼠标位置 */}
+            {zoomMenuOpen && zoomMenuPos && (
               <div
-                className="absolute left-0 top-full mt-1 z-50 min-w-[180px] rounded-xl border border-[var(--vibe-btn-border)] bg-[var(--vibe-toolbar-bg)] backdrop-blur-2xl p-1.5 shadow-2xl"
-                style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                className="fixed z-50 min-w-[180px] rounded-xl border border-[var(--vibe-btn-border)] bg-[var(--vibe-toolbar-bg)] backdrop-blur-2xl p-1.5 shadow-2xl"
+                style={{ left: zoomMenuPos.x, top: zoomMenuPos.y, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
               >
                 <p className="px-2.5 pb-1 pt-0.5 text-[0.625rem] font-medium uppercase tracking-[0.06em] text-[var(--text-faint)]">
                   移动与调整大小
@@ -650,16 +634,6 @@ export default function Sidebar({
         </button>
       </div>
 
-
-
-      {/* Resize Handle */}
-      <div
-        className={`sidebar-drag-handle ${isDragging ? 'active' : ''}`}
-        onMouseDown={handleMouseDown}
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={t(locale, 'sidebar.ariaResize')}
-      />
     </aside>
   );
 }

@@ -23,12 +23,18 @@ export default function ScreenshotCard() {
   return (
     <div style={{
       position: 'fixed', bottom: 80, right: 20, zIndex: 1000,
-      width: 280, background: 'var(--panel)', borderRadius: 'var(--radius)',
-      border: '1px solid var(--border)', overflow: 'hidden',
-      boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+      width: 280,
+      background: 'var(--vibe-toolbar-bg)',
+      backdropFilter: 'blur(20px) saturate(145%)',
+      WebkitBackdropFilter: 'blur(20px) saturate(145%)',
+      border: '0.0625rem solid var(--vibe-toolbar-border)',
+      borderRadius: '0.75rem',
+      overflow: 'hidden',
+      boxShadow: 'var(--vibe-toolbar-shadow)',
+      animation: 'slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
     }}>
-      <div style={{ padding: 8, borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)' }}>{t(locale, 'screenshot.newScreenshot')}</span>
+      <div style={{ padding: 8, borderBottom: '0.0625rem solid var(--vibe-toolbar-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--vibe-brand-text)' }}>{t(locale, 'screenshot.newScreenshot')}</span>
         <button className="btn btn-ghost" style={{ fontSize: 14, padding: '0 4px' }} onClick={() => setVisible(false)}><X size={14} /></button>
       </div>
       <div style={{ padding: 8, display: 'flex', gap: 6 }}>

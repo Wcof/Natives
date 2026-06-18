@@ -35,7 +35,7 @@ export default function ImageAnnotator({ imageUrl, onClose }: { imageUrl?: strin
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.9)', display: 'flex', flexDirection: 'column' }}>
       {/* Toolbar */}
-      <div style={{ display: 'flex', gap: 4, padding: 8, background: 'var(--panel)', borderBottom: '1px solid var(--border)', alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 4, padding: 8, background: 'var(--vibe-toolbar-bg)', borderBottom: '0.0625rem solid var(--vibe-toolbar-border)', alignItems: 'center' }}>
         {(['pen', 'arrow', 'text', 'blur'] as const).map((toolType) => (
           <button
             key={toolType}

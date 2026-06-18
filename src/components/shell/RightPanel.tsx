@@ -23,7 +23,6 @@ export default function RightPanel({
   title,
   children,
 }: RightPanelProps) {
-  const [isDragging, setIsDragging] = useState(false);
   const [locale, setLocale] = useState<Locale>('en');
   const isOpen = mode !== 'closed';
 
@@ -36,26 +35,6 @@ export default function RightPanel({
     }
     loadLocale();
   }, []);
-
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-    const startX = e.clientX;
-    const startW = width;
-
-    const handleMove = (ev: MouseEvent) => {
-      const delta = startX - ev.clientX;
-      const newWidth = Math.max(200, Math.min(400, startW + delta));
-      onResize(newWidth);
-    };
-    const handleUp = () => {
-      setIsDragging(false);
-      document.removeEventListener('mousemove', handleMove);
-      document.removeEventListener('mouseup', handleUp);
-    };
-    document.addEventListener('mousemove', handleMove);
-    document.addEventListener('mouseup', handleUp);
-  }, [width, onResize]);
 
   const handleClose = () => onModeChange('closed');
 
@@ -76,14 +55,6 @@ export default function RightPanel({
       aria-label={getTitle()}
       style={{ width: isOpen ? width : 0, position: 'relative' }}
     >
-      {/* Resize drag handle */}
-      {isOpen && (
-        <div
-          className={`sidebar-drag-handle ${isDragging ? 'active' : ''}`}
-          style={{ left: -3, right: 'auto' }}
-          onMouseDown={handleMouseDown}
-        />
-      )}
 
       {/* Header with glass effect */}
       <div className="right-panel-header" style={{

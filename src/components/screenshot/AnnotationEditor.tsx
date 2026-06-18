@@ -175,11 +175,11 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
           alignItems: 'center',
           gap: 8,
           padding: '8px 16px',
-          background: 'var(--surface)',
-          borderBottom: '1px solid var(--border)',
+          background: 'var(--vibe-toolbar-bg)',
+          borderBottom: '0.0625rem solid var(--vibe-toolbar-border)',
         }}
       >
-        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', marginRight: 8 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--vibe-btn-text)', marginRight: 8 }}>
           {t(locale, 'screenshot.annotationTools')}
         </span>
 
@@ -213,7 +213,7 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
                   height: 20,
                   borderRadius: '50%',
                   background: c,
-                  border: color === c ? '2px solid var(--accent)' : '1px solid var(--border)',
+                  border: color === c ? '2px solid var(--accent)' : '1px solid var(--vibe-toolbar-border)',
                   cursor: 'pointer',
                 }}
               />
@@ -266,8 +266,8 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
             top: '50%',
             left: '50%',
             transform: 'translate(-50%, -50%)',
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
+            background: 'var(--vibe-toolbar-bg)',
+            border: '1px solid var(--vibe-toolbar-border)',
             borderRadius: 8,
             padding: 16,
             zIndex: 10001,
@@ -284,7 +284,7 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
             placeholder="Enter text..."
             style={{
               background: 'var(--bg)',
-              border: '1px solid var(--border)',
+              border: '1px solid var(--vibe-toolbar-border)',
               borderRadius: 4,
               padding: '6px 10px',
               color: 'var(--text)',

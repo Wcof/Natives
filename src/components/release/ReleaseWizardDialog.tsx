@@ -68,27 +68,44 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* Backdrop */}
+    <div className="fixed inset-0 z-60 flex items-center justify-center">
+      {/* Backdrop — Glass overlay */}
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0"
         onClick={handleClose}
+        style={{
+          background: 'rgba(0,0,0,0.45)',
+          backdropFilter: 'blur(24px) saturate(150%)',
+          WebkitBackdropFilter: 'blur(24px) saturate(150%)',
+          animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}
       />
 
       {/* Dialog */}
-      <div className="relative z-10 w-full max-w-lg rounded-xl border border-[var(--border)] bg-[var(--surface-primary)] shadow-2xl">
+      <div
+        className="relative z-10 w-full max-w-lg"
+        style={{
+          background: 'var(--vibe-toolbar-bg)',
+          backdropFilter: 'blur(28px) saturate(145%)',
+          WebkitBackdropFilter: 'blur(28px) saturate(145%)',
+          border: '0.0625rem solid var(--vibe-toolbar-border)',
+          borderRadius: '1rem',
+          boxShadow: 'var(--vibe-toolbar-shadow)',
+          animation: 'dropIn 0.16s cubic-bezier(0.2, 0.7, 0.3, 1)',
+        }}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-4">
+        <div className="flex items-center justify-between border-b border-[var(--vibe-toolbar-border)] px-5 py-4">
           <div className="flex items-center gap-2">
             <Package size={18} className="text-[var(--accent)]" />
-            <h2 className="text-sm font-semibold text-[var(--text-primary)]">
+            <h2 className="text-sm font-semibold text-[var(--vibe-brand-text)]">
               {t(locale, 'release_wizard') || 'Release Wizard'}
             </h2>
           </div>
           <button
             onClick={handleClose}
             disabled={publishing}
-            className="rounded-md p-1.5 text-[var(--text-tertiary)] hover:bg-[var(--surface-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50"
+            className="rounded-md p-1.5 text-[var(--vibe-btn-text)] hover:bg-[var(--vibe-btn-bg)] hover:text-[var(--vibe-brand-text)] disabled:opacity-50"
           >
             <X size={16} />
           </button>
@@ -100,7 +117,7 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
           {step === 'info' && (
             <div className="space-y-4">
               <div>
-                <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
+                <label className="mb-1.5 block text-xs font-medium text-[var(--vibe-btn-text)]">
                   {t(locale, 'version') || 'Version'}
                 </label>
                 <input
@@ -108,12 +125,12 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
                   value={releaseInfo.version}
                   onChange={e => setReleaseInfo(prev => ({ ...prev, version: e.target.value }))}
                   placeholder="1.0.0"
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+                  className="w-full rounded-lg border border-[var(--vibe-toolbar-border)] bg-[var(--vibe-btn-bg)] px-3 py-2 text-sm text-[var(--vibe-brand-text)] outline-none focus:border-[var(--accent)]"
                 />
               </div>
 
               <div>
-                <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
+                <label className="mb-1.5 block text-xs font-medium text-[var(--vibe-btn-text)]">
                   {t(locale, 'release_notes') || 'Release Notes'}
                 </label>
                 <textarea
@@ -121,12 +138,12 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
                   onChange={e => setReleaseInfo(prev => ({ ...prev, releaseNotes: e.target.value }))}
                   placeholder={t(locale, 'release_notes_placeholder') || 'Describe what changed...'}
                   rows={4}
-                  className="w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--surface-secondary)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+                  className="w-full resize-none rounded-lg border border-[var(--vibe-toolbar-border)] bg-[var(--vibe-btn-bg)] px-3 py-2 text-sm text-[var(--vibe-brand-text)] outline-none focus:border-[var(--accent)]"
                 />
               </div>
 
               <div>
-                <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
+                <label className="mb-1.5 block text-xs font-medium text-[var(--vibe-btn-text)]">
                   {t(locale, 'target_platform') || 'Target Platform'}
                 </label>
                 <div className="flex gap-2">
@@ -136,8 +153,8 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
                       onClick={() => setReleaseInfo(prev => ({ ...prev, platform: p }))}
                       className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
                         releaseInfo.platform === p
-                          ? 'bg-[var(--accent)] text-[var(--accent-foreground)]'
-                          : 'bg-[var(--surface-secondary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                          ? 'bg-[var(--accent)] text-[var(--accent-ink)]'
+                          : 'bg-[var(--vibe-btn-bg)] text-[var(--vibe-btn-text)] hover:text-[var(--vibe-brand-text)]'
                       }`}
                     >
                       {p === 'all' ? 'All' : p === 'mac' ? 'macOS' : p === 'win' ? 'Windows' : 'Linux'}
@@ -158,12 +175,12 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
           {/* Step: Assets */}
           {step === 'assets' && (
             <div className="space-y-4">
-              <div className="rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface-secondary)] p-8 text-center">
-                <Upload size={24} className="mx-auto mb-2 text-[var(--text-tertiary)]" />
-                <p className="text-xs text-[var(--text-secondary)]">
+              <div className="rounded-lg border border-dashed border-[var(--vibe-toolbar-border)] bg-[var(--vibe-btn-bg)] p-8 text-center">
+                <Upload size={24} className="mx-auto mb-2 text-[var(--vibe-btn-text)]" />
+                <p className="text-xs text-[var(--vibe-btn-text)]">
                   {t(locale, 'assets_auto_detected') || 'Build assets will be auto-detected'}
                 </p>
-                <p className="mt-1 text-[10px] text-[var(--text-tertiary)]">
+                <p className="mt-1 text-[10px] text-[var(--vibe-btn-text)]">
                   {releaseInfo.platform === 'all'
                     ? 'macOS (.dmg) · Windows (.exe) · Linux (.AppImage)'
                     : releaseInfo.platform === 'mac'
@@ -180,16 +197,16 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
           {step === 'publish' && (
             <div className="space-y-4 py-4 text-center">
               <Loader2 size={32} className="mx-auto animate-spin text-[var(--accent)]" />
-              <p className="text-sm text-[var(--text-primary)]">
+              <p className="text-sm text-[var(--vibe-brand-text)]">
                 {t(locale, 'publishing') || 'Publishing...'}
               </p>
-              <div className="mx-auto h-1.5 w-48 overflow-hidden rounded-full bg-[var(--surface-secondary)]">
+              <div className="mx-auto h-1.5 w-48 overflow-hidden rounded-full bg-[var(--vibe-btn-bg)]">
                 <div
                   className="h-full rounded-full bg-[var(--accent)] transition-all duration-300"
                   style={{ width: `${progress}%` }}
                 />
               </div>
-              <p className="text-xs text-[var(--text-tertiary)]">{progress}%</p>
+              <p className="text-xs text-[var(--vibe-btn-text)]">{progress}%</p>
             </div>
           )}
 
@@ -200,10 +217,10 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
                 <Check size={24} className="text-green-400" />
               </div>
               <div>
-                <p className="text-sm font-medium text-[var(--text-primary)]">
+                <p className="text-sm font-medium text-[var(--vibe-brand-text)]">
                   {t(locale, 'release_published') || 'Release Published'}
                 </p>
-                <p className="mt-1 text-xs text-[var(--text-tertiary)]">
+                <p className="mt-1 text-xs text-[var(--vibe-btn-text)]">
                   v{releaseInfo.version}
                 </p>
               </div>
@@ -212,19 +229,19 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2 border-t border-[var(--border)] px-5 py-3">
+        <div className="flex items-center justify-end gap-2 border-t border-[var(--vibe-toolbar-border)] px-5 py-3">
           {step === 'info' && (
             <>
               <button
                 onClick={handleClose}
-                className="rounded-lg px-4 py-2 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                className="rounded-lg px-4 py-2 text-xs font-medium text-[var(--vibe-btn-text)] hover:text-[var(--vibe-brand-text)]"
               >
                 {t(locale, 'cancel') || 'Cancel'}
               </button>
               <button
                 onClick={() => setStep('assets')}
                 disabled={!releaseInfo.version.trim()}
-                className="rounded-lg bg-[var(--accent)] px-4 py-2 text-xs font-medium text-[var(--accent-foreground)] transition-opacity hover:opacity-90 disabled:opacity-40"
+                className="rounded-lg bg-[var(--accent)] px-4 py-2 text-xs font-medium text-[var(--accent-ink)] transition-opacity hover:opacity-90 disabled:opacity-40"
               >
                 {t(locale, 'next') || 'Next'}
               </button>
@@ -235,13 +252,13 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
             <>
               <button
                 onClick={() => setStep('info')}
-                className="rounded-lg px-4 py-2 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                className="rounded-lg px-4 py-2 text-xs font-medium text-[var(--vibe-btn-text)] hover:text-[var(--vibe-brand-text)]"
               >
                 {t(locale, 'back') || 'Back'}
               </button>
               <button
                 onClick={handlePublish}
-                className="rounded-lg bg-[var(--accent)] px-4 py-2 text-xs font-medium text-[var(--accent-foreground)] transition-opacity hover:opacity-90"
+                className="rounded-lg bg-[var(--accent)] px-4 py-2 text-xs font-medium text-[var(--accent-ink)] transition-opacity hover:opacity-90"
               >
                 {t(locale, 'publish') || 'Publish'}
               </button>
@@ -251,7 +268,7 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
           {step === 'done' && (
             <button
               onClick={handleClose}
-              className="rounded-lg bg-[var(--accent)] px-4 py-2 text-xs font-medium text-[var(--accent-foreground)] transition-opacity hover:opacity-90"
+              className="rounded-lg bg-[var(--accent)] px-4 py-2 text-xs font-medium text-[var(--accent-ink)] transition-opacity hover:opacity-90"
             >
               {t(locale, 'close') || 'Close'}
             </button>

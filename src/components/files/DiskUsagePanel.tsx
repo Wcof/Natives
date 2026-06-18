@@ -100,22 +100,33 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
   // 导致弹窗被 overflow:hidden 裁切而不可见。
   return (
     <Portal>
+      {/* Glass overlay */}
       <div
         style={{
           position: 'fixed', inset: 0, zIndex: 60,
-          background: 'rgba(0,0,0,0.42)',
-          display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
-          paddingTop: '18vh',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0,0,0,0.45)',
+          backdropFilter: 'blur(24px) saturate(150%)',
+          WebkitBackdropFilter: 'blur(24px) saturate(150%)',
+          animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
         }}
         onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
       >
-        <div style={{
-          width: 540, maxWidth: '92vw', borderRadius: 14, padding: 18,
-          background: 'color-mix(in srgb, var(--vibe-toolbar-bg) 85%, transparent)',
-          backdropFilter: 'blur(20px) saturate(1.4)',
-          boxShadow: '0 0 0 0.5px rgba(0,0,0,0.12), 0 12px 40px rgba(0,0,0,0.22)',
-          maxHeight: '70vh', display: 'flex', flexDirection: 'column',
-        }}>
+        {/* Dialog card */}
+        <div
+          className="anim-dropIn"
+          style={{
+            width: 540, maxWidth: '92vw',
+            background: 'var(--vibe-toolbar-bg)',
+            backdropFilter: 'blur(28px) saturate(145%)',
+            WebkitBackdropFilter: 'blur(28px) saturate(145%)',
+            border: '0.0625rem solid var(--vibe-toolbar-border)',
+            borderRadius: '1rem',
+            boxShadow: 'var(--vibe-toolbar-shadow)',
+            padding: 18,
+            maxHeight: '70vh', display: 'flex', flexDirection: 'column',
+          }}
+          onClick={(e) => e.stopPropagation()}>
           {/* Title */}
           <div style={{
             fontSize: 13, fontWeight: 600, color: 'var(--vibe-brand-text)',
