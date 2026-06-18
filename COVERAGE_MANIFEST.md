@@ -319,35 +319,32 @@ Target: `/Users/ldh/Downloads/project/AiNative/Natives2/`
 
 ---
 
-## Loop 11: AI Workbench
+## Loop 11: AI Workbench ✅
 
 ### AI Components
-- [ ] `src/components/ai/AiWorkbench.tsx`
-- [ ] `src/components/ai/ProjectMemory.tsx`
-- [ ] `src/components/ai/SessionReplay.tsx`
-- [ ] `src/components/ai/ChangeInbox.tsx`
-- [ ] `src/components/ai/FollowModeUI.tsx`
-- [ ] `src/components/ai/FollowRenderer.tsx`
-- [ ] `src/components/ai/SkillsPanel.tsx`
-- [ ] `src/components/ai/UsagePanel.tsx`
-- [ ] `src/components/ai/RtkPanel.tsx`
-- [ ] `src/components/ai/AIFileOrganizer.tsx`
-- [ ] `src/components/ai/AgentDashboard.tsx`
-- [ ] `src/components/ai/PromptLibrary.tsx`
-- [ ] `src/components/ai/FlingToTerminal.tsx`
+- [x] `src/components/ai/AiWorkbench.tsx` — pure frontend
+- [x] `src/components/ai/ProjectMemory.tsx` — pure frontend
+- [x] `src/components/ai/SessionReplay.tsx` — pure frontend
+- [x] `src/components/ai/ChangeInbox.tsx` — pure frontend
+- [x] `src/components/ai/FollowModeUI.tsx` — pure frontend
+- [x] `src/components/ai/FollowRenderer.tsx` — pure frontend
+- [x] `src/components/ai/SkillsPanel.tsx` — pure frontend
+- [x] `src/components/ai/UsagePanel.tsx` — pure frontend
+- [x] `src/components/ai/RtkPanel.tsx` — pure frontend
+- [x] `src/components/ai/AIFileOrganizer.tsx` — pure frontend
+- [x] `src/components/ai/AgentDashboard.tsx` — pure frontend
+- [x] `src/components/ai/PromptLibrary.tsx` — pure frontend
+- [x] `src/components/ai/FlingToTerminal.tsx` — pure frontend
 
 ### Dashboard
-- [ ] `src/components/dashboard/TokenHero.tsx`
-- [ ] `src/components/dashboard/TokenTrendChart.tsx`
-- [ ] `src/components/dashboard/ModelStatsTable.tsx`
-- [ ] `src/components/dashboard/SkillsPanel.tsx`
+- [x] `src/components/dashboard/TokenHero.tsx` — pure frontend
+- [x] `src/components/dashboard/TokenTrendChart.tsx` — pure frontend
+- [x] `src/components/dashboard/ModelStatsTable.tsx` — pure frontend
+- [x] `src/components/dashboard/SkillsPanel.tsx` — pure frontend
 
 ### Agent Backend
-- [ ] `src/main/session-scanner.ts`
-- [ ] `src/main/skills-manager.ts`
-- [ ] `src/main/skill-stats.ts`
-- [ ] `src/main/usage-tracker.ts`
-- [ ] `src/main/agent-status.ts`
+- [x] Agent (Rust) — scan_projects, scan_sessions, scan_skills, detect_status
+- [x] Skills (Rust) — enable/disable/getDeactivatedPath/uninstall
 
 ---
 
