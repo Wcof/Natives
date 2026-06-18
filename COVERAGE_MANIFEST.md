@@ -211,21 +211,22 @@ Target: `/Users/ldh/Downloads/project/AiNative/Natives2/`
 
 ---
 
-## Loop 6: Plugin Lifecycle And State Preservation
+## Loop 6: Plugin Lifecycle And State Preservation ✅
 
 ### iframe Management
-- [ ] `src/components/iframe/IframeContainer.tsx`
-- [ ] `src/lib/iframe-manager.ts`
-- [ ] `src/lib/iframe-sandbox-manager.ts`
-- [ ] Hot/warm/cold/persistent lifecycle
-- [ ] LRU cache
-- [ ] Heartbeat monitoring
-- [ ] `src/components/crash/CrashMonitor.tsx`
-- [ ] Crash overlay + notification
+- [x] `src/components/iframe/IframeContainer.tsx` — pure frontend
+- [x] `src/lib/iframe-manager.ts` — lifecycle states, LRU, heartbeat, crash overlay
+- [x] `src/lib/iframe-sandbox-manager.ts` — sandbox, token handshake, source verification
+- [x] Hot/warm/cold/persistent lifecycle — all via window.nativesAPI
+- [x] LRU cache (MAX_BACKGROUND = 5)
+- [x] Heartbeat monitoring (5s interval, 3 misses = crash)
+- [x] `src/components/crash/CrashMonitor.tsx` — crash overlay UI
+- [x] Crash notification — module-crashed/reload-module events
 
 ### State Persistence
-- [ ] `src/lib/state-persistence.ts`
-- [ ] `state.save/load/clear` commands
+- [x] `src/lib/state-persistence.ts` — pure frontend, uses window.nativesAPI
+- [x] `state.save/load/clear` commands — Rust implementation in commands/state.rs
+- [x] DB storage: module_data table, key=_state:{moduleId}, module_id=__system__
 
 ---
 
