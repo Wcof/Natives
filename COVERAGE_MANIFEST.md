@@ -22,9 +22,9 @@ Target: `/Users/ldh/Downloads/project/AiNative/Natives2/`
 - [x] `.gitignore` with Tauri rules
 - [x] `package.json` adapted for Tauri
 - [x] Frontend adapter created (`src/lib/tauri-adapter.ts`)
-- [ ] `npm install` succeeds
-- [ ] `cargo check` in `src-tauri/` succeeds
-- [ ] Global coverage manifest complete
+- [x] `npm install` succeeds (467 packages)
+- [x] `cargo check` in `src-tauri/` succeeds (0 errors, 3 warnings)
+- [x] Global coverage manifest complete
 
 ---
 

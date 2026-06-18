@@ -27,7 +27,6 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_log::Builder::default().build())
         .setup(|app| {
-            // Initialize app state
             app.manage(AppState {
                 db: Mutex::new(None),
             });
@@ -58,6 +57,97 @@ pub fn run() {
             // Clipboard
             commands::clipboard::clipboard_write,
             commands::clipboard::clipboard_read,
+            // Terminal
+            commands::terminal::terminal_create,
+            commands::terminal::terminal_write,
+            commands::terminal::terminal_resize,
+            commands::terminal::terminal_kill,
+            commands::terminal::terminal_cwd,
+            // Module
+            commands::module::module_scan,
+            commands::module::module_install,
+            commands::module::module_read_manifest,
+            commands::module::module_grant_permission,
+            commands::module::module_revoke_permission,
+            commands::module::module_list_permissions,
+            commands::module::module_get_audit_log,
+            commands::module::module_approve_all_permissions,
+            commands::module::module_uninstall,
+            commands::module::module_list,
+            commands::module::module_enable,
+            commands::module::module_disable,
+            commands::module::module_update,
+            // Environment
+            commands::env::env_get_variables,
+            commands::env::env_get_default_profile,
+            commands::env::env_list_profiles,
+            commands::env::env_create_profile,
+            commands::env::env_delete_profile,
+            commands::env::env_set_default_profile,
+            commands::env::env_set_variable,
+            commands::env::env_delete_variable,
+            commands::env::env_encrypt,
+            commands::env::env_decrypt,
+            // Notifications
+            commands::notification::notification_send,
+            commands::notification::notification_list,
+            commands::notification::notification_mark_read,
+            commands::notification::notification_mark_all_read,
+            // File System
+            commands::fs::fs_list_dir,
+            commands::fs::fs_read_file,
+            commands::fs::fs_write_file_atomic,
+            commands::fs::fs_create_entry,
+            commands::fs::fs_rename_entry,
+            commands::fs::fs_trash_entry,
+            commands::fs::fs_move_entry,
+            commands::fs::fs_import_files,
+            commands::fs::fs_recent_files,
+            // Archive
+            commands::archive::archive_list,
+            // Search
+            commands::search::search_grep,
+            commands::search::search_files,
+            commands::search::search_spotlight,
+            // State
+            commands::state::state_save,
+            commands::state::state_load,
+            commands::state::state_clear,
+            // Git
+            commands::git::git_status,
+            commands::git::git_diff,
+            // Disk
+            commands::disk::disk_usage,
+            // Thumbnail
+            commands::thumbnail::thumbnail_generate,
+            // Agent
+            commands::agent::agent_scan_projects,
+            commands::agent::agent_get_sessions,
+            commands::agent::agent_scan_skills,
+            commands::agent::agent_detect_status,
+            // Skills
+            commands::skills::skills_enable,
+            commands::skills::skills_disable,
+            commands::skills::skills_get_deactivated_path,
+            commands::skills::skills_uninstall,
+            // Screenshot
+            commands::screenshot::screenshot_start_watching,
+            commands::screenshot::screenshot_stop_watching,
+            commands::screenshot::screenshot_save_annotated,
+            // Release
+            commands::release::release_inspect,
+            commands::release::release_prepare,
+            commands::release::release_get_sequence,
+            commands::release::release_execute,
+            // Update
+            commands::update::update_check,
+            commands::update::update_mute,
+            commands::update::update_get_muted,
+            // Usage
+            commands::usage::usage_refresh,
+            // Widget
+            commands::widget::open_widget_window,
+            commands::widget::theme_ready_signal,
         ])
         .run(tauri::generate_context!())
         .expect("error while running natives");
