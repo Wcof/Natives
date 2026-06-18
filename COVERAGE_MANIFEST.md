@@ -132,37 +132,38 @@ Target: `/Users/ldh/Downloads/project/AiNative/Natives2/`
 
 ---
 
-## Loop 3: SQLite, Settings, Theme, Locale
+## Loop 3: SQLite, Settings, Theme, Locale ✅
 
-### DB Schema (9 tables)
-- [ ] `settings` table
-- [ ] `modules` table
-- [ ] `module_data` table
-- [ ] `notifications` table
-- [ ] `audit_log` table
-- [ ] `env_profiles` table
-- [ ] `env_variables` table
-- [ ] `recent_files` table
-- [ ] `state_persistence` table
+### DB Schema (10 tables)
+- [x] `settings` table — key-value app settings
+- [x] `modules` table — installed plugin registry
+- [x] `module_data` table — per-module key-value storage
+- [x] `notifications` table — notification queue
+- [x] `permission_audit_log` table — audit trail
+- [x] `env_profiles` table — environment configuration profiles
+- [x] `env_variables` table — encrypted env vars per profile
+- [x] `module_permissions` table — per-module permission grants
+- [x] `module_order` table — sidebar ordering
+- [x] `workshop_cache` table — workshop/marketplace cache
 
 ### DB Operations
-- [ ] WAL mode + foreign keys
-- [ ] Migration system
-- [ ] `db.get/set/delete/list` full implementation
-- [ ] `db-state-changed` event broadcasting
+- [x] WAL mode + foreign keys + busy timeout
+- [x] Migration system (ALTER TABLE column detection)
+- [x] `db.get/set/delete/list` full implementation on module_data
+- [x] `db-state-changed` event broadcasting (Tauri emit)
 
 ### Theme
-- [ ] `src/lib/theme-engine.ts`
-- [ ] `src/context/ThemeContext.tsx`
-- [ ] Theme persistence in DB
-- [ ] CSS variable injection
-- [ ] 3 built-in themes (Terminal Volt, Warm Archive, Editorial Index)
+- [x] `src/lib/theme-engine.ts` — pure frontend, works with window.nativesAPI
+- [x] `src/context/ThemeContext.tsx` — pure frontend
+- [x] Theme persistence in DB (settings:theme key)
+- [x] CSS variable injection (frontend applies, Tauri just stores)
+- [x] 2 built-in themes (Terminal Volt, Frosted Jasmine)
 
 ### Locale
-- [ ] `src/i18n/en.ts`
-- [ ] `src/i18n/zh.ts`
-- [ ] `src/i18n/index.ts`
-- [ ] Locale persistence in DB
+- [x] `src/i18n/en.ts` — pure frontend
+- [x] `src/i18n/zh.ts` — pure frontend
+- [x] `src/i18n/index.ts` — pure frontend
+- [x] Locale persistence in DB (settings:locale key)
 
 ---
 
