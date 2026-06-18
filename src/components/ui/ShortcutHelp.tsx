@@ -62,19 +62,20 @@ export default function ShortcutHelp() {
       onClick={(e) => { if (e.target === e.currentTarget) setVisible(false); }}
     >
       <div style={{
-        background: 'var(--bg-2, #131410)',
-        border: '1px solid var(--border, #262920)',
-        borderRadius: 12,
+        background: 'var(--vibe-toolbar-bg)',
+        border: '0.0625rem solid var(--vibe-toolbar-border)',
+        borderRadius: '1rem',
         padding: '24px 32px',
         maxWidth: 480,
         width: '90%',
-        boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+        boxShadow: 'var(--vibe-toolbar-shadow)',
+        backdropFilter: 'blur(28px) saturate(145%)',
       }}>
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           marginBottom: 20,
         }}>
-          <h2 style={{ fontSize: 16, fontWeight: 600, color: 'var(--text)', margin: 0 }}>
+          <h2 style={{ fontSize: 16, fontWeight: 600, color: 'var(--vibe-brand-text)', margin: 0 }}>
             <Keyboard size={16} /> {t(locale, 'shortcuts.title')}
           </h2>
           <button
@@ -93,9 +94,9 @@ export default function ShortcutHelp() {
             <div key={i} style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               padding: '6px 0',
-              borderBottom: i < getShortcuts(locale).length - 1 ? '1px solid var(--border, #262920)' : 'none',
+              borderBottom: i < getShortcuts(locale).length - 1 ? '0.0625rem solid var(--vibe-toolbar-border)' : 'none',
             }}>
-              <span style={{ fontSize: 13, color: 'var(--text-dim, #9b9d8c)' }}>
+              <span style={{ fontSize: 13, color: 'var(--vibe-btn-text)' }}>
                 {s.description}
               </span>
               <div style={{ display: 'flex', gap: 4 }}>
@@ -103,10 +104,10 @@ export default function ShortcutHelp() {
                   <kbd key={j} style={{
                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     minWidth: 24, height: 22, padding: '0 6px',
-                    background: 'var(--bg-3, #1c1e17)',
-                    border: '1px solid var(--border, #262920)',
+                    background: 'var(--vibe-btn-bg)',
+                    border: '0.0625rem solid var(--vibe-btn-border)',
                     borderRadius: 4,
-                    fontSize: 11, fontWeight: 600, color: 'var(--text)',
+                    fontSize: 11, fontWeight: 600, color: 'var(--vibe-btn-text)',
                     fontFamily: 'var(--font-mono)',
                   }}>
                     {key}
@@ -119,21 +120,21 @@ export default function ShortcutHelp() {
 
         <div style={{
           marginTop: 16, textAlign: 'center',
-          fontSize: 11, color: 'var(--text-faint, #62655a)',
+          fontSize: 11, color: 'var(--vibe-btn-text)',
         }}>
           Press <kbd style={{
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
             minWidth: 20, height: 18, padding: '0 4px',
-            background: 'var(--bg-3, #1c1e17)',
-            border: '1px solid var(--border, #262920)',
-            borderRadius: 3, fontSize: 10, fontWeight: 600, color: 'var(--text)',
+            background: 'var(--vibe-btn-bg)',
+            border: '0.0625rem solid var(--vibe-btn-border)',
+            borderRadius: 3, fontSize: 10, fontWeight: 600, color: 'var(--vibe-btn-text)',
             fontFamily: 'var(--font-mono)', margin: '0 2px',
           }}>⌘</kbd>+<kbd style={{
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
             minWidth: 20, height: 18, padding: '0 4px',
-            background: 'var(--bg-3, #1c1e17)',
-            border: '1px solid var(--border, #262920)',
-            borderRadius: 3, fontSize: 10, fontWeight: 600, color: 'var(--text)',
+            background: 'var(--vibe-btn-bg)',
+            border: '0.0625rem solid var(--vibe-btn-border)',
+            borderRadius: 3, fontSize: 10, fontWeight: 600, color: 'var(--vibe-btn-text)',
             fontFamily: 'var(--font-mono)', margin: '0 2px',
           }}>/</kbd> to toggle
         </div>
