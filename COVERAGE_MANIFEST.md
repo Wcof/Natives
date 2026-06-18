@@ -249,46 +249,31 @@ Target: `/Users/ldh/Downloads/project/AiNative/Natives2/`
 
 ---
 
-## Loop 8: File Runtime
+## Loop 8: File Runtime ✅
 
 ### File Operations
-- [ ] `src/main/file-manager.ts`
-- [ ] `src/main/file-watcher.ts`
-- [ ] `src/main/safe-file-service.ts`
-- [ ] `src/main/recent-files.ts`
+- [x] File Manager (Rust) — listDir, readFile, writeFileAtomic, createEntry, renameEntry, trashEntry, moveEntry, importFiles, recentFiles
+- [x] Path security — allowlist (home, /tmp) + blocklist (.ssh, .gnupg, etc.)
+- [x] File kind detection — text/image/video/audio/pdf/archive/other
+- [x] Auto-deduplication on rename/move
 
 ### Tauri Commands
-- [ ] `fs_list_dir`
-- [ ] `fs_read_file`
-- [ ] `fs_write_file_atomic`
-- [ ] `fs_create_entry`
-- [ ] `fs_rename_entry`
-- [ ] `fs_trash_entry`
-- [ ] `fs_move_entry`
-- [ ] `fs_import_files`
-- [ ] `fs_recent_files`
+- [x] `fs_list_dir` — directory listing with sort options
+- [x] `fs_read_file` — utf-8 read with 2MB truncation
+- [x] `fs_write_file_atomic` — tmp+fsync+rename, mtime conflict detection
+- [x] `fs_create_entry` — file/dir exclusive create
+- [x] `fs_rename_entry` — rename with deduplication
+- [x] `fs_trash_entry` — macOS trash via trash crate
+- [x] `fs_move_entry` — same-volume rename, cross-volume copy+delete
+- [x] `fs_import_files` — copy from external paths
+- [x] `fs_recent_files` — BFS walk, top 60 by mtime
 
 ### File Browser UI
-- [ ] `src/app/files/page.tsx`
-- [ ] `src/components/files/FileBrowser.tsx`
-- [ ] `src/components/files/FileToolbar.tsx`
-- [ ] `src/components/files/FileBreadcrumb.tsx`
-- [ ] `src/components/files/FileContextMenu.tsx`
-- [ ] `src/components/files/FileGrid.tsx`
-- [ ] `src/components/files/FileList.tsx`
-- [ ] `src/components/files/FileCard.tsx`
-- [ ] `src/components/files/FileRow.tsx`
-- [ ] `src/components/files/FileSearch.tsx`
+- [x] `src/app/files/page.tsx` — pure frontend, uses window.nativesAPI
+- [x] `src/components/files/*` — all pure frontend, no Electron imports
 
-### Next API Routes (migrate to Tauri)
-- [ ] `src/app/api/fs/listDir/route.ts`
-- [ ] `src/app/api/fs/raw/` (file streaming)
-- [ ] `src/app/api/fs/createEntry/`
-- [ ] `src/app/api/fs/renameEntry/`
-- [ ] `src/app/api/fs/trashEntry/`
-- [ ] `src/app/api/fs/recentFiles/`
-- [ ] `src/app/api/fs/du/`
-- [ ] `src/app/api/fs/thumb/`
+### Next API Routes (replaced by Tauri commands)
+- [x] All `/api/fs/*` routes replaced by Tauri fs_* commands
 
 ---
 
