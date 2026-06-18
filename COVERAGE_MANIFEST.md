@@ -190,22 +190,24 @@ Target: `/Users/ldh/Downloads/project/AiNative/Natives2/`
 
 ---
 
-## Loop 5: Module Runtime And Workshop
+## Loop 5: Module Runtime And Workshop ✅
 
 ### Module Management
-- [ ] `src/main/module-manager.ts`
-- [ ] `src/main/installer.ts`
-- [ ] `src/main/permission-center.ts`
+- [x] Module Manager (Rust) — scan, install, uninstall, enable/disable, list
+- [x] Permission Center (Rust) — grant, revoke, approveAll, audit log
+- [x] Manifest validation — Zod-equivalent schema check
+- [x] Zip extraction with Zip Slip protection
+- [x] DB sync — upsert modules, permissions, order; purge stale
 
 ### Pages
-- [ ] `src/app/modules/page.tsx`
-- [ ] `src/components/shell/WorkshopPage.tsx`
+- [x] `src/app/modules/page.tsx` — pure frontend, uses window.nativesAPI
+- [x] `src/components/shell/WorkshopPage.tsx` — pure frontend, uses window.nativesAPI
 
 ### Module Operations
-- [ ] scan/install/readManifest
-- [ ] enable/disable/update/uninstall
-- [ ] grantPermission/revokePermission/listPermissions
-- [ ] getAuditLog/approveAllPermissions
+- [x] scan/install/readManifest — all implemented
+- [x] enable/disable/update/uninstall — all implemented
+- [x] grantPermission/revokePermission/listPermissions — all implemented
+- [x] getAuditLog/approveAllPermissions — all implemented
 
 ---
 
