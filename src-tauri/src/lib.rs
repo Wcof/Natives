@@ -2,8 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::Manager;
 
+mod archive;
 mod commands;
 mod db;
+mod disk_usage;
 mod env_manager;
 mod error;
 mod file_manager;
@@ -11,6 +13,7 @@ mod http_server;
 mod module_manager;
 mod permission_center;
 mod terminal;
+mod thumbnail;
 mod token_manager;
 
 pub use error::{Error, Result};
