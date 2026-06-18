@@ -1,0 +1,32 @@
+{
+  "id": "com.example.my-plugin",
+  "name": "My Plugin",
+  "version": "1.0.0",
+  "description": "A sample Natives plugin",
+  "author": "Your Name",
+  "entry": "index.html",
+  "icon": "icon.png",
+  "type": "web",
+  "permissions": [
+    "db:read",
+    "db:write"
+  ],
+  "minNativesVersion": "0.1.0",
+  "api": {
+    "bridge": "1.0"
+  },
+  "lifecycle": {
+    "heartbeatInterval": 5000,
+    "loadTimeout": 10000
+  },
+  "i18n": {
+    "name": {
+      "en": "My Plugin",
+      "zh": "我的插件"
+    },
+    "description": {
+      "en": "A sample Natives plugin",
+      "zh": "一个示例 Natives 插件"
+    }
+  }
+}
