@@ -34,8 +34,23 @@ pub fn run() {
             }
         }))
         .setup(|app| {
+            // Initialize SQLite database at ~/.natives/natives.db
+            let data_dir = app
+                .path()
+                .home_dir()
+                .map_err(|e| format!("failed to get home dir: {e}"))
+                .unwrap()
+                .join(".natives");
+            std::fs::create_dir_all(&data_dir)
+                .map_err(|e| format!("failed to create .natives dir: {e}"))
+                .unwrap();
+            let db_path = data_dir.join("natives.db");
+            let conn = db::init_db(&db_path)
+                .map_err(|e| format!("failed to init database: {e}"))
+                .unwrap();
+
             app.manage(AppState {
-                db: Mutex::new(None),
+                db: Mutex::new(Some(conn)),
             });
 
             // FOUC guard: window starts hidden (tauri.conf.json has visible: false)
