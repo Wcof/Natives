@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Natives",
         "width": 1440,
         "height": 900,
@@ -20,7 +21,8 @@
         "transparent": true,
         "decorations": false,
         "fullscreen": false,
-        "resizable": true
+        "resizable": true,
+        "visible": false
       }
     ],
     "security": {
@@ -46,6 +48,9 @@
       "open": true
     },
     "window-state": {
+      "enabled": true
+    },
+    "single-instance": {
       "enabled": true
     },
     "updater": {

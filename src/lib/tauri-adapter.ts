@@ -144,6 +144,7 @@ export interface NativesAPI {
     maximize: () => Promise<void>;
     close: () => Promise<void>;
     isMaximized: () => Promise<boolean>;
+    tileWindow: (action: string) => Promise<void>;
   };
   openWidgetWindow: () => void;
 }
@@ -401,6 +402,7 @@ const nativesAPI: NativesAPI = {
     maximize: () => cmd('window_maximize'),
     close: () => cmd('window_close'),
     isMaximized: () => cmd('window_is_maximized'),
+    tileWindow: (action: string) => cmd('window_tile', { action }),
   },
 
   // Widget window

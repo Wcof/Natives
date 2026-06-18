@@ -26,10 +26,20 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_log::Builder::default().build())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // Focus the existing window when a second instance is launched
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .setup(|app| {
             app.manage(AppState {
                 db: Mutex::new(None),
             });
+
+            // FOUC guard: window starts hidden (tauri.conf.json has visible: false)
+            // It will be shown by theme_ready_signal command from frontend
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -54,6 +64,7 @@ pub fn run() {
             commands::window::window_maximize,
             commands::window::window_close,
             commands::window::window_is_maximized,
+            commands::window::window_tile,
             // Clipboard
             commands::clipboard::clipboard_write,
             commands::clipboard::clipboard_read,
