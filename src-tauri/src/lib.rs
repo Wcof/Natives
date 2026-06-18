@@ -6,6 +6,7 @@ mod commands;
 mod db;
 mod env_manager;
 mod error;
+mod file_manager;
 mod http_server;
 mod module_manager;
 mod permission_center;
