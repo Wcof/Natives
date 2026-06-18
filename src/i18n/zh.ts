@@ -12,9 +12,8 @@ export const zh = {
     aiWorkbench: 'AI 工作台',
     tools: '工具',
     terminalToggle: '切换终端',
+    themeFrostedJasmine: '主题：磨砂茉莉',
     themeTerminalVolt: '主题：Terminal Volt',
-    themeWarmArchive: '主题：Warm Archive',
-    themeEditorial: '主题：Editorial',
   },
 
   sidebar: {
@@ -31,6 +30,7 @@ export const zh = {
     },
     ariaToggle: '切换侧边栏',
     ariaResize: '调整侧边栏大小',
+    searchPlaceholder: '搜索全部文件',
   },
 
   dashboard: {
@@ -149,8 +149,7 @@ export const zh = {
     environment: '环境配置',
     about: '关于',
     themeTerminal: 'Terminal Volt（暗色）',
-    themeWarm: 'Warm Archive（暖色亮色）',
-    themeEditorial: 'Editorial（极简亮色）',
+    themeJasmine: '磨砂茉莉（浅色磨砂）',
     addProfile: '添加配置',
     deleteProfile: '删除配置',
     defaultProfile: '默认配置',
@@ -180,8 +179,7 @@ export const zh = {
     panelWidth: '面板宽度',
     terminalHeight: '终端高度',
     themeDescTerminal: '暗色终端风格',
-    themeDescWarm: '暖色纸张风格',
-    themeDescEditorial: '高对比极简风格',
+    themeDescJasmine: '浅色磨砂，系统壁纸渐变色系',
     aboutVersion: 'Natives v0.1.0 — AI 时代的桌面应用容器',
   },
 
@@ -252,6 +250,7 @@ export const zh = {
     ascending: '升序',
     descending: '降序',
     showHidden: '显示隐藏文件',
+    hideHidden: '不显示隐藏文件',
     searchPlaceholder: '搜索文件...',
     noResults: '未找到结果',
     dropToImport: '拖放文件到此处导入',
@@ -277,6 +276,9 @@ export const zh = {
     diskUsageShowFirst: '只显示前',
     diskUsageUp: '↑ 上一级',
     diskUsageLoading: '计算中（大目录会慢几秒）',
+    dropHere: '松开 · 存入当前目录',
+    filesDropped: '文件已复制',
+    imageSaved: '图片已保存',
     favorite: '收藏',
     unfavorite: '取消收藏',
     openInPreview: '预览',
@@ -310,6 +312,9 @@ export const zh = {
     breadcrumbLabel: '面包屑导航',
     recentMode: '最近修改的文件',
     recentModeTitle: '退出最近修改视图',
+    columnsView: '分栏视图',
+    sort: '排序',
+    filter: '筛选',
   },
 
   // 文件预览
@@ -343,6 +348,7 @@ export const zh = {
   header: {
     personal: '个人主页',
     aiWorkbench: 'AI 工作台',
+    showFull: '展开完整路径',
   },
 
   // AI 工作台
@@ -399,6 +405,10 @@ export const zh = {
     localTokens: '本地 Token',
     today: '今天',
     thisWeek: '本周',
+    total: '总计',
+    messages: '消息',
+    since: '始于',
+    modelBreakdown: '模型明细',
     nextReset: '重置',
     plan: '计划',
     tokensSaved: 'Token 已节省',
@@ -464,6 +474,8 @@ export const zh = {
     // Usage panel
     usage: {
       noRtkData: '暂无 RTK 用量数据',
+      noClaudeData: '暂无 Claude Code 用量数据',
+      noCodexData: '暂无 Codex 用量数据',
     },
     // Session replay
     replay: {
@@ -674,4 +686,49 @@ export const zh = {
     allSetDesc: '你已准备好开始使用 Natives。享受吧！',
     finish: '完成',
   },
+  controlHub: {
+    title: 'Natives 控制中心',
+    subtitle: '液态玻璃物理折射卡片',
+    tabControls: '控制中心',
+    tabSettings: '视觉微调',
+    wifi: '无线局域网',
+    bluetooth: '蓝牙',
+    airdrop: '隔空投送',
+    connected: '已连接',
+    disconnected: '未连接',
+    focusMode: '专注模式',
+    dnd: '勿扰模式',
+    brightness: '屏幕亮度',
+    volume: '系统音量',
+    systemMonitor: '系统监测',
+    cpuActivity: 'CPU 核心负载',
+    memoryFootprint: '内存占用',
+    sandboxMode: '独立沙箱模式',
+    sandboxActive: '已启用',
+    sandboxInactive: '未启用',
+    incrementState: '状态计数器 ({n})',
+    toggleSandbox: '切换沙箱模式',
+    settings: {
+      refractionMode: '折射计算模式',
+      modeStandard: '标准模式 (Standard)',
+      modePolar: '极坐标 (Polar)',
+      modeProminent: '高亮折射 (Prominent)',
+      modeShader: '着色器 (Shader - 实验性)',
+      displacementScale: '边缘畸变强度 (Displacement)',
+      blurAmount: '磨砂模糊程度 (Blur)',
+      saturation: '色彩饱和度 (Saturation)',
+      aberration: '色差边缘偏移 (Aberration)',
+      elasticity: '物理回弹弹性 (Elasticity)',
+      radius: '卡片圆角半径 (Corner Radius)',
+      overLight: '反色暗化遮罩 (Over Light)',
+      overLightDesc: '当背景偏亮时对玻璃层进行暗化处理',
+      themeSelection: '全局主题契约',
+      themeDark: '深色极光暗玻 (Dark)',
+      themeLight: '浅色极光亮玻 (Light)',
+      reset: '恢复默认参数',
+      firefoxWarning: '⚠️ Safari 和 Firefox 仅部分支持，折射效果将在非 Chromium 浏览器中失效',
+      wallpaperMockup: '模拟桌面壁纸背景',
+      blobsMockup: '模拟背景彩色光斑',
+    }
+  }
 };

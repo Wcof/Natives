@@ -2,20 +2,36 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { t, type Locale } from '@/i18n';
-import { Grid3x3, List, ArrowUp, ArrowDown, Terminal, EyeOff, Eye, Menu } from 'lucide-react';
-import FileBreadcrumb from '@/components/files/FileBreadcrumb';
+import {
+  Grid3x3,
+  List,
+  Home,
+  ChevronRight,
+  FolderPlus,
+  Search,
+  ArrowUpDown,
+  SlidersHorizontal,
+  X,
+  ArrowUp,
+  ArrowDown,
+  Eye,
+  EyeOff,
+  PanelLeft,
+} from 'lucide-react';
+
+const DRAG = { WebkitAppRegion: 'drag' as const };
+const NO_DRAG = { WebkitAppRegion: 'no-drag' as const } as React.CSSProperties;
 
 const VIEW_LABELS: Record<string, string> = {
-  dashboard: 'header.personal',
+  dashboard: 'nav.dashboard',
   files: '',
   ai: 'header.aiWorkbench',
   workshop: 'nav.workshop',
   settings: 'nav.settings',
   tools: 'nav.tools',
+  modules: 'nav.modules',
+  store: 'nav.store',
 };
-
-const DRAG = { WebkitAppRegion: 'drag' as const };
-const NO_DRAG = { WebkitAppRegion: 'no-drag' as const };
 
 interface FileState {
   viewMode: 'grid' | 'list';
@@ -28,12 +44,103 @@ interface FileState {
   projectBadge?: string | null;
 }
 
+// Smart breadcrumb: when segments > 4, collapse to ~ + … + last 2
+const CRUMB_COLLAPSE_THRESHOLD = 4;
+
+function BreadcrumbPath({
+  segments,
+  onNavigate,
+  locale,
+}: {
+  segments: string[];
+  onNavigate: (path: string) => void;
+  locale: Locale;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  // Reset collapse whenever path changes
+  useEffect(() => {
+    setExpanded(false);
+  }, [segments.join('/')]);
+
+  // Root path — just a home icon
+  if (segments.length === 0 || (segments.length === 1 && segments[0] === '/')) {
+    return (
+      <button
+        className="vibe-btn !h-8 text-xs active"
+        onClick={() => onNavigate('/')}
+        title="/"
+      >
+        <Home size={14} className="inline" />
+      </button>
+    );
+  }
+
+  const shouldCollapse = !expanded && segments.length > CRUMB_COLLAPSE_THRESHOLD;
+  // Collapsed view: ~ + … + last 2 segments
+  const displaySegments = shouldCollapse
+    ? [segments[0], null, ...segments.slice(-2)]
+    : segments;
+
+  return (
+    <>
+      {displaySegments.map((seg, i) => {
+        // null = ellipsis placeholder
+        if (seg === null) {
+          return (
+            <span key="ellipsis" className="flex items-center gap-1.5">
+              <ChevronRight size={12} className="text-[var(--text-faint)] shrink-0" />
+              <button
+                className="vibe-btn !h-8 text-xs px-1.5"
+                onClick={() => setExpanded(true)}
+                title={t(locale, 'header.showFull')}
+              >
+                …
+              </button>
+            </span>
+          );
+        }
+
+        // Map display index back to real segment index
+        const realIndex = shouldCollapse
+          ? (i === 0 ? 0 : segments.length - 2 + (i - 1))
+          : i;
+
+        const isHome = realIndex === 0;
+        const isLast = realIndex === segments.length - 1;
+
+        return (
+          <span key={`seg-${realIndex}`} className="flex items-center gap-1.5 min-w-0">
+            {i > 0 && <ChevronRight size={12} className="text-[var(--text-faint)] shrink-0" />}
+            <button
+              className={`vibe-btn !h-8 text-xs truncate max-w-[120px] ${isLast ? 'active' : ''}`}
+              onClick={() => {
+                if (isHome) {
+                  onNavigate('/');
+                } else {
+                  const path = '/' + segments.slice(1, realIndex + 1).join('/');
+                  onNavigate(path);
+                }
+              }}
+              title={isHome ? '~' : seg}
+            >
+              {isHome ? '~' : seg}
+            </button>
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
 export default function Header({
-  activeView, onToggleSidebar, onToggleTerminal,
+  activeView,
+  sidebarCollapsed,
+  onToggleSidebar,
 }: {
   activeView: string;
-  onToggleSidebar: () => void;
-  onToggleTerminal: () => void;
+  sidebarCollapsed?: boolean;
+  onToggleSidebar?: () => void;
 }) {
   const [locale, setLocale] = useState<Locale>('zh');
   const [tbClass, setTbClass] = useState('');
@@ -41,6 +148,14 @@ export default function Header({
 
   // File-browser state (updated via event bridge)
   const [fileState, setFileState] = useState<FileState | null>(null);
+
+  // Local UI state for sort dropdown, filter dropdown & search
+  const [sortOpen, setSortOpen] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const sortRef = useRef<HTMLDivElement>(null);
+  const filterRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     window.nativesAPI?.getLocale?.().then((l) => { if (l === 'en') setLocale('en'); }).catch(() => {});
@@ -59,6 +174,27 @@ export default function Header({
   const dispatchAction = useCallback((type: string, value?: unknown) => {
     window.dispatchEvent(new CustomEvent('header-file-action', { detail: { type, value } }));
   }, []);
+
+  // Click outside to close sort/filter/search popups
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (sortRef.current && !sortRef.current.contains(e.target as Node)) {
+        setSortOpen(false);
+      }
+      if (filterRef.current && !filterRef.current.contains(e.target as Node)) {
+        setFilterOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  // Focus search input when opened
+  useEffect(() => {
+    if (searchOpen && searchRef.current) {
+      searchRef.current.focus();
+    }
+  }, [searchOpen]);
 
   // Responsive shrinking
   useEffect(() => {
@@ -79,133 +215,221 @@ export default function Header({
   }, []);
 
   const isFileView = activeView === 'files';
-  const fs = fileState; // shorthand
+  const fs = fileState;
 
   return (
     <header
       ref={headerRef}
-      className={tbClass}
+      className={`vibe-toolbar flex items-center gap-3 px-4 ${tbClass}`}
       style={{
-        display: 'flex', alignItems: 'center', gap: 12,
-        padding: '10px 16px',
-        borderBottom: '1px solid var(--border, #262920)',
-        background: 'var(--bg, #0b0c0a)',
         ...DRAG,
         userSelect: 'none',
-        minHeight: 48,
       }}
     >
-      {/* Left: sidebar toggle */}
-      <button
-        className="btn btn-ghost"
-        onClick={onToggleSidebar}
-        title={t(locale, 'sidebar.ariaToggle')}
-        style={{ ...NO_DRAG, padding: '2px 6px', flexShrink: 0 }}
-      >
-        <Menu size={16} />
-      </button>
+      {/* Sidebar toggle — always visible */}
+      {onToggleSidebar && (
+        <button
+          className={`vibe-btn !h-8 !w-8 !p-0 flex items-center justify-center shrink-0 ${sidebarCollapsed ? '' : 'active'}`}
+          onClick={onToggleSidebar}
+          title={t(locale, sidebarCollapsed ? 'sidebar.expand' : 'sidebar.collapse')}
+          style={NO_DRAG}
+        >
+          <PanelLeft size={15} />
+        </button>
+      )}
 
-      {/* Center: breadcrumb (file view) or view title (other views) */}
-      <div style={{
-        flex: '1 1 auto', minWidth: 130, overflow: 'auto',
-        scrollbarWidth: 'none', msOverflowStyle: 'none',
-        ...NO_DRAG,
-      }}>
-        {isFileView && fs ? (
-          <FileBreadcrumb
-            segments={fs.segments}
-            onNavigate={(path) => {
-              window.dispatchEvent(new CustomEvent('navigate-files', { detail: path }));
-            }}
-            isFavorite={fs.isFavorite}
-            onToggleFavorite={() => {}}
-            projectBadge={fs.projectBadge as any}
-          />
-        ) : (
-          <span style={{ fontSize: 13, color: 'var(--text, #f2f2ea)', fontWeight: 500, whiteSpace: 'nowrap' }}>
+      {/* 根据 activeView 渲染不同导航 */}
+      {isFileView ? (
+        /* ── 文件浏览器：动态面包屑 + 控件 ── */
+        <>
+          {/* Dynamic breadcrumbs — smart truncation */}
+          <div className="flex items-center gap-1.5 flex-1 min-w-0 overflow-x-auto scrollbar-none" style={NO_DRAG}>
+            <BreadcrumbPath
+              segments={fs?.segments ?? []}
+              onNavigate={(path) => window.dispatchEvent(new CustomEvent('navigate-files', { detail: path }))}
+              locale={locale}
+            />
+          </div>
+
+          {/* New Folder */}
+          <div className="flex items-center" style={NO_DRAG}>
+            <button className="vibe-btn !h-8" onClick={() => dispatchAction('newFolder', fs?.breadcrumbPath ?? '/')} title={t(locale, 'fileBrowser.newFolder')}>
+              <FolderPlus size={14} />
+              <span className="text-xs">{t(locale, 'fileBrowser.newFolder')}</span>
+            </button>
+          </div>
+
+          {/* View mode toggle + Sort + Filter + Search */}
+          <div className="flex items-center gap-1.5" style={NO_DRAG}>
+            {/* View mode toggle */}
+            <div className="flex items-center gap-0.5 rounded-lg bg-[var(--vibe-btn-bg)] p-0.5 border border-[var(--vibe-btn-border)]">
+              <button
+                className={`flex h-7 w-7 items-center justify-center rounded-md transition-all ${
+                  (fs?.viewMode ?? 'grid') === 'grid'
+                    ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)] shadow-sm'
+                    : 'text-[var(--vibe-btn-text)] hover:text-[var(--vibe-btn-hover-color)]'
+                }`}
+                onClick={() => dispatchAction('viewMode', 'grid')}
+                title={t(locale, 'fileBrowser.gridView')}
+              >
+                <Grid3x3 size={14} />
+              </button>
+              <button
+                className={`flex h-7 w-7 items-center justify-center rounded-md transition-all ${
+                  (fs?.viewMode ?? 'grid') === 'list'
+                    ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)] shadow-sm'
+                    : 'text-[var(--vibe-btn-text)] hover:text-[var(--vibe-btn-hover-color)]'
+                }`}
+                onClick={() => dispatchAction('viewMode', 'list')}
+                title={t(locale, 'fileBrowser.listView')}
+              >
+                <List size={14} />
+              </button>
+            </div>
+
+            {/* Sort — dropdown */}
+            <div ref={sortRef} className="relative">
+              <button
+                className="vibe-btn !h-8 text-xs"
+                onClick={() => setSortOpen((v) => !v)}
+                title={t(locale, 'fileBrowser.sort')}
+              >
+                <ArrowUpDown size={12} />
+                <span>{t(locale, 'fileBrowser.sort')}</span>
+              </button>
+              {sortOpen && (
+                <div
+                  className="absolute right-0 top-full mt-1 z-50 min-w-[160px] rounded-lg border border-[var(--vibe-btn-border)] bg-[var(--vibe-toolbar-bg)] backdrop-blur-xl p-1 shadow-xl"
+                  style={{ ...NO_DRAG }}
+                >
+                  {([
+                    { key: 'name', label: t(locale, 'fileBrowser.sortByName') },
+                    { key: 'mtime', label: t(locale, 'fileBrowser.sortByModified') },
+                    { key: 'size', label: t(locale, 'fileBrowser.sortBySize') },
+                  ] as const).map((opt) => (
+                    <button
+                      key={opt.key}
+                      className={`flex w-full items-center justify-between gap-3 rounded-md px-3 py-1.5 text-xs transition-all ${
+                        fs?.sortBy === opt.key
+                          ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
+                          : 'text-[var(--vibe-btn-text)] hover:bg-[var(--vibe-btn-bg)]'
+                      }`}
+                      onClick={() => {
+                        dispatchAction('sortBy', opt.key);
+                        setSortOpen(false);
+                      }}
+                    >
+                      <span>{opt.label}</span>
+                      {fs?.sortBy === opt.key && (
+                        <span className="text-[10px] opacity-60">
+                          {fs?.sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                  <div className="mx-2 my-1 border-t border-[var(--vibe-btn-border)]" />
+                  <button
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs text-[var(--vibe-btn-text)] hover:bg-[var(--vibe-btn-bg)] transition-all"
+                    onClick={() => {
+                      dispatchAction('sortDir');
+                      setSortOpen(false);
+                    }}
+                  >
+                    {fs?.sortDir === 'asc' ? (
+                      <><ArrowUp size={12} /> {t(locale, 'fileBrowser.ascending')}</>
+                    ) : (
+                      <><ArrowDown size={12} /> {t(locale, 'fileBrowser.descending')}</>
+                    )}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Filter — dropdown */}
+            <div ref={filterRef} className="relative">
+              <button
+                className={`vibe-btn !h-8 text-xs ${fs?.showHidden ? 'text-[var(--vibe-active-color)]' : ''}`}
+                onClick={() => setFilterOpen((v) => !v)}
+                title={t(locale, 'fileBrowser.filter')}
+              >
+                {fs?.showHidden ? <EyeOff size={12} /> : <Eye size={12} />}
+                <span>{t(locale, 'fileBrowser.filter')}</span>
+              </button>
+              {filterOpen && (
+                <div
+                  className="absolute right-0 top-full mt-1 z-50 min-w-[140px] rounded-lg border border-[var(--vibe-btn-border)] bg-[var(--vibe-toolbar-bg)] backdrop-blur-xl p-1 shadow-xl"
+                  style={{ ...NO_DRAG }}
+                >
+                  <button
+                    className={`flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs transition-all ${
+                      !fs?.showHidden
+                        ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
+                        : 'text-[var(--vibe-btn-text)] hover:bg-[var(--vibe-btn-bg)]'
+                    }`}
+                    onClick={() => {
+                      if (fs?.showHidden) dispatchAction('showHidden');
+                      setFilterOpen(false);
+                    }}
+                  >
+                    <Eye size={12} />
+                    <span>{t(locale, 'fileBrowser.hideHidden')}</span>
+                  </button>
+                  <button
+                    className={`flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs transition-all ${
+                      fs?.showHidden
+                        ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
+                        : 'text-[var(--vibe-btn-text)] hover:bg-[var(--vibe-btn-bg)]'
+                    }`}
+                    onClick={() => {
+                      if (!fs?.showHidden) dispatchAction('showHidden');
+                      setFilterOpen(false);
+                    }}
+                  >
+                    <EyeOff size={12} />
+                    <span>{t(locale, 'fileBrowser.showHidden')}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Search */}
+            <div className="relative flex items-center" style={NO_DRAG}>
+              {searchOpen ? (
+                <div className="flex items-center gap-1 rounded-lg bg-[var(--vibe-btn-bg)] border border-[var(--vibe-btn-border)] px-2 py-1">
+                  <Search size={12} className="text-[var(--text-faint)] shrink-0" />
+                  <input
+                    ref={searchRef}
+                    type="text"
+                    className="bg-transparent border-none outline-none text-xs text-[var(--text)] w-[120px] placeholder:text-[var(--text-faint)]"
+                    placeholder={t(locale, 'fileBrowser.searchPlaceholder')}
+                    onChange={(e) => dispatchAction('search', e.target.value)}
+                    onKeyDown={(e) => e.key === 'Escape' && setSearchOpen(false)}
+                  />
+                  <button
+                    className="flex items-center justify-center text-[var(--text-faint)] hover:text-[var(--text)] transition-colors"
+                    onClick={() => { setSearchOpen(false); dispatchAction('search', ''); }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className="vibe-btn !h-8 !w-8 !p-0 flex items-center justify-center"
+                  onClick={() => setSearchOpen(true)}
+                  title={t(locale, 'fileBrowser.searchPlaceholder')}
+                >
+                  <Search size={14} />
+                </button>
+              )}
+            </div>
+          </div>
+        </>
+      ) : (
+        /* ── 其他视图：显示路由标题 ── */
+        <div className="flex items-center gap-2 flex-1 min-w-0" style={NO_DRAG}>
+          <span className="text-sm font-semibold text-[#2f3136]">
             {VIEW_LABELS[activeView] ? t(locale, VIEW_LABELS[activeView]) : activeView}
           </span>
-        )}
-      </div>
-
-      {/* Right: file-browser actions */}
-      {isFileView && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
-          ...NO_DRAG,
-        }}>
-          {/* Hidden toggle */}
-          <label className={`switch ${tbClass.includes('tb-xs') || tbClass.includes('tb-sm') ? 'tb-hide' : ''}`} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <input
-              type="checkbox"
-              checked={fs?.showHidden ?? false}
-              onChange={() => dispatchAction('showHidden')}
-              style={{ display: 'none' }}
-            />
-            <span className={`switch-track ${fs?.showHidden ? 'active' : ''}`}>
-              <span className="switch-knob" />
-            </span>
-            <span style={{ fontSize: 11, color: 'var(--text-dim, #9b9d8c)', display: tbClass.includes('tb-xxs') ? 'none' : 'inline' }}>
-              {fs?.showHidden ? <EyeOff size={12} /> : <Eye size={12} />}
-            </span>
-          </label>
-
-          {/* Sort-by segmented control (name / time / size) */}
-          <div className={`segmented-control ${tbClass.includes('tb-xxs') ? 'tb-hide' : ''}`} style={{ display: 'flex' }}>
-            {(['name', 'mtime', 'size'] as const).map((key) => (
-              <button
-                key={key}
-                className={`seg-item ${(fs?.sortBy ?? 'name') === key ? 'active' : ''}`}
-                onClick={() => dispatchAction('sortBy', key)}
-                style={{ fontSize: 10, padding: '2px 6px', lineHeight: '16px' }}
-              >
-                {key === 'name' ? 'A-Z' : key === 'mtime' ? t(locale, 'fileBrowser.modified') : t(locale, 'fileBrowser.size')}
-              </button>
-            ))}
-          </div>
-
-          {/* Sort direction */}
-          <button
-            className={`btn btn-ghost ${tbClass.includes('tb-min') ? 'tb-hide' : ''}`}
-            onClick={() => dispatchAction('sortDir')}
-            style={{ fontSize: 14, padding: '2px 6px' }}
-            title={t(locale, (fs?.sortDir ?? 'asc') === 'asc' ? 'fileBrowser.ascending' : 'fileBrowser.descending')}
-          >
-            {(fs?.sortDir ?? 'asc') === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
-          </button>
-
-          {/* View mode segmented control */}
-          <div className={`segmented-control ${tbClass.includes('tb-xs') ? 'tb-hide' : ''}`} style={{ display: 'flex' }}>
-            <button
-              className={`seg-item ${(fs?.viewMode ?? 'grid') === 'grid' ? 'active' : ''}`}
-              onClick={() => dispatchAction('viewMode', 'grid')}
-              title={t(locale, 'fileBrowser.gridView')}
-            >
-              <Grid3x3 size={14} />
-            </button>
-            <button
-              className={`seg-item ${(fs?.viewMode ?? 'grid') === 'list' ? 'active' : ''}`}
-              onClick={() => dispatchAction('viewMode', 'list')}
-              title={t(locale, 'fileBrowser.listView')}
-            >
-              <List size={14} />
-            </button>
-          </div>
-
-          {/* Terminal toggle */}
-          <button
-            id="btn-terminal"
-            className="btn btn-ghost"
-            onClick={onToggleTerminal}
-            style={{
-              color: 'var(--accent, #cdf24b)',
-              background: 'var(--accent-soft, #cdf24b15)',
-              fontWeight: 700, padding: '2px 8px',
-            }}
-            title={t(locale, 'nav.terminalToggle')}
-          >
-            <Terminal size={14} />
-          </button>
         </div>
       )}
     </header>

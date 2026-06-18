@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { t, type Locale } from '@/i18n';
 import Sidebar from './Sidebar';
-import ContentArea from './ContentArea';
 import RightPanel from './RightPanel';
 import type { RightPanelMode } from './RightPanel';
 import NotificationPanel from './NotificationPanel';
@@ -14,11 +13,13 @@ import ErrorBoundary from '@/components/ui/ErrorBoundary';
 import ShortcutHelp from '@/components/ui/ShortcutHelp';
 import WorkshopPage from './WorkshopPage';
 import SettingsPage from './SettingsPage';
+import ControlHubWidget from './ControlHubWidget';
 import FileBrowser from '@/components/files/FileBrowser';
 import FilePreview from '@/components/files/FilePreview';
 import { type FileEntry } from '@/types/file';
 import AiWorkbench from '@/components/ai/AiWorkbench';
 import ToolsPage from '@/components/tools/ToolsPage';
+import ModulesPage from '@/app/modules/page';
 import { applyTheme } from '@/lib/theme-engine';
 import { getIframeManager } from '@/lib/iframe-manager';
 import ScreenshotCard from '@/components/screenshot/ScreenshotCard';
@@ -95,7 +96,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         if (savedTheme) applyTheme(savedTheme);
       } catch (err) {
         console.error('[Shell] Failed to load saved theme:', err);
-        applyTheme('editorial');
+        applyTheme('terminal-volt');
       }
 
       try {
@@ -375,6 +376,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       else if (view === '__store__') setActiveView('workshop');
       else if (view === 'ai') setActiveView('ai');
       else if (view === 'tools') setActiveView('tools');
+      else if (view === 'modules') setActiveView('modules');
       else if (typeof view === 'string' && view.startsWith('files')) {
         setActiveView('files');
         // Parse query params for path navigation (e.g. files?path=/dir&select=/file)
@@ -518,15 +520,8 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     setRightPanelMode('file-preview');
   }, [setRightPanelMode]);
 
-  const classNames = [
-    'shell',
-    state.sidebarCollapsed ? 'sidebar-collapsed' : '',
-    state.rightPanelMode !== 'closed' ? 'right-panel-open' : '',
-    state.terminalCollapsed ? 'terminal-collapsed' : '',
-    state.terminalMaximized ? 'terminal-maximized' : '',
-  ]
-    .filter(Boolean)
-    .join(' ');
+  // Widget mode check — render only the ControlHub on transparent background
+  const isWidgetMode = typeof window !== 'undefined' && window.location.search.includes('mode=widget');
 
   const renderMainContent = () => {
     switch (activeView) {
@@ -540,6 +535,8 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         return <AiWorkbench />;
       case 'tools':
         return <ToolsPage />;
+      case 'modules':
+        return <ModulesPage />;
       case 'dashboard':
         return children;
       default:
@@ -552,73 +549,105 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   };
 
   // P1-5: Show onboarding if no username is set
-  if (needsOnboarding === null) return null;
-  if (needsOnboarding) {
-    return <UsernameOnboarding locale={locale} onComplete={() => setNeedsOnboarding(false)} />;
+  // Bypassed to directly render the demo
+  // if (needsOnboarding === null) return null;
+  // if (needsOnboarding) {
+  //   return <UsernameOnboarding locale={locale} onComplete={() => setNeedsOnboarding(false)} />;
+  // }
+
+  // Widget mode — bypass chrome, render ControlHub directly
+  if (isWidgetMode) {
+    return (
+      <div className="w-screen h-screen flex items-center justify-center bg-transparent">
+        <ErrorBoundary>
+          <ControlHubWidget />
+        </ErrorBoundary>
+      </div>
+    );
   }
 
   return (
-    <div className={classNames} style={{ opacity: themeReady ? 1 : 0 }}>
+    <div className="vibe-canvas w-screen h-[calc(100vh-var(--electron-titlebar-safe-area,38px))] p-[1.125rem] flex gap-4 overflow-visible box-border" style={{ opacity: themeReady ? 1 : 0 }}>
       {/* Skip to content — accessibility */}
       <a href="#main-content" className="skip-to-content">
         {t(locale, 'common.skipToContent')}
       </a>
-      <Sidebar
-        isCollapsed={state.sidebarCollapsed}
-        onToggle={toggleSidebar}
-        width={state.sidebarWidth}
-        onResize={(w) => setState((prev) => ({ ...prev, sidebarWidth: w }))}
-        activeModuleId={activeView}
-        onModuleSelect={handleModuleSelect}
-        onNotificationClick={() => toggleRightPanel('notifications')}
-        locale={locale}
-      />
-      <Header
-        activeView={activeView}
-        onToggleSidebar={toggleSidebar}
-        onToggleTerminal={toggleTerminal}
-      />
-      <ContentArea>
-        <div ref={contentRef} id="main-content" tabIndex={-1} style={{ height: '100%', outline: 'none' }}>
-          <ErrorBoundary>
-            {renderMainContent()}
-          </ErrorBoundary>
-        </div>
-      </ContentArea>
-      <RightPanel
-        mode={state.rightPanelMode}
-        onModeChange={setRightPanelMode}
-        width={state.rightPanelWidth}
-        onResize={(w) => setState((prev) => ({ ...prev, rightPanelWidth: w }))}
-        title={state.rightPanelMode === 'file-preview' && selectedFile ? selectedFile.name : undefined}
+
+      {/* Left: Sidebar */}
+      <div
+        className="h-[calc(100vh-var(--electron-titlebar-safe-area,38px)-2.25rem)] shrink-0 transition-[width] duration-200"
+        style={{ width: state.sidebarCollapsed ? 0 : state.sidebarWidth, overflow: state.sidebarCollapsed ? 'hidden' : undefined }}
       >
-        {state.rightPanelMode === 'notifications' && (
-          <NotificationPanel locale={locale} />
-        )}
-        {state.rightPanelMode === 'file-preview' && selectedFile && (
-          <FilePreview
-            entry={selectedFile}
-            onClose={() => {
-              setSelectedFile(null);
-              setRightPanelMode('closed');
-            }}
+        <Sidebar
+          isCollapsed={state.sidebarCollapsed}
+          onToggle={toggleSidebar}
+          width={state.sidebarWidth}
+          onResize={(w) => setState((prev) => ({ ...prev, sidebarWidth: w }))}
+          activeModuleId={activeView}
+          onModuleSelect={handleModuleSelect}
+          onNotificationClick={() => toggleRightPanel('notifications')}
+          locale={locale}
+        />
+      </div>
+
+      {/* Right: Workspace */}
+      <div className="flex-1 flex flex-col min-w-0 h-[calc(100vh-var(--electron-titlebar-safe-area,38px)-2.25rem)] box-border">
+        <div className="mb-4">
+          <Header
+            activeView={activeView}
+            sidebarCollapsed={state.sidebarCollapsed}
+            onToggleSidebar={toggleSidebar}
           />
-        )}
-        {state.rightPanelMode === 'module-details' && activeView.startsWith('module:') && (
-          <ModuleDetails moduleId={activeView.slice(7)} locale={locale} />
-        )}
-      </RightPanel>
-      <TerminalPanel
-        isCollapsed={state.terminalCollapsed}
-        onToggle={toggleTerminal}
-        height={state.terminalHeight}
-        onResize={(h) => setState((prev) => ({ ...prev, terminalHeight: h }))}
-        isMaximized={state.terminalMaximized}
-        onMaximizeToggle={toggleMaximized}
-        onSessionCreated={(id) => { terminalSessionIdRef.current = id; }}
-        followMode={followMode !== 'off'}
-        onFollowModeToggle={cycleFollowMode}
-      />
+        </div>
+
+        {/* Main Content — conditional bottom margin to preserve gap when terminal is visible */}
+        <div className={`flex-1 vibe-content-panel min-w-0 overflow-hidden relative${state.terminalCollapsed ? '' : ' mb-4'}`}>
+          <div ref={contentRef} id="main-content" tabIndex={-1} style={{ width: '100%', height: '100%', outline: 'none' }}>
+            <ErrorBoundary>
+              {renderMainContent()}
+            </ErrorBoundary>
+          </div>
+        </div>
+
+        {/* Terminal — bottom of workspace column */}
+        <TerminalPanel
+          isCollapsed={state.terminalCollapsed}
+          onToggle={toggleTerminal}
+          height={state.terminalHeight}
+          onResize={(h) => setState((prev) => ({ ...prev, terminalHeight: h }))}
+          isMaximized={state.terminalMaximized}
+          onMaximizeToggle={toggleMaximized}
+          onSessionCreated={(id) => { terminalSessionIdRef.current = id; }}
+          followMode={followMode !== 'off'}
+          onFollowModeToggle={cycleFollowMode}
+        />
+      </div>
+
+      {state.rightPanelMode !== 'closed' && (
+        <RightPanel
+          mode={state.rightPanelMode}
+          onModeChange={setRightPanelMode}
+          width={state.rightPanelWidth}
+          onResize={(w) => setState((prev) => ({ ...prev, rightPanelWidth: w }))}
+          title={state.rightPanelMode === 'file-preview' && selectedFile ? selectedFile.name : undefined}
+        >
+          {state.rightPanelMode === 'notifications' && (
+            <NotificationPanel locale={locale} />
+          )}
+          {state.rightPanelMode === 'file-preview' && selectedFile && (
+            <FilePreview
+              entry={selectedFile}
+              onClose={() => {
+                setSelectedFile(null);
+                setRightPanelMode('closed');
+              }}
+            />
+          )}
+          {state.rightPanelMode === 'module-details' && activeView.startsWith('module:') && (
+            <ModuleDetails moduleId={activeView.slice(7)} locale={locale} />
+          )}
+        </RightPanel>
+      )}
       <CommandPalette
         isOpen={state.cmdkOpen}
         onClose={() => setState((prev) => ({ ...prev, cmdkOpen: false }))}
