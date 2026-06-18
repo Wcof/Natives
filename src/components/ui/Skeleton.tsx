@@ -26,12 +26,12 @@ export default function Skeleton({ lines = 3, variant = 'text', width, height }:
     return (
       <div style={{
         padding: 12, borderRadius: 8,
-        border: '1px solid var(--border, #262920)',
-        background: 'var(--bg-2, #131410)',
+        border: '0.0625rem solid var(--vibe-btn-border)',
+        background: 'var(--vibe-toolbar-bg)',
       }}>
         <div style={{
           width: '100%', aspectRatio: '1', borderRadius: 4,
-          background: 'var(--bg-3, #1c1e17)',
+          background: 'var(--vibe-btn-bg)',
           marginBottom: 8,
           animation: 'skeleton-pulse 1.5s ease-in-out infinite',
         }} />
@@ -45,7 +45,7 @@ export default function Skeleton({ lines = 3, variant = 'text', width, height }:
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <div style={{
           width: 40, height: 40, borderRadius: '50%',
-          background: 'var(--bg-3, #1c1e17)',
+          background: 'var(--vibe-btn-bg)',
           animation: 'skeleton-pulse 1.5s ease-in-out infinite',
           flexShrink: 0,
         }} />
@@ -63,23 +63,23 @@ export default function Skeleton({ lines = 3, variant = 'text', width, height }:
           <div key={i} style={{
             display: 'flex', gap: 12, alignItems: 'center',
             padding: '8px 0',
-            borderBottom: '1px solid var(--border, #262920)',
+            borderBottom: '0.0625rem solid var(--vibe-btn-border)',
           }}>
             <div style={{
               width: 24, height: 12, borderRadius: 2,
-              background: 'var(--bg-3, #1c1e17)',
+              background: 'var(--vibe-btn-bg)',
               animation: 'skeleton-pulse 1.5s ease-in-out infinite',
               animationDelay: `${i * 0.1}s`,
             }} />
             <div style={{
               flex: 1, height: 12, borderRadius: 2,
-              background: 'var(--bg-3, #1c1e17)',
+              background: 'var(--vibe-btn-bg)',
               animation: 'skeleton-pulse 1.5s ease-in-out infinite',
               animationDelay: `${i * 0.1 + 0.05}s`,
             }} />
             <div style={{
               width: 60, height: 12, borderRadius: 2,
-              background: 'var(--bg-3, #1c1e17)',
+              background: 'var(--vibe-btn-bg)',
               animation: 'skeleton-pulse 1.5s ease-in-out infinite',
               animationDelay: `${i * 0.1 + 0.1}s`,
             }} />
@@ -99,7 +99,7 @@ export default function Skeleton({ lines = 3, variant = 'text', width, height }:
             height: height || 12,
             width: i === lines - 1 ? '60%' : '100%',
             borderRadius: 4,
-            background: 'var(--bg-3, #1c1e17)',
+            background: 'var(--vibe-btn-bg)',
             animation: 'skeleton-pulse 1.5s ease-in-out infinite',
             animationDelay: `${i * 0.1}s`,
           }}

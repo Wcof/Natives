@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { AlertTriangle, RefreshCw } from 'lucide-react';
 
 // i18n messages for ErrorBoundary (class component can't use hooks)
 const MESSAGES = {
@@ -60,22 +61,23 @@ export default class ErrorBoundary extends React.Component<Props, State> {
         <div style={{
           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
           height: '100%', padding: 32, gap: 12,
-          color: 'var(--text, #f2f2ea)', background: 'var(--bg, #0b0c0a)',
+          color: 'var(--vibe-brand-text)', background: 'var(--vibe-content-bg)',
         }}>
-          <div style={{ fontSize: 32, color: 'var(--danger)' }}>⚠</div>
+          <AlertTriangle size={32} style={{ color: 'var(--danger)' }} />
           <div style={{ fontSize: 14, fontWeight: 600 }}>{msg.title}</div>
-          <div style={{ fontSize: 12, color: 'var(--text-dim, #9b9d8c)', textAlign: 'center', maxWidth: 400 }}>
+          <div style={{ fontSize: 12, color: 'var(--vibe-btn-text)', textAlign: 'center', maxWidth: 400 }}>
             {this.state.error?.message || msg.fallback}
           </div>
           <button
             onClick={this.handleReset}
             style={{
-              marginTop: 8, padding: '6px 16px', borderRadius: 6,
-              background: 'var(--accent, #cdf24b)', color: 'var(--bg, #0b0c0a)',
-              border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+              marginTop: 8, padding: '6px 16px', borderRadius: '0.5rem',
+              background: 'var(--vibe-btn-bg)', color: 'var(--vibe-btn-text)',
+              border: '0.0625rem solid var(--vibe-btn-border)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+              display: 'inline-flex', alignItems: 'center', gap: 6,
             }}
           >
-            {msg.retry}
+            <RefreshCw size={12} /> {msg.retry}
           </button>
         </div>
       );
