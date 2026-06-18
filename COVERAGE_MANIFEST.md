@@ -28,7 +28,7 @@ Target: `/Users/ldh/Downloads/project/AiNative/Natives2/`
 
 ---
 
-## Loop 1: API Adapter Contract
+## Loop 1: API Adapter Contract ✅
 
 ### Frontend Adapter (`src/lib/tauri-adapter.ts`)
 - [x] `themeReady()`
@@ -67,25 +67,25 @@ Target: `/Users/ldh/Downloads/project/AiNative/Natives2/`
 - [x] `show_item_in_folder/open_path`
 - [x] `window_minimize/maximize/close/is_maximized`
 - [x] `clipboard_write/read`
-- [ ] `terminal_*` commands
-- [ ] `module_*` commands
-- [ ] `env_*` commands
-- [ ] `notification_*` commands
-- [ ] `fs_*` commands
-- [ ] `archive_*` commands
-- [ ] `search_*` commands
-- [ ] `state_*` commands
-- [ ] `git_*` commands
-- [ ] `disk_*` commands
-- [ ] `thumbnail_*` commands
-- [ ] `agent_*` commands
-- [ ] `skills_*` commands
-- [ ] `screenshot_*` commands
-- [ ] `release_*` commands
-- [ ] `update_*` commands
-- [ ] `usage_*` commands
-- [ ] `open_widget_window`
-- [ ] `theme_ready_signal`
+- [x] `terminal_create/write/resize/kill/cwd`
+- [x] `module_scan/install/readManifest/grantPermission/revokePermission/listPermissions/getAuditLog/approveAllPermissions/uninstall/list/enable/disable/update`
+- [x] `env_get_variables/getDefaultProfile/listProfiles/createProfile/deleteProfile/setDefaultProfile/setVariable/deleteVariable/encrypt/decrypt`
+- [x] `notification_send/list/markRead/markAllRead`
+- [x] `fs_listDir/readFile/writeFileAtomic/createEntry/renameEntry/trashEntry/moveEntry/importFiles/recentFiles`
+- [x] `archive_list`
+- [x] `search_grep/files/spotlight`
+- [x] `state_save/load/clear`
+- [x] `git_status/diff`
+- [x] `disk_usage`
+- [x] `thumbnail_generate`
+- [x] `agent_scanProjects/getSessions/scanSkills/detectStatus`
+- [x] `skills_enable/disable/getDeactivatedPath/uninstall`
+- [x] `screenshot_startWatching/stopWatching/saveAnnotated`
+- [x] `release_inspect/prepare/getSequence/execute`
+- [x] `update_check/mute/getMuted`
+- [x] `usage_refresh`
+- [x] `open_widget_window`
+- [x] `theme_ready_signal`
 
 ### Tauri Events
 - [ ] `db-state-changed` broadcast
