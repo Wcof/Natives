@@ -6,6 +6,8 @@ mod commands;
 mod db;
 mod error;
 mod http_server;
+mod module_manager;
+mod permission_center;
 mod token_manager;
 
 pub use error::{Error, Result};
