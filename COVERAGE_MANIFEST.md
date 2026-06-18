@@ -277,30 +277,28 @@ Target: `/Users/ldh/Downloads/project/AiNative/Natives2/`
 
 ---
 
-## Loop 9: Preview, Media, Archive, Thumbnails
+## Loop 9: Preview, Media, Archive, Thumbnails ✅
 
 ### Preview Components
-- [ ] `src/components/files/FilePreview.tsx`
-- [ ] `src/components/files/MonacoEditor.tsx`
-- [ ] `src/components/files/MonacoDiffView.tsx`
-- [ ] `src/components/files/MilkdownEditor.tsx`
-- [ ] `src/components/editor/MarkdownEditor.tsx`
-- [ ] `src/components/preview/HtmlPreview.tsx`
-- [ ] `src/components/files/ArchivePreview.tsx`
-- [ ] `src/components/files/CsvTable.tsx`
+- [x] `src/components/files/FilePreview.tsx` — pure frontend
+- [x] `src/components/files/MonacoEditor.tsx` — pure frontend
+- [x] `src/components/files/MonacoDiffView.tsx` — pure frontend
+- [x] `src/components/files/MilkdownEditor.tsx` — pure frontend
+- [x] `src/components/editor/MarkdownEditor.tsx` — pure frontend
+- [x] `src/components/preview/HtmlPreview.tsx` — pure frontend
+- [x] `src/components/files/ArchivePreview.tsx` — pure frontend
+- [x] `src/components/files/CsvTable.tsx` — pure frontend
 
 ### Media Support
-- [ ] Image preview
-- [ ] Video preview
-- [ ] Audio preview
-- [ ] PDF preview
+- [x] Image preview — browser native
+- [x] Video preview — browser native
+- [x] Audio preview — browser native
+- [x] PDF preview — browser native
 
 ### Archive & Disk
-- [ ] `src/main/archive.ts`
-- [ ] `src/main/disk-usage.ts`
-- [ ] `src/main/thumbnail.ts`
-- [ ] `src/components/files/DiskUsage.tsx`
-- [ ] `src/components/files/DiskUsagePanel.tsx`
+- [x] Archive (Rust) — zip/tar listing via zip crate + CLI
+- [x] Disk Usage (Rust) — stat + du, human-readable formatting
+- [x] Thumbnail (Rust) — sips/qlmanage, LRU cache, SHA-256 keys
 
 ---
 
