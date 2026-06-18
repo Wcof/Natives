@@ -1,14 +1,13 @@
-use crate::{Error, Result};
+use crate::{git, Error, Result};
 use serde_json::Value as JsonValue;
 
 #[tauri::command]
 pub fn git_status(dir_path: String) -> Result<JsonValue> {
-    // TODO: Implement in Loop 10
-    Err(Error::NotImplemented(format!("git:status({dir_path})")))
+    let status = git::git_status(&dir_path)?;
+    serde_json::to_value(status).map_err(|e| Error::Internal(e.to_string()))
 }
 
 #[tauri::command]
 pub fn git_diff(file_path: String) -> Result<String> {
-    // TODO: Implement in Loop 10
-    Err(Error::NotImplemented(format!("git:diff({file_path})")))
+    git::git_diff(&file_path)
 }
