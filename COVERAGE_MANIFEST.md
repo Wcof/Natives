@@ -96,38 +96,39 @@ Target: `/Users/ldh/Downloads/project/AiNative/Natives2/`
 
 ---
 
-## Loop 2: Shell, Navigation, Window Runtime
+## Loop 2: Shell, Navigation, Window Runtime ✅
 
 ### Shell Components
-- [ ] `src/components/shell/ShellLayout.tsx`
-- [ ] `src/components/shell/Header.tsx`
-- [ ] `src/components/shell/Sidebar.tsx`
-- [ ] `src/components/shell/RightPanel.tsx`
-- [ ] `src/components/shell/ContentArea.tsx`
-- [ ] `src/components/shell/CommandPalette.tsx`
-- [ ] `src/components/shell/ControlHubWidget.tsx`
-- [ ] `src/components/shell/NotificationPanel.tsx`
+- [x] `src/components/shell/ShellLayout.tsx` — uses window.nativesAPI, no Electron imports
+- [x] `src/components/shell/Header.tsx` — uses window.nativesAPI, no Electron imports
+- [x] `src/components/shell/Sidebar.tsx` — uses window.nativesAPI, no Electron imports
+- [x] `src/components/shell/RightPanel.tsx` — uses window.nativesAPI, no Electron imports
+- [x] `src/components/shell/ContentArea.tsx` — pure React, no native deps
+- [x] `src/components/shell/CommandPalette.tsx` — pure React, no native deps
+- [x] `src/components/shell/ControlHubWidget.tsx` — uses window.nativesAPI, no Electron imports
+- [x] `src/components/shell/NotificationPanel.tsx` — uses window.nativesAPI, no Electron imports
 
 ### Pages
-- [ ] `src/app/page.tsx` (dashboard)
-- [ ] `src/app/loading.tsx`
-- [ ] `src/app/not-found.tsx`
-- [ ] `src/app/layout.tsx`
+- [x] `src/app/page.tsx` (dashboard) — pure React
+- [x] `src/app/loading.tsx` — pure React
+- [x] `src/app/not-found.tsx` — pure React
+- [x] `src/app/layout.tsx` — pure React (ThemeProvider, ToastProvider)
 
 ### Window Runtime
-- [ ] Transparent frameless window
-- [ ] macOS traffic light positioning
-- [ ] Window state persistence
-- [ ] Single instance lock
-- [ ] FOUC guard (theme-ready before show)
+- [x] Transparent frameless window (tauri.conf.json: transparent, decorations: false)
+- [x] macOS traffic light positioning (Sidebar uses WebkitAppRegion drag/no-drag)
+- [x] Window state persistence (tauri-plugin-window-state)
+- [x] Single instance lock (tauri-plugin-single-instance)
+- [x] FOUC guard (window starts hidden, theme_ready_signal shows it)
+- [x] window_tile command (left/right/top/bottom/fullscreen/tile)
 
 ### Browser Events
-- [ ] `navigate`
-- [ ] `navigate-files`
-- [ ] `toggle-terminal`
-- [ ] `locale-changed`
-- [ ] `visual-config-changed`
-- [ ] `header-file-action`
+- [x] `navigate` — pure CustomEvent, works in any browser environment
+- [x] `navigate-files` — pure CustomEvent
+- [x] `toggle-terminal` — pure CustomEvent
+- [x] `locale-changed` — pure CustomEvent
+- [x] `visual-config-changed` — pure CustomEvent
+- [x] `header-file-action` — pure CustomEvent
 
 ---
 
