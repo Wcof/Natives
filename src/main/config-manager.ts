@@ -26,7 +26,7 @@ export function updateConfig<T>(
   filePath: string,
   mutator: (config: T) => T,
 ): Promise<void> {
-  cfgChain = cfgChain.then(() => {
+  const run = cfgChain.then(() => {
     return new Promise<void>((resolve, reject) => {
       const tmp = tmpPath(filePath);
       try {
@@ -51,5 +51,8 @@ export function updateConfig<T>(
       }
     });
   });
-  return cfgChain;
+  // Keep chain alive on error（对标 fanbox 的 _cfgChain 模式）
+  // Without this, a rejected mutation would break all subsequent updateConfig calls.
+  cfgChain = run.catch(() => {});
+  return run;
 }

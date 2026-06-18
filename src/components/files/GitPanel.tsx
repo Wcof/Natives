@@ -61,20 +61,20 @@ export default function GitPanel({ repoPath }: GitPanelProps) {
       <div style={{
         display: 'flex', alignItems: 'center', gap: 6,
         padding: '6px 8px', marginBottom: 8,
-        background: 'var(--bg-2, #131410)',
+        background: 'var(--vibe-toolbar-bg)',
         borderRadius: 'var(--radius, 4px)',
-        fontSize: 12, fontWeight: 600, color: 'var(--text, #f2f2ea)',
+        fontSize: 12, fontWeight: 600, color: 'var(--vibe-brand-text)',
       }}>
         <span>⎇</span>
         <span>{status.branch}</span>
-        <span style={{ fontSize: 10, color: 'var(--text-faint, #62655a)' }}>
+        <span style={{ fontSize: 10, color: 'var(--vibe-btn-text)' }}>
           {status.files.length}
         </span>
       </div>
 
       {/* File list */}
       {status.files.length === 0 ? (
-        <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint, #62655a)', fontSize: 12 }}>
+        <div style={{ padding: 20, textAlign: 'center', color: 'var(--vibe-btn-text)', fontSize: 12 }}>
           {t(locale, 'fileBrowser.workingTreeClean')}
         </div>
       ) : (
@@ -84,8 +84,8 @@ export default function GitPanel({ repoPath }: GitPanelProps) {
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
               padding: '4px 8px', fontSize: 12,
-              borderBottom: '1px solid var(--border, #262920)',
-              color: 'var(--text, #f2f2ea)',
+              borderBottom: '1px solid var(--vibe-btn-border)',
+              color: 'var(--vibe-brand-text)',
             }}
           >
             <span className="anim-changedBreath" style={{
@@ -99,7 +99,7 @@ export default function GitPanel({ repoPath }: GitPanelProps) {
               {file.path}
             </span>
             {file.oldPath && (
-              <span style={{ fontSize: 10, color: 'var(--text-faint, #62655a)' }}>
+              <span style={{ fontSize: 10, color: 'var(--vibe-btn-text)' }}>
                 ← {file.oldPath}
               </span>
             )}

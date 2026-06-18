@@ -59,9 +59,15 @@ function countWordBoundaryMatches(positions: number[], filename: string): number
       count++;
       continue;
     }
-    // 前一个字符是分隔符
     const prev = filename[pos - 1]!;
+    const curr = filename[pos]!;
+    // 分隔符边界（- _ . / 空格）
     if (prev === '-' || prev === '_' || prev === '.' || prev === ' ' || prev === '/') {
+      count++;
+      continue;
+    }
+    // camelCase 边界：前一个是小写，当前是大写
+    if (prev >= 'a' && prev <= 'z' && curr >= 'A' && curr <= 'Z') {
       count++;
     }
   }
@@ -107,7 +113,7 @@ export function calculateScore(
   if (isDir) score += 5;
 
   // 7. 最近修改奖励
-  if (mtime) {
+  if (mtime !== undefined && mtime > 0) {
     const hoursSinceModified = (Date.now() - mtime) / (1000 * 60 * 60);
     score += Math.max(0, 10 - hoursSinceModified * 0.1);
   }
@@ -136,6 +142,7 @@ const TEXT_EXTENSIONS = new Set([
 ]);
 
 const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB
+const SEARCH_DEADLINE_MS = 4_000; // 4 秒硬截止（对标 fanbox，防止大目录无限扫描）
 
 // ── Ripgrep Detection (TASK-011) ──
 
@@ -191,11 +198,14 @@ export function indexFileForSearch(filePath: string, content: string): void {
 export function searchFtsIndex(query: string, limit = 50): ContentSearchResult[] {
   const db = getFtsDb();
   if (!db) return [];
+  // FTS5 特殊字符清理（防止语法错误）
+  const sanitized = query.replace(/["'*+\-()]/g, ' ').trim();
+  if (!sanitized) return [];
   try {
     const rows = db.prepare(
       `SELECT path, snippet(file_contents, 1, '<mark>', '</mark>', '...', 40) AS preview
        FROM file_contents WHERE file_contents MATCH ? ORDER BY rank LIMIT ?`
-    ).all(query, limit) as Array<{ path: string; preview: string }>;
+    ).all(sanitized, limit) as Array<{ path: string; preview: string }>;
     return rows.map((r) => ({
       path: r.path,
       name: path.basename(r.path),
@@ -234,7 +244,21 @@ async function grepWithRipgrep(
   }
   args.push('--', query, root);
 
-  const output = execFileSync('rg', args, { encoding: 'utf-8', timeout: 30000, maxBuffer: 10 * 1024 * 1024 });
+  // 使用异步 execFile 避免阻塞事件循环（对标 fanbox 的异步模式）
+  const output = await new Promise<string>((resolve, reject) => {
+    execFile('rg', args, { encoding: 'utf-8', timeout: 30000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        // rg 退出码 1 = 无匹配，不是错误
+        if (err.code === 1 && stdout) {
+          resolve(stdout);
+        } else {
+          reject(err);
+        }
+      } else {
+        resolve(stdout);
+      }
+    });
+  });
   const results: ContentSearchResult[] = [];
   const lines = output.trim().split('\n');
   for (const line of lines) {
@@ -293,6 +317,7 @@ export async function grepContent(
     ? new Set(options.fileExtensions.map((e) => e.startsWith('.') ? e : `.${e}`))
     : null;
   const q = query.toLowerCase();
+  const deadline = Date.now() + SEARCH_DEADLINE_MS;
 
   async function searchFile(filePath: string): Promise<void> {
     if (results.length >= maxResults) return;
@@ -341,11 +366,13 @@ export async function grepContent(
 
   async function walkDir(dirPath: string): Promise<void> {
     if (results.length >= maxResults) return;
+    if (Date.now() >= deadline) return; // 硬截止
 
     try {
       const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
       for (const entry of entries) {
         if (results.length >= maxResults) return;
+        if (Date.now() >= deadline) return; // 硬截止
         const fullPath = path.join(dirPath, entry.name);
         if (entry.isDirectory()) {
           if (entry.name.startsWith('.')) continue;
@@ -387,14 +414,17 @@ export async function searchFiles(
   const maxResults = options?.maxResults || 80;
   const includeDirs = options?.includeDirs ?? true;
   const results: SearchResult[] = [];
+  const deadline = Date.now() + SEARCH_DEADLINE_MS;
 
   async function walk(dirPath: string): Promise<void> {
     if (results.length >= maxResults * 2) return; // 收集更多以便排序
+    if (Date.now() >= deadline) return; // 硬截止
 
     try {
       const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
       for (const entry of entries) {
         if (results.length >= maxResults * 2) break;
+        if (Date.now() >= deadline) return; // 硬截止
         const fullPath = path.join(dirPath, entry.name);
 
         if (entry.isDirectory()) {
@@ -404,6 +434,8 @@ export async function searchFiles(
           if (includeDirs) {
             const score = calculateScore(query, entry.name, true);
             if (score !== -1) {
+              const matchPos = findSubsequence(query, entry.name);
+              const ranges: [number, number][] = matchPos ? matchPos.map((p) => [p, p + 1]) : [];
               try {
                 const stat = await fs.promises.stat(fullPath);
                 results.push({
@@ -412,7 +444,7 @@ export async function searchFiles(
                   score,
                   isDir: true,
                   mtime: stat.mtimeMs,
-                  matchRanges: [],
+                  matchRanges: ranges,
                 });
               } catch {
                 results.push({
@@ -421,7 +453,7 @@ export async function searchFiles(
                   score,
                   isDir: true,
                   mtime: 0,
-                  matchRanges: [],
+                  matchRanges: ranges,
                 });
               }
             }
@@ -430,6 +462,8 @@ export async function searchFiles(
         } else if (entry.isFile()) {
           const score = calculateScore(query, entry.name);
           if (score !== -1) {
+            const matchPos = findSubsequence(query, entry.name);
+            const ranges: [number, number][] = matchPos ? matchPos.map((p) => [p, p + 1]) : [];
             try {
               const stat = await fs.promises.stat(fullPath);
               results.push({
@@ -438,7 +472,7 @@ export async function searchFiles(
                 score,
                 isDir: false,
                 mtime: stat.mtimeMs,
-                matchRanges: [],
+                matchRanges: ranges,
               });
             } catch {
               results.push({
@@ -447,7 +481,7 @@ export async function searchFiles(
                 score,
                 isDir: false,
                 mtime: 0,
-                matchRanges: [],
+                matchRanges: ranges,
               });
             }
           }

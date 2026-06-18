@@ -195,7 +195,7 @@ export default function AIFileOrganizer() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Header */}
       <div style={{
-        padding: '8px 10px', borderBottom: '1px solid var(--border,#262920)',
+        padding: '8px 10px', borderBottom: '1px solid var(--vibe-btn-border)',
       }}>
         <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
           {t(locale, 'aiWorkbench.aiFileOrganizer')}
@@ -212,8 +212,8 @@ export default function AIFileOrganizer() {
               style={{
                 fontSize: 9, padding: '2px 6px', borderRadius: 3,
                 display: 'inline-flex', alignItems: 'center', gap: 3,
-                color: analysisMode === mode ? 'var(--accent,#cdf24b)' : 'var(--text-faint)',
-                background: analysisMode === mode ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
+                color: analysisMode === mode ? 'var(--accent)' : 'var(--text-faint)',
+                background: analysisMode === mode ? 'var(--accent-soft)' : 'transparent',
               }}
             >
               {mode === 'organize' ? <><Package size={10} /> Organize</> : mode === 'duplicates' ? <><ClipboardList size={10} /> Duplicates</> : <><Ruler size={10} /> Large Files</>}
@@ -243,8 +243,8 @@ export default function AIFileOrganizer() {
             {proposals.map((p) => (
               <div key={p.id} style={{
                 padding: 'var(--space-sm)', marginBottom: 6, borderRadius: 6,
-                border: `1px solid ${approved.has(p.id) ? 'var(--accent,#cdf24b)' : 'var(--border,#262920)'}`,
-                background: approved.has(p.id) ? 'rgba(205,242,75,0.08)' : 'var(--bg-2,#131410)',
+                border: `1px solid ${approved.has(p.id) ? 'var(--accent)' : 'var(--vibe-btn-border)'}`,
+                background: approved.has(p.id) ? 'rgba(205,242,75,0.08)' : 'var(--vibe-toolbar-bg)',
               }}>
                 <label style={{ display: 'flex', gap: 'var(--space-sm)', cursor: 'pointer', fontSize: 'var(--fs-sm)' }}>
                   <input

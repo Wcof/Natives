@@ -85,7 +85,7 @@ export default function ChangeInbox() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Header */}
       <div style={{
-        padding: '8px 10px', borderBottom: '1px solid var(--border,#262920)',
+        padding: '8px 10px', borderBottom: '1px solid var(--vibe-btn-border)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       }}>
         <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
@@ -127,7 +127,7 @@ export default function ChangeInbox() {
                   style={{
                     padding: '4px 8px', fontSize: 11, color: 'var(--text)',
                     borderRadius: 4, cursor: 'pointer', marginBottom: 2,
-                    background: 'var(--bg-2,#131410)',
+                    background: 'var(--vibe-toolbar-bg)',
                     borderLeft: `3px solid ${ch.type === 'create' ? 'var(--diff-add)' : ch.type === 'delete' ? 'var(--danger)' : 'var(--warning)'}`,
                     display: 'flex', alignItems: 'center', gap: 4,
                   }}

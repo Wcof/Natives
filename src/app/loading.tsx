@@ -19,7 +19,7 @@ export default function Loading() {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-      height: '100%', color: 'var(--text-faint,#62655a)', fontSize: 13,
+      height: '100%', color: 'var(--vibe-btn-text)', fontSize: '0.8125rem',
     }}>
       {t(locale, 'common.loading')}
     </div>

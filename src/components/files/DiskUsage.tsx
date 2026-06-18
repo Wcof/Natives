@@ -50,7 +50,7 @@ export default function DiskUsage({ dirPath, onNavigate }: DiskUsageProps) {
   return (
     <div style={{ padding: 8 }}>
       {items.length === 0 ? (
-        <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint, #62655a)', fontSize: 12 }}>
+        <div style={{ padding: 20, textAlign: 'center', color: 'var(--vibe-btn-text)', fontSize: 12 }}>
           {t(locale, 'fileBrowser.empty')}
         </div>
       ) : (
@@ -63,22 +63,22 @@ export default function DiskUsage({ dirPath, onNavigate }: DiskUsageProps) {
               style={{
                 display: 'flex', alignItems: 'center', gap: 8,
                 padding: '4px 8px', cursor: item.isDir ? 'pointer' : 'default',
-                borderBottom: '1px solid var(--border, #262920)',
+                borderBottom: '1px solid var(--vibe-btn-border)',
                 fontSize: 12,
                 transition: 'background 0.08s',
               }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-2, #131410)'; }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--vibe-toolbar-bg)'; }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
             >
               {/* Icon */}
-              <span style={{ fontSize: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: item.isDir ? 'var(--accent, #cdf24b)' : 'var(--text-dim, #9b9d8c)' }}>
+              <span style={{ fontSize: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: item.isDir ? 'var(--accent)' : 'var(--vibe-btn-text)' }}>
                 {item.isDir ? <Folder size={14} /> : <FileText size={14} />}
               </span>
 
               {/* Name */}
               <div style={{
                 flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                color: 'var(--text, #f2f2ea)',
+                color: 'var(--vibe-brand-text)',
               }}>
                 {item.name}
               </div>
@@ -86,7 +86,7 @@ export default function DiskUsage({ dirPath, onNavigate }: DiskUsageProps) {
               {/* Size */}
               <div style={{
                 width: 70, textAlign: 'right',
-                color: 'var(--text-dim, #9b9d8c)', fontSize: 11,
+                color: 'var(--vibe-btn-text)', fontSize: 11,
               }}>
                 {item.sizeFormatted}
               </div>
@@ -94,14 +94,14 @@ export default function DiskUsage({ dirPath, onNavigate }: DiskUsageProps) {
               {/* Bar */}
               <div style={{
                 width: MAX_BAR_WIDTH, height: 10,
-                background: 'var(--bg-3, #1c1e17)',
+                background: 'var(--vibe-btn-bg)',
                 borderRadius: 5, overflow: 'hidden', flexShrink: 0,
               }}>
                 <div style={{
                   width: barWidth, height: '100%',
                   background: item.isDir
-                    ? 'var(--accent, #cdf24b)'
-                    : 'var(--text-faint, #62655a)',
+                    ? 'var(--accent)'
+                    : 'var(--vibe-btn-text)',
                   borderRadius: 5,
                   transition: 'width 0.3s ease',
                   opacity: item.isDir ? 0.8 : 0.4,

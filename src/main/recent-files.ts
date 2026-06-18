@@ -43,6 +43,11 @@ export interface WalkFile {
 /**
  * BFS 目录遍历（fanbox 移植）
  * 跳过 IGNORE_DIRS，带文件数/时间上限
+ *
+ * 改进点：
+ * - O(1) 出队（索引指针代替 shift()）
+ * - 单次 stat 调用（stat 解析符号链接，失败时回退 lstat）
+ * - 符号链接指向目录时正确入队
  */
 export function walk(
   root: string,
@@ -55,12 +60,13 @@ export function walk(
   const deadline = options?.deadline ?? (Date.now() + MAX_TIME_MS);
   let count = 0;
   const queue: string[] = [root];
+  let ptr = 0; // O(1) 出队指针
 
-  while (queue.length > 0) {
+  while (ptr < queue.length) {
     // 时间上限检查
     if (Date.now() > deadline) break;
 
-    const dir = queue.shift()!;
+    const dir = queue[ptr++]!;
     let entries: string[];
 
     try {
@@ -77,10 +83,15 @@ export function walk(
       const fullPath = path.join(dir, name);
       let stat: fs.Stats;
 
+      // 优先使用 stat（自动解析符号链接），失败时回退 lstat
       try {
-        stat = fs.lstatSync(fullPath);
+        stat = fs.statSync(fullPath);
       } catch {
-        continue;
+        try {
+          stat = fs.lstatSync(fullPath);
+        } catch {
+          continue;
+        }
       }
 
       if (stat.isDirectory()) {
@@ -88,13 +99,7 @@ export function walk(
         onDir?.(fullPath);
       } else if (stat.isFile()) {
         count++;
-        try {
-          // 对文件使用 stat（解析符号链接）
-          const fileStat = fs.statSync(fullPath);
-          onFile({ path: fullPath, mtime: fileStat.mtimeMs, size: fileStat.size });
-        } catch {
-          onFile({ path: fullPath, mtime: stat.mtimeMs, size: stat.size });
-        }
+        onFile({ path: fullPath, mtime: stat.mtimeMs, size: stat.size });
       }
     }
   }

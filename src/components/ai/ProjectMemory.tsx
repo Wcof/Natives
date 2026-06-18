@@ -58,7 +58,7 @@ export default function ProjectMemory() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Header */}
       <div style={{
-        padding: '8px 10px', borderBottom: '1px solid var(--border,#262920)',
+        padding: '8px 10px', borderBottom: '1px solid var(--vibe-btn-border)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       }}>
         <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
@@ -85,8 +85,8 @@ export default function ProjectMemory() {
               style={{
                 padding: '8px 10px', marginBottom: 4,
                 borderRadius: 6, cursor: 'pointer',
-                background: selected === s.id ? 'var(--bg-3,#1c1e17)' : 'var(--bg-2,#131410)',
-                border: `1px solid ${selected === s.id ? 'var(--accent,#cdf24b)' : 'var(--border,#262920)'}`,
+                background: selected === s.id ? 'var(--vibe-btn-bg)' : 'var(--vibe-toolbar-bg)',
+                border: `1px solid ${selected === s.id ? 'var(--accent)' : 'var(--vibe-btn-border)'}`,
                 transition: 'all 0.12s',
               }}
             >
@@ -97,14 +97,14 @@ export default function ProjectMemory() {
                 {s.engine} · {s.filesModified.length} {t(locale, 'aiWorkbench.files')} · {new Date(s.startTime).toLocaleDateString()}
               </div>
               {selected === s.id && (
-                <div style={{ marginTop: 8, paddingTop: 6, borderTop: '1px solid var(--border,#262920)' }}>
+                <div style={{ marginTop: 8, paddingTop: 6, borderTop: '1px solid var(--vibe-btn-border)' }}>
                   {s.filesModified.length > 0 && (
                     <div style={{ fontSize: 11, color: 'var(--text-dim)', marginBottom: 6 }}>
                       <span style={{ fontWeight: 600 }}>{t(locale, 'aiWorkbench.files')}:</span>{' '}
                       {s.filesModified.slice(0, 5).map((f, i) => (
                         <span key={f}>
                           {i > 0 && ', '}
-                          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent,#cdf24b)' }}>
+                          <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
                             {f.split('/').pop()}
                           </span>
                         </span>

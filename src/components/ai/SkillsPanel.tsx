@@ -86,7 +86,7 @@ export default function SkillsPanel() {
       {/* Filter tabs */}
       <div style={{
         display: 'flex', gap: 4, padding: '8px 10px',
-        borderBottom: '1px solid var(--border,#262920)',
+        borderBottom: '1px solid var(--vibe-btn-border)',
       }}>
         {(['all', 'healthy', 'issues'] as const).map((f) => (
           <button
@@ -95,8 +95,8 @@ export default function SkillsPanel() {
             onClick={() => setFilter(f)}
             style={{
               fontSize: 10, padding: '3px 8px', borderRadius: 4,
-              color: filter === f ? 'var(--accent,#cdf24b)' : 'var(--text-faint)',
-              background: filter === f ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
+              color: filter === f ? 'var(--accent)' : 'var(--text-faint)',
+              background: filter === f ? 'var(--accent-soft)' : 'transparent',
             }}
           >
             {f === 'all' ? t(locale, 'aiWorkbench.skillsLabel') : f === 'healthy' ? t(locale, 'aiWorkbench.skills.healthy') : t(locale, 'aiWorkbench.skills.issues')}
@@ -122,17 +122,17 @@ export default function SkillsPanel() {
             <div key={skill.name} style={{
               padding: '8px 10px', marginBottom: 4,
               borderRadius: 6,
-              border: '1px solid var(--border,#262920)',
-              background: 'var(--bg-2,#131410)',
+              border: '1px solid var(--vibe-btn-border)',
+              background: 'var(--vibe-toolbar-bg)',
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                 <span style={{ fontSize: 'var(--fs-sm)', fontWeight: 600, color: 'var(--text)' }}>{skill.name}</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <button onClick={() => handleToggle(skill)} style={{
                     fontSize: 10, padding: '2px 6px', borderRadius: 4,
-                    border: '1px solid var(--border,#262920)',
-                    background: skill.enabled ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
-                    color: skill.enabled ? 'var(--accent,#cdf24b)' : 'var(--text-faint)',
+                    border: '1px solid var(--vibe-btn-border)',
+                    background: skill.enabled ? 'var(--accent-soft)' : 'transparent',
+                    color: skill.enabled ? 'var(--accent)' : 'var(--text-faint)',
                     cursor: 'pointer',
                   }}>
                     {skill.enabled ? t(locale, 'aiWorkbench.skills.enabled') : t(locale, 'aiWorkbench.skills.disabled')}
@@ -150,7 +150,7 @@ export default function SkillsPanel() {
                 {skill.lastTriggered ? <span> · last {new Date(skill.lastTriggered).toLocaleDateString()}</span> : null}
               </div>
               <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
-                <button onClick={() => { setSelectedSkill(skill); setShowLogs(true); const meta = [`Skill: ${skill.name}`, `Source: ${skill.source}`, `Path: ${skill.path}`, `Health: ${skill.health.ok ? 'OK' : skill.health.issues.join(', ') || 'unknown'}`, `Trigger count: ${skill.triggerCount}`, skill.lastTriggered ? `Last triggered: ${new Date(skill.lastTriggered).toLocaleString()}` : 'Last triggered: never']; if (skill.description) meta.push(`Description: ${skill.description.slice(0, 120)}`); setSkillLogs(meta); }} style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, border: '1px solid var(--border,#262920)', background: 'transparent', color: 'var(--text-faint)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                <button onClick={() => { setSelectedSkill(skill); setShowLogs(true); const meta = [`Skill: ${skill.name}`, `Source: ${skill.source}`, `Path: ${skill.path}`, `Health: ${skill.health.ok ? 'OK' : skill.health.issues.join(', ') || 'unknown'}`, `Trigger count: ${skill.triggerCount}`, skill.lastTriggered ? `Last triggered: ${new Date(skill.lastTriggered).toLocaleString()}` : 'Last triggered: never']; if (skill.description) meta.push(`Description: ${skill.description.slice(0, 120)}`); setSkillLogs(meta); }} style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, border: '1px solid var(--vibe-btn-border)', background: 'transparent', color: 'var(--text-faint)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 2 }}>
                   <Clipboard size={10} /> Logs
                 </button>
                 <button onClick={() => handleUninstall(skill)} style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, border: '1px solid #f24b4b', background: 'transparent', color: 'var(--danger)', cursor: 'pointer' }}>
@@ -169,7 +169,7 @@ export default function SkillsPanel() {
           display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60,
         }} onClick={() => setShowLogs(false)}>
           <div style={{
-            background: 'var(--bg-2,#131410)', border: '1px solid var(--border,#262920)',
+            background: 'var(--vibe-toolbar-bg)', border: '1px solid var(--vibe-btn-border)',
             borderRadius: 10, padding: 'var(--space-md)', width: 480, maxWidth: '90vw', maxHeight: '60vh',
             overflow: 'auto',
           }} onClick={(e) => e.stopPropagation()}>

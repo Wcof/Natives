@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   ButtonHTMLAttributes,
   DragEvent,
@@ -215,6 +215,69 @@ export default function Sidebar({
     }
   }, []);
 
+  // ── 长按 Zoom 弹出菜单（macOS 原生行为）──
+  const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
+  const zoomTimerRef = useRef<number | null>(null);
+  const zoomPopupRef = useRef<HTMLDivElement>(null);
+  const zoomBtnRef = useRef<HTMLButtonElement>(null);
+
+  const handleTileWindow = useCallback(async (action: string) => {
+    const ctrl = window.nativesAPI?.windowControls as Record<string, unknown> | undefined;
+    if (!ctrl) return;
+    try {
+      const fn = ctrl.tileWindow as ((a: string) => Promise<void>) | undefined;
+      await fn?.(action);
+    } catch { /* fallback */ }
+  }, []);
+
+  // 当菜单打开时，document mouseup 检测鼠标下方元素
+  useEffect(() => {
+    if (!zoomMenuOpen) return;
+    const handler = (e: globalThis.MouseEvent) => {
+      const target = document.elementFromPoint(e.clientX, e.clientY);
+      // 向上查找最近的 data-tile-action 元素
+      let el: Element | null = target;
+      while (el && el !== document.body) {
+        if (el instanceof HTMLElement && el.dataset.tileAction) {
+          handleTileWindow(el.dataset.tileAction);
+          break;
+        }
+        el = el.parentElement;
+      }
+      setZoomMenuOpen(false);
+    };
+    document.addEventListener('mouseup', handler);
+    return () => document.removeEventListener('mouseup', handler);
+  }, [zoomMenuOpen, handleTileWindow]);
+
+  // ── 弹窗内 SVG 图标组件 ──
+  const iconWrap = (svg: React.ReactNode) => <svg width="22" height="14" viewBox="0 0 22 14" fill="none" className="text-[var(--text-dim)]">{svg}</svg>;
+
+  const leftHalfIcon = iconWrap(
+    <><rect x="0.5" y="0.5" width="21" height="13" rx="1.5" stroke="currentColor" strokeOpacity="0.3"/><rect x="0.5" y="0.5" width="10" height="13" rx="1.5" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/></>
+  );
+  const rightHalfIcon = iconWrap(
+    <><rect x="0.5" y="0.5" width="21" height="13" rx="1.5" stroke="currentColor" strokeOpacity="0.3"/><rect x="11.5" y="0.5" width="10" height="13" rx="1.5" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/></>
+  );
+  const topHalfIcon = iconWrap(
+    <><rect x="0.5" y="0.5" width="21" height="13" rx="1.5" stroke="currentColor" strokeOpacity="0.3"/><rect x="0.5" y="0.5" width="21" height="6" rx="1.5" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/></>
+  );
+  const bottomHalfIcon = iconWrap(
+    <><rect x="0.5" y="0.5" width="21" height="13" rx="1.5" stroke="currentColor" strokeOpacity="0.3"/><rect x="0.5" y="7.5" width="21" height="6" rx="1.5" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/></>
+  );
+  const fillIcon = iconWrap(
+    <rect x="0.5" y="0.5" width="21" height="13" rx="1.5" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/>
+  );
+  const leftFillIcon = iconWrap(
+    <><rect x="0.5" y="0.5" width="21" height="13" rx="1.5" stroke="currentColor" strokeOpacity="0.3"/><rect x="0.5" y="0.5" width="7" height="13" rx="1.5" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/></>
+  );
+  const rightFillIcon = iconWrap(
+    <><rect x="0.5" y="0.5" width="21" height="13" rx="1.5" stroke="currentColor" strokeOpacity="0.3"/><rect x="14.5" y="0.5" width="7" height="13" rx="1.5" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/></>
+  );
+  const tileIcon = iconWrap(
+    <><rect x="0.5" y="0.5" width="9.5" height="5.5" rx="1" stroke="currentColor" strokeOpacity="0.3"/><rect x="12" y="0.5" width="9.5" height="5.5" rx="1" stroke="currentColor" strokeOpacity="0.3"/><rect x="0.5" y="8" width="9.5" height="5.5" rx="1" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/><rect x="12" y="8" width="9.5" height="5.5" rx="1" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/></>
+  );
+
   useEffect(() => {
     let cancelled = false;
     const loadModules = async () => {
@@ -300,37 +363,117 @@ export default function Sidebar({
       {/* ── 窗口控制 + Brand Header ── */}
       <div className="shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
         {/* 窗口控制按钮行 */}
-        <div className="flex items-center justify-start gap-1 px-3 pt-2 pb-1">
-          {/* 关闭 */}
+      <div className="flex items-center justify-start gap-1 px-3 pt-2 pb-1">
+        {/* 关闭 — macOS 红 */}
+        <button
+          onClick={() => handleWindowAction('close')}
+          className="flex h-6 w-6 items-center justify-center rounded-md text-[#ff5f57] hover:text-[#ff3b30] hover:bg-red-500/20 transition-all"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          aria-label="关闭"
+          title="关闭"
+        >
+          <X size={13} />
+        </button>
+        {/* 最小化 — macOS 黄 */}
+        <button
+          onClick={() => handleWindowAction('minimize')}
+          className="flex h-6 w-6 items-center justify-center rounded-md text-[#febc2e] hover:text-[#f5a623] hover:bg-yellow-500/20 transition-all"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          aria-label="最小化"
+          title="最小化"
+        >
+          <Minus size={12} />
+        </button>
+        {/* 最大化 / 全屏 — macOS 绿 */}
+        <div className="relative" ref={zoomPopupRef}>
           <button
-            onClick={() => handleWindowAction('close')}
-            className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-faint)] hover:bg-red-500/15 hover:text-red-400 transition-all"
-            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            aria-label="关闭"
-            title="关闭"
-          >
-            <X size={13} />
-          </button>
-          {/* 最小化 */}
-          <button
-            onClick={() => handleWindowAction('minimize')}
-            className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-faint)] hover:bg-[var(--vibe-btn-bg)] hover:text-[var(--text)] transition-all"
-            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            aria-label="最小化"
-            title="最小化"
-          >
-            <Minus size={12} />
-          </button>
-          {/* 最大化 / 还原 */}
-          <button
+            ref={zoomBtnRef}
             onClick={() => handleWindowAction('maximize')}
-            className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-faint)] hover:bg-[var(--vibe-btn-bg)] hover:text-[var(--text)] transition-all"
+            onMouseDown={() => {
+              zoomTimerRef.current = window.setTimeout(() => {
+                setZoomMenuOpen(true);
+              }, 500);
+            }}
+            onMouseUp={() => {
+              if (zoomTimerRef.current) {
+                clearTimeout(zoomTimerRef.current);
+                zoomTimerRef.current = null;
+              }
+            }}
+            onMouseLeave={() => {
+              if (zoomTimerRef.current) {
+                clearTimeout(zoomTimerRef.current);
+                zoomTimerRef.current = null;
+              }
+            }}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-[#28c840] hover:text-[#1fa836] hover:bg-green-500/20 transition-all"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             aria-label={isMaximized ? '还原' : '最大化'}
             title={isMaximized ? '还原' : '最大化'}
           >
-            <Square size={10} className={isMaximized ? 'opacity-60' : ''} />
-          </button>
+              {/* macOS Zoom 图标：双对角外扩箭头 */}
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className={isMaximized ? 'opacity-60' : ''}>
+                <path d="M7 1h2v2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M9 1l-4 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M3 9H1V7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M1 9l4-4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
+
+            {/* 长按弹出菜单 — macOS 窗口管理 */}
+            {zoomMenuOpen && (
+              <div
+                className="absolute left-0 top-full mt-1 z-50 min-w-[180px] rounded-xl border border-[var(--vibe-btn-border)] bg-[var(--vibe-toolbar-bg)] backdrop-blur-2xl p-1.5 shadow-2xl"
+                style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+              >
+                <p className="px-2.5 pb-1 pt-0.5 text-[0.625rem] font-medium uppercase tracking-[0.06em] text-[var(--text-faint)]">
+                  移动与调整大小
+                </p>
+                <div className="grid grid-cols-4 gap-1 px-1 pb-2">
+                  {[
+                    { id: 'left', label: '左', icon: leftHalfIcon },
+                    { id: 'right', label: '右', icon: rightHalfIcon },
+                    { id: 'top', label: '上', icon: topHalfIcon },
+                    { id: 'bottom', label: '下', icon: bottomHalfIcon },
+                  ].map((opt) => (
+                    <button
+                      key={opt.id}
+                      data-tile-action={opt.id}
+                      className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-[0.625rem] text-[var(--text-dim)] hover:bg-[var(--vibe-btn-bg)] hover:text-[var(--text)] transition-all"
+                      style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                      title={opt.label}
+                    >
+                      {opt.icon}
+                      <span>{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="mx-2 my-1 border-t border-[var(--vibe-btn-border)]" />
+                <p className="px-2.5 pb-1 pt-1.5 text-[0.625rem] font-medium uppercase tracking-[0.06em] text-[var(--text-faint)]">
+                  填充与排列
+                </p>
+                <div className="grid grid-cols-4 gap-1 px-1 pb-1">
+                  {[
+                    { id: 'fullscreen', label: '填充', icon: fillIcon },
+                    { id: 'left-half', label: '居左', icon: leftFillIcon },
+                    { id: 'right-half', label: '居右', icon: rightFillIcon },
+                    { id: 'tile', label: '平铺', icon: tileIcon },
+                  ].map((opt) => (
+                    <button
+                      key={opt.id}
+                      data-tile-action={opt.id}
+                      className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-[0.625rem] text-[var(--text-dim)] hover:bg-[var(--vibe-btn-bg)] hover:text-[var(--text)] transition-all"
+                      style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                      title={opt.label}
+                    >
+                      {opt.icon}
+                      <span>{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Brand Header */}

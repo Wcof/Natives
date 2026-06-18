@@ -22,10 +22,10 @@ export default function NotFound() {
       height: '100%', padding: 40, textAlign: 'center',
     }}>
       <div style={{ fontSize: 48, marginBottom: 16 }}>404</div>
-      <h1 style={{ fontSize: 18, fontWeight: 600, color: 'var(--text,#f2f2ea)', marginBottom: 8 }}>
+      <h1 style={{ fontSize: 18, fontWeight: 600, color: 'var(--vibe-brand-text)', marginBottom: 8 }}>
         {t(locale, 'notFound.title')}
       </h1>
-      <p style={{ fontSize: 13, color: 'var(--text-faint,#62655a)', marginBottom: 24 }}>
+      <p style={{ fontSize: 13, color: 'var(--vibe-btn-text)', marginBottom: 24 }}>
         {t(locale, 'notFound.description')}
       </p>
       <button className="btn btn-primary" onClick={() => window.location.href = '/'}>

@@ -31,7 +31,7 @@ export default function ToolsPage() {
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: 16 }}>
-      <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border,#262920)', marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 0, borderBottom: '0.0625rem solid var(--vibe-toolbar-border)', marginBottom: 16 }}>
         {tabs.map((t) => (
           <button
             key={t.id}
@@ -42,8 +42,8 @@ export default function ToolsPage() {
               fontWeight: 500,
               background: 'none',
               border: 'none',
-              borderBottom: tab === t.id ? '2px solid var(--accent,#cdf24b)' : '2px solid transparent',
-              color: tab === t.id ? 'var(--text,#f2f2ea)' : 'var(--text-faint,#62655a)',
+              borderBottom: tab === t.id ? '2px solid var(--accent)' : '2px solid transparent',
+              color: tab === t.id ? 'var(--vibe-brand-text)' : 'var(--vibe-btn-text)',
               cursor: 'pointer',
             }}
           >

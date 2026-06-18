@@ -342,14 +342,14 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
       {/* Header */}
       <div style={{
         padding: '16px 20px',
-        borderBottom: '1px solid var(--border,#262920)',
+        borderBottom: '0.0625rem solid var(--vibe-toolbar-border)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         flexShrink: 0,
       }}>
         <div>
-          <p style={{ fontSize: 12, color: 'var(--text-dim,#9b9d8c)', margin: 0 }}>
+          <p style={{ fontSize: 12, color: 'var(--vibe-btn-text)', margin: 0 }}>
             {t(locale, 'workshop.subtitle')}
           </p>
         </div>
@@ -372,7 +372,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
         display: 'flex',
         gap: 16,
         padding: '0 20px',
-        borderBottom: '1px solid var(--border,#262920)',
+        borderBottom: '0.0625rem solid var(--vibe-toolbar-border)',
         flexShrink: 0,
       }}>
         <button
@@ -381,8 +381,8 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
             padding: '10px 4px',
             border: 'none',
             background: 'none',
-            color: activeTab === 'installed' ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
-            borderBottom: activeTab === 'installed' ? '2px solid var(--accent,#cdf24b)' : '2px solid transparent',
+            color: activeTab === 'installed' ? 'var(--accent)' : 'var(--vibe-btn-text)',
+            borderBottom: activeTab === 'installed' ? '2px solid var(--accent)' : '2px solid transparent',
             fontSize: 13,
             fontWeight: 600,
             cursor: 'pointer',
@@ -397,8 +397,8 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
             padding: '10px 4px',
             border: 'none',
             background: 'none',
-            color: activeTab === 'browse' ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
-            borderBottom: activeTab === 'browse' ? '2px solid var(--accent,#cdf24b)' : '2px solid transparent',
+            color: activeTab === 'browse' ? 'var(--accent)' : 'var(--vibe-btn-text)',
+            borderBottom: activeTab === 'browse' ? '2px solid var(--accent)' : '2px solid transparent',
             fontSize: 13,
             fontWeight: 600,
             cursor: 'pointer',
@@ -420,13 +420,13 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
               onDrop={handleDrop}
               style={{
                 padding: dragOver ? 36 : 28,
-                border: `2px dashed ${dragOver ? 'var(--accent,#cdf24b)' : 'var(--border,#262920)'}`,
+                border: `2px dashed ${dragOver ? 'var(--accent)' : 'var(--vibe-btn-border)'}`,
                 borderRadius: 8,
                 textAlign: 'center',
-                color: 'var(--text-faint,#62655a)',
+                color: 'var(--vibe-btn-text)',
                 fontSize: 13,
                 transition: 'all 0.16s cubic-bezier(0.2,0.7,0.3,1)',
-                background: dragOver ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
+                background: dragOver ? 'var(--accent-soft)' : 'transparent',
                 marginBottom: 20,
                 display: 'flex',
                 flexDirection: 'column',
@@ -435,7 +435,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
               }}
             >
               {dragOver ? (
-                <span style={{ color: 'var(--accent,#cdf24b)', fontWeight: 600 }}>
+                <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
                   {t(locale, 'workshop.releaseToInstall')}
                 </span>
               ) : (
@@ -494,8 +494,8 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
                 style={{
                   width: '100%',
                   padding: '8px 12px',
-                  background: 'var(--bg,#0b0c0a)',
-                  border: '1px solid var(--border,#262920)',
+                  background: 'var(--vibe-content-bg)',
+                  border: '1px solid var(--vibe-btn-border)',
                   borderRadius: 6,
                   color: 'var(--text)',
                   fontSize: 13,
@@ -507,8 +507,8 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
             {/* Coming soon banner */}
             <div style={{
               padding: '16px 20px',
-              background: 'linear-gradient(135deg, var(--accent-soft,#cdf24b1f), transparent)',
-              border: '1px solid var(--border,#262920)',
+              background: 'linear-gradient(135deg, var(--accent-soft), transparent)',
+              border: '1px solid var(--vibe-btn-border)',
               borderRadius: 8,
               marginBottom: 20,
               display: 'flex',
@@ -518,7 +518,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
             }}>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Rocket size={14} style={{ color: 'var(--accent,#cdf24b)' }} />
+                  <Rocket size={14} style={{ color: 'var(--accent)' }} />
                   <span>{t(locale, 'store.comingSoon')}</span>
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
@@ -570,8 +570,8 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
         >
           <div
             style={{
-              background: 'var(--bg-2,#131410)',
-              border: '1px solid var(--border,#262920)',
+              background: 'var(--vibe-toolbar-bg)',
+              border: '1px solid var(--vibe-btn-border)',
               borderRadius: 12,
               padding: 24,
               width: 400,
@@ -648,8 +648,8 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
           }}
         >
           <div style={{
-            background: 'var(--bg-2,#131410)',
-            border: '1px solid var(--border,#262920)',
+            background: 'var(--vibe-toolbar-bg)',
+            border: '1px solid var(--vibe-btn-border)',
             borderRadius: 12,
             padding: 24,
             width: 420,
@@ -666,7 +666,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
                 <label key={perm} style={{
                   display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
                   padding: '8px 10px',
-                  background: selectedPerms.has(perm) ? 'var(--accent-soft,#cdf24b1f)' : 'var(--bg-3,#1c1e17)',
+                  background: selectedPerms.has(perm) ? 'var(--accent-soft)' : 'var(--vibe-btn-bg)',
                   borderRadius: 6,
                   fontSize: 12,
                   transition: 'background 0.12s',
@@ -726,7 +726,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
       {toast && (
         <div style={{
           position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
-          background: 'var(--bg-3,#1c1e17)', border: '1px solid var(--border,#262920)',
+          background: 'var(--vibe-btn-bg)', border: '1px solid var(--vibe-btn-border)',
           padding: '10px 18px', borderRadius: 10, fontSize: 13, color: 'var(--text)',
           zIndex: 200, animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
@@ -758,12 +758,12 @@ function ModuleCard({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        background: 'var(--bg-2,#131410)',
-        border: '1px solid var(--border,#262920)',
+        background: 'var(--vibe-toolbar-bg)',
+        border: '1px solid var(--vibe-btn-border)',
         borderRadius: 8,
         padding: '14px 12px',
         transition: 'all 0.12s',
-        borderColor: hovered ? 'var(--accent,#cdf24b)' : undefined,
+        borderColor: hovered ? 'var(--accent)' : undefined,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -780,8 +780,8 @@ function ModuleCard({
         </div>
         <span style={{
           fontSize: 9, padding: '1px 5px', borderRadius: 3,
-          background: mod.enabled ? 'var(--accent-soft,#cdf24b1f)' : 'var(--bg-3,#1c1e17)',
-          color: mod.enabled ? 'var(--accent,#cdf24b)' : 'var(--text-faint)',
+          background: mod.enabled ? 'var(--accent-soft)' : 'var(--vibe-btn-bg)',
+          color: mod.enabled ? 'var(--accent)' : 'var(--text-faint)',
           fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0,
         }}>
           {mod.enabled ? t(locale, 'workshop.enabled') : t(locale, 'workshop.disabled')}
@@ -845,8 +845,8 @@ function generateId(name: string): string {
 const dialogInputStyle: React.CSSProperties = {
   width: '100%',
   padding: '8px 10px',
-  background: 'var(--bg,#0b0c0a)',
-  border: '1px solid var(--border,#262920)',
+  background: 'var(--vibe-content-bg)',
+  border: '1px solid var(--vibe-btn-border)',
   borderRadius: 6,
   color: 'var(--text)',
   fontSize: 13,
@@ -863,12 +863,12 @@ function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: 
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        background: 'var(--bg-2,#131410)',
-        border: '1px solid var(--border,#262920)',
+        background: 'var(--vibe-toolbar-bg)',
+        border: '1px solid var(--vibe-btn-border)',
         borderRadius: 8,
         padding: '14px 14px 12px',
         transition: 'all 0.12s',
-        borderColor: hovered ? 'var(--accent,#cdf24b)' : undefined,
+        borderColor: hovered ? 'var(--accent)' : undefined,
         cursor: 'default',
       }}
     >
@@ -876,8 +876,8 @@ function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: 
         {/* Module icon placeholder */}
         <div style={{
           width: 36, height: 36, borderRadius: 8,
-          background: 'var(--bg-3,#1c1e17)',
-          border: '1px solid var(--border,#262920)',
+          background: 'var(--vibe-btn-bg)',
+          border: '1px solid var(--vibe-btn-border)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontSize: 16, flexShrink: 0,
         }}>
@@ -896,8 +896,8 @@ function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: 
         </div>
         <span style={{
           fontSize: 9, padding: '1px 5px', borderRadius: 3,
-          background: mod.enabled ? 'var(--accent-soft,#cdf24b1f)' : 'var(--bg-3,#1c1e17)',
-          color: mod.enabled ? 'var(--accent,#cdf24b)' : 'var(--text-faint)',
+          background: mod.enabled ? 'var(--accent-soft)' : 'var(--vibe-btn-bg)',
+          color: mod.enabled ? 'var(--accent)' : 'var(--text-faint)',
           fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0,
         }}>
           {mod.enabled ? t(locale, 'workshop.enabled') : t(locale, 'workshop.disabled')}
@@ -918,8 +918,8 @@ function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: 
         <span style={{
           padding: '2px 6px',
           borderRadius: 3,
-          background: 'var(--bg-3,#1c1e17)',
-          border: '1px solid var(--border,#262920)',
+          background: 'var(--vibe-btn-bg)',
+          border: '1px solid var(--vibe-btn-border)',
           fontSize: 9,
           textTransform: 'uppercase',
         }}>

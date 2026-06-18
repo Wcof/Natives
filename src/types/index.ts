@@ -25,6 +25,8 @@ declare global {
         resize: (sessionId: string, cols: number, rows: number) => Promise<void>;
         kill: (sessionId: string) => Promise<void>;
         cwd: (sessionId: string) => Promise<{ ok: boolean; cwd?: string }>;
+        onData: (callback: (data: { sessionId: string; data: string }) => void) => () => void;
+        onExit: (callback: (data: { sessionId: string; exitCode: number }) => void) => () => void;
       };
       archive: {
         list: (archivePath: string) => Promise<{ entries: Array<{ name: string; size: number; isDir: boolean }>; truncated: boolean; totalSize: number; error?: string }>;

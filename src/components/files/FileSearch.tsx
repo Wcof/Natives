@@ -50,13 +50,13 @@ export default function FileSearch({ onClose, onNavigate }: FileSearchProps) {
       <div style={{
         width: 560, maxHeight: '60vh', overflow: 'hidden',
         background: 'var(--panel, #0e0f0c)',
-        border: '1px solid var(--border, #262920)',
+        border: '1px solid var(--vibe-btn-border)',
         borderRadius: 'var(--radius, 4px)',
         display: 'flex', flexDirection: 'column',
         boxShadow: '0 16px 48px rgba(0,0,0,0.4)',
       }}>
         {/* Search input */}
-        <div style={{ padding: 12, borderBottom: '1px solid var(--border, #262920)' }}>
+        <div style={{ padding: 12, borderBottom: '1px solid var(--vibe-btn-border)' }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <input
               className="input"
@@ -78,8 +78,8 @@ export default function FileSearch({ onClose, onNavigate }: FileSearchProps) {
             />
             <span style={{
               fontSize: 10, padding: '2px 6px', borderRadius: 3,
-              background: mode === 'content' ? 'var(--accent, #cdf24b)' : 'var(--bg-3, #1c1e17)',
-              color: mode === 'content' ? 'var(--accent-ink, #0b0c0a)' : 'var(--text-dim, #9b9d8c)',
+              background: mode === 'content' ? 'var(--accent)' : 'var(--vibe-btn-bg)',
+              color: mode === 'content' ? 'var(--accent-ink)' : 'var(--vibe-btn-text)',
             }}>
               {mode === 'content' ? 'content' : 'name'}
             </span>
@@ -89,11 +89,11 @@ export default function FileSearch({ onClose, onNavigate }: FileSearchProps) {
         {/* Results */}
         <div style={{ flex: 1, overflow: 'auto' }}>
           {searching ? (
-            <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint, #62655a)' }}>
+            <div style={{ padding: 20, textAlign: 'center', color: 'var(--vibe-btn-text)' }}>
               Searching...
             </div>
           ) : results.length === 0 && query ? (
-            <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint, #62655a)' }}>
+            <div style={{ padding: 20, textAlign: 'center', color: 'var(--vibe-btn-text)' }}>
               No results for "{query}"
             </div>
           ) : (
@@ -104,22 +104,22 @@ export default function FileSearch({ onClose, onNavigate }: FileSearchProps) {
                 style={{
                   padding: '8px 12px',
                   cursor: 'pointer',
-                  borderBottom: '1px solid var(--border, #262920)',
+                  borderBottom: '1px solid var(--vibe-btn-border)',
                   transition: 'background 0.08s',
                 }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-2, #131410)'; }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--vibe-toolbar-bg)'; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
               >
-                <div style={{ fontSize: 12, color: 'var(--text, #f2f2ea)', marginBottom: 2 }}>
+                <div style={{ fontSize: 12, color: 'var(--vibe-brand-text)', marginBottom: 2 }}>
                   {r.name}
-                  {mode === 'content' && <span style={{ color: 'var(--text-faint, #62655a)', marginLeft: 8 }}>line {r.line}</span>}
+                  {mode === 'content' && <span style={{ color: 'var(--vibe-btn-text)', marginLeft: 8 }}>line {r.line}</span>}
                 </div>
-                <div style={{ fontSize: 10, color: 'var(--text-faint, #62655a)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <div style={{ fontSize: 10, color: 'var(--vibe-btn-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {r.path}
                 </div>
                 {mode === 'content' && r.preview && (
                   <div style={{
-                    fontSize: 11, color: 'var(--text-dim, #9b9d8c)',
+                    fontSize: 11, color: 'var(--vibe-btn-text)',
                     marginTop: 4, fontFamily: 'monospace',
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                   }}>
@@ -130,7 +130,7 @@ export default function FileSearch({ onClose, onNavigate }: FileSearchProps) {
             ))
           )}
           {results.length > 50 && (
-            <div style={{ padding: '6px 12px', fontSize: 11, color: 'var(--text-faint, #62655a)', textAlign: 'center' }}>
+            <div style={{ padding: '6px 12px', fontSize: 11, color: 'var(--vibe-btn-text)', textAlign: 'center' }}>
               Showing 50 of {results.length} results
             </div>
           )}

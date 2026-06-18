@@ -1,10 +1,11 @@
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 
 // Allow test override via environment variable
 function getDbDir(): string {
-  return process.env.NATIVES_DB_DIR || path.join(process.env.HOME || '~', '.natives');
+  return process.env.NATIVES_DB_DIR || path.join(os.homedir(), '.natives');
 }
 function getDbPath(): string {
   return path.join(getDbDir(), 'natives.db');
@@ -16,17 +17,50 @@ function getLockPath(): string {
 let db: Database.Database | null = null;
 let lockFd: number | null = null;
 
-// ── File lock ──
+// ── File lock（带 PID 写入和陈旧锁检测） ──
 
 function acquireLock(): void {
   const dbDir = getDbDir();
   if (!fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
   }
+  const lockPath = getLockPath();
+
+  // 检查是否有陈旧锁文件（进程已退出但锁文件残留）
+  if (fs.existsSync(lockPath)) {
+    try {
+      const content = fs.readFileSync(lockPath, 'utf-8').trim();
+      const oldPid = parseInt(content, 10);
+      if (oldPid === process.pid) {
+        // 已被当前进程持有，允许复用
+        return;
+      }
+      if (oldPid && !isPidAlive(oldPid)) {
+        // 陈旧锁，安全删除
+        try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
+      }
+    } catch {
+      // 无法读取锁文件，尝试删除
+      try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
+    }
+  }
+
   try {
-    lockFd = fs.openSync(getLockPath(), fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR, 0o644);
+    lockFd = fs.openSync(lockPath, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_RDWR, 0o644);
+    // 写入当前 PID，便于陈旧锁检测
+    fs.writeSync(lockFd, String(process.pid));
+    fs.fsyncSync(lockFd);
   } catch {
     throw new Error('Another instance is already running with this database.');
+  }
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0); // 信号 0 = 检测进程是否存在
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -132,6 +166,13 @@ const TABLES: Record<string, string> = {
   )`,
 };
 
+// ── Indexes ──
+
+const INDEXES: string[] = [
+  'CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(read, created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_audit_log_module ON permission_audit_log(module_id, created_at)',
+];
+
 // ── Migration ──
 
 const MIGRATIONS: Array<{ table: string; columns: Array<{ name: string; def: string }> }> = [];
@@ -161,10 +202,16 @@ export function initDb(): Database.Database {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
-  // Create all tables
-  for (const sql of Object.values(TABLES)) {
-    db.exec(sql);
-  }
+  // 创建所有表（事务内，保证原子性）
+  const createAll = db.transaction(() => {
+    for (const sql of Object.values(TABLES)) {
+      db!.exec(sql);
+    }
+    for (const sql of INDEXES) {
+      db!.exec(sql);
+    }
+  });
+  createAll();
 
   // Apply incremental migrations
   applyMigrations();
@@ -178,6 +225,7 @@ export function getDb(): Database.Database {
 }
 
 export function closeDb(): void {
+  _stmts = null; // 清除预编译语句缓存
   if (db) {
     db.close();
     db = null;
@@ -185,36 +233,44 @@ export function closeDb(): void {
   releaseLock();
 }
 
-// ── CRUD helpers ──
+// ── CRUD helpers（缓存预编译语句 — better-sqlite3 最佳实践）──
+// 每次调用 db.prepare() 会重新解析 SQL。高频调用（db:get/set IPC、state persistence、
+// usage tracking）时缓存 Statement 对象可消除重复解析开销。
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _stmts: Record<string, any> | null = null;
+
+function getStmts() {
+  if (_stmts) return _stmts;
+  const d = getDb();
+  _stmts = {
+    get: d.prepare('SELECT value FROM module_data WHERE module_id = ? AND key = ?'),
+    set: d.prepare('INSERT INTO module_data (module_id, key, value) VALUES (?, ?, ?) ON CONFLICT(module_id, key) DO UPDATE SET value = excluded.value'),
+    delete: d.prepare('DELETE FROM module_data WHERE module_id = ? AND key = ?'),
+    listAll: d.prepare('SELECT key FROM module_data WHERE module_id = ?'),
+    listPrefix: d.prepare('SELECT key FROM module_data WHERE module_id = ? AND key LIKE ?'),
+  };
+  return _stmts;
+}
 
 export function dbGet(moduleId: string, key: string): string | undefined {
-  const row = getDb()
-    .prepare('SELECT value FROM module_data WHERE module_id = ? AND key = ?')
-    .get(moduleId, key) as { value: string } | undefined;
+  const row = getStmts().get.get(moduleId, key) as { value: string } | undefined;
   return row?.value;
 }
 
 export function dbSet(moduleId: string, key: string, value: string): void {
-  getDb()
-    .prepare('INSERT INTO module_data (module_id, key, value) VALUES (?, ?, ?) ON CONFLICT(module_id, key) DO UPDATE SET value = excluded.value')
-    .run(moduleId, key, value);
+  getStmts().set.run(moduleId, key, value);
 }
 
 export function dbDelete(moduleId: string, key: string): void {
-  getDb()
-    .prepare('DELETE FROM module_data WHERE module_id = ? AND key = ?')
-    .run(moduleId, key);
+  getStmts().delete.run(moduleId, key);
 }
 
 export function dbList(moduleId: string, prefix?: string): string[] {
   if (prefix) {
-    const rows = getDb()
-      .prepare('SELECT key FROM module_data WHERE module_id = ? AND key LIKE ?')
-      .all(moduleId, `${prefix}%`) as Array<{ key: string }>;
+    const rows = getStmts().listPrefix.all(moduleId, `${prefix}%`) as Array<{ key: string }>;
     return rows.map((r) => r.key);
   }
-  const rows = getDb()
-    .prepare('SELECT key FROM module_data WHERE module_id = ?')
-    .all(moduleId) as Array<{ key: string }>;
+  const rows = getStmts().listAll.all(moduleId) as Array<{ key: string }>;
   return rows.map((r) => r.key);
 }

@@ -52,14 +52,14 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
   const getIntensity = (idx: number) => Math.max(0.2, 1 - idx * 0.03);
 
   const typeIcons: Record<string, string> = { create: '+', delete: '−', modify: '✎' };
-  const typeColors: Record<string, string> = { create: 'var(--diff-add)', delete: 'var(--danger)', modify: 'var(--accent,#cdf24b)' };
+  const typeColors: Record<string, string> = { create: 'var(--diff-add)', delete: 'var(--danger)', modify: 'var(--accent)' };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Header */}
       <div style={{
         padding: '8px 10px',
-        borderBottom: '1px solid var(--border,#262920)',
+        borderBottom: '1px solid var(--vibe-btn-border)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       }}>
         <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
@@ -74,8 +74,8 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
               onClick={() => setFilter(f)}
               style={{
                 fontSize: 10, padding: '2px 6px', borderRadius: 3,
-                color: filter === f ? 'var(--accent,#cdf24b)' : 'var(--text-faint)',
-                background: filter === f ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
+                color: filter === f ? 'var(--accent)' : 'var(--text-faint)',
+                background: filter === f ? 'var(--accent-soft)' : 'transparent',
               }}
             >
               {f === 'all' ? t(locale, 'aiWorkbench.dashboard.all') : `${typeIcons[f]} ${t(locale, 'aiWorkbench.dashboard.' + f)}`}
@@ -141,7 +141,7 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
 
       {/* Footer */}
       <div style={{
-        padding: '4px 10px', borderTop: '1px solid var(--border,#262920)',
+        padding: '4px 10px', borderTop: '1px solid var(--vibe-btn-border)',
         fontSize: 10, color: 'var(--text-faint)', display: 'flex', justifyContent: 'space-between',
       }}>
         <span>{t(locale, 'aiWorkbench.dashboard.changesCount').replace('{n}', String(filtered.length))}</span>

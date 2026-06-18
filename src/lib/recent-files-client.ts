@@ -6,7 +6,8 @@ import { useState, useEffect, useCallback } from 'react';
  * LRU 最近打开文件记录（客户端）
  *
  * 数据存储在 DB `settings:recent_files`，通过 IPC 读写。
- * 上限 30 个，新打开的文件推到队首，超出则淘汰最旧。
+ * 缓存使用 localStorage（跨 tab 持久化），上限 30 个。
+ * 使用 Promise 链序列化写入，防止并发竞争。
  */
 
 const STORAGE_KEY = 'settings:recent_files';
@@ -17,11 +18,14 @@ export interface RecentFile {
   openedAt: number;
 }
 
+// ── 写入序列化（防止并发竞争） ──
+
+let writeChain: Promise<void> = Promise.resolve();
+
 function readRaw(): string[] {
-  // 同步读取缓存（首次由 hook 初始化）
   if (typeof window === 'undefined') return [];
   try {
-    const raw = window.sessionStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.filter((x) => typeof x === 'string') : [];
@@ -33,7 +37,7 @@ function readRaw(): string[] {
 function writeRaw(paths: string[]): void {
   if (typeof window === 'undefined') return;
   try {
-    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(paths.slice(0, MAX_ENTRIES)));
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(paths.slice(0, MAX_ENTRIES)));
     window.dispatchEvent(new CustomEvent('natives:recent-files-changed'));
   } catch {
     /* non-fatal */
@@ -61,7 +65,7 @@ async function saveToDb(paths: string[]): Promise<void> {
   }
 }
 
-/** 同步 sessionStorage 缓存与 DB */
+/** 同步 localStorage 缓存与 DB */
 async function syncCache(): Promise<void> {
   const dbPaths = await loadFromDb();
   writeRaw(dbPaths);
@@ -69,25 +73,29 @@ async function syncCache(): Promise<void> {
 
 /**
  * 记录一个文件被打开
- * 推入 LRU 队列，异步持久化到 DB
+ * 使用 Promise 链序列化，防止并发写入导致数据丢失
  */
-export async function pushRecentFile(filePath: string): Promise<void> {
-  if (!filePath) return;
+export function pushRecentFile(filePath: string): Promise<void> {
+  if (!filePath) return Promise.resolve();
 
-  // 从缓存读取作为 base，避免每次都要 await DB
-  const paths = readRaw();
-  const filtered = paths.filter((p) => p !== filePath);
-  filtered.unshift(filePath);
+  writeChain = writeChain.then(async () => {
+    // 从缓存读取最新状态（可能已被前一个 promise 更新）
+    const paths = readRaw();
+    const filtered = paths.filter((p) => p !== filePath);
+    filtered.unshift(filePath);
 
-  // 立即更新 sessionStorage（同步，无等待）
-  writeRaw(filtered);
+    // 立即更新 localStorage（同步）
+    writeRaw(filtered);
 
-  // 异步持久化到 DB
-  await saveToDb(filtered);
+    // 异步持久化到 DB
+    await saveToDb(filtered);
+  });
+
+  return writeChain;
 }
 
 /**
- * 获取最近打开文件列表（同步，从 sessionStorage 缓存读取）
+ * 获取最近打开文件列表（同步，从 localStorage 缓存读取）
  */
 export function getRecentFiles(limit = MAX_ENTRIES): string[] {
   return readRaw().slice(0, limit);
@@ -102,7 +110,7 @@ export function useRecentFiles(limit = MAX_ENTRIES): {
   loading: boolean;
   refresh: () => void;
 } {
-  const [paths, setPaths] = useState<string[]>([]);
+  const [paths, setPaths] = useState<string[]>(() => readRaw().slice(0, limit));
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(() => {
@@ -123,7 +131,12 @@ export function useRecentFiles(limit = MAX_ENTRIES): {
       setPaths(readRaw().slice(0, limit));
     };
     window.addEventListener('natives:recent-files-changed', onChange);
-    return () => window.removeEventListener('natives:recent-files-changed', onChange);
+    // 跨 tab 同步（localStorage 的 storage 事件只在其他 tab 触发）
+    window.addEventListener('storage', onChange);
+    return () => {
+      window.removeEventListener('natives:recent-files-changed', onChange);
+      window.removeEventListener('storage', onChange);
+    };
   }, [limit]);
 
   return { paths, loading, refresh };

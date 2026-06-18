@@ -6,20 +6,20 @@ describe('ThemeEngine', () => {
   it('should have exactly two themes (editorial-index removed)', () => {
     const ids = Object.keys(THEMES);
     assert.equal(ids.length, 2);
-    assert.ok(ids.includes('editorial'));
-    assert.ok(ids.includes('warm-archive'));
+    assert.ok(ids.includes('frosted-jasmine'));
+    assert.ok(ids.includes('terminal-volt'));
     assert.equal(ids.includes('editorial-index'), false);
   });
 
   it('should validate a valid theme', () => {
-    const theme = validateTheme(THEMES['editorial']!);
-    assert.equal(theme.accent, '#ff433d');
-    assert.equal(theme.bg, '#f4f1ea');
+    const theme = validateTheme(THEMES['frosted-jasmine']!);
+    assert.equal(theme.accent, '#ff793f');
+    assert.equal(theme.bg, '#fdf6f0');
   });
 
   it('should reject invalid hex color', () => {
     assert.throws(() => {
-      validateTheme({ ...THEMES['editorial'], accent: 'not-a-color' });
+      validateTheme({ ...THEMES['frosted-jasmine'], accent: 'not-a-color' });
     });
   });
 

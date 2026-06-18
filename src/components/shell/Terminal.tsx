@@ -16,6 +16,8 @@ interface TerminalSession {
   fitAddon: unknown;
   active: boolean;
   profileId?: string;
+  /** IPC listener 清理函数（防止内存泄漏） */
+  unsubscribers?: Array<() => void>;
 }
 
 interface TerminalPanelProps {
@@ -77,12 +79,14 @@ export default function TerminalPanel({
 
   // Terminal breathing glow animation on agent idle + tabpulse busy
   useEffect(() => {
+    let glowTimeout: ReturnType<typeof setTimeout> | null = null;
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail?.status === 'idle' && terminalRef.current?.parentElement) {
         terminalRef.current.parentElement.classList.add('anim-termAwait');
         setIsAgentBusy(false);
-        setTimeout(() => {
+        if (glowTimeout) clearTimeout(glowTimeout);
+        glowTimeout = setTimeout(() => {
           terminalRef.current?.parentElement?.classList.remove('anim-termAwait');
         }, 3000);
       } else if (detail?.status === 'busy' || detail?.status === 'working') {
@@ -90,7 +94,10 @@ export default function TerminalPanel({
       }
     };
     window.addEventListener('agent-status-changed', handler);
-    return () => window.removeEventListener('agent-status-changed', handler);
+    return () => {
+      window.removeEventListener('agent-status-changed', handler);
+      if (glowTimeout) clearTimeout(glowTimeout);
+    };
   }, []);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -198,33 +205,35 @@ export default function TerminalPanel({
       api.terminal.write(sessionId, data);
     });
 
-    // Receive PTY output
-    const termBuffer: string[] = [];
-    api.onDbStateChanged((_event: unknown, channel: string, data: unknown) => {
-      if (channel === 'terminal:data' && (data as { sessionId?: string })?.sessionId === sessionId) {
-        const output = (data as { data?: string })?.data;
-        if (output) {
-          term.write(output);
-          // Track activity for follow mode
-          recordTerminalActivity(sessionId);
-          // Buffer lines for narration parsing
-          termBuffer.push(output);
-          if (termBuffer.length > 50) termBuffer.splice(0, termBuffer.length - 50);
-          // Check for completion/approval patterns
-          if (/esc to interrupt/i.test(output)) {
-            setIsAgentBusy(true);
-          }
-          if (/\? for.*options|Do you want|approve|Y\/n/i.test(output)) {
-            playAskChime();
-          }
+    // Receive PTY output via dedicated channels（对标 CodePilot — 绕过 db-state-changed 事件风暴）
+    const unsubscribers: Array<() => void> = [];
+
+    const unsubData = api.terminal.onData((payload: { sessionId: string; data: string }) => {
+      if (payload.sessionId !== sessionId) return;
+      const output = payload.data;
+      if (output) {
+        term.write(output);
+        // Track activity for follow mode
+        recordTerminalActivity(sessionId);
+        // Check for completion/approval patterns
+        if (/esc to interrupt/i.test(output)) {
+          setIsAgentBusy(true);
+        }
+        if (/\? for.*options|Do you want|approve|Y\/n/i.test(output)) {
+          playAskChime();
         }
       }
-      // Terminal exit
-      if (channel === 'terminal:exit' && (data as { sessionId?: string })?.sessionId === sessionId) {
-        setIsAgentBusy(false);
-        playDoneChime();
-      }
     });
+    if (typeof unsubData === 'function') unsubscribers.push(unsubData);
+
+    const unsubExit = api.terminal.onExit((payload: { sessionId: string; exitCode: number }) => {
+      if (payload.sessionId !== sessionId) return;
+      setIsAgentBusy(false);
+      playDoneChime();
+    });
+    if (typeof unsubExit === 'function') unsubscribers.push(unsubExit);
+
+    session.unsubscribers = unsubscribers;
 
     // Resize handling
     term.onResize(({ cols, rows }: { cols: number; rows: number }) => {
@@ -266,6 +275,13 @@ export default function TerminalPanel({
   const closeSession = useCallback((sessionId: string) => {
     const session = sessionMapRef.current.get(sessionId);
     if (!session) return;
+
+    // 清理 IPC 监听器（防止内存泄漏和写入已销毁的 terminal）
+    if (session.unsubscribers) {
+      for (const unsub of session.unsubscribers) {
+        try { unsub(); } catch { /* ignore */ }
+      }
+    }
 
     // Kill PTY
     window.nativesAPI?.terminal?.kill(sessionId);
@@ -355,6 +371,12 @@ export default function TerminalPanel({
   useEffect(() => {
     return () => {
       sessionMapRef.current.forEach((session) => {
+        // 清理 IPC 监听器
+        if (session.unsubscribers) {
+          for (const unsub of session.unsubscribers) {
+            try { unsub(); } catch { /* ignore */ }
+          }
+        }
         window.nativesAPI?.terminal?.kill(session.id);
         const term = session.term as { dispose?: () => void };
         if (term?.dispose) term.dispose();
@@ -388,7 +410,16 @@ export default function TerminalPanel({
     if (!activeSessionId) {
       // No session, create one then send command
       await createSession(undefined, selectedProfileId ?? undefined);
-      // After creation, the new session becomes active
+      // createSession 更新了 sessions 和 activeSessionId，但 setSessions 是异步的
+      // 需要从 sessionMapRef 获取最新的 session
+      // 使用 setTimeout 等待 React 状态更新
+      setTimeout(() => {
+        const sessions = sessionMapRef.current;
+        const latestSession = Array.from(sessions.values()).pop();
+        if (latestSession) {
+          window.nativesAPI?.terminal?.write?.(latestSession.id, cmd + '\r');
+        }
+      }, 100);
       return;
     }
     // Send command to current session
@@ -503,8 +534,8 @@ export default function TerminalPanel({
             onChange={(e) => setSelectedProfileId(e.target.value ? Number(e.target.value) : null)}
             style={{
               fontSize: 10, padding: '1px 4px', marginRight: 8,
-              background: 'var(--bg-3,#1c1e17)', color: 'var(--text)',
-              border: '1px solid var(--border,#262920)', borderRadius: 4,
+              background: 'var(--vibe-btn-bg)', color: 'var(--text)',
+              border: '1px solid var(--vibe-btn-border)', borderRadius: 4,
               cursor: 'pointer', maxWidth: 120,
             }}
             aria-label={t(locale, 'terminal.selectProfile')}
@@ -524,7 +555,7 @@ export default function TerminalPanel({
             onClick={() => launchAgent('claude --dangerously-skip-permissions')}
             style={{
               fontSize: 10, padding: '2px 6px', borderRadius: 4,
-              color: 'var(--text-dim,#9b9d8c)',
+              color: 'var(--vibe-btn-text)',
             }}
             title="Launch Claude Code"
           >
@@ -535,7 +566,7 @@ export default function TerminalPanel({
             onClick={() => launchAgent('codex')}
             style={{
               fontSize: 10, padding: '2px 6px', borderRadius: 4,
-              color: 'var(--text-dim,#9b9d8c)',
+              color: 'var(--vibe-btn-text)',
             }}
             title="Launch Codex"
           >
@@ -548,8 +579,8 @@ export default function TerminalPanel({
               onClick={onFollowModeToggle}
               style={{
                 fontSize: 10, padding: '2px 6px', borderRadius: 4,
-                color: followMode ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
-                background: followMode ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
+                color: followMode ? 'var(--accent)' : 'var(--text-faint)',
+                background: followMode ? 'var(--accent-soft)' : 'transparent',
               }}
               title={followMode ? t(locale, 'terminal.followModeOn') : t(locale, 'terminal.followModeOff')}
               aria-label={t(locale, 'terminal.ariaToggleFollowMode')}
@@ -557,25 +588,29 @@ export default function TerminalPanel({
               <Link2 size={12} />
             </button>
           )}
-          {/* Copy selection to clipboard */}
+          {/* Copy selection to clipboard（不调用 selectAll，保留用户选择） */}
           <button
             className="btn-ghost"
             onClick={async () => {
               const session = sessions.find(s => s.id === activeSessionId);
               if (!session) return;
-              const term = session.term as { selectAll?: () => void; getSelection?: () => string; clearSelection?: () => void } | undefined;
+              const term = session.term as { getSelection?: () => string; selectAll?: () => void; clearSelection?: () => void } | undefined;
               if (!term) return;
               try {
-                term.selectAll?.();
-                const text = term.getSelection?.() || '';
-                term.clearSelection?.();
+                let text = term.getSelection?.() || '';
+                // 如果没有选择，才选择全部
+                if (!text) {
+                  term.selectAll?.();
+                  text = term.getSelection?.() || '';
+                  term.clearSelection?.();
+                }
                 if (text) {
                   const ok = await copyToClipboard(text);
                   if (ok) playDoneChime();
                 }
               } catch { /* ignore */ }
             }}
-            style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, color: 'var(--text-dim,#9b9d8c)' }}
+            style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, color: 'var(--vibe-btn-text)' }}
             title="Copy selection"
             aria-label="Copy selection"
           >
@@ -613,11 +648,11 @@ export default function TerminalPanel({
         {isDragOver && (
           <div style={{
             position: 'absolute', inset: 0,
-            background: 'var(--accent-soft,#cdf24b1f)',
-            border: '2px dashed var(--accent,#cdf24b)',
+            background: 'var(--accent-soft)',
+            border: '2px dashed var(--accent)',
             borderRadius: 4,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: 'var(--accent,#cdf24b)', fontSize: 13, fontWeight: 600,
+            color: 'var(--accent)', fontSize: 13, fontWeight: 600,
             zIndex: 10, pointerEvents: 'none',
           }}>
             {t(locale, 'terminal.dropPrompt')}

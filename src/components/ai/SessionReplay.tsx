@@ -89,7 +89,7 @@ export default function SessionReplay() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Header */}
       <div style={{
-        padding: '8px 10px', borderBottom: '1px solid var(--border,#262920)',
+        padding: '8px 10px', borderBottom: '1px solid var(--vibe-btn-border)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       }}>
         <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
@@ -115,7 +115,7 @@ export default function SessionReplay() {
                 onClick={() => handleSelectSession(s)}
                 style={{
                   padding: '8px 10px', marginBottom: 4, borderRadius: 6, cursor: 'pointer',
-                  background: 'var(--bg-2,#131410)', border: '1px solid var(--border,#262920)',
+                  background: 'var(--vibe-toolbar-bg)', border: '1px solid var(--vibe-btn-border)',
                   transition: 'border-color 0.12s',
                 }}
               >
@@ -201,10 +201,10 @@ export default function SessionReplay() {
               onClick={() => handleNavigateToFile(steps[currentStep]!.path)}
               style={{
                 padding: 10, borderRadius: 6, cursor: 'pointer',
-                background: 'var(--bg-2,#131410)', border: '1px solid var(--border,#262920)',
+                background: 'var(--vibe-toolbar-bg)', border: '1px solid var(--vibe-btn-border)',
               }}
             >
-              <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--accent,#cdf24b)', fontFamily: 'var(--font-mono)', marginBottom: 4 }}>
+              <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--accent)', fontFamily: 'var(--font-mono)', marginBottom: 4 }}>
                 {steps[currentStep]!.path.split('/').pop()}
               </div>
               <div style={{ fontSize: 10, color: 'var(--text-faint)' }}>
@@ -224,8 +224,8 @@ export default function SessionReplay() {
                 onClick={() => { setCurrentStep(i); handleNavigateToFile(step.path); }}
                 style={{
                   padding: '3px 8px', fontSize: 10, cursor: 'pointer', borderRadius: 3,
-                  color: i === currentStep ? 'var(--accent,#cdf24b)' : 'var(--text-dim)',
-                  background: i === currentStep ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
+                  color: i === currentStep ? 'var(--accent)' : 'var(--text-dim)',
+                  background: i === currentStep ? 'var(--accent-soft)' : 'transparent',
                 }}
               >
                 {step.path.split('/').pop()}

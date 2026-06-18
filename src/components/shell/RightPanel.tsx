@@ -71,7 +71,7 @@ export default function RightPanel({
 
   return (
     <aside
-      className={`right-panel ${!isOpen ? 'collapsed' : ''}`}
+      className={`vibe-right-panel ${!isOpen ? 'collapsed' : ''}`}
       role="region"
       aria-label={getTitle()}
       style={{ width: isOpen ? width : 0, position: 'relative' }}
@@ -85,63 +85,70 @@ export default function RightPanel({
         />
       )}
 
-      <div className="right-panel-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {/* Mode tabs */}
+      {/* Header with glass effect */}
+      <div className="right-panel-header" style={{
+        background: 'var(--vibe-toolbar-bg)',
+        borderBottom: '1px solid var(--vibe-sidebar-border)',
+      }}>
+        <div className="flex items-center gap-1">
+          {/* Mode tabs with improved styling */}
           <button
-            className={`btn-ghost ${mode === 'file-preview' ? 'active' : ''}`}
+            className={`flex items-center justify-center p-1.5 rounded-lg transition-all ${
+              mode === 'file-preview'
+                ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
+                : 'text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+            }`}
             onClick={() => onModeChange('file-preview')}
-            style={{
-              padding: '4px 8px', borderRadius: 4,
-              color: mode === 'file-preview' ? 'var(--accent)' : 'var(--text-faint)',
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            }}
             title={t(locale, 'rightPanel.filePreview')}
           >
-            <FileText size={16} />
+            <FileText size={15} />
           </button>
           <button
-            className={`btn-ghost ${mode === 'notifications' ? 'active' : ''}`}
+            className={`flex items-center justify-center p-1.5 rounded-lg transition-all ${
+              mode === 'notifications'
+                ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
+                : 'text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+            }`}
             onClick={() => onModeChange('notifications')}
-            style={{
-              padding: '4px 8px', borderRadius: 4,
-              color: mode === 'notifications' ? 'var(--accent)' : 'var(--text-faint)',
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            }}
             title={t(locale, 'rightPanel.title.notifications')}
           >
-            <Bell size={16} />
+            <Bell size={15} />
           </button>
           <button
-            className={`btn-ghost ${mode === 'module-details' ? 'active' : ''}`}
+            className={`flex items-center justify-center p-1.5 rounded-lg transition-all ${
+              mode === 'module-details'
+                ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
+                : 'text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+            }`}
             onClick={() => onModeChange('module-details')}
-            style={{
-              padding: '4px 8px', borderRadius: 4,
-              color: mode === 'module-details' ? 'var(--accent)' : 'var(--text-faint)',
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            }}
             title={t(locale, 'rightPanel.title.moduleDetails')}
           >
-            <Info size={16} />
+            <Info size={15} />
           </button>
         </div>
-        <button className="btn-ghost" onClick={handleClose} aria-label="Close panel" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+        <button
+          className="flex items-center justify-center p-1.5 rounded-lg text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)] transition-all"
+          onClick={handleClose}
+          aria-label="Close panel"
+        >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M18 6L6 18M6 6l12 12" />
           </svg>
         </button>
       </div>
 
-      <div className="right-panel-content">
+      {/* Content area */}
+      <div className="right-panel-content" style={{ padding: '12px 16px 40px' }}>
         {children || (
-          <div style={{
-            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-            height: 200, color: 'var(--text-faint)', fontSize: 13,
-          }}>
-            <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'center', color: 'var(--text-faint)' }}>
-              {mode === 'notifications' ? <Bell size={28} /> : <FileText size={28} />}
+          <div className="flex flex-col items-center justify-center h-[200px] text-[var(--text-faint)] text-[13px]">
+            <div className="mb-3 flex justify-center">
+              <div className="w-10 h-10 rounded-full bg-[var(--vibe-btn-bg)] flex items-center justify-center">
+                {mode === 'notifications' ? <Bell size={18} /> : <FileText size={18} />}
+              </div>
             </div>
-            <div>{mode === 'notifications' ? t(locale, 'rightPanel.empty.notifications') : t(locale, 'rightPanel.empty.selectFile')}</div>
+            <div className="text-center">
+              {mode === 'notifications' ? t(locale, 'rightPanel.empty.notifications') : t(locale, 'rightPanel.empty.selectFile')}
+            </div>
           </div>
         )}
       </div>

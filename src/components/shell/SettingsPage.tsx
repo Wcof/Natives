@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { applyTheme } from '@/lib/theme-engine';
+import { applyLiquidGlassConfig } from '@/context/ThemeContext';
 import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { X, Check, Star, Edit2 } from 'lucide-react';
@@ -181,8 +182,16 @@ export default function SettingsPage() {
   const CONFIG_DB_KEY = 'settings:controlHubVisuals';
   useEffect(() => {
     if (!hasLoaded) return;
+
+    // Apply styles instantly to this window (compute and set variables directly to bypass Chromium nested repaint bug)
+    applyLiquidGlassConfig(liquidGlassConfig);
+
+    // Dispatch custom event for real-time synchronization in the same window (e.g. ShellLayout background)
+    window.dispatchEvent(new CustomEvent('visual-config-changed', { detail: liquidGlassConfig }));
+
     const api = window.nativesAPI;
     if (!api?.db?.set) return;
+
     const timer = setTimeout(() => {
       const config = {
         blurAmount: liquidGlassConfig.blurAmount,
@@ -377,9 +386,9 @@ export default function SettingsPage() {
             <div style={{
               padding: '24px 16px',
               textAlign: 'center',
-              border: '1px dashed var(--border,#262920)',
+              border: '1px dashed var(--vibe-toolbar-border)',
               borderRadius: 8,
-              color: 'var(--text-faint,#62655a)',
+              color: 'var(--vibe-btn-text)',
             }}>
               <div style={{ fontSize: 13, marginBottom: 4 }}>{t(locale, 'settings.noProfiles')}</div>
               <div style={{ fontSize: 11, marginBottom: 12 }}>{t(locale, 'settings.noProfilesDesc')}</div>
@@ -402,8 +411,8 @@ export default function SettingsPage() {
                       padding: '8px 10px',
                       borderRadius: 6,
                       cursor: 'pointer',
-                      background: selectedProfile === p.name ? 'var(--accent-soft,#cdf24b1f)' : 'transparent',
-                      border: selectedProfile === p.name ? '1px solid var(--accent,#cdf24b)' : '1px solid transparent',
+                      background: selectedProfile === p.name ? 'var(--accent-soft)' : 'transparent',
+                      border: selectedProfile === p.name ? '1px solid var(--accent)' : '1px solid transparent',
                       transition: 'all 0.12s',
                     }}
                   >
@@ -416,8 +425,8 @@ export default function SettingsPage() {
                           fontSize: 9,
                           padding: '1px 5px',
                           borderRadius: 3,
-                          background: 'var(--accent,#cdf24b)',
-                          color: 'var(--accent-ink,#0b0c0a)',
+                          background: 'var(--accent)',
+                          color: 'var(--accent-ink)',
                           fontWeight: 600,
                           textTransform: 'uppercase',
                           letterSpacing: 0.5,
@@ -488,17 +497,17 @@ export default function SettingsPage() {
               {/* Variables for selected profile */}
               {selectedProfile && (
                 <div style={{
-                  border: '1px solid var(--border,#262920)',
+                  border: '1px solid var(--vibe-toolbar-border)',
                   borderRadius: 8,
                   overflow: 'hidden',
                 }}>
                   <div style={{
                     padding: '8px 10px',
-                    background: 'var(--bg-2,#131410)',
+                    background: 'var(--vibe-toolbar-bg)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    borderBottom: '1px solid var(--border,#262920)',
+                    borderBottom: '1px solid var(--vibe-toolbar-border)',
                   }}>
                     <span style={{ fontSize: 11, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1 }}>
                       {t(locale, 'settings.variables')}
@@ -524,7 +533,7 @@ export default function SettingsPage() {
                           key={v.key}
                           style={{
                             padding: '6px 10px',
-                            borderBottom: '1px solid var(--border,#262920)',
+                            borderBottom: '1px solid var(--vibe-toolbar-border)',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'space-between',
@@ -532,7 +541,7 @@ export default function SettingsPage() {
                           }}
                         >
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent,#cdf24b)', fontFamily: 'var(--font-mono)' }}>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>
                               {v.key}
                             </div>
                             {editingVar === v.key ? (
@@ -710,7 +719,7 @@ export default function SettingsPage() {
           <div style={{
             marginTop: 12, padding: 12, borderRadius: 12,
             background: 'linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%)',
-            border: '1px solid var(--border,#262920)',
+            border: '1px solid var(--vibe-toolbar-border)',
             textAlign: 'center', fontSize: 11, color: 'var(--text-dim)',
           }}>
             <div style={{ fontSize: 10, fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>
@@ -775,8 +784,8 @@ export default function SettingsPage() {
           bottom: 24,
           left: '50%',
           transform: 'translateX(-50%)',
-          background: 'var(--bg-3,#1c1e17)',
-          border: '1px solid var(--border,#262920)',
+          background: 'var(--vibe-btn-bg)',
+          border: '1px solid var(--vibe-btn-border)',
           padding: '10px 18px',
           borderRadius: 10,
           fontSize: 13,
@@ -794,7 +803,7 @@ export default function SettingsPage() {
 const sectionTitleStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 600,
-  color: 'var(--text-dim,#9b9d8c)',
+  color: 'var(--vibe-btn-text)',
   marginBottom: 8,
   textTransform: 'uppercase',
   letterSpacing: 1,
@@ -803,8 +812,8 @@ const sectionTitleStyle: React.CSSProperties = {
 const inputStyle: React.CSSProperties = {
   width: 80,
   padding: '4px 8px',
-  background: 'var(--bg,#0b0c0a)',
-  border: '1px solid var(--border,#262920)',
+  background: 'var(--vibe-content-bg)',
+  border: '1px solid var(--vibe-btn-border)',
   borderRadius: 4,
   color: 'var(--text)',
   fontSize: 12,

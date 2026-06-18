@@ -14,6 +14,9 @@ const THUMBNAILABLE_EXTENSIONS = new Set([...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIO
 let CACHE_DIR = path.join(os.homedir(), '.natives', 'thumbs');
 const MAX_CACHE_SIZE = 400 * 1024 * 1024; // 400MB
 
+// ── In-Flight Deduplication（对标 fanbox — 防止并发重复生成）──
+const thumbInflight = new Map<string, Promise<{ buffer: Buffer; contentType: string; cached: boolean } | null>>();
+
 // ── Configuration ──
 
 export function setThumbCacheDir(dir: string): void {
@@ -130,49 +133,62 @@ export async function generateThumb(
     // 缓存未命中，继续生成
   }
 
-  // 确保缓存目录存在
-  await fs.promises.mkdir(CACHE_DIR, { recursive: true });
+  // ── In-Flight Dedup：如果同一缩略图正在生成中，复用其 Promise ──
+  const inflight = thumbInflight.get(cacheKey);
+  if (inflight) return inflight;
 
-  const tmpDir = path.join(os.tmpdir(), 'natives-thumbs');
-  await fs.promises.mkdir(tmpDir, { recursive: true });
+  const promise = (async () => {
+    // 确保缓存目录存在
+    await fs.promises.mkdir(CACHE_DIR, { recursive: true });
 
-  const tmpPath = path.join(tmpDir, `thumb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`);
+    const tmpDir = path.join(os.tmpdir(), 'natives-thumbs');
+    await fs.promises.mkdir(tmpDir, { recursive: true });
 
-  try {
-    if (IMAGE_EXTENSIONS.has(ext)) {
-      await execFilePromise('sips', ['-Z', String(thumbWidth), '-s', 'format', 'jpeg', filePath, '--out', tmpPath]);
-    } else {
-      await execFilePromise('qlmanage', ['-t', '-s', String(thumbWidth), '-o', tmpDir, filePath]);
-      const basename = path.basename(filePath, ext);
-      const qlOutput = path.join(tmpDir, `${basename}.png`);
-      if (fs.existsSync(qlOutput)) {
-        await execFilePromise('sips', ['-s', 'format', 'jpeg', qlOutput, '--out', tmpPath]);
-        try { await fs.promises.unlink(qlOutput); } catch { /* ignore */ }
-      }
-    }
+    const tmpPath = path.join(tmpDir, `thumb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`);
 
-    const buffer = await fs.promises.readFile(tmpPath);
-
-    // 写入缓存
     try {
-      await fs.promises.copyFile(tmpPath, cachePath);
-      const meta = await readMeta();
-      meta[cacheKey] = {
-        filePath,
-        width: thumbWidth,
-        size: buffer.length,
-        lastAccess: Date.now(),
-      };
-      await writeMeta(meta);
-      await enforceCacheLimit();
-    } catch { /* 缓存写入失败不影响功能 */ }
+      if (IMAGE_EXTENSIONS.has(ext)) {
+        await execFilePromise('sips', ['-Z', String(thumbWidth), '-s', 'format', 'jpeg', filePath, '--out', tmpPath]);
+      } else {
+        await execFilePromise('qlmanage', ['-t', '-s', String(thumbWidth), '-o', tmpDir, filePath]);
+        const basename = path.basename(filePath, ext);
+        const qlOutput = path.join(tmpDir, `${basename}.png`);
+        if (fs.existsSync(qlOutput)) {
+          await execFilePromise('sips', ['-s', 'format', 'jpeg', qlOutput, '--out', tmpPath]);
+          try { await fs.promises.unlink(qlOutput); } catch { /* ignore */ }
+        }
+      }
 
-    try { await fs.promises.unlink(tmpPath); } catch { /* ignore */ }
+      const buffer = await fs.promises.readFile(tmpPath);
 
-    return { buffer, contentType: 'image/jpeg', cached: false };
-  } catch {
-    try { if (fs.existsSync(tmpPath)) await fs.promises.unlink(tmpPath); } catch { /* ignore */ }
-    return null;
+      // 写入缓存
+      try {
+        await fs.promises.copyFile(tmpPath, cachePath);
+        const meta = await readMeta();
+        meta[cacheKey] = {
+          filePath,
+          width: thumbWidth,
+          size: buffer.length,
+          lastAccess: Date.now(),
+        };
+        await writeMeta(meta);
+        await enforceCacheLimit();
+      } catch { /* 缓存写入失败不影响功能 */ }
+
+      try { await fs.promises.unlink(tmpPath); } catch { /* ignore */ }
+
+      return { buffer, contentType: 'image/jpeg', cached: false };
+    } catch {
+      try { if (fs.existsSync(tmpPath)) await fs.promises.unlink(tmpPath); } catch { /* ignore */ }
+      return null;
+    }
+  })();
+
+  thumbInflight.set(cacheKey, promise);
+  try {
+    return await promise;
+  } finally {
+    thumbInflight.delete(cacheKey);
   }
 }
 

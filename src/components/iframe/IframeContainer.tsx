@@ -73,11 +73,11 @@ export default function IframeContainer({ moduleId, url, isVisible, onReady, onE
         aria-live="assertive"
         style={{
           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          height: '100%', padding: 40, textAlign: 'center',
+          height: '100%', padding: '2.5rem', textAlign: 'center',
         }}
       >
-        <div style={{ fontSize: 44, marginBottom: 16 }}>&#9888;&#65039;</div>
-        <p style={{ fontSize: 14, color: 'var(--text,#f2f2ea)', marginBottom: 8 }}>{error}</p>
+        <div style={{ fontSize: '2.75rem', marginBottom: '1rem' }}>&#9888;&#65039;</div>
+        <p style={{ fontSize: '0.875rem', color: 'var(--vibe-brand-text)', marginBottom: '0.5rem' }}>{error}</p>
         <button className="btn btn-primary" onClick={handleRetry}>
           Retry
         </button>
@@ -100,7 +100,7 @@ export default function IframeContainer({ moduleId, url, isVisible, onReady, onE
       {loading && (
         <div style={{
           position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
-          justifyContent: 'center', color: 'var(--text-faint,#62655a)', fontSize: 13,
+          justifyContent: 'center', color: 'var(--vibe-btn-text)', fontSize: 13,
           padding: 30,
         }}>
           Loading...{retryCount > 0 ? ` (retry ${retryCount}/${MAX_RETRIES})` : ''}

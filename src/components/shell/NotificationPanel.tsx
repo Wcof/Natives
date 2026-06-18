@@ -19,6 +19,12 @@ interface NotificationPanelProps {
   locale: Locale;
 }
 
+const levelDot: Record<string, string> = {
+  info: '#28c840',
+  warning: '#febc2e',
+  error: '#fe5f57',
+};
+
 export default function NotificationPanel({ locale }: NotificationPanelProps) {
   const { data: notifications, loading, error, reload: loadNotifications } = useAsyncData(async () => {
     const api = window.nativesAPI;
@@ -31,7 +37,6 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
 
   useEffect(() => {
     loadNotifications();
-    // Poll for new notifications every 30s
     const interval = setInterval(loadNotifications, 30000);
     return () => clearInterval(interval);
   }, [loadNotifications]);
@@ -55,21 +60,14 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
   };
 
   const handleClear = async () => {
-    // Mark all as read (soft clear)
     await handleMarkAllRead();
-  };
-
-  const levelColors: Record<string, string> = {
-    info: 'var(--accent,#cdf24b)',
-    warning: 'var(--warning)',
-    error: 'var(--danger)',
   };
 
   const unreadCount = (notifications ?? []).filter((n) => !n.read).length;
 
   if (loading) {
     return (
-      <div style={{ padding: '40px 16px', textAlign: 'center', color: 'var(--text-faint)', fontSize: 13 }}>
+      <div className="flex items-center justify-center py-10 text-sm text-[var(--text-faint)]">
         {t(locale, 'common.loading')}
       </div>
     );
@@ -78,38 +76,29 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
   return (
     <div>
       {/* Header with actions */}
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '0 0 12px', borderBottom: '1px solid var(--border,#262920)', marginBottom: 8,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 12, color: 'var(--text-dim)', fontWeight: 600 }}>
+      <div className="flex items-center justify-between pb-3 mb-3 border-b border-[var(--vibe-border-subtle)]">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-[var(--text-dim)]">
             {t(locale, 'notifications.title')}
           </span>
           {unreadCount > 0 && (
-            <span style={{
-              fontSize: 10, padding: '1px 5px', borderRadius: 3,
-              background: 'var(--accent,#cdf24b)', color: 'var(--accent-ink,#0b0c0a)',
-              fontWeight: 600,
-            }}>
+            <span className="text-[0.625rem] font-semibold px-1.5 py-0.5 rounded bg-[var(--vibe-notif-badge)] text-white">
               {unreadCount}
             </span>
           )}
         </div>
-        <div style={{ display: 'flex', gap: 4 }}>
+        <div className="flex gap-1">
           {unreadCount > 0 && (
             <button
-              className="btn-ghost"
               onClick={handleMarkAllRead}
-              style={{ fontSize: 10, color: 'var(--accent,#cdf24b)', padding: '2px 6px' }}
+              className="text-[0.625rem] text-[var(--vibe-accent-color)] hover:text-[var(--vibe-active-color)] transition-colors px-1.5 py-0.5 rounded hover:bg-[var(--vibe-notif-hover)]"
             >
               {t(locale, 'notifications.markAllRead')}
             </button>
           )}
           <button
-            className="btn-ghost"
             onClick={handleClear}
-            style={{ fontSize: 10, color: 'var(--text-faint)', padding: '2px 6px' }}
+            className="text-[0.625rem] text-[var(--text-faint)] hover:text-[var(--text-dim)] transition-colors px-1.5 py-0.5 rounded hover:bg-[var(--vibe-notif-hover)]"
           >
             {t(locale, 'notifications.clear')}
           </button>
@@ -120,48 +109,38 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
       {(notifications ?? []).length === 0 ? (
         <EmptyState title={t(locale, 'notifications.empty')} />
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
+        <div className="flex flex-col">
           {(notifications ?? []).map((notif) => (
             <div
               key={notif.id}
-              style={{
-                padding: '10px 0',
-                borderBottom: '1px solid var(--border,#262920)',
-                opacity: notif.read ? 0.5 : 1,
-                transition: 'opacity 0.15s',
-              }}
+              className="py-2.5 border-b border-[var(--vibe-border-subtle)] last:border-b-0 transition-opacity"
+              style={{ opacity: notif.read ? 0.45 : 1 }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                    <span style={{
-                      width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
-                      background: levelColors[notif.level] || levelColors.info,
-                    }} />
-                    <span style={{
-                      fontSize: 12, fontWeight: 600, color: 'var(--text)',
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }}>
+              <div className="flex justify-between items-start gap-2">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <span
+                      className="w-1.5 h-1.5 rounded-full shrink-0"
+                      style={{ background: levelDot[notif.level] || levelDot.info }}
+                    />
+                    <span className="text-xs font-semibold text-[var(--vibe-brand-text)] truncate">
                       {notif.title}
                     </span>
                   </div>
                   {notif.body && (
-                    <div style={{ fontSize: 11, color: 'var(--text-dim)', marginLeft: 13, lineHeight: 1.4 }}>
+                    <div className="text-[0.6875rem] text-[var(--text-dim)] ml-[18px] leading-relaxed">
                       {notif.body}
                     </div>
                   )}
-                  <div style={{ fontSize: 10, color: 'var(--text-faint)', marginLeft: 13, marginTop: 3 }}>
-                    {notif.moduleId && (
-                      <span style={{ marginRight: 8 }}>{notif.moduleId}</span>
-                    )}
+                  <div className="text-[0.625rem] text-[var(--text-faint)] ml-[18px] mt-0.5">
+                    {notif.moduleId && <span className="mr-1.5">{notif.moduleId}</span>}
                     <span>{notif.createdAt}</span>
                   </div>
                 </div>
                 {!notif.read && (
                   <button
-                    className="btn-ghost"
                     onClick={() => handleMarkRead(notif.id)}
-                    style={{ fontSize: 10, color: 'var(--accent)', padding: '2px 6px', flexShrink: 0 }}
+                    className="text-[0.625rem] text-[var(--vibe-accent-color)] hover:text-[var(--vibe-active-color)] transition-colors px-1.5 py-0.5 rounded hover:bg-[var(--vibe-notif-hover)] shrink-0"
                   >
                     ✓
                   </button>
@@ -197,14 +176,7 @@ export function NotificationBadge({ locale }: { locale: Locale }) {
   if (count === 0) return null;
 
   return (
-    <span style={{
-      position: 'absolute', top: -4, right: -4,
-      minWidth: 14, height: 14,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: 'var(--danger)', color: '#fff',
-      fontSize: 9, fontWeight: 700, borderRadius: 7,
-      padding: '0 3px',
-    }}>
+    <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] flex items-center justify-center bg-[var(--vibe-notif-badge)] text-white text-[9px] font-bold rounded-full px-[3px]">
       {count > 99 ? '99+' : count}
     </span>
   );

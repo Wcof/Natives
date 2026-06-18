@@ -40,6 +40,16 @@ let sessionCounter = 0;
 
 // ── PTY Session ──
 
+/** 清理 __NEXT_PRIVATE_* 变量（对标 CodePilot — 防止泄漏到子进程） */
+function sanitizedEnv(extra: Record<string, string>): Record<string, string> {
+  const clean: Record<string, string> = {};
+  for (const [key, val] of Object.entries(process.env)) {
+    if (key.startsWith('__NEXT_PRIVATE_')) continue;
+    if (val !== undefined) clean[key] = val;
+  }
+  return { ...clean, ...extra };
+}
+
 function createPTYSession(shell: string, env: Record<string, string>): ShellSession {
   const id = `session-${++sessionCounter}`;
   const cols = 80;
@@ -52,7 +62,7 @@ function createPTYSession(shell: string, env: Record<string, string>): ShellSess
         cols,
         rows,
         cwd: process.env.HOME,
-        env: { ...process.env, ...env },
+        env: sanitizedEnv(env),
       });
 
       writeHandlers.set(id, (data: string) => ptyProcess.write(data));
@@ -80,7 +90,7 @@ function createPTYSession(shell: string, env: Record<string, string>): ShellSess
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { spawn } = require('child_process');
     const child = spawn(shell, [], {
-      env: { ...process.env, ...env },
+      env: sanitizedEnv(env),
       cwd: process.env.HOME,
     });
 

@@ -30,6 +30,7 @@ import UsernameOnboarding from '@/components/onboarding/UsernameOnboarding';
 import { classifyError } from '@/lib/error-classifier';
 import { useFollowMode } from '@/lib/follow-mode';
 import { pushRecentModule } from '@/lib/recent-modules';
+import LiquidGlass from '@/components/ui/LiquidGlass';
 import '@/types'; // ensure Window.nativesAPI type
 
 interface ShellState {
@@ -65,6 +66,80 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
   // File preview state
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null);
+
+  // ── Global Background Visual Config (shared with ControlHub & Settings) ──
+  const WALLPAPERS = [
+    'https://images.unsplash.com/photo-1579033461380-adb47c3eb938?q=80&w=800&auto=format&fit=crop',
+  ];
+
+  const [visualConfig, setVisualConfig] = useState({
+    blurAmount: 0.40,
+    displacementScale: 64,
+    saturation: 135,
+    aberrationIntensity: 2,
+    elasticity: 0,
+    cornerRadius: 28,
+    showWallpaper: false,
+    showBlobs: false,
+  });
+
+  const CONFIG_DB_KEY = 'settings:controlHubVisuals';
+
+  useEffect(() => {
+    async function loadConfig() {
+      try {
+        const api = window.nativesAPI;
+        if (!api?.db?.get) return;
+        const savedVisuals = await api.db.get(CONFIG_DB_KEY);
+        if (savedVisuals) {
+          const saved = JSON.parse(savedVisuals as string);
+          if (saved) {
+            setVisualConfig((prev) => ({
+              ...prev,
+              ...(typeof saved.blurAmount === 'number' && { blurAmount: saved.blurAmount }),
+              ...(typeof saved.displacementScale === 'number' && { displacementScale: saved.displacementScale }),
+              ...(typeof saved.saturation === 'number' && { saturation: saved.saturation }),
+              ...(typeof saved.aberrationIntensity === 'number' && { aberrationIntensity: saved.aberrationIntensity }),
+              ...(typeof saved.elasticity === 'number' && { elasticity: saved.elasticity }),
+              ...(typeof saved.cornerRadius === 'number' && { cornerRadius: saved.cornerRadius }),
+              ...(typeof saved.showWallpaper === 'boolean' && { showWallpaper: saved.showWallpaper }),
+              ...(typeof saved.showBlobs === 'boolean' && { showBlobs: saved.showBlobs }),
+            }));
+          }
+        }
+      } catch {}
+    }
+
+    loadConfig();
+
+    // Listen to local visual config changes (for instant drag updates in same window)
+    const handleLocalConfigChange = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail) {
+        setVisualConfig((prev) => ({
+          ...prev,
+          ...detail,
+        }));
+      }
+    };
+    window.addEventListener('visual-config-changed', handleLocalConfigChange);
+
+    let unsubscribe: (() => void) | undefined;
+    try {
+      if (window.nativesAPI?.onDbStateChanged) {
+        unsubscribe = window.nativesAPI.onDbStateChanged((_event, channel, data: any) => {
+          if (channel === 'module_data' && data?.key === CONFIG_DB_KEY) {
+            loadConfig();
+          }
+        });
+      }
+    } catch {}
+
+    return () => {
+      window.removeEventListener('visual-config-changed', handleLocalConfigChange);
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
 
   // Terminal follow mode — unified via useFollowMode hook
   const { mode: followMode, cycleMode: cycleFollowMode } = useFollowMode();
@@ -567,15 +642,45 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   }
 
   return (
-    <div className="vibe-canvas w-screen h-[calc(100vh-var(--electron-titlebar-safe-area,38px))] p-[1.125rem] flex gap-4 overflow-visible box-border" style={{ opacity: themeReady ? 1 : 0 }}>
-      {/* Skip to content — accessibility */}
-      <a href="#main-content" className="skip-to-content">
-        {t(locale, 'common.skipToContent')}
-      </a>
+    <div className="vibe-canvas w-screen h-screen p-[1.125rem] flex gap-4 overflow-visible box-border relative isolate" style={{ opacity: themeReady ? 1 : 0 }}>
+      {/* ── Global Dynamic Background Layer ── */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-[1.125rem] z-0" style={{ zIndex: 0 }}>
+        {visualConfig.showWallpaper && (
+          <div
+            className="absolute inset-0 bg-cover bg-center transition-all duration-[500ms] ease-in-out"
+            style={{
+              backgroundImage: `url(${WALLPAPERS[0]})`,
+            }}
+          />
+        )}
+
+        {visualConfig.showBlobs && (
+          <div className="liquid-blob-wrapper absolute inset-0 z-10">
+            <div className="liquid-blob liquid-blob-1" />
+            <div className="liquid-blob liquid-blob-2" />
+            <div className="liquid-blob liquid-blob-3" />
+          </div>
+        )}
+
+        {/* Global WebGL Liquid Glass Canvas Layer */}
+        <div className="absolute inset-0 opacity-40 z-20">
+          <LiquidGlass
+            isActive={true}
+            className="w-full h-full border-none bg-transparent shadow-none animate-none"
+            blurAmount={visualConfig.blurAmount}
+            displacementScale={visualConfig.displacementScale}
+            saturation={visualConfig.saturation}
+            aberrationIntensity={visualConfig.aberrationIntensity}
+            elasticity={visualConfig.elasticity}
+          >
+            <div className="w-full h-full" />
+          </LiquidGlass>
+        </div>
+      </div>
 
       {/* Left: Sidebar */}
       <div
-        className="h-[calc(100vh-var(--electron-titlebar-safe-area,38px)-2.25rem)] shrink-0 transition-[width] duration-200"
+        className="h-[calc(100vh-2.25rem)] shrink-0 transition-[width] duration-200 relative z-10"
         style={{ width: state.sidebarCollapsed ? 0 : state.sidebarWidth, overflow: state.sidebarCollapsed ? 'hidden' : undefined }}
       >
         <Sidebar
@@ -591,7 +696,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       </div>
 
       {/* Right: Workspace */}
-      <div className="flex-1 flex flex-col min-w-0 h-[calc(100vh-var(--electron-titlebar-safe-area,38px)-2.25rem)] box-border">
+      <div className="flex-1 flex flex-col min-w-0 h-[calc(100vh-2.25rem)] box-border relative z-10">
         <div className="mb-4">
           <Header
             activeView={activeView}
@@ -779,10 +884,10 @@ function ModuleDetails({ moduleId, locale }: { moduleId: string; locale: Locale 
             {modulePerms.map((perm) => (
               <div key={perm.permission} style={{
                 display: 'flex', alignItems: 'center', gap: 8,
-                padding: '6px 8px', background: 'var(--bg-3,#1c1e17)',
+                padding: '6px 8px', background: 'var(--vibe-btn-bg)',
                 borderRadius: 4, fontSize: 11,
               }}>
-                <span style={{ color: perm.granted ? 'var(--accent,#cdf24b)' : 'var(--text-faint)' }}>
+                <span style={{ color: perm.granted ? 'var(--accent)' : 'var(--text-faint)' }}>
                   {perm.granted ? '✓' : '✗'}
                 </span>
                 <span style={{ color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>{perm.permission}</span>

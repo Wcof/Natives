@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { t, type Locale } from '@/i18n';
 import { Folder, FileText } from 'lucide-react';
 import { webFsClient } from '@/lib/web-fs-client';
+import Portal from '@/components/ui/Portal';
 
 interface DiskUsageItem {
   name: string;
@@ -94,134 +95,139 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
   };
 
+  // 用 Portal 渲染到 document.body，避免祖先 .vibe-content-panel 的
+  // backdrop-filter 使 position:fixed 失效（它会成为 fixed 元素的包含块），
+  // 导致弹窗被 overflow:hidden 裁切而不可见。
   return (
-    <div
-      style={{
-        position: 'fixed', inset: 0, zIndex: 60,
-        background: 'rgba(0,0,0,0.42)',
-        display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
-        paddingTop: '18vh',
-      }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div style={{
-        width: 540, maxWidth: '92vw', borderRadius: 14, padding: 18,
-        background: 'color-mix(in srgb, var(--bg-2,#131410) 85%, transparent)',
-        backdropFilter: 'blur(20px) saturate(1.4)',
-        boxShadow: '0 0 0 0.5px rgba(0,0,0,0.12), 0 12px 40px rgba(0,0,0,0.22)',
-        maxHeight: '70vh', display: 'flex', flexDirection: 'column',
-      }}>
-        {/* Title */}
+    <Portal>
+      <div
+        style={{
+          position: 'fixed', inset: 0, zIndex: 60,
+          background: 'rgba(0,0,0,0.42)',
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+          paddingTop: '18vh',
+        }}
+        onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      >
         <div style={{
-          fontSize: 13, fontWeight: 600, color: 'var(--text,#f2f2ea)',
-          marginBottom: 12, paddingBottom: 10,
-          borderBottom: '1px solid var(--border,#262920)',
+          width: 540, maxWidth: '92vw', borderRadius: 14, padding: 18,
+          background: 'color-mix(in srgb, var(--vibe-toolbar-bg) 85%, transparent)',
+          backdropFilter: 'blur(20px) saturate(1.4)',
+          boxShadow: '0 0 0 0.5px rgba(0,0,0,0.12), 0 12px 40px rgba(0,0,0,0.22)',
+          maxHeight: '70vh', display: 'flex', flexDirection: 'column',
         }}>
-          {t(locale, 'fileBrowser.diskUsage')} · {formatPath(currentPath)}
-        </div>
-
-        {/* Loading */}
-        {loading && (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint,#62655a)', fontSize: 12 }}>
-            {t(locale, 'fileBrowser.diskUsageLoading')}
+          {/* Title */}
+          <div style={{
+            fontSize: 13, fontWeight: 600, color: 'var(--vibe-brand-text)',
+            marginBottom: 12, paddingBottom: 10,
+            borderBottom: '1px solid var(--vibe-btn-border)',
+          }}>
+            {t(locale, 'fileBrowser.diskUsage')} · {formatPath(currentPath)}
           </div>
-        )}
 
-        {/* Error */}
-        {!loading && error && (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--danger)', fontSize: 12 }}>
-            {error}
-          </div>
-        )}
+          {/* Loading */}
+          {loading && (
+            <div style={{ padding: 20, textAlign: 'center', color: 'var(--vibe-btn-text)', fontSize: 12 }}>
+              {t(locale, 'fileBrowser.diskUsageLoading')}
+            </div>
+          )}
 
-        {/* Content */}
-        {!loading && !error && (
-          <div style={{ flex: 1, overflow: 'auto' }}>
-            {/* Total + hint */}
-            {totalSize > 0 && (
-              <div style={{ fontSize: 11, color: 'var(--text-dim,#9b9d8c)', marginBottom: 8 }}>
-                {t(locale, 'fileBrowser.diskUsageTotal')}: {fmtBytes(totalSize)}
-                {items.length > DISPLAY_COUNT && (
-                  <span> · {t(locale, 'fileBrowser.diskUsageShowFirst')} {DISPLAY_COUNT}</span>
-                )}
-              </div>
-            )}
+          {/* Error */}
+          {!loading && error && (
+            <div style={{ padding: 20, textAlign: 'center', color: 'var(--danger)', fontSize: 12 }}>
+              {error}
+            </div>
+          )}
 
-            {/* Parent directory up button */}
-            {currentPath !== '/' && (
-              <div
-                className="disk-up"
-                onClick={handleUp}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  padding: '6px 8px', borderRadius: 6, cursor: 'pointer',
-                  fontSize: 12, color: 'var(--accent,#cdf24b)',
-                  marginBottom: 4,
-                }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-3,#1c1e17)'; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-              >
-                ↑ {t(locale, 'fileBrowser.diskUsageUp')}
-              </div>
-            )}
+          {/* Content */}
+          {!loading && !error && (
+            <div style={{ flex: 1, overflow: 'auto' }}>
+              {/* Total + hint */}
+              {totalSize > 0 && (
+                <div style={{ fontSize: 11, color: 'var(--vibe-btn-text)', marginBottom: 8 }}>
+                  {t(locale, 'fileBrowser.diskUsageTotal')}: {fmtBytes(totalSize)}
+                  {items.length > DISPLAY_COUNT && (
+                    <span> · {t(locale, 'fileBrowser.diskUsageShowFirst')} {DISPLAY_COUNT}</span>
+                  )}
+                </div>
+              )}
 
-            {/* Items */}
-            {displayItems.map((item, idx) => {
-              const barWidth = Math.max(1, Math.round((item.size / maxSize) * 100));
-              return (
+              {/* Parent directory up button */}
+              {currentPath !== '/' && (
                 <div
-                  key={item.path}
-                  onClick={() => item.isDir ? handleDirClick(item.path) : undefined}
-                  className="disk-row"
+                  className="disk-up"
+                  onClick={handleUp}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 8,
-                    padding: '4px 8px', borderRadius: 4,
-                    cursor: item.isDir ? 'pointer' : 'default',
-                    position: 'relative', overflow: 'hidden',
+                    padding: '6px 8px', borderRadius: 6, cursor: 'pointer',
+                    fontSize: 12, color: 'var(--accent)',
+                    marginBottom: 4,
                   }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-3,#1c1e17)'; }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--vibe-btn-bg)'; }}
                   onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
                 >
-                  {/* Background bar */}
-                  <div style={{
-                    position: 'absolute', left: 0, top: 0, bottom: 0,
-                    width: `${barWidth}%`, borderRadius: 4,
-                    background: 'var(--accent-soft, #cdf24b18)',
-                    transition: 'width 0.3s ease',
-                  }} />
-
-                  {/* Icon */}
-                  <span style={{
-                    position: 'relative', zIndex: 1, display: 'inline-flex',
-                    color: item.isDir ? 'var(--accent,#cdf24b)' : 'var(--text-dim,#9b9d8c)',
-                    flexShrink: 0,
-                  }}>
-                    {item.isDir ? <Folder size={14} /> : <FileText size={14} />}
-                  </span>
-
-                  {/* Name */}
-                  <div style={{
-                    position: 'relative', zIndex: 1,
-                    flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    fontSize: 12, color: 'var(--text,#f2f2ea)',
-                  }}>
-                    {item.name}
-                  </div>
-
-                  {/* Size */}
-                  <div style={{
-                    position: 'relative', zIndex: 1,
-                    fontSize: 11, fontFamily: 'var(--font-mono)',
-                    color: 'var(--text-dim,#9b9d8c)', flexShrink: 0,
-                  }}>
-                    {item.sizeFormatted || fmtBytes(item.size)}
-                  </div>
+                  ↑ {t(locale, 'fileBrowser.diskUsageUp')}
                 </div>
-              );
-            })}
-          </div>
-        )}
+              )}
+
+              {/* Items */}
+              {displayItems.map((item, idx) => {
+                const barWidth = Math.max(1, Math.round((item.size / maxSize) * 100));
+                return (
+                  <div
+                    key={item.path}
+                    onClick={() => item.isDir ? handleDirClick(item.path) : undefined}
+                    className="disk-row"
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '4px 8px', borderRadius: 4,
+                      cursor: item.isDir ? 'pointer' : 'default',
+                      position: 'relative', overflow: 'hidden',
+                    }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--vibe-btn-bg)'; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                  >
+                    {/* Background bar */}
+                    <div style={{
+                      position: 'absolute', left: 0, top: 0, bottom: 0,
+                      width: `${barWidth}%`, borderRadius: 4,
+                      background: 'var(--accent-soft, #cdf24b18)',
+                      transition: 'width 0.3s ease',
+                    }} />
+
+                    {/* Icon */}
+                    <span style={{
+                      position: 'relative', zIndex: 1, display: 'inline-flex',
+                      color: item.isDir ? 'var(--accent)' : 'var(--vibe-btn-text)',
+                      flexShrink: 0,
+                    }}>
+                      {item.isDir ? <Folder size={14} /> : <FileText size={14} />}
+                    </span>
+
+                    {/* Name */}
+                    <div style={{
+                      position: 'relative', zIndex: 1,
+                      flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      fontSize: 12, color: 'var(--vibe-brand-text)',
+                    }}>
+                      {item.name}
+                    </div>
+
+                    {/* Size */}
+                    <div style={{
+                      position: 'relative', zIndex: 1,
+                      fontSize: 11, fontFamily: 'var(--font-mono)',
+                      color: 'var(--vibe-btn-text)', flexShrink: 0,
+                    }}>
+                      {item.sizeFormatted || fmtBytes(item.size)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+    </Portal>
   );
 }

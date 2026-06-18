@@ -82,11 +82,11 @@ export default function ModulesPage() {
 
   return (
     <div style={{ height: '100%', overflow: 'auto' }} role="region" aria-label="Module manager">
-      <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border,#262920)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <h1 style={{ fontSize: 17, fontWeight: 600, color: 'var(--text,#f2f2ea)', margin: 0, fontFamily: 'var(--font-display)' }}>{t(locale, 'modules.title')}</h1>
+      {/* Minimal action bar — no title (shown in top Header) */}
+      <div style={{ padding: '12px 20px', display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
         <button
           onClick={handleScan}
-          style={{ background: 'var(--bg-3,#1c1e17)', border: '1px solid var(--border,#262920)', color: 'var(--text,#f2f2ea)', padding: '6px 12px', borderRadius: 6, cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}
+          style={{ background: 'var(--vibe-btn-bg)', border: '1px solid var(--vibe-btn-border)', color: 'var(--vibe-brand-text)', padding: '6px 12px', borderRadius: 6, cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}
           aria-label={t(locale, 'modules.ariaScan')}
         >
           <RefreshCw size={14} />
@@ -95,7 +95,7 @@ export default function ModulesPage() {
       </div>
 
       {loading ? (
-        <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--text-faint,#62655a)', fontSize: 13 }}>
+        <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--vibe-btn-text)', fontSize: 13 }}>
           {t(locale, 'common.loading')}
         </div>
       ) : (modules ?? []).length === 0 ? (
@@ -105,30 +105,30 @@ export default function ModulesPage() {
           {(modules ?? []).map((mod) => (
             <div key={mod.id} style={{
               display: 'flex', alignItems: 'center', gap: 12,
-              padding: '12px 20px', borderBottom: '1px solid var(--border,#262920)',
+              padding: '12px 20px', borderBottom: '1px solid var(--vibe-btn-border)',
             }}>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text,#f2f2ea)' }}>{mod.name}</div>
-                <div style={{ fontSize: 11, color: 'var(--text-faint,#62655a)' }}>{mod.id} v{mod.version}</div>
-                {mod.description && <div style={{ fontSize: 12, color: 'var(--text-dim,#9b9d8c)', marginTop: 4 }}>{mod.description}</div>}
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--vibe-brand-text)' }}>{mod.name}</div>
+                <div style={{ fontSize: 11, color: 'var(--vibe-btn-text)' }}>{mod.id} v{mod.version}</div>
+                {mod.description && <div style={{ fontSize: 12, color: 'var(--vibe-btn-text)', marginTop: 4 }}>{mod.description}</div>}
               </div>
               <span style={{
                 fontSize: 11, padding: '2px 8px', borderRadius: 4,
-                background: mod.enabled ? 'var(--accent-soft,#cdf24b1f)' : 'var(--bg-3,#1c1e17)',
-                color: mod.enabled ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
+                background: mod.enabled ? 'var(--accent-soft)' : 'var(--vibe-btn-bg)',
+                color: mod.enabled ? 'var(--accent)' : 'var(--vibe-btn-text)',
               }}>
                 {mod.enabled ? t(locale, 'workshop.enabled') : t(locale, 'workshop.disabled')}
               </span>
               <button
                 onClick={() => handleToggle(mod)}
-                style={{ background: 'none', border: '1px solid var(--border,#262920)', color: 'var(--text-dim,#9b9d8c)', padding: '4px 8px', borderRadius: 4, cursor: 'pointer' }}
+                style={{ background: 'none', border: '1px solid var(--vibe-btn-border)', color: 'var(--vibe-btn-text)', padding: '4px 8px', borderRadius: 4, cursor: 'pointer' }}
                 aria-label={mod.enabled ? t(locale, 'modules.ariaDisable').replace('{name}', mod.name) : t(locale, 'modules.ariaEnable').replace('{name}', mod.name)}
               >
                 <Power size={14} />
               </button>
               <button
                 onClick={() => handleUninstall(mod)}
-                style={{ background: 'none', border: '1px solid var(--border,#262920)', color: 'var(--danger)', padding: '4px 8px', borderRadius: 4, cursor: 'pointer' }}
+                style={{ background: 'none', border: '1px solid var(--vibe-btn-border)', color: 'var(--danger)', padding: '4px 8px', borderRadius: 4, cursor: 'pointer' }}
                 aria-label={t(locale, 'modules.ariaUninstall').replace('{name}', mod.name)}
               >
                 <Trash2 size={14} />

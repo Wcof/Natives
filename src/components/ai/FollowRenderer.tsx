@@ -86,7 +86,7 @@ export default function FollowRenderer({ filePath, httpPort }: FollowRendererPro
   if (prio === 0) {
     return (
       <div style={{ padding: 20, textAlign: 'center' }}>
-        <Package size={32} style={{ color: 'var(--accent,#cdf24b)', marginBottom: 8 }} />
+        <Package size={32} style={{ color: 'var(--accent)', marginBottom: 8 }} />
         <div style={{ color: 'var(--text)', fontSize: 'var(--fs-md)', fontWeight: 600 }}>
           {filePath.split('/').pop()}
         </div>
@@ -281,7 +281,7 @@ function LiveCodePreview({ content, highlightedLines, ext }: {
           flex: 1, overflow: 'auto', padding: 12,
           fontSize: 'var(--fs-sm)', lineHeight: 1.6,
           fontFamily: 'var(--font-mono, monospace)',
-          background: 'var(--bg-2, #131410)',
+          background: 'var(--vibe-toolbar-bg)',
         }}
       />
     );
@@ -293,7 +293,7 @@ function LiveCodePreview({ content, highlightedLines, ext }: {
       fontSize: 'var(--fs-sm)', lineHeight: 1.6,
       fontFamily: 'var(--font-mono, monospace)',
       color: 'var(--text)', whiteSpace: 'pre-wrap',
-      background: 'var(--bg-2, #131410)',
+      background: 'var(--vibe-toolbar-bg)',
     }}>
       {content}
     </pre>
@@ -307,10 +307,10 @@ function NarrationBar({ text }: { text: string }) {
   return (
     <div style={{
       padding: '4px 12px',
-      borderTop: '1px solid var(--border, #262920)',
+      borderTop: '1px solid var(--vibe-btn-border)',
       fontSize: 11,
-      color: 'var(--text-dim, #9b9d8c)',
-      background: 'var(--bg, #0b0c0a)',
+      color: 'var(--vibe-btn-text)',
+      background: 'var(--vibe-content-bg)',
       whiteSpace: 'nowrap',
       overflow: 'hidden',
       textOverflow: 'ellipsis',

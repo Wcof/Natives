@@ -52,23 +52,48 @@ export default function UsagePanel() {
 
       {activeTab === 'claude' && (
         <div>
-          <ProgressBar
-            label={t(locale, 'aiWorkbench.fiveHourWindow')}
-            used={usageData?.claude?.fiveHourWindow?.used ?? 0}
-            limit={usageData?.claude?.fiveHourWindow?.limit ?? 50000}
-            color="#cdf24b"
-          />
-          <ProgressBar
-            label={t(locale, 'aiWorkbench.weeklyQuota')}
-            used={usageData?.claude?.weeklyQuota?.used ?? 0}
-            limit={usageData?.claude?.weeklyQuota?.limit ?? 500000}
-            color="#4bcdf2"
-          />
-          <div style={{ marginTop: 12, fontSize: 11, color: 'var(--text-dim)' }}>
-            <div>{t(locale, 'aiWorkbench.localTokens')} 5h: {usageData?.claude?.localTokens?.last5h ?? 0} tokens</div>
-            <div>{t(locale, 'aiWorkbench.today')}: {usageData?.claude?.localTokens?.today ?? 0} tokens</div>
-            <div>{t(locale, 'aiWorkbench.thisWeek')}: {usageData?.claude?.localTokens?.thisWeek ?? 0} tokens</div>
-          </div>
+          {usageData?.claude ? (
+            <>
+              {/* 本地 token 统计 */}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                  {t(locale, 'aiWorkbench.today')}: <span style={{ color: 'var(--text)', fontWeight: 600 }}>{usageData.claude.localTokens?.today ?? 0}</span>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                  {t(locale, 'aiWorkbench.thisWeek')}: <span style={{ color: 'var(--text)', fontWeight: 600 }}>{usageData.claude.localTokens?.thisWeek ?? 0}</span>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                  {t(locale, 'aiWorkbench.total')}: <span style={{ color: 'var(--text)', fontWeight: 600 }}>{usageData.claude.localTokens?.total ?? 0}</span>
+                </div>
+              </div>
+              {/* 活跃统计 */}
+              <div style={{ display: 'flex', gap: 12, fontSize: 10, color: 'var(--text-faint)', marginBottom: 12 }}>
+                <span>{usageData.claude.activity?.totalSessions ?? 0} {t(locale, 'aiWorkbench.sessions')}</span>
+                <span>{usageData.claude.activity?.totalMessages ?? 0} {t(locale, 'aiWorkbench.messages')}</span>
+                {usageData.claude.activity?.firstSessionDate && (
+                  <span>{t(locale, 'aiWorkbench.since')}: {usageData.claude.activity.firstSessionDate}</span>
+                )}
+              </div>
+              {/* 模型 token 明细 */}
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>
+                {t(locale, 'aiWorkbench.modelBreakdown')}
+              </div>
+              {Object.entries(usageData.claude.models ?? {}).map(([modelId, usage]) => (
+                <div key={modelId} style={{ marginBottom: 4 }}>
+                  <ProgressBar
+                    label={modelId}
+                    used={(usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)}
+                    limit={((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) + (usage.cacheReadInputTokens ?? 0)) || 1}
+                    color="var(--vibe-active-color)"
+                  />
+                </div>
+              ))}
+            </>
+          ) : (
+            <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+              {usageData?.error || t(locale, 'aiWorkbench.usage.noClaudeData')}
+            </div>
+          )}
           <button
             className="btn btn-ghost"
             onClick={fetchUsage}
@@ -82,14 +107,8 @@ export default function UsagePanel() {
 
       {activeTab === 'codex' && (
         <div>
-          <ProgressBar
-            label={t(locale, 'aiWorkbench.fiveHourWindow')}
-            used={0}
-            limit={30000}
-            color="#DEA584"
-          />
-          <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-dim)' }}>
-            {t(locale, 'aiWorkbench.plan')}: Free
+          <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+            {t(locale, 'aiWorkbench.usage.noCodexData')}
           </div>
         </div>
       )}

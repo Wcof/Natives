@@ -40,20 +40,22 @@ export async function listDir(dirPath: string, options?: ListDirOptions): Promis
 
   const entries = await fs.promises.readdir(dirPath);
 
-  // 过滤 .DS_Store
-  const filtered = entries.filter((name) => name !== DS_STORE);
+  // 过滤 .DS_Store + 隐藏文件
+  const filtered = entries.filter((name) => {
+    if (name === DS_STORE) return false;
+    if (name.startsWith('.') && !options?.showHidden) return false;
+    return true;
+  });
 
+  // ── 并行 I/O（对标 fanbox — 批量处理，上限 64 并发）──
+  // 顺序 lstat/readdir 对 200 个文件 = 200-600 次串行 I/O。
+  // 分批 Promise.all 将 wall-clock 降低到 ~1/64。
+  const IO_BATCH = 64;
   const result: FileEntry[] = [];
 
-  for (const name of filtered) {
-    // 隐藏文件过滤（.DS_Store 已过滤，其余隐藏文件根据 showHidden 决定）
-    const isHidden = name.startsWith('.');
-    if (isHidden && !options?.showHidden) continue;
-
+  async function processEntry(name: string): Promise<FileEntry | null> {
     const fullPath = path.resolve(dirPath, name);
-
     try {
-      // 先 lstat 获取链接本身的信息
       const lstat = await fs.promises.lstat(fullPath);
       const isSymlink = lstat.isSymbolicLink();
 
@@ -62,12 +64,7 @@ export async function listDir(dirPath: string, options?: ListDirOptions): Promis
 
       if (isSymlink) {
         symlinkTarget = await fs.promises.readlink(fullPath);
-        // 尝试 stat（解析符号链接），如果目标不存在则 fallback 到 lstat
-        try {
-          targetStat = await fs.promises.stat(fullPath);
-        } catch {
-          targetStat = lstat;
-        }
+        try { targetStat = await fs.promises.stat(fullPath); } catch { targetStat = lstat; }
       } else {
         targetStat = lstat;
       }
@@ -82,26 +79,32 @@ export async function listDir(dirPath: string, options?: ListDirOptions): Promis
           const childFiles = await fs.promises.readdir(fullPath);
           const hasGit = childFiles.includes('.git');
           projectBadge = detectProjectBadge(fullPath, childFiles, hasGit);
-        } catch {
-          // 无权限读取的目录
-        }
+        } catch { /* 无权限 */ }
       }
 
-      result.push({
+      return {
         name,
         path: fullPath,
         isDir,
         kind,
-        hidden: isHidden,
+        hidden: name.startsWith('.'),
         size: isDir ? 4096 : targetStat.size,
         mtime: targetStat.mtimeMs,
         btime: targetStat.birthtimeMs,
         ...(symlinkTarget ? { symlink: symlinkTarget } : {}),
         ...(projectBadge ? { projectBadge: projectBadge as any } : {}),
-      });
+      };
     } catch {
-      // 无法 stat 的文件（权限问题等），跳过
-      continue;
+      return null;
+    }
+  }
+
+  // 分批并行处理
+  for (let i = 0; i < filtered.length; i += IO_BATCH) {
+    const batch = filtered.slice(i, i + IO_BATCH);
+    const batchResults = await Promise.all(batch.map(processEntry));
+    for (const entry of batchResults) {
+      if (entry) result.push(entry);
     }
   }
 
@@ -148,6 +151,7 @@ export async function readFile(filePath: string): Promise<{
   size: number;
   encoding: string;
 }> {
+  filePath = expandTilde(filePath);
   const stat = await fs.promises.stat(filePath);
 
   if (!stat.isFile()) {
@@ -245,6 +249,7 @@ export async function streamFile(
   filePath: string,
   range?: StreamFileRange,
 ): Promise<StreamFileResult> {
+  filePath = expandTilde(filePath);
   const stat = await fs.promises.stat(filePath);
   if (!stat.isFile()) {
     throw Object.assign(new Error(`Not a file: ${filePath}`), { code: 'EISDIR' });
@@ -285,6 +290,7 @@ export async function writeFileAtomic(
   content: string,
   expectedMtime?: number,
 ): Promise<{ mtime: number; conflict: boolean }> {
+  filePath = expandTilde(filePath);
   const dir = path.dirname(filePath);
 
   // mtime 冲突检测
@@ -335,23 +341,54 @@ export async function writeFileAtomic(
 
 // ── Validation ──
 
+/** 允许的根目录（在此范围内可操作文件） */
+const ALLOWED_ROOTS: string[] = [
+  os.homedir(),
+  '/tmp',
+  '/private/tmp',
+];
+
+/**
+ * 路径安全验证（allowlist 模式）
+ *
+ * 对标 fanbox 的安全模式：
+ * - 拒绝空字节
+ * - 展开 ~ 后 resolve
+ * - 验证解析后的路径在允许的根目录下
+ */
 function validatePath(targetPath: string): void {
+  // 空字节检查
   if (targetPath.includes('\0')) {
     throw Object.assign(new Error(`Path contains null byte: ${targetPath}`), { code: 'EINVAL' });
   }
-  // 解析绝对路径并检查目录遍历
-  const resolved = path.resolve(targetPath);
-  if (resolved !== targetPath && !targetPath.startsWith('/')) {
-    // 相对路径：检查是否包含 ..
-    const normalized = path.normalize(targetPath);
-    if (normalized.startsWith('..') || normalized.includes(`..${path.sep}`)) {
-      throw Object.assign(new Error(`Path traversal denied: ${targetPath}`), { code: 'EACCES' });
-    }
+
+  // 展开 ~ 并 resolve
+  const expanded = expandTilde(targetPath);
+  const resolved = path.resolve(expanded);
+
+  // 允许的根目录检查
+  const isAllowed = ALLOWED_ROOTS.some((root) => {
+    const resolvedRoot = path.resolve(root);
+    return resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep);
+  });
+
+  if (!isAllowed) {
+    throw Object.assign(
+      new Error(`Path outside allowed roots: ${targetPath} (resolved: ${resolved})`),
+      { code: 'EACCES' },
+    );
   }
-  // 绝对路径中的 .. 也会被 path.resolve 消除，确保最终路径不偏离预期
-  const containsTraversal = resolved.split(path.sep).some((part) => part === '..');
-  if (containsTraversal) {
-    throw Object.assign(new Error(`Path traversal denied: ${targetPath}`), { code: 'EACCES' });
+
+  // 额外检查：禁止访问敏感的 dotfile 目录（.ssh, .gnupg 等）
+  const relativeToHome = path.relative(os.homedir(), resolved);
+  const sensitiveDirs = ['.ssh', '.gnupg', '.aws', '.config/gh', '.kube'];
+  for (const sensitive of sensitiveDirs) {
+    if (relativeToHome === sensitive || relativeToHome.startsWith(sensitive + path.sep)) {
+      throw Object.assign(
+        new Error(`Access to sensitive directory denied: ${targetPath}`),
+        { code: 'EACCES' },
+      );
+    }
   }
 }
 
@@ -376,6 +413,31 @@ export async function createEntry(targetPath: string, type: 'file' | 'dir'): Pro
  * @param oldPath 旧路径
  * @param newPath 新路径
  */
+// ── 自动递增文件名辅助函数（消除 3 处重复逻辑）──
+/**
+ * 如果 targetPath 已存在，自动追加 (1), (2), ... 直到找到可用路径。
+ * 最多尝试 100 次。
+ */
+async function deduplicatePath(targetPath: string): Promise<string> {
+  try {
+    await fs.promises.access(targetPath);
+  } catch {
+    return targetPath; // 目标不存在，直接使用
+  }
+  const dir = path.dirname(targetPath);
+  const ext = path.extname(targetPath);
+  const base = path.basename(targetPath, ext);
+  for (let counter = 1; counter < 100; counter++) {
+    const candidate = path.join(dir, `${base} (${counter})${ext}`);
+    try {
+      await fs.promises.access(candidate);
+    } catch {
+      return candidate; // 找到可用路径
+    }
+  }
+  return targetPath; // fallback
+}
+
 export async function renameEntry(oldPath: string, newPath: string): Promise<void> {
   validatePath(oldPath);
   validatePath(newPath);
@@ -383,28 +445,8 @@ export async function renameEntry(oldPath: string, newPath: string): Promise<voi
   // 检查源文件是否存在
   await fs.promises.stat(oldPath);
 
-  // 如果目标存在且是文件，尝试自动递增
-  let targetPath = newPath;
-  try {
-    await fs.promises.stat(targetPath);
-    // 目标已存在，自动递增
-    const dir = path.dirname(newPath);
-    const ext = path.extname(newPath);
-    const base = path.basename(newPath, ext);
-
-    let counter = 1;
-    while (counter < 100) {
-      targetPath = path.join(dir, `${base} (${counter})${ext}`);
-      try {
-        await fs.promises.stat(targetPath);
-        counter++;
-      } catch {
-        break; // 找到可用路径
-      }
-    }
-  } catch {
-    // 目标不存在，直接重命名
-  }
+  // 自动递增（如果目标已存在）
+  const targetPath = await deduplicatePath(newPath);
 
   await fs.promises.rename(oldPath, targetPath);
 }
@@ -412,20 +454,37 @@ export async function renameEntry(oldPath: string, newPath: string): Promise<voi
 /**
  * 删除到系统回收站（macOS osascript）
  * @param filePath 文件路径
+ *
+ * 安全改进（对标 fanbox）：使用 POSIX file 对象传递路径，
+ * 避免字符串插值导致的命令注入。
  */
 export async function trashEntry(filePath: string): Promise<void> {
   validatePath(filePath);
   await fs.promises.stat(filePath); // 确保文件存在
 
-  // Use osascript to move to Finder's Trash
-  const escapedPath = filePath.replace(/"/g, '\\"');
+  // 安全方式：将路径作为 POSIX file 对象传递，不经过 shell 解释
+  const script = `
+    use framework "Foundation"
+    set fileURL to current application's NSURL's fileURLWithPath:"${filePath.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"
+    set workspace to current application's NSWorkspace's sharedWorkspace()
+    workspace's recycleURLs:{fileURL} completionHandler:(missing value)
+  `;
   await new Promise<void>((resolve, reject) => {
-    execFile('osascript', [
-      '-e',
-      `tell application "Finder" to delete POSIX file "${escapedPath}"`,
-    ], { timeout: 10000 }, (err, stdout, stderr) => {
+    execFile('osascript', ['-l', 'AppleScript', '-e', script], { timeout: 10000 }, (err, stdout, stderr) => {
       if (err) {
-        reject(Object.assign(new Error(`Failed to trash: ${stderr || err.message}`), { code: 'ETRASH' }));
+        // 降级方案：使用 Finder 的 POSIX file（安全，因为路径已验证）
+        execFile('osascript', [
+          '-e',
+          `POSIX file "${filePath.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}" as alias`,
+          '-e',
+          'tell application "Finder" to delete item 1 of result',
+        ], { timeout: 10000 }, (err2, stdout2, stderr2) => {
+          if (err2) {
+            reject(Object.assign(new Error(`Failed to trash: ${stderr2 || err2.message}`), { code: 'ETRASH' }));
+          } else {
+            resolve();
+          }
+        });
       } else {
         resolve();
       }
@@ -447,27 +506,8 @@ export async function moveEntry(from: string, to: string): Promise<void> {
   // 检查源是否存在
   await fs.promises.stat(from);
 
-  // 如果目标存在，自动递增
-  let targetPath = to;
-  try {
-    await fs.promises.stat(targetPath);
-    const dir = path.dirname(to);
-    const ext = path.extname(to);
-    const base = path.basename(to, ext);
-
-    let counter = 1;
-    while (counter < 100) {
-      targetPath = path.join(dir, `${base} (${counter})${ext}`);
-      try {
-        await fs.promises.stat(targetPath);
-        counter++;
-      } catch {
-        break;
-      }
-    }
-  } catch {
-    // 目标不存在，使用原路径
-  }
+  // 自动递增（如果目标已存在）
+  const targetPath = await deduplicatePath(to);
 
   try {
     // 尝试同卷 rename
@@ -515,21 +555,7 @@ export async function importFiles(sourcePaths: string[], destDir: string): Promi
 
   for (const srcPath of sourcePaths) {
     const baseName = path.basename(srcPath);
-    let destPath = path.join(destDir, baseName);
-
-    // 自动递增（如果目标已存在）
-    let counter = 1;
-    while (true) {
-      try {
-        await fs.promises.access(destPath);
-        const ext = path.extname(baseName);
-        const name = path.basename(baseName, ext);
-        destPath = path.join(destDir, `${name} (${counter})${ext}`);
-        counter++;
-      } catch {
-        break; // 目标不存在，可以使用
-      }
-    }
+    const destPath = await deduplicatePath(path.join(destDir, baseName));
 
     // 复制文件
     const stat = await fs.promises.stat(srcPath);

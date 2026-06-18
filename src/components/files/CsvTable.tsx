@@ -54,13 +54,13 @@ export default function CsvTable({ content, delimiter = ',', maxRows = 500 }: Cs
               <th key={i} style={{
                 padding: '6px 10px',
                 textAlign: 'left',
-                borderBottom: '2px solid var(--border, #262920)',
-                color: 'var(--text-dim, #9b9d8c)',
+                borderBottom: '2px solid var(--vibe-btn-border)',
+                color: 'var(--vibe-btn-text)',
                 fontWeight: 600,
                 whiteSpace: 'nowrap',
                 position: 'sticky',
                 top: 0,
-                background: 'var(--bg, #0b0c0a)',
+                background: 'var(--vibe-content-bg)',
               }}>
                 {h}
               </th>
@@ -70,12 +70,12 @@ export default function CsvTable({ content, delimiter = ',', maxRows = 500 }: Cs
         <tbody>
           {rows.map((row, ri) => (
             <tr key={ri} style={{
-              borderBottom: '1px solid var(--border, #262920)',
+              borderBottom: '1px solid var(--vibe-btn-border)',
             }}>
               {row.map((cell, ci) => (
                 <td key={ci} style={{
                   padding: '4px 10px',
-                  color: 'var(--text, #f2f2ea)',
+                  color: 'var(--vibe-brand-text)',
                   whiteSpace: 'nowrap',
                   maxWidth: 300,
                   overflow: 'hidden',

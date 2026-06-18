@@ -67,8 +67,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             key={t.id}
             style={{
               padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 500,
-              color: 'var(--bg, #0b0c0a)',
-              background: t.type === 'success' ? 'var(--diff-add)' : t.type === 'error' ? 'var(--danger)' : t.type === 'warning' ? 'var(--warning)' : 'var(--accent, #cdf24b)',
+              color: 'var(--accent-ink)',
+              background: t.type === 'success' ? 'var(--diff-add)' : t.type === 'error' ? 'var(--danger)' : t.type === 'warning' ? 'var(--warning)' : 'var(--accent)',
               boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
               opacity: t.dismissing ? 0 : 1,
               transform: t.dismissing ? 'translateY(8px)' : 'translateY(0)',

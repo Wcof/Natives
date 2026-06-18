@@ -18,9 +18,9 @@ export default function FileGrid({ entries, onSelect, onContextMenu }: FileGridP
     return (
       <div style={{
         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-        height: '100%', color: 'var(--text-faint, #62655a)', fontSize: 13, gap: 8,
+        height: '100%', color: 'var(--vibe-btn-text)', fontSize: 13, gap: 8,
       }}>
-        <FolderOpen size={24} style={{ color: 'var(--text-faint, #62655a)' }} />
+        <FolderOpen size={24} style={{ color: 'var(--vibe-btn-text)' }} />
         {t(locale, 'fileBrowser.empty')}
       </div>
     );

@@ -30,55 +30,55 @@ export type Theme = z.infer<typeof ThemeSchema>;
 // ── Built-in Themes ──
 
 export const THEMES: Record<string, Theme> = {
-  'editorial': {
-    bg: '#f4f1ea',
-    'bg-2': '#ece8dd',
-    'bg-3': '#e4dfd2',
-    panel: '#f4f1ea',
-    border: '#d6d1c3',
-    text: '#0a0a0a',
-    'text-dim': '#57534a',
-    'text-faint': '#8a857a',
-    accent: '#ff433d',
+  'frosted-jasmine': {
+    bg: '#fdf6f0',
+    'bg-2': '#f9eee4',
+    'bg-3': '#f5e5d6',
+    panel: '#fcf3ea',
+    border: '#e8d5c0',
+    text: '#2d1f14',
+    'text-dim': '#7a6b5a',
+    'text-faint': '#b8a594',
+    accent: '#ff793f',
     'accent-ink': '#ffffff',
-    radius: '0px',
-    'font-display': 'var(--font-ui)',
-    danger: '#ff433d',
-    'danger-soft': '#ff433d15',
-    warning: '#000000',
-    info: '#0a0a0a',
-    'diff-add': '#0a0a0a',
-    'diff-del': '#ff433d',
-    'diff-mod': '#5a5a5a',
+    radius: '12px',
+    'font-display': '"Noto Serif SC", Georgia, serif',
+    danger: '#f05b3f',
+    'danger-soft': '#f05b3f20',
+    warning: '#ffa466',
+    info: '#be88ed',
+    'diff-add': '#ff9856',
+    'diff-del': '#f05b3f',
+    'diff-mod': '#be88ed',
   },
-  'warm-archive': {
-    bg: '#f5f0e8',
-    'bg-2': '#ece4d6',
-    'bg-3': '#e5dccd',
-    panel: '#efe9df',
-    border: '#d4c9b7',
-    text: '#2c2418',
-    'text-dim': '#6b5f4e',
-    'text-faint': '#a0947d',
-    accent: '#cc785c',
-    'accent-ink': '#f5f0e8',
-    radius: '9px',
-    'font-display': '"Fraunces", Georgia, serif',
-    danger: '#c0392b',
-    'danger-soft': '#c0392b15',
-    warning: '#b8860b',
-    info: '#3a7ca5',
-    'diff-add': '#5a8a5a',
-    'diff-del': '#a04040',
-    'diff-mod': '#5a6a9a',
+  'terminal-volt': {
+    bg: '#0d0f12',
+    'bg-2': '#15181d',
+    'bg-3': '#1c2027',
+    panel: '#0d0f12',
+    border: '#2a2f38',
+    text: '#d4d7de',
+    'text-dim': '#8b90a0',
+    'text-faint': '#555a66',
+    accent: '#00ff9c',
+    'accent-ink': '#0d0f12',
+    radius: '4px',
+    'font-display': '"JetBrains Mono", "Fira Code", monospace',
+    danger: '#ff3a4d',
+    'danger-soft': '#ff3a4d15',
+    warning: '#ffb545',
+    info: '#45b5ff',
+    'diff-add': '#00ff9c',
+    'diff-del': '#ff3a4d',
+    'diff-mod': '#45b5ff',
   },
 };
 
 // ── Terminal ANSI Colors ──
 
 export const TERMINAL_THEMES: Record<string, { background: string; foreground: string; cursor: string; selectionBackground?: string }> = {
-  'editorial': { background: '#f4f1ea', foreground: '#0a0a0a', cursor: '#ff433d', selectionBackground: '#ff433d33' },
-  'warm-archive': { background: '#ece2d2', foreground: '#4a3f30', cursor: '#cc785c', selectionBackground: '#cc785c33' },
+  'frosted-jasmine': { background: '#fdf6f0', foreground: '#2d1f14', cursor: '#ff793f', selectionBackground: '#ff793f33' },
+  'terminal-volt': { background: '#0d0f12', foreground: '#d4d7de', cursor: '#00ff9c', selectionBackground: '#00ff9c33' },
 };
 
 // ── Theme Application ──
@@ -93,8 +93,8 @@ export function validateTheme(theme: Record<string, unknown>): Theme {
 export function applyTheme(themeId: string): void {
   const theme = THEMES[themeId];
   if (!theme) {
-    console.warn(`Theme '${themeId}' not found, falling back to editorial`);
-    return applyTheme('editorial');
+    console.warn(`Theme '${themeId}' not found, falling back to terminal-volt`);
+    return applyTheme('terminal-volt');
   }
 
   const root = document.documentElement;
@@ -128,5 +128,5 @@ export function onThemeChange(cb: ThemeListeners): () => void {
 }
 
 export function getThemeId(): string {
-  return document.documentElement.getAttribute('data-theme') || 'editorial';
+  return document.documentElement.getAttribute('data-theme') || 'terminal-volt';
 }

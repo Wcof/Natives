@@ -103,7 +103,7 @@ export default function PromptLibrary() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Header */}
-      <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border,#262920)' }}>
+      <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--vibe-btn-border)' }}>
         <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
           {t(locale,'aiWorkbench.promptLibrary.title')}
         </div>
@@ -115,7 +115,7 @@ export default function PromptLibrary() {
 placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
             style={{
               flex: 1, fontSize: 11, padding: '4px 8px',
-              background: 'var(--bg,#0b0c0a)', border: '1px solid var(--border,#262920)',
+              background: 'var(--vibe-content-bg)', border: '1px solid var(--vibe-btn-border)',
               borderRadius: 4, color: 'var(--text)', outline: 'none',
             }}
           />
@@ -135,7 +135,7 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
           filtered.map((prompt) => (
             <div key={prompt.id} style={{
               padding: '8px 10px', marginBottom: 4, borderRadius: 6,
-              border: '1px solid var(--border,#262920)', background: 'var(--bg-2,#131410)',
+              border: '1px solid var(--vibe-btn-border)', background: 'var(--vibe-toolbar-bg)',
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
                 <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 600, color: 'var(--text)' }}>{prompt.title}</div>
@@ -155,7 +155,7 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
                 {prompt.tags.map((tag) => (
                   <span key={tag} style={{
                     fontSize: 9, padding: '1px 5px', borderRadius: 3,
-                    background: 'var(--accent-soft,#cdf24b1f)', color: 'var(--accent,#cdf24b)',
+                    background: 'var(--accent-soft)', color: 'var(--accent)',
                   }}>
                     #{tag}
                   </span>
@@ -173,7 +173,7 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
           display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60,
         }} onClick={() => setShowEditor(false)}>
           <div style={{
-            background: 'var(--bg-2,#131410)', border: '1px solid var(--border,#262920)',
+            background: 'var(--vibe-toolbar-bg)', border: '1px solid var(--vibe-btn-border)',
             borderRadius: 10, padding: 'var(--space-md)', width: 440, maxWidth: '90vw',
           }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontSize: 'var(--fs-md)', fontWeight: 600, color: 'var(--text)', marginBottom: 12 }}>
@@ -187,7 +187,7 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
                 placeholder="Prompt title"
                 style={{
                   width: '100%', padding: '6px 8px', fontSize: 'var(--fs-sm)',
-                  background: 'var(--bg,#0b0c0a)', border: '1px solid var(--border,#262920)',
+                  background: 'var(--vibe-content-bg)', border: '1px solid var(--vibe-btn-border)',
                   borderRadius: 4, color: 'var(--text)', outline: 'none',
                 }}
                 autoFocus
@@ -199,7 +199,7 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
                 rows={6}
                 style={{
                   width: '100%', padding: '6px 8px', fontSize: 11, fontFamily: 'var(--font-mono)',
-                  background: 'var(--bg,#0b0c0a)', border: '1px solid var(--border,#262920)',
+                  background: 'var(--vibe-content-bg)', border: '1px solid var(--vibe-btn-border)',
                   borderRadius: 4, color: 'var(--text)', outline: 'none', resize: 'vertical',
                 }}
               />
@@ -210,7 +210,7 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
                 placeholder="Tags (comma separated: code-review, typescript)"
                 style={{
                   width: '100%', padding: '6px 8px', fontSize: 11,
-                  background: 'var(--bg,#0b0c0a)', border: '1px solid var(--border,#262920)',
+                  background: 'var(--vibe-content-bg)', border: '1px solid var(--vibe-btn-border)',
                   borderRadius: 4, color: 'var(--text)', outline: 'none',
                 }}
               />

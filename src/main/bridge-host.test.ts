@@ -69,13 +69,13 @@ describe('BridgeHost', () => {
   describe('Theme & Locale', () => {
     it('should return default theme', () => {
       const { theme } = getTheme();
-      assert.equal(theme, 'editorial');
+      assert.equal(theme, 'terminal-volt');
     });
 
     it('should set and get theme', () => {
-      setTheme('warm-archive');
+      setTheme('frosted-jasmine');
       const { theme } = getTheme();
-      assert.equal(theme, 'warm-archive');
+      assert.equal(theme, 'frosted-jasmine');
     });
 
     it('should return default locale', () => {

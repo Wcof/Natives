@@ -55,36 +55,22 @@ export default function StorePage() {
 
   return (
     <div style={{ height: '100%', overflow: 'auto' }}>
-      {/* Header */}
-      <div style={{
-        padding: '16px 20px',
-        borderBottom: '1px solid var(--border,#262920)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-      }}>
-        <div>
-          <h1 style={{ fontSize: 17, fontWeight: 600, color: 'var(--text,#f2f2ea)', margin: 0, fontFamily: 'var(--font-display)' }}>
-            {t(locale, 'store.title')}
-          </h1>
-          <p style={{ fontSize: 12, color: 'var(--text-dim,#9b9d8c)', margin: '2px 0 0' }}>
-            {t(locale, 'store.subtitle')}
-          </p>
-        </div>
+      {/* Count badge — minimal, no title (shown in top Header) */}
+      <div style={{ padding: '12px 20px', display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
         <div style={{
           fontSize: 11,
           color: 'var(--text-faint)',
           padding: '4px 10px',
-          background: 'var(--bg-3,#1c1e17)',
+          background: 'var(--vibe-btn-bg)',
           borderRadius: 6,
-          border: '1px solid var(--border,#262920)',
+          border: '1px solid var(--vibe-btn-border)',
         }}>
           {t(locale, 'store.moduleCount').replace('{count}', String(modules?.length ?? 0))}
         </div>
       </div>
 
       {/* Search bar */}
-      <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border,#262920)' }}>
+      <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--vibe-btn-border)' }}>
         <input
           type="text"
           value={searchQuery}
@@ -93,8 +79,8 @@ export default function StorePage() {
           style={{
             width: '100%',
             padding: '8px 12px',
-            background: 'var(--bg,#0b0c0a)',
-            border: '1px solid var(--border,#262920)',
+            background: 'var(--vibe-content-bg)',
+            border: '1px solid var(--vibe-btn-border)',
             borderRadius: 6,
             color: 'var(--text)',
             fontSize: 13,
@@ -107,8 +93,8 @@ export default function StorePage() {
         {/* Coming soon banner */}
         <div style={{
           padding: '20px 24px',
-          background: 'linear-gradient(135deg, var(--accent-soft,#cdf24b1f), transparent)',
-          border: '1px solid var(--border,#262920)',
+          background: 'linear-gradient(135deg, var(--accent-soft), transparent)',
+          border: '1px solid var(--vibe-btn-border)',
           borderRadius: 10,
           marginBottom: 20,
           display: 'flex',
@@ -137,7 +123,7 @@ export default function StorePage() {
         <div style={{ marginBottom: 16 }}>
           <h2 style={{
             fontSize: 13, fontWeight: 600,
-            color: 'var(--text-dim,#9b9d8c)',
+            color: 'var(--vibe-btn-text)',
             textTransform: 'uppercase',
             letterSpacing: 1,
             marginBottom: 12,
@@ -178,12 +164,12 @@ function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: 
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        background: 'var(--bg-2,#131410)',
-        border: '1px solid var(--border,#262920)',
+        background: 'var(--vibe-toolbar-bg)',
+        border: '1px solid var(--vibe-btn-border)',
         borderRadius: 8,
         padding: '14px 14px 12px',
         transition: 'all 0.12s',
-        borderColor: hovered ? 'var(--accent,#cdf24b)' : undefined,
+        borderColor: hovered ? 'var(--accent)' : undefined,
         cursor: 'default',
       }}
     >
@@ -191,8 +177,8 @@ function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: 
         {/* Module icon placeholder */}
         <div style={{
           width: 36, height: 36, borderRadius: 8,
-          background: 'var(--bg-3,#1c1e17)',
-          border: '1px solid var(--border,#262920)',
+          background: 'var(--vibe-btn-bg)',
+          border: '1px solid var(--vibe-btn-border)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontSize: 16, flexShrink: 0,
         }}>
@@ -211,8 +197,8 @@ function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: 
         </div>
         <span style={{
           fontSize: 9, padding: '1px 5px', borderRadius: 3,
-          background: mod.enabled ? 'var(--accent-soft,#cdf24b1f)' : 'var(--bg-3,#1c1e17)',
-          color: mod.enabled ? 'var(--accent,#cdf24b)' : 'var(--text-faint)',
+          background: mod.enabled ? 'var(--accent-soft)' : 'var(--vibe-btn-bg)',
+          color: mod.enabled ? 'var(--accent)' : 'var(--text-faint)',
           fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0,
         }}>
           {mod.enabled ? t(locale, 'workshop.enabled') : t(locale, 'workshop.disabled')}
@@ -233,8 +219,8 @@ function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: 
         <span style={{
           padding: '2px 6px',
           borderRadius: 3,
-          background: 'var(--bg-3,#1c1e17)',
-          border: '1px solid var(--border,#262920)',
+          background: 'var(--vibe-btn-bg)',
+          border: '1px solid var(--vibe-btn-border)',
           fontSize: 9,
           textTransform: 'uppercase',
         }}>

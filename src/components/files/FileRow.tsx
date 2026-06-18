@@ -84,6 +84,21 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir }: Fil
     if (entry.isDir) {
       return <Folder size={16} style={{ color: tint }} />;
     }
+    // Image thumbnail
+    if (entry.kind === 'image') {
+      const port = window.__nativesHttpPort || 3001;
+      const thumbUrl = `http://localhost:${port}/api/fs/thumb?path=${encodeURIComponent(entry.path)}&w=48`;
+      return (
+        <img
+          src={thumbUrl}
+          alt={entry.name}
+          style={{
+            width: 24, height: 24, borderRadius: 2,
+            objectFit: 'cover', display: 'block',
+          }}
+        />
+      );
+    }
     if (badge) {
       return (
         <span style={{
@@ -116,12 +131,12 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir }: Fil
         alignItems: 'center',
         cursor: 'pointer',
         fontSize: 13,
-        color: 'var(--text, #f2f2ea)',
-        borderBottom: '1px solid var(--border, #262920)',
-        background: flash ? 'var(--accent-soft, #cdf24b1f)' : 'transparent',
+        color: 'var(--vibe-brand-text)',
+        borderBottom: '1px solid var(--vibe-btn-border)',
+        background: flash ? 'var(--accent-soft)' : 'transparent',
         transition: 'background 0.12s',
       }}
-      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-2, #131410)'; }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--vibe-toolbar-bg)'; }}
       onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
     >
       {/* Icon */}
@@ -138,33 +153,33 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir }: Fil
         {entry.projectBadge && (
           <span style={{
             fontSize: 8, fontWeight: 600, padding: '0 3px', borderRadius: 2,
-            background: 'var(--accent-soft, #cdf24b1f)', color: 'var(--accent, #cdf24b)',
+            background: 'var(--accent-soft)', color: 'var(--accent)',
             lineHeight: '14px', textTransform: 'uppercase',
           }}>
             {entry.projectBadge}
           </span>
         )}
         {showDir && entry.dirHint && (
-          <span style={{ fontSize: 10, color: 'var(--text-faint, #62655a)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>
+          <span style={{ fontSize: 10, color: 'var(--vibe-btn-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>
             — {entry.dirHint}
           </span>
         )}
-        {entry.hidden && <span style={{ fontSize: 10, color: 'var(--text-faint, #62655a)' }}>(hidden)</span>}
-        {entry.symlink && <span style={{ fontSize: 10, color: 'var(--text-faint, #62655a)' }}>→ link</span>}
+        {entry.hidden && <span style={{ fontSize: 10, color: 'var(--vibe-btn-text)' }}>(hidden)</span>}
+        {entry.symlink && <span style={{ fontSize: 10, color: 'var(--vibe-btn-text)' }}>→ link</span>}
       </div>
 
       {/* Modified time (relative) */}
-      <div style={{ color: 'var(--text-dim, #9b9d8c)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+      <div style={{ color: 'var(--vibe-btn-text)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
         {fmtTime(entry.mtime)}
       </div>
 
       {/* Size */}
-      <div style={{ color: 'var(--text-dim, #9b9d8c)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+      <div style={{ color: 'var(--vibe-btn-text)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
         {entry.isDir ? '—' : fmtSize(entry.size)}
       </div>
 
       {/* Favorite star */}
-      <span style={{ display: 'inline-flex', color: 'var(--text-faint, #62655a)' }}>
+      <span style={{ display: 'inline-flex', color: 'var(--vibe-btn-text)' }}>
         <Star size={12} />
       </span>
     </div>

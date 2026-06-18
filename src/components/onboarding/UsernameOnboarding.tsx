@@ -22,7 +22,7 @@ export default function UsernameOnboarding({ locale, onComplete }: UsernameOnboa
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: 9999,
-      background: 'var(--bg,#0b0c0a)',
+      background: 'var(--vibe-content-bg)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
     }}>
       <div style={{ width: 360, textAlign: 'center' }}>
@@ -41,7 +41,7 @@ export default function UsernameOnboarding({ locale, onComplete }: UsernameOnboa
           onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
           style={{
             width: '100%', padding: '10px 12px', fontSize: 14, textAlign: 'center',
-            background: 'var(--bg-2,#131410)', border: '1px solid var(--border,#262920)',
+            background: 'var(--vibe-toolbar-bg)', border: '1px solid var(--vibe-btn-border)',
             borderRadius: 6, color: 'var(--text)', outline: 'none', marginBottom: 16,
           }}
           autoFocus

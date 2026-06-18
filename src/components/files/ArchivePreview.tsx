@@ -66,7 +66,7 @@ export default function ArchivePreview({ path, locale }: ArchivePreviewProps) {
       <div style={{
         padding: '6px 10px',
         color: 'var(--text-dim)',
-        borderBottom: '1px solid var(--border, #262920)',
+        borderBottom: '1px solid var(--vibe-btn-border)',
         marginBottom: 4,
       }}>
         {entries.length} entries{truncated ? ' (showing first 1000)' : ''}
@@ -78,14 +78,14 @@ export default function ArchivePreview({ path, locale }: ArchivePreviewProps) {
             alignItems: 'center',
             gap: 8,
             padding: '3px 10px',
-            borderBottom: '1px solid var(--border, #262920)',
+            borderBottom: '1px solid var(--vibe-btn-border)',
           }}>
-            <span style={{ color: entry.isDir ? 'var(--accent, #cdf24b)' : 'var(--text-dim)', fontSize: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+            <span style={{ color: entry.isDir ? 'var(--accent)' : 'var(--text-dim)', fontSize: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
               {entry.isDir ? <Folder size={14} /> : <FileText size={14} />}
             </span>
             <span style={{
               flex: 1,
-              color: 'var(--text, #f2f2ea)',
+              color: 'var(--vibe-brand-text)',
               fontFamily: 'var(--font-mono, monospace)',
               overflow: 'hidden',
               textOverflow: 'ellipsis',

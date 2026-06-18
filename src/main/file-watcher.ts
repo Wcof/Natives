@@ -16,7 +16,7 @@ export interface WatchContext {
 const SIDECAR_PATTERNS = ['-journal', '-shm', '-wal', '.tmp', '.lock'];
 
 /**
- * 判断是否应该忽略此文件变更事件
+ * 判断是否应该忽略此文件变更事件（基于文件名模式）
  */
 export function shouldIgnoreEvent(
   event: FileChangeEvent,
@@ -41,6 +41,44 @@ export function shouldIgnoreEvent(
   return false;
 }
 
+// ── Stat-Based Cache（对标 fanbox 的 mtime+size 缓存） ──
+
+/** 文件元数据缓存 — 跳过 metadata-only 的 FSEvents */
+const statCache = new Map<string, { size: number; mtimeMs: number }>();
+
+/** Per-file 防抖 — 合并快速连续事件 */
+const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const DEBOUNCE_MS = 300;
+
+/**
+ * 检查文件内容是否真正变更（stat-based，对标 fanbox）
+ * 返回 true 表示文件未变更（应跳过）
+ */
+function isMetadataOnly(filePath: string): boolean {
+  try {
+    const st = fs.statSync(filePath);
+    const cached = statCache.get(filePath);
+    if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs) {
+      return true; // size 和 mtime 都没变 → metadata-only 事件
+    }
+    statCache.set(filePath, { size: st.size, mtimeMs: st.mtimeMs });
+    return false;
+  } catch {
+    // 文件不存在（delete 事件）— 不是 metadata-only
+    statCache.delete(filePath);
+    return false;
+  }
+}
+
+/**
+ * 清理 stat 缓存中已删除的文件（定期调用）
+ */
+export function evictDeletedFromStatCache(): void {
+  for (const filePath of statCache.keys()) {
+    try { fs.statSync(filePath); } catch { statCache.delete(filePath); }
+  }
+}
+
 // ── Priority Queue ──
 
 const HIGH_PRIORITY_EXTS = new Set(['.html', '.htm', '.md', '.mdx']);
@@ -63,13 +101,22 @@ type WatchCallback = (event: FileChangeEvent) => void;
 
 /**
  * 启动文件监控
+ *
+ * 噪声过滤策略（对标 fanbox + CodePilot）：
+ * 1. 文件名模式过滤（隐藏文件、sidecar、node_modules）
+ * 2. Stat-based 内容变更检测（mtime+size，跳过 metadata-only FSEvents）
+ * 3. Per-file 防抖（300ms，合并快速连续事件）
+ * 4. 活跃文件 3 秒抑制窗口
+ *
  * @param dirPath 监控目录
  * @param cb 回调函数
+ * @param context 可选的 WatchContext（活跃文件路径、用户访问时间）
  * @returns 停止函数
  */
 export function startFileWatcher(
   dirPath: string,
   cb: WatchCallback,
+  context?: WatchContext,
 ): () => void {
   const watcher = fs.watch(dirPath, { recursive: true }, (eventType, filename) => {
     if (!filename) return;
@@ -91,15 +138,29 @@ export function startFileWatcher(
       }
     }
 
-    const context: WatchContext = {};
-    if (!shouldIgnoreEvent(event, context)) {
+    // 第一层：文件名模式过滤
+    if (shouldIgnoreEvent(event, context ?? {})) return;
+
+    // 第二层：stat-based 内容变更检测（跳过 metadata-only 事件）
+    if (event.type !== 'delete' && isMetadataOnly(fullPath)) return;
+
+    // 第三层：per-file 防抖（合并 300ms 内的连续事件）
+    const existing = debounceTimers.get(fullPath);
+    if (existing) clearTimeout(existing);
+    debounceTimers.set(fullPath, setTimeout(() => {
+      debounceTimers.delete(fullPath);
       cb(event);
-    }
+    }, DEBOUNCE_MS));
   });
 
   watcher.on('error', () => { /* silently ignore */ });
 
   return () => {
-    try { watcher.close(); } catch { /* ignore */ }
+    try {
+      watcher.close();
+    } catch { /* ignore */ }
+    // 清理防抖定时器
+    for (const timer of debounceTimers.values()) clearTimeout(timer);
+    debounceTimers.clear();
   };
 }

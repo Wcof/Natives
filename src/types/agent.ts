@@ -63,22 +63,30 @@ export interface SkillHealth {
   issues: SkillIssue[];
 }
 
-/** Claude Code 用量 */
+/** 单模型 token 统计（来源：~/.claude/stats-cache.json modelUsage） */
+export interface ModelTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
+  costUSD: number;
+}
+
+/** Claude Code 用量（来源：~/.claude/stats-cache.json，无伪造数据） */
 export interface ClaudeUsage {
-  fiveHourWindow: {
-    used: number;
-    limit: number;
-    resetAt: number;
-  };
-  weeklyQuota: {
-    used: number;
-    limit: number;
-    resetAt: number;
-  };
+  /** 各模型 token 用量明细 */
+  models: Record<string, ModelTokenUsage>;
+  /** 本地统计 token（从 stats-cache.json dailyModelTokens 聚合） */
   localTokens: {
-    last5h: number;
     today: number;
     thisWeek: number;
+    total: number;
+  };
+  /** 活跃统计 */
+  activity: {
+    totalSessions: number;
+    totalMessages: number;
+    firstSessionDate: string;
   };
 }
 

@@ -110,7 +110,7 @@ export default function FilePreview({ entry, onClose }: FilePreviewProps) {
       display: 'flex',
       flexDirection: 'column',
       height: '100%',
-      background: 'var(--bg, #0b0c0a)',
+      background: 'transparent',
     }}>
       {/* Header */}
       <div style={{
@@ -118,51 +118,46 @@ export default function FilePreview({ entry, onClose }: FilePreviewProps) {
         alignItems: 'center',
         justifyContent: 'space-between',
         padding: '8px 12px',
-        borderBottom: '1px solid var(--border, #262920)',
+        borderBottom: '1px solid var(--vibe-sidebar-border)',
+        background: 'var(--vibe-toolbar-bg)',
       }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text, #f2f2ea)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--vibe-brand-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {entry.name}
         </div>
         <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
           {/* Edit mode toggle for code files */}
           {activeTab === 'code' && isCode && (
             <button
-              className="btn btn-ghost"
+              className="flex items-center justify-center p-1.5 rounded-lg text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)] transition-all"
               onClick={() => setEditMode(!editMode)}
-              style={{ padding: '2px 8px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
               title={editMode ? 'View mode' : 'Edit mode'}
             >
               {editMode ? <Eye size={12} /> : <Edit2 size={12} />}
             </button>
           )}
           <button
-            className="btn btn-ghost"
+            className="flex items-center justify-center p-1.5 rounded-lg text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)] transition-all"
             onClick={onClose}
             aria-label="Close preview"
-            style={{ fontSize: 16, padding: '0 6px', lineHeight: '24px' }}
           >
-            <X size={16} />
+            <X size={14} />
           </button>
         </div>
       </div>
 
       {/* Tabs */}
-      <div role="tablist" style={{ display: 'flex', borderBottom: '1px solid var(--border, #262920)' }}>
+      <div role="tablist" style={{ display: 'flex', borderBottom: '1px solid var(--vibe-sidebar-border)' }}>
         {tabs.map((tab) => (
           <button
             key={tab.id}
             role="tab"
             aria-selected={activeTab === tab.id}
-            className="btn btn-ghost"
+            className={`flex-1 text-[11px] py-1.5 px-2 transition-all ${
+              activeTab === tab.id
+                ? 'text-[var(--vibe-active-color)] border-b-2 border-[var(--vibe-active-color)]'
+                : 'text-[var(--text-faint)] hover:text-[var(--text-dim)] border-b-2 border-transparent'
+            }`}
             onClick={() => setActiveTab(tab.id)}
-            style={{
-              flex: 1,
-              fontSize: 11,
-              padding: '6px 8px',
-              borderBottom: activeTab === tab.id ? '2px solid var(--accent, #cdf24b)' : '2px solid transparent',
-              color: activeTab === tab.id ? 'var(--accent, #cdf24b)' : 'var(--text-dim, #9b9d8c)',
-              borderRadius: 0,
-            }}
           >
             {tab.label}
           </button>
@@ -282,7 +277,7 @@ function PreviewContent({ entry, httpPort, locale, isMarkdown, isCsv, isArchive,
   }
 
   return (
-    <div style={{ color: 'var(--text-dim, #9b9d8c)', fontSize: 12, padding: 20, textAlign: 'center' }}>
+    <div style={{ color: 'var(--text-faint)', fontSize: 12, padding: 20, textAlign: 'center' }}>
       {t(locale, 'filePreview.noPreview').replace('{kind}', entry.kind)}
     </div>
   );
@@ -370,9 +365,9 @@ function CodePreview({ entry, httpPort, locale, editMode, ext }: {
       return (
         <pre style={{
           margin: 0, fontSize: 12, lineHeight: 1.6,
-          fontFamily: 'var(--font-mono, monospace)',
-          color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-          background: 'var(--bg-2, #131410)', padding: 12, borderRadius: 4,
+          fontFamily: 'var(--font-mono)',
+          color: 'var(--vibe-brand-text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+          background: 'transparent', padding: 12,
         }}>
           {pretty}
         </pre>
@@ -403,10 +398,9 @@ function CodePreview({ entry, httpPort, locale, editMode, ext }: {
         style={{
           fontSize: 12,
           lineHeight: 1.6,
-          fontFamily: 'var(--font-mono, monospace)',
-          background: 'var(--bg-2, #131410)',
+          fontFamily: 'var(--font-mono)',
+          background: 'transparent',
           padding: 12,
-          borderRadius: 4,
           overflow: 'auto',
         }}
       />
@@ -417,9 +411,9 @@ function CodePreview({ entry, httpPort, locale, editMode, ext }: {
   return (
     <pre style={{
       margin: 0, fontSize: 12, lineHeight: 1.6,
-      fontFamily: 'var(--font-mono, monospace)',
-      color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-      background: 'var(--bg-2, #131410)', padding: 12, borderRadius: 4,
+      fontFamily: 'var(--font-mono)',
+      color: 'var(--vibe-brand-text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+      background: 'transparent', padding: 12,
     }}>
       {code}
     </pre>
@@ -447,11 +441,11 @@ function FileInfo({ entry, locale }: { entry: FileEntry; locale: Locale }) {
     <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
       <tbody>
         {rows.map(([key, val]) => (
-          <tr key={key} style={{ borderBottom: '1px solid var(--border, #262920)' }}>
-            <td style={{ padding: '6px 8px', color: 'var(--text-dim, #9b9d8c)', fontWeight: 600, width: 80, verticalAlign: 'top' }}>
+          <tr key={key} style={{ borderBottom: '1px solid var(--vibe-border-subtle)' }}>
+            <td style={{ padding: '6px 8px', color: 'var(--text-dim)', fontWeight: 600, width: 80, verticalAlign: 'top' }}>
               {key}
             </td>
-            <td style={{ padding: '6px 8px', color: 'var(--text, #f2f2ea)', wordBreak: 'break-all' }}>
+            <td style={{ padding: '6px 8px', color: 'var(--vibe-brand-text)', wordBreak: 'break-all' }}>
               {val}
             </td>
           </tr>
@@ -498,22 +492,22 @@ function GitDiffView({ diff, loading, status, fileName, locale }: {
           }}>
             <span style={{
               width: 8, height: 8, borderRadius: '50%',
-              background: status === t(locale, 'filePreview.gitUnchanged') ? 'var(--accent,#cdf24b)' : 'var(--warning)',
+              background: status === t(locale, 'filePreview.gitUnchanged') ? 'var(--vibe-accent-color)' : 'var(--warning)',
             }} />
             <span>{status}</span>
           </div>
         )}
-        <pre style={{ margin: 0, fontSize: 11, lineHeight: 1.5, fontFamily: 'var(--font-mono, monospace)', color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+        <pre style={{ margin: 0, fontSize: 11, lineHeight: 1.5, fontFamily: 'var(--font-mono)', color: 'var(--vibe-brand-text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
           {lines.map((line, i) => {
-            let color = 'var(--text)';
+            let color = 'var(--vibe-brand-text)';
             const isChanged = line.startsWith('+') && !line.startsWith('+++');
             const isRemoved = line.startsWith('-') && !line.startsWith('---');
-            if (isChanged) color = 'var(--diff-add)';
+            if (isChanged) color = 'var(--vibe-accent-color)';
             else if (isRemoved) color = 'var(--danger)';
-            else if (line.startsWith('@@')) color = '#5b9cf5';
+            else if (line.startsWith('@@')) color = 'var(--info)';
             else if (line.startsWith('diff') || line.startsWith('index')) color = 'var(--text-faint)';
             return (
-              <div key={i} className={isChanged || isRemoved ? 'anim-clFlash' : ''} style={{ color, background: isChanged ? '#4ec9b010' : isRemoved ? '#d9534f10' : undefined }}>
+              <div key={i} className={isChanged || isRemoved ? 'anim-clFlash' : ''} style={{ color, background: isChanged ? 'var(--accent-soft)' : isRemoved ? 'color-mix(in srgb, var(--danger) 8%, transparent)' : undefined }}>
                 {line || ' '}
               </div>
             );
@@ -532,7 +526,7 @@ function GitDiffView({ diff, loading, status, fileName, locale }: {
         }}>
           <span style={{
             width: 8, height: 8, borderRadius: '50%',
-            background: status === t(locale, 'filePreview.gitUnchanged') ? 'var(--accent,#cdf24b)' : 'var(--warning)',
+            background: status === t(locale, 'filePreview.gitUnchanged') ? 'var(--vibe-accent-color)' : 'var(--warning)',
           }} />
           <span>{status}</span>
         </div>

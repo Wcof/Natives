@@ -63,7 +63,7 @@ export const THEME_TOKENS = {
   accentInk: 'var(--accent-ink, #0b0c0a)',
 
   // Borders
-  border: 'var(--border, #262920)',
+  border: 'var(--vibe-btn-border)',
 
   // Surface
   surface: 'var(--surface, #131410)',
@@ -83,7 +83,7 @@ export const INPUT_STYLE: React.CSSProperties = {
   width: '100%',
   padding: '8px 10px',
   background: 'var(--bg,#0b0c0a)',
-  border: '1px solid var(--border,#262920)',
+  border: '1px solid var(--vibe-btn-border)',
   borderRadius: BORDER_RADIUS.md,
   color: 'var(--text)',
   fontSize: FONT_SIZE.md,

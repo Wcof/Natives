@@ -68,14 +68,14 @@ export default function CrashMonitor() {
     <div style={{
       position: 'fixed', bottom: 60, right: 16, zIndex: 100,
       width: 320, maxHeight: 240, overflow: 'auto',
-      background: 'var(--bg-2,#131410)',
+      background: 'var(--vibe-toolbar-bg)',
       border: '1px solid #f24b4b',
       borderRadius: 8,
       boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
     }}>
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '8px 10px', borderBottom: '1px solid var(--border,#262920)',
+        padding: '8px 10px', borderBottom: '1px solid var(--vibe-btn-border)',
         background: 'var(--danger-soft)',
       }}>
         <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--danger)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
@@ -83,7 +83,7 @@ export default function CrashMonitor() {
           {activeCrashes.length} {activeCrashes.length !== 1 ? t(locale, 'errors.crashes') : t(locale, 'errors.crash')}
         </span>
         {activeCrashes.length > 1 && (
-          <button onClick={handleReloadAll} style={{ fontSize: 9, padding: '2px 6px', borderRadius: 3, border: '1px solid var(--border,#262920)', background: 'transparent', color: 'var(--text-faint)', cursor: 'pointer' }}>
+          <button onClick={handleReloadAll} style={{ fontSize: 9, padding: '2px 6px', borderRadius: 3, border: '1px solid var(--vibe-btn-border)', background: 'transparent', color: 'var(--text-faint)', cursor: 'pointer' }}>
             {t(locale, 'errors.reloadAll')}
           </button>
         )}
@@ -92,16 +92,16 @@ export default function CrashMonitor() {
         <div key={crash.moduleId + crash.time} style={{
           display: 'flex', alignItems: 'center', gap: 6,
           padding: '6px 10px', fontSize: 11,
-          borderBottom: '1px solid var(--border,#262920)',
+          borderBottom: '1px solid var(--vibe-btn-border)',
           opacity: crash.recovered ? 0.5 : 1,
         }}>
           <span style={{ flex: 1, color: crash.recovered ? 'var(--text-dim)' : 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {crash.title}
           </span>
           {crash.recovered ? (
-            <span style={{ fontSize: 9, color: 'var(--accent,#cdf24b)' }}>✓ {t(locale, 'errors.recovered')}</span>
+            <span style={{ fontSize: 9, color: 'var(--accent)' }}>✓ {t(locale, 'errors.recovered')}</span>
           ) : (
-            <button onClick={() => handleReload(crash.moduleId)} style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, border: '1px solid var(--accent,#cdf24b)', background: 'transparent', color: 'var(--accent,#cdf24b)', cursor: 'pointer' }}>
+            <button onClick={() => handleReload(crash.moduleId)} style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, border: '1px solid var(--accent)', background: 'transparent', color: 'var(--accent)', cursor: 'pointer' }}>
               <RefreshCw size={9} /> {t(locale, 'errors.reload')}
             </button>
           )}

@@ -43,11 +43,11 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
         gridTemplateColumns: '24px 1fr 120px 80px 24px',
         gap: 8,
         padding: '8px 12px',
-        borderBottom: '1px solid var(--border, #262920)',
+        borderBottom: '1px solid var(--vibe-btn-border)',
         fontSize: 11,
         fontWeight: 600,
         fontFamily: 'var(--font-mono)',
-        color: 'var(--text-dim, #9b9d8c)',
+        color: 'var(--vibe-btn-text)',
         textTransform: 'uppercase',
         letterSpacing: '0.5px',
       }}>
@@ -59,7 +59,7 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
             style={{
               cursor: 'pointer',
               userSelect: 'none',
-              color: sortBy === key ? 'var(--accent, #cdf24b)' : undefined,
+              color: sortBy === key ? 'var(--accent)' : undefined,
             }}
           >
             {SORT_LABELS[key]}
@@ -74,7 +74,7 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
         <div style={{
           padding: 40,
           textAlign: 'center',
-          color: 'var(--text-faint, #62655a)',
+          color: 'var(--vibe-btn-text)',
           fontSize: 13,
         }}>
           <FolderOpen size={20} style={{ color: 'var(--text-faint)', marginBottom: 4 }} />

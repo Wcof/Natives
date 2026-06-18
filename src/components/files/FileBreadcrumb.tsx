@@ -52,7 +52,7 @@ export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onTog
   if (segments.length === 0 || (segments.length === 1 && segments[0] === '')) {
     return (
       <nav aria-label={t(locale, 'fileBrowser.breadcrumbLabel')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', fontSize: 13 }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--accent, #cdf24b)', fontWeight: 600 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--accent)', fontWeight: 600 }}>
           <Monitor size={14} /> /
         </span>
         {projectBadge && BADGE_COLORS[projectBadge] && (
@@ -74,7 +74,7 @@ export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onTog
         gap: 4,
         padding: '8px 12px',
         fontSize: 13,
-        color: 'var(--text, #f2f2ea)',
+        color: 'var(--vibe-brand-text)',
         overflowX: 'auto',
         scrollbarWidth: 'none',
         whiteSpace: 'nowrap',
@@ -87,23 +87,23 @@ export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onTog
             onClick={() => onNavigate('/')}
             style={{
               background: 'none', border: 'none', cursor: 'pointer',
-              color: 'var(--text-dim, #9b9d8c)', padding: '2px 4px', borderRadius: 3,
+              color: 'var(--vibe-btn-text)', padding: '2px 4px', borderRadius: 3,
               fontSize: 13, display: 'flex', alignItems: 'center', gap: 3,
               transition: 'color 0.1s, background 0.1s',
             }}
             onMouseEnter={(e) => {
-              (e.currentTarget as HTMLElement).style.color = 'var(--text, #f2f2ea)';
-              (e.currentTarget as HTMLElement).style.background = 'var(--bg-2, #131410)';
+              (e.currentTarget as HTMLElement).style.color = 'var(--vibe-brand-text)';
+              (e.currentTarget as HTMLElement).style.background = 'var(--vibe-toolbar-bg)';
             }}
             onMouseLeave={(e) => {
-              (e.currentTarget as HTMLElement).style.color = 'var(--text-dim, #9b9d8c)';
+              (e.currentTarget as HTMLElement).style.color = 'var(--vibe-btn-text)';
               (e.currentTarget as HTMLElement).style.background = 'none';
             }}
           >
-            <Monitor size={13} style={{ color: 'var(--accent, #cdf24b)' }} />
+            <Monitor size={13} style={{ color: 'var(--accent)' }} />
           </button>
         ) : (
-          <Monitor size={13} style={{ color: 'var(--accent, #cdf24b)' }} />
+          <Monitor size={13} style={{ color: 'var(--accent)' }} />
         )}
       </span>
 
@@ -113,12 +113,12 @@ export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onTog
 
         return (
           <span key={pathSoFar} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <span style={{ color: 'var(--text-faint, #62655a)', fontSize: 12 }}>›</span>
+            <span style={{ color: 'var(--vibe-btn-text)', fontSize: 12 }}>›</span>
             {isLast ? (
               <span style={{
-                color: 'var(--accent, #cdf24b)', fontWeight: 600,
+                color: 'var(--accent)', fontWeight: 600,
                 fontFamily: 'var(--font-display)',
-                background: 'var(--accent-soft, #cdf24b1f)',
+                background: 'var(--accent-soft)',
                 padding: '2px 7px', borderRadius: 6,
               }}>
                 {segment}
@@ -128,16 +128,16 @@ export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onTog
                 onClick={() => onNavigate(pathSoFar)}
                 style={{
                   background: 'none', border: 'none',
-                  color: 'var(--text-dim, #9b9d8c)',
+                  color: 'var(--vibe-btn-text)',
                   cursor: 'pointer', padding: '2px 4px', borderRadius: 3,
                   fontSize: 13, transition: 'color 0.1s, background 0.1s',
                 }}
                 onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLElement).style.color = 'var(--text, #f2f2ea)';
-                  (e.currentTarget as HTMLElement).style.background = 'var(--bg-2, #131410)';
+                  (e.currentTarget as HTMLElement).style.color = 'var(--vibe-brand-text)';
+                  (e.currentTarget as HTMLElement).style.background = 'var(--vibe-toolbar-bg)';
                 }}
                 onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLElement).style.color = 'var(--text-dim, #9b9d8c)';
+                  (e.currentTarget as HTMLElement).style.color = 'var(--vibe-btn-text)';
                   (e.currentTarget as HTMLElement).style.background = 'none';
                 }}
               >
@@ -166,7 +166,7 @@ export default function FileBreadcrumb({ segments, onNavigate, isFavorite, onTog
           style={{
             background: 'none', border: 'none', cursor: 'pointer',
             padding: '2px 4px', marginLeft: 'auto', display: 'flex', flexShrink: 0,
-            color: isFavorite ? 'var(--accent,#cdf24b)' : 'var(--text-faint,#62655a)',
+            color: isFavorite ? 'var(--accent)' : 'var(--vibe-btn-text)',
           }}
           title={t(locale, isFavorite ? 'fileBrowser.removeFromFavorites' : 'fileBrowser.addToFavorites')}
           aria-label={t(locale, isFavorite ? 'fileBrowser.removeFromFavorites' : 'fileBrowser.addToFavorites')}

@@ -18,11 +18,11 @@ interface MonacoDiffViewProps {
  */
 function MonacoDiffView({ original, modified, language = 'plaintext', fileName }: MonacoDiffViewProps) {
   return (
-    <div style={{ height: '100%', minHeight: 300, border: '1px solid var(--border,#262920)', borderRadius: 6, overflow: 'hidden' }}>
+    <div style={{ height: '100%', minHeight: 300, border: '1px solid var(--vibe-btn-border)', borderRadius: 6, overflow: 'hidden' }}>
       {fileName && (
         <div style={{
           padding: '4px 10px', fontSize: 11, color: 'var(--text-faint)',
-          background: 'var(--bg-2,#131410)', borderBottom: '1px solid var(--border,#262920)',
+          background: 'var(--vibe-toolbar-bg)', borderBottom: '1px solid var(--vibe-btn-border)',
           fontFamily: 'var(--font-mono)',
         }}>
           {fileName}

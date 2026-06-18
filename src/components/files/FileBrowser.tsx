@@ -1,12 +1,10 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { type FileEntry, type FileKind } from '@/types/file';
 import { t, type Locale } from '@/i18n';
 import FileGrid from './FileGrid';
 import FileList from './FileList';
-import FileBreadcrumb from './FileBreadcrumb';
-import FileToolbar from './FileToolbar';
 import FileContextMenu from './FileContextMenu';
 import DiskUsagePanel from './DiskUsagePanel';
 import Skeleton from '@/components/ui/Skeleton';
@@ -15,6 +13,7 @@ import { useFocusTrap } from '@/lib/useFocusTrap';
 import { pushRecentFile } from '@/lib/recent-files-client';
 import { webFsClient } from '@/lib/web-fs-client';
 import { fmtSize } from '@/lib/format';
+import { useFileDrop } from '@/lib/use-file-drop';
 
 /** Electron IPC 可用时用 nativesAPI.fs，否则降级到 webFsClient (Next.js API Routes) */
 function getFsApi() {
@@ -158,6 +157,30 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     loadEntries();
   }, [loadEntries]);
 
+  // Drag-and-drop: files from Finder + images from WeChat/browser
+  const { isDragging, dragHandlers } = useFileDrop({
+    currentDir: currentPath,
+    onFilesDropped: useCallback(async (paths: string[]) => {
+      const port = (window as any).__nativesHttpPort || 3000;
+      for (const p of paths) {
+        try {
+          await fetch(
+            `http://localhost:${port}/api/fs/copy?src=${encodeURIComponent(p)}&dir=${encodeURIComponent(currentPath)}`,
+            { method: 'POST' },
+          );
+        } catch (err) {
+          console.error('[FileBrowser] copy file failed:', p, err);
+        }
+      }
+      await loadEntries();
+      showToast(t(locale, 'fileBrowser.filesDropped'));
+    }, [currentPath, locale, loadEntries, showToast]),
+    onUrlDropped: useCallback(async (_savedPath: string) => {
+      await loadEntries();
+      showToast(t(locale, 'fileBrowser.imageSaved'));
+    }, [loadEntries, locale, showToast]),
+  });
+
   // Keyboard shortcuts: Cmd+[ back, Cmd+] forward
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -177,6 +200,8 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       if (detail.type === 'sortBy') setSortBy(detail.value);
       if (detail.type === 'sortDir') setSortDir((prev) => prev === 'asc' ? 'desc' : 'asc');
       if (detail.type === 'showHidden') setShowHidden((prev) => !prev);
+      if (detail.type === 'search') setSearchQuery(detail.value ?? '');
+      if (detail.type === 'newFolder') handleNewFolder(detail.value ?? currentPath);
     };
     window.addEventListener('header-file-action', handler);
     return () => window.removeEventListener('header-file-action', handler);
@@ -358,6 +383,13 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
 
   const segments = currentPath.split('/').filter(Boolean);
 
+  // Search filter (client-side)
+  const filteredEntries = useMemo(() => {
+    if (!searchQuery) return entries;
+    const q = searchQuery.toLowerCase();
+    return entries.filter(e => e.name.toLowerCase().includes(q));
+  }, [entries, searchQuery]);
+
   // Detect project badge from current directory entries
   const detectedProject = (() => {
     const names = new Set(entries.filter(e => !e.isDir).map(e => e.name.toLowerCase()));
@@ -385,33 +417,13 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       display: 'flex',
       flexDirection: 'column',
       height: '100%',
-      background: 'var(--bg, #0b0c0a)',
+      background: 'var(--vibe-content-bg)',
+      position: 'relative',
     }}>
-      {/* Navigation */}
-      <FileBreadcrumb
-        segments={segments.length > 0 ? segments : ['/']}
-        onNavigate={handleNavigate}
-        isFavorite={isFavorite}
-        onToggleFavorite={toggleFavorite}
-        projectBadge={detectedProject}
-      />
-      <FileToolbar
-        searchQuery={searchQuery}
-        recentMode={recentMode}
-        canGoBack={canGoBack}
-        canGoForward={canGoForward}
-        onSearchChange={setSearchQuery}
-        onRecentModeToggle={() => setRecentMode((v) => !v)}
-        onRefresh={loadEntries}
-        onNewFile={() => handleNewFile(currentPath)}
-        onNewFolder={() => handleNewFolder(currentPath)}
-        onBack={goBack}
-        onForward={goForward}
-      />
-
-      {/* File area */}
+      {/* File area — drop zone covers entire height including empty space */}
       <div
-        style={{ flex: 1, overflow: 'auto' }}
+        {...dragHandlers}
+        style={{ flex: 1, overflow: 'auto', position: 'relative' }}
         role="listbox"
         aria-label={t(locale, 'fileBrowser.ariaLabelFiles')}
         tabIndex={0}
@@ -424,6 +436,28 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           }
         }}
       >
+        {/* Drop overlay — fills entire area including empty space below files */}
+        {isDragging && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 4,
+              zIndex: 20,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              pointerEvents: 'none',
+              border: '2px dashed var(--accent)',
+              borderRadius: 'var(--radius, 4px)',
+              background: 'var(--accent-soft, rgba(205,242,75,0.08))',
+              color: 'var(--accent)',
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            {t(locale, 'fileBrowser.dropHere')}
+          </div>
+        )}
         {loading ? (
           <div style={{ padding: viewMode === 'grid' ? 12 : 0 }}>
             {viewMode === 'grid' ? (
@@ -435,10 +469,10 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             )}
           </div>
         ) : viewMode === 'grid' ? (
-          <FileGrid entries={entries} onSelect={handleSelect} onContextMenu={handleContextMenu} />
+          <FileGrid entries={filteredEntries} onSelect={handleSelect} onContextMenu={handleContextMenu} />
         ) : (
           <FileList
-            entries={entries}
+            entries={filteredEntries}
             sortBy={sortBy}
             sortDir={sortDir}
             onSort={handleSort}
@@ -449,20 +483,20 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         )}
       </div>
 
-      {/* Status bar (fanbox-style) */}
-      {!loading && entries.length > 0 && (() => {
-        const dirs = entries.filter(e => e.isDir).length;
-        const files = entries.length - dirs;
-        const totalSize = entries.reduce((sum, e) => sum + (e.isDir ? 0 : e.size), 0);
+      {/* Status bar */}
+      {!loading && filteredEntries.length > 0 && (() => {
+        const dirs = filteredEntries.filter(e => e.isDir).length;
+        const files = filteredEntries.length - dirs;
+        const totalSize = filteredEntries.reduce((sum, e) => sum + (e.isDir ? 0 : e.size), 0);
         return (
           <div style={{
             display: 'flex', alignItems: 'center', gap: 12,
             padding: '4px 12px', fontSize: 11, fontFamily: 'var(--font-mono)',
-            color: 'var(--text-faint, #62655a)',
-            borderTop: '1px solid var(--border, #262920)',
-            background: 'var(--bg-2, #131410)',
+            color: 'var(--vibe-btn-text)',
+            borderTop: '1px solid var(--vibe-btn-border)',
+            background: 'var(--vibe-toolbar-bg)',
           }}>
-            <span>{entries.length} 项</span>
+            <span>{filteredEntries.length} 项</span>
             {dirs > 0 && <span>{dirs} 个文件夹</span>}
             {files > 0 && <span>{files} 个文件</span>}
             {totalSize > 0 && <span>{fmtSize(totalSize)}</span>}
@@ -470,7 +504,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             <span
               onClick={() => setDiskUsageTarget(currentPath)}
               style={{
-                cursor: 'pointer', color: 'var(--accent,#cdf24b)',
+                cursor: 'pointer', color: 'var(--accent)',
                 textDecoration: 'none', fontSize: 11,
               }}
               onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.textDecoration = 'underline'; }}
@@ -535,7 +569,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           }}
         >
           <div style={{
-            background: 'var(--bg-2,#131410)', border: '1px solid var(--border,#262920)',
+            background: 'var(--vibe-toolbar-bg)', border: '1px solid var(--vibe-btn-border)',
             borderRadius: 10, padding: 20, width: 340,
           }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 12 }}>
@@ -547,8 +581,8 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
               onChange={(e) => setRenameValue(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleRenameConfirm()}
               style={{
-                width: '100%', padding: '8px 10px', background: 'var(--bg,#0b0c0a)',
-                border: '1px solid var(--border,#262920)', borderRadius: 6,
+                width: '100%', padding: '8px 10px', background: 'var(--vibe-content-bg)',
+                border: '1px solid var(--vibe-btn-border)', borderRadius: 6,
                 color: 'var(--text)', fontSize: 13, outline: 'none',
               }}
               autoFocus
@@ -580,7 +614,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           }}
         >
           <div style={{
-            background: 'var(--bg-2,#131410)', border: '1px solid var(--border,#262920)',
+            background: 'var(--vibe-toolbar-bg)', border: '1px solid var(--vibe-btn-border)',
             borderRadius: 10, padding: 20, width: 340,
           }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 12 }}>
@@ -593,8 +627,8 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
               onKeyDown={(e) => e.key === 'Enter' && handleNewItemConfirm()}
               placeholder={newItemTarget.type === 'file' ? t(locale, 'fileBrowser.placeholderFileName') : t(locale, 'fileBrowser.placeholderFolderName')}
               style={{
-                width: '100%', padding: '8px 10px', background: 'var(--bg,#0b0c0a)',
-                border: '1px solid var(--border,#262920)', borderRadius: 6,
+                width: '100%', padding: '8px 10px', background: 'var(--vibe-content-bg)',
+                border: '1px solid var(--vibe-btn-border)', borderRadius: 6,
                 color: 'var(--text)', fontSize: 13, outline: 'none',
               }}
               autoFocus
@@ -623,7 +657,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           aria-live="polite"
           style={{
             position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
-            background: 'var(--bg-3,#1c1e17)', border: '1px solid var(--border,#262920)',
+            background: 'var(--vibe-btn-bg)', border: '1px solid var(--vibe-btn-border)',
             padding: '10px 18px', borderRadius: 10, fontSize: 13, color: 'var(--text)',
             zIndex: 200, animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
           }}

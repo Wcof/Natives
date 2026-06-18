@@ -61,7 +61,7 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: 9999,
-      background: 'var(--bg,#0b0c0a)',
+      background: 'var(--vibe-content-bg)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
     }}>
       <div style={{ width: 480, maxWidth: '90vw' }}>
@@ -70,7 +70,7 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
           {STEPS.map((s) => (
             <div key={s} style={{
               width: 8, height: 8, borderRadius: '50%',
-              background: STEPS.indexOf(s) <= STEPS.indexOf(step) ? 'var(--accent,#cdf24b)' : 'var(--bg-3,#1c1e17)',
+              background: STEPS.indexOf(s) <= STEPS.indexOf(step) ? 'var(--accent)' : 'var(--vibe-btn-bg)',
               transition: 'background 0.2s',
             }} />
           ))}
@@ -109,7 +109,7 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
               </button>
             ) : envOk ? (
               <div>
-                <div style={{ fontSize: 14, color: 'var(--accent,#cdf24b)', marginBottom: 16 }}>{t(locale, 'onboarding.allReady')}</div>
+                <div style={{ fontSize: 14, color: 'var(--accent)', marginBottom: 16 }}>{t(locale, 'onboarding.allReady')}</div>
                 <button className="btn btn-primary" onClick={handleNext} style={{ fontSize: 12 }}>{t(locale, 'onboarding.continue')}</button>
               </div>
             ) : (
@@ -138,7 +138,7 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
               placeholder="sk-ant-..."
               style={{
                 width: '100%', padding: '10px 12px', fontSize: 13,
-                background: 'var(--bg-2,#131410)', border: '1px solid var(--border,#262920)',
+                background: 'var(--vibe-toolbar-bg)', border: '1px solid var(--vibe-btn-border)',
                 borderRadius: 6, color: 'var(--text)', outline: 'none', marginBottom: 16,
                 fontFamily: 'var(--font-mono)',
               }}

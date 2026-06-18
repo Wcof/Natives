@@ -19,8 +19,8 @@ export function showToast(message: string, level: 'info' | 'error' = 'info'): vo
   const el = document.createElement('div');
   el.style.cssText = `
     padding:10px 18px;border-radius:10px;font-size:13px;
-    background:var(--bg-3,#1c1e17);border:1px solid ${level === 'error' ? '#d9534f' : 'var(--border,#262920)'};
-    color:var(--text,#f2f2ea);opacity:0;transition:opacity 0.2s ease;pointer-events:auto;
+    background:var(--vibe-btn-bg);border:1px solid ${level === 'error' ? '#d9534f' : 'var(--vibe-btn-border)'};
+    color:var(--vibe-brand-text);opacity:0;transition:opacity 0.2s ease;pointer-events:auto;
   `;
   el.textContent = message;
   container.appendChild(el);
@@ -59,22 +59,22 @@ export function renderNotificationCenter(
   container.replaceChildren();
 
   const header = document.createElement('div');
-  header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--border,#262920);';
+  header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--vibe-btn-border);';
   const titleSpan = document.createElement('span');
-  titleSpan.style.cssText = 'font-size:13px;font-weight:600;color:var(--text-dim,#9b9d8c)';
+  titleSpan.style.cssText = 'font-size:13px;font-weight:600;color:var(--vibe-btn-text)';
   titleSpan.textContent = 'Notifications';
   header.appendChild(titleSpan);
   const markAllBtn = document.createElement('button');
   markAllBtn.className = 'btn-ghost';
   markAllBtn.textContent = 'Mark all read';
-  markAllBtn.style.cssText = 'font-size:11px;color:var(--accent,#cdf24b);background:none;border:none;cursor:pointer;';
+  markAllBtn.style.cssText = 'font-size:11px;color:var(--accent);background:none;border:none;cursor:pointer;';
   markAllBtn.onclick = onMarkAllRead;
   header.appendChild(markAllBtn);
   container.appendChild(header);
 
   if (notifications.length === 0) {
     const empty = document.createElement('div');
-    empty.style.cssText = 'padding:40px 20px;text-align:center;color:var(--text-faint,#62655a);font-size:13px;';
+    empty.style.cssText = 'padding:40px 20px;text-align:center;color:var(--vibe-btn-text);font-size:13px;';
     empty.textContent = 'No notifications';
     container.appendChild(empty);
     return;
@@ -84,12 +84,12 @@ export function renderNotificationCenter(
   for (const notif of notifications) {
     const item = document.createElement('div');
     item.style.cssText = `
-      padding:9px 16px;border-bottom:1px solid var(--border,#262920);
+      padding:9px 16px;border-bottom:1px solid var(--vibe-btn-border);
       ${notif.read ? 'opacity:0.6' : ''}
     `;
 
     const levelColors: Record<string, string> = {
-      info: 'var(--accent,#cdf24b)',
+      info: 'var(--accent)',
       warning: '#e6b800',
       error: '#d9534f',
     };
@@ -100,19 +100,19 @@ export function renderNotificationCenter(
 
     const left = document.createElement('div');
     const titleEl = document.createElement('span');
-    titleEl.style.cssText = 'font-size:12px;font-weight:600;color:var(--text,#f2f2ea)';
+    titleEl.style.cssText = 'font-size:12px;font-weight:600;color:var(--vibe-brand-text)';
     titleEl.textContent = notif.title;
     left.appendChild(titleEl);
 
     if (notif.body) {
       const bodyEl = document.createElement('p');
-      bodyEl.style.cssText = 'font-size:12px;color:var(--text-dim,#9b9d8c);margin:2px 0 0';
+      bodyEl.style.cssText = 'font-size:12px;color:var(--vibe-btn-text);margin:2px 0 0';
       bodyEl.textContent = notif.body;
       left.appendChild(bodyEl);
     }
 
     const timeEl = document.createElement('span');
-    timeEl.style.cssText = 'font-size:10px;color:var(--text-faint,#62655a);margin-top:4px;display:block';
+    timeEl.style.cssText = 'font-size:10px;color:var(--vibe-btn-text);margin-top:4px;display:block';
     timeEl.textContent = notif.createdAt;
     left.appendChild(timeEl);
 
@@ -128,7 +128,7 @@ export function renderNotificationCenter(
     if (!notif.read) {
       const markBtn = document.createElement('button');
       markBtn.className = 'btn-ghost';
-      markBtn.style.cssText = 'font-size:10px;color:var(--accent,#cdf24b);background:none;border:none;cursor:pointer;';
+      markBtn.style.cssText = 'font-size:10px;color:var(--accent);background:none;border:none;cursor:pointer;';
       markBtn.textContent = 'Mark read';
       markBtn.addEventListener('click', () => onMarkRead(notif.id));
       right.appendChild(markBtn);
@@ -158,13 +158,13 @@ export function renderErrorPage(
   container.appendChild(icon);
 
   const title = document.createElement('h2');
-  title.style.cssText = 'font-size:18px;font-weight:600;color:var(--text,#f2f2ea);margin-bottom:8px;';
+  title.style.cssText = 'font-size:18px;font-weight:600;color:var(--vibe-brand-text);margin-bottom:8px;';
   title.textContent = error.userMessage;
   container.appendChild(title);
 
   if (error.actionHint) {
     const hint = document.createElement('p');
-    hint.style.cssText = 'font-size:13px;color:var(--text-dim,#9b9d8c);margin-bottom:24px;';
+    hint.style.cssText = 'font-size:13px;color:var(--vibe-btn-text);margin-bottom:24px;';
     hint.textContent = error.actionHint;
     container.appendChild(hint);
   }
