@@ -190,7 +190,7 @@ Natives 引入了专为桌面小组件 (Widget) 模式设计的 "Polished Crysta
     - `cornerRadius`: 28 （对齐 HIG 圆角）
   - **无边框窗口拖拽规范**：主体卡片元素配置 `WebkitAppRegion: 'drag'`（拖拽移动），且内部所有按钮、滑块、标签页切换器等交互控件**必须**强制设为 `WebkitAppRegion: 'no-drag'`，以排除交互事件劫持（符合 R-U13）。
 - **参考代码**：[DashboardPage (src/app/page.tsx)](file:///Users/ldh/Downloads/project/AiNative/Natives/src/app/page.tsx) 是本项目小组件玻璃效果的官方标准实现。
-- **为什么**：液态玻璃视觉涉及复杂的 WebGL 着色器和 SVG 滤镜混合，统一参数能防止不同开发阶段风格发生偏移，并确保在 Electron 框架中无边框拖拽和控件响应完美互斥。
+- **为什么**：液态玻璃视觉涉及复杂的 WebGL 着色器和 SVG 滤镜混合，统一参数能防止不同开发阶段风格发生偏移，并确保在 Tauri v2（formerly Electron）框架中无边框拖拽和控件响应完美互斥。
 
 ---
 

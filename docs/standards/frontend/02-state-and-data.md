@@ -2,7 +2,7 @@
 
 > **版本**: 1.0.0 · **日期**: 2026-06-15
 > **关联 ADR**: [ADR-0003](../../adr/0003-plugin-ipc-main-process-relay.md)（插件 IPC 中转）、[ADR-0004](../../adr/0004-terminal-env-injection-new-sessions-only.md)（注入仅对新会话）
-> **关联源文件**: `src/components/shell/ShellLayout.tsx`、`src/lib/follow-mode.ts`、`electron/preload.ts`、`src/main/bridge-host.ts`
+> **关联源文件**: `src/components/shell/ShellLayout.tsx`、`src/lib/follow-mode.ts`、`src/lib/tauri-adapter.ts`、`src/main/bridge-host.ts`
 
 ---
 
@@ -35,9 +35,9 @@
 #### R-E9 · Renderer 取数只走 `window.nativesAPI`
 - **等级**：MUST
 - **分类**：状态、安全
-- **规则**：Renderer 获取任何 Main 侧数据**必须**经 preload 暴露的 `window.nativesAPI.{domain}.{action}()` → `ipcRenderer.invoke('domain:action')` → Main handler。**禁止**直接 `fetch` 本地 HTTP 服务（那是给插件的通道）、**禁止**绕过 preload 自造 IPC。
-- **为什么**：preload 是 `contextIsolation` 下的唯一受控通道；绕过它等于破坏隔离。
-- **检查方法**：Renderer 中无 `ipcRenderer` 直接 import（应由 preload 封装）；无对本地 HTTP 端口的 `fetch`。
+- **规则**：Renderer 获取任何 Main 侧数据**必须**经 Tauri adapter 暴露的 `window.nativesAPI.{domain}.{action}()` → `ipcRenderer.invoke('domain:action')` → Main handler。**禁止**直接 `fetch` 本地 HTTP 服务（那是给插件的通道）、**禁止**绕过 adapter 自造 IPC。
+- **为什么**：adapter 是 Tauri（formerly Electron）`contextIsolation` 下的唯一受控通道；绕过它等于破坏隔离。
+- **检查方法**：Renderer 中无 `ipcRenderer` 直接 import（应由 Tauri adapter 封装）；无对本地 HTTP 端口的 `fetch`。
 
 #### R-E10 · 异步取数必须有加载/错误/成功三态
 - **等级**：MUST
@@ -78,7 +78,7 @@
 ## 五、本篇合规自检清单
 
 - [ ] 我没有重复持有全局状态，全局状态在 ShellLayout（R-E7）。
-- [ ] 我的取数走 `window.nativesAPI`，没有绕过 preload（R-E9）。
+- [ ] 我的取数走 `window.nativesAPI`，没有绕过 adapter（R-E9）。
 - [ ] 我的异步 UI 覆盖了 loading/error/success 三态（R-E10）。
 - [ ] 实时数据用广播同步而非轮询（R-E11）。
 - [ ] 我的错误经 `classifyError` 后展示，没有静默吞掉或弹原始异常（R-E12）。
