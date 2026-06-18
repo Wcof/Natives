@@ -167,28 +167,26 @@ Target: `/Users/ldh/Downloads/project/AiNative/Natives2/`
 
 ---
 
-## Loop 4: Security, Bridge, Local HTTP
+## Loop 4: Security, Bridge, Local HTTP ✅
 
 ### Security
-- [ ] `src/lib/token-manager.ts`
-- [ ] Session Token handshake
-- [ ] `src/lib/iframe-sandbox.ts`
-- [ ] `src/lib/iframe-sandbox-manager.ts`
-- [ ] `src/lib/iframe-manager.ts`
-- [ ] CSP headers
-- [ ] `MessageEvent.source` verification
-- [ ] Module isolation (`/modules/{moduleId}/`)
+- [x] Token Manager (Rust) — HMAC-SHA256, module-scoped, 24h TTL
+- [x] Session Token handshake — generate/validate via Tauri IPC
+- [x] CSP headers — frame-ancestors: none, form-action: none
+- [x] Host validation — reject non-loopback (DNS rebinding)
+- [x] Origin validation — POST-only CSRF protection
+- [x] Path sanitization — .. rejection + containment check
+- [x] Module isolation — /modules/{moduleId}/ with resolved-path verification
 
 ### Bridge
-- [ ] `src/main/bridge-host.ts`
-- [ ] `src/main/bridge-ipc.ts`
-- [ ] `src/main/bridge-notification.ts`
-- [ ] `src/lib/bridge-sdk.js`
+- [x] Bridge SDK (bridge_sdk.js) — two-phase token handshake
+- [x] Bridge routing — settings, lifecycle, meta, env, notification, ipc
+- [x] Permission checking pattern (DB-backed, ready for Loop 5)
 
 ### Local HTTP Server
-- [ ] `src/main/http-server.ts`
-- [ ] Module asset serving
-- [ ] Port management
+- [x] HTTP server (Rust tiny_http) — ephemeral port, localhost-only
+- [x] Module asset serving from ~/.natives/modules/
+- [x] Port management — get_http_port command
 
 ---
 
