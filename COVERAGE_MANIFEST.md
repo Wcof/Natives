@@ -348,31 +348,24 @@ Target: `/Users/ldh/Downloads/project/AiNative/Natives2/`
 
 ---
 
-## Loop 12: Tools And Secondary Workflows
+## Loop 12: Tools And Secondary Workflows ✅
 
 ### Screenshot
-- [ ] `src/main/screenshot.ts`
-- [ ] `src/components/screenshot/ScreenshotCard.tsx`
-- [ ] `src/components/screenshot/AnnotationEditor.tsx`
-- [ ] `src/components/tools/ScreenshotCard.tsx`
+- [x] Screenshot (Rust) — watch Desktop, save annotated
+- [x] `src/components/screenshot/*` — pure frontend
 
 ### Release Wizard
-- [ ] `src/main/release-wizard.ts`
-- [ ] `src/components/release/ReleaseWizardDialog.tsx`
-- [ ] `src/components/tools/ReleaseWizardDialog.tsx`
+- [x] Release Wizard (Rust) — inspect, prepare, getSequence, execute
+- [x] `src/components/release/*` — pure frontend
 
 ### Update
-- [ ] `src/main/update-checker.ts`
-- [ ] `src/main/updater.ts`
-- [ ] `src/components/tools/UpdateNotification.tsx`
-- [ ] `src/components/update/UpdateNotification.tsx`
+- [x] Update Checker (Rust) — check, mute, getMuted
+- [x] `src/components/update/*` — pure frontend
 
 ### Other Tools
-- [ ] `src/components/tools/ImageAnnotator.tsx`
-- [ ] `src/components/tools/ToolsPage.tsx`
-- [ ] `src/app/tools/page.tsx`
-- [ ] `src/lib/clipboard.ts`
-- [ ] `src/main/clipboard.ts`
+- [x] Clipboard (Rust) — pbcopy/pbpaste
+- [x] `src/components/tools/*` — all pure frontend
+- [x] `src/app/tools/page.tsx` — pure frontend
 
 ---
 
