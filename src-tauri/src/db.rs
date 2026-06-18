@@ -142,6 +142,49 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
 
 const APP_MODULE_ID: &str = "_app";
 
+/// Generic module_data read (used by state persistence)
+pub fn db_get_module_data(conn: &Connection, module_id: &str, key: &str) -> Result<Option<serde_json::Value>> {
+    let mut stmt = conn
+        .prepare("SELECT value FROM module_data WHERE module_id = ?1 AND key = ?2")
+        .map_err(Error::Database)?;
+    let result: Option<String> = stmt
+        .query_row(rusqlite::params![module_id, key], |row| {
+            row.get::<_, String>(0)
+        })
+        .optional()
+        .map_err(Error::Database)?;
+    match result {
+        Some(s) => {
+            let v: serde_json::Value =
+                serde_json::from_str(&s).unwrap_or(serde_json::Value::String(s));
+            Ok(Some(v))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Generic module_data write (used by state persistence)
+pub fn db_set_module_data(conn: &Connection, module_id: &str, key: &str, value: &serde_json::Value) -> Result<()> {
+    let serialized = serde_json::to_string(value).map_err(Error::Json)?;
+    conn.execute(
+        "INSERT INTO module_data (module_id, key, value) VALUES (?1, ?2, ?3)
+         ON CONFLICT(module_id, key) DO UPDATE SET value = excluded.value",
+        rusqlite::params![module_id, key, serialized],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// Generic module_data delete (used by state persistence)
+pub fn db_delete_module_data(conn: &Connection, module_id: &str, key: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM module_data WHERE module_id = ?1 AND key = ?2",
+        rusqlite::params![module_id, key],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
 /// db:get — read a value from module_data
 pub fn db_get(conn: &Connection, key: &str) -> Result<Option<serde_json::Value>> {
     let mut stmt = conn
