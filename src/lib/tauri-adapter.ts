@@ -147,6 +147,11 @@ export interface NativesAPI {
     tileWindow: (action: string) => Promise<void>;
   };
   openWidgetWindow: () => void;
+  bridge: {
+    getHttpPort: () => Promise<number>;
+    generateToken: (moduleId: string) => Promise<string>;
+    validateToken: (token: string, moduleId: string) => Promise<boolean>;
+  };
 }
 
 // --- Helper: invoke with error mapping ---
@@ -408,6 +413,13 @@ const nativesAPI: NativesAPI = {
   // Widget window
   openWidgetWindow: () => {
     invoke('open_widget_window').catch(() => {});
+  },
+
+  // Bridge / Security
+  bridge: {
+    getHttpPort: () => cmd<number>('get_http_port'),
+    generateToken: (moduleId: string) => cmd<string>('generate_token', { moduleId }),
+    validateToken: (token: string, moduleId: string) => cmd<boolean>('validate_token', { token, moduleId }),
   },
 };
 

@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod app;
+pub mod bridge;
 pub mod archive;
 pub mod clipboard;
 pub mod db;

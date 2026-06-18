@@ -5,12 +5,16 @@ use tauri::Manager;
 mod commands;
 mod db;
 mod error;
+mod http_server;
+mod token_manager;
 
 pub use error::{Error, Result};
 
 /// Application state shared across commands
 pub struct AppState {
     pub db: Mutex<Option<rusqlite::Connection>>,
+    pub token_manager: std::sync::Arc<token_manager::TokenManager>,
+    pub http_port: Mutex<u16>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -49,8 +53,26 @@ pub fn run() {
                 .map_err(|e| format!("failed to init database: {e}"))
                 .unwrap();
 
+            // Initialize token manager
+            let tm = std::sync::Arc::new(token_manager::TokenManager::new(&conn));
+
+            // Initialize modules directory
+            let modules_dir = data_dir.join("modules");
+            std::fs::create_dir_all(&modules_dir)
+                .map_err(|e| format!("failed to create modules dir: {e}"))
+                .unwrap();
+
+            // Start local HTTP server for module assets and bridge API
+            let mut server = http_server::HttpServer::new(modules_dir, tm.clone());
+            let port = server.start(0).unwrap_or_else(|e| {
+                eprintln!("failed to start HTTP server: {e}");
+                0
+            });
+
             app.manage(AppState {
                 db: Mutex::new(Some(conn)),
+                token_manager: tm,
+                http_port: Mutex::new(port),
             });
 
             // FOUC guard: window starts hidden (tauri.conf.json has visible: false)
@@ -174,6 +196,10 @@ pub fn run() {
             // Widget
             commands::widget::open_widget_window,
             commands::widget::theme_ready_signal,
+            // Bridge / Security
+            commands::bridge::get_http_port,
+            commands::bridge::generate_token,
+            commands::bridge::validate_token,
         ])
         .run(tauri::generate_context!())
         .expect("error while running natives");
