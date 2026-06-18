@@ -345,28 +345,28 @@ export default function Sidebar({
       {/* ── 窗口控制 + Brand Header ── */}
       <div className="shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
         {/* 窗口控制按钮行 */}
-      <div className="flex items-center justify-start gap-1 px-3 pt-2 pb-1">
-        {/* 关闭 — macOS 红 */}
+      <div className="flex items-center justify-start gap-[6px] px-3 pt-2.5 pb-1">
+        {/* 关闭 — macOS 红圆 */}
         <button
           onClick={() => handleWindowAction('close')}
-          className="flex h-6 w-6 items-center justify-center rounded-md text-[#ff5f57] hover:text-[#ff3b30] hover:bg-red-500/20 transition-all"
+          className="group flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[#ff5f57] hover:bg-[#ff3b30] transition-all"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           aria-label="关闭"
           title="关闭"
         >
-          <X size={13} />
+          <X size={9} className="text-[#1a1a1e] opacity-0 group-hover:opacity-100 transition-opacity" strokeWidth={2.5} />
         </button>
-        {/* 最小化 — macOS 黄 */}
+        {/* 最小化 — macOS 黄圆 */}
         <button
           onClick={() => handleWindowAction('minimize')}
-          className="flex h-6 w-6 items-center justify-center rounded-md text-[#febc2e] hover:text-[#f5a623] hover:bg-yellow-500/20 transition-all"
+          className="group flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[#febc2e] hover:bg-[#f5a623] transition-all"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           aria-label="最小化"
           title="最小化"
         >
-          <Minus size={12} />
+          <Minus size={9} className="text-[#1a1a1e] opacity-0 group-hover:opacity-100 transition-opacity" strokeWidth={2.5} />
         </button>
-        {/* 最大化 / 全屏 — macOS 绿 */}
+        {/* 最大化 / 全屏 — macOS 绿圆 */}
         <div className="relative" ref={zoomPopupRef}>
           <button
             ref={zoomBtnRef}
@@ -391,17 +391,17 @@ export default function Sidebar({
                 zoomTimerRef.current = null;
               }
             }}
-            className="flex h-6 w-6 items-center justify-center rounded-md text-[#28c840] hover:text-[#1fa836] hover:bg-green-500/20 transition-all"
+            className="group flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[#28c840] hover:bg-[#1fa836] transition-all"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             aria-label={isMaximized ? '还原' : '最大化'}
             title={isMaximized ? '还原' : '最大化'}
           >
-              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className={isMaximized ? 'opacity-60' : ''}>
-                <path d="M7 1h2v2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M9 1l-4 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M3 9H1V7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M1 9l4-4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
+            <svg width="8" height="8" viewBox="0 0 10 10" fill="none" className="text-[#1a1a1e] opacity-0 group-hover:opacity-100 transition-opacity">
+              <path d="M7 1h2v2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M9 1l-4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M3 9H1V7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M1 9l4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
             </button>
 
             {/* 长按弹出菜单 — macOS 窗口管理，跟随鼠标位置 */}

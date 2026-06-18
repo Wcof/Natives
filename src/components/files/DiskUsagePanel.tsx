@@ -1,10 +1,10 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { t, type Locale } from '@/i18n';
 import { Folder, FileText } from 'lucide-react';
 import { webFsClient } from '@/lib/web-fs-client';
-import Portal from '@/components/ui/Portal';
 
 interface DiskUsageItem {
   name: string;
@@ -26,6 +26,11 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
   const [currentPath, setCurrentPath] = useState(dirPath);
   const [locale, setLocale] = useState<Locale>('zh');
   const [error, setError] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     window.nativesAPI?.getLocale?.().then((l) => { if (l === 'en') setLocale('en'); }).catch(() => {});
@@ -95,15 +100,15 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
   };
 
-  // 用 Portal 渲染到 document.body，避免祖先 .vibe-content-panel 的
-  // backdrop-filter 使 position:fixed 失效（它会成为 fixed 元素的包含块），
-  // 导致弹窗被 overflow:hidden 裁切而不可见。
-  return (
-    <Portal>
-      {/* Glass overlay */}
+  if (!mounted) return null;
+  const root = document.getElementById('content-overlay-root');
+  if (!root) return null;
+
+  return createPortal(
+    (
       <div
         style={{
-          position: 'fixed', inset: 0, zIndex: 60,
+          position: 'absolute', inset: 0, zIndex: 60,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           background: 'rgba(0,0,0,0.45)',
           backdropFilter: 'blur(24px) saturate(150%)',
@@ -182,16 +187,15 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
               )}
 
               {/* Items */}
-              {displayItems.map((item, idx) => {
-                const barWidth = Math.max(1, Math.round((item.size / maxSize) * 100));
+              {displayItems.map((item) => {
+                const barWidth = maxSize > 0 ? (item.size / maxSize) * 100 : 0;
                 return (
                   <div
                     key={item.path}
-                    onClick={() => item.isDir ? handleDirClick(item.path) : undefined}
-                    className="disk-row"
+                    onClick={() => { if (item.isDir) { setCurrentPath(item.path); onNavigate(item.path); } }}
                     style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '4px 8px', borderRadius: 4,
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      padding: '8px 12px', borderRadius: 6,
                       cursor: item.isDir ? 'pointer' : 'default',
                       position: 'relative', overflow: 'hidden',
                     }}
@@ -239,6 +243,7 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
           )}
         </div>
       </div>
-    </Portal>
+    ),
+    root
   );
 }

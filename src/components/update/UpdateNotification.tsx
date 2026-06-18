@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Download, X, Bell } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
@@ -20,6 +21,12 @@ export default function UpdateNotification({ locale }: UpdateNotificationProps) 
   const [checked, setChecked] = useState(false);
   const [checking, setChecking] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const checkForUpdate = useCallback(async () => {
@@ -80,13 +87,17 @@ export default function UpdateNotification({ locale }: UpdateNotificationProps) 
 
   if (!update || dismissed) return null;
 
-  return (
+  if (!mounted) return null;
+  const root = document.getElementById('content-overlay-root');
+  if (!root) return null;
+
+  return createPortal(
     <>
       {/* Bell icon indicator when update available */}
       <div
         style={{
-          position: 'fixed',
-          bottom: 40,
+          position: 'absolute',
+          bottom: 20,
           right: 20,
           zIndex: 9998,
           background: 'var(--vibe-toolbar-bg)',
@@ -132,6 +143,7 @@ export default function UpdateNotification({ locale }: UpdateNotificationProps) 
           </button>
         </div>
       </div>
-    </>
+    </>,
+    root
   );
 }

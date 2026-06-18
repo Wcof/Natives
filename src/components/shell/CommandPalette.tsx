@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { applyTheme } from '@/lib/theme-engine';
 import { t, type Locale } from '@/i18n';
 import { useFocusTrap } from '@/lib/useFocusTrap';
@@ -57,6 +58,8 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
   const [allCommands, setAllCommands] = useState<CommandItem[]>(() => getStaticCommands(locale));
   const [results, setResults] = useState<CommandItem[]>(() => getStaticCommands(locale));
   const [searchScope, setSearchScope] = useState<'global' | 'local'>('global');
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Load locale
@@ -235,13 +238,16 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
   };
 
   if (!isOpen) return null;
+  if (!mounted) return null;
+  const root = document.getElementById('content-overlay-root');
+  if (!root) return null;
 
-  return (
+  return createPortal((
     <>
       {/* Overlay */}
       <div
         style={{
-          position: 'fixed', inset: 0, zIndex: 60,
+          position: 'absolute', inset: 0, zIndex: 60,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           background: 'rgba(0,0,0,0.45)',
           backdropFilter: 'blur(24px) saturate(150%)',
@@ -261,7 +267,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
         onKeyDown={(e) => { trapKeyDown(e); handleKeyDown(e); }}
         className="anim-dropIn"
         style={{
-          position: 'fixed', top: '20%', left: '50%', transform: 'translateX(-50%)',
+          position: 'absolute', top: '20%', left: '50%', transform: 'translateX(-50%)',
           width: 520, maxWidth: '90vw',
           background: 'var(--vibe-toolbar-bg)',
           backdropFilter: 'blur(28px) saturate(145%)',
@@ -389,5 +395,5 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
         </div>
       </div>
     </>
-  );
+  ), root);
 }

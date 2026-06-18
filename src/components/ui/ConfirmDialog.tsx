@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
-import Portal from './Portal';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -25,6 +25,9 @@ interface ConfirmDialogProps {
 export default function ConfirmDialog({
   open, title, message, confirmLabel, cancelLabel, danger, onConfirm, onCancel,
 }: ConfirmDialogProps) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+
   const dialogRef = useRef<HTMLDivElement>(null);
   const confirmBtnRef = useRef<HTMLButtonElement>(null);
 
@@ -68,64 +71,65 @@ export default function ConfirmDialog({
   };
 
   if (!open) return null;
+  if (!mounted) return null;
 
-  // 用 Portal 渲染到 document.body，脱离带 backdrop-filter/overflow:hidden 的祖先容器，
-  // 避免 position:fixed 被重新锚定并被裁切（删除确认等弹窗才不会看不见）。
-  return (
-    <Portal>
+  const root = document.getElementById('content-overlay-root');
+  if (!root) return null;
+
+  return createPortal(
+    <div
+      style={{
+        position: 'absolute', inset: 0, zIndex: 60,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(0,0,0,0.45)',
+        backdropFilter: 'blur(24px) saturate(150%)',
+        WebkitBackdropFilter: 'blur(24px) saturate(150%)',
+        animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
+      }}
+      onClick={onCancel}
+    >
       <div
+        ref={dialogRef}
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        className="anim-dropIn"
         style={{
-          position: 'fixed', inset: 0, zIndex: 60,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(0,0,0,0.45)',
-          backdropFilter: 'blur(24px) saturate(150%)',
-          WebkitBackdropFilter: 'blur(24px) saturate(150%)',
-          animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
+          background: 'var(--vibe-toolbar-bg)',
+          backdropFilter: 'blur(28px) saturate(145%)',
+          WebkitBackdropFilter: 'blur(28px) saturate(145%)',
+          border: '0.0625rem solid var(--vibe-toolbar-border)',
+          borderRadius: '1rem',
+          boxShadow: 'var(--vibe-toolbar-shadow)',
+          padding: 20, maxWidth: 400, width: '90vw',
         }}
-        onClick={onCancel}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={handleKeyDown}
       >
-        <div
-          ref={dialogRef}
-          role="alertdialog"
-          aria-modal="true"
-          aria-label={title}
-          tabIndex={-1}
-          className="anim-dropIn"
-          style={{
-            background: 'var(--vibe-toolbar-bg)',
-            backdropFilter: 'blur(28px) saturate(145%)',
-            WebkitBackdropFilter: 'blur(28px) saturate(145%)',
-            border: '0.0625rem solid var(--vibe-toolbar-border)',
-            borderRadius: '1rem',
-            boxShadow: 'var(--vibe-toolbar-shadow)',
-            padding: 20, maxWidth: 400, width: '90vw',
-          }}
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={handleKeyDown}
-        >
-          <h3 style={{ fontSize: 14, fontWeight: 600, color: 'var(--vibe-brand-text)', marginBottom: 8 }}>
-            {title}
-          </h3>
-          <p style={{ fontSize: 13, color: 'var(--vibe-btn-text)', marginBottom: 16, lineHeight: 1.5 }}>
-            {message}
-          </p>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <button className="btn-ghost" onClick={onCancel}>{cancelLabel}</button>
-            <button
-              ref={confirmBtnRef}
-              className="btn"
-              onClick={onConfirm}
-              style={{
-                background: danger ? 'var(--danger)' : 'var(--accent)',
-                color: danger ? '#fff' : 'var(--accent-ink)',
-                border: 'none', padding: '6px 14px', borderRadius: 6, cursor: 'pointer',
-              }}
-            >
-              {confirmLabel}
-            </button>
-          </div>
+        <h3 style={{ fontSize: 14, fontWeight: 600, color: 'var(--vibe-brand-text)', marginBottom: 8 }}>
+          {title}
+        </h3>
+        <p style={{ fontSize: 13, color: 'var(--vibe-btn-text)', marginBottom: 16, lineHeight: 1.5 }}>
+          {message}
+        </p>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button className="btn-ghost" onClick={onCancel}>{cancelLabel}</button>
+          <button
+            ref={confirmBtnRef}
+            className="btn"
+            onClick={onConfirm}
+            style={{
+              background: danger ? 'var(--danger)' : 'var(--accent)',
+              color: danger ? '#fff' : 'var(--accent-ink)',
+              border: 'none', padding: '6px 14px', borderRadius: 6, cursor: 'pointer',
+            }}
+          >
+            {confirmLabel}
+          </button>
         </div>
       </div>
-    </Portal>
+    </div>,
+    root,
   );
 }

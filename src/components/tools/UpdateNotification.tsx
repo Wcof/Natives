@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Download, X, Bell } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
+import { createPortal } from 'react-dom';
 
 interface UpdateInfo {
   latestVersion: string;
@@ -17,7 +18,12 @@ export default function UpdateNotification({ onClose }: { onClose?: () => void }
   const [checking, setChecking] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const [locale, setLocale] = useState<Locale>('zh');
+  const [mounted, setMounted] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     async function loadLocale() {
@@ -85,13 +91,17 @@ export default function UpdateNotification({ onClose }: { onClose?: () => void }
 
   if (!update || dismissed) return null;
 
-  return (
+  if (!mounted) return null;
+  const root = document.getElementById('content-overlay-root');
+  if (!root) return null;
+
+  return createPortal(
     <div style={{
-      position: 'fixed', bottom: 20, right: 20, zIndex: 1000,
+      position: 'absolute', bottom: 20, right: 20, zIndex: 1000,
       padding: '12px 16px', background: 'var(--vibe-toolbar-bg)',
       backdropFilter: 'blur(20px) saturate(145%)',
       WebkitBackdropFilter: 'blur(20px) saturate(145%)',
-      border: '1px solid var(--accent)', borderRadius: '0.75rem', maxWidth: 320,
+      border: '0.0625rem solid var(--vibe-toolbar-border)', borderRadius: '0.75rem', maxWidth: 320,
       boxShadow: 'var(--vibe-toolbar-shadow)',
       animation: 'slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
     }}>
@@ -124,6 +134,7 @@ export default function UpdateNotification({ onClose }: { onClose?: () => void }
           {t(locale, 'update.muteVersion')}
         </button>
       </div>
-    </div>
+    </div>,
+    root
   );
 }

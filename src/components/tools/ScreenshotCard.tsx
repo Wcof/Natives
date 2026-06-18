@@ -1,12 +1,16 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
 export default function ScreenshotCard() {
   const [locale, setLocale] = useState<Locale>('zh');
   const [visible, setVisible] = useState(true);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
     async function loadLocale() {
@@ -19,10 +23,13 @@ export default function ScreenshotCard() {
   }, []);
 
   if (!visible) return null;
+  if (!mounted) return null;
+  const root = document.getElementById('content-overlay-root');
+  if (!root) return null;
 
-  return (
+  return createPortal(
     <div style={{
-      position: 'fixed', bottom: 80, right: 20, zIndex: 1000,
+      position: 'absolute', bottom: 20, right: 20, zIndex: 1000,
       width: 280,
       background: 'var(--vibe-toolbar-bg)',
       backdropFilter: 'blur(20px) saturate(145%)',
@@ -42,6 +49,7 @@ export default function ScreenshotCard() {
         <button className="btn btn-ghost" style={{ flex: 1, fontSize: 11 }}>{t(locale, 'screenshot.saveToMaterial')}</button>
         <button className="btn btn-ghost" style={{ flex: 1, fontSize: 11 }}>{t(locale, 'screenshot.annotate')}</button>
       </div>
-    </div>
+    </div>,
+    root
   );
 }

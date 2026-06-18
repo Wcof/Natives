@@ -79,8 +79,8 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     aberrationIntensity: 2,
     elasticity: 0,
     cornerRadius: 28,
-    showWallpaper: false,
-    showBlobs: false,
+    showWallpaper: true,
+    showBlobs: true,
   });
 
   const CONFIG_DB_KEY = 'settings:controlHubVisuals';
@@ -718,6 +718,8 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
               {renderMainContent()}
             </ErrorBoundary>
           </div>
+          {/* Portal target for content-area overlays — covers only the content panel */}
+          <div id="content-overlay-root" style={{ position: 'absolute', inset: 0, zIndex: 50, pointerEvents: 'none' }} />
         </div>
 
         {/* Terminal — bottom of workspace column */}

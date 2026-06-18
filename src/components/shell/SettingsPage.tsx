@@ -34,8 +34,8 @@ export default function SettingsPage() {
     aberrationIntensity: 2,
     elasticity: 0,
     cornerRadius: 28,
-    showWallpaper: false,
-    showBlobs: false,
+    showWallpaper: true,
+    showBlobs: true,
   });
 
   // Guard flag: once persisted settings have been loaded from DB, allow saves

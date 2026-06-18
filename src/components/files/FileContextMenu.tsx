@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { type FileEntry } from '@/types/file';
 import { t, type Locale } from '@/i18n';
 
@@ -138,7 +139,7 @@ export default function FileContextMenu({
 
   const items = buildItems();
 
-  return (
+  const menuContent = (
     <div
       ref={ref}
       className="context-menu"
@@ -165,4 +166,10 @@ export default function FileContextMenu({
       )}
     </div>
   );
+
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+
+  if (!mounted) return null;
+  return createPortal(menuContent, document.body);
 }

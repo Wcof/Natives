@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Check, Loader2 } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
+import { createPortal } from 'react-dom';
 
 interface ReleaseCheckItem {
   label: string;
@@ -13,6 +14,7 @@ interface ReleaseCheckItem {
 export default function ReleaseWizardDialog({ onClose }: { onClose?: () => void }) {
   const [locale, setLocale] = useState<Locale>('zh');
   const [version, setVersion] = useState('');
+  const [mounted, setMounted] = useState(false);
   const [checks, setChecks] = useState<ReleaseCheckItem[]>([
     { label: 'package.json', ok: false, message: t(locale, 'common.loading') },
     { label: 'Git Status', ok: false, message: t(locale, 'common.loading') },
@@ -21,6 +23,7 @@ export default function ReleaseWizardDialog({ onClose }: { onClose?: () => void 
   ]);
 
   useEffect(() => {
+    setMounted(true);
     async function loadLocale() {
       try {
         const saved = await window.nativesAPI?.getLocale?.();
@@ -30,9 +33,13 @@ export default function ReleaseWizardDialog({ onClose }: { onClose?: () => void 
     loadLocale();
   }, []);
 
-  return (
+  if (!mounted) return null;
+  const root = document.getElementById('content-overlay-root');
+  if (!root) return null;
+
+  return createPortal(
     <div style={{
-      position: 'fixed', inset: 0, zIndex: 60,
+      position: 'absolute', inset: 0, zIndex: 50,
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       background: 'rgba(0,0,0,0.45)',
       backdropFilter: 'blur(24px) saturate(150%)',
@@ -55,17 +62,17 @@ export default function ReleaseWizardDialog({ onClose }: { onClose?: () => void 
 
         {/* Version input */}
         <div style={{ marginBottom: 12 }}>
-          <label style={{ fontSize: 11, color: 'var(--text-dim)', display: 'block', marginBottom: 4 }}>{t(locale, 'release.newVersion')}</label>
+          <label style={{ fontSize: 11, color: 'var(--vibe-btn-text)', display: 'block', marginBottom: 4 }}>{t(locale, 'release.newVersion')}</label>
           <input className="input" type="text" placeholder="1.2.0" value={version} onChange={(e) => setVersion(e.target.value)} style={{ width: '100%' }} />
         </div>
 
         {/* Checklist */}
         <div style={{ marginBottom: 12 }}>
           {checks.map((c, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', fontSize: 12, color: 'var(--text-dim)' }}>
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', fontSize: 12, color: 'var(--vibe-btn-text)' }}>
               <span style={{display:'inline-flex'}}>{c.ok ? <Check size={12} style={{color:'var(--diff-add)'}} /> : <Loader2 size={12} className='anim-livePulse' />}</span>
               <span>{c.label}</span>
-              <span style={{ fontSize: 10, color: 'var(--text-faint)' }}>{c.message}</span>
+              <span style={{ fontSize: 10, color: 'var(--vibe-btn-text)' }}>{c.message}</span>
             </div>
           ))}
         </div>
@@ -78,6 +85,7 @@ export default function ReleaseWizardDialog({ onClose }: { onClose?: () => void 
           <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={onClose}>{t(locale, 'common.cancel')}</button>
         </div>
       </div>
-    </div>
+    </div>,
+    root,
   );
 }

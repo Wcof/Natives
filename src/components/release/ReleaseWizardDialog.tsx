@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Package, Upload, Check, Loader2, AlertCircle } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
@@ -29,9 +30,14 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
     releaseNotes: '',
     platform: 'all',
   });
+  const [mounted, setMounted] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Reset state when dialog opens
   useEffect(() => {
@@ -45,6 +51,9 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
   }, [isOpen]);
 
   if (!isOpen) return null;
+  if (!mounted) return null;
+  const root = document.getElementById('content-overlay-root');
+  if (!root) return null;
 
   const handlePublish = async () => {
     setPublishing(true);
@@ -68,7 +77,7 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
   };
 
   return (
-    <div className="fixed inset-0 z-60 flex items-center justify-center">
+    <div style={{ position: 'absolute', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       {/* Backdrop — Glass overlay */}
       <div
         className="absolute inset-0"
