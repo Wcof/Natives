@@ -1,7 +1,7 @@
-use crate::{db, Error, Result};
+use crate::{Error, Result};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Module manifest — mirrors Natives Zod schema
 #[derive(Debug, Clone, Serialize, Deserialize)]

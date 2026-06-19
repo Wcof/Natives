@@ -58,7 +58,7 @@ Natives 的视觉风格系统。通过 `data-theme` 属性切换，所有颜色/
 一组环境变量的集合（如 API Key、代理地址）。用户可以创建多组配置（如"工作"、"个人"），终端启动时自动注入当前激活的配置。
 
 ### 凭证（Credentials）
-存储在环境配置中的敏感信息（API Key 等），使用 `electron.safeStorage` 加密存储。
+存储在环境配置中的敏感信息（API Key 等），使用 AES-256-GCM 加密存储在 SQLite 中。
 
 ---
 

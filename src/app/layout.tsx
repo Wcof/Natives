@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import './globals.css';
+import '@/lib/tauri-adapter'; // Ensure nativesAPI bridge is injected before any component mounts
 import ShellLayout from '@/components/shell/ShellLayout';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { ToastProvider } from '@/components/ui/Toast';
@@ -13,6 +14,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     if (typeof window !== 'undefined' && window.location.search.includes('mode=widget')) {
       setIsWidget(true);
     }
+
+    // Disable default webview context menu in production for native-app feel
+    const handleContextMenu = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // Let custom context menus through (data-custom-context-menu), suppress others
+      if (!target.closest('[data-custom-context-menu]') && process.env.NODE_ENV === 'production') {
+        e.preventDefault();
+      }
+    };
+    document.addEventListener('contextmenu', handleContextMenu);
+    return () => document.removeEventListener('contextmenu', handleContextMenu);
   }, []);
 
   return (

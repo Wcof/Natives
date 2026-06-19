@@ -1,6 +1,6 @@
 use crate::{db, Error, Result};
 use serde_json::Value as JsonValue;
-use tauri::{Emitter, State};
+use tauri::State;
 
 use crate::AppState;
 

@@ -1,8 +1,8 @@
 # 技术架构 03 · 数据与持久化
 
-> **版本**: 1.0.0 · **日期**: 2026-06-15
-> **关联 ADR**: [ADR-0005](../../adr/0005-plugin-state-preservation-strategy.md)（状态分层）
-> **关联源文件**: `src/main/database.ts`、`src/main/env-injector.ts`、`src/lib/state-persistence.ts`
+> **版本**: 1.1.0 · **日期**: 2026-06-19
+> **关联 ADR**: [ADR-0005](../../adr/0005-plugin-state-preservation-strategy.md)（状态分层）、[ADR-0008](../../adr/0008-electron-to-tauri-migration.md)（Tauri 迁移）
+> **关联源文件**: `src-tauri/src/db.rs`、`src-tauri/src/env_manager.rs`
 
 ---
 
@@ -50,6 +50,7 @@
 - **等级**：MUST
 - **分类**：数据
 - **规则**：DB schema 变更**必须**用增量迁移：启动时 `PRAGMA table_info()` 检查现有列，用 `ALTER TABLE ADD COLUMN` 补齐缺失列。**禁止** `DROP TABLE` 重建（会丢用户数据）。表结构变更需配合文件锁防并发迁移。
+- **正例**：`src-tauri/src/db.rs` 的 `apply_migrations()` 函数已是增量模式。
 - **为什么**：用户数据不可丢；重建表在已发布版本上是事故。
 - **检查方法**：新增字段是否走 `ALTER`；是否有 `DROP TABLE`。
 
@@ -105,7 +106,7 @@
 
 ---
 
-## 附录：当前表清单（9 张）
+## 附录：当前表清单（10 张）
 
 > 新增表请在此登记，并补 `ALTER` 迁移逻辑。
 
@@ -120,3 +121,4 @@
 | `env_variables` | 环境变量（加密） |
 | `notifications` | 通知历史 |
 | `module_order` | 侧边栏排序 |
+| `permission_audit_log` | 权限审计日志 |

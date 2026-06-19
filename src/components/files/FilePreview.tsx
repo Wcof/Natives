@@ -186,7 +186,7 @@ function PreviewContent({ entry, httpPort, locale, isMarkdown, isCsv, isArchive,
 }) {
   // Image with lightbox
   if (entry.kind === 'image') {
-    const src = `/api/fs/raw?path=${encodeURIComponent(entry.path)}`;
+    const src = `http://localhost:${httpPort}/api/fs/raw?path=${encodeURIComponent(entry.path)}`;
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, cursor: 'zoom-in' }}>
         <img
@@ -293,7 +293,12 @@ function HtmlFilePreview({ path, httpPort, locale }: { path: string; httpPort: n
   return (
     <iframe
       srcDoc={content}
-      sandbox="allow-scripts allow-forms allow-popups"
+      // File preview iframe: this is a LOCAL file viewer, NOT a plugin execution
+      // environment. `allow-popups` is deliberately excluded to prevent HTML files
+      // from opening new windows. `allow-same-origin` is excluded per security
+      // standard R-S2 (plugin iframes must never have it; file previews follow
+      // the same rule to keep the surface minimal).
+      sandbox="allow-scripts allow-forms"
       style={{ width: '100%', height: '100%', border: 'none', background: '#fff' }}
     />
   );

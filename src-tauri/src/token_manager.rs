@@ -1,4 +1,4 @@
-use crate::{db, Error, Result};
+use crate::db;
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -11,6 +11,7 @@ const SECRET_KEY: &str = "_token_master_secret";
 
 #[derive(Debug, Clone)]
 struct TokenEntry {
+    #[allow(dead_code)]
     token_hash: String,
     module_id: String,
     created_at: u64,

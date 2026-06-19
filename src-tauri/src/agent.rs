@@ -1,4 +1,4 @@
-use crate::{Error, Result};
+use crate::Result;
 use serde::Serialize;
 use std::path::Path;
 

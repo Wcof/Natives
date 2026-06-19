@@ -75,7 +75,7 @@
 | 缩写 | 全称 | 说明 |
 |------|------|------|
 | FOUC | Flash of Unstyled Content | 主题未就绪时窗口先显示无样式内容 |
-| PTY | Pseudo-Terminal | node-pty 提供的完整终端能力 |
+| PTY | Pseudo-Terminal | portable-pty 提供的完整终端能力 |
 | CSP | Content-Security-Policy | 插件 HTTP 响应注入的安全策略头 |
 | LRU | Least Recently Used | 后台 iframe 的淘汰策略 |
 | KV | Key-Value | `module_data` 表的存储模型 |

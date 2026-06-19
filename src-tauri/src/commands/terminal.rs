@@ -1,15 +1,17 @@
-use crate::{Error, Result};
+use crate::Result;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::AppState;
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TerminalData {
     pub session_id: String,
     pub data: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TerminalExit {
     pub session_id: String,

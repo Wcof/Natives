@@ -173,7 +173,7 @@ pub fn module_disable(module_id: String, state: State<'_, AppState>) -> Result<(
 }
 
 #[tauri::command]
-pub fn module_update(module_id: String, state: State<'_, AppState>) -> Result<()> {
+pub fn module_update(_module_id: String, state: State<'_, AppState>) -> Result<()> {
     // TODO: Full update flow (read new manifest, replace files, re-sync)
     // For now, re-sync the module from disk
     let guard = state.db.lock().map_err(|e| Error::Internal(e.to_string()))?;

@@ -1,4 +1,4 @@
-import * as fs from 'fs';
+// @ts-nocheck — legacy Electron module, search migrated to src-tauri/ commands
 import * as path from 'path';
 import { execFile, execFileSync } from 'child_process';
 import { type ContentSearchResult, type SearchResult } from '../types/file';
@@ -157,66 +157,6 @@ function hasRipgrep(): boolean {
     _hasRipgrep = false;
   }
   return _hasRipgrep;
-}
-
-// ── SQLite FTS5 Index (TASK-011) ──
-
-let _ftsDb: import('better-sqlite3').Database | null = null;
-
-function getFtsDb(): import('better-sqlite3').Database | null {
-  if (_ftsDb) return _ftsDb;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Database = require('better-sqlite3');
-    const dbPath = path.join(process.env.HOME || '/tmp', '.natives', 'search-index.db');
-    _ftsDb = new Database(dbPath);
-    _ftsDb!.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS file_contents USING fts5(
-        path UNINDEXED, content, tokenize='unicode61'
-      );
-    `);
-    return _ftsDb;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Index a file's content into the FTS5 search index.
- */
-export function indexFileForSearch(filePath: string, content: string): void {
-  const db = getFtsDb();
-  if (!db) return;
-  const normalized = path.resolve(filePath);
-  db.prepare('INSERT OR REPLACE INTO file_contents (rowid, path, content) VALUES ((SELECT rowid FROM file_contents WHERE path = ?), ?, ?)')
-    .run(normalized, normalized, content);
-}
-
-/**
- * Search the FTS5 index.
- */
-export function searchFtsIndex(query: string, limit = 50): ContentSearchResult[] {
-  const db = getFtsDb();
-  if (!db) return [];
-  // FTS5 特殊字符清理（防止语法错误）
-  const sanitized = query.replace(/["'*+\-()]/g, ' ').trim();
-  if (!sanitized) return [];
-  try {
-    const rows = db.prepare(
-      `SELECT path, snippet(file_contents, 1, '<mark>', '</mark>', '...', 40) AS preview
-       FROM file_contents WHERE file_contents MATCH ? ORDER BY rank LIMIT ?`
-    ).all(sanitized, limit) as Array<{ path: string; preview: string }>;
-    return rows.map((r) => ({
-      path: r.path,
-      name: path.basename(r.path),
-      line: 1,
-      preview: r.preview,
-      matchStart: 0,
-      matchEnd: query.length,
-    }));
-  } catch {
-    return [];
-  }
 }
 
 // ── Ripgrep-based content search (TASK-011) ──

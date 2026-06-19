@@ -127,9 +127,34 @@ fn create_tables(conn: &Connection) -> Result<()> {
 }
 
 fn apply_migrations(conn: &Connection) -> Result<()> {
-    // Migration system: check existing columns, add missing ones.
-    // Currently no migrations needed — schema is at v1.
-    let _ = conn;
+    // Migration system: incremental ALTER TABLE ADD COLUMN only.
+    // Never DROP TABLE or rebuild — that would lose user data.
+    //
+    // Version is tracked in settings table with key '_schema_version'.
+    // If absent, schema is considered v1 (initial state from create_tables).
+
+    let current_version: i32 = conn
+        . query_row(
+            "SELECT value FROM settings WHERE key = '_schema_version'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(Error::Database)?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+
+    // Migration v1→v2: v1 schema already includes all 10 tables created at init,
+    // so this is a no-op for now. Future migrations go here.
+    if current_version < 2 {
+        // v2: (placeholder — no column additions needed yet)
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '2')",
+            [],
+        )
+        .map_err(Error::Database)?;
+    }
+
     Ok(())
 }
 
@@ -231,7 +256,7 @@ pub fn db_delete(conn: &Connection, key: &str) -> Result<()> {
 
 /// db:list — list keys in module_data, optionally filtered by prefix
 pub fn db_list(conn: &Connection, prefix: Option<&str>) -> Result<Vec<String>> {
-    let mut stmt = match prefix {
+    let stmt = match prefix {
         Some(_) => {
             let mut s = conn
                 .prepare("SELECT key FROM module_data WHERE module_id = ?1 AND key LIKE ?2")

@@ -1,5 +1,5 @@
 use crate::token_manager::TokenManager;
-use std::io::Read;
+use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tiny_http::{Header, Method, Request, Response, Server};
@@ -19,14 +19,16 @@ pub struct HttpServer {
     port: u16,
     modules_dir: PathBuf,
     token_manager: Arc<TokenManager>,
+    db_path: PathBuf,
 }
 
 impl HttpServer {
-    pub fn new(modules_dir: PathBuf, token_manager: Arc<TokenManager>) -> Self {
+    pub fn new(modules_dir: PathBuf, token_manager: Arc<TokenManager>, db_path: PathBuf) -> Self {
         Self {
             port: 0,
             modules_dir,
             token_manager,
+            db_path,
         }
     }
 
@@ -40,13 +42,15 @@ impl HttpServer {
 
         let modules_dir = self.modules_dir.clone();
         let token_manager = self.token_manager.clone();
+        let db_path = self.db_path.clone();
 
         std::thread::spawn(move || {
             for request in server.incoming_requests() {
                 let modules_dir = modules_dir.clone();
                 let token_manager = token_manager.clone();
+                let db_path = db_path.clone();
                 std::thread::spawn(move || {
-                    if let Err(e) = handle_request(request, &modules_dir, &token_manager) {
+                    if let Err(e) = handle_request(request, &modules_dir, &token_manager, &db_path) {
                         eprintln!("request error: {e}");
                     }
                 });
@@ -56,15 +60,17 @@ impl HttpServer {
         Ok(actual_port)
     }
 
+    #[allow(dead_code)]
     pub fn port(&self) -> u16 {
         self.port
     }
 }
 
 fn handle_request(
-    mut request: Request,
+    request: Request,
     modules_dir: &Path,
     token_manager: &TokenManager,
+    db_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // 1. Host validation (DNS rebinding protection)
     if let Some(host) = get_header(&request, "Host") {
@@ -113,7 +119,7 @@ fn handle_request(
             }
 
             if url.starts_with("/api/bridge/") {
-                handle_bridge_request(request, token_manager, csp)?;
+                handle_bridge_request(request, token_manager, csp, db_path)?;
             } else {
                 let resp = Response::from_string("Not Found").with_status_code(404);
                 request.respond(resp)?;
@@ -228,6 +234,7 @@ fn handle_bridge_request(
     mut request: Request,
     token_manager: &TokenManager,
     csp: Header,
+    db_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Read request body
     let mut body = String::new();
@@ -268,7 +275,7 @@ fn handle_bridge_request(
     let method = bridge_parts.next().unwrap_or("");
 
     // Route bridge request
-    let response_body = route_bridge(namespace, method, &module_id, &body);
+    let response_body = route_bridge(namespace, method, &module_id, &body, db_path);
 
     let resp = Response::from_string(&response_body)
         .with_header(csp)
@@ -277,25 +284,73 @@ fn handle_bridge_request(
     Ok(())
 }
 
-fn route_bridge(namespace: &str, method: &str, module_id: &str, body: &str) -> String {
+fn route_bridge(namespace: &str, method: &str, module_id: &str, _body: &str, db_path: &Path) -> String {
     // Bridge API routing — mirrors Natives bridge-host.ts
+    // Open a read-only connection to read real settings
+    let conn = Connection::open(db_path).ok();
+
     match (namespace, method) {
-        ("settings", "getTheme") => r#"{"result":"terminal-volt"}"#.to_string(),
-        ("settings", "getLocale") => r#"{"result":"zh"}"#.to_string(),
+        ("settings", "getTheme") => {
+            // Read theme from SQLite settings, fallback to neutral default
+            let theme = conn.as_ref().and_then(|c| {
+                let mut stmt = c.prepare("SELECT value FROM settings WHERE key = 'settings:theme'").ok()?;
+                stmt.query_row([], |row| row.get::<_, String>(0)).ok()
+            }).unwrap_or_else(|| "default".to_string());
+            format!(r#"{{"result":"{theme}"}}"#)
+        }
+        ("settings", "getLocale") => {
+            // Read locale from SQLite settings, fallback to empty (let renderer decide default)
+            let locale = conn.as_ref().and_then(|c| {
+                let mut stmt = c.prepare("SELECT value FROM settings WHERE key = 'settings:locale'").ok()?;
+                stmt.query_row([], |row| row.get::<_, String>(0)).ok()
+            }).unwrap_or_else(|| "".to_string());
+            format!(r#"{{"result":"{locale}"}}"#)
+        }
         ("lifecycle", "ready") => {
-            // TODO: mark module as ready in lifecycle tracker
+            // Record module readiness in lifecycle tracker
+            if let Some(c) = conn.as_ref() {
+                let _ = c.execute(
+                    "INSERT INTO notifications (module_id, title, body, level, created_at)
+                     VALUES (?1, 'module.ready', 'Module ready', 'info', datetime('now'))",
+                    rusqlite::params![module_id],
+                );
+            }
             r#"{"ok":true}"#.to_string()
         }
         ("lifecycle", "heartbeat") => {
-            // TODO: update heartbeat timestamp
+            // Update heartbeat timestamp — stored in module_data for each module
+            if let Some(c) = conn.as_ref() {
+                let ts = chrono::Utc::now().to_rfc3339();
+                let _ = c.execute(
+                    "INSERT INTO module_data (module_id, key, value) VALUES (?1, '_heartbeat', ?2)
+                     ON CONFLICT(module_id, key) DO UPDATE SET value = excluded.value",
+                    rusqlite::params![module_id, ts],
+                );
+            }
             r#"{"ok":true}"#.to_string()
         }
         ("lifecycle", "error") => {
-            // TODO: record error, create notification
+            // Record error notification
+            if let Some(c) = conn.as_ref() {
+                let _ = c.execute(
+                    "INSERT INTO notifications (module_id, title, body, level, created_at)
+                     VALUES (?1, 'module.error', 'Bridge error', 'error', datetime('now'))",
+                    rusqlite::params![module_id],
+                );
+            }
             r#"{"ok":true}"#.to_string()
         }
         ("meta", "info") => {
-            format!(r#"{{"moduleId":"{}","version":"0.1.0","nativesVersion":"0.1.0"}}"#, module_id)
+            // Read real module version from DB, fallback to empty string (not a placeholder)
+            let version = conn.as_ref().and_then(|c| {
+                let mut stmt = c.prepare("SELECT version FROM modules WHERE id = ?1").ok()?;
+                stmt.query_row(rusqlite::params![module_id], |row| row.get::<_, String>(0)).ok()
+            }).unwrap_or_else(|| "".to_string());
+            let natives_version = conn.as_ref().and_then(|c| {
+                let mut stmt = c.prepare("SELECT value FROM settings WHERE key = '_app_version'").ok()?;
+                stmt.query_row([], |row| row.get::<_, String>(0)).ok()
+            }).unwrap_or_else(|| "".to_string());
+            format!(r#"{{"moduleId":"{}","version":"{}","nativesVersion":"{}"}}"#, module_id, version, natives_version)
         }
         _ => {
             format!(r#"{{"error":"Unknown bridge method: {namespace}.{method}"}}"#)

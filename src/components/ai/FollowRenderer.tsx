@@ -6,6 +6,7 @@ import { followPriority, changedRange, getFollowState, recordTerminalActivity, g
 import { parseAgentAction, composeNarration } from '@/lib/agent-narration';
 import { highlightCode, extToLanguage } from '@/lib/shiki-utils';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { useTheme } from '@/context/ThemeContext';
 
 interface FollowRendererProps {
   filePath: string | null;
@@ -18,19 +19,21 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
   const [highlightedLines, setHighlightedLines] = useState<Set<number>>(new Set());
   const contentRef = useRef<string | null>(null);
 
-  // Fetch file content when path changes
+  // Fetch file content when path changes — use Tauri IPC fs.readFile
   useEffect(() => {
     if (!filePath) { setContent(null); return; }
     let cancelled = false;
-    fetch(`/api/fs/raw?path=${encodeURIComponent(filePath)}`)
-      .then(r => r.text())
-      .then(text => {
-        if (cancelled) return;
+    (async () => {
+      try {
+        const text = await window.nativesAPI?.fs?.readFile?.(filePath) as string | undefined;
+        if (cancelled || text === undefined) return;
         setLastContent(contentRef.current);
         contentRef.current = text;
         setContent(text);
-      })
-      .catch(() => {});
+      } catch {
+        // fallback: do nothing
+      }
+    })();
     return () => { cancelled = true; };
   }, [filePath]);
 
@@ -141,34 +144,98 @@ function LiveHtmlPreview({ path }: { path: string }) {
   const swappingRef = useRef(false);
   const dirtyRef = useRef(false);
   const nextSrcRef = useRef<string | null>(null);
+  const currentIframeRef = useRef<HTMLIFrameElement>(null);
+  const nextIframeRef = useRef<HTMLIFrameElement>(null);
+  const lastUrlRef = useRef('');
+  const { themeId } = useTheme();
+
+  // Get theme CSS variables to pass into sandboxed iframes
+  const getThemeCSS = useCallback((): string => {
+    const root = document.documentElement;
+    const computed = getComputedStyle(root);
+    const vars: string[] = [];
+    // Extract key CSS custom properties for theme coherence
+    const keys = [
+      '--bg', '--text', '--text-dim', '--text-faint', '--accent',
+      '--vibe-toolbar-bg', '--vibe-content-bg', '--vibe-btn-border', '--vibe-btn-text',
+      '--mac-red', '--mac-yellow', '--mac-green',
+      '--font-sans', '--font-mono', '--fs-sm', '--fs-md',
+    ];
+    for (const key of keys) {
+      const val = computed.getPropertyValue(key).trim();
+      if (val) vars.push(`${key}: ${val};`);
+    }
+    return vars.join('\n');
+  }, []);
+
+  // Send theme CSS to iframe via postMessage
+  const sendThemeToIframe = useCallback((iframe: HTMLIFrameElement | null) => {
+    if (!iframe?.contentWindow) return;
+    try {
+      iframe.contentWindow.postMessage(
+        { type: 'natives-theme-update', css: getThemeCSS(), themeId },
+        '*', // targetOrigin '*' is safe here because the iframe is sandboxed (no allow-same-origin)
+      );
+    } catch { /* cross-origin errors are expected if iframe navigated */ }
+  }, [getThemeCSS, themeId]);
+
+  // Re-send theme on every themeId change
+  useEffect(() => {
+    sendThemeToIframe(currentIframeRef.current);
+    // Also re-render with cache-busting URL so the iframe reloads with new theme
+    if (currentSrc) {
+      setCurrentSrc(`${currentSrc.split('&v=')[0]}&v=${Date.now()}`);
+    }
+  }, [themeId, sendThemeToIframe, currentSrc]);
 
   useEffect(() => {
-    const url = `/api/fs/raw?path=${encodeURIComponent(path)}&v=${Date.now()}`;
-    if (!currentSrc) {
-      setCurrentSrc(url);
-      return;
-    }
-    if (swappingRef.current) {
-      dirtyRef.current = true;
-      return;
-    }
-    swappingRef.current = true;
-    nextSrcRef.current = url;
-    setNextSrc(url);
+    // Use the Tauri HTTP server for iframe source (bypasses deleted Next.js API routes)
+    const getHttpPort = async (): Promise<number> => {
+      try {
+        const port = await window.nativesAPI?.bridge?.getHttpPort?.() ?? 3456;
+        return port;
+      } catch {
+        return 3456;
+      }
+    };
+    (async () => {
+      const port = await getHttpPort();
+      const url = `http://localhost:${port}/api/fs/raw?path=${encodeURIComponent(path)}&v=${Date.now()}`;
+      if (!currentSrc) {
+        setCurrentSrc(url);
+        lastUrlRef.current = url;
+        return;
+      }
+      if (swappingRef.current) {
+        dirtyRef.current = true;
+        return;
+      }
+      swappingRef.current = true;
+      nextSrcRef.current = url;
+      setNextSrc(url);
+    })();
   }, [path, currentSrc]);
 
-  const handleNextLoad = useCallback(() => {
+  const handleNextLoad = useCallback(async () => {
     if (!swappingRef.current) return;
     swappingRef.current = false;
     const loadedSrc = nextSrcRef.current;
     if (loadedSrc) setCurrentSrc(loadedSrc);
     setNextSrc(null);
     nextSrcRef.current = null;
+
+    // Send theme to newly loaded iframe
+    sendThemeToIframe(currentIframeRef.current);
+
     if (dirtyRef.current) {
       dirtyRef.current = false;
-      setCurrentSrc(`/api/fs/raw?path=${encodeURIComponent(path)}&v=${Date.now()}`);
+      const port = await (async () => {
+        try { return await window.nativesAPI?.bridge?.getHttpPort?.() ?? 3456; }
+        catch { return 3456; }
+      })();
+      setCurrentSrc(`http://localhost:${port}/api/fs/raw?path=${encodeURIComponent(path)}&v=${Date.now()}`);
     }
-  }, [path]);
+  }, [path, sendThemeToIframe]);
 
   // Force swap after 2.5s
   useEffect(() => {
@@ -181,16 +248,22 @@ function LiveHtmlPreview({ path }: { path: string }) {
     <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
       {currentSrc && (
         <iframe
+          ref={currentIframeRef}
           src={currentSrc}
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+          sandbox="allow-scripts allow-forms"
+          onLoad={() => sendThemeToIframe(currentIframeRef.current)}
           style={{ width: '100%', height: '100%', border: 'none', background: '#fff' }}
         />
       )}
       {nextSrc && (
         <iframe
+          ref={nextIframeRef}
           src={nextSrc}
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-          onLoad={handleNextLoad}
+          sandbox="allow-scripts allow-forms"
+          onLoad={() => {
+            handleNextLoad();
+            sendThemeToIframe(nextIframeRef.current);
+          }}
           style={{
             position: 'absolute', inset: 0,
             width: '100%', height: '100%',

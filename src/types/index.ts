@@ -70,6 +70,13 @@ declare global {
       };
       onDbStateChanged: (callback: (event: unknown, channel: string, data: unknown) => void) => () => void;
 
+      // Bridge / Security
+      bridge: {
+        getHttpPort: () => Promise<number>;
+        generateToken: (moduleId: string) => Promise<string>;
+        validateToken: (token: string, moduleId: string) => Promise<boolean>;
+      };
+
       // File Manager
       fs: {
         listDir: (dirPath: string, options?: { sortBy?: string; sortDir?: string; showHidden?: boolean }) => Promise<import('./file').FileEntry[]>;

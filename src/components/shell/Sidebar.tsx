@@ -194,13 +194,51 @@ export default function Sidebar({
   const [isMaximized, setIsMaximized] = useState(false);
 
   useEffect(() => {
-    const poll = setInterval(async () => {
+    let unlistenResize: (() => void) | undefined;
+    let cancelled = false;
+
+    const setupListener = async () => {
       try {
-        const m = await window.nativesAPI?.windowControls?.isMaximized?.();
-        if (m !== undefined) setIsMaximized(m);
-      } catch { /* ignore */ }
-    }, 300);
-    return () => clearInterval(poll);
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const activeWin = getCurrentWindow();
+
+        // Initial state
+        if (!cancelled) {
+          setIsMaximized(await activeWin.isMaximized());
+        }
+
+        // Listen to resize events instead of polling every 300ms
+        const unsub = await activeWin.onResized(async () => {
+          if (!cancelled) {
+            setIsMaximized(await activeWin.isMaximized());
+          }
+        });
+        unlistenResize = unsub;
+      } catch {
+        // Fallback: polling only when Tauri API is unavailable (browser dev)
+        const poll = setInterval(async () => {
+          try {
+            const m = await window.nativesAPI?.windowControls?.isMaximized?.();
+            if (m !== undefined && !cancelled) setIsMaximized(m);
+          } catch { /* ignore */ }
+        }, 2000);
+        // Store cleanup ref
+        const origCleanup = cleanup;
+        cleanup = () => {
+          clearInterval(poll);
+          origCleanup?.();
+        };
+      }
+    };
+
+    let cleanup: (() => void) | undefined;
+    setupListener();
+
+    return () => {
+      cancelled = true;
+      if (unlistenResize) unlistenResize();
+      if (cleanup) cleanup();
+    };
   }, []);
 
   const handleWindowAction = useCallback(async (action: 'minimize' | 'maximize' | 'close') => {
@@ -343,13 +381,13 @@ export default function Sidebar({
       data-sidebar
     >
       {/* ── 窗口控制 + Brand Header ── */}
-      <div className="shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
+      <div className="shrink-0" data-tauri-drag-region style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
         {/* 窗口控制按钮行 */}
       <div className="flex items-center justify-start gap-[6px] px-3 pt-2.5 pb-1">
         {/* 关闭 — macOS 红圆 */}
         <button
           onClick={() => handleWindowAction('close')}
-          className="group flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--mac-red)] hover:bg-[var(--mac-red-hover)] transition-all"
+          className="group flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--mac-red)] hover:bg-[var(--mac-red-hover)] hover:shadow-[0_0_6px_var(--mac-red-glow)] transition-all"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           aria-label="关闭"
           title="关闭"
@@ -359,7 +397,7 @@ export default function Sidebar({
         {/* 最小化 — macOS 黄圆 */}
         <button
           onClick={() => handleWindowAction('minimize')}
-          className="group flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--mac-yellow)] hover:bg-[var(--mac-yellow-hover)] transition-all"
+          className="group flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--mac-yellow)] hover:bg-[var(--mac-yellow-hover)] hover:shadow-[0_0_6px_var(--mac-yellow-glow)] transition-all"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           aria-label="最小化"
           title="最小化"
@@ -391,7 +429,7 @@ export default function Sidebar({
                 zoomTimerRef.current = null;
               }
             }}
-            className="group flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--mac-green)] hover:bg-[var(--mac-green-hover)] transition-all"
+            className="group flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--mac-green)] hover:bg-[var(--mac-green-hover)] hover:shadow-[0_0_6px_var(--mac-green-glow)] transition-all"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             aria-label={isMaximized ? '还原' : '最大化'}
             title={isMaximized ? '还原' : '最大化'}

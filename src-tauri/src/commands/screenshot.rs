@@ -1,4 +1,4 @@
-use crate::{screenshot, Error, Result};
+use crate::{screenshot, Result};
 
 #[tauri::command]
 pub fn screenshot_start_watching(app: tauri::AppHandle) -> Result<()> {

@@ -1,7 +1,4 @@
 use crate::{thumbnail, Error, Result};
-use tauri::State;
-
-use crate::AppState;
 
 #[tauri::command]
 pub fn thumbnail_generate(file_path: String, width: u32) -> Result<String> {

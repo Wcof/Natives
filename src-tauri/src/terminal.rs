@@ -6,10 +6,13 @@ use std::thread;
 use tauri::Emitter;
 
 pub struct TerminalSession {
+    #[allow(dead_code)]
     pub id: String,
+    #[allow(dead_code)]
     pub pid: u32,
     pub cols: u16,
     pub rows: u16,
+    #[allow(dead_code)]
     pub created_at: std::time::Instant,
 }
 
@@ -30,11 +33,11 @@ impl TerminalManager {
     pub fn create_session(
         &self,
         app_handle: tauri::AppHandle,
-        profile_id: Option<&str>,
+        _profile_id: Option<&str>,
         env_overrides: Option<HashMap<String, String>>,
     ) -> Result<(String, u32)> {
         let session_id = {
-            let mut sessions = self.sessions.lock().map_err(|e| Error::Internal(e.to_string()))?;
+            let sessions = self.sessions.lock().map_err(|e| Error::Internal(e.to_string()))?;
             let counter = sessions.len() + 1;
             format!("session-{counter}")
         };

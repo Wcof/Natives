@@ -4,6 +4,12 @@ use tauri::{Emitter, State};
 
 use crate::AppState;
 
+#[derive(Clone, serde::Serialize)]
+struct DbPayload {
+    channel: String,
+    data: serde_json::Value,
+}
+
 #[tauri::command]
 pub fn db_get(key: String, state: State<'_, AppState>) -> Result<Option<JsonValue>> {
     let guard = state.db.lock().map_err(|e| Error::Internal(e.to_string()))?;
@@ -14,21 +20,37 @@ pub fn db_get(key: String, state: State<'_, AppState>) -> Result<Option<JsonValu
 }
 
 #[tauri::command]
-pub fn db_set(key: String, value: JsonValue, state: State<'_, AppState>) -> Result<()> {
+pub fn db_set(key: String, value: JsonValue, app_handle: tauri::AppHandle, state: State<'_, AppState>) -> Result<()> {
     let guard = state.db.lock().map_err(|e| Error::Internal(e.to_string()))?;
     let conn = guard
         .as_ref()
         .ok_or_else(|| Error::Internal("database not initialized".into()))?;
-    db::db_set(conn, &key, &value)
+    db::db_set(conn, &key, &value)?;
+
+    // Broadcast change to all webviews so live theme/locale/config updates are reflected
+    let payload = DbPayload {
+        channel: "module_data".into(),
+        data: serde_json::json!({ "key": key }),
+    };
+    let _ = app_handle.emit("db-state-changed", payload);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn db_delete(key: String, state: State<'_, AppState>) -> Result<()> {
+pub fn db_delete(key: String, app_handle: tauri::AppHandle, state: State<'_, AppState>) -> Result<()> {
     let guard = state.db.lock().map_err(|e| Error::Internal(e.to_string()))?;
     let conn = guard
         .as_ref()
         .ok_or_else(|| Error::Internal("database not initialized".into()))?;
-    db::db_delete(conn, &key)
+    db::db_delete(conn, &key)?;
+
+    // Broadcast deletion event
+    let payload = DbPayload {
+        channel: "module_data".into(),
+        data: serde_json::json!({ "key": key, "deleted": true }),
+    };
+    let _ = app_handle.emit("db-state-changed", payload);
+    Ok(())
 }
 
 #[tauri::command]

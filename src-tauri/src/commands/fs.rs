@@ -1,8 +1,5 @@
 use crate::{file_manager, Error, Result};
 use serde_json::Value as JsonValue;
-use tauri::State;
-
-use crate::AppState;
 
 #[tauri::command]
 pub fn fs_list_dir(dir_path: String, options: Option<JsonValue>) -> Result<Vec<JsonValue>> {

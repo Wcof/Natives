@@ -68,16 +68,21 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             key={t.id}
             style={{
               padding: `${SPACING.sm}px ${SPACING.lg}px`, borderRadius: BORDER_RADIUS.lg, fontSize: FONT_SIZE.lg, fontWeight: 500,
-              color: 'var(--accent-ink)',
-              background: t.type === 'success' ? 'var(--diff-add)' : t.type === 'error' ? 'var(--danger)' : t.type === 'warning' ? 'var(--warning)' : 'var(--accent)',
-              boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+              color: 'var(--vibe-brand-text)',
+              background: 'var(--vibe-toolbar-bg)',
+              backdropFilter: 'blur(12px)',
+              WebkitBackdropFilter: 'blur(12px)',
+              border: '0.0625rem solid var(--vibe-toolbar-border)',
+              borderLeft: `3px solid ${t.type === 'success' ? 'var(--diff-add)' : t.type === 'error' ? 'var(--danger)' : t.type === 'warning' ? 'var(--warning)' : 'var(--accent)'}`,
+              boxShadow: 'var(--vibe-toolbar-shadow)',
               opacity: t.dismissing ? 0 : 1,
-              transform: t.dismissing ? 'translateY(8px)' : 'translateY(0)',
-              transition: `opacity ${TRANSITION.slow}, transform ${TRANSITION.slow}`,
+              transform: t.dismissing ? 'translateY(8px) scale(0.98)' : 'translateY(0) scale(1)',
+              transition: `opacity ${TRANSITION.slow}, transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1)`,
               pointerEvents: 'auto',
               cursor: 'pointer',
               maxWidth: 360,
               display: 'inline-flex', alignItems: 'center', gap: SPACING.xs,
+              animation: !t.dismissing ? `toastSlideUp 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)` : undefined,
             }}
             onClick={() => removeToast(t.id)}
           >

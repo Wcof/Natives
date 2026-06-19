@@ -744,7 +744,7 @@ CREATE TABLE env_variables (
 CLI 工具自动获得 API Key
 ```
 
-**加密方案**: 使用 `electron.safeStorage.encryptString()` / `decryptString()`。这是 Electron 原生提供的安全存储，使用系统密钥链（macOS Keychain、Windows DPAPI、Linux libsecret）。
+**加密方案**: 使用 AES-256-GCM（`src-tauri/src/env_manager.rs`）。密钥存储在 SQLite settings 表中，密文格式为 `v2:<nonce>:<ciphertext>:<tag>`。原 Electron 方案使用 `electron.safeStorage.encryptString()` / `decryptString()`，已随 ADR-0008 迁移至 Rust 后端。
 
 ### Q31: SQLite 迁移策略
 

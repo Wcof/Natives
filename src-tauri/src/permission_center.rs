@@ -163,6 +163,7 @@ pub fn get_audit_log(
 }
 
 /// Check if a module has a specific permission granted
+#[allow(dead_code)]
 pub fn check_permission(conn: &Connection, module_id: &str, permission: &str) -> Result<bool> {
     let mut stmt = conn
         .prepare("SELECT granted FROM module_permissions WHERE module_id = ?1 AND permission = ?2")

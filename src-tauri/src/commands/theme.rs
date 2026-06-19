@@ -1,5 +1,5 @@
 use crate::{db, Error, Result};
-use tauri::{Emitter, State};
+use tauri::State;
 
 use crate::AppState;
 

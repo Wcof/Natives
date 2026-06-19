@@ -47,9 +47,7 @@
     "shell": {
       "open": true
     },
-    "window-state": {
-      "enabled": true
-    },
+    "window-state": null,
     "single-instance": {
       "enabled": true
     },

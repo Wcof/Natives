@@ -1,55 +1,15 @@
-import { describe, it, before, after } from 'node:test';
+import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  generateSessionToken,
-  validateSessionToken,
-  invalidateToken,
-  invalidateModuleTokens,
-  invalidateAllTokens,
-} from './token-manager';
 import { IframeSandboxManager } from './iframe-sandbox-manager';
 import { buildBridgeSdkScript } from './iframe-sandbox';
 
 describe('IframeSandbox', () => {
-  describe('SessionToken', () => {
-    it('should generate and validate a token', () => {
-      const token = generateSessionToken('test-module');
-      assert.ok(token);
-      assert.ok(token.includes(':'));
-
-      const valid = validateSessionToken(token, 'test-module');
-      assert.equal(valid, true);
-    });
-
-    it('should reject token for wrong moduleId', () => {
-      const token = generateSessionToken('module-a');
-      const valid = validateSessionToken(token, 'module-b');
-      assert.equal(valid, false);
-    });
-
-    it('should reject invalidated token', () => {
-      const token = generateSessionToken('test-module');
-      invalidateToken(token);
-
-      const valid = validateSessionToken(token, 'test-module');
-      assert.equal(valid, false);
-    });
-
-    it('should invalidate all tokens for a module', () => {
-      const t1 = generateSessionToken('multi-module');
-      const t2 = generateSessionToken('multi-module');
-
-      invalidateModuleTokens('multi-module');
-
-      assert.equal(validateSessionToken(t1, 'multi-module'), false);
-      assert.equal(validateSessionToken(t2, 'multi-module'), false);
-    });
-  });
+  // Token generation/validation moved to src-tauri/token_manager.rs (HMAC-SHA256)
+  // Renderer-side tests only cover IframeSandboxManager and BridgeSdkScript.
 
   describe('IframeSandboxManager', () => {
     before(() => {
-      // Clean global token state between test suites
-      invalidateAllTokens();
+      // Clean any state between test suites
     });
 
     it('should register and provide a token', () => {
@@ -92,23 +52,17 @@ describe('IframeSandbox', () => {
       assert.equal(mgr.getToken('test-module'), undefined);
     });
 
-    it('should handle re-registration (old token invalidated)', () => {
-      // Directly use global functions to verify behavior
-      const first = generateSessionToken('test-module');
-      const firstHash = first.split(':')[0]!;
+    it('should handle re-registration', () => {
+      const mgr = new IframeSandboxManager();
+      mgr.register('test-module', null);
+      const first = mgr.getToken('test-module');
 
-      invalidateModuleTokens('test-module');
+      mgr.register('test-module', null);
+      const second = mgr.getToken('test-module');
 
-      const second = generateSessionToken('test-module');
-      const secondHash = second.split(':')[0]!;
-
-      // Should have different hashes
-      assert.notEqual(firstHash, secondHash);
-
-      // Old token should be invalidated
-      assert.equal(validateSessionToken(first, 'test-module'), false);
-      // New token should be valid
-      assert.equal(validateSessionToken(second, 'test-module'), true);
+      // Both should be empty strings (token generation moved to main process)
+      assert.equal(first, '');
+      assert.equal(second, '');
     });
   });
 

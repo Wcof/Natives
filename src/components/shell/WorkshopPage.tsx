@@ -113,7 +113,12 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
     const files = Array.from(e.dataTransfer.files);
     for (const file of files) {
       if (file.name.endsWith('.zip') || file.type === '') {
-        const source = file.path || file.name;
+        // In Tauri v2, drag-and-drop File objects may have `.path` (from Tauri's
+        // native drag-drop event) or only `.name` (browser fallback).
+        // For browser fallback, we'd need to read via FileReader and pass content
+        // to the installer — for now use name-based fallback and let the installer
+        // surface an appropriate error if the path is not real.
+        const source = (file as { path?: string }).path || file.name;
         // Read manifest to show the permission dialog (US12).
         // If the manifest cannot be read (corrupt zip / missing manifest.json)
         // we must NOT silently install — that would bypass the permission

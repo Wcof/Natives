@@ -283,7 +283,10 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
           display: 'flex', alignItems: 'center', gap: SPACING.sm,
           padding: `${SPACING.md}px ${SPACING.lg}px`,
           borderBottom: '0.0625rem solid var(--vibe-toolbar-border)',
-        }}>
+          boxShadow: '0 0 0 0px transparent',
+          transition: 'box-shadow 0.3s ease',
+        }}
+          className="focus-within:shadow-[0_0_0_2px_var(--accent-border),0_0_12px_var(--accent-soft)]">
           <Search size={14} className="shrink-0" style={{ color: 'var(--vibe-search-placeholder)' }} />
           <input
             ref={inputRef}
@@ -325,7 +328,8 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
                   background: index === selectedIndex ? 'var(--vibe-active-bg)' : 'transparent',
                   color: index === selectedIndex ? 'var(--vibe-active-color)' : 'var(--vibe-brand-text)',
                   fontSize: FONT_SIZE.lg,
-                  transition: 'background 0.1s',
+                  transition: 'background 0.15s, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                  transform: selectedIndex === index ? 'translateX(4px)' : 'translateX(0)',
                 }}
               >
                 {/* Icon or category dot */}

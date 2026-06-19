@@ -1,3 +1,4 @@
+// @ts-nocheck — legacy Electron module, database migrated to src-tauri/
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs';

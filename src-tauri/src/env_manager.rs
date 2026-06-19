@@ -1,8 +1,16 @@
 use crate::{db, Error, Result};
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce,
+};
 use rusqlite::Connection;
 use serde::Serialize;
 
 const ENCRYPTION_KEY_SETTING: &str = "env_encryption_key";
+
+/// Ciphertext format prefix — identifies AES-256-GCM v2 payloads
+const V2_PREFIX: &str = "v2:";
+/// Old XOR format was just raw base64 (no prefix)
 
 #[derive(Debug, Serialize)]
 pub struct EnvProfile {
@@ -32,36 +40,103 @@ fn generate_random_hex(bytes: usize) -> String {
     hex::encode(buf)
 }
 
-/// Encrypt text using AES-256-GCM with scrypt-derived key.
-/// Format: iv_base64:authTag_base64:ciphertext_base64
+/// Encrypt text using AES-256-GCM with random nonce.
+///
+/// Format: `v2:<nonce_hex>:<ciphertext_hex>:<tag_hex>`
+///
+/// The nonce (12 bytes) and tag (16 bytes) are randomly generated per encryption.
 pub fn encrypt(text: &str, encryption_key: &str) -> Result<String> {
-    // For now, use a simple XOR-based encoding (not production-grade)
-    // TODO: Replace with proper AES-256-GCM using ring or aes-gcm crate
-    let key_bytes = hex::decode(encryption_key).map_err(|e| Error::Internal(e.to_string()))?;
-    let text_bytes = text.as_bytes();
-    let mut encrypted = Vec::with_capacity(text_bytes.len());
-    for (i, &byte) in text_bytes.iter().enumerate() {
-        encrypted.push(byte ^ key_bytes[i % key_bytes.len()]);
-    }
-    Ok(base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        &encrypted,
+    let key_bytes =
+        hex::decode(encryption_key).map_err(|e| Error::Internal(format!("invalid key hex: {e}")))?;
+    let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
+    let cipher =
+        Aes256Gcm::new(key);
+
+    // Generate random 12-byte nonce
+    let mut nonce_bytes = [0u8; 12];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, text.as_bytes())
+        .map_err(|e| Error::Internal(format!("encryption failed: {e}")))?;
+
+    // ciphertext = actual_ciphertext (len=plaintext) ++ tag (16 bytes)
+    // aes-gcm's encrypt() returns ciphertext || tag concatenated
+    let actual_ct = &ciphertext[..ciphertext.len() - 16];
+    let tag = &ciphertext[ciphertext.len() - 16..];
+
+    Ok(format!(
+        "{}{}:{}:{}",
+        V2_PREFIX,
+        hex::encode(nonce_bytes),
+        hex::encode(actual_ct),
+        hex::encode(tag)
     ))
 }
 
-/// Decrypt text (reverse of encrypt)
+/// Decrypt text encrypted with AES-256-GCM.
+///
+/// Also handles legacy XOR + base64 format (no `v2:` prefix) for backward
+/// compatibility — on read, old values are transparently re-encrypted as v2
+/// by the caller (set_variable stores newly encrypted values).
 pub fn decrypt(encoded: &str, encryption_key: &str) -> Result<String> {
-    let key_bytes = hex::decode(encryption_key).map_err(|e| Error::Internal(e.to_string()))?;
-    let encrypted = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        encoded,
-    )
-    .map_err(|e| Error::Internal(e.to_string()))?;
-    let mut decrypted = Vec::with_capacity(encrypted.len());
-    for (i, &byte) in encrypted.iter().enumerate() {
-        decrypted.push(byte ^ key_bytes[i % key_bytes.len()]);
+    let key_bytes =
+        hex::decode(encryption_key).map_err(|e| Error::Internal(format!("invalid key hex: {e}")))?;
+
+    if encoded.starts_with(V2_PREFIX) {
+        // New AES-256-GCM format: v2:<nonce_hex>:<ciphertext_hex>:<tag_hex>
+        let inner = encoded.strip_prefix(V2_PREFIX).unwrap_or("");
+        let parts: Vec<&str> = inner.split(':').collect();
+        if parts.len() != 3 {
+            return Err(Error::Internal("invalid v2 ciphertext format".into()));
+        }
+        let nonce_bytes = hex::decode(parts[0])
+            .map_err(|e| Error::Internal(format!("invalid nonce hex: {e}")))?;
+        let ct_bytes = hex::decode(parts[1])
+            .map_err(|e| Error::Internal(format!("invalid ciphertext hex: {e}")))?;
+        let tag_bytes = hex::decode(parts[2])
+            .map_err(|e| Error::Internal(format!("invalid tag hex: {e}")))?;
+
+        if nonce_bytes.len() != 12 {
+            return Err(Error::Internal("nonce must be 12 bytes".into()));
+        }
+        if tag_bytes.len() != 16 {
+            return Err(Error::Internal("tag must be 16 bytes".into()));
+        }
+
+        let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
+        let cipher = Aes256Gcm::new(key);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        // Reconstruct the ciphertext || tag for decrypt
+        let mut combined = ct_bytes;
+        combined.extend_from_slice(&tag_bytes);
+
+        let plaintext = cipher
+            .decrypt(nonce, combined.as_slice())
+            .map_err(|_| Error::Internal("decryption failed (wrong key or corrupted data)".into()))?;
+
+        String::from_utf8(plaintext)
+            .map_err(|e| Error::Internal(format!("decrypted bytes not valid UTF-8: {e}")))
+    } else {
+        // Legacy XOR + base64 format — attempt migration
+        let encrypted = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            encoded,
+        )
+        .map_err(|e| {
+            Error::Internal(format!(
+                "legacy base64 decode failed (corrupted data): {e}"
+            ))
+        })?;
+        let mut decrypted = Vec::with_capacity(encrypted.len());
+        for (i, &byte) in encrypted.iter().enumerate() {
+            decrypted.push(byte ^ key_bytes[i % key_bytes.len()]);
+        }
+        String::from_utf8(decrypted)
+            .map_err(|e| Error::Internal(format!("decrypted bytes not valid UTF-8: {e}")))
     }
-    String::from_utf8(decrypted).map_err(|e| Error::Internal(e.to_string()))
 }
 
 // ── Profile CRUD ──
@@ -176,6 +251,15 @@ pub fn get_variables(
         let encrypted: String = row.get(1).map_err(Error::Database)?;
         match decrypt(&encrypted, encryption_key) {
             Ok(value) => {
+                // If value was in legacy format, transparently re-encrypt as v2
+                if !encrypted.starts_with(V2_PREFIX) {
+                    if let Ok(new_encrypted) = encrypt(&value, encryption_key) {
+                        let _ = conn.execute(
+                            "UPDATE env_variables SET value_encrypted = ?1 WHERE profile_id = ?2 AND key = ?3",
+                            rusqlite::params![new_encrypted, profile_id, key],
+                        );
+                    }
+                }
                 result.insert(key, value);
             }
             Err(_) => {
@@ -188,6 +272,7 @@ pub fn get_variables(
 }
 
 /// Inject env variables from a profile into a HashMap (for terminal sessions)
+#[allow(dead_code)]
 pub fn inject_env(
     conn: &Connection,
     profile_id: i64,

@@ -68,6 +68,14 @@ pub fn run() {
                 .map_err(|e| format!("failed to init database: {e}"))
                 .unwrap();
 
+            // ── Window Vibrancy (macOS Liquid Glass) ──
+            // CSS backdrop-filter blur() is configured in globals.css for cross-platform glass effect.
+            // Native NSVisualEffectView vibrancy can be added here when a Tauri v2 plugin becomes
+            // available (e.g. tauri-plugin-vibrancy). The window is already "transparent": true in
+            // tauri.conf.json, so applying a native vibrancy view will work out of the box.
+            // On Tauri v2, use: window.set_background_color(Color::TRANSPARENT) and then apply
+            // NSVisualEffectView via the raw window handle (app.get_webview_window("main").unwrap()).
+
             // Initialize token manager
             let tm = std::sync::Arc::new(token_manager::TokenManager::new(&conn));
 
@@ -78,7 +86,7 @@ pub fn run() {
                 .unwrap();
 
             // Start local HTTP server for module assets and bridge API
-            let mut server = http_server::HttpServer::new(modules_dir, tm.clone());
+            let mut server = http_server::HttpServer::new(modules_dir, tm.clone(), db_path.clone());
             let port = server.start(0).unwrap_or_else(|e| {
                 eprintln!("failed to start HTTP server: {e}");
                 0

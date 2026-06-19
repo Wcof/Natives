@@ -139,7 +139,7 @@ export default function Modal({
           WebkitBackdropFilter: 'blur(var(--vibe-sidebar-blur, 28px)) saturate(var(--vibe-sidebar-saturation, 145%))',
           border: '0.0625rem solid var(--vibe-toolbar-border)',
           borderRadius: 'var(--radius)',
-          boxShadow: 'var(--vibe-toolbar-shadow)',
+          boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent), var(--vibe-toolbar-shadow)',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',

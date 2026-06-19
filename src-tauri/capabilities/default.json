@@ -1,14 +1,24 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capabilities for Natives",
+  "description": "Minimum required capabilities for Natives — each permission is scoped to the minimum needed. Keep this file reviewed.",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "shell:allow-open",
-    "shell:allow-execute",
     "dialog:default",
-    "fs:default",
+    "fs:allow-app-read",
+    "fs:allow-app-write",
+    "fs:allow-app-meta",
+    "fs:allow-appdata-read",
+    "fs:allow-appdata-write",
+    "fs:allow-appdata-meta",
+    "fs:allow-home-read",
+    "fs:allow-home-write",
+    "fs:allow-home-meta",
+    "fs:allow-resource-read",
+    "fs:allow-download-read",
+    "fs:allow-download-write",
     "window-state:default",
     "log:default",
     "core:window:allow-close",
@@ -18,6 +28,9 @@
     "core:window:allow-is-maximized",
     "core:window:allow-set-focus",
     "core:window:allow-show",
-    "core:window:allow-hide"
+    "core:window:allow-hide",
+    "core:event:default",
+    "core:event:allow-listen",
+    "core:event:allow-emit"
   ]
 }

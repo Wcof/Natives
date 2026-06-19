@@ -35,7 +35,7 @@
 
 4. **AI 工作台**：终端增强（跟随模式、可点击路径、Agent 状态）、Agent 变更监控（实时仪表盘、跟随模式、变更收件箱、会话回放）、项目记忆、Skills X-Ray、Agent 用量追踪、RTK 用量分析。
 
-5. **完整终端**：基于 node-pty + xterm.js 的完整 PTY 终端，支持 TUI 程序、窗口调整、多会话。终端启动时自动注入用户配置的环境变量（API Key 等）。
+5. **完整终端**：基于 portable-pty (Rust) + xterm.js 的完整 PTY 终端，支持 TUI 程序、窗口调整、多会话。终端启动时自动注入用户配置的环境变量（API Key 等）。
 
 6. **安全沙箱**：iframe sandbox 隔离（无 allow-same-origin）+ Session Token 鉴权 + 路径前缀隔离 + CSP 策略 + Host/Origin 头验证，确保插件之间互不干扰。
 
@@ -270,7 +270,7 @@
 
 **关键接口**：
 - `initDb()` — 建表（IF NOT EXISTS）+ 增量迁移（PRAGMA table_info）
-- `getDb()` — 返回 better-sqlite3 实例
+- `getDb()` — 返回 rusqlite 连接实例（仅 Rust 后端可用）
 - `broadcast(channel, data)` — 通过 IPC 广播状态变更
 
 **Schema（9 张表）**：
@@ -389,7 +389,7 @@
 - `onExit(sessionId, cb)` — 退出回调
 
 **实现**：
-- node-pty（主方案）+ child_process.spawn（降级方案）
+- portable-pty（Rust crate，主方案）
 - @xterm/xterm 前端渲染（WebGL + unicode11 CJK 支持）
 - Session Token 握手防 XSS
 - 环境变量注入仅对新会话生效（已运行会话保持原有环境，用户需新开终端标签）
@@ -481,7 +481,7 @@
 - `getDefaultProfile()` — 获取默认配置
 - `injectEnv(profileId, env)` — 合并到 env 对象
 
-**加密方案**：`electron.safeStorage.encryptString()` / `decryptString()`
+**加密方案**：AES-256-GCM（`src-tauri/src/env_manager.rs`）
 
 ---
 
@@ -720,11 +720,11 @@
 | Q23 | Bridge API | 混合 postMessage + HTTP |
 | Q24 | 插件隔离 | 路径前缀 + sandbox + Token |
 | Q25 | 远程 URL | 不支持（仅本地） |
-| Q26 | 终端实现 | node-pty + 降级 spawn |
+| Q26 | 终端实现 | portable-pty (Rust crate) |
 | Q27 | 插件生命周期 | ready / unload / error / heartbeat |
 | Q28 | 配置安全 | 原子写入（temp + fsync + rename） |
 | Q29 | 错误分类 | 12 类结构化错误 |
-| Q30 | 环境注入 | 多组环境配置 + electron.safeStorage |
+| Q30 | 环境注入 | 多组环境配置 + AES-256-GCM 加密 |
 | Q31 | DB 迁移 | PRAGMA table_info 增量迁移 |
 | Q32 | Token 机制 | HMAC 生成 + postMessage 下发 + 内存存储 |
 | Q33 | Token 握手 | 两阶段握手（iframe 主动请求，消除竞态） |
@@ -1148,7 +1148,7 @@ Natives/
 │   │   ├── http-server.ts           # 本地 HTTP 服务（含文件管理 API）
 │   │   ├── module-manager.ts        # 模块生命周期
 │   │   ├── bridge-host.ts           # Bridge API 宿主
-│   │   ├── shell.ts                 # Shell 管理 (node-pty) + 终端增强
+│   │   ├── terminal.rs             # Shell 管理 (portable-pty, 多会话)
 │   │   ├── env-injector.ts          # 环境注入
 │   │   ├── file-manager.ts          # 文件管理（新增）
 │   │   ├── agent-integration.ts     # Agent 集成（新增）
@@ -1224,11 +1224,11 @@ Natives/
 
 | 依赖 | 用途 | 备注 |
 |------|------|------|
-| Electron | 桌面框架 | contextIsolation: true, 无 nodeIntegration |
-| Next.js | 前端框架 | App Router, output: 'standalone' |
-| TypeScript | 类型安全 | 全项目使用 |
-| better-sqlite3 | 数据库 | serverExternalPackages, WAL 模式 |
-| node-pty | PTY 终端 | native module, 需 electron-rebuild |
+| Tauri v2 | 桌面框架 | Rust 后端, tiny_http |
+| Next.js | 前端框架 | App Router |
+| TypeScript + Rust | 类型安全 | 全项目使用 |
+| rusqlite | 数据库 | WAL 模式, 10 张表 |
+| portable-pty | PTY 终端 | Rust crate |
 | @xterm/xterm | 终端渲染 | WebGL + unicode11 |
 | @xterm/addon-fit | 终端适配 | |
 | zod | 配置校验 | manifest + 主题 + 设置 |

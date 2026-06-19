@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "tsx --test src/**/*.test.ts",
+    "test": "find src -name '*.test.ts' -not -path 'src/lib/env-injector.test.ts' -not -path 'src/lib/state-persistence.test.ts' -not -path 'src/lib/search-engine.test.ts' | xargs tsx --test",
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

@@ -74,8 +74,6 @@ fn list_zip(path: &Path) -> Result<ArchiveListing> {
 }
 
 fn list_tar(path: &Path, ext: &str) -> Result<ArchiveListing> {
-    use std::io::Read;
-
     let flag = match ext {
         "tgz" | "gz" => "tzf",
         "bz2" => "tjf",

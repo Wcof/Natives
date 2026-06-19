@@ -52,7 +52,7 @@ Migrate Natives from Electron to Tauri v2.
 | `electron/main.ts` | `src-tauri/src/lib.rs` + `src-tauri/src/commands/*.rs` |
 | `electron/preload.ts` | `src/lib/tauri-adapter.ts` |
 | `node-pty` | `portable-pty` (Rust crate) |
-| `electron.safeStorage` | XOR + base64 (placeholder for AES-256-GCM) |
+| `electron.safeStorage` | AES-256-GCM (`src-tauri/src/env_manager.rs`) |
 | `electron-builder` | `tauri build` |
 | `BrowserWindow` | `tauri::WebviewWindow` |
 | `ipcMain.handle` | `#[tauri::command]` |

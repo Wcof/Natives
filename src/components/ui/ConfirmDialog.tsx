@@ -99,7 +99,7 @@ export default function ConfirmDialog({
           WebkitBackdropFilter: 'blur(var(--vibe-toolbar-blur, 22px)) saturate(var(--vibe-toolbar-saturation, 145%))',
           border: '0.0625rem solid var(--vibe-toolbar-border)',
           borderRadius: 'var(--radius)',
-          boxShadow: 'var(--vibe-toolbar-shadow)',
+          boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent), var(--vibe-toolbar-shadow)',
           padding: SPACING.xl, maxWidth: 400, width: '90vw',
         }}
         onClick={(e) => e.stopPropagation()}

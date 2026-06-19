@@ -32,13 +32,13 @@
 
 | 领域 | 技术 |
 |------|------|
-| 桌面框架 | Electron (contextIsolation: true, 无 nodeIntegration) |
-| 前端框架 | Next.js (App Router, output: 'standalone') |
-| 语言 | TypeScript |
-| 数据库 | SQLite (better-sqlite3, WAL 模式) |
-| 终端 | node-pty + @xterm/xterm（降级: child_process.spawn） |
+| 桌面框架 | Tauri v2 (Rust 后端) |
+| 前端框架 | Next.js (App Router) |
+| 语言 | TypeScript + Rust |
+| 数据库 | SQLite (rusqlite, WAL 模式, 10 张表) |
+| 终端 | portable-pty + @xterm/xterm |
 | 验证 | Zod |
-| 凭证加密 | electron.safeStorage |
+| 凭证加密 | AES-256-GCM |
 | 图标 | lucide-react |
 
 ---
@@ -76,7 +76,7 @@
 │   DB CRUD · 环境注入 · 模块安装/卸载 · 搜索        │
 ├─────────────────────────────────────────────────┤
 │            基础设施层 (Infrastructure)            │
-│   Electron Main · SQLite · watchdog · IPC        │
+│   Tauri v2 (Rust · src-tauri/) · SQLite · IPC        │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -86,10 +86,8 @@
 用户操作
   ↓
 Renderer (Next.js)
-  ↓ IPC
-Preload (Bridge)
-  ↓ IPC
-Main Process
+  ↓ invoke() via tauri-adapter
+Tauri Rust Command (src-tauri/)
   ↓
 SQLite / 子进程 / 文件系统
 
@@ -105,9 +103,9 @@ db-state-changed → Renderer 自动同步
   ↓ window.natives.db.get(key)
 Bridge SDK (natives-sdk.js)
   ↓ postMessage / HTTP API
-Renderer (iframe host)
-  ↓ IPC
-Preload → Main Process
+Renderer (iframe host) → tauri-adapter
+  ↓ invoke()
+Tauri Rust Command (src-tauri/)
   ↓
 SQLite (按 module_id 命名空间隔离)
 ```
@@ -119,16 +117,15 @@ SQLite (按 module_id 命名空间隔离)
 ### 4.1 进程模型
 
 ```
-Electron Main Process
-├── main.ts           — 入口: 窗口管理、FOUC 防护、端口分配
-├── database.ts       — SQLite: 9 张表、WAL、外键、增量迁移
-├── module-manager.ts — 模块生命周期: 安装/卸载/启用/禁用
-├── bridge-host.ts    — Bridge API 宿主端: 请求路由 + 权限检查
-├── shell.ts          — Shell 管理: 多会话终端 + Token 握手
-├── env-injector.ts   — 环境注入: API Key 加密存储 + 环境配置管理
-├── subprocess.ts     — 子进程管理: 动态端口 + watchdog
-├── watchdog.ts       — 进程守护: PID 轮询 + 自毁机制
-└── http-server.ts    — 本地 HTTP 服务: 静态文件 + Bridge API 路由
+Tauri v2 Main Process (Rust · src-tauri/)
+├── main.rs / lib.rs    — 入口: 窗口管理、FOUC 防护、端口分配
+├── commands/db.rs      — SQLite: 10 张表、WAL、外键、增量迁移
+├── module_manager.rs   — 模块生命周期: 安装/卸载/启用/禁用
+├── http_server.rs      — 本地 HTTP 服务: 静态文件 + Bridge API 路由
+├── terminal.rs         — Shell 管理: 多会话终端 + portable-pty
+├── env_manager.rs      — 环境注入: AES-256-GCM 凭证加密 + 环境配置管理
+├── agent.rs            — 子进程管理: 动态端口
+└── token_manager.rs    — Session Token: HMAC-SHA256 握手
 
 Renderer Process (Next.js)
 ├── Shell UI (三栏布局)
@@ -143,13 +140,13 @@ iframe (N 个, 同进程 sandbox 隔离)
 
 ### 4.2 五大防线
 
-#### 防线 1: 子进程生命周期 & PID 轮询看门狗
+#### 防线 1: 子进程生命周期 & Tauri 管理
 
 | 机制 | 实现 |
 |------|------|
-| 看门狗注入 | `node --require dist/watchdog.js` |
-| 健康检测 | 每 2 秒 `process.kill(parentPid, 0)` |
-| 自毁 | 父进程死亡 → 子进程自动退出 |
+| 进程管理 | Tauri command 派生和管理子进程 |
+| 健康检测 | 子进程退出时 Tauri 事件通知 |
+| 自毁 | 父进程崩溃 → Tauri 自动清理子进程 |
 | 端口分配 | 内存端口扫描，动态绑定 |
 
 #### 防线 2: iframe 沙箱安全
@@ -168,7 +165,7 @@ iframe (N 个, 同进程 sandbox 隔离)
 
 | 机制 | 实现 |
 |------|------|
-| Shell 启动 | `node-pty.spawn('/bin/zsh')`（降级: `child_process.spawn`） |
+| Shell 启动 | `portable-pty::new('/bin/zsh')` |
 | 窗口调整 | `pty.resize(cols, rows)` 支持 TUI 程序 |
 | 前端渲染 | `@xterm/xterm` 字符流渲染 |
 | 安全握手 | Session Token 防 XSS 劫持 IPC |
@@ -178,7 +175,7 @@ iframe (N 个, 同进程 sandbox 隔离)
 
 | 机制 | 实现 |
 |------|------|
-| 读写独占 | SQLite 只在 Main Process 读写 |
+| 读写独占 | SQLite 只在 Tauri Rust 后端 (`src-tauri/`) 读写 |
 | 状态同步 | 配置变更 → `db-state-changed` IPC 广播 |
 | 前端响应 | Renderer React 自动同步 |
 | 数据隔离 | 每个插件一个 namespace（module_id） |
@@ -479,7 +476,7 @@ interface NativesBridge {
 
 **轻量操作 — postMessage 通道**:
 ```
-插件 (iframe)                    基座 (Renderer)                Main Process
+插件 (iframe)                    基座 (Renderer)                Tauri Rust 后端 (src-tauri/)
      │                                │                              │
      │  postMessage({                 │                              │
      │    type: 'bridge-request',     │                              │
@@ -505,7 +502,7 @@ interface NativesBridge {
 
 **重操作 — HTTP API 通道**:
 ```
-插件 (iframe)                    本地 HTTP 服务                   Main Process
+插件 (iframe)                    本地 HTTP 服务                   Tauri Rust 后端 (src-tauri/)
      │                                │                              │
      │  fetch('/api/bridge/db/get',   │                              │
      │    { headers: {                │                              │
@@ -582,7 +579,7 @@ Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; 
 #### 5.4.2 主题注入流程
 
 ```
-Main Process 启动
+Tauri Rust 后端 (src-tauri/) 启动
     ↓
 从 SQLite 读取主题配置
     ↓
@@ -594,7 +591,7 @@ Next.js 挂载 CSS 变量到 document.documentElement
     ↓
 发送 theme-applied-ready
     ↓
-Main Process 显示窗口 (FOUC Guard 完成)
+Tauri 显示窗口 (FOUC Guard 完成)
     ↓
 插件通过 window.natives.settings.getTheme() 获取主题
 ```
@@ -621,19 +618,19 @@ Natives/
 │   └── architecture/
 │       ├── ARCHITECTURE.md          # 本文档
 │       └── DESIGN_DISCUSSION.md     # 设计讨论记录
-├── electron/
-│   ├── main.ts                      # Electron 入口
-│   └── preload.ts                   # IPC 隔离桥
-├── src/
-│   ├── main/                        # Main Process 模块
-│   │   ├── database.ts              # SQLite (9 张表, WAL, 外键, 增量迁移)
-│   │   ├── http-server.ts           # 本地 HTTP 服务 (静态文件 + Bridge API)
-│   │   ├── module-manager.ts        # 模块生命周期 (安装/卸载/启用/禁用)
-│   │   ├── bridge-host.ts           # Bridge API 宿主 (请求路由 + 权限检查)
-│   │   ├── shell.ts                 # Shell 管理 (node-pty, 多会话)
-│   │   ├── env-injector.ts          # 环境注入 (多组配置 + 加密存储)
-│   │   ├── subprocess.ts            # 子进程管理 (动态端口 + watchdog)
-│   │   └── watchdog.ts              # 进程守护 (PID 轮询 + 自毁)
+├── src-tauri/
+│   ├── src/
+│   │   ├── main.rs / lib.rs        # Tauri 入口
+│   │   ├── commands/db.rs          # SQLite (10 张表, WAL, 外键, 增量迁移)
+│   │   ├── commands/fs.rs          # 文件系统操作
+│   │   ├── http_server.rs          # 本地 HTTP 服务 (静态文件 + Bridge API)
+│   │   ├── module_manager.rs       # 模块生命周期 (安装/卸载/启用/禁用)
+│   │   ├── terminal.rs             # Shell 管理 (portable-pty, 多会话)
+│   │   ├── env_manager.rs          # 环境注入 (AES-256-GCM 加密)
+│   │   ├── agent.rs                # 子进程管理
+│   │   └── token_manager.rs        # Session Token (HMAC-SHA256)
+│   └── capabilities/
+│       └── default.json            # Tauri 权限声明 (最小权限)
 │   ├── app/                         # Next.js 页面
 │   │   ├── page.tsx                 # 基座首页
 │   │   ├── layout.tsx               # Root Layout
@@ -669,10 +666,10 @@ Natives/
 │   ├── index.html                   # 入口页面模板
 │   └── natives-sdk.d.ts             # Bridge API 类型声明
 ├── CLAUDE.md                        # AI 协作指南
+├── Cargo.toml
 ├── package.json
 ├── tsconfig.json
 ├── next.config.ts
-└── electron-builder.yml
 ```
 
 ---

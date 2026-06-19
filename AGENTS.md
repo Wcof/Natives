@@ -3,19 +3,21 @@
 ## Development Commands
 
 - **Start Next.js dev server**: `npm run dev`
-- **Start Electron dev**: `npm run electron:dev` (requires Next.js dev server running first)
-- **Production build**: `npm run build` then `npm run electron:build`
-- **Rebuild native modules**: `npm run electron:rebuild` (required after install for better-sqlite3, node-pty)
+- **Start Tauri dev**: `npm run tauri:dev` (starts Next.js + Tauri together)
+- **Production build**: `npm run build` then `npm run tauri:build`
+- **Rebuild native modules**: Not needed — Tauri manages native deps via Cargo
 
 ## Verification
 
 - **Type check**: `npm run typecheck` (tsc --noEmit)
 - **Lint**: `npm run lint` (next lint)
 - **Test**: `npm run test` (tsx --test src/**/*.test.ts)
+- **Cargo check**: `cd src-tauri && cargo check`
+- **Cargo test**: `cd src-tauri && cargo test`
 
 ## Architecture
 
-- Electron + Next.js + SQLite desktop container
+- Tauri v2 + Next.js + SQLite desktop container
 - Three-layer architecture: Overall, Infrastructure, Frontend
 - Four design pillars: Zero-Code Embedding, Style Self-Definition, Environment Injection, Sub-Application Isolation
 - Five defense lines: Watchdog, iframe sandbox, PTY terminal, Database unidirectional bus, FOUC guard
@@ -38,22 +40,24 @@
 - No fake data: All user-visible fields must have real source breadcrumbs → [`product/02`](docs/standards/product/02-feature-spec.md)
 - i18n sync: UI text changes must update both language files → [`frontend/03`](docs/standards/frontend/03-i18n.md)
 - DB schema changes require migration logic (WAL mode, foreign keys) → [`technical/03`](docs/standards/technical/03-data.md)
-- Native modules in `serverExternalPackages` cannot be bundled by Next.js
-- Credentials encrypted with `electron.safeStorage` → [`technical/02`](docs/standards/technical/02-security.md)
+- Credentials encrypted with AES-256-GCM (in `env_manager.rs`) → [`technical/02`](docs/standards/technical/02-security.md)
+- Plugin iframe sandbox must be `allow-scripts allow-forms`, no `allow-same-origin` → [`technical/02`](docs/standards/technical/02-security.md)
+- Frontend must access backend only through `window.nativesAPI` (tauri-adapter) → [`technical/01`](docs/standards/technical/01-layering.md)
 
 ## File Structure
 
-- `src/main/` - Main process modules (database, shell, module-manager, etc.)
+- `src-tauri/` - Tauri backend (Rust): commands, database, HTTP server, terminal, modules
 - `src/app/` - Next.js frontend application
-- `electron/` - Electron main process entry points
+- `src/components/` - React UI components
+- `src/lib/` - Shared frontend libraries (tauri-adapter, design-tokens, etc.)
 - `~/.natives/` - SQLite data storage location
 
 ## Development Notes
 
-- Electron window starts invisible (`show: false`) for FOUC protection
-- Wait for `theme-applied-ready` IPC before showing window
-- SQLite read/write exclusively by Electron main process
-- Config changes broadcast via `db-state-changed` IPC
+- Tauri window starts hidden (`visible: false` in tauri.conf.json) for FOUC protection
+- It is shown after the frontend sends `theme_ready_signal` via Tauri command
+- SQLite read/write exclusively by Tauri Rust backend (src-tauri/)
+- Config changes broadcast via `db-state-changed` IPC event
 
 ## Diagnostics & Tooling (RTK & CodeGraph)
 
