@@ -198,7 +198,12 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   // Phase 3: Release Wizard state
   const [releaseWizardOpen, setReleaseWizardOpen] = useState(false);
 
-  // FOUC guard + locale/theme init + state persistence load
+  // ── stateRef: 追踪最新布局状态但不触发重新渲染 ──
+  // 用于 beforeunload 持久化，避免拖拽时导致 init  Effect 反复重绑
+  const stateRef = useRef(state);
+  useEffect(() => { stateRef.current = state; }, [state]);
+
+  // FOUC guard + locale/theme init + state persistence LOAD（只执行一次）
   useEffect(() => {
     // ── CRITICAL: Signal theme readiness IMMEDIATELY ──
     // The Tauri window starts with visible:false. The theme_ready_signal
@@ -267,18 +272,22 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       }
     }
     initSettings();
+  }, []);
 
-    // Persist sidebar state on page unload
+  // beforeunload 持久化（只挂一次，不依赖 state 变化重绑）
+  // 通过 stateRef 读取最新布局值，避免拖拽时重新触发生成 Effect
+  useEffect(() => {
     const handleBeforeUnload = () => {
       try {
         const api = window.nativesAPI;
+        const s = stateRef.current; // 读取 stateRef，不产生依赖追踪
         if (api?.db?.set) {
           api.db.set('_state:sidebar', JSON.stringify({
-            sidebarWidth: state.sidebarWidth,
-            sidebarCollapsed: state.sidebarCollapsed,
-            terminalHeight: state.terminalHeight,
-            terminalCollapsed: state.terminalCollapsed,
-            rightPanelWidth: state.rightPanelWidth,
+            sidebarWidth: s.sidebarWidth,
+            sidebarCollapsed: s.sidebarCollapsed,
+            terminalHeight: s.terminalHeight,
+            terminalCollapsed: s.terminalCollapsed,
+            rightPanelWidth: s.rightPanelWidth,
           }));
         }
       } catch (err) {
@@ -289,7 +298,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, [state.sidebarWidth, state.sidebarCollapsed, state.terminalHeight, state.terminalCollapsed, state.rightPanelWidth]);
+  }, []);
 
   // Reactively update locale when SettingsPage changes language
   useEffect(() => {
