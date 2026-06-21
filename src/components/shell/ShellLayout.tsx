@@ -30,6 +30,7 @@ import LiquidGlass from '@/components/ui/LiquidGlass';
 import { FONT_SIZE, SPACING, BORDER_RADIUS } from '@/lib/design-tokens';
 import { getHttpPort } from '@/lib/natives-http-port';
 import ModuleDetails from './ModuleDetails';
+import { useShellState } from './useShellState';
 import '@/types'; // ensure Window.nativesAPI type
 import { Edit2, Eye, Radio } from 'lucide-react';
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
@@ -71,60 +72,34 @@ interface ShellState {
 }
 
 export default function ShellLayout({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<ShellState>({
-    sidebarCollapsed: false,
-    sidebarWidth: 248,
-    rightPanelMode: 'closed',
-    rightPanelWidth: 320,
-    previewSubMode: 'preview',
-    terminalCollapsed: true,
-    terminalHeight: 280,
-    terminalMaximized: false,
-    cmdkOpen: false,
-  });
-
-  // Derive initial view from URL pathname — the App Router page files are
-  // no-op shells that dispatch a navigate event, but we need to set the
-  // correct view synchronously on first render (before child effects fire).
-  const [activeView, setActiveView] = useState<string>(() => {
-    if (typeof window === 'undefined') return 'dashboard';
-    const path = window.location.pathname.replace(/\/+$/, '') || '/';
-    const routingTable: Record<string, string> = {
-      '/': 'dashboard',
-      '/files': 'files',
-      '/tools': 'tools',
-      '/ai': 'ai',
-      '/modules': 'modules',
-    };
-    return routingTable[path] || 'dashboard';
-  });
-  const [themeReady, setThemeReady] = useState(false);
-  const [locale, setLocale] = useState<Locale>('zh');
-  const [httpPort, setHttpPort] = useState<number | null>(null);
-  const terminalSessionIdRef = useRef<string | null>(null);
-  const iframeContainerRef = useRef<HTMLDivElement>(null);
-  const activeModuleRef = useRef<string | null>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
-
-  // File preview state
-  const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null);
-  const [editMode, setEditMode] = useState(false);
+  const {
+    state, setState, stateRef,
+    activeView, setActiveView,
+    themeReady, setThemeReady,
+    locale, setLocale,
+    httpPort, setHttpPort,
+    terminalSessionIdRef,
+    iframeContainerRef,
+    activeModuleRef,
+    contentRef,
+    selectedFile, setSelectedFile,
+    editMode, setEditMode,
+    visualConfig, setVisualConfig,
+    followMode, cycleFollowMode,
+    crashedModules, setCrashedModules,
+    needsOnboarding, setNeedsOnboarding,
+    annotatingFile, setAnnotatingFile,
+    annotationImageUrl, setAnnotationImageUrl,
+    releaseWizardOpen, setReleaseWizardOpen,
+    toggleSidebar, toggleTerminal, toggleMaximized,
+    toggleRightPanel,
+    setRightPanelMode,
+  } = useShellState();
 
   // ── Global Background Visual Config (shared with ControlHub & Settings) ──
   const WALLPAPERS = [
     'https://images.unsplash.com/photo-1579033461380-adb47c3eb938?q=80&w=800&auto=format&fit=crop',
   ];
-
-  const [visualConfig, setVisualConfig] = useState({
-    blurAmount: 0.40,
-    displacementScale: 64,
-    saturation: 135,
-    aberrationIntensity: 2,
-    elasticity: 0,
-    cornerRadius: 28,
-    showWallpaper: true,
-    showBlobs: true,
-  });
 
   const CONFIG_DB_KEY = 'settings:controlHubVisuals';
 
@@ -185,26 +160,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   }, []);
 
   // Terminal follow mode — unified via useFollowMode hook
-  const { mode: followMode, cycleMode: cycleFollowMode } = useFollowMode();
 
   // Crash state: track crashed modules for overlay display
-  const [crashedModules, setCrashedModules] = useState<Set<string>>(new Set());
   const [iframeReloadKey, setIframeReloadKey] = useState(0);
-
-  // P1-5: Username onboarding
-  const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null);
-
-  // Phase 3: Screenshot state
-  const [annotatingFile, setAnnotatingFile] = useState<string | null>(null);
-  const [annotationImageUrl, setAnnotationImageUrl] = useState<string | null>(null);
-
-  // Phase 3: Release Wizard state
-  const [releaseWizardOpen, setReleaseWizardOpen] = useState(false);
-
-  // ── stateRef: 追踪最新布局状态但不触发重新渲染 ──
-  // 用于 beforeunload 持久化，避免拖拽时导致 init  Effect 反复重绑
-  const stateRef = useRef(state);
-  useEffect(() => { stateRef.current = state; }, [state]);
 
   // FOUC guard + locale/theme init + state persistence LOAD（只执行一次）
   useEffect(() => {
@@ -578,41 +536,17 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     return () => window.removeEventListener('long-task-complete', handler);
   }, []);
 
-  const toggleSidebar = useCallback(() => {
-    setState((prev) => ({ ...prev, sidebarCollapsed: !prev.sidebarCollapsed }));
-  }, []);
-
-  const setRightPanelMode = useCallback((mode: RightPanelMode) => {
-    setState((prev) => ({ ...prev, rightPanelMode: mode }));
-  }, []);
-
   const setPreviewSubMode = useCallback((mode: PreviewSubMode) => {
     setState((prev) => ({ ...prev, previewSubMode: mode }));
   }, []);
       // eslint-disable-next-line react-hooks/preserve-manual-memoization
 
-    // eslint-disable-next-line react-hooks/preserve-manual-memoization
-  const toggleRightPanel = useCallback((mode: RightPanelMode = 'notifications') => {
-    setState((prev) => ({
-      ...prev,
-      rightPanelMode: prev.rightPanelMode === 'closed' ? mode : 'closed',
-    }));
-  }, []);
-
-  const toggleTerminal = useCallback(() => {
-    setState((prev) => ({ ...prev, terminalCollapsed: !prev.terminalCollapsed }));
-  }, []);
-
-  // Listen for 'toggle-terminal' custom event (dispatched by CommandPalette)
+    // Listen for 'toggle-terminal' custom event (dispatched by CommandPalette)
   useEffect(() => {
     const handler = () => toggleTerminal();
     window.addEventListener('toggle-terminal', handler);
     return () => window.removeEventListener('toggle-terminal', handler);
   }, [toggleTerminal]);
-
-  const toggleMaximized = useCallback(() => {
-    setState((prev) => ({ ...prev, terminalMaximized: !prev.terminalMaximized }));
-  }, []);
 
   const openCmdk = useCallback(() => {
     setState((prev) => ({ ...prev, cmdkOpen: true }));
