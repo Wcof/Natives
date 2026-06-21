@@ -1,7 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { startTransition, useEffect, useRef, useState, useCallback } from 'react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
+import { IFRAME_SANDBOX, assertSecureSandbox } from '@/lib/iframe-manager';
+import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 
 interface IframeContainerProps {
   moduleId: string;
@@ -27,10 +29,12 @@ export default function IframeContainer({ moduleId, url, isVisible, onReady, onE
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadIframe();
   }, [url, loadIframe]);
 
   const handleLoad = () => {
+    assertSecureSandbox(IFRAME_SANDBOX, `IframeContainer(${moduleId})`);
     setLoading(false);
     setRetryCount(0);
     onReady?.(moduleId);
@@ -100,16 +104,21 @@ export default function IframeContainer({ moduleId, url, isVisible, onReady, onE
     >
       {loading && (
         <div style={{
-          position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
-          justifyContent: 'center', color: 'var(--vibe-btn-text)', fontSize: FONT_SIZE.lg,
-          padding: 30,
+          position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center',
+          justifyContent: 'center', color: 'var(--text-dim)', fontSize: FONT_SIZE.md,
+          padding: 30, gap: 16
         }}>
-          Loading...{retryCount > 0 ? ` (retry ${retryCount}/${MAX_RETRIES})` : ''}
+          <MathCurveLoader size={60} />
+          {retryCount > 0 && (
+            <div style={{ fontSize: FONT_SIZE.sm }}>
+              retry {retryCount}/{MAX_RETRIES}
+            </div>
+          )}
         </div>
       )}
       <iframe
         ref={iframeRef}
-        sandbox="allow-scripts allow-forms"
+        sandbox={IFRAME_SANDBOX}
         src={url}
         onLoad={handleLoad}
         onError={handleError}

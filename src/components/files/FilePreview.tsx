@@ -1,11 +1,13 @@
 'use client';
 
-import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
-import { Eye, Edit2 } from 'lucide-react';
+import { startTransition, useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
+import { Eye, Edit2, Pencil } from 'lucide-react';
+import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 import { type FileEntry } from '@/types/file';
 import { t, useLocale, type Locale } from '@/i18n';
 import { getExt, isMarkdownFile, isCsvFile, isArchiveFile } from '@/lib/follow-mode';
 import { detectLanguage, highlightCode } from '@/lib/shiki-utils';
+import { IFRAME_SANDBOX } from '@/lib/iframe-manager';
 import { parseUnifiedDiff } from '@/lib/diff-utils';
 import { useFileContent } from '@/lib/useFileContent';
 import { type PreviewSubMode } from '@/components/shell/RightPanel';
@@ -13,26 +15,29 @@ import MonacoDiffView from './MonacoDiffView';
 import ImageLightbox from './ImageLightbox';
 import CsvTable from './CsvTable';
 import ArchivePreview from './ArchivePreview';
+import { getHttpPort } from '@/lib/natives-http-port';
 
 // Lazy-loaded heavy components
 const MilkdownEditor = lazy(() => import('./MilkdownEditor'));
 const MonacoEditor = lazy(() => import('./MonacoEditor'));
+const ImageEditor = lazy(() => import('./ImageEditor'));
 
 interface FilePreviewProps {
   entry: FileEntry;
   subMode: PreviewSubMode;
   onClose: () => void;
+  editMode?: boolean;
+  onEditModeChange?: (mode: boolean) => void;
 }
 
 export { type PreviewSubMode };
 
-export default function FilePreview({ entry, subMode, onClose }: FilePreviewProps) {
+export default function FilePreview({ entry, subMode, onClose, editMode = false, onEditModeChange }: FilePreviewProps) {
   const [gitDiff, setGitDiff] = useState<string | null>(null);
   const [gitLoading, setGitLoading] = useState(false);
   const [gitStatus, setGitStatus] = useState<string | null>(null);
   const locale = useLocale();
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
-  const [editMode, setEditMode] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Escape to close
@@ -57,15 +62,15 @@ export default function FilePreview({ entry, subMode, onClose }: FilePreviewProp
         if (api?.git?.diff) {
           const diff = await api.git.diff(entry.path);
           if (!cancelled) {
-            setGitDiff(diff || t(locale, 'fileBrowser.noChanges'));
+            setGitDiff((diff as string) || t(locale, 'fileBrowser.noChanges'));
           }
         }
         if (api?.git?.status) {
           const dirPath = entry.isDir ? entry.path : entry.path.substring(0, entry.path.lastIndexOf('/')) || '/';
-          const status = await api.git.status(dirPath);
+          const status = await api.git.status(dirPath) as unknown as { files: Array<{ path: string; status: string }> };
           if (!cancelled && status) {
             const fileStatus = (status.files || []).find(
-              (f: { path: string; status: string }) => f.path === entry.path || f.path === entry.name
+              (f) => f.path === entry.path || f.path === entry.name
             );
             if (fileStatus) {
               const statusMap: Record<string, string> = {
@@ -92,12 +97,16 @@ export default function FilePreview({ entry, subMode, onClose }: FilePreviewProp
     return () => { cancelled = true; };
   }, [subMode, entry.path, entry.name, entry.isDir, locale]);
 
-  const httpPort = window.__nativesHttpPort || 3001;
+  const [httpPort, setHttpPort] = useState<number | null>(null);
   const ext = getExt(entry.name);
   const isMarkdown = isMarkdownFile(entry.name);
   const isCsv = isCsvFile(entry.name);
   const isArchive = isArchiveFile(entry.name);
   const isCode = entry.kind === 'text' && !isMarkdown && !isCsv;
+
+  useEffect(() => {
+    getHttpPort().then(setHttpPort).catch(() => {});
+  }, []);
 
   return (
     <div ref={containerRef} tabIndex={-1} role="dialog" aria-label={entry.name} style={{
@@ -107,24 +116,6 @@ export default function FilePreview({ entry, subMode, onClose }: FilePreviewProp
       minHeight: 0,
       background: 'transparent',
     }}>
-      {/* Top bar: edit toggle for code preview */}
-      {subMode === 'preview' && isCode && (
-        <div style={{
-          display: 'flex',
-          justifyContent: 'flex-end',
-          padding: '4px 8px',
-          borderBottom: '1px solid var(--vibe-sidebar-border)',
-        }}>
-          <button
-            className="flex items-center justify-center p-1 rounded-lg text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)] transition-all"
-            onClick={() => setEditMode(!editMode)}
-            title={editMode ? 'View mode' : 'Edit mode'}
-          >
-            {editMode ? <Eye size={13} /> : <Edit2 size={13} />}
-          </button>
-        </div>
-      )}
-
       {/* Content */}
       <div style={{
         flex: 1,
@@ -139,7 +130,6 @@ export default function FilePreview({ entry, subMode, onClose }: FilePreviewProp
             ? (
               <CodePreview
                 entry={entry}
-                httpPort={httpPort}
                 locale={locale}
                 editMode={editMode}
                 ext={ext}
@@ -148,7 +138,6 @@ export default function FilePreview({ entry, subMode, onClose }: FilePreviewProp
             : (
               <PreviewContent
                 entry={entry}
-                httpPort={httpPort}
                 locale={locale}
                 isMarkdown={isMarkdown}
                 isCsv={isCsv}
@@ -175,53 +164,160 @@ export default function FilePreview({ entry, subMode, onClose }: FilePreviewProp
 
 // ── Preview Content ──
 
-function PreviewContent({ entry, httpPort, locale, isMarkdown, isCsv, isArchive, onImageClick }: {
+/** Build a blob URL for a file via Tauri IPC. Returns null for binary types that need a URL. */
+function useFileBlobUrl(path: string, kind?: string): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    const api = window.nativesAPI;
+    if (kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'pdf') {
+      if (api?.fs?.convertFileSrc) {
+        startTransition(() => { setUrl(api.fs?.convertFileSrc?.(path) ?? ""); });
+        return;
+      }
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        if (api?.fs?.readFile) {
+          const result = await api.fs.readFile(path) as any;
+          if (cancelled) return;
+          const content = typeof result === 'string' ? result : result?.content;
+          if (!content) return;
+          // Infer MIME from extension
+          const ext = path.split('.').pop()?.toLowerCase() || '';
+          const mimeMap: Record<string, string> = {
+            png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+            gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+            mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime',
+            mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg',
+            pdf: 'application/pdf',
+          };
+          const mime = mimeMap[ext] || 'application/octet-stream';
+          // If encoding is base64, decode it
+          let blob: Blob;
+          if (result?.encoding === 'base64') {
+            const byteString = atob(content);
+            const ab = new ArrayBuffer(byteString.length);
+            const ia = new Uint8Array(ab);
+            for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+            blob = new Blob([ab], { type: mime });
+          } else {
+            blob = new Blob([content], { type: mime });
+          }
+          if (!cancelled) setUrl(URL.createObjectURL(blob));
+        }
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [path, kind]);
+
+  return url;
+}
+
+function PreviewContent({ entry, locale, isMarkdown, isCsv, isArchive, onImageClick }: {
   entry: FileEntry;
-  httpPort: number;
   locale: Locale;
   isMarkdown: boolean;
   isCsv: boolean;
   isArchive: boolean;
   onImageClick: (src: string) => void;
 }) {
-  // Image with lightbox
-  if (entry.kind === 'image') {
-    const src = `http://localhost:${httpPort}/api/fs/raw?path=${encodeURIComponent(entry.path)}`;
+  const blobUrl = useFileBlobUrl(entry.path, entry.kind);
+  const [imageEditing, setImageEditing] = useState(false);
+
+  // Image with lightbox + edit button
+  if (entry.kind === 'image' && blobUrl) {
+    if (imageEditing) {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', borderBottom: '1px solid var(--border)' }}>
+            <button
+              onClick={() => setImageEditing(false)}
+              className="text-xs px-2 py-1 rounded"
+              style={{ background: 'var(--vibe-btn-bg)', color: 'var(--text-dim)' }}
+            >
+              {t(locale, 'filePreview.backToPreview')}
+            </button>
+            <span className="text-xs" style={{ color: 'var(--text-faint)' }}>{entry.name}</span>
+          </div>
+          <Suspense fallback={<MathCurveLoader />}>
+            <ImageEditor
+              imagePath={blobUrl}
+              imageName={entry.name}
+              onSave={(dataUrl, ext, asNew) => {
+                // Save via fs.saveBlob
+                const api = window.nativesAPI;
+                if (api?.fs?.saveBlob && dataUrl) {
+                  const base64 = dataUrl.split(',')[1] || '';
+                  const p = entry.path || '';
+                  const dir = p.substring(0, p.lastIndexOf('/')) || '/';
+                  const entryName = entry.name || 'image';
+                  const name = asNew
+                    ? entryName.replace(/\.[^.]+$/, '') + '-edited.' + ext
+                    : entryName;
+                  api.fs.saveBlob(dir, name, base64).catch(() => {});
+                }
+                setImageEditing(false);
+              }}
+              onClose={() => setImageEditing(false)}
+            />
+          </Suspense>
+        </div>
+      );
+    }
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, cursor: 'zoom-in' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, position: 'relative' }}>
         <img
-          src={src}
+          src={blobUrl}
           alt={entry.name}
-          onClick={() => onImageClick(src)}
+          onClick={() => onImageClick(blobUrl)}
           style={{
             maxWidth: '100%', maxHeight: '100%', objectFit: 'contain',
             background: 'repeating-conic-gradient(#80808033 0% 25%, transparent 0% 50%) 50% / 20px 20px',
+            cursor: 'zoom-in',
           }}
         />
+        <button
+          onClick={(e) => { e.stopPropagation(); setImageEditing(true); }}
+          title={t(locale, 'filePreview.editImage')}
+          style={{
+            position: 'absolute', top: 8, right: 8,
+            display: 'flex', alignItems: 'center', gap: 4,
+            padding: '4px 8px', borderRadius: 6, fontSize: 12,
+            background: 'var(--vibe-btn-bg)', color: 'var(--text-dim)',
+            border: '1px solid var(--border)', cursor: 'pointer',
+            backdropFilter: 'blur(8px)',
+          }}
+        >
+          <Pencil size={13} />
+          {t(locale, 'filePreview.editImage')}
+        </button>
       </div>
     );
   }
 
-  if (entry.kind === 'video') {
+  if (entry.kind === 'video' && blobUrl) {
     return (
       <video controls style={{ maxWidth: '100%', maxHeight: '100%' }}>
-        <source src={`http://localhost:${httpPort}/api/fs/raw?path=${encodeURIComponent(entry.path)}`} />
+        <source src={blobUrl} />
       </video>
     );
   }
 
-  if (entry.kind === 'audio') {
+  if (entry.kind === 'audio' && blobUrl) {
     return (
       <audio controls style={{ width: '100%' }}>
-        <source src={`http://localhost:${httpPort}/api/fs/raw?path=${encodeURIComponent(entry.path)}`} />
+        <source src={blobUrl} />
       </audio>
     );
   }
 
-  if (entry.kind === 'pdf') {
+  if (entry.kind === 'pdf' && blobUrl) {
     return (
       <iframe
-        src={`http://localhost:${httpPort}/api/fs/raw?path=${encodeURIComponent(entry.path)}`}
+        src={blobUrl}
         style={{ width: '100%', height: '100%', border: 'none' }}
       />
     );
@@ -229,17 +325,17 @@ function PreviewContent({ entry, httpPort, locale, isMarkdown, isCsv, isArchive,
 
   // CSV/TSV table
   if (isCsv) {
-    return <CsvPreview path={entry.path} httpPort={httpPort} locale={locale} delimiter={entry.name.endsWith('.tsv') ? '\t' : ','} />;
+    return <CsvPreview path={entry.path} locale={locale} delimiter={entry.name.endsWith('.tsv') ? '\t' : ','} />;
   }
 
   // Markdown WYSIWYG (Milkdown Crepe)
   if (isMarkdown) {
-    return <MdWysiwygPreview path={entry.path} httpPort={httpPort} locale={locale} />;
+    return <MdWysiwygPreview path={entry.path} locale={locale} />;
   }
 
   // HTML isolated preview
   if (entry.name.endsWith('.html') || entry.name.endsWith('.htm')) {
-    return <HtmlFilePreview path={entry.path} httpPort={httpPort} locale={locale} />;
+    return <HtmlFilePreview path={entry.path} locale={locale} />;
   }
 
   // Archive preview
@@ -256,8 +352,8 @@ function PreviewContent({ entry, httpPort, locale, isMarkdown, isCsv, isArchive,
 
 // ── CSV Preview ──
 
-function CsvPreview({ path, httpPort, locale, delimiter }: { path: string; httpPort: number; locale: Locale; delimiter: string }) {
-  const { content } = useFileContent(path, httpPort);
+function CsvPreview({ path, locale, delimiter }: { path: string; locale: Locale; delimiter: string }) {
+  const { content } = useFileContent(path);
   if (content === null) {
     return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
   }
@@ -266,14 +362,19 @@ function CsvPreview({ path, httpPort, locale, delimiter }: { path: string; httpP
 
 // ── Markdown WYSIWYG Preview ──
 
-function MdWysiwygPreview({ path, httpPort, locale }: { path: string; httpPort: number; locale: Locale }) {
-  const { content } = useFileContent(path, httpPort);
+function MdWysiwygPreview({ path, locale }: { path: string; locale: Locale }) {
+  const { content } = useFileContent(path);
   if (content === null) {
     return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
   }
 
   return (
-    <Suspense fallback={<div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>Loading editor...</div>}>
+    <Suspense fallback={
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 40, gap: 12 }}>
+        <MathCurveLoader size={40} />
+        <div style={{ color: 'var(--text-faint)', fontSize: 12 }}>Loading editor...</div>
+      </div>
+    }>
       <MilkdownEditor
         content={content}
         filePath={path}
@@ -285,8 +386,8 @@ function MdWysiwygPreview({ path, httpPort, locale }: { path: string; httpPort: 
   );
 }
 
-function HtmlFilePreview({ path, httpPort, locale }: { path: string; httpPort: number; locale: Locale }) {
-  const { content } = useFileContent(path, httpPort);
+function HtmlFilePreview({ path, locale }: { path: string; locale: Locale }) {
+  const { content } = useFileContent(path);
   if (content === null) {
     return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
   }
@@ -298,7 +399,7 @@ function HtmlFilePreview({ path, httpPort, locale }: { path: string; httpPort: n
       // from opening new windows. `allow-same-origin` is excluded per security
       // standard R-S2 (plugin iframes must never have it; file previews follow
       // the same rule to keep the surface minimal).
-      sandbox="allow-scripts allow-forms"
+      sandbox={IFRAME_SANDBOX}
       style={{ width: '100%', height: '100%', border: 'none', background: '#fff' }}
     />
   );
@@ -306,15 +407,14 @@ function HtmlFilePreview({ path, httpPort, locale }: { path: string; httpPort: n
 
 // ── Code Preview (shiki highlight + Monaco editor) ──
 
-function CodePreview({ entry, httpPort, locale, editMode, ext }: {
+function CodePreview({ entry, locale, editMode, ext }: {
   entry: FileEntry;
-  httpPort: number;
   locale: Locale;
   editMode: boolean;
   ext: string;
 }) {
   const [highlightedHtml, setHighlightedHtml] = useState<string>('');
-  const { content: code, loading } = useFileContent(entry.path, httpPort);
+  const { content: code, loading } = useFileContent(entry.path);
 
   // shiki syntax highlighting
   useEffect(() => {
@@ -339,6 +439,7 @@ function CodePreview({ entry, httpPort, locale, editMode, ext }: {
     try {
       const pretty = JSON.stringify(JSON.parse(code), null, 2);
       return (
+    // eslint-disable-next-line react-hooks/error-boundaries
         <pre style={{
           margin: 0, fontSize: 12, lineHeight: 1.6,
           fontFamily: 'var(--font-mono)',
@@ -354,7 +455,12 @@ function CodePreview({ entry, httpPort, locale, editMode, ext }: {
   // Edit mode: Monaco Editor
   if (editMode) {
     return (
-      <Suspense fallback={<div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>Loading editor...</div>}>
+      <Suspense fallback={
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 40, gap: 12 }}>
+          <MathCurveLoader size={40} />
+          <div style={{ color: 'var(--text-faint)', fontSize: 12 }}>Loading editor...</div>
+        </div>
+      }>
         <MonacoEditor
           content={code}
           language={ext}

@@ -1,11 +1,13 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { startTransition, useState, useEffect, useRef, useCallback } from 'react';
 import { Package } from 'lucide-react';
 import { followPriority, changedRange, getFollowState, recordTerminalActivity, getExt } from '@/lib/follow-mode';
+import { getScrollbackLines } from '@/lib/path-detector';
 import { parseAgentAction, composeNarration } from '@/lib/agent-narration';
 import { highlightCode, extToLanguage } from '@/lib/shiki-utils';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { IFRAME_SANDBOX } from '@/lib/iframe-manager';
 import { useTheme } from '@/context/ThemeContext';
 
 interface FollowRendererProps {
@@ -21,6 +23,7 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
 
   // Fetch file content when path changes — use Tauri IPC fs.readFile
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!filePath) { setContent(null); return; }
     let cancelled = false;
     (async () => {
@@ -39,6 +42,7 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
 
   // Compute changed lines
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!content || !lastContent) { setHighlightedLines(new Set()); return; }
     const range = changedRange(lastContent, content);
     const lines = new Set<number>();
@@ -49,18 +53,23 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
     return () => clearTimeout(timer);
   }, [content, lastContent]);
 
-  // Narration polling
+  // Narration polling — connect to terminal output buffer
   useEffect(() => {
     const interval = setInterval(() => {
       const state = getFollowState();
       if (!state.on || !state.currentPath) { setNarration(''); return; }
 
-      // Get terminal lines for action parsing (placeholder — needs terminal buffer access)
-      const action = ''; // Will be populated by terminal integration
+      // Get terminal output lines for action parsing
+      const terminalLines = getScrollbackLines();
+      const action = terminalLines.length > 0 ? parseAgentAction(terminalLines) : '';
       const prio = followPriority(state.currentPath);
       const isArtifact = prio === 0;
+
+      // Determine if agent is active (has recent terminal output within 8s)
+      const isActive = terminalLines.length > 0 && Date.now() - state.lastActivity < 8000;
+
       setNarration(composeNarration(
-        Date.now() - state.lastActivity < 8000,
+        isActive,
         action,
         state.currentPath,
         isArtifact,
@@ -184,35 +193,42 @@ function LiveHtmlPreview({ path }: { path: string }) {
     sendThemeToIframe(currentIframeRef.current);
     // Also re-render with cache-busting URL so the iframe reloads with new theme
     if (currentSrc) {
-      setCurrentSrc(`${currentSrc.split('&v=')[0]}&v=${Date.now()}`);
+      startTransition(() => { setCurrentSrc(`${currentSrc.split('&v=')[0]}&v=${Date.now()}`); });
     }
   }, [themeId, sendThemeToIframe, currentSrc]);
 
   useEffect(() => {
-    // Use the Tauri HTTP server for iframe source (bypasses deleted Next.js API routes)
-    const getHttpPort = async (): Promise<number> => {
-      try {
-        const port = await window.nativesAPI?.bridge?.getHttpPort?.() ?? 3456;
-        return port;
-      } catch {
-        return 3456;
-      }
-    };
+    // Read file content via Tauri IPC and create a blob URL for the iframe
     (async () => {
-      const port = await getHttpPort();
-      const url = `http://localhost:${port}/api/fs/raw?path=${encodeURIComponent(path)}&v=${Date.now()}`;
-      if (!currentSrc) {
-        setCurrentSrc(url);
-        lastUrlRef.current = url;
-        return;
+      try {
+        const api = window.nativesAPI;
+        if (!api?.fs?.readFile) {
+          console.warn('[FollowRenderer] fs.readFile not available');
+          return;
+        }
+
+        const result = await api.fs.readFile(path);
+        if (!result) return;
+        const content = typeof result === 'string' ? result : (result as any).content;
+        const mimeType = path.endsWith('.html') || path.endsWith('.htm') ? 'text/html' : 'text/plain';
+        const blob = new Blob([content || ''], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+
+        if (!currentSrc) {
+          setCurrentSrc(url);
+          lastUrlRef.current = url;
+          return;
+        }
+        if (swappingRef.current) {
+          dirtyRef.current = true;
+          return;
+        }
+        swappingRef.current = true;
+        nextSrcRef.current = url;
+        setNextSrc(url);
+      } catch (err) {
+        console.error('[FollowRenderer] Failed to load file:', err);
       }
-      if (swappingRef.current) {
-        dirtyRef.current = true;
-        return;
-      }
-      swappingRef.current = true;
-      nextSrcRef.current = url;
-      setNextSrc(url);
     })();
   }, [path, currentSrc]);
 
@@ -229,11 +245,18 @@ function LiveHtmlPreview({ path }: { path: string }) {
 
     if (dirtyRef.current) {
       dirtyRef.current = false;
-      const port = await (async () => {
-        try { return await window.nativesAPI?.bridge?.getHttpPort?.() ?? 3456; }
-        catch { return 3456; }
-      })();
-      setCurrentSrc(`http://localhost:${port}/api/fs/raw?path=${encodeURIComponent(path)}&v=${Date.now()}`);
+      try {
+        const api = window.nativesAPI;
+        if (api?.fs?.readFile) {
+          const result = await api.fs.readFile(path);
+          if (result) {
+            const content = typeof result === 'string' ? result : (result as any).content;
+            const mimeType = path.endsWith('.html') || path.endsWith('.htm') ? 'text/html' : 'text/plain';
+            const blob = new Blob([content || ''], { type: mimeType });
+            setCurrentSrc(URL.createObjectURL(blob));
+          }
+        }
+      } catch { /* ignore fallback */ }
     }
   }, [path, sendThemeToIframe]);
 
@@ -250,7 +273,7 @@ function LiveHtmlPreview({ path }: { path: string }) {
         <iframe
           ref={currentIframeRef}
           src={currentSrc}
-          sandbox="allow-scripts allow-forms"
+          sandbox={IFRAME_SANDBOX}
           onLoad={() => sendThemeToIframe(currentIframeRef.current)}
           style={{ width: '100%', height: '100%', border: 'none', background: '#fff' }}
         />
@@ -259,7 +282,7 @@ function LiveHtmlPreview({ path }: { path: string }) {
         <iframe
           ref={nextIframeRef}
           src={nextSrc}
-          sandbox="allow-scripts allow-forms"
+          sandbox={IFRAME_SANDBOX}
           onLoad={() => {
             handleNextLoad();
             sendThemeToIframe(nextIframeRef.current);
