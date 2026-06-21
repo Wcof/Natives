@@ -1,6 +1,6 @@
 'use client';
 
-import { startTransition, useState, useEffect, useRef, useCallback, lazy, Suspense, memo } from 'react';
+import { startTransition, useState, useEffect, useRef, useCallback, memo, lazy, Suspense } from 'react';
 import { t, type Locale } from '@/i18n';
 import Sidebar from './Sidebar';
 import RightPanel from './RightPanel';
@@ -11,8 +11,8 @@ import TerminalPanel from './Terminal';
 import CommandPalette from './CommandPalette';
 import ErrorBoundary from '@/components/ui/ErrorBoundary';
 import ShortcutHelp from '@/components/ui/ShortcutHelp';
-import SettingsPage from './SettingsPage';
 import ControlHubWidget from './ControlHubWidget';
+import MainContent from './MainContent';
 import { applyTheme } from '@/lib/theme-engine';
 
 const MemoizedSidebar = memo(Sidebar);
@@ -39,25 +39,16 @@ import { BUILTIN_TOOLS, getBuiltinTool } from '@/lib/builtin-tools';
 import type { FileEntry } from '@/types/file';
 import type { PreviewSubMode } from '@/components/files/FilePreview';
 
-// Lazy-loaded heavy page components — 0 cost until actually visited
-const LazyWorkshopPage = lazy(() => import('./WorkshopPage'));
-const LazyFileBrowser = lazy(() => import('@/components/files/FileBrowser'));
+// Right panel lazy imports (not in MainContent)
 const LazyFilePreview = lazy(() => import('@/components/files/FilePreview'));
-const LazyAiWorkbench = lazy(() => import('@/components/ai/AiWorkbench'));
-const LazyToolsPage = lazy(() => import('@/components/tools/ToolsPage'));
-const LazyModulesPage = lazy(() => import('@/app/modules/page'));
-
-// Lazy fallback
-// 预创建内置工具的懒加载组件，避免在 render 中创建
-const BUILTIN_LAZY_MAP: Record<string, React.LazyExoticComponent<any>> = {};
-// 未来有 editor/browser 面板时在此预创建，例如：
-// BUILTIN_LAZY_MAP['editor'] = lazy(() => import('@/components/shell/EditorPanel'));
-
 const LazyFallback = () => (
   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 16 }}>
     <MathCurveLoader size={48} />
   </div>
 );
+import { useLayoutEvents } from './hooks/useLayoutEvents';
+import { useModuleEvents } from './hooks/useModuleEvents';
+import { useFileEvents } from './hooks/useFileEvents';
 
 interface ShellState {
   sidebarCollapsed: boolean;
@@ -102,6 +93,34 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   ];
 
   const CONFIG_DB_KEY = 'settings:controlHubVisuals';
+
+  // ── Event hooks ──
+  useLayoutEvents({
+    setVisualConfig,
+    stateRef,
+    toggleTerminal,
+    setState,
+    setLocale,
+    CONFIG_DB_KEY,
+  });
+  useModuleEvents({
+    activeView,
+    httpPort,
+    iframeContainerRef,
+    activeModuleRef,
+    setCrashedModules,
+    setReleaseWizardOpen,
+    setActiveView,
+  });
+  useFileEvents({
+    followMode,
+    terminalSessionIdRef,
+    selectedFile,
+    setSelectedFile,
+    setRightPanelMode,
+  });
+
+  // ── Global Background Visual Config (shared with ControlHub & Settings) ──
 
   useEffect(() => {
     async function loadConfig() {
@@ -649,73 +668,6 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   // Widget mode check — render only the ControlHub on transparent background
   const isWidgetMode = typeof window !== 'undefined' && window.location.search.includes('mode=widget');
 
-  const renderMainContent = () => {
-    // Builtin tool routing: builtin:terminal → open bottom panel, others → lazy content
-    if (activeView.startsWith('builtin:')) {
-      const toolId = activeView.slice('builtin:'.length);
-      const toolDef = getBuiltinTool(toolId);
-
-      // Terminal = bottom panel (special case)
-      if (toolId === 'terminal') {
-        // 面板展开已在 handleModuleSelect 中处理，此处仅返回内容
-        return children; // show dashboard behind the panel
-      }
-
-      // Other builtin tools with displayMode 'content' — lazy load their component
-      if (toolDef?.componentPath && toolDef.displayMode === 'content') {
-        const LazyComponent = BUILTIN_LAZY_MAP[toolDef.id];
-        if (LazyComponent) {
-          return (
-            <Suspense fallback={<LazyFallback />}>
-              <LazyComponent />
-            </Suspense>
-          );
-        }
-        // fallback: 无预创建的懒组件，显示提示
-        return <div style={{ padding: 40, color: 'var(--text-dim)' }}>Component not registered: {toolDef.componentPath}</div>;
-      }
-
-      // External-only tool (no embedded view) — launch externally
-      if (toolDef) {
-        // Read driver from DB and launch
-        (async () => {
-          try {
-            const list = await window.nativesAPI?.builtinTool?.list?.();
-            const entry = list?.find((t: { id: string }) => t.id === toolId);
-            if (entry?.driver && entry.driver !== 'native') {
-              await window.nativesAPI?.builtinTool?.launch?.(entry.driver);
-            }
-          } catch { /* ignore */ }
-        })();
-        return children;
-      }
-
-      return children;
-    }
-
-    switch (activeView) {
-      case 'settings':
-        return <SettingsPage />;
-      case 'workshop':
-        return <Suspense fallback={<LazyFallback />}><LazyWorkshopPage onInstall={handleInstallModule} /></Suspense>;
-      case 'files':
-        return <Suspense fallback={<LazyFallback />}><LazyFileBrowser onFileSelect={handleFileSelect} /></Suspense>;
-      case 'ai':
-        return <Suspense fallback={<LazyFallback />}><LazyAiWorkbench /></Suspense>;
-      case 'tools':
-        return <Suspense fallback={<LazyFallback />}><LazyToolsPage /></Suspense>;
-      case 'modules':
-        return <Suspense fallback={<LazyFallback />}><LazyModulesPage /></Suspense>;
-      case 'dashboard':
-        return children;
-      default:
-        if (activeView.startsWith('module:')) {
-          // iframe is managed by useEffect above, render container
-          return <div ref={iframeContainerRef} style={{ width: '100%', height: '100%' }} />;
-        }
-        return children;
-    }
-  };
 
   // P1-5: Show onboarding if no username is set
   // Bypassed to directly render the demo
@@ -810,7 +762,21 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         <div className={`flex-1 vibe-content-panel min-w-0 overflow-hidden relative${state.terminalCollapsed ? '' : ' mb-3'}`}>
           <div ref={contentRef} id="main-content" tabIndex={-1} style={{ width: '100%', height: '100%', outline: 'none' }}>
             <ErrorBoundary>
-              {renderMainContent()}
+              <MainContent
+                activeView={activeView}
+                locale={locale}
+                httpPort={httpPort}
+                selectedFile={selectedFile}
+                setSelectedFile={setSelectedFile}
+                editMode={editMode}
+                setEditMode={setEditMode}
+                iframeReloadKey={0}
+                terminalSessionId={terminalSessionIdRef.current}
+                onFileSelect={handleFileSelect}
+                iframeContainerRef={iframeContainerRef}
+              >
+                {children}
+              </MainContent>
             </ErrorBoundary>
           </div>
           {/* Portal target for content-area overlays — covers only the content panel */}
