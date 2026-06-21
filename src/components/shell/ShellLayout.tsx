@@ -1,6 +1,6 @@
 'use client';
 
-import { startTransition, useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
+import { startTransition, useState, useEffect, useRef, useCallback, lazy, Suspense, memo } from 'react';
 import { t, type Locale } from '@/i18n';
 import Sidebar from './Sidebar';
 import RightPanel from './RightPanel';
@@ -14,6 +14,9 @@ import ShortcutHelp from '@/components/ui/ShortcutHelp';
 import SettingsPage from './SettingsPage';
 import ControlHubWidget from './ControlHubWidget';
 import { applyTheme } from '@/lib/theme-engine';
+
+const MemoizedSidebar = memo(Sidebar);
+const MemoizedHeader = memo(Header);
 import { getIframeManager } from '@/lib/iframe-manager';
 import ScreenshotCard from '@/components/screenshot/ScreenshotCard';
 import AnnotationEditor from '@/components/screenshot/AnnotationEditor';
@@ -846,7 +849,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         className="h-full shrink-0 transition-[width] duration-200 relative z-10"
         style={{ width: state.sidebarCollapsed ? 0 : state.sidebarWidth, overflow: state.sidebarCollapsed ? 'hidden' : undefined }}
       >
-        <Sidebar
+        <MemoizedSidebar
           isCollapsed={state.sidebarCollapsed}
           onToggle={toggleSidebar}
           width={state.sidebarWidth}
@@ -862,7 +865,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       <div className="flex-1 flex flex-col min-w-0 h-full box-border relative z-10">
         {/* ↓ relative z-20 确保 header 的下拉菜单不被 content panel 遮住 */}
         <div className="mb-3 relative z-20">
-          <Header
+          <MemoizedHeader
             activeView={activeView}
             sidebarCollapsed={state.sidebarCollapsed}
             onToggleSidebar={toggleSidebar}
