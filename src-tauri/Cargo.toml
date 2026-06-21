@@ -44,6 +44,7 @@ aes-gcm = "0.10"
 # Build dependencies for portable-pty on macOS
 objc = "0.2"
 rand = "0.8"
+keyring = "4"
 hex = "0.4"
 zip = "2"
 base64 = "0.22"

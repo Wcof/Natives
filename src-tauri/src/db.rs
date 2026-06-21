@@ -414,6 +414,13 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// Delete a setting value by key
+pub fn delete_setting(conn: &Connection, key: &str) -> Result<()> {
+    conn.execute("DELETE FROM settings WHERE key = ?1", rusqlite::params![key])
+        .map_err(Error::Database)?;
+    Ok(())
+}
+
 // ──────────────────────────────────────────────
 // Notifications
 // ──────────────────────────────────────────────

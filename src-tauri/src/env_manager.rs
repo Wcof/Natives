@@ -20,8 +20,55 @@ pub struct EnvProfile {
     pub created_at: String,
 }
 
-/// Get or create the encryption key (persisted in settings table)
+/// Get or create the encryption key.
+///
+/// Primary: macOS Keychain / Windows Credential Manager / Linux Secret Service
+/// via the `keyring` crate. Falls back to SQLite `settings` table if keyring
+/// is unavailable (e.g., headless CI), and migrates the key on first successful
+/// keyring access.
 pub fn get_encryption_key(conn: &Connection) -> Result<String> {
+    const SERVICE: &str = "natives";
+    const USERNAME: &str = "env_encryption_key";
+
+    // 1. Try OS keyring first
+    if let Ok(entry) = keyring::Entry::new(SERVICE, USERNAME) {
+        match entry.get_password() {
+            Ok(key) => {
+                // Key found in keyring — if SQLite still has the old key, migrate & delete
+                if let Ok(Some(db_key)) = db::get_setting(conn, ENCRYPTION_KEY_SETTING) {
+                    if db_key == key {
+                        // Same key — safe to remove from SQLite
+                        let _ = db::delete_setting(conn, ENCRYPTION_KEY_SETTING);
+                    }
+                    // If different, keyring takes precedence; don't delete SQLite key
+                    // (it may be needed for a rollback)
+                }
+                return Ok(key);
+            }
+            Err(keyring::Error::NoEntry) => {
+                // Not in keyring yet — check SQLite for migration
+                if let Ok(Some(db_key)) = db::get_setting(conn, ENCRYPTION_KEY_SETTING) {
+                    // Migrate existing SQLite key to keyring
+                    if entry.set_password(&db_key).is_ok() {
+                        let _ = db::delete_setting(conn, ENCRYPTION_KEY_SETTING);
+                    }
+                    return Ok(db_key);
+                }
+                // No key anywhere — generate new one, store in keyring
+                let new_key = generate_random_hex(32);
+                if entry.set_password(&new_key).is_err() {
+                    // Keyring write failed — fall back to SQLite
+                    let _ = db::set_setting(conn, ENCRYPTION_KEY_SETTING, &new_key);
+                }
+                return Ok(new_key);
+            }
+            Err(_) => {
+                // Keyring access error — fall through to SQLite fallback
+            }
+        }
+    }
+
+    // 2. Fallback: SQLite settings table (for headless/CI environments)
     match db::get_setting(conn, ENCRYPTION_KEY_SETTING)? {
         Some(key) => Ok(key),
         None => {
