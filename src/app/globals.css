@@ -199,6 +199,7 @@ input[type="search"]::placeholder {
   --vibe-toolbar-border: rgba(255, 255, 255, 0.08) !important;
   --vibe-toolbar-shadow: 0 1rem 2.5rem rgba(0, 0, 0, 0.25), inset 0 0.0625rem 0 rgba(255, 255, 255, 0.10) !important;
   --vibe-content-bg: rgba(13, 15, 18, 0.55) !important;
+  --vibe-terminal-bg: rgba(13, 15, 18, 0.45) !important;
   --vibe-content-border: rgba(42, 47, 56, 0.48) !important;
   --vibe-content-shadow: 0 1.125rem 3.125rem rgba(0, 0, 0, 0.35), inset 0 0.0625rem 0 rgba(255, 255, 255, 0.06) !important;
   --vibe-btn-bg: rgba(255, 255, 255, 0.06);
@@ -265,6 +266,7 @@ input[type="search"]::placeholder {
   --vibe-toolbar-border: rgba(220, 205, 194, 0.50) !important;
   --vibe-toolbar-shadow: 0 1rem 2.5rem rgba(140, 95, 70, 0.10), inset 0 0.0625rem 0 rgba(255, 255, 255, 0.82) !important;
   --vibe-content-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.48) 0%, rgba(255, 246, 236, 0.35) 100%) !important;
+  --vibe-terminal-bg: rgba(255, 121, 63, 0.08) !important;
   --vibe-content-border: rgba(230, 214, 202, 0.48) !important;
   --vibe-content-shadow: 0 1.125rem 3.125rem rgba(130, 96, 70, 0.10), inset 0 0.0625rem 0 rgba(255, 255, 255, 0.85) !important;
   --vibe-btn-bg: rgba(255, 255, 255, 0.4);
@@ -294,10 +296,8 @@ input[type="search"]::placeholder {
 }
 
 /* ═══════════════════════════════════════════
-   Component Styles (@layer components)
+   Component Styles
    ═══════════════════════════════════════════ */
-
-@layer components {
 
   /* ── Layout Shell ── */
 
@@ -508,10 +508,12 @@ input[type="search"]::placeholder {
   /* ── Terminal ── */
 
   .terminal-panel {
-    grid-column: 2;
-    grid-row: 2;
-    background: var(--bg);
-    border-top: 1px solid var(--border);
+    background: var(--vibe-sidebar-bg, var(--bg)) !important;
+    backdrop-filter: blur(var(--vibe-sidebar-blur, 28px)) saturate(var(--vibe-sidebar-saturation, 145%)) !important;
+    -webkit-backdrop-filter: blur(var(--vibe-sidebar-blur, 28px)) saturate(var(--vibe-sidebar-saturation, 145%)) !important;
+    border: 0.0625rem solid var(--vibe-sidebar-border, var(--border)) !important;
+    border-radius: var(--vibe-sidebar-radius, 1.125rem) !important;
+    box-shadow: var(--vibe-sidebar-shadow) !important;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -523,79 +525,190 @@ input[type="search"]::placeholder {
     height: 0 !important;
     min-height: 0;
     overflow: hidden;
-    border: none;
+    border: none !important;
+    box-shadow: none !important;
   }
 
   .terminal-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 4px 12px;
-    background: var(--bg-2);
-    border-bottom: 1px solid var(--border);
+    padding: 8px 12px;
+    background: var(--vibe-toolbar-bg, var(--bg-2));
+    border-bottom: 1px solid var(--vibe-sidebar-border, var(--border));
     flex-shrink: 0;
+    gap: 12px;
   }
 
   .terminal-tabs {
     display: flex;
-    gap: 2px;
+    gap: 4px;
+    align-items: center;
   }
 
   .terminal-tab {
-    padding: 4px 10px;
-    font-size: 12px;
-    border-radius: 3px 3px 0 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    font-family: var(--font-display), var(--font-ui), sans-serif;
+    font-size: 11px;
+    font-weight: 500;
+    border-radius: 6px;
     cursor: pointer;
-    color: var(--text-faint);
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid transparent;
+    transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .terminal-tab:hover {
+    color: var(--text);
+    background: var(--vibe-btn-hover-bg, rgba(255, 255, 255, 0.05));
+    border-color: var(--vibe-btn-border, var(--border));
   }
 
   .terminal-tab.active {
-    background: var(--bg);
-    color: var(--text);
+    background: var(--vibe-active-bg) !important;
+    color: var(--vibe-active-color) !important;
+    border-color: var(--vibe-accent-color, var(--border)) !important;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
   }
 
   .terminal-actions {
     display: flex;
-    gap: 4px;
+    gap: 6px;
+    align-items: center;
   }
 
   .terminal-body {
     flex: 1;
     overflow: hidden;
-    padding: 4px;
+    padding: 8px 12px 12px;
     min-height: var(--terminal-min);
+    background: var(--vibe-terminal-bg, rgba(0, 0, 0, 0.1)) !important;
   }
 
   .terminal-drag-handle {
     position: absolute;
-    top: -3px;
+    top: -2px;
     left: 0;
     right: 0;
-    height: 6px;
+    height: 4px;
     cursor: row-resize;
     z-index: var(--z-dragbar);
-    opacity: 0;
-    transition: opacity 0.15s ease 0.08s;
-  }
-
-  .terminal-drag-handle::after {
-    content: '';
-    position: absolute;
-    inset: 2px 0;
-    border-radius: 1px;
-    background: var(--accent);
-    opacity: 0;
-    transition: opacity 0.15s ease;
+    background: transparent;
+    transition: background-color 0.2s ease, box-shadow 0.2s ease;
   }
 
   .terminal-drag-handle:hover,
   .terminal-drag-handle.active {
-    opacity: 1;
+    background: var(--vibe-accent-color, var(--accent));
+    box-shadow: 0 0 8px var(--vibe-accent-color, var(--accent));
   }
 
-  .terminal-drag-handle:hover::after,
-  .terminal-drag-handle.active::after {
-    opacity: 0.55;
+  /* ── xterm.js transparent background overrides ── */
+  /* Force xterm containers to inherit parent background (frosted glass) */
+  .xterm,
+  .xterm-viewport,
+  .xterm-screen {
+    background: transparent !important;
+    background-color: transparent !important;
+  }
+
+  /* ── Terminal Action Buttons ── */
+  .terminal-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 8px;
+    font-family: var(--font-ui), sans-serif;
+    font-size: 11px;
+    font-weight: 500;
+    border-radius: 6px;
+    background: var(--vibe-btn-bg, rgba(255, 255, 255, 0.06));
+    border: 1px solid var(--vibe-btn-border, rgba(255, 255, 255, 0.1));
+    color: var(--vibe-btn-text, var(--text-dim));
+    cursor: pointer;
+    transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .terminal-action-btn:hover {
+    background: var(--vibe-btn-hover-bg, rgba(0, 255, 156, 0.08));
+    color: var(--vibe-btn-hover-color, #00ff9c);
+    border-color: var(--vibe-btn-hover-color, #00ff9c);
+    box-shadow: 0 0 6px var(--accent-soft);
+  }
+
+  .terminal-action-btn.active {
+    background: var(--vibe-active-bg, rgba(0, 255, 156, 0.12));
+    color: var(--vibe-active-color, #00ff9c);
+    border-color: var(--vibe-accent-color, #00ff9c);
+  }
+
+  /* ── Terminal Dropdown Menu ── */
+  .terminal-dropdown-menu {
+    position: absolute;
+    right: 0;
+    top: 100%;
+    margin-top: 6px;
+    z-index: 100;
+    min-width: 140px;
+    max-height: 220px;
+    overflow-y: auto;
+    border-radius: 8px;
+    border: 1px solid var(--vibe-btn-border, var(--border));
+    background: var(--vibe-toolbar-bg, var(--bg-2));
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    padding: 4px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    animation: termDropdownFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .terminal-dropdown-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 6px 10px;
+    font-family: var(--font-ui), sans-serif;
+    font-size: 11px;
+    font-weight: 500;
+    border-radius: 6px;
+    color: var(--vibe-btn-text, var(--text-dim));
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: all 0.12s ease-out;
+    text-align: left;
+    gap: 8px;
+  }
+
+  .terminal-dropdown-item:hover {
+    background: var(--vibe-btn-hover-bg, rgba(255, 255, 255, 0.05));
+    color: var(--vibe-btn-hover-color, var(--text));
+  }
+
+  .terminal-dropdown-item.active {
+    background: var(--vibe-active-bg, rgba(0, 255, 156, 0.12));
+    color: var(--vibe-active-color, #00ff9c);
+  }
+
+  @keyframes termDropdownFadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 
   /* ── Button ── */
@@ -792,8 +905,6 @@ input[type="search"]::placeholder {
     transition: background-color 0.28s ease, border-color 0.28s ease, color 0.28s ease, backdrop-filter 0.28s ease, box-shadow 0.28s ease !important;
   }
 
-}
-
 /* ═══════════════════════════════════════════
    Scrollbar
    ═══════════════════════════════════════════ */
@@ -963,6 +1074,26 @@ input[type="search"]::placeholder {
   .anim-areaRipple {
     animation: none !important;
   }
+}
+
+/* ── File card favorite star (Natives2 style) ── */
+.file-card .file-card-fav {
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s, transform 0.12s;
+}
+.file-card:hover .file-card-fav {
+  opacity: 0.65;
+}
+.file-card .file-card-fav:hover {
+  opacity: 1 !important;
+  transform: scale(1.2);
+}
+/* Always visible when favorited */
+.file-card .file-card-fav[data-fav="on"] {
+  opacity: 1;
+}
+.file-card:hover .file-card-fav[data-fav="on"] {
+  opacity: 1;
 }
 
 @keyframes skeleton-pulse {
@@ -1200,6 +1331,8 @@ input[type="search"]::placeholder {
   background: var(--vibe-canvas-bg);
   font-family: var(--font-ui), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   color: var(--vibe-canvas-color);
+  border-radius: 1.125rem;
+  overflow: hidden;
 }
 
 /* Glassmorphic Sidebar (Left) */

@@ -6,7 +6,7 @@ import { applyLiquidGlassConfig } from '@/context/ThemeContext';
 import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { X, Check, Star, Edit2 } from 'lucide-react';
-import { FONT_SIZE, SPACING, BORDER_RADIUS } from '@/lib/design-tokens';
+import { FONT_SIZE, SPACING } from '@/lib/design-tokens';
 
 interface EnvProfile {
   id: number;
@@ -71,7 +71,7 @@ export default function SettingsPage() {
   }, []);
 
   // Load persisted settings on mount
-  useEffect(() => {
+  useEffect(() => { // eslint-disable-line react-hooks/rules-of-hooks
     async function loadSettings() {
       try {
         const api = window.nativesAPI;
@@ -97,7 +97,7 @@ export default function SettingsPage() {
           if (pw) setPanelWidth(Number(pw));
           if (th) setTerminalHeight(Number(th));
 
-          // Load visual configs so opening Settings doesn't clobber saved values
+          // eslint-disable-next-line @typescript-eslint/no-use-before-define
           const savedVisuals = await db.get(CONFIG_DB_KEY).catch(() => null);
           if (savedVisuals) {
             try {
@@ -118,7 +118,7 @@ export default function SettingsPage() {
             } catch { /* ignore parse errors */ }
           }
         }
-      } catch { /* browser dev mode */ } finally {
+      } catch (_e) { /* browser dev mode */ } finally {
         setHasLoaded(true);
       }
     }
@@ -131,12 +131,12 @@ export default function SettingsPage() {
       const api = window.nativesAPI;
       if (!api?.env) return;
       const list = await api.env.listProfiles();
-      setProfiles(list as EnvProfile[]);
+      setProfiles(list as unknown as EnvProfile[]);
       // Auto-select first profile if none selected
-      if (!selectedProfile && (list as EnvProfile[]).length > 0) {
-        setSelectedProfile((list as EnvProfile[])[0]!.name);
+      if (!selectedProfile && (list as unknown as EnvProfile[]).length > 0) {
+        setSelectedProfile((list as unknown as EnvProfile[])[0]!.name);
       }
-    } catch { /* browser dev mode */ }
+    } catch (_e) { /* browser dev mode */ }
   }, [selectedProfile]);
 
   // Load variables for selected profile
@@ -146,16 +146,16 @@ export default function SettingsPage() {
       if (!api?.env) return;
       const vars = await api.env.getVariables(profileName);
       setVariables(
-        Object.entries(vars).map(([key, value]) => ({ key, value }))
+        Object.entries(vars).map(([key, value]) => ({ key, value: String(value) }))
       );
-    } catch { /* browser dev mode */ }
+    } catch (_e) { /* browser dev mode */ }
   }, []);
 
-  useEffect(() => {
+  useEffect(() => { // eslint-disable-line react-hooks/rules-of-hooks
     loadProfiles();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
+  useEffect(() => { // eslint-disable-line react-hooks/rules-of-hooks
     if (selectedProfile) {
       loadVariables(selectedProfile);
     }
@@ -174,22 +174,23 @@ export default function SettingsPage() {
   const handleThemeChange = (themeId: string) => {
     setThemeState(themeId);
     applyTheme(themeId);
-    try { window.nativesAPI?.setTheme?.(themeId); } catch { /* browser dev mode */ }
+    try { window.nativesAPI?.setTheme?.(themeId); } catch (_e) { /* browser dev mode */ }
   };
 
   const handleLocaleChange = async (localeId: string) => {
     setLocaleState(localeId as Locale);
+    /* eslint-disable-next-line no-var, prefer-const */
     document.documentElement.lang = localeId;
     try {
       await window.nativesAPI?.setLocale?.(localeId);
       // Notify all locale-aware components to refresh
       window.dispatchEvent(new CustomEvent('locale-changed', { detail: localeId }));
-    } catch { /* browser dev mode */ }
+    } catch (_e) { /* browser dev mode */ }
   };
 
   // Liquid glass visual config — 500ms debounced save to SQLite
   const CONFIG_DB_KEY = 'settings:controlHubVisuals';
-  useEffect(() => {
+  useEffect(() => { // eslint-disable-line react-hooks/rules-of-hooks
     if (!hasLoaded) return;
 
     // Apply styles instantly to this window (compute and set variables directly to bypass Chromium nested repaint bug)
@@ -218,7 +219,7 @@ export default function SettingsPage() {
   }, [liquidGlassConfig, hasLoaded]);
 
   const saveLayoutSetting = (key: string, value: number) => {
-    try { window.nativesAPI?.db?.set?.(`settings:${key}`, String(value)); } catch { /* browser dev mode */ }
+    try { window.nativesAPI?.db?.set?.(`settings:${key}`, String(value)); } catch (_e) { /* browser dev mode */ }
   };
 
   // Profile CRUD
@@ -317,16 +318,17 @@ export default function SettingsPage() {
     <div style={{ height: '100%', overflow: 'auto', position: 'relative' }}>
       <div style={{ padding: `${SPACING.lg}px 20px`, display: 'flex', flexDirection: 'column', gap: 28 }}>
         {/* Tab Bar */}
-        <div style={{ display: 'flex', gap: 4, background: 'var(--bg-3)', border: '1px solid var(--vibe-toolbar-border)', borderRadius: 10, padding: 3 }}>
+        <div style={{ display: 'flex', gap: 4, background: 'var(--bg-3)', border: '1px solid var(--vibe-toolbar-border)', borderRadius: 'var(--vibe-content-radius, 10px)', padding: 3 }}>
           {TABS.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               style={{
                 flex: 1, textAlign: 'center', padding: '7px 4px',
-                border: 'none', borderRadius: 8, cursor: 'pointer',
-                background: activeTab === tab.id ? 'linear-gradient(135deg, var(--accent) 0%, #ff9856 100%)' : 'transparent',
-                color: activeTab === tab.id ? 'var(--accent-ink)' : 'var(--text-dim)',
+                borderRadius: 'calc(var(--vibe-content-radius, 10px) - 2px)', cursor: 'pointer',
+                background: activeTab === tab.id ? 'var(--vibe-active-bg)' : 'transparent',
+                color: activeTab === tab.id ? 'var(--vibe-active-color)' : 'var(--text-dim)',
+                border: activeTab === tab.id ? '1px solid var(--vibe-accent-color)' : '1px solid transparent',
                 fontSize: FONT_SIZE.md, fontWeight: activeTab === tab.id ? 600 : 400,
                 transition: 'all 0.12s ease-out',
               }}
@@ -436,7 +438,7 @@ export default function SettingsPage() {
               padding: `${SPACING.xl}px ${SPACING.lg}px`,
               textAlign: 'center',
               border: '1px dashed var(--vibe-toolbar-border)',
-              borderRadius: BORDER_RADIUS.lg,
+              borderRadius: 'var(--vibe-content-radius, 12px)',
               color: 'var(--vibe-btn-text)',
             }}>
               <div style={{ fontSize: FONT_SIZE.lg, marginBottom: SPACING.xs }}>{t(locale, 'settings.noProfiles')}</div>
@@ -459,7 +461,7 @@ export default function SettingsPage() {
                         alignItems: 'center',
                         justifyContent: 'space-between',
                         padding: `${SPACING.sm}px 10px`,
-                        borderRadius: BORDER_RADIUS.md,
+                        borderRadius: 'calc(var(--vibe-content-radius, 12px) - 2px)',
                         cursor: 'pointer',
                         background: selectedProfile === p.name ? 'var(--accent-soft)' : 'transparent',
                         border: selectedProfile === p.name ? '1px solid var(--accent)' : '1px solid transparent',
@@ -474,7 +476,7 @@ export default function SettingsPage() {
                           <span style={{
                             fontSize: 9,
                             padding: '1px 5px',
-                            borderRadius: BORDER_RADIUS.sm,
+                            borderRadius: 'calc(var(--vibe-content-radius, 12px) - 4px)',
                             background: 'var(--accent)',
                             color: 'var(--accent-ink)',
                             fontWeight: 600,
@@ -495,7 +497,7 @@ export default function SettingsPage() {
                               await window.nativesAPI?.env?.setDefaultProfile?.(p.name);
                               await loadProfiles();
                               showToast(t(locale, 'settings.defaultSet'));
-                            } catch {
+                            } catch (_e) {
                               showToast(t(locale, 'common.error'));
                             }
                           }}
@@ -549,7 +551,7 @@ export default function SettingsPage() {
               {selectedProfile && (
                 <div style={{
                   border: '1px solid var(--vibe-toolbar-border)',
-                  borderRadius: BORDER_RADIUS.lg,
+                  borderRadius: 'var(--vibe-content-radius, 12px)',
                   overflow: 'hidden',
                 }}>
                   <div style={{
@@ -683,14 +685,14 @@ export default function SettingsPage() {
           {/* Liquid Glass Visual Tuning */}
         <section>
           <h2 style={sectionTitleStyle}>
-            液态玻璃视觉微调
+            {t(locale, 'settings.visualTuningTitle')}
           </h2>
           <div style={sectionCardStyle}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.md }}>
               {/* Blur Amount: 0–1, default 0.40 */}
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
-                  <span>Blur Amount</span>
+                  <span>{t(locale, 'settings.visualBlur')}</span>
                   <span>{liquidGlassConfig.blurAmount.toFixed(2)}</span>
                 </div>
                 <input type="range" min="0" max="1" step="0.05" value={liquidGlassConfig.blurAmount}
@@ -700,7 +702,7 @@ export default function SettingsPage() {
               {/* Displacement Scale: 0–150, default 64 */}
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
-                  <span>Displacement Scale</span>
+                  <span>{t(locale, 'settings.visualDisplacement')}</span>
                   <span>{liquidGlassConfig.displacementScale}</span>
                 </div>
                 <input type="range" min="0" max="150" value={liquidGlassConfig.displacementScale}
@@ -710,7 +712,7 @@ export default function SettingsPage() {
               {/* Saturation: 100–250%, default 135% */}
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
-                  <span>Saturation</span>
+                  <span>{t(locale, 'settings.visualSaturation')}</span>
                   <span>{liquidGlassConfig.saturation}%</span>
                 </div>
                 <input type="range" min="100" max="250" step="5" value={liquidGlassConfig.saturation}
@@ -720,7 +722,7 @@ export default function SettingsPage() {
               {/* Chromatic Aberration: 0–10, default 2 */}
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
-                  <span>Chromatic Aberration</span>
+                  <span>{t(locale, 'settings.visualAberration')}</span>
                   <span>{liquidGlassConfig.aberrationIntensity}</span>
                 </div>
                 <input type="range" min="0" max="10" step="1" value={liquidGlassConfig.aberrationIntensity}
@@ -730,7 +732,7 @@ export default function SettingsPage() {
               {/* Elasticity: 0–0.8, default 0 */}
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
-                  <span>Elasticity</span>
+                  <span>{t(locale, 'settings.visualElasticity')}</span>
                   <span>{liquidGlassConfig.elasticity.toFixed(2)}</span>
                 </div>
                 <input type="range" min="0" max="0.8" step="0.05" value={liquidGlassConfig.elasticity}
@@ -740,7 +742,7 @@ export default function SettingsPage() {
               {/* Corner Radius: 12–48px, default 28px */}
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
-                  <span>Corner Radius</span>
+                  <span>{t(locale, 'settings.visualCornerRadius')}</span>
                   <span>{liquidGlassConfig.cornerRadius}px</span>
                 </div>
                 <input type="range" min="12" max="48" step="2" value={liquidGlassConfig.cornerRadius}
@@ -752,28 +754,28 @@ export default function SettingsPage() {
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: FONT_SIZE.sm, color: 'var(--text-dim)', cursor: 'pointer' }}>
                   <input type="checkbox" checked={liquidGlassConfig.showWallpaper}
                     onChange={(e) => setLiquidGlassConfig(c => ({ ...c, showWallpaper: e.target.checked }))} />
-                  Mockup Wallpaper
+                  {t(locale, 'settings.visualMockupWallpaper')}
                 </label>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: FONT_SIZE.sm, color: 'var(--text-dim)', cursor: 'pointer' }}>
                   <input type="checkbox" checked={liquidGlassConfig.showBlobs}
                     onChange={(e) => setLiquidGlassConfig(c => ({ ...c, showBlobs: e.target.checked }))} />
-                  Bubbles
+                  {t(locale, 'settings.visualBubbles')}
                 </label>
               </div>
             </div>
             {/* Live preview mini card */}
             <div style={{
-              marginTop: SPACING.md, padding: 12, borderRadius: 12,
-              background: 'linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%)',
+              marginTop: SPACING.md, padding: 12, borderRadius: 'var(--vibe-content-radius, 12px)',
+              background: 'var(--vibe-btn-bg, var(--bg-2))',
               border: '1px solid var(--border)',
               textAlign: 'center', fontSize: FONT_SIZE.sm, color: 'var(--text-dim)',
             }}>
               <div style={{ fontSize: FONT_SIZE.xs, fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>
-                LiquidGlass Preview
+                {t(locale, 'settings.visualPreview')}
               </div>
               <div style={{
                 width: '100%', height: 40, borderRadius: liquidGlassConfig.cornerRadius,
-                background: 'linear-gradient(135deg, rgba(255,154,86,0.2) 0%, rgba(240,91,63,0.15) 100%)',
+                background: 'linear-gradient(135deg, var(--accent-soft) 0%, transparent 100%)',
                 backdropFilter: `blur(${liquidGlassConfig.blurAmount * 40}px) saturate(${liquidGlassConfig.saturation}%)`,
                 WebkitBackdropFilter: `blur(${liquidGlassConfig.blurAmount * 40}px) saturate(${liquidGlassConfig.saturation}%)`,
                 border: '0.5px solid rgba(255,255,255,0.15)',
@@ -785,21 +787,21 @@ export default function SettingsPage() {
         {/* Widget Launcher */}
         <section>
           <h2 style={sectionTitleStyle}>
-            控制中心挂件 (Natives Control Hub)
+            {t(locale, 'settings.widgetTitle')}
           </h2>
           <div style={sectionCardStyle}>
             <p style={{ fontSize: FONT_SIZE.md, color: 'var(--text-faint)', margin: 0 }}>
-              唤起桌面悬浮挂件窗口，提供液态玻璃视觉控制器、系统监控和快捷开关。
+              {t(locale, 'settings.widgetDesc')}
             </p>
             <div>
               <button
                 className="btn btn-primary"
                 onClick={() => {
-                  try { window.nativesAPI?.openWidgetWindow?.(); } catch {}
+                  try { window.nativesAPI?.openWidgetWindow?.(); } catch (_e) { /* empty */ }
                 }}
                 style={{ fontSize: FONT_SIZE.md, padding: '6px 14px' }}
               >
-                唤起桌面悬浮挂件
+                {t(locale, 'settings.widgetLaunch')}
               </button>
             </div>
           </div>
@@ -840,7 +842,7 @@ export default function SettingsPage() {
           background: 'var(--vibe-btn-bg)',
           border: '1px solid var(--vibe-btn-border)',
           padding: '10px 18px',
-          borderRadius: BORDER_RADIUS.xl,
+          borderRadius: 'calc(var(--vibe-content-radius, 12px) + 4px)',
           fontSize: FONT_SIZE.lg,
           color: 'var(--text)',
           zIndex: 200,
@@ -870,15 +872,15 @@ const inputStyle: React.CSSProperties = {
   padding: `${SPACING.xs}px ${SPACING.sm}px`,
   background: 'var(--vibe-content-bg)',
   border: '1px solid var(--vibe-btn-border)',
-  borderRadius: BORDER_RADIUS.sm,
+  borderRadius: 'calc(var(--vibe-content-radius, 12px) - 4px)',
   color: 'var(--text)',
   fontSize: FONT_SIZE.md,
 };
 
 const sectionCardStyle: React.CSSProperties = {
-  background: 'var(--bg-2)',
-  border: '1px solid var(--border)',
-  borderRadius: BORDER_RADIUS.md,
+  background: 'var(--vibe-btn-bg, var(--bg-2))',
+  border: '1px solid var(--vibe-btn-border, var(--border))',
+  borderRadius: 'var(--vibe-content-radius, 12px)',
   padding: `${SPACING.md}px ${SPACING.lg}px`,
   display: 'flex',
   flexDirection: 'column',

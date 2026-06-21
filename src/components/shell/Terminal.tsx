@@ -1,10 +1,13 @@
 'use client';
 
+import '@xterm/xterm/css/xterm.css';
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { t, useLocale, type Locale } from '@/i18n';
-import { Clipboard, X, Plus, Zap, Link2 } from 'lucide-react';
+import { Terminal as TerminalIcon, Clipboard, X, Plus, Link2, VolumeX, Volume2, Crosshair, Maximize2, Minimize2, ChevronDown, ChevronUp, Check, Sparkles, Code2 } from 'lucide-react';
 import { onThemeChange, TERMINAL_THEMES } from '@/lib/theme-engine';
 import { recordTerminalActivity, setFileFollow, followChange } from '@/lib/follow-mode';
+import { recordScrollbackLine } from '@/lib/path-detector';
 import { playDoneChime, playAskChime } from '@/lib/chime';
 import { parseAgentAction } from '@/lib/agent-narration';
 import { copyToClipboard } from '@/lib/clipboard';
@@ -51,11 +54,49 @@ export default function TerminalPanel({
   const locale = useLocale();
   const terminalRef = useRef<HTMLDivElement>(null);
   const sessionMapRef = useRef<Map<string, TerminalSession>>(new Map());
+  const sessionCounterRef = useRef(0);
+
+  // Tab label fallback：尝试从 foreground_process / cwd 推断 label
+  const getFallbackLabel = useCallback((sessionId: string): string => {
+    const session = sessionMapRef.current.get(sessionId);
+    if (!session) return 'zsh';
+    // 检查 foreground_process（来自 session.term 的额外数据不可用，通过 sessionId 查 proc）
+    // 但 foreground_process 是异步的，这里用同步的 label 后备
+    // 用 session 已有的初始 label（shell 名）作为保底
+    return session.label || 'zsh';
+  }, []);
 
   // Profile state (US26)
   const [profiles, setProfiles] = useState<Array<{ id: number; name: string; is_default: number }>>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null);
   const [isAgentBusy, setIsAgentBusy] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileRef = useRef<HTMLDivElement>(null);
+
+  // Click outside listener for custom profile dropdown
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (profileRef.current && !profileRef.current.contains(event.target as Node)) {
+        setProfileMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  // Mute state（持久化到 localStorage）
+  const [muted, setMuted] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('natives_term_muted') === '1';
+  });
+  // 持久化 mute 变更
+  useEffect(() => {
+    localStorage.setItem('natives_term_muted', muted ? '1' : '0');
+  }, [muted]);
+  // Process exit message tracking
+  const exitedSessionIds = useRef<Set<string>>(new Set());
 
   // Load environment profiles (US26)
   useEffect(() => {
@@ -64,7 +105,7 @@ export default function TerminalPanel({
         const api = window.nativesAPI;
         if (!api?.env) return;
         const list = await api.env.listProfiles();
-        const profileList = list as Array<{ id: number; name: string; is_default: number }>;
+        const profileList = list as unknown as Array<{ id: number; name: string; is_default: number }>;
         setProfiles(profileList);
         // Auto-select default profile
         const defaultProfile = profileList.find((p) => p.is_default === 1);
@@ -126,27 +167,45 @@ export default function TerminalPanel({
     const container = terminalRef.current;
     if (!container) return;
 
-    const [{ Terminal }, { FitAddon }, { WebLinksAddon }] = await Promise.all([
+    const [{ Terminal }, { FitAddon }, { WebLinksAddon }, { Unicode11Addon }] = await Promise.all([
       import('@xterm/xterm'),
       import('@xterm/addon-fit'),
       import('@xterm/addon-web-links'),
+      import('@xterm/addon-unicode11'),
     ]);
 
+    const activeTheme = typeof document !== 'undefined' ? (document.documentElement.getAttribute('data-theme') || 'terminal-volt') : 'terminal-volt';
+    const initialTerminalTheme = TERMINAL_THEMES[activeTheme] || TERMINAL_THEMES['terminal-volt']!;
+
     const term = new Terminal({
+      allowProposedApi: true,
       fontSize: FONT_SIZE.lg,
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      // Nerd Font 优先（Starship、powerline 图标正确显示，避免 tofu 方块）
+      fontFamily: '"JetBrainsMono Nerd Font", "MesloLGS NF", "FiraCode Nerd Font", "Hack Nerd Font", Menlo, Monaco, "Courier New", monospace',
       theme: {
-        background: 'var(--terminal-bg, #131410)',
-        foreground: 'var(--terminal-fg, #f2f2ea)',
-        cursor: 'var(--terminal-cursor, #cdf24b)',
-        selectionBackground: 'var(--accent-soft, #cdf24b33)',
+        background: 'rgba(0, 0, 0, 0)',
+        foreground: initialTerminalTheme.foreground,
+        cursor: initialTerminalTheme.cursor,
+        selectionBackground: initialTerminalTheme.selectionBackground || initialTerminalTheme.cursor + '33',
       },
+      allowTransparency: true,
       cursorBlink: true,
       scrollback: 5000,
+      // WCAG AA: auto-adjust dim agent output to readable contrast (Natives2: 4.5)
+      minimumContrastRatio: 4.5,
+      drawBoldTextInBrightColors: true,
     });
+
+    // Unicode11Addon: correct CJK wide character width (Natives2)
+    const unicode11Addon = new Unicode11Addon();
+    term.loadAddon(unicode11Addon);
+    term.unicode.activeVersion = '11';
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
+
+    // WebGL addon is bypassed to support transparent/frosted-glass backgrounds
+    // (xterm.js WebGL renderer does not support alpha channel transparency)
 
     // Clickable links (HTTP/HTTPS URLs and file paths)
     const webLinksAddon = new WebLinksAddon((e, uri) => {
@@ -159,21 +218,49 @@ export default function TerminalPanel({
     });
     term.loadAddon(webLinksAddon);
 
-    // Create PTY session via IPC
+    // Create container for this session FIRST (before PTY creation)
+    const placeholderId = `placeholder-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const sessionContainer = document.createElement('div');
+    sessionContainer.setAttribute('data-terminal-session', placeholderId);
+    sessionContainer.style.cssText = 'width:100%;height:100%;display:none;';
+    container.appendChild(sessionContainer);
+
+    // Mount xterm and fit to get real cols/rows BEFORE creating PTY
+    term.open(sessionContainer);
+    try { fitAddon.fit(); } catch { /* ignore */ }
+    const realCols = term.cols;
+    const realRows = term.rows;
+
+    // Create PTY session via IPC with real terminal dimensions
     const api = window.nativesAPI;
     if (!api?.terminal?.create) {
       term.writeln('\x1b[31mTerminal API not available\x1b[0m');
       return;
     }
 
-    const { sessionId, error } = await api.terminal.create(profileId ? String(profileId) : undefined);
-    if (error || !sessionId) {
-      term.writeln(`\x1b[31mFailed to create terminal: ${error || 'unknown error'}\x1b[0m`);
+    let sessionId: string;
+    try {
+      const result = (await api.terminal.create(
+        profileId ? String(profileId) : undefined,
+        realCols,
+        realRows,
+      )) as unknown as { sessionId?: string; error?: string };
+      if (result.error || !result.sessionId) {
+        term.writeln(`\x1b[31mFailed to create terminal: ${result.error || 'unknown error'}\x1b[0m`);
+        return;
+      }
+      sessionId = result.sessionId;
+    } catch (err) {
+      term.writeln(`\x1b[31mFailed to create terminal: ${err}\x1b[0m`);
       return;
     }
 
+    // Fix up the data-terminal-session attribute with the real sessionId
+    sessionContainer.setAttribute('data-terminal-session', sessionId);
+
     const profileName = profiles.find((p) => p.id === profileId)?.name || '';
-    const sessionLabel = label || `${profileName ? profileName + ' ' : ''}zsh ${sessions.length + 1}`;
+    sessionCounterRef.current += 1;
+    const sessionLabel = label || `${profileName ? profileName + ' ' : ''}zsh ${sessionCounterRef.current}`;
     const session: TerminalSession = {
       id: sessionId,
       label: sessionLabel,
@@ -183,28 +270,45 @@ export default function TerminalPanel({
       profileId: profileId ? String(profileId) : undefined,
     };
 
+    // Use a placeholder ID initially, then replace with real sessionId
     sessionMapRef.current.set(sessionId, session);
     setSessions((prev) => [...prev, session]);
     setActiveSessionId(sessionId);
     onSessionCreated?.(sessionId);
 
-    // Hide all other terminal containers, show this one
+    // Show this session's container, hide others
     const allContainers = container.querySelectorAll('[data-terminal-session]');
-    allContainers.forEach((el) => { (el as HTMLElement).style.display = 'none'; });
+    allContainers.forEach((el) => {
+      (el as HTMLElement).style.display =
+        el.getAttribute('data-terminal-session') === sessionId ? 'block' : 'none';
+    });
 
-    // Create container for this session
-    const sessionContainer = document.createElement('div');
-    sessionContainer.setAttribute('data-terminal-session', sessionId);
-    sessionContainer.style.cssText = 'width:100%;height:100%;';
-    container.appendChild(sessionContainer);
+    // Focus the new terminal so user can type immediately
+    term.focus();
 
-    term.open(sessionContainer);
-    try { fitAddon.fit(); } catch { /* ignore */ }
+    // Scroll desync self-healing (xterm 5.5.0 viewport bug):
+    // If already at bottom, force scroll after write to stay at bottom
+    const isAtBottom = () => {
+      const buf = term.buffer.active;
+      return buf.viewportY + term.rows >= buf.baseY + term.rows - 1;
+    };
+
+    // IME composition flag — 防止 compositionupdate 双写（fanbox 风格）
+    const isComposingRef = { current: false };
 
     // Send user input to PTY
     term.onData((data: string) => {
+      // IME 合成期间跳过修饰键产生的重复写入
+      if (isComposingRef.current && data.length <= 4) return;
       api.terminal.write(sessionId, data);
     });
+
+    // Listen for composition events on xterm's textarea
+    const termEl = container.querySelector('.xterm-helper-textarea') as HTMLElement | null;
+    if (termEl) {
+      termEl.addEventListener('compositionstart', () => { isComposingRef.current = true; });
+      termEl.addEventListener('compositionend', () => { isComposingRef.current = false; });
+    }
 
     // Receive PTY output via dedicated channels（对标 CodePilot — 绕过 db-state-changed 事件风暴）
     const unsubscribers: Array<() => void> = [];
@@ -213,15 +317,31 @@ export default function TerminalPanel({
       if (payload.sessionId !== sessionId) return;
       const output = payload.data;
       if (output) {
+        const wasAtBottom = isAtBottom();
         term.write(output);
+        // Scroll desync self-healing: if was at bottom, stay at bottom
+        if (wasAtBottom) term.scrollToBottom();
         // Track activity for follow mode
         recordTerminalActivity(sessionId);
-        // Check for completion/approval patterns
-        if (/esc to interrupt/i.test(output)) {
-          setIsAgentBusy(true);
+        // Record scrollback for path detection (split once, trim once)
+        const lines = output.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          const trimmed = lines[i]!.trim();
+          if (trimmed) recordScrollbackLine(trimmed);
         }
-        if (/\? for.*options|Do you want|approve|Y\/n/i.test(output)) {
-          playAskChime();
+        // Check for completion/approval patterns (only when output is substantial)
+        if (output.length > 10) {
+          if (/esc to interrupt/i.test(output)) {
+            setIsAgentBusy(true);
+          }
+          if (/\? for.*options|Do you want|approve|Y\/n/i.test(output)) {
+            if (!muted) playAskChime();
+          }
+          // 假静默护栏：检测 "still running" 则延迟完成通知
+          if (/\d+ shell still running|background\s*(job|process)/i.test(output)) {
+            // Agent 输出表明有后台任务在跑，不做完成通知
+            return;
+          }
         }
       }
     });
@@ -230,9 +350,52 @@ export default function TerminalPanel({
     const unsubExit = api.terminal.onExit((payload: { sessionId: string; exitCode: number }) => {
       if (payload.sessionId !== sessionId) return;
       setIsAgentBusy(false);
-      playDoneChime();
+      if (!muted) playDoneChime();
+      // 写入退出提示（fanbox 风格）
+      const codeStr = payload.exitCode !== 0 ? ` (code ${payload.exitCode})` : '';
+      term.write(`\r\n\x1b[2m[进程已退出${codeStr} — 回车重开，或关闭此 tab]\x1b[0m\r\n`);
+      // 回车重开
+      const reopenHandler = (data: string) => {
+        if (data === '\r') {
+          term.dispose?.();
+    // eslint-disable-next-line react-hooks/immutability
+          createSession(undefined, selectedProfileId ?? undefined);
+          // 移除监听
+        }
+      };
+      const disposable = term.onData(reopenHandler);
+      // 3 秒后自动移除回车监听，防止堆积
+      setTimeout(() => { try { disposable.dispose(); } catch { /* */ } }, 3000);
     });
     if (typeof unsubExit === 'function') unsubscribers.push(unsubExit);
+
+    // ── Ghostty VT 事件订阅（feature gate — adapter 端安全 fallback） ──
+
+    // Title changed → update tab label（优先级：OSC title → foreground process → cwd → shell）
+    const unsubTitle = api.terminal.onTitleChanged?.((payload: { sessionId: string; title: string }) => {
+      if (payload.sessionId !== sessionId) return;
+      const newLabel = payload.title || getFallbackLabel(sessionId);
+      setSessions((prev) =>
+        prev.map((s) => (s.id === sessionId ? { ...s, label: newLabel } : s))
+      );
+    });
+    if (typeof unsubTitle === 'function') unsubscribers.push(unsubTitle);
+
+    // PWD changed → update cwd + notify file browser
+    const unsubPwd = api.terminal.onPwdChanged?.((payload: { sessionId: string; pwd: string }) => {
+      if (payload.sessionId !== sessionId) return;
+      if (payload.pwd) {
+        window.dispatchEvent(new CustomEvent('navigate-files', { detail: payload.pwd }));
+      }
+    });
+    if (typeof unsubPwd === 'function') unsubscribers.push(unsubPwd);
+
+    // Bell → play chime
+    const unsubBell = api.terminal.onBell?.((payload: { sessionId: string }) => {
+      if (payload.sessionId !== sessionId) return;
+      if (!muted) playAskChime();
+    });
+    if (typeof unsubBell === 'function') unsubscribers.push(unsubBell);
 
     session.unsubscribers = unsubscribers;
 
@@ -240,7 +403,9 @@ export default function TerminalPanel({
     term.onResize(({ cols, rows }: { cols: number; rows: number }) => {
       api.terminal.resize(sessionId, cols, rows);
     });
-  }, [sessions.length, onSessionCreated, profiles]);
+
+    return sessionId;
+  }, [onSessionCreated, profiles]);
 
   // Auto-create first session when terminal opens
   useEffect(() => {
@@ -269,6 +434,9 @@ export default function TerminalPanel({
     if (session) {
       const fa = session.fitAddon as { fit: () => void };
       try { fa.fit(); } catch { /* ignore */ }
+      // Focus the terminal so user can type immediately
+      const term = session.term as { focus?: () => void };
+      try { term.focus?.(); } catch { /* ignore */ }
     }
   }, []);
 
@@ -321,14 +489,38 @@ export default function TerminalPanel({
     });
   }, [onToggle]);
 
-  // Fit on resize
+  // Fit on resize + ResizeObserver for cold start / maximize / tab switch
   useEffect(() => {
     if (isCollapsed || !activeSessionId) return;
-    const session = sessionMapRef.current.get(activeSessionId);
-    if (session) {
-      const fa = session.fitAddon as { fit: () => void };
-      try { fa.fit(); } catch { /* ignore */ }
-    }
+
+    const doFit = () => {
+      const session = sessionMapRef.current.get(activeSessionId);
+      if (session) {
+        const fa = session.fitAddon as { fit: () => void };
+        try { fa.fit(); } catch { /* ignore */ }
+      }
+    };
+    doFit();
+
+    // ResizeObserver: 确保 xterm cols/rows 与容器始终保持一致
+    // 覆盖冷启动、展开、最大化、切 tab 后容器尺寸变化
+    const containerEl = terminalRef.current;
+    if (!containerEl) return;
+    let rafId: number | null = null;
+    const ro = new ResizeObserver(() => {
+      // Throttle with requestAnimationFrame
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        doFit();
+      });
+    });
+    ro.observe(containerEl);
+
+    return () => {
+      ro.disconnect();
+      if (rafId !== null) cancelAnimationFrame(rafId);
+    };
   }, [height, isCollapsed, isMaximized, activeSessionId]);
 
   // Terminal keyboard shortcuts: Cmd+T new tab, Cmd+W close tab, Cmd+Shift+]/[ switch tabs
@@ -363,6 +555,26 @@ export default function TerminalPanel({
           if (sessions[nextIdx]) switchSession(sessions[nextIdx].id);
         }
       }
+      // Cmd+K: 清屏（发送 clear 或 form feed）
+      if (e.key === 'k' && !e.shiftKey && !e.ctrlKey && activeSessionId) {
+        const termEl = terminalRef.current;
+        if (termEl && (termEl.contains(document.activeElement) || !isCollapsed)) {
+          e.preventDefault();
+          // 发送 Ctrl+L (form feed) 清屏
+          window.nativesAPI?.terminal?.write?.(activeSessionId, '\x0c');
+        }
+      }
+      // Cmd+V: paste as bracketed paste
+      if (e.key === 'v' && e.shiftKey && activeSessionId) {
+        // Cmd+Shift+V — bracketed paste
+        e.preventDefault();
+        navigator.clipboard.readText().then((text) => {
+          if (text && activeSessionId) {
+            // 用 bracketed paste 模式包裹粘贴内容，防止多行触发意外执行
+            window.nativesAPI?.terminal?.write?.(activeSessionId, `\x1b[200~${text}\x1b[201~`);
+          }
+        }).catch(() => {});
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -396,7 +608,7 @@ export default function TerminalPanel({
         const term = session.term as { setOption?: (key: string, value: unknown) => void };
         if (term?.setOption) {
           term.setOption('theme', {
-            background: terminalTheme.background,
+            background: 'rgba(0, 0, 0, 0)',
             foreground: terminalTheme.foreground,
             cursor: terminalTheme.cursor,
             selectionBackground: terminalTheme.selectionBackground || terminalTheme.cursor + '33',
@@ -406,32 +618,46 @@ export default function TerminalPanel({
     });
   }, []);
 
-  // Agent launch: reuse current tab if it's a plain shell, otherwise create new
+  // Agent launch: 若当前前台进程是 shell 则复用当前 tab，否则新建 tab
   const launchAgent = useCallback(async (cmd: string) => {
-    if (!activeSessionId) {
-      // No session, create one then send command
-      await createSession(undefined, selectedProfileId ?? undefined);
-      // createSession 更新了 sessions 和 activeSessionId，但 setSessions 是异步的
-      // 需要从 sessionMapRef 获取最新的 session
-      // 使用 setTimeout 等待 React 状态更新
-      setTimeout(() => {
-        const sessions = sessionMapRef.current;
-        const latestSession = Array.from(sessions.values()).pop();
-        if (latestSession) {
-          window.nativesAPI?.terminal?.write?.(latestSession.id, cmd + '\r');
+    if (activeSessionId) {
+      // 检查当前 session 的前台进程是否是 shell
+      try {
+        const procResult = await window.nativesAPI?.terminal?.proc?.(activeSessionId) as
+          { processName?: string; pid?: number } | undefined;
+        const procName = procResult?.processName?.toLowerCase() || '';
+        // shell 进程名: zsh, bash, fish, sh, powershell, cmd
+        const isShell = ['zsh', 'bash', 'fish', 'sh', 'powershell', 'cmd', 'shell'].some(
+          (s) => procName.includes(s)
+        );
+        if (!isShell) {
+          // 前台跑着 TUI (vim/top/claude/codex)，新建 tab
+          const newId = await createSession(undefined, selectedProfileId ?? undefined);
+          if (newId) {
+            window.nativesAPI?.terminal?.write?.(newId, cmd + '\r');
+          }
+          return;
         }
-      }, 100);
+      } catch {
+        // proc 不可用时 fallback 到当前 session
+      }
+      // 是 shell，发送命令到当前 session
+      window.nativesAPI?.terminal?.write?.(activeSessionId, cmd + '\r');
       return;
     }
-    // Send command to current session
-    window.nativesAPI?.terminal?.write?.(activeSessionId, cmd + '\r');
+    // No session, create one then send command directly
+    const newId = await createSession(undefined, selectedProfileId ?? undefined);
+    if (newId) {
+      window.nativesAPI?.terminal?.write?.(newId, cmd + '\r');
+    }
   }, [activeSessionId, createSession, selectedProfileId]);
 
-  // CWD detection (macOS — lsof)
+  // CWD detection — 使用 OSC 7 → lsof → HOME 三级 fallback
   const refreshCwd = useCallback(async (sessionId: string) => {
     try {
-      const result = await window.nativesAPI?.terminal?.cwd?.(sessionId);
-      if (result?.ok && result.cwd) {
+      const result = await window.nativesAPI?.terminal?.cwd?.(sessionId) as
+        { cwd?: string; source?: string } | undefined;
+      if (result?.cwd) {
         // Dispatch CWD change for follow mode
         followChange(result.cwd, '', result.cwd);
       }
@@ -491,98 +717,149 @@ export default function TerminalPanel({
       />
 
       <div className="terminal-header">
-        <div className="terminal-tabs">
-          {sessions.map((session) => (
-            <div
-              key={session.id}
-              className={`terminal-tab ${session.id === activeSessionId ? 'active' : ''}${isAgentBusy && session.id === activeSessionId ? ' anim-tabpulse' : ''}`}
-              onClick={() => switchSession(session.id)}
-              style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 pl-1">
+            <TerminalIcon size={12} className="text-[var(--vibe-active-color)]" />
+            <span style={{
+              fontFamily: 'var(--font-display)',
+              fontSize: '11px',
+              fontWeight: 700,
+              color: 'var(--vibe-brand-text)',
+              letterSpacing: '0.05em',
+              textTransform: 'uppercase'
+            }}>
+              {t(locale, 'terminal.title')}
+            </span>
+          </div>
+          <div style={{ width: '1px', height: '12px', background: 'var(--vibe-btn-border, var(--border))', margin: '0 4px' }} />
+          
+          <div className="terminal-tabs">
+            {sessions.map((session) => (
+              <div
+                key={session.id}
+                className={`terminal-tab ${session.id === activeSessionId ? 'active' : ''}${isAgentBusy && session.id === activeSessionId ? ' anim-tabpulse' : ''}`}
+                onClick={() => switchSession(session.id)}
+              >
+                <span>{session.label}</span>
+                {sessions.length > 1 && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      closeSession(session.id);
+                    }}
+                    className="flex items-center justify-center p-0.5 rounded-full hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)] transition-colors opacity-60 hover:opacity-100"
+                    style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer' }}
+                    title={t(locale, 'terminal.closeTab')}
+                    aria-label={t(locale, 'terminal.closeTab')}
+                  >
+                    <X size={10} />
+                  </button>
+                )}
+              </div>
+            ))}
+            <button
+              className="terminal-tab"
+              onClick={() => createSession(undefined, selectedProfileId ?? undefined)}
+              title={t(locale, 'terminal.newTab')}
+              aria-label={t(locale, 'terminal.newTab')}
             >
-              <span>{session.label}</span>
-              {sessions.length > 1 && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    closeSession(session.id);
-                  }}
-                  style={{
-                    background: 'none', border: 'none', color: 'inherit',
-                    cursor: 'pointer', padding: 0, fontSize: FONT_SIZE.xs, opacity: 0.5,
-                    lineHeight: 1,
-                  }}
-                  title={t(locale, 'terminal.closeTab')}
-                >
-                  <X size={10} />
-                </button>
-              )}
-            </div>
-          ))}
-          <button
-            className="terminal-tab"
-            onClick={() => createSession(undefined, selectedProfileId ?? undefined)}
-            style={{ cursor: 'pointer', opacity: 0.6, fontSize: FONT_SIZE.xl, padding: '2px 8px' }}
-            title={t(locale, 'terminal.newTab')}
-          >
-            <Plus size={14} />
-          </button>
+              <Plus size={12} />
+            </button>
+          </div>
         </div>
 
         {/* Environment profile selector (US26) */}
         {profiles.length > 0 && (
-          <select
-            value={selectedProfileId ?? ''}
-            onChange={(e) => setSelectedProfileId(e.target.value ? Number(e.target.value) : null)}
-            style={{
-              fontSize: FONT_SIZE.xs, padding: '1px 4px', marginRight: 8,
-              background: 'var(--vibe-btn-bg)', color: 'var(--text)',
-              border: '1px solid var(--vibe-btn-border)', borderRadius: BORDER_RADIUS.sm,
-              cursor: 'pointer', maxWidth: 120,
-            }}
-            aria-label={t(locale, 'terminal.selectProfile')}
-          >
-            {profiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+          <div ref={profileRef} className="relative flex items-center">
+            <button
+              className="terminal-action-btn"
+              onClick={() => setProfileMenuOpen((v) => !v)}
+              title={t(locale, 'terminal.selectProfile')}
+              aria-label={t(locale, 'terminal.selectProfile')}
+            >
+              <span>
+                {profiles.find((p) => p.id === selectedProfileId)?.name || t(locale, 'terminal.selectProfile')}
+              </span>
+              <ChevronDown
+                size={10}
+                className={`transition-transform duration-200 ${profileMenuOpen ? 'rotate-180' : ''}`}
+              />
+            </button>
+            {profileMenuOpen && (
+              <div className="terminal-dropdown-menu">
+                {profiles.map((p) => {
+                  const isActive = p.id === selectedProfileId;
+                  return (
+                    <button
+                      key={p.id}
+                      className={`terminal-dropdown-item ${isActive ? 'active' : ''}`}
+                      onClick={() => {
+                        setSelectedProfileId(p.id);
+                        setProfileMenuOpen(false);
+                      }}
+                    >
+                      <span>{p.name}</span>
+                      {isActive && <Check size={12} />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         )}
 
         <div className="terminal-actions">
           {/* Agent launch buttons */}
           <button
-            className="btn-ghost"
+            className="terminal-action-btn"
             onClick={() => launchAgent('claude --dangerously-skip-permissions')}
-            style={{
-              fontSize: FONT_SIZE.xs, padding: '2px 6px', borderRadius: BORDER_RADIUS.sm,
-              color: 'var(--vibe-btn-text)',
-            }}
-            title="Launch Claude Code"
+            title={t(locale, 'terminal.launchClaude')}
+            aria-label={t(locale, 'terminal.launchClaude')}
           >
-            <Zap size={11} style={{ marginRight: 2 }} /> Claude
+            <Sparkles size={12} className="text-[var(--vibe-active-color)]" />
+            <span>Claude</span>
           </button>
           <button
-            className="btn-ghost"
+            className="terminal-action-btn"
             onClick={() => launchAgent('codex')}
-            style={{
-              fontSize: FONT_SIZE.xs, padding: '2px 6px', borderRadius: BORDER_RADIUS.sm,
-              color: 'var(--vibe-btn-text)',
-            }}
-            title="Launch Codex"
+            title={t(locale, 'terminal.launchCodex')}
+            aria-label={t(locale, 'terminal.launchCodex')}
           >
-            <Zap size={11} style={{ marginRight: 2 }} /> Codex
+            <Code2 size={12} className="text-[var(--vibe-active-color)]" />
+            <span>Codex</span>
+          </button>
+          {/* Mute toggle — fanbox 风格 */}
+          <button
+            className="terminal-action-btn"
+            onClick={() => setMuted((prev) => !prev)}
+            title={muted ? t(locale, 'terminal.unmute') : t(locale, 'terminal.mute')}
+            aria-label={muted ? t(locale, 'terminal.unmute') : t(locale, 'terminal.mute')}
+          >
+            {muted ? <VolumeX size={12} /> : <Volume2 size={12} />}
+          </button>
+          {/* Locate CWD — 把文件区跳到终端当前所在目录（fanbox 风格） */}
+          <button
+            className="terminal-action-btn"
+            onClick={async () => {
+              if (!activeSessionId) return;
+              try {
+                const result = await window.nativesAPI?.terminal?.cwd?.(activeSessionId) as
+                  { cwd?: string; source?: string } | undefined;
+                if (result?.cwd) {
+                  window.dispatchEvent(new CustomEvent('navigate-files', { detail: result.cwd }));
+                }
+              } catch { /* ignore */ }
+            }}
+            title={t(locale, 'terminal.locateCwd')}
+            aria-label={t(locale, 'terminal.locateCwd')}
+          >
+            <Crosshair size={12} />
           </button>
           {/* Follow mode toggle */}
           {onFollowModeToggle && (
             <button
-              className="btn-ghost"
+              className={`terminal-action-btn ${followMode ? 'active' : ''}`}
               onClick={onFollowModeToggle}
-              style={{
-                fontSize: FONT_SIZE.xs, padding: '2px 6px', borderRadius: BORDER_RADIUS.sm,
-                color: followMode ? 'var(--accent)' : 'var(--text-faint)',
-                background: followMode ? 'var(--accent-soft)' : 'transparent',
-              }}
               title={followMode ? t(locale, 'terminal.followModeOn') : t(locale, 'terminal.followModeOff')}
               aria-label={t(locale, 'terminal.ariaToggleFollowMode')}
             >
@@ -591,7 +868,7 @@ export default function TerminalPanel({
           )}
           {/* Copy selection to clipboard（不调用 selectAll，保留用户选择） */}
           <button
-            className="btn-ghost"
+            className="terminal-action-btn"
             onClick={async () => {
               const session = sessions.find(s => s.id === activeSessionId);
               if (!session) return;
@@ -607,33 +884,30 @@ export default function TerminalPanel({
                 }
                 if (text) {
                   const ok = await copyToClipboard(text);
-                  if (ok) playDoneChime();
+                  if (ok && !muted) playDoneChime();
                 }
               } catch { /* ignore */ }
             }}
-            style={{ fontSize: FONT_SIZE.xs, padding: '2px 6px', borderRadius: BORDER_RADIUS.sm, color: 'var(--vibe-btn-text)' }}
-            title="Copy selection"
-            aria-label="Copy selection"
+            title={t(locale, 'terminal.copySelection')}
+            aria-label={t(locale, 'terminal.copySelection')}
           >
             <Clipboard size={12} />
           </button>
-          <button className="btn-ghost" onClick={onMaximizeToggle} aria-label={isMaximized ? t(locale, 'terminal.ariaRestore') : t(locale, 'terminal.ariaMaximize')}>
-            <svg className="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              {isMaximized ? (
-                <path d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3" />
-              ) : (
-                <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" />
-              )}
-            </svg>
+          <button
+            className="terminal-action-btn"
+            onClick={onMaximizeToggle}
+            title={isMaximized ? t(locale, 'terminal.restore') : t(locale, 'terminal.maximize')}
+            aria-label={isMaximized ? t(locale, 'terminal.ariaRestore') : t(locale, 'terminal.ariaMaximize')}
+          >
+            {isMaximized ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
           </button>
-          <button className="btn-ghost" onClick={onToggle} aria-label={isCollapsed ? t(locale, 'terminal.ariaOpen') : t(locale, 'terminal.ariaClose')}>
-            <svg className="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              {isCollapsed ? (
-                <path d="M18 15l-6-6-6 6" />
-              ) : (
-                <path d="M6 9l6 6 6-6" />
-              )}
-            </svg>
+          <button
+            className="terminal-action-btn"
+            onClick={onToggle}
+            title={isCollapsed ? t(locale, 'terminal.expand') : t(locale, 'terminal.collapse')}
+            aria-label={isCollapsed ? t(locale, 'terminal.ariaOpen') : t(locale, 'terminal.ariaClose')}
+          >
+            {isCollapsed ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
           </button>
         </div>
       </div>
