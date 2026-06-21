@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { startTransition, useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { t, type Locale } from '@/i18n';
 import Sidebar from './Sidebar';
 import RightPanel from './RightPanel';
@@ -11,15 +11,8 @@ import TerminalPanel from './Terminal';
 import CommandPalette from './CommandPalette';
 import ErrorBoundary from '@/components/ui/ErrorBoundary';
 import ShortcutHelp from '@/components/ui/ShortcutHelp';
-import WorkshopPage from './WorkshopPage';
 import SettingsPage from './SettingsPage';
 import ControlHubWidget from './ControlHubWidget';
-import FileBrowser from '@/components/files/FileBrowser';
-import FilePreview, { type PreviewSubMode } from '@/components/files/FilePreview';
-import { type FileEntry } from '@/types/file';
-import AiWorkbench from '@/components/ai/AiWorkbench';
-import ToolsPage from '@/components/tools/ToolsPage';
-import ModulesPage from '@/app/modules/page';
 import { applyTheme } from '@/lib/theme-engine';
 import { getIframeManager } from '@/lib/iframe-manager';
 import ScreenshotCard from '@/components/screenshot/ScreenshotCard';
@@ -32,7 +25,35 @@ import { useFollowMode } from '@/lib/follow-mode';
 import { pushRecentModule } from '@/lib/recent-modules';
 import LiquidGlass from '@/components/ui/LiquidGlass';
 import { FONT_SIZE, SPACING, BORDER_RADIUS } from '@/lib/design-tokens';
+import { getHttpPort } from '@/lib/natives-http-port';
+import ModuleDetails from './ModuleDetails';
 import '@/types'; // ensure Window.nativesAPI type
+import { Edit2, Eye, Radio } from 'lucide-react';
+import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
+import { getExt, isMarkdownFile, isCsvFile, isArchiveFile } from '@/lib/follow-mode';
+import { BUILTIN_TOOLS, getBuiltinTool } from '@/lib/builtin-tools';
+import type { FileEntry } from '@/types/file';
+import type { PreviewSubMode } from '@/components/files/FilePreview';
+
+// Lazy-loaded heavy page components — 0 cost until actually visited
+const LazyWorkshopPage = lazy(() => import('./WorkshopPage'));
+const LazyFileBrowser = lazy(() => import('@/components/files/FileBrowser'));
+const LazyFilePreview = lazy(() => import('@/components/files/FilePreview'));
+const LazyAiWorkbench = lazy(() => import('@/components/ai/AiWorkbench'));
+const LazyToolsPage = lazy(() => import('@/components/tools/ToolsPage'));
+const LazyModulesPage = lazy(() => import('@/app/modules/page'));
+
+// Lazy fallback
+// 预创建内置工具的懒加载组件，避免在 render 中创建
+const BUILTIN_LAZY_MAP: Record<string, React.LazyExoticComponent<any>> = {};
+// 未来有 editor/browser 面板时在此预创建，例如：
+// BUILTIN_LAZY_MAP['editor'] = lazy(() => import('@/components/shell/EditorPanel'));
+
+const LazyFallback = () => (
+  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 16 }}>
+    <MathCurveLoader size={48} />
+  </div>
+);
 
 interface ShellState {
   sidebarCollapsed: boolean;
@@ -59,9 +80,24 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     cmdkOpen: false,
   });
 
-  const [activeView, setActiveView] = useState<string>('dashboard');
+  // Derive initial view from URL pathname — the App Router page files are
+  // no-op shells that dispatch a navigate event, but we need to set the
+  // correct view synchronously on first render (before child effects fire).
+  const [activeView, setActiveView] = useState<string>(() => {
+    if (typeof window === 'undefined') return 'dashboard';
+    const path = window.location.pathname.replace(/\/+$/, '') || '/';
+    const routingTable: Record<string, string> = {
+      '/': 'dashboard',
+      '/files': 'files',
+      '/tools': 'tools',
+      '/ai': 'ai',
+      '/modules': 'modules',
+    };
+    return routingTable[path] || 'dashboard';
+  });
   const [themeReady, setThemeReady] = useState(false);
   const [locale, setLocale] = useState<Locale>('zh');
+  const [httpPort, setHttpPort] = useState<number | null>(null);
   const terminalSessionIdRef = useRef<string | null>(null);
   const iframeContainerRef = useRef<HTMLDivElement>(null);
   const activeModuleRef = useRef<string | null>(null);
@@ -69,6 +105,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
   // File preview state
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null);
+  const [editMode, setEditMode] = useState(false);
 
   // ── Global Background Visual Config (shared with ControlHub & Settings) ──
   const WALLPAPERS = [
@@ -110,7 +147,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
             }));
           }
         }
-      } catch {}
+      } catch { /* no-op */ }
     }
 
     loadConfig();
@@ -136,7 +173,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           }
         });
       }
-    } catch {}
+    } catch { /* no-op */ }
 
     return () => {
       window.removeEventListener('visual-config-changed', handleLocalConfigChange);
@@ -163,7 +200,20 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
   // FOUC guard + locale/theme init + state persistence load
   useEffect(() => {
-    setThemeReady(true);
+    // ── CRITICAL: Signal theme readiness IMMEDIATELY ──
+    // The Tauri window starts with visible:false. The theme_ready_signal
+    // command calls window.show(). If this is delayed or blocked by any
+    // async operation (getHttpPort, db.get, etc.), the window stays
+    // hidden → appears as white screen.
+    //
+    // Solution: Fire themeReady() FIRST, before any async work. Even if
+    // subsequent init fails, the window is already visible.
+    startTransition(() => { setThemeReady(true); });
+    try {
+      window.nativesAPI?.themeReady();
+    } catch {
+      // Browser dev mode — no Tauri window to show
+    }
 
     async function initSettings() {
       const api = window.nativesAPI;
@@ -187,6 +237,12 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         console.error('[Shell] Failed to load saved locale:', err);
       }
 
+      // Load HTTP port for module iframe serving
+      try {
+        const port = await getHttpPort();
+        setHttpPort(port);
+      } catch { /* use default */ }
+
       // Restore persisted sidebar state
       try {
         const api = window.nativesAPI;
@@ -208,12 +264,6 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         }
       } catch (err) {
         console.warn('[Shell] Failed to load sidebar state:', err);
-      }
-
-      try {
-        window.nativesAPI?.themeReady();
-      } catch {
-        // Browser dev mode
       }
     }
     initSettings();
@@ -267,7 +317,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     const api = window.nativesAPI;
     if (!api?.db?.get) {
       // No native API (browser dev mode) — skip onboarding
-      setNeedsOnboarding(false);
+      startTransition(() => { setNeedsOnboarding(false); });
       return;
     }
     api.db.get('settings:username').then((value: unknown) => {
@@ -307,8 +357,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     let iframe = manager.showIframe(moduleId);
     if (!iframe) {
       // Create new iframe
-      const port = window.__nativesHttpPort || 3001;
-      const url = `http://localhost:${port}/modules/${moduleId}/index.html`;
+      const url = `http://localhost:${httpPort}/modules/${moduleId}/index.html`;
       iframe = manager.createIframe(moduleId, url);
 
       // Set up heartbeat monitoring
@@ -397,6 +446,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       // Cmd+N: toggle notifications panel
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n' && !e.shiftKey) {
         e.preventDefault();
+      // eslint-disable-next-line react-hooks/immutability
         toggleRightPanel('notifications');
       }
     };
@@ -527,7 +577,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   const setPreviewSubMode = useCallback((mode: PreviewSubMode) => {
     setState((prev) => ({ ...prev, previewSubMode: mode }));
   }, []);
+      // eslint-disable-next-line react-hooks/preserve-manual-memoization
 
+    // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const toggleRightPanel = useCallback((mode: RightPanelMode = 'notifications') => {
     setState((prev) => ({
       ...prev,
@@ -562,8 +614,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         return;
       }
       const result = await api.module.install(source);
-      if (!result.success && result.error) {
-        console.error('[Shell] Module install failed:', result.error);
+      const installResult = result as { success?: boolean; error?: string; moduleId: string };
+      if (!installResult.success && installResult.error) {
+        console.error('[Shell] Module install failed:', installResult.error);
       }
     } catch (err) {
       console.error('[Shell] Module install error:', err);
@@ -587,6 +640,29 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       (window as any).__pendingNavigateFiles = path;
       // Also dispatch event for already-mounted FileBrowser
       window.dispatchEvent(new CustomEvent('navigate-files', { detail: path }));
+    } else if (moduleId.startsWith('builtin:')) {
+      setActiveView(moduleId);
+      const toolId = moduleId.slice('builtin:'.length);
+      if (toolId === 'terminal') {
+        (async () => {
+          try {
+            const list = await window.nativesAPI?.builtinTool?.list?.();
+            const entry = list?.find((t: { id: string }) => t.id === 'terminal');
+            if (entry?.driver === 'ghostty') {
+              const running = await window.nativesAPI?.builtinTool?.ghosttyIsRunning?.();
+              if (running) {
+                await window.nativesAPI?.builtinTool?.ghosttyFocus?.();
+              } else {
+                await window.nativesAPI?.builtinTool?.launch?.('ghostty');
+              }
+            } else {
+              setState((s) => ({ ...s, terminalCollapsed: false }));
+            }
+          } catch {
+            setState((s) => ({ ...s, terminalCollapsed: false }));
+          }
+        })();
+      }
     } else {
       setActiveView(`module:${moduleId}`);
       setRightPanelMode('module-details');
@@ -628,19 +704,62 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   const isWidgetMode = typeof window !== 'undefined' && window.location.search.includes('mode=widget');
 
   const renderMainContent = () => {
+    // Builtin tool routing: builtin:terminal → open bottom panel, others → lazy content
+    if (activeView.startsWith('builtin:')) {
+      const toolId = activeView.slice('builtin:'.length);
+      const toolDef = getBuiltinTool(toolId);
+
+      // Terminal = bottom panel (special case)
+      if (toolId === 'terminal') {
+        // 面板展开已在 handleModuleSelect 中处理，此处仅返回内容
+        return children; // show dashboard behind the panel
+      }
+
+      // Other builtin tools with displayMode 'content' — lazy load their component
+      if (toolDef?.componentPath && toolDef.displayMode === 'content') {
+        const LazyComponent = BUILTIN_LAZY_MAP[toolDef.id];
+        if (LazyComponent) {
+          return (
+            <Suspense fallback={<LazyFallback />}>
+              <LazyComponent />
+            </Suspense>
+          );
+        }
+        // fallback: 无预创建的懒组件，显示提示
+        return <div style={{ padding: 40, color: 'var(--text-dim)' }}>Component not registered: {toolDef.componentPath}</div>;
+      }
+
+      // External-only tool (no embedded view) — launch externally
+      if (toolDef) {
+        // Read driver from DB and launch
+        (async () => {
+          try {
+            const list = await window.nativesAPI?.builtinTool?.list?.();
+            const entry = list?.find((t: { id: string }) => t.id === toolId);
+            if (entry?.driver && entry.driver !== 'native') {
+              await window.nativesAPI?.builtinTool?.launch?.(entry.driver);
+            }
+          } catch { /* ignore */ }
+        })();
+        return children;
+      }
+
+      return children;
+    }
+
     switch (activeView) {
       case 'settings':
         return <SettingsPage />;
       case 'workshop':
-        return <WorkshopPage onInstall={handleInstallModule} />;
+        return <Suspense fallback={<LazyFallback />}><LazyWorkshopPage onInstall={handleInstallModule} /></Suspense>;
       case 'files':
-        return <FileBrowser onFileSelect={handleFileSelect} />;
+        return <Suspense fallback={<LazyFallback />}><LazyFileBrowser onFileSelect={handleFileSelect} /></Suspense>;
       case 'ai':
-        return <AiWorkbench />;
+        return <Suspense fallback={<LazyFallback />}><LazyAiWorkbench /></Suspense>;
       case 'tools':
-        return <ToolsPage />;
+        return <Suspense fallback={<LazyFallback />}><LazyToolsPage /></Suspense>;
       case 'modules':
-        return <ModulesPage />;
+        return <Suspense fallback={<LazyFallback />}><LazyModulesPage /></Suspense>;
       case 'dashboard':
         return children;
       default:
@@ -662,7 +781,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   // Widget mode — bypass chrome, render ControlHub directly
   if (isWidgetMode) {
     return (
-      <div className="w-screen h-screen flex items-center justify-center bg-transparent">
+      <div className="w-full h-full flex items-center justify-center bg-transparent">
         <ErrorBoundary>
           <ControlHubWidget />
         </ErrorBoundary>
@@ -671,13 +790,13 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   }
 
   return (
-    <div className="vibe-canvas w-screen h-screen p-[1.125rem] flex gap-4 overflow-visible box-border relative isolate" style={{ opacity: themeReady ? 1 : 0 }}>
-      {/* ── 全宽透明拖拽条 — 始终可用 ── */}
+    <div className="vibe-canvas w-full h-full p-[1.125rem] flex gap-4 overflow-visible box-border relative isolate" style={{ opacity: themeReady ? 1 : 0 }}>
+      {/* ── 全宽透明拖拽条 — absolute 定位 + 负 margin 穿透父 padding ── */}
       <div
-        className="absolute top-0 left-0 right-0 h-3 z-30"
-        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+        data-tauri-drag-region
+        className="absolute top-0 z-50"
+        style={{ left: '-1.125rem', right: '-1.125rem', height: '28px' }}
       />
-
       {/* ── Global Dynamic Background Layer ── */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-[1.125rem] z-0" style={{ zIndex: 0 }}>
         {visualConfig.showWallpaper && (
@@ -715,7 +834,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
       {/* Left: Sidebar */}
       <div
-        className="h-[calc(100vh-2.25rem)] shrink-0 transition-[width] duration-200 relative z-10"
+        className="h-full shrink-0 transition-[width] duration-200 relative z-10"
         style={{ width: state.sidebarCollapsed ? 0 : state.sidebarWidth, overflow: state.sidebarCollapsed ? 'hidden' : undefined }}
       >
         <Sidebar
@@ -731,7 +850,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       </div>
 
       {/* Right: Workspace */}
-      <div className="flex-1 flex flex-col min-w-0 h-[calc(100vh-2.25rem)] box-border relative z-10">
+      <div className="flex-1 flex flex-col min-w-0 h-full box-border relative z-10">
         {/* ↓ relative z-20 确保 header 的下拉菜单不被 content panel 遮住 */}
         <div className="mb-3 relative z-20">
           <Header
@@ -775,19 +894,42 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           width={state.rightPanelWidth}
           onResize={(w) => setState((prev) => ({ ...prev, rightPanelWidth: w }))}
           title={state.rightPanelMode === 'file-preview' && selectedFile ? selectedFile.name : undefined}
+          extraHeaderContent={
+            state.rightPanelMode === 'file-preview' && selectedFile && state.previewSubMode === 'preview'
+              ? (() => {
+                  const ext = getExt(selectedFile.name);
+                  const isCode = selectedFile.kind === 'text' && !isMarkdownFile(selectedFile.name) && !isCsvFile(selectedFile.name);
+                  if (!isCode) return undefined;
+                  return (
+                    <button
+                      className="flex items-center justify-center p-1.5 rounded-lg text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)] transition-all"
+                      onClick={() => setEditMode(!editMode)}
+                      title={editMode ? 'View mode' : 'Edit mode'}
+                    >
+                      {editMode ? <Eye size={13} /> : <Edit2 size={13} />}
+                    </button>
+                  );
+                })()
+              : undefined
+          }
         >
           {state.rightPanelMode === 'notifications' && (
             <NotificationPanel locale={locale} />
           )}
           {state.rightPanelMode === 'file-preview' && selectedFile && (
-            <FilePreview
-              entry={selectedFile}
-              subMode={state.previewSubMode}
-              onClose={() => {
-                setSelectedFile(null);
-                setRightPanelMode('closed');
-              }}
-            />
+            <Suspense fallback={<LazyFallback />}>
+              <LazyFilePreview
+                entry={selectedFile}
+                subMode={state.previewSubMode}
+                editMode={editMode}
+                onEditModeChange={setEditMode}
+                onClose={() => {
+                  setSelectedFile(null);
+                  setRightPanelMode('closed');
+                  setEditMode(false);
+                }}
+              />
+            </Suspense>
           )}
           {state.rightPanelMode === 'module-details' && activeView.startsWith('module:') && (
             <ModuleDetails moduleId={activeView.slice(7)} locale={locale} />
@@ -797,8 +939,10 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       <CommandPalette
         isOpen={state.cmdkOpen}
         onClose={() => setState((prev) => ({ ...prev, cmdkOpen: false }))}
+    // eslint-disable-next-line react-hooks/refs
         onSelect={handleModuleSelect}
         onToggleTerminal={toggleTerminal}
+    // eslint-disable-next-line react-hooks/refs
         terminalSessionId={terminalSessionIdRef.current}
       />
 
@@ -818,24 +962,36 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
             const api = window.nativesAPI;
             if (!api?.fs?.readFile || !api?.fs?.writeFileAtomic) return;
             const result = await api.fs.readFile(filePath);
-            if (!result?.content) return;
+            const readResult = result as { content?: string };
+            if (!readResult?.content) return;
             const fileName = filePath.split('/').pop() || filePath;
-            await api.fs.writeFileAtomic(`~/Desktop/素材/${fileName}`, result.content);
+            await api.fs.writeFileAtomic(`~/Desktop/素材/${fileName}`, readResult.content);
           } catch { /* ignore in browser mode */ }
         }}
-        onAnnotate={(filePath) => {
-          // Load image as data URL for the annotation editor
+        onAnnotate={async (filePath) => {
+          // Load image as data URL for the annotation editor (CSP-safe, no file://)
           setAnnotatingFile(filePath);
-          const img = new Image();
-          img.onload = () => {
-            const canvas = document.createElement('canvas');
-            canvas.width = img.naturalWidth;
-            canvas.height = img.naturalHeight;
-            const ctx = canvas.getContext('2d');
-            ctx?.drawImage(img, 0, 0);
-            setAnnotationImageUrl(canvas.toDataURL('image/png'));
-          };
-          img.src = `file://${filePath}`;
+          try {
+            const api = window.nativesAPI;
+            if (api?.thumbnail?.generate) {
+              const dataUrl = await api.thumbnail.generate(filePath, 0) as unknown as string;
+              if (dataUrl) {
+                setAnnotationImageUrl(dataUrl);
+                return;
+              }
+            }
+            if (api?.fs?.readFile) {
+              const result = await api.fs.readFile(filePath) as any;
+              if (result?.content && result?.encoding === 'base64') {
+                const ext = (filePath.split('.').pop() || 'png').toLowerCase();
+                const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'image/png';
+                setAnnotationImageUrl(`data:${mime};base64,${result.content}`);
+                return;
+              }
+            }
+          } catch (err) {
+            console.error('[Shell] Failed to load image for annotation:', err);
+          }
         }}
         onDismiss={() => {}}
       />
@@ -850,8 +1006,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
               const api = window.nativesAPI;
               if (api?.screenshot?.saveAnnotated) {
                 const result = await api.screenshot.saveAnnotated(dataUrl, annotatingFile.replace(/\.(png|jpg|jpeg|webp)$/, '-annotated.png'));
-                if (result.success) {
-                  console.log('[Shell] Annotated image saved:', result.path);
+                const annotateResult = result as { success?: boolean; path?: string };
+                if (annotateResult.success) {
+                  console.log('[Shell] Annotated image saved:', annotateResult.path);
                 }
               }
             } catch (err) {
@@ -876,79 +1033,6 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
       {/* Phase 3: Update Notification */}
       <UpdateNotification locale={locale} />
-    </div>
-  );
-}
-
-// ── Module Details panel (STYLE-3) ──
-
-function ModuleDetails({ moduleId, locale }: { moduleId: string; locale: Locale }) {
-  const [mod, setMod] = useState<{ name: string; version: string; enabled: number; state: string; description?: string; author?: string } | null>(null);
-  const [modulePerms, setModulePerms] = useState<Array<{ module_id: string; permission: string; granted: number }>>([]);
-  useEffect(() => {
-    async function load() {
-      try {
-        const api = window.nativesAPI;
-        if (!api?.module?.list) return;
-        const list = await api.module.list();
-        if (Array.isArray(list)) {
-          const found = (list as Array<{ id: string; name: string; version: string; enabled: number; state: string; description?: string; author?: string }>).find((m) => m.id === moduleId);
-          if (found) setMod(found);
-        }
-        // P1-4: Load permissions
-        if (api?.module?.listPermissions) {
-          const perms = await api.module.listPermissions(moduleId);
-          if (Array.isArray(perms)) setModulePerms(perms);
-        }
-      } catch { /* ignore */ }
-    }
-    load();
-  }, [moduleId]);
-  if (!mod) return <div style={{ padding: SPACING.lg, color: 'var(--text-faint)', fontSize: FONT_SIZE.md }}>{t(locale, 'common.loading')}</div>;
-  return (
-    <div style={{ padding: SPACING.lg, fontSize: FONT_SIZE.md }}>
-      <div style={{ fontSize: FONT_SIZE.xl, fontWeight: 600, color: 'var(--text)', marginBottom: SPACING.lg }}>{mod.name}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <InfoRow label={t(locale, 'workshop.templateId')} value={moduleId} />
-        <InfoRow label={t(locale, 'store.installed')} value={t(locale, mod.enabled ? 'workshop.enabled' : 'workshop.disabled')} />
-        {mod.version && <InfoRow label={t(locale, 'store.version')} value={'v' + mod.version} />}
-        {mod.author && <InfoRow label={t(locale, 'store.author')} value={mod.author} />}
-        {mod.description && <InfoRow label={t(locale, 'store.description')} value={mod.description} />}
-      </div>
-      {/* P1-4: Permissions list */}
-      {modulePerms.length > 0 && (
-        <div style={{ marginTop: SPACING.lg }}>
-          <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
-            Permissions
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.xs }}>
-            {modulePerms.map((perm) => (
-              <div key={perm.permission} style={{
-                display: 'flex', alignItems: 'center', gap: SPACING.sm,
-                padding: '6px 8px', background: 'var(--vibe-btn-bg)',
-                borderRadius: BORDER_RADIUS.sm, fontSize: FONT_SIZE.sm,
-              }}>
-                <span style={{ color: perm.granted ? 'var(--accent)' : 'var(--text-faint)' }}>
-                  {perm.granted ? '✓' : '✗'}
-                </span>
-                <span style={{ color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>{perm.permission}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Keyboard shortcut help overlay (Cmd+/) */}
-      <ShortcutHelp />
-    </div>
-  );
-}
-
-function InfoRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 }}>{label}</div>
-      <div style={{ color: 'var(--text)', wordBreak: 'break-all' }}>{value}</div>
     </div>
   );
 }
