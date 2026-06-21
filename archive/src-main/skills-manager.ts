@@ -12,7 +12,7 @@ export { SKILL_SOURCES as SKILL_SOURCE_DIRS } from '../types/agent';
 /**
  * 检查 SKILL.md 的健康状态
  *
- * 改进点（对标 fanbox）：
+ * 改进点（对标 Natives2）：
  * - 支持 BOM 开头的文件
  * - 支持 CRLF 行尾
  * - 检测 missing-skill-md（空内容）
@@ -95,12 +95,12 @@ export function getSkillNameFromPath(skillPath: string): string {
   return path.basename(path.dirname(skillPath));
 }
 
-// ── Symlink-safe skill toggle（对标 fanbox 的 symlink 处理） ──
+// ── Symlink-safe skill toggle（对标 Natives2 的 symlink 处理） ──
 
 /**
  * 切换技能启用/禁用状态（安全处理符号链接）
  *
- * 对标 fanbox 的 skillToggle 模式：
+ * 对标 Natives2 的 skillToggle 模式：
  * - 使用 lstat 检测符号链接
  * - 使用 realpath 解析真实路径
  * - 符号链接：先 unlink 再 symlink 到新位置

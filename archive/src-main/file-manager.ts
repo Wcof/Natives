@@ -47,7 +47,7 @@ export async function listDir(dirPath: string, options?: ListDirOptions): Promis
     return true;
   });
 
-  // ── 并行 I/O（对标 fanbox — 批量处理，上限 64 并发）──
+  // ── 并行 I/O（对标 Natives2 — 批量处理，上限 64 并发）──
   // 顺序 lstat/readdir 对 200 个文件 = 200-600 次串行 I/O。
   // 分批 Promise.all 将 wall-clock 降低到 ~1/64。
   const IO_BATCH = 64;
@@ -351,7 +351,7 @@ const ALLOWED_ROOTS: string[] = [
 /**
  * 路径安全验证（allowlist 模式）
  *
- * 对标 fanbox 的安全模式：
+ * 对标 Natives2 的安全模式：
  * - 拒绝空字节
  * - 展开 ~ 后 resolve
  * - 验证解析后的路径在允许的根目录下
@@ -455,7 +455,7 @@ export async function renameEntry(oldPath: string, newPath: string): Promise<voi
  * 删除到系统回收站（macOS osascript）
  * @param filePath 文件路径
  *
- * 安全改进（对标 fanbox）：使用 POSIX file 对象传递路径，
+ * 安全改进（对标 Natives2）：使用 POSIX file 对象传递路径，
  * 避免字符串插值导致的命令注入。
  */
 export async function trashEntry(filePath: string): Promise<void> {

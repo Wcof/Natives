@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useCallback } from 'react';
-import { Package, Edit2, Trash2, Archive, Loader2, ClipboardList, Ruler } from 'lucide-react';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { Package, Edit2, Trash2, Archive, ClipboardList, Ruler, RotateCcw } from 'lucide-react';
+import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 import { t, type Locale } from '@/i18n';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
 
@@ -11,6 +12,19 @@ interface AIProposal {
   filePath: string;
   reason: string;
   targetPath?: string;
+}
+
+/** Rollback log entry (Natives2: ~/.natives/organize-log/<timestamp>.json) */
+interface RollbackEntry {
+  from: string;
+  to: string;
+  action: string;
+}
+
+interface RollbackLog {
+  dir: string;
+  at: number;
+  moves: RollbackEntry[];
 }
 
 // File type → folder mapping
@@ -47,6 +61,43 @@ function getFileCategory(name: string): string {
   return 'other';
 }
 
+/** Read organize preferences brief file (Natives2: ~/.natives/organize-prefs.md) */
+async function readBriefFile(): Promise<string> {
+  try {
+    const api = window.nativesAPI;
+    const result = await api?.fs?.readFile?.('~/.natives/organize-prefs.md') as { content?: string } | undefined;
+    return result?.content || '';
+  } catch {
+    return '';
+  }
+}
+
+/** Write rollback log for undo support (Natives2: ~/.natives/organize-log/<ms>.json) */
+async function writeRollbackLog(dir: string, moves: RollbackEntry[]): Promise<void> {
+  if (moves.length === 0) return;
+  try {
+    const api = window.nativesAPI;
+    // Ensure log directory exists
+    await api?.fs?.createEntry?.('~/.natives/organize-log', 'directory').catch(() => {});
+    const log: RollbackLog = { dir, at: Date.now(), moves };
+    const filename = `~/.natives/organize-log/${Date.now()}.json`;
+    await api?.fs?.writeFileAtomic?.(filename, JSON.stringify(log, null, 2));
+  } catch (err) {
+    console.warn('[AIFileOrganizer] Failed to write rollback log:', err);
+  }
+}
+
+/** Append a preference learned from this organize session (Natives2: preference sedimentation) */
+async function appendPreference(preference: string, existingContent?: string): Promise<void> {
+  try {
+    const api = window.nativesAPI;
+    const existing = existingContent ?? await readBriefFile();
+    const timestamp = new Date().toISOString().split('T')[0];
+    const newEntry = `\n- [${timestamp}] ${preference}`;
+    await api?.fs?.writeFileAtomic?.('~/.natives/organize-prefs.md', existing + newEntry);
+  } catch { /* ignore */ }
+}
+
 export default function AIFileOrganizer() {
   const [proposals, setProposals] = useState<AIProposal[]>([]);
   const [approved, setApproved] = useState<Set<string>>(new Set());
@@ -55,6 +106,8 @@ export default function AIFileOrganizer() {
   const [currentDir, setCurrentDir] = useState('~');
   const [locale, setLocale] = useState<Locale>('zh');
   const [analysisMode, setAnalysisMode] = useState<'organize' | 'duplicates' | 'large-files'>('organize');
+  const [lastRollback, setLastRollback] = useState<RollbackLog | null>(null);
+  const briefContentRef = useRef<string>('');
 
   const handleAnalyze = useCallback(async () => {
     setAnalyzing(true);
@@ -63,6 +116,11 @@ export default function AIFileOrganizer() {
     try {
       const api = window.nativesAPI;
       if (!api?.fs?.listDir) return;
+
+      // Read brief file for organize preferences (Natives2)
+      const brief = await readBriefFile();
+      briefContentRef.current = brief;
+      const hasPreferences = brief.trim().length > 0;
 
       const dir = currentDir || '~';
       const entries = await api.fs.listDir(dir, { sortBy: 'name', sortDir: 'asc', showHidden: false });
@@ -158,13 +216,14 @@ export default function AIFileOrganizer() {
     } finally {
       setAnalyzing(false);
     }
-  }, [currentDir, analysisMode]);
+  }, [currentDir, analysisMode, locale]);
 
   const handleExecute = useCallback(async () => {
     setExecuting(true);
     try {
       const api = window.nativesAPI;
       const approvedProposals = proposals.filter((p) => approved.has(p.id));
+      const rollbackMoves: RollbackEntry[] = [];
 
       for (const p of approvedProposals) {
         if (p.action === 'move' && p.targetPath) {
@@ -172,10 +231,28 @@ export default function AIFileOrganizer() {
           const targetDir = p.targetPath.substring(0, p.targetPath.lastIndexOf('/'));
           await api?.fs?.createEntry?.(targetDir, 'directory').catch(() => {});
           await api?.fs?.moveEntry?.(p.filePath, p.targetPath);
+          rollbackMoves.push({ from: p.targetPath, to: p.filePath, action: 'move' });
         } else if (p.action === 'delete') {
           await api?.fs?.trashEntry?.(p.filePath);
+          rollbackMoves.push({ from: p.filePath, to: '', action: 'trash' });
+        } else if (p.action === 'archive' && p.targetPath) {
+          const targetDir = p.targetPath.substring(0, p.targetPath.lastIndexOf('/'));
+          await api?.fs?.createEntry?.(targetDir, 'directory').catch(() => {});
+          await api?.fs?.moveEntry?.(p.filePath, p.targetPath);
+          rollbackMoves.push({ from: p.targetPath, to: p.filePath, action: 'move' });
         }
       }
+
+      // Write rollback log + preference sedimentation in parallel (Natives2)
+      setLastRollback({ dir: currentDir, at: Date.now(), moves: rollbackMoves });
+      const moveCount = approvedProposals.filter(p => p.action === 'move').length;
+      const deleteCount = approvedProposals.filter(p => p.action === 'delete').length;
+      const writes: Promise<void>[] = [writeRollbackLog(currentDir, rollbackMoves)];
+      if (moveCount > 0 || deleteCount > 0) {
+        const summary = `Organized ${currentDir}: ${moveCount} moves, ${deleteCount} deletions`;
+        writes.push(appendPreference(summary, briefContentRef.current));
+      }
+      await Promise.all(writes);
 
       // Clear executed proposals
       setProposals((prev) => prev.filter((p) => !approved.has(p.id)));
@@ -185,12 +262,35 @@ export default function AIFileOrganizer() {
     } finally {
       setExecuting(false);
     }
-  }, [proposals, approved]);
+  }, [proposals, approved, currentDir]);
 
   const handleUndo = useCallback(() => {
     setProposals([]);
     setApproved(new Set());
   }, []);
+
+  /** Undo the last organize operation using the rollback log (Natives2) */
+  const handleUndoLast = useCallback(async () => {
+    if (!lastRollback) return;
+    setExecuting(true);
+    try {
+      const api = window.nativesAPI;
+      for (const move of lastRollback.moves) {
+        if (move.action === 'move' && move.to) {
+          // Reverse the move
+          const targetDir = move.to.substring(0, move.to.lastIndexOf('/'));
+          await api?.fs?.createEntry?.(targetDir, 'directory').catch(() => {});
+          await api?.fs?.moveEntry?.(move.from, move.to).catch(() => {});
+        }
+        // Note: trashed files can't be easily untrashed via API
+      }
+      setLastRollback(null);
+    } catch (err) {
+      console.error('[AIFileOrganizer] Undo failed:', err);
+    } finally {
+      setExecuting(false);
+    }
+  }, [lastRollback]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -211,7 +311,7 @@ export default function AIFileOrganizer() {
               className="btn-ghost"
               onClick={() => setAnalysisMode(mode)}
               style={{
-                fontSize: 9, padding: '2px 6px', borderRadius: BORDER_RADIUS.sm,
+                fontSize: FONT_SIZE.xs, padding: '2px 6px', borderRadius: BORDER_RADIUS.sm,
                 display: 'inline-flex', alignItems: 'center', gap: 3,
                 color: analysisMode === mode ? 'var(--accent)' : 'var(--text-faint)',
                 background: analysisMode === mode ? 'var(--accent-soft)' : 'transparent',
@@ -236,7 +336,7 @@ export default function AIFileOrganizer() {
               onClick={handleAnalyze}
               disabled={analyzing}
             >
-              {analyzing ? <><Loader2 size={12} className="anim-livePulse" /> {t(locale, 'aiWorkbench.organizer.analyzing')}</> : <><Package size={12} /> {t(locale, 'aiWorkbench.analyze')}</>}
+              {analyzing ? <><MathCurveLoader size={12} strokeWidth={1} particleCount={6} /> {t(locale, 'aiWorkbench.organizer.analyzing')}</> : <><Package size={12} /> {t(locale, 'aiWorkbench.analyze')}</>}
             </button>
           </div>
         ) : (
@@ -288,7 +388,7 @@ export default function AIFileOrganizer() {
                 >
                   {executing ? (
                     <>
-                      <Loader2 size={11} className="anim-livePulse" style={{ display: 'inline-block' }} />
+                      <MathCurveLoader size={11} strokeWidth={1} particleCount={6} style={{ display: 'inline-block' }} />
                       <span>{t(locale, 'aiWorkbench.execute')}</span>
                     </>
                   ) : (
@@ -302,6 +402,17 @@ export default function AIFileOrganizer() {
                 >
                   {t(locale, 'aiWorkbench.undoAll')}
                 </button>
+                {lastRollback && (
+                  <button
+                    className="btn btn-ghost"
+                    style={{ fontSize: FONT_SIZE.sm, display: 'inline-flex', alignItems: 'center', gap: SPACING.xs }}
+                    onClick={handleUndoLast}
+                    disabled={executing}
+                    title={`${lastRollback.moves.length} operations from ${new Date(lastRollback.at).toLocaleTimeString()}`}
+                  >
+                    <RotateCcw size={11} /> Undo Last
+                  </button>
+                )}
               </div>
           </>
         )}

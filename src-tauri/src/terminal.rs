@@ -598,6 +598,16 @@ fi
         let mut writers = self.writers.lock().map_err(|e| Error::Internal(e.to_string()))?;
 
         if let Some(session) = sessions.get_mut(session_id) {
+            // ── Unix: send SIGTERM to the entire process group first ──
+            // This ensures child processes (npm run dev, database servers, etc.)
+            // spawned by the shell are also cleaned up, not orphaned.
+            #[cfg(unix)]
+            if session.pid > 1 {
+                unsafe {
+                    let _ = libc::kill(-(session.pid as libc::pid_t), libc::SIGTERM);
+                }
+            }
+
             // Kill the child process if we have a handle
             if let Some(ref mut killer) = session.child_killer {
                 let _ = killer.kill();
@@ -607,6 +617,31 @@ fi
         sessions.remove(session_id);
         writers.remove(session_id);
         Ok(())
+    }
+
+    /// Kill all active PTY sessions — called on app exit or Drop.
+    pub fn kill_all(&self) {
+        let mut sessions = match self.sessions.lock() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let _writers = match self.writers.lock() {
+            Ok(w) => w,
+            Err(_) => return,
+        };
+
+        for (_id, session) in sessions.iter_mut() {
+            #[cfg(unix)]
+            if session.pid > 1 {
+                unsafe {
+                    let _ = libc::kill(-(session.pid as libc::pid_t), libc::SIGTERM);
+                }
+            }
+            if let Some(ref mut killer) = session.child_killer {
+                let _ = killer.kill();
+            }
+        }
+        sessions.clear();
     }
 
     /// Get session info (used by ghostty-vt render state query).
@@ -805,6 +840,13 @@ fi
             }
         }
         None
+    }
+}
+
+// ── Drop: automatically clean up all PTY sessions when TerminalManager is destroyed ──
+impl Drop for TerminalManager {
+    fn drop(&mut self) {
+        self.kill_all();
     }
 }
 

@@ -16,6 +16,7 @@ interface RightPanelProps {
   onResize: (width: number) => void;
   title?: string;
   children?: ReactNode;
+  extraHeaderContent?: ReactNode;
 }
 
 export default function RightPanel({
@@ -27,6 +28,7 @@ export default function RightPanel({
   onResize,
   title,
   children,
+  extraHeaderContent,
 }: RightPanelProps) {
   const [locale, setLocale] = useState<Locale>('en');
   const isOpen = mode !== 'closed';
@@ -67,86 +69,72 @@ export default function RightPanel({
         borderBottom: '1px solid var(--vibe-sidebar-border)',
       }}>
         <div className="flex items-center gap-1">
-          {mode === 'file-preview' ? (
-            /* ── file-preview mode: sub-mode selector icons + Bell ── */
-            <>
-              <button
-                className={`flex items-center justify-center p-1.5 rounded-lg transition-all ${
-                  previewSubMode === 'preview'
-                    ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
-                    : 'text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
-                }`}
-                onClick={() => onPreviewSubModeChange?.('preview')}
-                title={t(locale, 'filePreview.tabPreview')}
-              >
-                <FileText size={15} />
-              </button>
-              <button
-                className={`flex items-center justify-center p-1.5 rounded-lg transition-all ${
-                  previewSubMode === 'info'
-                    ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
-                    : 'text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
-                }`}
-                onClick={() => onPreviewSubModeChange?.('info')}
-                title={t(locale, 'filePreview.tabInfo')}
-              >
-                <Info size={15} />
-              </button>
-              <button
-                className={`flex items-center justify-center p-1.5 rounded-lg transition-all ${
-                  previewSubMode === 'git'
-                    ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
-                    : 'text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
-                }`}
-                onClick={() => onPreviewSubModeChange?.('git')}
-                title={t(locale, 'filePreview.tabGit')}
-              >
-                <GitBranch size={15} />
-              </button>
-              <div className="w-px h-4 mx-0.5 bg-[var(--vibe-sidebar-border)]" />
-              <button
-                className="flex items-center justify-center p-1.5 rounded-lg transition-all text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]"
-                onClick={() => onModeChange('notifications')}
-                title={t(locale, 'rightPanel.title.notifications')}
-              >
-                <Bell size={15} />
-              </button>
-            </>
-          ) : (
-            /* ── Other modes: mode-switch icons ── */
-            <>
-              <button
-                className="flex items-center justify-center p-1.5 rounded-lg transition-all text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]"
-                onClick={() => onModeChange('file-preview')}
-                title={t(locale, 'rightPanel.filePreview')}
-              >
-                <FileText size={15} />
-              </button>
-              <button
-                className={`flex items-center justify-center p-1.5 rounded-lg transition-all ${
-                  mode === 'notifications'
-                    ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
-                    : 'text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
-                }`}
-                onClick={() => onModeChange('notifications')}
-                title={t(locale, 'rightPanel.title.notifications')}
-              >
-                <Bell size={15} />
-              </button>
-              <button
-                className={`flex items-center justify-center p-1.5 rounded-lg transition-all ${
-                  mode === 'module-details'
-                    ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
-                    : 'text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
-                }`}
-                onClick={() => onModeChange('module-details')}
-                title={t(locale, 'rightPanel.title.moduleDetails')}
-              >
-                <Info size={15} />
-              </button>
-            </>
-          )}
+          {/* ── Always show 4 mode-tab icons: Preview / Info / Git / Notifications ── */}
+          <button
+            className={`flex items-center justify-center p-1.5 rounded-lg transition-all ${
+              mode === 'file-preview' && previewSubMode === 'preview'
+                ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
+                : 'text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+            }`}
+            onClick={() => {
+              onModeChange('file-preview');
+              onPreviewSubModeChange?.('preview');
+            }}
+            title={t(locale, 'rightPanel.filePreview')}
+          >
+            <FileText size={15} />
+          </button>
+          <button
+            className={`flex items-center justify-center p-1.5 rounded-lg transition-all ${
+              mode === 'file-preview' && previewSubMode === 'info'
+                ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
+                : 'text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+            }`}
+            onClick={() => {
+              onModeChange('file-preview');
+              onPreviewSubModeChange?.('info');
+            }}
+            title={t(locale, 'rightPanel.title.moduleDetails')}
+          >
+            <Info size={15} />
+          </button>
+          <button
+            className={`flex items-center justify-center p-1.5 rounded-lg transition-all ${
+              mode === 'file-preview' && previewSubMode === 'git'
+                ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
+                : 'text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+            }`}
+            onClick={() => {
+              onModeChange('file-preview');
+              onPreviewSubModeChange?.('git');
+            }}
+            title="Git"
+          >
+            <GitBranch size={15} />
+          </button>
+          <button
+            className={`flex items-center justify-center p-1.5 rounded-lg transition-all ${
+              mode === 'notifications'
+                ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
+                : 'text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+            }`}
+            onClick={() => onModeChange('notifications')}
+            title={t(locale, 'rightPanel.title.notifications')}
+          >
+            <Bell size={15} />
+          </button>
         </div>
+
+        {/* Spacer pushes everything right */}
+        <div style={{ flex: 1 }} />
+
+        {/* Extra header content (e.g., edit toggle button) — adjacent to close button */}
+        {extraHeaderContent && (
+          <div className="flex items-center gap-0.5">
+            {extraHeaderContent}
+          </div>
+        )}
+
         <button
           className="flex items-center justify-center p-1.5 rounded-lg text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)] transition-all"
           onClick={handleClose}

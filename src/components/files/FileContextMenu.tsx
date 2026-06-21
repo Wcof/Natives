@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { type FileEntry } from '@/types/file';
 import { t, type Locale } from '@/i18n';
+import { useHydrated } from '@/hooks/useHydrated';
 
 type MenuMode = 'file' | 'dir' | 'blank';
 
@@ -11,6 +12,7 @@ interface ContextMenuItemBase {
   label: string;
   action: () => void;
   danger?: boolean;
+  shortcut?: string;
 }
 
 interface FileContextMenuProps {
@@ -32,6 +34,7 @@ interface FileContextMenuProps {
   onNewFolder?: (parentDir: string) => void;
   onFavorite?: (entry: FileEntry) => void;
   onUnfavorite?: (entry: FileEntry) => void;
+  onEditImage?: (entry: FileEntry) => void;
   isFavorite?: boolean;
 }
 
@@ -40,7 +43,7 @@ export default function FileContextMenu({
   onOpen, onOpenInTerminal, onRevealInFinder, onOpenInEditor,
   onPreview, onDiskUsage, onRename, onTrash,
   onNewFile, onNewFolder, onFavorite, onUnfavorite,
-  isFavorite,
+  isFavorite, onEditImage,
 }: FileContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [locale, setLocale] = useState<Locale>('zh');
@@ -126,39 +129,43 @@ export default function FileContextMenu({
 
     if (mode === 'dir') {
       return [
-        mkItem({ label: t(locale, 'fileBrowser.open'), action: () => onOpen?.(entry) }),
+        mkItem({ label: t(locale, 'fileBrowser.open'), action: () => onOpen?.(entry), shortcut: '↵' }),
         mkItem({ label: t(locale, 'fileBrowser.openInTerminal'), action: () => onOpenInTerminal?.(p) }),
         mkItem({ label: t(locale, 'fileBrowser.diskUsage'), action: () => onDiskUsage?.(p) }),
         mkItem({ label: t(locale, 'fileBrowser.revealInFinder'), action: () => onRevealInFinder?.(entry) }),
         'sep',
         mkItem({ label: t(locale, 'fileBrowser.copyPath'), action: () => { navigator.clipboard.writeText(p); } }),
-        mkItem({ label: t(locale, 'fileBrowser.copyAsCd'), action: () => { navigator.clipboard.writeText(`cd "${p}"`); } }),
         'sep',
         mkItem({ label: t(locale, isFavorite ? 'fileBrowser.unfavorite' : 'fileBrowser.favorite'), action: () => {
           if (isFavorite) onUnfavorite?.(entry); else onFavorite?.(entry);
-        }}),
-        mkItem({ label: t(locale, 'fileBrowser.rename'), action: () => onRename?.(entry) }),
+        }, shortcut: 'Space' }),
+        mkItem({ label: t(locale, 'fileBrowser.rename'), action: () => onRename?.(entry), shortcut: t(locale, 'fileBrowser.shortcutRename') }),
         mkItem({ label: t(locale, 'fileBrowser.newFile'), action: () => onNewFile?.(p) }),
         mkItem({ label: t(locale, 'fileBrowser.newFolder'), action: () => onNewFolder?.(p) }),
-        mkItem({ label: t(locale, 'fileBrowser.moveToTrash'), action: () => onTrash?.(entry), danger: true }),
+        mkItem({ label: t(locale, 'fileBrowser.moveToTrash'), action: () => onTrash?.(entry), danger: true, shortcut: t(locale, 'fileBrowser.shortcutTrash') }),
       ];
     }
 
     // file mode
-    return [
-      mkItem({ label: t(locale, 'fileBrowser.openInPreview'), action: () => onPreview?.(entry) }),
-      mkItem({ label: t(locale, 'fileBrowser.openInEditor'), action: () => onOpenInEditor?.(entry) }),
+    const items: (ContextMenuItemBase | 'sep')[] = [
+      mkItem({ label: t(locale, 'fileBrowser.openInPreview'), action: () => onPreview?.(entry), shortcut: '↵' }),
+      mkItem({ label: t(locale, 'fileBrowser.openInEditor'), action: () => onOpenInEditor?.(entry), shortcut: t(locale, 'fileBrowser.shortcutOpenInEditor') }),
+    ];
+    if (entry.kind === 'image') {
+      items.push(mkItem({ label: t(locale, 'fileBrowser.editImage'), action: () => onEditImage?.(entry) }));
+    }
+    items.push(
       mkItem({ label: t(locale, 'fileBrowser.revealInFinder'), action: () => onRevealInFinder?.(entry) }),
       'sep',
       mkItem({ label: t(locale, 'fileBrowser.copyPath'), action: () => { navigator.clipboard.writeText(p); } }),
-      mkItem({ label: t(locale, 'fileBrowser.copyAsCd'), action: () => { navigator.clipboard.writeText(`cd "${parent}"`); } }),
       'sep',
       mkItem({ label: t(locale, isFavorite ? 'fileBrowser.unfavorite' : 'fileBrowser.favorite'), action: () => {
         if (isFavorite) onUnfavorite?.(entry); else onFavorite?.(entry);
-      }}),
-      mkItem({ label: t(locale, 'fileBrowser.rename'), action: () => onRename?.(entry) }),
-      mkItem({ label: t(locale, 'fileBrowser.moveToTrash'), action: () => onTrash?.(entry), danger: true }),
-    ];
+      }, shortcut: 'Space' }),
+      mkItem({ label: t(locale, 'fileBrowser.rename'), action: () => onRename?.(entry), shortcut: t(locale, 'fileBrowser.shortcutRename') }),
+      mkItem({ label: t(locale, 'fileBrowser.moveToTrash'), action: () => onTrash?.(entry), danger: true, shortcut: t(locale, 'fileBrowser.shortcutTrash') }),
+    );
+    return items;
   };
 
   const items = buildItems();
@@ -183,16 +190,25 @@ export default function FileContextMenu({
             key={`${item.label}-${idx}`}
             className={`context-menu-item ${item.danger ? 'danger' : ''}`}
             onClick={item.action}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}
           >
-            {item.label}
+            <span>{item.label}</span>
+            {item.shortcut && (
+              <span style={{
+                fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--vibe-btn-text)',
+                opacity: 0.6, flexShrink: 0,
+              }}>
+                {item.shortcut}
+              </span>
+            )}
           </div>
         )
       )}
     </div>
   );
 
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => { setMounted(true); }, []);
+  const mounted = useHydrated();
+  
 
   if (!mounted) return null;
   return createPortal(menuContent, document.body);

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { startTransition, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 import { type FileEntry, type FileKind } from '@/types/file';
 import { t, type Locale } from '@/i18n';
@@ -10,16 +10,21 @@ import FileContextMenu from './FileContextMenu';
 import DiskUsagePanel from './DiskUsagePanel';
 import Skeleton from '@/components/ui/Skeleton';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
-import { useFocusTrap } from '@/lib/useFocusTrap';
+import Modal from '@/components/ui/Modal';
 import { pushRecentFile } from '@/lib/recent-files-client';
-import { webFsClient } from '@/lib/web-fs-client';
 import { fmtSize } from '@/lib/format';
 import { useFileDrop } from '@/lib/use-file-drop';
 
-/** Electron IPC 可用时用 nativesAPI.fs，否则降级到 webFsClient (Next.js API Routes) */
+export interface FavoriteItem {
+  path: string;
+  addedAt: number;
+}
+
+/** Tauri IPC 可用时用 nativesAPI.fs，否则抛出错误 */
 function getFsApi() {
   const native = (window as any).nativesAPI?.fs;
-  return native || webFsClient;
+  if (!native) throw new Error('[FileBrowser] fs API not available (Tauri IPC required)');
+  return native;
 }
 
 interface FileBrowserProps {
@@ -32,8 +37,6 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [sortBy, setSortBy] = useState<'name' | 'mtime' | 'size'>('name');
-  const renameTrap = useFocusTrap();
-  const newItemTrap = useFocusTrap();
   const [trashTarget, setTrashTarget] = useState<FileEntry | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [showHidden, setShowHidden] = useState(false);
@@ -44,14 +47,23 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const [newItemTarget, setNewItemTarget] = useState<{ parentDir: string; type: 'file' | 'folder' } | null>(null);
   const [newItemName, setNewItemName] = useState('');
   const [toast, setToast] = useState<string | null>(null);
-  const [favorites, setFavorites] = useState<string[]>([]);
+  const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
   const [diskUsageTarget, setDiskUsageTarget] = useState<string | null>(null);
   const [locale, setLocale] = useState<Locale>('zh');
   const [recentMode, setRecentMode] = useState(false);
+  const [selectedIndex, setSelectedIndex] = useState(-1);
+  const [gridSize, setGridSize] = useState<'sm' | 'md' | 'lg'>(() => {
+    if (typeof window !== 'undefined') {
+      return (localStorage.getItem('file-grid-size') as 'sm' | 'md' | 'lg') || 'md';
+    }
+    return 'md';
+  });
 
   // Navigation history for back/forward
   const historyRef = useRef<string[]>(['/']);
   const historyIndexRef = useRef(0);
+  const fileAreaRef = useRef<HTMLDivElement>(null);
+  const gridContainerRef = useRef<HTMLDivElement>(null);
 
   const navigateTo = useCallback((path: string) => {
     // Truncate forward history and append
@@ -89,7 +101,16 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     async function load() {
       try {
         const stored = await window.nativesAPI?.db?.get?.('settings:favorites');
-        if (stored) setFavorites(JSON.parse(stored));
+        if (stored) {
+          const parsed = JSON.parse(stored as string);
+          // Migrate old format: string[] → FavoriteItem[]
+          if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
+            const migrated: FavoriteItem[] = (parsed as string[]).map((p, i) => ({ path: p, addedAt: Date.now() + i }));
+            setFavorites(migrated);
+          } else {
+            setFavorites(parsed as FavoriteItem[]);
+          }
+        }
       } catch { /* ignore */ }
       try {
         const saved = await window.nativesAPI?.getLocale?.();
@@ -99,18 +120,25 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     load();
   }, []);
 
-  const isFavorite = favorites.includes(currentPath);
-  const toggleFavorite = useCallback(async () => {
-    const next = isFavorite
-      ? favorites.filter((f) => f !== currentPath)
-      : [...favorites, currentPath];
+  const isFavorite = favorites.some((f) => f.path === currentPath);
+  const toggleFavorite = useCallback(async (targetPath?: string) => {
+    const path = targetPath ?? currentPath;
+    const existing = favorites.find((f) => f.path === path);
+    const next = existing
+      ? favorites.filter((f) => f.path !== path)
+      : [...favorites, { path, addedAt: Date.now() }];
     setFavorites(next);
     try {
       await window.nativesAPI?.db?.set?.('settings:favorites', JSON.stringify(next));
       window.dispatchEvent(new CustomEvent('favorites-changed'));
-      showToast(isFavorite ? t(locale, 'fileBrowser.removedFromFavorites') : t(locale, 'fileBrowser.addedToFavorites'));
+      showToast(existing ? t(locale, 'fileBrowser.removedFromFavorites') : t(locale, 'fileBrowser.addedToFavorites'));
     } catch { /* ignore */ }
-  }, [currentPath, favorites, isFavorite, showToast]);
+  }, [currentPath, favorites, showToast, locale]);
+
+  const favoritePaths = useMemo(() => favorites.map((f) => f.path), [favorites]);
+  const handleFavoriteToggle = useCallback((entry: FileEntry) => {
+    void toggleFavorite(entry.path);
+  }, [toggleFavorite]);
 
   const loadEntries = useCallback(async () => {
     setLoading(true);
@@ -155,6 +183,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   }, [currentPath, sortBy, sortDir, showHidden, recentMode]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadEntries();
   }, [loadEntries]);
 
@@ -162,19 +191,20 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const { isDragging, dragHandlers } = useFileDrop({
     currentDir: currentPath,
     onFilesDropped: useCallback(async (paths: string[]) => {
-      const port = (window as any).__nativesHttpPort || 3001;
-      for (const p of paths) {
-        try {
-          await fetch(
-            `http://localhost:${port}/api/fs/copy?src=${encodeURIComponent(p)}&dir=${encodeURIComponent(currentPath)}`,
-            { method: 'POST' },
-          );
-        } catch (err) {
-          console.error('[FileBrowser] copy file failed:', p, err);
+      try {
+        const api = window.nativesAPI;
+        if (api?.fs?.importFiles) {
+          await api.fs.importFiles(paths, currentPath);
+          await loadEntries();
+          showToast(t(locale, 'fileBrowser.filesDropped'));
+        } else {
+          console.error('[FileBrowser] fs.importFiles API not available');
+          showToast(t(locale, 'fileBrowser.importFailed'));
         }
+      } catch (err) {
+        console.error('[FileBrowser] import files failed:', err);
+        showToast(t(locale, 'fileBrowser.importFailed'));
       }
-      await loadEntries();
-      showToast(t(locale, 'fileBrowser.filesDropped'));
     }, [currentPath, locale, loadEntries, showToast]),
     onUrlDropped: useCallback(async (_savedPath: string) => {
       await loadEntries();
@@ -192,17 +222,37 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [goBack, goForward]);
 
+  // Grid column count calculation
+  const getGridColumns = useCallback(() => {
+    const container = gridContainerRef.current;
+    if (!container) return 1;
+    const containerWidth = container.clientWidth - SPACING.md * 2; // subtract padding
+    const minCardWidth = gridSize === 'sm' ? 100 : gridSize === 'lg' ? 200 : 140;
+    const gap = 10;
+    return Math.max(1, Math.floor((containerWidth + gap) / (minCardWidth + gap)));
+  }, [gridSize]);
+
+  // Persist gridSize to localStorage
+  useEffect(() => {
+    localStorage.setItem('file-grid-size', gridSize);
+  }, [gridSize]);
+
   // Listen for Header action events
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (!detail) return;
       if (detail.type === 'viewMode') setViewMode(detail.value);
-      if (detail.type === 'sortBy') setSortBy(detail.value);
+      if (detail.type === 'sortBy') { setSortBy(detail.value); setSortDir('asc'); }
       if (detail.type === 'sortDir') setSortDir((prev) => prev === 'asc' ? 'desc' : 'asc');
       if (detail.type === 'showHidden') setShowHidden((prev) => !prev);
       if (detail.type === 'search') setSearchQuery(detail.value ?? '');
-      if (detail.type === 'newFolder') handleNewFolder(detail.value ?? currentPath);
+      if (detail.type === 'newFolder') {
+        // Use detail.value or fall back to current path from state
+        const dir = detail.value ?? '';
+        if (dir) setNewItemTarget({ parentDir: dir, type: 'folder' });
+      }
+      if (detail.type === 'gridSize') setGridSize(detail.value);
     };
     window.addEventListener('header-file-action', handler);
     return () => window.removeEventListener('header-file-action', handler);
@@ -213,6 +263,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     // Check for pending path set before mount (race condition fix)
     const pending = (window as any).__pendingNavigateFiles;
     if (typeof pending === 'string') {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
       navigateTo(pending);
       delete (window as any).__pendingNavigateFiles;
     }
@@ -227,14 +278,14 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     return () => window.removeEventListener('navigate-files', handler);
   }, []);
 
-  const handleSelect = (entry: FileEntry) => {
+  const handleSelect = useCallback((entry: FileEntry) => {
     if (entry.isDir) {
       navigateTo(entry.path);
     } else {
       pushRecentFile(entry.path);
       onFileSelect?.(entry);
     }
-  };
+  }, [navigateTo, onFileSelect]);
 
   const handleNavigate = (path: string) => {
     navigateTo(path);
@@ -303,7 +354,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     } else {
       showToast(t(locale, 'fileBrowser.revealInFinder') + ': ' + entry.path);
     }
-  }, [showToast]);
+  }, [showToast, locale]);
 
   const handleOpenInEditor = useCallback((entry: FileEntry) => {
     const api = (window as any).nativesAPI?.shell;
@@ -313,7 +364,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       navigator.clipboard.writeText(entry.path);
       showToast(t(locale, 'fileBrowser.copyPath'));
     }
-  }, [showToast]);
+  }, [showToast, locale]);
 
   const handleOpenInTerminal = useCallback(async (dir: string) => {
     const api = (window as any).nativesAPI;
@@ -328,9 +379,13 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       navigator.clipboard.writeText(`cd "${dir}"`);
       showToast(t(locale, 'fileBrowser.copyAsCd'));
     }
-  }, [showToast]);
+  }, [showToast, locale]);
 
   const handlePreview = useCallback((entry: FileEntry) => {
+    onFileSelect?.(entry);
+  }, [onFileSelect]);
+
+  const handleEditRequest = useCallback((entry: FileEntry) => {
     onFileSelect?.(entry);
   }, [onFileSelect]);
 
@@ -394,6 +449,103 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     return entries.filter(e => e.name.toLowerCase().includes(q));
   }, [entries, searchQuery]);
 
+  // Keyboard navigation for file area
+  useEffect(() => {
+    const handleFileKeyDown = (e: KeyboardEvent) => {
+      // Only handle when no input is focused
+      const target = e.target as HTMLElement;
+      const isInputFocused = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+      if (isInputFocused) return;
+      // Don't handle if a dialog is open
+      if (renameTarget || newItemTarget || trashTarget || contextMenu) return;
+
+      const list = filteredEntries;
+      if (list.length === 0) return;
+
+      switch (e.key) {
+        case 'ArrowDown': {
+          e.preventDefault();
+          setSelectedIndex(prev => {
+            if (viewMode === 'grid') {
+              const cols = getGridColumns();
+              return prev < 0 ? 0 : Math.min(prev + cols, list.length - 1);
+            }
+            return prev < 0 ? 0 : Math.min(prev + 1, list.length - 1);
+          });
+          break;
+        }
+        case 'ArrowUp': {
+          e.preventDefault();
+          setSelectedIndex(prev => {
+            if (viewMode === 'grid') {
+              const cols = getGridColumns();
+              return prev < 0 ? 0 : Math.max(prev - cols, 0);
+            }
+            return prev < 0 ? 0 : Math.max(prev - 1, 0);
+          });
+          break;
+        }
+        case 'ArrowRight': {
+          if (viewMode !== 'grid') break;
+          e.preventDefault();
+          setSelectedIndex(prev => prev < 0 ? 0 : Math.min(prev + 1, list.length - 1));
+          break;
+        }
+        case 'ArrowLeft': {
+          if (viewMode !== 'grid') break;
+          e.preventDefault();
+          setSelectedIndex(prev => prev < 0 ? 0 : Math.max(prev - 1, 0));
+          break;
+        }
+        case 'Enter': {
+          if (selectedIndex < 0 || selectedIndex >= list.length) break;
+          e.preventDefault();
+          const entry = list[selectedIndex]!;
+          if (e.metaKey || e.ctrlKey) {
+            onFileSelect?.(entry);
+          } else {
+            handleSelect(entry);
+          }
+          break;
+        }
+        case 'Backspace': {
+          e.preventDefault();
+          const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
+          if (parentPath !== currentPath) {
+            navigateTo(parentPath);
+          }
+          break;
+        }
+        case 'F2': {
+          if (selectedIndex < 0 || selectedIndex >= list.length) break;
+          e.preventDefault();
+          handleRename(list[selectedIndex]!);
+          break;
+        }
+        case 'Delete': {
+          if (selectedIndex < 0 || selectedIndex >= list.length) break;
+          if (!e.metaKey) break;
+          e.preventDefault();
+          handleTrash(list[selectedIndex]!);
+          break;
+        }
+        case ' ': {
+          if (selectedIndex < 0 || selectedIndex >= list.length) break;
+          e.preventDefault();
+          toggleFavorite(list[selectedIndex]!.path);
+          break;
+        }
+      }
+    };
+    window.addEventListener('keydown', handleFileKeyDown);
+    return () => window.removeEventListener('keydown', handleFileKeyDown);
+  }, [filteredEntries, selectedIndex, viewMode, getGridColumns, onFileSelect, currentPath, renameTarget, newItemTarget, trashTarget, contextMenu, toggleFavorite, handleSelect, handleRename, handleTrash]);
+
+  // Reset selectedIndex when entries or path change
+  useEffect(() => {
+    startTransition(() => { setSelectedIndex(-1); });
+  }, [currentPath, entries, searchQuery]);
+
   // Detect project badge from current directory entries
   const detectedProject = useMemo(() => {
     const names = new Set(entries.filter(e => !e.isDir).map(e => e.name.toLowerCase()));
@@ -409,12 +561,12 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   // ── Event bridge: broadcast file-browser state for Header ──
   useEffect(() => {
     const detail = {
-      viewMode, sortBy, sortDir, showHidden,
+      viewMode, sortBy, sortDir, showHidden, gridSize,
       segments: segments.length > 0 ? segments : ['/'],
       isFavorite, breadcrumbPath: currentPath, projectBadge: detectedProject,
     };
     window.dispatchEvent(new CustomEvent('header-file-state', { detail }));
-  }, [viewMode, sortBy, sortDir, showHidden, segments, isFavorite, currentPath, detectedProject]);
+  }, [viewMode, sortBy, sortDir, showHidden, gridSize, segments, isFavorite, currentPath, detectedProject]);
 
   return (
     <div style={{
@@ -473,7 +625,17 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             )}
           </div>
         ) : viewMode === 'grid' ? (
-          <FileGrid entries={filteredEntries} onSelect={handleSelect} onContextMenu={handleContextMenu} />
+          <FileGrid
+            ref={gridContainerRef}
+            entries={filteredEntries}
+            onSelect={handleSelect}
+            onContextMenu={handleContextMenu}
+            selectedIndex={selectedIndex}
+            gridSize={gridSize}
+            onEditRequest={handleEditRequest}
+            favorites={favoritePaths}
+            onFavoriteToggle={handleFavoriteToggle}
+          />
         ) : (
           <FileList
             entries={filteredEntries}
@@ -483,6 +645,10 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             onSelect={handleSelect}
             onContextMenu={handleContextMenu}
             showDir={recentMode}
+            selectedIndex={selectedIndex}
+            onEditRequest={handleEditRequest}
+            favorites={favoritePaths}
+            onFavoriteToggle={handleFavoriteToggle}
           />
         )}
       </div>
@@ -534,6 +700,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           onRevealInFinder={handleRevealInFinder}
           onOpenInEditor={handleOpenInEditor}
           onPreview={handlePreview}
+          onEditImage={handleEditRequest}
           onDiskUsage={handleDiskUsage}
           onRename={handleRename}
           onTrash={handleTrash}
@@ -555,101 +722,53 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       )}
 
       {/* Rename dialog */}
-      {renameTarget && (
-        <div
-          ref={renameTrap.dialogRef}
-          role="dialog"
-          aria-modal="true"
-          aria-label={t(locale, 'fileBrowser.dialogRename')}
-          className="anim-editRipple"
-          style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60,
-          }}
-          onClick={() => setRenameTarget(null)}
-          onKeyDown={(e) => {
-            renameTrap.handleKeyDown(e);
-            if (e.key === 'Escape') setRenameTarget(null);
-          }}
-        >
-          <div style={{
-            background: 'var(--vibe-toolbar-bg)', border: '1px solid var(--vibe-btn-border)',
-            borderRadius: BORDER_RADIUS.xl, padding: SPACING.xl, width: 340,
-            boxShadow: 'var(--vibe-toolbar-shadow)',
-            backdropFilter: 'blur(var(--vibe-toolbar-blur, 22px)) saturate(var(--vibe-toolbar-saturation, 145%))',
-            WebkitBackdropFilter: 'blur(var(--vibe-toolbar-blur, 22px)) saturate(var(--vibe-toolbar-saturation, 145%))',
-          }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)', marginBottom: SPACING.md }}>
-              {t(locale, 'fileBrowser.dialogRename')}
-            </div>
-            <input
-              type="text"
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleRenameConfirm()}
-              style={{
-                width: '100%', padding: `${SPACING.xs}px ${SPACING.md}px`, background: 'var(--vibe-content-bg)',
-                border: '1px solid var(--vibe-btn-border)', borderRadius: BORDER_RADIUS.md,
-                color: 'var(--text)', fontSize: FONT_SIZE.lg, outline: 'none',
-              }}
-              autoFocus
-            />
-            <div style={{ display: 'flex', gap: SPACING.sm, marginTop: 14, justifyContent: 'flex-end' }}>
-              <button className="btn" onClick={() => setRenameTarget(null)}>{t(locale, 'common.cancel')}</button>
-              <button className="btn btn-primary" onClick={handleRenameConfirm}>{t(locale, 'fileBrowser.dialogRenameBtn')}</button>
-            </div>
-          </div>
+      <Modal
+        isOpen={!!renameTarget}
+        onClose={() => setRenameTarget(null)}
+        title={t(locale, 'fileBrowser.dialogRename')}
+        width={340}
+      >
+        <input
+          type="text"
+          value={renameValue}
+          onChange={(e) => setRenameValue(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && handleRenameConfirm()}
+          className="input"
+          style={{ width: '100%', fontSize: FONT_SIZE.lg }}
+          autoFocus
+        />
+        <div style={{ display: 'flex', gap: SPACING.sm, marginTop: 14, justifyContent: 'flex-end' }}>
+          <button className="btn btn-ghost" onClick={() => setRenameTarget(null)}>{t(locale, 'common.cancel')}</button>
+          <button className="btn btn-primary" onClick={handleRenameConfirm}>{t(locale, 'fileBrowser.dialogRenameBtn')}</button>
         </div>
-      )}
+      </Modal>
 
       {/* New file/folder dialog */}
-      {newItemTarget && (
-        <div
-          ref={newItemTrap.dialogRef}
-          role="dialog"
-          aria-modal="true"
-          aria-label={newItemTarget.type === 'file' ? t(locale, 'fileBrowser.dialogNewFile') : t(locale, 'fileBrowser.dialogNewFolder')}
-          className="anim-editRipple"
-          style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60,
-          }}
-          onClick={() => setNewItemTarget(null)}
-          onKeyDown={(e) => {
-            newItemTrap.handleKeyDown(e);
-            if (e.key === 'Escape') setNewItemTarget(null);
-          }}
-        >
-          <div style={{
-            background: 'var(--vibe-toolbar-bg)', border: '1px solid var(--vibe-btn-border)',
-            borderRadius: BORDER_RADIUS.xl, padding: SPACING.xl, width: 340,
-            boxShadow: 'var(--vibe-toolbar-shadow)',
-            backdropFilter: 'blur(var(--vibe-toolbar-blur, 22px)) saturate(var(--vibe-toolbar-saturation, 145%))',
-            WebkitBackdropFilter: 'blur(var(--vibe-toolbar-blur, 22px)) saturate(var(--vibe-toolbar-saturation, 145%))',
-          }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)', marginBottom: SPACING.md }}>
-              {newItemTarget.type === 'file' ? t(locale, 'fileBrowser.dialogNewFile') : t(locale, 'fileBrowser.dialogNewFolder')}
-            </div>
+      <Modal
+        isOpen={!!newItemTarget}
+        onClose={() => setNewItemTarget(null)}
+        title={newItemTarget?.type === 'file' ? t(locale, 'fileBrowser.dialogNewFile') : t(locale, 'fileBrowser.dialogNewFolder')}
+        width={340}
+      >
+        {newItemTarget && (
+          <>
             <input
               type="text"
               value={newItemName}
               onChange={(e) => setNewItemName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleNewItemConfirm()}
               placeholder={newItemTarget.type === 'file' ? t(locale, 'fileBrowser.placeholderFileName') : t(locale, 'fileBrowser.placeholderFolderName')}
-              style={{
-                width: '100%', padding: `${SPACING.xs}px ${SPACING.md}px`, background: 'var(--vibe-content-bg)',
-                border: '1px solid var(--vibe-btn-border)', borderRadius: BORDER_RADIUS.md,
-                color: 'var(--text)', fontSize: FONT_SIZE.lg, outline: 'none',
-              }}
+              className="input"
+              style={{ width: '100%', fontSize: FONT_SIZE.lg }}
               autoFocus
             />
             <div style={{ display: 'flex', gap: SPACING.sm, marginTop: 14, justifyContent: 'flex-end' }}>
-              <button className="btn" onClick={() => setNewItemTarget(null)}>{t(locale, 'common.cancel')}</button>
+              <button className="btn btn-ghost" onClick={() => setNewItemTarget(null)}>{t(locale, 'common.cancel')}</button>
               <button className="btn btn-primary" onClick={handleNewItemConfirm}>{t(locale, 'fileBrowser.dialogCreate')}</button>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </Modal>
 
       {/* Disk Usage Panel (overlay) */}
       {diskUsageTarget && (

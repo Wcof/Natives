@@ -2,7 +2,7 @@
 
 /**
  * 通用进度条组件 — 复用自 UsagePanel 和 Dashboard
- * 对齐 fanbox usagePanel.bar() 样式
+ * 对齐 Natives2 usagePanel.bar() 样式
  */
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
 
@@ -37,7 +37,7 @@ export function TokenChip({ value, label }: { value: number; label: string }) {
       background: 'var(--vibe-btn-bg)', fontSize: FONT_SIZE.sm, textAlign: 'center',
       fontFamily: 'var(--font-mono)', color: 'var(--text)',
     }}>
-      {value.toLocaleString()} <span style={{ color: 'var(--text-faint)', fontSize: 9 }}>{label}</span>
+      {value.toLocaleString()} <span style={{ color: 'var(--text-faint)', fontSize: FONT_SIZE.xs }}>{label}</span>
     </span>
   );
 }

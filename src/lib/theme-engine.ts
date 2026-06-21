@@ -77,8 +77,8 @@ export const THEMES: Record<string, Theme> = {
 // ── Terminal ANSI Colors ──
 
 export const TERMINAL_THEMES: Record<string, { background: string; foreground: string; cursor: string; selectionBackground?: string }> = {
-  'frosted-jasmine': { background: '#fdf6f0', foreground: '#2d1f14', cursor: '#ff793f', selectionBackground: '#ff793f33' },
-  'terminal-volt': { background: '#0d0f12', foreground: '#d4d7de', cursor: '#00ff9c', selectionBackground: '#00ff9c33' },
+  'terminal-volt': { background: THEMES['terminal-volt']!.bg, foreground: THEMES['terminal-volt']!.text, cursor: THEMES['terminal-volt']!.accent, selectionBackground: THEMES['terminal-volt']!.accent + '33' },
+  'frosted-jasmine': { background: THEMES['frosted-jasmine']!.bg, foreground: THEMES['frosted-jasmine']!.text, cursor: THEMES['frosted-jasmine']!.accent, selectionBackground: THEMES['frosted-jasmine']!.accent + '33' },
 };
 
 // ── Theme Application ──

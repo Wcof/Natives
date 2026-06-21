@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useHydrated } from '@/hooks/useHydrated';
 import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
 
@@ -22,11 +22,7 @@ interface PortalProps {
  * 避免 Next.js SSR/hydration 不一致。
  */
 export default function Portal({ container, children }: PortalProps) {
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  const mounted = useHydrated();
 
   if (!mounted) return null;
   return createPortal(children, container ?? document.body);

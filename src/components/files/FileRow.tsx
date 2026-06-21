@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { type FileEntry } from '@/types/file';
-import { Star } from 'lucide-react';
+import { Star, Play } from 'lucide-react';
 import { fmtSize, fmtTime } from '@/lib/format';
 import { EXT_BADGES, getBadgeExt } from '@/lib/file-badges';
 import { getFileIcon, getIconColor, FbFolder, FbImage } from '@/lib/file-icons';
@@ -13,10 +13,15 @@ interface FileRowProps {
   onSelect: (entry: FileEntry) => void;
   onContextMenu?: (e: React.MouseEvent, entry: FileEntry) => void;
   showDir?: boolean;
+  selected?: boolean;
+  onDoubleClick?: () => void;
+  isFavorite?: boolean;
+  onFavoriteToggle?: (entry: FileEntry) => void;
 }
 
-export default function FileRow({ entry, onSelect, onContextMenu, showDir }: FileRowProps) {
+export default function FileRow({ entry, onSelect, onContextMenu, showDir, selected, onDoubleClick, isFavorite, onFavoriteToggle }: FileRowProps) {
   const [flash, setFlash] = useState(false);
+  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -26,7 +31,10 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir }: Fil
       }
     };
     window.addEventListener('file-flash', handler);
-    return () => window.removeEventListener('file-flash', handler);
+    return () => {
+      window.removeEventListener('file-flash', handler);
+      if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+    };
   }, [entry.path]);
 
   const tint = getIconColor(entry);
@@ -34,16 +42,11 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir }: Fil
   const badge = entry.isDir ? null : EXT_BADGES[ext];
 
   const renderIcon = () => {
-    // Folder: fanbox style
+    // Folder: Natives2 style
     if (entry.isDir) {
       return <FbFolder size={28} />;
     }
-    // Image thumbnail with broken-image fallback
-    if (entry.kind === 'image') {
-      const thumbUrl = `/api/fs/thumb?path=${encodeURIComponent(entry.path)}&w=64`;
-      return <ThumbImg src={thumbUrl} alt={entry.name} tint={tint} />;
-    }
-    // Extension badge + fanbox icon overlay (TS, JS, PY, etc.)
+    // Extension badge + Natives2 icon overlay (TS, JS, PY, etc.)
     if (badge) {
       const Icon = getFileIcon(entry);
       return (
@@ -65,7 +68,7 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir }: Fil
         </span>
       );
     }
-    // Fanbox-style icon based on file type
+    // Natives2-style icon based on file type
     const Icon = getFileIcon(entry);
     return <Icon size={28} color={tint} />;
   };
@@ -74,7 +77,20 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir }: Fil
     <div
       className={flash ? 'anim-liveZapRow' : ''}
       data-file-entry={entry.path}
-      onClick={() => onSelect(entry)}
+      onClick={() => {
+        if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = setTimeout(() => {
+          onSelect(entry);
+          clickTimerRef.current = null;
+        }, 200);
+      }}
+      onDoubleClick={() => {
+        if (clickTimerRef.current) {
+          clearTimeout(clickTimerRef.current);
+          clickTimerRef.current = null;
+        }
+        onDoubleClick?.();
+      }}
       onContextMenu={(e) => onContextMenu?.(e, entry)}
       role="button"
       tabIndex={0}
@@ -89,15 +105,29 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir }: Fil
         fontSize: FONT_SIZE.lg,
         color: 'var(--vibe-brand-text)',
         borderBottom: '1px solid var(--vibe-btn-border)',
-        background: flash ? 'var(--accent-soft)' : 'transparent',
-        transition: 'background 0.12s',
+        background: selected ? 'var(--accent-soft)' : flash ? 'var(--accent-soft)' : 'transparent',
+        outline: selected ? '1px solid var(--accent)' : 'none',
+        outlineOffset: -1,
+        transition: 'background 0.12s, opacity 0.12s',
+        opacity: entry.hidden ? 0.5 : 1,
       }}
       onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--vibe-toolbar-bg)'; }}
-      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = selected ? 'var(--accent-soft)' : 'transparent'; }}
     >
       {/* Icon */}
-      <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
         {renderIcon()}
+        {/* Video play badge — small overlay */}
+        {entry.kind === 'video' && !entry.isDir && (
+          <span style={{
+            position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
+            width: 18, height: 18, borderRadius: '50%',
+            background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            pointerEvents: 'none',
+          }}>
+            <Play size={8} fill="#fff" color="#fff" />
+          </span>
+        )}
       </span>
 
       {/* Name + badges */}
@@ -135,29 +165,25 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir }: Fil
       </div>
 
       {/* Favorite star */}
-      <span style={{ display: 'inline-flex', color: 'var(--vibe-btn-text)' }}>
-        <Star size={12} />
-      </span>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onFavoriteToggle?.(entry);
+        }}
+        title={isFavorite ? '取消收藏' : '收藏'}
+        style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          color: isFavorite ? 'var(--yellow, #e3b341)' : 'var(--text-faint)',
+          cursor: 'pointer', background: 'none', border: 'none', padding: 0,
+          transition: 'color 0.12s, transform 0.12s',
+          opacity: isFavorite ? 1 : 0.5,
+        }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = '1'; (e.currentTarget as HTMLElement).style.transform = 'scale(1.2)'; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = isFavorite ? '1' : '0.5'; (e.currentTarget as HTMLElement).style.transform = 'scale(1)'; }}
+      >
+        <Star size={12} fill={isFavorite ? 'currentColor' : 'none'} />
+      </button>
     </div>
-  );
-}
-
-// ── Small thumbnail with broken-image fallback ──
-
-function ThumbImg({ src, alt, tint }: { src: string; alt: string; tint: string }) {
-  const [error, setError] = useState(false);
-  if (error) {
-    return <FbImage size={28} />;
-  }
-  return (
-    <img
-      src={src}
-      alt={alt}
-      onError={() => setError(true)}
-      style={{
-        width: 36, height: 36, borderRadius: 4,
-        objectFit: 'cover', display: 'block',
-      }}
-    />
   );
 }

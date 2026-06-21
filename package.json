@@ -4,12 +4,13 @@
   "description": "AI Steam Base — Tauri Desktop Application Container",
   "private": true,
   "scripts": {
-    "dev": "NODE_ENV=development next dev -H 127.0.0.1",
+    "dev": "NODE_ENV=development next dev -H 127.0.0.1 -p 3000",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
-    "test": "find src -name '*.test.ts' -not -path 'src/lib/env-injector.test.ts' -not -path 'src/lib/state-persistence.test.ts' -not -path 'src/lib/search-engine.test.ts' | xargs tsx --test",
+    "lint": "eslint src/",
+    "test": "tsx --test src/**/*.test.ts",
     "typecheck": "tsc --noEmit",
+    "i18n:check": "node scripts/i18n-check.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
@@ -25,7 +26,9 @@
     "@tauri-apps/plugin-window-state": "^2.0.0",
     "@uiw/react-md-editor": "^4.1.1",
     "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-unicode11": "^0.9.0",
     "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^5.5.0",
     "adm-zip": "^0.5.17",
     "framer-motion": "^12.40.0",
@@ -44,14 +47,23 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "^3.3.5",
+    "@eslint/js": "^9.39.4",
+    "@next/eslint-plugin-next": "^16.2.9",
+    "@next/swc-darwin-arm64": "^16.2.9",
     "@types/adm-zip": "^0.5.8",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "autoprefixer": "^10.5.0",
+    "eslint": "^9.39.4",
+    "eslint-config-next": "^16.2.9",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
     "postcss": "^8.5.15",
     "tailwindcss": "^3.4.19",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.61.1"
   }
 }

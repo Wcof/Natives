@@ -16,7 +16,7 @@ const MAX_TIME_MS = 3_000;
 /** 日志保留窗口（天） */
 const RETENTION_DAYS = 45;
 
-// ── 增量解析缓存（对标 fanbox 的 claudeFileCache） ──
+// ── 增量解析缓存（对标 Natives2 的 claudeFileCache） ──
 
 interface FileCacheEntry {
   offset: number;
@@ -34,7 +34,7 @@ let lastCacheCleanup = 0;
 const CACHE_CLEANUP_INTERVAL = 60_000;
 
 /**
- * 增量解析单个 JSONL 文件（对标 fanbox 的 parseClaudeFile）
+ * 增量解析单个 JSONL 文件（对标 Natives2 的 parseClaudeFile）
  *
  * - 只读取 offset 之后的新内容
  * - 文件被截断时重置 offset
@@ -106,7 +106,7 @@ async function parseFileIncremental(file: string, stat: { size: number; mtimeMs:
 }
 
 /**
- * 清理过期文件缓存（对标 fanbox 的 cache eviction）
+ * 清理过期文件缓存（对标 Natives2 的 cache eviction）
  */
 function evictStaleCache(liveFiles: Set<string>): void {
   for (const key of fileCache.keys()) {
@@ -117,7 +117,7 @@ function evictStaleCache(liveFiles: Set<string>): void {
 /**
  * 扫描 Claude Code 会话日志，统计每个 Skill 的触发次数
  *
- * 增量解析（对标 fanbox）：
+ * 增量解析（对标 Natives2）：
  * - 跨调用复用文件偏移量缓存，只解析新增内容
  * - 文件被截断时自动重置
  * - 末尾不完整行留给下一轮

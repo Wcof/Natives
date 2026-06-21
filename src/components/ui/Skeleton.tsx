@@ -67,19 +67,19 @@ export default function Skeleton({ lines = 3, variant = 'text', width, height }:
             borderBottom: '0.0625rem solid var(--vibe-btn-border)',
           }}>
             <div style={{
-              width: 24, height: 12, borderRadius: 2,
+              width: 24, height: 12, borderRadius: BORDER_RADIUS.sm,
               background: 'var(--vibe-btn-bg)',
               animation: 'skeleton-pulse 1.5s ease-in-out infinite',
               animationDelay: `${i * 0.1}s`,
             }} />
             <div style={{
-              flex: 1, height: 12, borderRadius: 2,
+              flex: 1, height: 12, borderRadius: BORDER_RADIUS.sm,
               background: 'var(--vibe-btn-bg)',
               animation: 'skeleton-pulse 1.5s ease-in-out infinite',
               animationDelay: `${i * 0.1 + 0.05}s`,
             }} />
             <div style={{
-              width: 60, height: 12, borderRadius: 2,
+              width: 60, height: 12, borderRadius: BORDER_RADIUS.sm,
               background: 'var(--vibe-btn-bg)',
               animation: 'skeleton-pulse 1.5s ease-in-out infinite',
               animationDelay: `${i * 0.1 + 0.1}s`,

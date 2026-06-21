@@ -13,7 +13,6 @@ export default function GitPanel({ repoPath }: GitPanelProps) {
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [locale, setLocale] = useState<Locale>('en');
-  const httpPort = window.__nativesHttpPort || 3001;
 
   useEffect(() => {
     async function loadLocale() {
@@ -29,16 +28,19 @@ export default function GitPanel({ repoPath }: GitPanelProps) {
     async function load() {
       setLoading(true);
       try {
-        const res = await fetch(`http://localhost:${httpPort}/api/fs/git?path=${encodeURIComponent(repoPath)}`);
-        if (res.ok) {
-          const data = await res.json();
-          setStatus(data);
+        const api = window.nativesAPI;
+        if (!api?.git?.status) {
+          setStatus(null);
+          setLoading(false);
+          return;
         }
+        const data = await api.git.status(repoPath);
+        setStatus(data as GitStatus | null);
       } catch { /* ignore */ }
       setLoading(false);
     }
     load();
-  }, [repoPath, httpPort]);
+  }, [repoPath]);
 
   if (loading) return <div style={{ padding: SPACING.md, color: 'var(--text-faint)' }}>{t(locale, 'fileBrowser.loadingGitStatus')}</div>;
   if (!status) return <div style={{ padding: SPACING.md, color: 'var(--text-faint)' }}>{t(locale, 'fileBrowser.notInRepo')}</div>;

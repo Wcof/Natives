@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { classifyError, type ClassifiedError } from '@/lib/error-classifier';
 
 interface State<T> {
@@ -23,11 +23,10 @@ export function useAsyncData<T>(
   const [state, setState] = useState<State<T>>({ data: null, loading: true, error: null });
   const mounted = useRef(true);
 
-  // 组件卸载时标记已卸载，防止 unmounted 后 setState
-  useState(() => {
+  useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
-  });
+  }, []);
 
   const reload = useCallback(async () => {
     setState((s) => ({ ...s, loading: true, error: null }));
@@ -37,7 +36,7 @@ export function useAsyncData<T>(
     } catch (err) {
       if (mounted.current) setState({ data: null, loading: false, error: classifyError(err) });
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/use-memo
   }, deps);
 
   const setError = useCallback((e: unknown) => {

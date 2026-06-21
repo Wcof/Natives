@@ -1,7 +1,7 @@
 'use client';
 
-import { startTransition, useState, useEffect, useRef, useCallback, memo, lazy, Suspense } from 'react';
-import { t, type Locale } from '@/i18n';
+import { startTransition, useState, useEffect, useCallback, memo, lazy, Suspense } from 'react';
+import { type Locale } from '@/i18n';
 import Sidebar from './Sidebar';
 import RightPanel from './RightPanel';
 import type { RightPanelMode } from './RightPanel';
@@ -10,32 +10,24 @@ import Header from './Header';
 import TerminalPanel from './Terminal';
 import CommandPalette from './CommandPalette';
 import ErrorBoundary from '@/components/ui/ErrorBoundary';
-import ShortcutHelp from '@/components/ui/ShortcutHelp';
 import ControlHubWidget from './ControlHubWidget';
 import MainContent from './MainContent';
 import { applyTheme } from '@/lib/theme-engine';
 
 const MemoizedSidebar = memo(Sidebar);
 const MemoizedHeader = memo(Header);
-import { getIframeManager } from '@/lib/iframe-manager';
 import ScreenshotCard from '@/components/screenshot/ScreenshotCard';
 import AnnotationEditor from '@/components/screenshot/AnnotationEditor';
 import ReleaseWizardDialog from '@/components/release/ReleaseWizardDialog';
 import UpdateNotification from '@/components/update/UpdateNotification';
-import UsernameOnboarding from '@/components/onboarding/UsernameOnboarding';
-import { classifyError } from '@/lib/error-classifier';
-import { useFollowMode } from '@/lib/follow-mode';
-import { pushRecentModule } from '@/lib/recent-modules';
 import LiquidGlass from '@/components/ui/LiquidGlass';
-import { FONT_SIZE, SPACING, BORDER_RADIUS } from '@/lib/design-tokens';
 import { getHttpPort } from '@/lib/natives-http-port';
 import ModuleDetails from './ModuleDetails';
 import { useShellState } from './useShellState';
 import '@/types'; // ensure Window.nativesAPI type
-import { Edit2, Eye, Radio } from 'lucide-react';
+import { Edit2, Eye } from 'lucide-react';
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 import { getExt, isMarkdownFile, isCsvFile, isArchiveFile } from '@/lib/follow-mode';
-import { BUILTIN_TOOLS, getBuiltinTool } from '@/lib/builtin-tools';
 import type { FileEntry } from '@/types/file';
 import type { PreviewSubMode } from '@/components/files/FilePreview';
 
@@ -122,64 +114,6 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
   // ── Global Background Visual Config (shared with ControlHub & Settings) ──
 
-  useEffect(() => {
-    async function loadConfig() {
-      try {
-        const api = window.nativesAPI;
-        if (!api?.db?.get) return;
-        const savedVisuals = await api.db.get(CONFIG_DB_KEY);
-        if (savedVisuals) {
-          const saved = JSON.parse(savedVisuals as string);
-          if (saved) {
-            setVisualConfig((prev) => ({
-              ...prev,
-              ...(typeof saved.blurAmount === 'number' && { blurAmount: saved.blurAmount }),
-              ...(typeof saved.displacementScale === 'number' && { displacementScale: saved.displacementScale }),
-              ...(typeof saved.saturation === 'number' && { saturation: saved.saturation }),
-              ...(typeof saved.aberrationIntensity === 'number' && { aberrationIntensity: saved.aberrationIntensity }),
-              ...(typeof saved.elasticity === 'number' && { elasticity: saved.elasticity }),
-              ...(typeof saved.cornerRadius === 'number' && { cornerRadius: saved.cornerRadius }),
-              ...(typeof saved.showWallpaper === 'boolean' && { showWallpaper: saved.showWallpaper }),
-              ...(typeof saved.showBlobs === 'boolean' && { showBlobs: saved.showBlobs }),
-            }));
-          }
-        }
-      } catch { /* no-op */ }
-    }
-
-    loadConfig();
-
-    // Listen to local visual config changes (for instant drag updates in same window)
-    const handleLocalConfigChange = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail) {
-        setVisualConfig((prev) => ({
-          ...prev,
-          ...detail,
-        }));
-      }
-    };
-    window.addEventListener('visual-config-changed', handleLocalConfigChange);
-
-    let unsubscribe: (() => void) | undefined;
-    try {
-      if (window.nativesAPI?.onDbStateChanged) {
-        unsubscribe = window.nativesAPI.onDbStateChanged((_event, channel, data: any) => {
-          if (channel === 'module_data' && data?.key === CONFIG_DB_KEY) {
-            loadConfig();
-          }
-        });
-      }
-    } catch { /* no-op */ }
-
-    return () => {
-      window.removeEventListener('visual-config-changed', handleLocalConfigChange);
-      if (unsubscribe) unsubscribe();
-    };
-  }, []);
-
-  // Terminal follow mode — unified via useFollowMode hook
-
   // Crash state: track crashed modules for overlay display
   const [iframeReloadKey, setIframeReloadKey] = useState(0);
 
@@ -250,153 +184,33 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       } catch (err) {
         console.warn('[Shell] Failed to load sidebar state:', err);
       }
+
+      // Load visual config (cornerRadius, blur, etc.)
+      try {
+        const api = window.nativesAPI;
+        if (api?.db?.get) {
+          const savedVisuals = await api.db.get(CONFIG_DB_KEY);
+          if (savedVisuals) {
+            const saved = JSON.parse(savedVisuals as string);
+            if (saved) {
+              setVisualConfig((prev) => ({
+                ...prev,
+                ...(typeof saved.blurAmount === 'number' && { blurAmount: saved.blurAmount }),
+                ...(typeof saved.displacementScale === 'number' && { displacementScale: saved.displacementScale }),
+                ...(typeof saved.saturation === 'number' && { saturation: saved.saturation }),
+                ...(typeof saved.aberrationIntensity === 'number' && { aberrationIntensity: saved.aberrationIntensity }),
+                ...(typeof saved.elasticity === 'number' && { elasticity: saved.elasticity }),
+                ...(typeof saved.cornerRadius === 'number' && { cornerRadius: saved.cornerRadius }),
+                ...(typeof saved.showWallpaper === 'boolean' && { showWallpaper: saved.showWallpaper }),
+                ...(typeof saved.showBlobs === 'boolean' && { showBlobs: saved.showBlobs }),
+              }));
+            }
+          }
+        }
+      } catch { /* no-op */ }
     }
     initSettings();
   }, []);
-
-  // beforeunload 持久化（只挂一次，不依赖 state 变化重绑）
-  // 通过 stateRef 读取最新布局值，避免拖拽时重新触发生成 Effect
-  useEffect(() => {
-    const handleBeforeUnload = () => {
-      try {
-        const api = window.nativesAPI;
-        const s = stateRef.current; // 读取 stateRef，不产生依赖追踪
-        if (api?.db?.set) {
-          api.db.set('_state:sidebar', JSON.stringify({
-            sidebarWidth: s.sidebarWidth,
-            sidebarCollapsed: s.sidebarCollapsed,
-            terminalHeight: s.terminalHeight,
-            terminalCollapsed: s.terminalCollapsed,
-            rightPanelWidth: s.rightPanelWidth,
-          }));
-        }
-      } catch (err) {
-        console.warn('[Shell] Failed to save sidebar state:', err);
-      }
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, []);
-
-  // Reactively update locale when SettingsPage changes language
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const customEvent = e as CustomEvent<string>;
-      const newLocale = customEvent.detail;
-      if (newLocale) {
-        document.documentElement.lang = newLocale;
-        setLocale(newLocale as Locale);
-      } else {
-        window.nativesAPI?.getLocale?.().then((saved) => {
-          if (saved) {
-            document.documentElement.lang = saved;
-            setLocale(saved as Locale);
-          }
-        }).catch(() => {});
-      }
-    };
-    window.addEventListener('locale-changed', handler as EventListener);
-    return () => window.removeEventListener('locale-changed', handler as EventListener);
-  }, []);
-
-  // P1-5: Check if username is set (first-run detection)
-  useEffect(() => {
-    const api = window.nativesAPI;
-    if (!api?.db?.get) {
-      // No native API (browser dev mode) — skip onboarding
-      startTransition(() => { setNeedsOnboarding(false); });
-      return;
-    }
-    api.db.get('settings:username').then((value: unknown) => {
-      setNeedsOnboarding(!value);
-    }).catch(() => setNeedsOnboarding(false));
-  }, []);
-
-  // Manage iframe lifecycle when activeView changes
-  useEffect(() => {
-    const container = iframeContainerRef.current;
-    if (!container) return;
-
-    const manager = getIframeManager();
-    const moduleId = activeView.startsWith('module:') ? activeView.slice(7) : null;
-
-    // Hide previous iframe
-    if (activeModuleRef.current && activeModuleRef.current !== moduleId) {
-      manager.hideIframe(activeModuleRef.current);
-    }
-
-    activeModuleRef.current = moduleId;
-
-    // Record this open in the LRU "recently used" list (US1 Dashboard). See
-    // ISSUE-3. Only meaningful for actual module views.
-    if (moduleId) {
-      pushRecentModule(moduleId);
-    }
-
-    if (!moduleId) {
-      // Remove any existing iframes from container (for non-module views)
-      const existingIframes = container.querySelectorAll('iframe');
-      existingIframes.forEach((f) => f.remove());
-      return;
-    }
-
-    // Check if iframe already exists
-    let iframe = manager.showIframe(moduleId);
-    if (!iframe) {
-      // Create new iframe
-      const url = `http://localhost:${httpPort}/modules/${moduleId}/index.html`;
-      iframe = manager.createIframe(moduleId, url);
-
-      // Set up heartbeat monitoring
-      manager.startHeartbeat(moduleId, 5000);
-      manager.onHeartbeatTimeout(moduleId, () => {
-        console.warn(`[Shell] Heartbeat timeout for module ${moduleId}`);
-      });
-      manager.onCrash(moduleId, () => {
-        console.error(`[Shell] Module ${moduleId} crashed`);
-        setCrashedModules((prev) => {
-          // Persist the crash to the notifications table so it shows up in
-          // the notification center (US20). Only fire once per crash to avoid
-          // duplicate rows when the callback fires repeatedly. See BUG-3.
-          if (!prev.has(moduleId)) {
-            try {
-              // P1-6: Use classifyError to enrich crash notification with actionHint
-              const classified = classifyError(new Error(`Plugin ${moduleId} crashed: Heartbeat timeout`), moduleId);
-              window.nativesAPI?.notification?.send?.(
-                `Plugin ${moduleId} crashed`,
-                `Heartbeat timeout — ${classified.actionHint}`,
-                'error',
-              );
-            } catch { /* notification persistence is best-effort */ }
-          }
-          const next = new Set(prev);
-          next.add(moduleId);
-          return next;
-        });
-      });
-    }
-
-    // Move iframe into container
-    container.innerHTML = '';
-    container.appendChild(iframe);
-    iframe.style.width = '100%';
-    iframe.style.height = '100%';
-    iframe.style.border = 'none';
-
-    // Listen for heartbeat messages from the iframe
-    const handleMessage = (event: MessageEvent) => {
-      if (event.data?.type === 'lifecycle:heartbeat' && event.data?.moduleId === moduleId) {
-        manager.onHeartbeatReceived(moduleId);
-      }
-    };
-    window.addEventListener('message', handleMessage);
-
-    return () => {
-      window.removeEventListener('message', handleMessage);
-    };
-  }, [activeView]);
 
   // Focus management: move focus to content area when view changes
   useEffect(() => {
@@ -405,168 +219,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     }
   }, [activeView]);
 
-  // Cmd+B toggle sidebar, Cmd+K command palette, Cmd+Shift+K focus sidebar
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b' && !e.shiftKey) {
-        e.preventDefault();
-        setState((prev) => ({ ...prev, sidebarCollapsed: !prev.sidebarCollapsed }));
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k' && !e.shiftKey) {
-        e.preventDefault();
-        setState((prev) => ({ ...prev, cmdkOpen: !prev.cmdkOpen }));
-      }
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        if (document.activeElement instanceof HTMLElement) {
-          document.activeElement.blur();
-        }
-        const sidebar = document.querySelector<HTMLElement>('[data-sidebar]');
-        if (sidebar) {
-          const firstFocusable = sidebar.querySelector<HTMLElement>(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-          );
-          firstFocusable?.focus();
-        }
-      }
-      if (e.key === 'Escape') {
-        setState((prev) => ({ ...prev, cmdkOpen: false }));
-      }
-      // Cmd+N: toggle notifications panel
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n' && !e.shiftKey) {
-        e.preventDefault();
-      // eslint-disable-next-line react-hooks/immutability
-        toggleRightPanel('notifications');
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
-
-  // Terminal follow mode: send cd to active terminal when file browser navigates
-  useEffect(() => {
-    if (followMode !== 'terminal-follow') return;
-    const handler = (e: Event) => {
-      const dirPath = (e as CustomEvent).detail;
-      if (typeof dirPath !== 'string' || !dirPath.startsWith('/')) return;
-      const sessionId = terminalSessionIdRef.current;
-      if (!sessionId) return;
-      const api = window.nativesAPI;
-      if (api?.terminal?.write) {
-        // Send cd command with proper quoting
-        api.terminal.write(sessionId, `cd "${dirPath}"\r`);
-      }
-    };
-    window.addEventListener('navigate-files', handler);
-    return () => window.removeEventListener('navigate-files', handler);
-  }, [followMode]);
-
-  // Listen for 'focus-base' messages from iframes (Cmd+Shift+K from iframe context)
-  useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      if (event.data?.type === 'shell:focus-base') {
-        const sidebar = document.querySelector<HTMLElement>('[data-sidebar]');
-        if (sidebar) {
-          const firstFocusable = sidebar.querySelector<HTMLElement>(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-          );
-          firstFocusable?.focus();
-        }
-      }
-    };
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, []);
-
-  // Phase 3: Listen for release wizard and update events from dashboard
-  useEffect(() => {
-    const handleRelease = () => setReleaseWizardOpen(true);
-    const handleUpdate = () => {
-      // Trigger update check via dispatch
-      window.nativesAPI?.update?.check().catch(() => {});
-    };
-    // Listen for 'navigate' custom event from DashboardPage/Dashboard
-    const handleNavigate = (e: Event) => {
-      const view = (e as CustomEvent).detail;
-      if (view === '__settings__') setActiveView('settings');
-      else if (view === '__workshop__') setActiveView('workshop');
-      else if (view === 'ai') setActiveView('ai');
-      else if (view === 'tools') setActiveView('tools');
-      else if (view === 'modules') setActiveView('modules');
-      else if (typeof view === 'string' && view.startsWith('files')) {
-        setActiveView('files');
-        // Parse query params for path navigation (e.g. files?path=/dir&select=/file)
-        const qIndex = view.indexOf('?');
-        if (qIndex >= 0) {
-          const params = new URLSearchParams(view.slice(qIndex + 1));
-          const navPath = params.get('path');
-          if (navPath) {
-            // Store for FileBrowser to pick up after mount
-            (window as any).__pendingNavigateFiles = navPath;
-            window.dispatchEvent(new CustomEvent('navigate-files', { detail: navPath }));
-          }
-        }
-      }
-    };
-
-    window.addEventListener('open-release-wizard', handleRelease);
-    window.addEventListener('check-updates', handleUpdate);
-    window.addEventListener('navigate', handleNavigate);
-    return () => {
-      window.removeEventListener('open-release-wizard', handleRelease);
-      window.removeEventListener('check-updates', handleUpdate);
-      window.removeEventListener('navigate', handleNavigate);
-    };
-  }, []);
-
-  // File flash animation: listen for file write events via IPC
-  useEffect(() => {
-    const handler = (_event: unknown, channel: string, data: unknown) => {
-      if (channel === 'file:changed') {
-        const filePath = typeof data === 'string' ? data : (data as { path?: string })?.path || '';
-        if (filePath) {
-          window.dispatchEvent(new CustomEvent('file-flash', { detail: filePath }));
-        }
-      }
-    };
-    const api = window.nativesAPI;
-    if (api?.onDbStateChanged) {
-      const unsub = api.onDbStateChanged(handler);
-      return () => { unsub?.(); };
-    }
-  }, []);
-
-  // System notification support: listen for long-task-complete events
-  useEffect(() => {
-    // Request notification permission on mount
-    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
-      Notification.requestPermission().catch(() => {});
-    }
-
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      const title = detail?.title || t(locale, 'common.notificationTitle');
-      const body = detail?.message || t(locale, 'common.notificationBody');
-      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-        new Notification(title, { body });
-      }
-    };
-    window.addEventListener('long-task-complete', handler);
-    return () => window.removeEventListener('long-task-complete', handler);
-  }, []);
-
   const setPreviewSubMode = useCallback((mode: PreviewSubMode) => {
     setState((prev) => ({ ...prev, previewSubMode: mode }));
   }, []);
-      // eslint-disable-next-line react-hooks/preserve-manual-memoization
-
-    // Listen for 'toggle-terminal' custom event (dispatched by CommandPalette)
-  useEffect(() => {
-    const handler = () => toggleTerminal();
-    window.addEventListener('toggle-terminal', handler);
-    return () => window.removeEventListener('toggle-terminal', handler);
-  }, [toggleTerminal]);
-
   const openCmdk = useCallback(() => {
     setState((prev) => ({ ...prev, cmdkOpen: true }));
   }, []);
@@ -639,31 +294,6 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     setSelectedFile(entry);
     setRightPanelMode('file-preview');
   }, [setRightPanelMode]);
-
-  // Sync preview when file is renamed or trashed via FileBrowser context menu
-  useEffect(() => {
-    const handleRenamed = (e: Event) => {
-      const { oldPath, newPath } = (e as CustomEvent).detail || {};
-      if (!selectedFile || !oldPath || !newPath) return;
-      if (selectedFile.path === oldPath) {
-        const newName = newPath.split('/').pop() || selectedFile.name;
-        setSelectedFile({ ...selectedFile, path: newPath, name: newName });
-      }
-    };
-    const handleTrashed = (e: Event) => {
-      const { path } = (e as CustomEvent).detail || {};
-      if (selectedFile && selectedFile.path === path) {
-        setSelectedFile(null);
-        setRightPanelMode('closed');
-      }
-    };
-    window.addEventListener('file-renamed', handleRenamed);
-    window.addEventListener('file-trashed', handleTrashed);
-    return () => {
-      window.removeEventListener('file-renamed', handleRenamed);
-      window.removeEventListener('file-trashed', handleTrashed);
-    };
-  }, [selectedFile, setRightPanelMode]);
 
   // Widget mode check — render only the ControlHub on transparent background
   const isWidgetMode = typeof window !== 'undefined' && window.location.search.includes('mode=widget');

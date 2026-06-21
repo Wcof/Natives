@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useMemo } from 'react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
-import { useTranslation } from 'react-i18next';
-import { Loader2, TrendingUp } from 'lucide-react';
+import { useLocale, t } from '@/i18n';
+import { TrendingUp } from 'lucide-react';
+import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 
 /**
  * ModelStatsTable — Model-level token statistics table
@@ -23,6 +24,7 @@ import { Loader2, TrendingUp } from 'lucide-react';
 interface ModelStatsTableProps {
   modelStats?: ModelStat[];
   isLoading?: boolean;
+  minimal?: boolean;
 }
 
 export interface ModelStat {
@@ -43,22 +45,19 @@ function formatTokenShort(value: number): string {
   return value.toLocaleString();
 }
 
-export function ModelStatsTable({ modelStats, isLoading }: ModelStatsTableProps) {
-  const { t } = useTranslation();
-  const [stats, setStats] = useState<ModelStat[]>([]);
-
-  useEffect(() => {
-    if (modelStats) {
-      setStats(modelStats);
-    } else {
-      setStats([]);
-    }
-  }, [modelStats]);
+export function ModelStatsTable({ modelStats, isLoading, minimal }: ModelStatsTableProps) {
+  const locale = useLocale();
+  const stats = useMemo(() => modelStats ?? [], [modelStats]);
 
   if (isLoading) {
     return (
       <div
-        style={{
+        style={minimal ? {
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: 120,
+        } : {
           borderRadius: BORDER_RADIUS.lg,
           border: '0.0625rem solid var(--vibe-content-border)',
           background: 'var(--vibe-content-bg)',
@@ -70,7 +69,7 @@ export function ModelStatsTable({ modelStats, isLoading }: ModelStatsTableProps)
           justifyContent: 'center',
         }}
       >
-        <Loader2 size={24} style={{ color: 'var(--text-faint)', animation: 'spin 1s linear infinite' }} />
+        <MathCurveLoader size={36} />
       </div>
     );
   }
@@ -78,7 +77,15 @@ export function ModelStatsTable({ modelStats, isLoading }: ModelStatsTableProps)
   if (stats.length === 0) {
     return (
       <div
-        style={{
+        style={minimal ? {
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: SPACING.sm,
+          minHeight: 120,
+          paddingTop: SPACING.md,
+        } : {
           borderRadius: BORDER_RADIUS.lg,
           border: '0.0625rem solid var(--vibe-content-border)',
           background: 'var(--vibe-content-bg)',
@@ -93,10 +100,10 @@ export function ModelStatsTable({ modelStats, isLoading }: ModelStatsTableProps)
         }}
       >
         <span style={{ fontSize: FONT_SIZE.md, color: 'var(--text-faint)' }}>
-          {t('dashboard.noData')}
+          {t(locale, 'dashboard.noData')}
         </span>
         <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-faint)' }}>
-          {t('dashboard.modelStats')}
+          {t(locale, 'dashboard.modelStats')}
         </span>
       </div>
     );
@@ -104,7 +111,10 @@ export function ModelStatsTable({ modelStats, isLoading }: ModelStatsTableProps)
 
   return (
     <div
-      style={{
+      style={minimal ? {
+        paddingTop: SPACING.md,
+        overflow: 'hidden',
+      } : {
         borderRadius: BORDER_RADIUS.lg,
         border: '0.0625rem solid var(--vibe-content-border)',
         background: 'var(--vibe-content-bg)',
@@ -114,12 +124,14 @@ export function ModelStatsTable({ modelStats, isLoading }: ModelStatsTableProps)
       }}
     >
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.sm, marginBottom: SPACING.sm }}>
-        <TrendingUp size={16} style={{ color: 'var(--vibe-accent-color)' }} />
-        <h3 style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--vibe-brand-text)' }}>
-          {t('dashboard.modelStats')}
-        </h3>
-      </div>
+      {!minimal && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.sm, marginBottom: SPACING.sm }}>
+          <TrendingUp size={16} style={{ color: 'var(--vibe-accent-color)' }} />
+          <h3 style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--vibe-brand-text)' }}>
+            {t(locale, 'dashboard.modelStats')}
+          </h3>
+        </div>
+      )}
 
       {/* Table */}
       <div style={{ overflowX: 'auto' }}>
@@ -130,66 +142,66 @@ export function ModelStatsTable({ modelStats, isLoading }: ModelStatsTableProps)
                 style={{
                   textAlign: 'left',
                   padding: `${SPACING.sm}px ${SPACING.sm}px`,
-                  fontSize: '10px',
+                  fontSize: FONT_SIZE.xs,
                   color: 'var(--text-faint)',
                   textTransform: 'uppercase',
                   letterSpacing: '0.08em',
                   fontWeight: 600,
                 }}
               >
-                {t('dashboard.model')}
+                {t(locale, 'dashboard.model')}
               </th>
               <th
                 style={{
                   textAlign: 'right',
                   padding: `${SPACING.sm}px ${SPACING.sm}px`,
-                  fontSize: '10px',
+                  fontSize: FONT_SIZE.xs,
                   color: 'var(--text-faint)',
                   textTransform: 'uppercase',
                   letterSpacing: '0.08em',
                   fontWeight: 600,
                 }}
               >
-                {t('dashboard.requests')}
+                {t(locale, 'dashboard.requests')}
               </th>
               <th
                 style={{
                   textAlign: 'right',
                   padding: `${SPACING.sm}px ${SPACING.sm}px`,
-                  fontSize: '10px',
+                  fontSize: FONT_SIZE.xs,
                   color: 'var(--text-faint)',
                   textTransform: 'uppercase',
                   letterSpacing: '0.08em',
                   fontWeight: 600,
                 }}
               >
-                {t('dashboard.tokens')}
+                {t(locale, 'dashboard.tokens')}
               </th>
               <th
                 style={{
                   textAlign: 'right',
                   padding: `${SPACING.sm}px ${SPACING.sm}px`,
-                  fontSize: '10px',
+                  fontSize: FONT_SIZE.xs,
                   color: 'var(--text-faint)',
                   textTransform: 'uppercase',
                   letterSpacing: '0.08em',
                   fontWeight: 600,
                 }}
               >
-                {t('dashboard.cost')}
+                {t(locale, 'dashboard.cost')}
               </th>
               <th
                 style={{
                   textAlign: 'right',
                   padding: `${SPACING.sm}px ${SPACING.sm}px`,
-                  fontSize: '10px',
+                  fontSize: FONT_SIZE.xs,
                   color: 'var(--text-faint)',
                   textTransform: 'uppercase',
                   letterSpacing: '0.08em',
                   fontWeight: 600,
                 }}
               >
-                {t('dashboard.avgCost')}
+                {t(locale, 'dashboard.avgCost')}
               </th>
             </tr>
           </thead>
@@ -213,7 +225,7 @@ export function ModelStatsTable({ modelStats, isLoading }: ModelStatsTableProps)
                 <td style={{ padding: `${SPACING.sm}px ${SPACING.sm}px`, textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.sm, color: 'var(--vibe-brand-text)' }}>
                   ${stat.totalCost.toFixed(2)}
                 </td>
-                <td style={{ padding: `${SPACING.sm}px ${SPACING.sm}px`, textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--text-dim)' }}>
+                <td style={{ padding: `${SPACING.sm}px ${SPACING.sm}px`, textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.xs, color: 'var(--text-dim)' }}>
                   ${stat.avgCostPerRequest.toFixed(4)}
                 </td>
               </tr>

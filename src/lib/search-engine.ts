@@ -1,4 +1,5 @@
-// @ts-nocheck — legacy Electron module, search migrated to src-tauri/ commands
+// legacy Electron module, search migrated to src-tauri/ commands
+import * as fs from 'fs';
 import * as path from 'path';
 import { execFile, execFileSync } from 'child_process';
 import { type ContentSearchResult, type SearchResult } from '../types/file';
@@ -142,7 +143,7 @@ const TEXT_EXTENSIONS = new Set([
 ]);
 
 const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB
-const SEARCH_DEADLINE_MS = 4_000; // 4 秒硬截止（对标 fanbox，防止大目录无限扫描）
+const SEARCH_DEADLINE_MS = 4_000; // 4 秒硬截止（对标 Natives2，防止大目录无限扫描）
 
 // ── Ripgrep Detection (TASK-011) ──
 
@@ -179,12 +180,14 @@ async function grepWithRipgrep(
   ];
   if (options?.fileExtensions && options.fileExtensions.length > 0) {
     for (const ext of options.fileExtensions) {
-      args.push('-g', `*.${ext}`);
+      // Strip leading dot so ripgrep gets `*.ts` not `*..ts`
+      const clean = ext.startsWith('.') ? ext.slice(1) : ext;
+      args.push('-g', `*.${clean}`);
     }
   }
   args.push('--', query, root);
 
-  // 使用异步 execFile 避免阻塞事件循环（对标 fanbox 的异步模式）
+  // 使用异步 execFile 避免阻塞事件循环（对标 Natives2 的异步模式）
   const output = await new Promise<string>((resolve, reject) => {
     execFile('rg', args, { encoding: 'utf-8', timeout: 30000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {

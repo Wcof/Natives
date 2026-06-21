@@ -5,9 +5,9 @@ import { Layers, Pause, Play, RefreshCw, Trash2, Package, Rocket } from 'lucide-
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
 import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
-import { EmptyState } from '@/components/ui/EmptyState';
+import { EmptyState, LoadingState } from '@/components/ui/EmptyState';
 import { useAsyncData } from '@/hooks/useAsyncData';
-import { useFocusTrap } from '@/lib/useFocusTrap';
+import Modal from '@/components/ui/Modal';
 
 interface ModuleInfo {
   id: string;
@@ -67,9 +67,7 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
   const [selectedPerms, setSelectedPerms] = useState<Set<string>>(new Set());
   const [uninstallTarget, setUninstallTarget] = useState<ModuleInfo | null>(null);
 
-  // Focus traps (STYLE-2)
-  const createDialogTrap = useFocusTrap();
-  const permDialogTrap = useFocusTrap();
+
 
   // areaRipple animation state (STYLE-1)
   const [showRipple, setShowRipple] = useState(false);
@@ -125,7 +123,7 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
         // confirmation. Instead surface the error and abort. See BUG-2.
         try {
           const api = window.nativesAPI;
-          const result = await api?.module?.readManifest?.(source);
+          const result = await api?.module?.readManifest?.(source) as { manifest?: { name: string; permissions: string[] }; error?: string } | undefined;
           if (result?.manifest) {
             const perms = result.manifest.permissions || [];
             setPermDialog({
@@ -138,7 +136,7 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
           } else {
             // Manifest unreadable: refuse to install rather than bypassing
             // the permission step. Surface the error reason if available.
-            const reason = (result as { error?: string } | undefined)?.error;
+            const reason = result?.error;
             showToast(
               reason
                 ? t(locale, 'errors.installFailed').replace('{reason}', reason)
@@ -158,7 +156,7 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
     setInstalling(true);
     try {
       const api = window.nativesAPI;
-      const installResult = await api?.module?.install?.(permDialog.source);
+      const installResult = await api?.module?.install?.(permDialog.source) as { success?: boolean; moduleId?: string } | undefined;
       if (installResult?.success) {
         // Grant only selected permissions (or all if allowAll)
         const toGrant = allowAll ? permDialog.permissions : Array.from(selectedPerms);
@@ -464,9 +462,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
 
             {/* Module grid */}
             {loading ? (
-              <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-faint)', fontSize: FONT_SIZE.lg }}>
-                {t(locale, 'common.loading')}
-              </div>
+              <LoadingState message={t(locale, 'common.loading')} />
             ) : (modules ?? []).length === 0 ? (
               <EmptyState title={t(locale, 'workshop.emptyState')} />
             ) : (
@@ -556,120 +552,64 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
       </div>
 
       {/* Create template dialog */}
-      {showCreateDialog && (
-        <div
-          ref={createDialogTrap.dialogRef}
-          role="dialog"
-          aria-modal="true"
-          aria-label={t(locale, 'workshop.createModule')}
-          style={{
-            position: 'fixed', inset: 0,
-            background: 'rgba(0,0,0,0.5)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            zIndex: 60,
-          }}
-          onClick={() => setShowCreateDialog(false)}
-          onKeyDown={(e) => {
-            createDialogTrap.handleKeyDown(e);
-            if (e.key === 'Escape') setShowCreateDialog(false);
-          }}
-        >
-          <div
-            style={{
-              background: 'var(--vibe-toolbar-bg)',
-              border: '1px solid var(--vibe-btn-border)',
-              borderRadius: BORDER_RADIUS.xl,
-              padding: SPACING.xl,
-              width: 400,
-              maxWidth: '90vw',
-              boxShadow: 'var(--vibe-toolbar-shadow)',
-              backdropFilter: 'blur(var(--vibe-toolbar-blur, 22px)) saturate(var(--vibe-toolbar-saturation, 145%))',
-              WebkitBackdropFilter: 'blur(var(--vibe-toolbar-blur, 22px)) saturate(var(--vibe-toolbar-saturation, 145%))',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 style={{ fontSize: FONT_SIZE.heading, fontWeight: 600, color: 'var(--text)', margin: '0 0 16px' }}>
-              {t(locale, 'workshop.createModule')}
-            </h2>
+      <Modal
+        isOpen={showCreateDialog}
+        onClose={() => setShowCreateDialog(false)}
+        title={t(locale, 'workshop.createModule')}
+        width={400}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.md }}>
+          <div>
+            <label style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: SPACING.xs, display: 'block' }}>
+              {t(locale, 'workshop.templateName')}
+            </label>
+            <input
+              type="text"
+              value={templateName}
+              onChange={(e) => handleNameChange(e.target.value)}
+              placeholder={t(locale, 'workshop.templateNamePlaceholder')}
+              className="input"
+              autoFocus
+            />
+          </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.md }}>
-              <div>
-                <label style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: SPACING.xs, display: 'block' }}>
-                  {t(locale, 'workshop.templateName')}
-                </label>
-                <input
-                  type="text"
-                  value={templateName}
-                  onChange={(e) => handleNameChange(e.target.value)}
-                  placeholder={t(locale, 'workshop.templateNamePlaceholder')}
-                  style={dialogInputStyle}
-                  autoFocus
-                />
-              </div>
-
-              <div>
-                <label style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: SPACING.xs, display: 'block' }}>
-                  {t(locale, 'workshop.templateId')}
-                </label>
-                <input
-                  type="text"
-                  value={templateId}
-                  onChange={(e) => setTemplateId(e.target.value)}
-                  placeholder={t(locale, 'workshop.templateIdPlaceholder')}
-                  style={dialogInputStyle}
-                />
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: SPACING.sm, marginTop: SPACING.xl, justifyContent: 'flex-end' }}>
-              <button className="btn" onClick={() => setShowCreateDialog(false)}>
-                {t(locale, 'common.cancel')}
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={handleCreateTemplate}
-                disabled={creating || !templateName.trim() || !templateId.trim()}
-              >
-                {creating ? t(locale, 'workshop.creating') : t(locale, 'workshop.createTemplate')}
-              </button>
-            </div>
+          <div>
+            <label style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: SPACING.xs, display: 'block' }}>
+              {t(locale, 'workshop.templateId')}
+            </label>
+            <input
+              type="text"
+              value={templateId}
+              onChange={(e) => setTemplateId(e.target.value)}
+              placeholder={t(locale, 'workshop.templateIdPlaceholder')}
+              className="input"
+            />
           </div>
         </div>
-      )}
+
+        <div style={{ display: 'flex', gap: SPACING.sm, marginTop: SPACING.xl, justifyContent: 'flex-end' }}>
+          <button className="btn" onClick={() => setShowCreateDialog(false)}>
+            {t(locale, 'common.cancel')}
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={handleCreateTemplate}
+            disabled={creating || !templateName.trim() || !templateId.trim()}
+          >
+            {creating ? t(locale, 'workshop.creating') : t(locale, 'workshop.createTemplate')}
+          </button>
+        </div>
+      </Modal>
 
       {/* Permission dialog (US12) */}
-      {permDialog && (
-        <div
-          ref={permDialogTrap.dialogRef}
-          role="dialog"
-          aria-modal="true"
-          aria-label={t(locale, 'workshop.permissionTitle')}
-          style={{
-            position: 'fixed', inset: 0,
-            background: 'rgba(0,0,0,0.5)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            zIndex: 60,
-          }}
-          onClick={() => setPermDialog(null)}
-          onKeyDown={(e) => {
-            permDialogTrap.handleKeyDown(e);
-            if (e.key === 'Escape') setPermDialog(null);
-          }}
-        >
-          <div style={{
-            background: 'var(--vibe-toolbar-bg)',
-            border: '1px solid var(--vibe-btn-border)',
-            borderRadius: BORDER_RADIUS.xl,
-            padding: SPACING.xl,
-            width: 420,
-            maxWidth: '90vw',
-            boxShadow: 'var(--vibe-toolbar-shadow)',
-            backdropFilter: 'blur(var(--vibe-toolbar-blur, 22px)) saturate(var(--vibe-toolbar-saturation, 145%))',
-            WebkitBackdropFilter: 'blur(var(--vibe-toolbar-blur, 22px)) saturate(var(--vibe-toolbar-saturation, 145%))',
-          }}>
-            <h2 style={{ fontSize: FONT_SIZE.heading, fontWeight: 600, color: 'var(--text)', margin: '0 0 16px' }}>
-              {t(locale, 'workshop.permissionTitle')}
-            </h2>
+      <Modal
+        isOpen={!!permDialog}
+        onClose={() => { setPermDialog(null); setInstalling(false); }}
+        title={t(locale, 'workshop.permissionTitle')}
+        width={420}
+      >
+        {permDialog && (
+          <>
             <p style={{ fontSize: FONT_SIZE.md, color: 'var(--text-dim)', marginBottom: SPACING.lg }}>
               {t(locale, 'workshop.permissionDesc').replace('{name}', permDialog.moduleName)}
             </p>
@@ -714,9 +654,9 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
                 {installing ? t(locale, 'common.loading') : t(locale, 'workshop.permissionAllowAll')}
               </button>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </Modal>
 
       {/* Confirm uninstall dialog */}
       <ConfirmDialog
@@ -791,7 +731,7 @@ function ModuleCard({
           </div>
         </div>
         <span style={{
-          fontSize: 9, padding: '1px 5px', borderRadius: BORDER_RADIUS.sm,
+          fontSize: FONT_SIZE.xs, padding: '1px 5px', borderRadius: BORDER_RADIUS.sm,
           background: mod.enabled ? 'var(--accent-soft)' : 'var(--vibe-btn-bg)',
           color: mod.enabled ? 'var(--accent)' : 'var(--text-faint)',
           fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0,
@@ -891,7 +831,7 @@ function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: 
           background: 'var(--vibe-btn-bg)',
           border: '1px solid var(--vibe-btn-border)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 16, flexShrink: 0,
+          fontSize: FONT_SIZE.heading, flexShrink: 0,
         }}>
           {mod.name.charAt(0).toUpperCase()}
         </div>
@@ -907,7 +847,7 @@ function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: 
           </div>
         </div>
         <span style={{
-          fontSize: 9, padding: '1px 5px', borderRadius: BORDER_RADIUS.sm,
+          fontSize: FONT_SIZE.xs, padding: '1px 5px', borderRadius: BORDER_RADIUS.sm,
           background: mod.enabled ? 'var(--accent-soft)' : 'var(--vibe-btn-bg)',
           color: mod.enabled ? 'var(--accent)' : 'var(--text-faint)',
           fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0,
@@ -932,7 +872,7 @@ function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: 
           borderRadius: BORDER_RADIUS.sm,
           background: 'var(--vibe-btn-bg)',
           border: '1px solid var(--vibe-btn-border)',
-          fontSize: 9,
+          fontSize: FONT_SIZE.xs,
           textTransform: 'uppercase',
         }}>
           {t(locale, 'store.installed')}

@@ -5,13 +5,14 @@ import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { FONT_SIZE, SPACING } from '@/lib/design-tokens';
 import { t, type Locale } from '@/i18n';
+import { useHydrated } from '@/hooks/useHydrated';
 
 export default function ScreenshotCard() {
   const [locale, setLocale] = useState<Locale>('zh');
   const [visible, setVisible] = useState(true);
-  const [mounted, setMounted] = useState(false);
+  const mounted = useHydrated();
 
-  useEffect(() => { setMounted(true); }, []);
+  
 
   useEffect(() => {
     async function loadLocale() {

@@ -6,7 +6,7 @@ export type Locale = 'en' | 'zh' | 'zh-CN';
 
 export const locales: Record<string, typeof en> = { en, zh, 'zh-CN': zh };
 
-export function t(locale: string, key: string): string {
+export function t(locale: string, key: string, params?: Record<string, string | number>): string {
   const normLocale = (locale && locale.startsWith('zh')) ? 'zh' : 'en';
   const keys = key.split('.');
   let result: unknown = locales[normLocale];
@@ -17,7 +17,9 @@ export function t(locale: string, key: string): string {
       return key;
     }
   }
-  return typeof result === 'string' ? result : key;
+  if (typeof result !== 'string') return key;
+  if (!params) return result;
+  return result.replace(/\{(\w+)\}/g, (_, name) => String(params[name] ?? ''));
 }
 
 export function useLocale(): Locale {

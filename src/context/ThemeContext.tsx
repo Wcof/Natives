@@ -181,7 +181,7 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
               });
               applyLiquidGlassConfig(config);
             }
-          } catch {}
+          } catch { /* no-op */ }
         }
       } catch (error) {
         console.warn('[ThemeContext] Failed to load liquid glass config:', error);

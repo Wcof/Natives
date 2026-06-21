@@ -31,13 +31,41 @@ export function detectLanguage(filename: string): string {
 /**
  * Highlight code with shiki (lazy-loaded).
  * Returns HTML string with syntax highlighting.
+ * Theme-aware: detects data-theme on <html> for light/dark switching.
  */
 export async function highlightCode(code: string, lang: string): Promise<string> {
   try {
-    const { codeToHtml } = await import('shiki');
-    return await codeToHtml(code, { lang: lang || 'text', theme: 'dark-plus' });
+    const { codeToHtml, createHighlighter } = await import('shiki');
+
+    // Detect theme from <html> data-theme attribute
+    let theme = 'dark-plus';
+    if (typeof document !== 'undefined') {
+      const htmlTheme = document.documentElement.getAttribute('data-theme');
+      if (htmlTheme === 'frosted-jasmine') {
+        theme = 'light-plus';
+      }
+    }
+
+    const highlighter = await createHighlighter({
+      themes: [theme],
+      langs: [lang || 'text'],
+    });
+
+    const html = highlighter.codeToHtml(code, { lang: lang || 'text', theme });
+    await highlighter.dispose();
+    return html;
   } catch {
-    return `<pre style="margin:0;font-size:12px;line-height:1.6;font-family:var(--font-mono,monospace);color:var(--text);white-space:pre-wrap;word-break:break-all;background:var(--bg-2,#131410);padding:12px;border-radius:4px">${escapeHtmlForCode(code)}</pre>`;
+    // Fallback: detect theme for background color
+    let bgColor = 'var(--bg-2,#131410)';
+    let textColor = 'var(--text)';
+    if (typeof document !== 'undefined') {
+      const htmlTheme = document.documentElement.getAttribute('data-theme');
+      if (htmlTheme === 'frosted-jasmine') {
+        bgColor = '#f5f0eb';
+        textColor = '#2c2a26';
+      }
+    }
+    return `<pre style="margin:0;font-size:12px;line-height:1.6;font-family:var(--font-mono,monospace);color:${textColor};white-space:pre-wrap;word-break:break-all;background:${bgColor};padding:12px;border-radius:4px">${escapeHtmlForCode(code)}</pre>`;
   }
 }
 

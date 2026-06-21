@@ -1,4 +1,5 @@
 use crate::{db, Error, Result};
+use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use tauri::State;
@@ -160,6 +161,281 @@ pub struct RtkCommandStat {
     pub total_saved: u64,
 }
 
+// ── ccusage JSON response structs ──
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CcusageResponse {
+    pub history: Vec<CcusageHistoryPoint>,
+    pub totals: CcusageTotals,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CcusageHistoryPoint {
+    pub period: String, // e.g. "2026-06-21"
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub total_tokens: u64,
+    pub total_cost: f64,
+    pub model_breakdowns: Vec<CcusageModelBreakdown>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CcusageModelBreakdown {
+    pub model_name: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cost: f64,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CcusageTotals {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub total_tokens: u64,
+    pub total_cost: f64,
+}
+
+// ── ccusage CLI helper ──
+
+/// Run `ccusage daily -j -O` and parse its JSON output.
+/// Tries `/bin/zsh -lc 'ccusage daily -j -O'` first; if that fails for
+/// *any* reason (not on PATH, crash, locale-dependent error message, etc.),
+/// falls back to `npx --no-install ccusage daily -j -O`.
+fn run_ccusage_daily() -> Result<CcusageResponse> {
+    let cmd = "ccusage daily -j -O";
+
+    // Attempt direct invocation via zsh -lc to inherit user PATH
+    let direct_ok = match std::process::Command::new("/bin/zsh")
+        .args(["-lc", cmd])
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+            return serde_json::from_str::<CcusageResponse>(&stdout)
+                .map_err(|e| Error::Internal(format!("failed to parse ccusage JSON output: {e}")));
+        }
+        Ok(out) => {
+            let _stderr = String::from_utf8_lossy(&out.stderr);
+            false
+        }
+        Err(_) => false,
+    };
+
+    if !direct_ok {
+        // Direct call failed for ANY reason — try npx as fallback
+        let npx_cmd = "npx --no-install ccusage daily -j -O";
+        let npx_output = std::process::Command::new("/bin/zsh")
+            .args(["-lc", npx_cmd])
+            .output()
+            .map_err(|e| Error::Internal(format!("failed to execute npx ccusage fallback: {e}")))?;
+
+        if !npx_output.status.success() {
+            let npx_stderr = String::from_utf8_lossy(&npx_output.stderr);
+            return Err(Error::Internal(format!(
+                "ccusage not found via PATH or npx. stderr: {npx_stderr}"
+            )));
+        }
+        let npx_stdout = String::from_utf8_lossy(&npx_output.stdout).to_string();
+        return serde_json::from_str::<CcusageResponse>(&npx_stdout)
+            .map_err(|e| Error::Internal(format!("failed to parse npx ccusage JSON output: {e}")));
+    }
+
+    unreachable!() // direct_ok branch returned above
+}
+
+/// Map CcusageResponse into the existing UsageResponse shape, fusing with
+/// legacy Claude local stats (stats-cache.json) for behavioral metrics that
+/// ccusage does not provide: skill/tool-call counts, per-model request counts,
+/// session stats, and total_requests.
+///
+/// Data fusion policy:
+/// - Token & cost numbers → ccusage (authoritative source)
+/// - Skills count, activity, total_requests, per-model request_count → legacy
+/// - Model-level token breakdown → ccusage
+fn map_ccusage_to_response(
+    cc: CcusageResponse,
+    legacy_claude: Option<UsageResponse>,
+) -> UsageResponse {
+    let now = chrono::Local::now();
+    let today_str = now.format("%Y-%m-%d").to_string();
+    let weekday = now.weekday();
+    let days_from_monday = weekday.num_days_from_monday();
+    let monday = now - chrono::Duration::days(days_from_monday as i64);
+    let week_start_str = monday.format("%Y-%m-%d").to_string();
+
+    // ── Extract fusion data from legacy Claude stats ──
+    let mut legacy_skills_map: std::collections::HashMap<String, u64> =
+        std::collections::HashMap::new();
+    let mut legacy_model_reqs: std::collections::HashMap<String, u64> =
+        std::collections::HashMap::new();
+    let mut legacy_activity: Option<ActivityStats> = None;
+    let mut legacy_total_requests: Option<u64> = None;
+
+    if let Some(lc) = &legacy_claude {
+        if let Some(claude_inner) = &lc.claude {
+            legacy_activity = Some(claude_inner.activity.clone());
+            legacy_total_requests = Some(claude_inner.total_requests);
+        }
+        // Index legacy history by YYYY-MM-DD for skills fusion
+        for point in &lc.history {
+            let secs = point.timestamp / 1000;
+            if let Some(dt) = chrono::DateTime::from_timestamp(secs, 0) {
+                let date_str = dt.format("%Y-%m-%d").to_string();
+                legacy_skills_map.insert(date_str, point.skills);
+            }
+        }
+        // Index legacy model_stats by model name for per-model request counts
+        for stat in &lc.model_stats {
+            legacy_model_reqs.insert(stat.model.clone(), stat.request_count);
+        }
+    }
+
+    // ── Totals (ccusage authoritative) ──
+    let local_tokens = LocalTokens {
+        today: 0, // filled below from today's history point
+        this_week: 0,
+        total: cc.totals.total_tokens,
+        input: cc.totals.input_tokens,
+        output: cc.totals.output_tokens,
+        cache_creation: cc.totals.cache_creation_tokens,
+        cache_read: cc.totals.cache_read_tokens,
+    };
+
+    // ── Aggregate model breakdowns across all history points (ccusage) ──
+    let mut model_agg: std::collections::HashMap<String, (u64, u64, u64, u64, f64)> =
+        std::collections::HashMap::new();
+
+    for point in &cc.history {
+        for mb in &point.model_breakdowns {
+            let entry = model_agg
+                .entry(mb.model_name.clone())
+                .or_insert((0, 0, 0, 0, 0.0));
+            entry.0 += mb.input_tokens;
+            entry.1 += mb.output_tokens;
+            entry.2 += mb.cache_creation_tokens;
+            entry.3 += mb.cache_read_tokens;
+            entry.4 += mb.cost;
+        }
+    }
+
+    let mut models_map: std::collections::HashMap<String, ModelTokenUsage> =
+        std::collections::HashMap::new();
+    let mut model_stats = Vec::new();
+
+    for (model_name, (inp, out, cc_cre, cc_rd, cost)) in &model_agg {
+        models_map.insert(
+            model_name.clone(),
+            ModelTokenUsage {
+                input_tokens: *inp,
+                output_tokens: *out,
+                cache_read_input_tokens: *cc_rd,
+                cache_creation_input_tokens: *cc_cre,
+                cost_usd: *cost,
+            },
+        );
+
+        let total_tokens = inp + out + cc_cre + cc_rd;
+        // Recover real per-model request count from legacy data
+        let req_count = legacy_model_reqs.get(model_name).copied().unwrap_or(0);
+        let avg_cost = if req_count > 0 {
+            *cost / (req_count as f64)
+        } else {
+            0.0
+        };
+
+        model_stats.push(ModelStatUsage {
+            model: model_name.clone(),
+            request_count: req_count,
+            total_tokens,
+            total_cost: *cost,
+            avg_cost_per_request: avg_cost,
+        });
+    }
+    model_stats.sort_by(|a, b| b.total_tokens.cmp(&a.total_tokens));
+
+    // ── History points (tokens from ccusage, skills from legacy) ──
+    let mut history = Vec::new();
+    let mut today_tokens: u64 = 0;
+    let mut week_tokens: u64 = 0;
+
+    for point in &cc.history {
+        let period = &point.period;
+        if period == &today_str {
+            today_tokens = point.total_tokens;
+        }
+        if period.as_str() >= week_start_str.as_str() {
+            week_tokens += point.total_tokens;
+        }
+
+        // Parse date string to UTC midnight timestamp
+        if let Ok(naive_date) = chrono::NaiveDate::parse_from_str(period, "%Y-%m-%d") {
+            let datetime = naive_date
+                .and_hms_opt(0, 0, 0)
+                .unwrap();
+            let timestamp = datetime.and_utc().timestamp_millis();
+
+            // Fuse skills count from legacy data; fall back to 0 if unavailable
+            let skills = legacy_skills_map.get(period).copied().unwrap_or(0);
+
+            history.push(UsageHistoryPoint {
+                timestamp,
+                input_tokens: point.input_tokens,
+                output_tokens: point.output_tokens,
+                cache_creation_tokens: point.cache_creation_tokens,
+                cache_read_tokens: point.cache_read_tokens,
+                skills,
+            });
+        }
+    }
+    history.sort_by_key(|h| h.timestamp);
+
+    // Update today/this_week in local_tokens
+    let mut local = local_tokens;
+    local.today = today_tokens;
+    local.this_week = week_tokens;
+
+    // Activity metrics: prefer real legacy data, fall back to empty
+    let activity = legacy_activity.unwrap_or(ActivityStats {
+        total_sessions: 0,
+        total_messages: 0,
+        first_session_date: String::new(),
+    });
+
+    // Total requests: prefer legacy, fall back to ccusage approximation
+    let total_requests = legacy_total_requests.unwrap_or_else(|| {
+        cc.history.iter().map(|h| h.model_breakdowns.len() as u64).sum()
+    });
+
+    let claude = ClaudeUsage {
+        models: models_map,
+        local_tokens: local,
+        activity,
+        total_requests,
+        total_cost: Some(cc.totals.total_cost),
+    };
+
+    UsageResponse {
+        claude: Some(claude),
+        codex: None,
+        rtk: None,
+        history,
+        model_stats,
+        source_configured: true,
+        source_breadcrumbs: vec!["ccusage (via daily -j -O)".to_string()],
+        error: None,
+    }
+}
+
 #[tauri::command]
 pub fn usage_refresh(state: State<'_, AppState>) -> Result<JsonValue> {
     // Step 0: Check in-memory cache (30s TTL)
@@ -180,31 +456,51 @@ pub fn usage_refresh(state: State<'_, AppState>) -> Result<JsonValue> {
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
 
-    // Step 1: Read real usage from all available sources.
-    // Each source pushes its own breadcrumb into the shared list.
+    // Step 1: Try ccusage as the primary data source (covers all coding agents).
+    // Simultaneously read legacy Claude stats for behavioral metrics fusion
+    // (skills, total_requests, activity stats, per-model request_count).
     let mut source_breadcrumbs: Vec<String> = Vec::new();
-    let claude_data = read_claude_usage_from_files(&mut source_breadcrumbs);
-    let codex_data = read_codex_usage_from_files(&mut source_breadcrumbs);
     let rtk_data = read_rtk_usage_from_files(&mut source_breadcrumbs);
+    let legacy_claude = read_claude_usage_from_files(&mut source_breadcrumbs);
 
-    // source_configured: true if at least one real source produced data.
-    let source_configured = claude_data.is_some() || codex_data.is_some() || rtk_data.is_some();
-
-    // Merge model_stats and history from Claude (primary) — Codex history is kept separately
-    let (model_stats, history) = match &claude_data {
-        Some(c) => (c.model_stats.clone(), c.history.clone()),
-        None => (Vec::new(), Vec::new()),
-    };
-
-    let response = UsageResponse {
-        claude: claude_data.as_ref().and_then(|resp| resp.claude.clone()),
-        codex: codex_data,
-        rtk: rtk_data,
-        history,
-        model_stats,
-        source_configured,
-        source_breadcrumbs,
-        error: None,
+    let response = match run_ccusage_daily() {
+        Ok(cc_response) => {
+            let mut resp = map_ccusage_to_response(cc_response, legacy_claude);
+            resp.rtk = rtk_data;
+            resp.error = None;
+            // Merge breadcrumbs from both ccusage and legacy sources
+            resp.source_breadcrumbs = vec!["ccusage (via daily -j -O)".to_string()];
+            for bc in &source_breadcrumbs {
+                if !resp.source_breadcrumbs.contains(bc) {
+                    resp.source_breadcrumbs.push(bc.clone());
+                }
+            }
+            resp
+        }
+        Err(e) => {
+            eprintln!("[usage] ccusage unavailable, falling back to legacy readers: {e}");
+            // Legacy fallback: read Claude / Codex from local files
+            let codex_data = read_codex_usage_from_files(&mut source_breadcrumbs);
+            let source_configured = legacy_claude.is_some() || codex_data.is_some() || rtk_data.is_some();
+            let (model_stats, history) = match &legacy_claude {
+                Some(c) => (c.model_stats.clone(), c.history.clone()),
+                None => (Vec::new(), Vec::new()),
+            };
+            UsageResponse {
+                claude: legacy_claude.as_ref().and_then(|resp| resp.claude.clone()),
+                codex: codex_data,
+                rtk: rtk_data,
+                history,
+                model_stats,
+                source_configured,
+                source_breadcrumbs,
+                error: if !source_configured {
+                    Some("ccusage not installed; legacy sources also unavailable".to_string())
+                } else {
+                    None
+                },
+            }
+        }
     };
 
     // Step 2: Persist structured rows to usage_stats / skill_usage tables.

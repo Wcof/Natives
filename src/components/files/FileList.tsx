@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { FolderOpen } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import { type FileEntry } from '@/types/file';
 import { SPACING, FONT_SIZE } from '@/lib/design-tokens';
@@ -15,9 +14,13 @@ interface FileListProps {
   onSelect: (entry: FileEntry) => void;
   onContextMenu?: (e: React.MouseEvent, entry: FileEntry) => void;
   showDir?: boolean;
+  selectedIndex?: number;
+  onEditRequest?: (entry: FileEntry) => void;
+  favorites?: string[];
+  onFavoriteToggle?: (entry: FileEntry) => void;
 }
 
-export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, onContextMenu, showDir }: FileListProps) {
+export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, onContextMenu, showDir, selectedIndex = -1, onEditRequest, favorites, onFavoriteToggle }: FileListProps) {
   const [locale, setLocale] = useState<Locale>('zh');
 
   useEffect(() => {
@@ -78,17 +81,20 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
           color: 'var(--vibe-btn-text)',
           fontSize: FONT_SIZE.lg,
         }}>
-          <FolderOpen size={20} style={{ color: 'var(--text-faint)', marginBottom: SPACING.xs }} />
-          <div>{t(locale, 'fileBrowser.empty')}</div>
+          {t(locale, 'fileBrowser.empty')}
         </div>
       ) : (
-        entries.map((entry) => (
+        entries.map((entry, index) => (
           <FileRow
             key={entry.path}
             entry={entry}
             onSelect={onSelect}
             onContextMenu={onContextMenu}
             showDir={showDir}
+            selected={index === selectedIndex}
+            onDoubleClick={() => onEditRequest?.(entry)}
+            isFavorite={favorites?.includes(entry.path)}
+            onFavoriteToggle={onFavoriteToggle}
           />
         ))
       )}

@@ -15,8 +15,6 @@ export default function FileSearch({ onClose, onNavigate }: FileSearchProps) {
   const [searching, setSearching] = useState(false);
   const [mode, setMode] = useState<'name' | 'content'>('name');
 
-  const httpPort = window.__nativesHttpPort || 3001;
-
   const handleSearch = async (q: string) => {
     setQuery(q);
     if (!q.trim()) {
@@ -26,12 +24,39 @@ export default function FileSearch({ onClose, onNavigate }: FileSearchProps) {
 
     setSearching(true);
     try {
-      const endpoint = mode === 'content' ? 'grep' : 'search';
-      const res = await fetch(`http://localhost:${httpPort}/api/fs/${endpoint}?q=${encodeURIComponent(q)}&root=${encodeURIComponent('/')}`);
-      if (res.ok) {
-        const data = await res.json();
-        setResults(Array.isArray(data) ? data : []);
+      const api = window.nativesAPI;
+      const searchApi = api?.search;
+      if (!searchApi) {
+        setResults([]);
+        return;
       }
+
+      let data: any;
+      if (mode === 'content') {
+        data = await searchApi.grep(q, '/', { maxResults: 50 });
+      } else {
+        data = await searchApi.files(q, '/', { maxResults: 50 });
+      }
+
+      // Normalize response to ContentSearchResult[]
+      // Rust SearchResult: { path, line, text, score, mtime }
+      const items = Array.isArray(data)
+        ? data.map((item: any) => ({
+            path: item.path ?? '',
+            name: item.name ?? item.path?.split('/').pop() ?? '',
+            line: item.line ?? 0,
+            preview: item.preview ?? item.text ?? item.content ?? '',
+            matchStart: item.matchStart ?? 0,
+            matchEnd: item.matchEnd ?? 0,
+            score: item.score ?? undefined,
+            mtime: item.mtime ?? undefined,
+          }))
+        : [];
+      // Sort by score descending when available (fuzzy search results)
+      if (items.some((i) => i.score != null)) {
+        items.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+      }
+      setResults(items);
     } catch {
       setResults([]);
     } finally {
@@ -111,9 +136,18 @@ export default function FileSearch({ onClose, onNavigate }: FileSearchProps) {
                 onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--vibe-toolbar-bg)'; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
               >
-                <div style={{ fontSize: FONT_SIZE.md, color: 'var(--vibe-brand-text)', marginBottom: 2 }}>
+                <div style={{ fontSize: FONT_SIZE.md, color: 'var(--vibe-brand-text)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 8 }}>
                   {r.name}
-                  {mode === 'content' && <span style={{ color: 'var(--vibe-btn-text)', marginLeft: 8 }}>line {r.line}</span>}
+                  {mode === 'content' && <span style={{ color: 'var(--vibe-btn-text)' }}>line {r.line}</span>}
+                  {r.score != null && r.score > 0 && (
+                    <span style={{
+                      fontSize: FONT_SIZE.xs, color: 'var(--vibe-btn-text)',
+                      background: 'var(--vibe-btn-bg)', padding: '1px 5px',
+                      borderRadius: BORDER_RADIUS.sm, marginLeft: 'auto',
+                    }}>
+                      {r.score.toFixed(1)}
+                    </span>
+                  )}
                 </div>
                 <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--vibe-btn-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {r.path}

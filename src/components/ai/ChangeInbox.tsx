@@ -141,7 +141,7 @@ export default function ChangeInbox() {
                   </span>
                   {ch.count > 1 && (
                     <span style={{
-                      fontSize: 9, fontWeight: 600, color: 'var(--accent)',
+                      fontSize: FONT_SIZE.xs, fontWeight: 600, color: 'var(--accent)',
                       background: 'var(--accent-soft)', padding: '0 4px', borderRadius: BORDER_RADIUS.sm,
                       flexShrink: 0,
                     }}>

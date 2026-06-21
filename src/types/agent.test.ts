@@ -107,10 +107,20 @@ describe('AgentTypes', () => {
 
   it('should construct CodexUsage', () => {
     const usage: CodexUsage = {
-      fiveHourWindow: { used: 5000, limit: 30000, resetAt: Date.now() + 18000000 },
-      planType: 'Pro',
+      totalTokens: 100000,
+      inputTokens: 50000,
+      outputTokens: 50000,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      todayTokens: 45000,
+      weekTokens: 200000,
+      totalSessions: 10,
+      totalCost: 1.5,
+      models: {},
+      history: [],
     };
-    assert.equal(usage.planType, 'Pro');
+    assert.equal(usage.totalTokens, 100000);
+    assert.equal(usage.totalSessions, 10);
   });
 
   it('should construct FileChangeEvent', () => {

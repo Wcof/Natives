@@ -1,6 +1,6 @@
 /**
  * Agent Narration — parse terminal output to extract current agent action.
- * Based on fanbox's latestAgentAction() implementation.
+ * Based on Natives2's latestAgentAction() implementation.
  *
  * Detects Claude Code 2.x tool call format: ⏺ ToolName(args)
  * and other patterns like "esc to interrupt" for thinking state.

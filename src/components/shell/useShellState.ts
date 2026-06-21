@@ -1,16 +1,11 @@
 'use client';
 
 import { startTransition, useState, useEffect, useRef, useCallback } from 'react';
-import { t, type Locale } from '@/i18n';
+import type { Locale } from '@/i18n';
 import type { RightPanelMode } from './RightPanel';
 import type { PreviewSubMode } from '@/components/files/FilePreview';
 import type { FileEntry } from '@/types/file';
-import { applyTheme } from '@/lib/theme-engine';
-import { getIframeManager } from '@/lib/iframe-manager';
 import { useFollowMode } from '@/lib/follow-mode';
-import { pushRecentModule } from '@/lib/recent-modules';
-import { classifyError } from '@/lib/error-classifier';
-import { getHttpPort } from '@/lib/natives-http-port';
 
 export interface ShellState {
   sidebarCollapsed: boolean;
@@ -147,6 +142,18 @@ export function useShellState(): ShellStateReturn {
 
   // ── Onboarding ──
   const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null);
+
+  // Check if username is set (first-run detection)
+  useEffect(() => {
+    const api = window.nativesAPI;
+    if (!api?.db?.get) {
+      startTransition(() => { setNeedsOnboarding(false); });
+      return;
+    }
+    api.db.get('settings:username').then((value: unknown) => {
+      setNeedsOnboarding(!value);
+    }).catch(() => setNeedsOnboarding(false));
+  }, []);
 
   // ── Screenshot/Release ──
   const [annotatingFile, setAnnotatingFile] = useState<string | null>(null);

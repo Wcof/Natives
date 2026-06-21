@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { useHydrated } from '@/hooks/useHydrated';
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -26,8 +27,8 @@ interface ConfirmDialogProps {
 export default function ConfirmDialog({
   open, title, message, confirmLabel, cancelLabel, danger, onConfirm, onCancel,
 }: ConfirmDialogProps) {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => { setMounted(true); }, []);
+  const mounted = useHydrated();
+  
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const confirmBtnRef = useRef<HTMLButtonElement>(null);

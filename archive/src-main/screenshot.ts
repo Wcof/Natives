@@ -1,5 +1,5 @@
 /**
- * 截图文件名模式匹配（对标 fanbox — 增加 CleanShot/SCR-/截圖）
+ * 截图文件名模式匹配（对标 Natives2 — 增加 CleanShot/SCR-/截圖）
  */
 const SCREENSHOT_PATTERNS = [
   /^Screenshot[\s_]\d{4}/i,
@@ -30,14 +30,14 @@ export function formatDetectedName(fileName: string): string {
   return fileName.replace(/\.\w+$/, '').replace(/[\s_]/g, ' ').toLowerCase();
 }
 
-// ── Directory Watcher（对标 fanbox — 写入稳定性轮询 + 有界去重）──
+// ── Directory Watcher（对标 Natives2 — 写入稳定性轮询 + 有界去重）──
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { execSync } from 'child_process';
 
-/** 动态检测 macOS 截图保存目录（对标 fanbox 的 defaults read 方式） */
+/** 动态检测 macOS 截图保存目录（对标 Natives2 的 defaults read 方式） */
 function getScreenshotDir(): string {
   try {
     const out = execSync('defaults read com.apple.screencapture location 2>/dev/null', {
@@ -58,7 +58,7 @@ function getScreenshotDir(): string {
  */
 export function watchScreenshotDir(onDetected: (filePath: string) => void): () => void {
   const SCREENSHOT_DIR = getScreenshotDir();
-  // 有界去重 Map（对标 fanbox — 50 条上限 + 3s TTL）
+  // 有界去重 Map（对标 Natives2 — 50 条上限 + 3s TTL）
   const sentMap = new Map<string, number>();
   const MAX_SENT = 50;
   const TTL_MS = 3000;
@@ -81,7 +81,7 @@ export function watchScreenshotDir(onDetected: (filePath: string) => void): () =
 
     const fp = path.join(SCREENSHOT_DIR, name);
 
-    // ── 写入稳定性轮询（对标 fanbox — Retina 截图几 MB，固定 debounce 不可靠）──
+    // ── 写入稳定性轮询（对标 Natives2 — Retina 截图几 MB，固定 debounce 不可靠）──
     // 轮询 stat 直到大小连续两次不变且 >= 1000 字节，最多 12 次（~3s）
     const waitStable = (tries: number, lastSize: number): void => {
       fs.stat(fp, (err, st) => {

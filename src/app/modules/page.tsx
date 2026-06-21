@@ -5,7 +5,7 @@ import { useAsyncData } from '@/hooks/useAsyncData';
 import { Power, Trash2, RefreshCw } from 'lucide-react';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { t, type Locale } from '@/i18n';
-import { EmptyState } from '@/components/ui/EmptyState';
+import { EmptyState, LoadingState } from '@/components/ui/EmptyState';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
 
 interface ModuleInfo {
@@ -96,9 +96,7 @@ export default function ModulesPage() {
       </div>
 
       {loading ? (
-        <div style={{ padding: `${SPACING.xxl}px ${SPACING.xl}px`, textAlign: 'center', color: 'var(--vibe-btn-text)', fontSize: FONT_SIZE.lg }}>
-          {t(locale, 'common.loading')}
-        </div>
+        <LoadingState message={t(locale, 'common.loading')} />
       ) : (modules ?? []).length === 0 ? (
         <EmptyState title={t(locale, 'modules.emptyState')} />
       ) : (

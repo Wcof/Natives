@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { t, type Locale } from '@/i18n';
+import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 
 export default function Loading() {
   const [locale, setLocale] = useState<Locale>('zh');
@@ -11,17 +12,18 @@ export default function Loading() {
       try {
         const saved = await window.nativesAPI?.getLocale?.();
         if (saved) setLocale(saved === 'en' ? 'en' : 'zh');
-      } catch {}
+      } catch { /* no-op */ }
     }
     load();
   }, []);
 
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      height: '100%', color: 'var(--vibe-btn-text)', fontSize: '0.8125rem',
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      height: '100%', gap: '16px', color: 'var(--text-dim)', fontSize: '0.875rem',
     }}>
-      {t(locale, 'common.loading')}
+      <MathCurveLoader size={80} />
+      <span style={{ letterSpacing: '0.05em' }}>{t(locale, 'common.loading')}</span>
     </div>
   );
 }

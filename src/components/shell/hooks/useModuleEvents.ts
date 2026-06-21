@@ -1,6 +1,9 @@
 'use client';
 
 import { useEffect } from 'react';
+import { getIframeManager } from '@/lib/iframe-manager';
+import { classifyError } from '@/lib/error-classifier';
+import { pushRecentModule } from '@/lib/recent-modules';
 
 interface UseModuleEventsOptions {
   activeView: string;
@@ -26,14 +29,18 @@ export function useModuleEvents({
     const container = iframeContainerRef.current;
     if (!container) return;
 
-    const manager = (window as any).__iframeManager;
+    const manager = getIframeManager();
     const moduleId = activeView.startsWith('module:') ? activeView.slice(7) : null;
 
     if (activeModuleRef.current && activeModuleRef.current !== moduleId) {
-      manager?.hideIframe(activeModuleRef.current);
+      manager.hideIframe(activeModuleRef.current);
     }
 
     activeModuleRef.current = moduleId;
+
+    if (moduleId) {
+      pushRecentModule(moduleId);
+    }
 
     if (!moduleId) {
       const existingIframes = container.querySelectorAll('iframe');
@@ -55,12 +62,13 @@ export function useModuleEvents({
         setCrashedModules((prev) => {
           if (!prev.has(moduleId)) {
             try {
+              const classified = classifyError(new Error(`Plugin ${moduleId} crashed: Heartbeat timeout`), moduleId);
               window.nativesAPI?.notification?.send?.(
                 `Plugin ${moduleId} crashed`,
-                `Heartbeat timeout`,
+                `Heartbeat timeout — ${classified.actionHint}`,
                 'error',
               );
-            } catch { /* no-op */ }
+            } catch { /* notification persistence is best-effort */ }
           }
           const next = new Set(prev);
           next.add(moduleId);

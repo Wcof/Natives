@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useAsyncData } from '@/hooks/useAsyncData';
 import { t, type Locale } from '@/i18n';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 
 interface Notification {
   id: number;
@@ -67,8 +68,9 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-10 text-sm text-[var(--text-faint)]">
-        {t(locale, 'common.loading')}
+      <div className="flex flex-col items-center justify-center py-12 gap-3 text-sm text-[var(--text-faint)]">
+        <MathCurveLoader size={40} />
+        <span>{t(locale, 'common.loading')}</span>
       </div>
     );
   }

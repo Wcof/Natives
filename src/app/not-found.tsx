@@ -12,7 +12,7 @@ export default function NotFound() {
       try {
         const saved = await window.nativesAPI?.getLocale?.();
         if (saved) setLocale(saved === 'en' ? 'en' : 'zh');
-      } catch {}
+      } catch { /* no-op */ }
     }
     load();
   }, []);

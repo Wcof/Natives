@@ -2,7 +2,22 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as path from 'path';
+import { tmpdir } from 'os';
 import { calculateScore, findSubsequence, findStreaks, grepContent, searchFiles, spotlightSearch } from './search-engine';
+
+/**
+ * Create a unique temp directory for each test suite to avoid isolation races.
+ */
+function tmpTestDir(name: string): string {
+  const dir = fs.mkdtempSync(path.join(tmpdir(), `natives2-test-${name}-`));
+  return dir;
+}
+
+function rmrf(dir: string) {
+  if (fs.existsSync(dir)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 describe('SearchEngine', () => {
   describe('findSubsequence', () => {
@@ -96,9 +111,10 @@ describe('SearchEngine', () => {
   });
 
   describe('grepContent', () => {
-    const GREP_DIR = path.join(process.env.HOME || '~', '.natives-test', 'grep-test');
+    let GREP_DIR: string;
 
     before(() => {
+      GREP_DIR = tmpTestDir('grep');
       fs.mkdirSync(path.join(GREP_DIR, 'subdir'), { recursive: true });
       fs.writeFileSync(path.join(GREP_DIR, 'hello.txt'), 'Hello World\nThis is a test file\nLine 3', 'utf-8');
       fs.writeFileSync(path.join(GREP_DIR, 'typescript.ts'), 'const x: number = 42;\nconsole.log(x);', 'utf-8');
@@ -107,9 +123,7 @@ describe('SearchEngine', () => {
     });
 
     after(() => {
-      if (fs.existsSync(GREP_DIR)) {
-        fs.rmSync(GREP_DIR, { recursive: true, force: true });
-      }
+      rmrf(GREP_DIR);
     });
 
     it('should find matching lines for a simple query', async () => {
@@ -152,9 +166,10 @@ describe('SearchEngine', () => {
   });
 
   describe('searchFiles', () => {
-    const SEARCH_DIR = path.join(process.env.HOME || '~', '.natives-test', 'search-test');
+    let SEARCH_DIR: string;
 
     before(() => {
+      SEARCH_DIR = tmpTestDir('search');
       fs.mkdirSync(SEARCH_DIR, { recursive: true });
       fs.writeFileSync(path.join(SEARCH_DIR, 'main.ts'), '', 'utf-8');
       fs.writeFileSync(path.join(SEARCH_DIR, 'README.md'), '', 'utf-8');
@@ -165,9 +180,7 @@ describe('SearchEngine', () => {
     });
 
     after(() => {
-      if (fs.existsSync(SEARCH_DIR)) {
-        fs.rmSync(SEARCH_DIR, { recursive: true, force: true });
-      }
+      rmrf(SEARCH_DIR);
     });
 
     it('should return results sorted by score descending', async () => {
@@ -196,18 +209,17 @@ describe('SearchEngine', () => {
   });
 
   describe('spotlightSearch', () => {
-    const SPOT_DIR = path.join(process.env.HOME || '~', '.natives-test', 'spotlight-test');
+    let SPOT_DIR: string;
 
     before(() => {
+      SPOT_DIR = tmpTestDir('spotlight');
       fs.mkdirSync(SPOT_DIR, { recursive: true });
       fs.writeFileSync(path.join(SPOT_DIR, 'spotlight-me.txt'), 'spotlight content here', 'utf-8');
       fs.writeFileSync(path.join(SPOT_DIR, 'other.txt'), 'other content', 'utf-8');
     });
 
     after(() => {
-      if (fs.existsSync(SPOT_DIR)) {
-        fs.rmSync(SPOT_DIR, { recursive: true, force: true });
-      }
+      rmrf(SPOT_DIR);
     });
 
     it('should return results from mdfind or grep fallback', async () => {

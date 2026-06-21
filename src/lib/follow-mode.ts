@@ -12,7 +12,14 @@ const ARTIFACT_EXTS = new Set([
   'dmg', 'pkg', 'deb', 'rpm', 'msi', 'jar', 'war', 'ipa', 'apk',
   'zip', 'tar', 'gz', 'bz2', 'xz', '7z', 'rar', 'tgz',
   'woff', 'woff2', 'ttf', 'otf', 'eot',
+  'pyo', 'nib', 'car',
 ]);
+
+// Artifact path patterns (Natives2: .app/.framework bundles count as artifacts)
+const ARTIFACT_PATTERNS = [
+  /\.app\//, /\.framework\//, /\.xcassets\//, /\.xcodeproj\//,
+  /\/DerivedData\//, /\/build\/Products\//,
+];
 
 const NOEXT_TEXT = new Set([
   'Makefile', 'Dockerfile', 'LICENSE', 'README', 'CHANGELOG', 'Gemfile',
@@ -44,6 +51,8 @@ const NOEXT_BINARY = new Set(['node', 'a.out', 'core']);
 function isArtifact(path: string): boolean {
   const ext = getExt(path);
   if (ARTIFACT_EXTS.has(ext)) return true;
+  // Check path patterns (.app bundles, frameworks, etc.)
+  if (ARTIFACT_PATTERNS.some(p => p.test(path))) return true;
   if (!ext) {
     const name = path.split('/').pop() || '';
     return NOEXT_BINARY.has(name);
@@ -87,6 +96,13 @@ interface FollowState {
   pendingPath: string | null;
   throttleTimer: ReturnType<typeof setTimeout> | null;
   lastActivity: number; // timestamp of last terminal output
+  /** Agent status from agent-status-changed events */
+  agentStatus: 'idle' | 'busy' | null;
+  /** true = user manually browsed/edited, follow paused until next agent activity */
+  paused: boolean;
+  /** HTML double buffer: pre-render target for zero-flash HTML/MD switching */
+  htmlBufferPath: string | null;
+  swapping: boolean;
 }
 
 const followState: FollowState = {
@@ -97,6 +113,10 @@ const followState: FollowState = {
   pendingPath: null,
   throttleTimer: null,
   lastActivity: 0,
+  agentStatus: null,
+  paused: false,
+  htmlBufferPath: null,
+  swapping: false,
 };
 
 // Listeners
@@ -121,10 +141,11 @@ function inFollowScope(filePath: string, scopeRoot: string | null): boolean {
 
 function boundAgentActive(): boolean {
   if (!followState.boundSessionId) return false;
-  // Check if terminal had recent output (within 8s)
-  if (Date.now() - followState.lastActivity < 8000) return true;
-  // Check via agent status
-  return false; // Will be updated by terminal output hook
+  // Explicit agent status takes priority
+  if (followState.agentStatus === 'busy') return true;
+  if (followState.agentStatus === 'idle') return false;
+  // Fallback: check if terminal had recent output (within 8s)
+  return Date.now() - followState.lastActivity < 8000;
 }
 
 // ── Core Follow Logic ──
@@ -141,8 +162,32 @@ const FOLLOW_NOISE = [
   /__pycache__\//, /\.DS_Store$/, /\.db-wal$/, /\.db-shm$/, /\.lock$/,
 ];
 
+/**
+ * Manual takeover: any manual file browse/edit pauses follow mode.
+ * Follow resumes automatically when the agent becomes active again.
+ */
+export function followManualTakeover() {
+  if (!followState.on) return;
+  followState.paused = true;
+}
+
+/**
+ * Update agent status from agent-status-changed events.
+ * When agent becomes active after being paused, auto-resume follow.
+ */
+export function followAgentStatus(status: 'idle' | 'busy' | 'working') {
+  const prev = followState.agentStatus;
+  followState.agentStatus = status === 'working' ? 'busy' : status;
+  // Auto-resume on agent activity after manual takeover
+  if (followState.paused && status !== 'idle' && prev !== 'busy') {
+    followState.paused = false;
+  }
+}
+
 export function followChange(dir: string, filename: string, scopeRoot: string | null) {
   if (!followState.on || !followState.boundSessionId) return;
+  // Paused by manual takeover — skip until agent resumes
+  if (followState.paused) return;
 
   // Scope check
   const fullPath = dir.endsWith('/') ? dir + filename : dir + '/' + filename;
@@ -181,11 +226,53 @@ export function followChange(dir: string, filename: string, scopeRoot: string | 
 }
 
 function followSwitch(fullPath: string) {
+  const wasHtml = followState.currentPath && isHtmlOrMd(followState.currentPath);
+  const isHtml = isHtmlOrMd(fullPath);
+
+  // HTML double buffer: if switching between HTML/MD files, use buffer swap
+  if (isHtml && wasHtml) {
+    followState.swapping = true;
+    followState.htmlBufferPath = fullPath;
+    // Pre-render into buffer — the renderer will call followCommitSwap()
+    // after the new content is loaded into the hidden buffer
+    const dir = fullPath.substring(0, fullPath.lastIndexOf('/')) || '/';
+    window.dispatchEvent(new CustomEvent('navigate-files', { detail: { path: dir, selectFile: fullPath } }));
+    notifyListeners(fullPath, null);
+    // Auto-commit swap after a short delay (fallback if renderer doesn't call it)
+    setTimeout(() => {
+      if (followState.swapping) followCommitSwap();
+    }, 200);
+    return;
+  }
+
   followState.currentPath = fullPath;
+  followState.htmlBufferPath = null;
+  followState.swapping = false;
   // Navigate file browser to the file's directory
   const dir = fullPath.substring(0, fullPath.lastIndexOf('/')) || '/';
   window.dispatchEvent(new CustomEvent('navigate-files', { detail: { path: dir, selectFile: fullPath } }));
   notifyListeners(fullPath, null);
+}
+
+/**
+ * Commit the HTML double buffer swap. Called by the renderer after
+ * the new HTML/MD content is fully loaded into the hidden buffer.
+ * This eliminates white flash during HTML-to-HTML transitions.
+ */
+export function followCommitSwap() {
+  if (!followState.swapping) return;
+  followState.currentPath = followState.htmlBufferPath;
+  followState.htmlBufferPath = null;
+  followState.swapping = false;
+  notifyListeners(followState.currentPath, null);
+}
+
+export function isSwapping(): boolean {
+  return followState.swapping;
+}
+
+export function getHtmlBufferPath(): string | null {
+  return followState.htmlBufferPath;
 }
 
 let renderTimer: ReturnType<typeof setTimeout> | null = null;
@@ -197,6 +284,8 @@ function scheduleFollowRender() {
   }, 300);
 }
 
+// ── Terminal Output Buffer for Action Parsing ──
+
 // ── Terminal Activity Hook ──
 
 export function recordTerminalActivity(sessionId: string) {
@@ -207,17 +296,36 @@ export function recordTerminalActivity(sessionId: string) {
 
 // ── Public API ──
 
+// Manual takeover listener — any navigate-files event NOT from followSwitch pauses follow
+let _manualNavHandler: ((e: Event) => void) | null = null;
+
 export function setFileFollow(on: boolean, sessionId?: string) {
   if (on) {
     followState.on = true;
     followState.boundSessionId = sessionId || null;
     followState.lastActivity = Date.now();
+    followState.paused = false;
+    followState.agentStatus = null;
+    // Install manual takeover listener
+    if (!_manualNavHandler) {
+      _manualNavHandler = (e: Event) => {
+        // If we're not in a follow-initiated switch, treat as manual takeover
+        if (!followState.swapping && followState.on) {
+          followManualTakeover();
+        }
+      };
+      window.addEventListener('navigate-files', _manualNavHandler);
+    }
   } else {
     followState.on = false;
     followState.boundSessionId = null;
     followState.currentPath = null;
     followState.lastContent = null;
     followState.pendingPath = null;
+    followState.paused = false;
+    followState.agentStatus = null;
+    followState.htmlBufferPath = null;
+    followState.swapping = false;
     if (followState.throttleTimer) {
       clearTimeout(followState.throttleTimer);
       followState.throttleTimer = null;
@@ -225,6 +333,11 @@ export function setFileFollow(on: boolean, sessionId?: string) {
     if (renderTimer) {
       clearTimeout(renderTimer);
       renderTimer = null;
+    }
+    // Remove manual takeover listener
+    if (_manualNavHandler) {
+      window.removeEventListener('navigate-files', _manualNavHandler);
+      _manualNavHandler = null;
     }
   }
   notifyListeners(followState.currentPath, null);

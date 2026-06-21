@@ -46,6 +46,8 @@ export interface ContentSearchResult {
   preview: string;
   matchStart: number;
   matchEnd: number;
+  score?: number;
+  mtime?: number;
 }
 
 /** Git 状态 */
@@ -69,6 +71,19 @@ export interface DiskUsageItem {
   isDir: boolean;
   size: number;
   sizeFormatted: string;
+}
+
+/** 单模型统计（用于 usage.refresh() 响应） */
+export interface ModelStat {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens?: number;
+  cacheReadTokens?: number;
+  requestCount: number;
+  totalTokens: number;
+  totalCost: number;
+  avgCostPerRequest: number;
 }
 
 /** 终端路径候选 */

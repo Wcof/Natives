@@ -55,7 +55,7 @@ export default function ToolsPage() {
 
       {tab === 'screenshot' && <ScreenshotCard />}
       {tab === 'release' && <ReleaseWizardDialog />}
-      {tab === 'update' && <UpdateNotification />}
+      {tab === 'update' && <UpdateNotification locale={locale} />}
     </div>
   );
 }

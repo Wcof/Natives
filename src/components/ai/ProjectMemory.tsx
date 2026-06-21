@@ -14,9 +14,9 @@ export default function ProjectMemory() {
   const { data: sessions, loading, error, reload: loadSessions } = useAsyncData(async () => {
     const api = window.nativesAPI;
     if (api?.agent?.scanProjects && api?.agent?.getSessions) {
-      const projects = await api.agent.scanProjects();
+      const projects = await api.agent.scanProjects() as Array<{ path: string; name: string }>;
       if (Array.isArray(projects) && projects.length > 0) {
-        const result = await api.agent.getSessions(projects[0]!);
+        const result = await api.agent.getSessions(projects[0]!.path);
         if (Array.isArray(result)) return result as AgentSession[];
       }
     }

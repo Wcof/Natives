@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef } from 'react';
+import { useHydrated } from '@/hooks/useHydrated';
 import type { CSSProperties, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
@@ -40,12 +41,8 @@ export default function Modal({
   const locale = useLocale();
   const titleId = useId();
   const previousFocusRef = useRef<HTMLElement | null>(null);
-  const [isMounted, setIsMounted] = useState(false);
+  const isMounted = useHydrated();
   const { dialogRef, handleKeyDown } = useFocusTrap();
-
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
 
   useEffect(() => {
     if (!isOpen) {

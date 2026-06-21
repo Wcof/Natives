@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { startTransition, useState, useEffect, useCallback } from 'react';
 import { useAsyncData } from '@/hooks/useAsyncData';
 import { type AgentSession } from '@/types/agent';
 import { t, type Locale } from '@/i18n';
@@ -16,9 +16,9 @@ export default function SessionReplay() {
   const { data: sessions, loading, error, reload: loadSessions } = useAsyncData(async () => {
     const api = window.nativesAPI;
     if (api?.agent?.scanProjects && api?.agent?.getSessions) {
-      const projects = await api.agent.scanProjects();
+      const projects = await api.agent.scanProjects() as Array<{ path: string; name: string }>;
       if (Array.isArray(projects) && projects.length > 0) {
-        const result = await api.agent.getSessions(projects[0]!);
+        const result = await api.agent.getSessions(projects[0]!.path);
         if (Array.isArray(result)) return result as AgentSession[];
       }
     }
@@ -43,7 +43,8 @@ export default function SessionReplay() {
   // When session selected, build replay steps
   useEffect(() => {
     if (!selectedSession) {
-      setSteps([]);
+      startTransition(() => { setSteps([]); });
+    // eslint-disable-next-line react-hooks/set-state-in-effect
       setCurrentStep(0);
       return;
     }

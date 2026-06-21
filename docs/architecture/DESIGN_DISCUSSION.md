@@ -79,9 +79,9 @@
 
 ---
 
-### Q4: 现有项目 CodePilot 和 FanBox 的角色
+### Q4: 现有项目 CodePilot 和 Natives2 的角色
 
-**问题**: 在 Natives 架构中，CodePilot 和 FanBox 扮演什么角色？
+**问题**: 在 Natives 架构中，CodePilot 和 Natives2 扮演什么角色？
 
 **选项**:
 - A. 作为内置应用 — 预装应用，开箱即用，但也可以卸载
@@ -91,8 +91,8 @@
 
 **决策**: ✅ **B. 作为参考实现**
 
-**推理**: 不直接嵌入 CodePilot 和 FanBox，而是吸收它们的设计模式：
-- 从 FanBox 吸收：零依赖后端哲学、单文件 SPA 模式、双缓冲预览
+**推理**: 不直接嵌入 CodePilot 和 Natives2，而是吸收它们的设计模式：
+- 从 Natives2 吸收：零依赖后端哲学、单文件 SPA 模式、双缓冲预览
 - 从 CodePilot 吸收：Provider 抽象、SSE 流式通信、SQLite 数据模型、i18n 模式
 - 这样 Natives 可以独立演进，不受现有项目的技术债务影响
 
@@ -105,7 +105,7 @@
 **选项**:
 - A. Electron + Next.js + TypeScript — 和 CodePilot 一致
 - B. Electron + Vite + React + TypeScript — 更轻量
-- C. Electron + Vanilla JS — 和 FanBox 一致
+- C. Electron + Vanilla JS — 和 Natives2 一致
 - D. Tauri + Web 技术 — 用 Rust 替代 Electron
 
 **决策**: ✅ **A. Electron + Next.js + TypeScript**
@@ -340,7 +340,7 @@
 - iframe 是标准 Web 技术，行为稳定可预测
 - 本地 HTTP 服务解决 iframe 无法加载 `file://` 的问题
 - HTTP 服务本身也可以提供 Bridge API 的 REST 端点
-- 参考 FanBox 的 `server.js` 模式（零依赖 HTTP 服务），已验证可行
+- 参考 Natives2 的 `server.js` 模式（零依赖 HTTP 服务），已验证可行
 
 ---
 
@@ -436,7 +436,7 @@
 **决策**: ✅ **A. 单一静态文件服务 + API 路由** (架构师最优判断)
 
 **推理**:
-- 参考 FanBox 的 `server.js` 模式：单一 HTTP 服务，零外部依赖
+- 参考 Natives2 的 `server.js` 模式：单一 HTTP 服务，零外部依赖
 - 静态文件路由：`GET /modules/{moduleId}/{path}` → 从 `~/.natives/modules/{moduleId}/` 读取文件
 - Bridge API 路由：`POST /api/bridge/{namespace}/{method}` → 转发到 Main Process 处理
 - 避免多端口管理的复杂性
@@ -544,7 +544,7 @@ GET  /api/bridge/meta                → 获取模块元信息
 | 1 | 核心模型 | Hub 聚合 + App Store + 创意工坊 + OS 级管理 |
 | 2 | 插件粒度 | 页面级插件（独立 HTML/JS/CSS，iframe 加载，仅本地文件） |
 | 3 | 架构分层 | 三层：整体架构 → 底层架构 → 前端架构 |
-| 4 | CodePilot/FanBox 角色 | 参考实现（吸收设计模式，不直接嵌入） |
+| 4 | CodePilot/Natives2 角色 | 参考实现（吸收设计模式，不直接嵌入） |
 | 5 | 技术栈 | Electron + Next.js + TypeScript |
 | 6 | 三层边界 | 产品定位+分层 / 进程+安全+DB / UI+插件+主题 |
 | 7 | 模块类型 | Web 页面模块（MVP 阶段） |
@@ -586,19 +586,19 @@ GET  /api/bridge/meta                → 获取模块元信息
 
 ## 第三轮: 参考实现交叉比对 (Q26+)
 
-> 本轮基于对 CodePilot 和 FanBox 实际实现的交叉比对，发现设计空白并补全。
+> 本轮基于对 CodePilot 和 Natives2 实际实现的交叉比对，发现设计空白并补全。
 
 ### Q26: 终端实现方案 ⚠️ 修正防线 3
 
-**问题**: 五大防线第 3 条决定用 `child_process.spawn` 实现终端（"零原生依赖"），但从 FanBox 参考实现来看，此方案不支持 TUI 交互（resize 无效、全屏程序渲染异常）。Natives 终端需要支持完整交互体验。
+**问题**: 五大防线第 3 条决定用 `child_process.spawn` 实现终端（"零原生依赖"），但从 Natives2 参考实现来看，此方案不支持 TUI 交互（resize 无效、全屏程序渲染异常）。Natives 终端需要支持完整交互体验。
 
-**决策**: ✅ **B. 完整终端 — 采用 node-pty**（参考 FanBox 方案）
+**决策**: ✅ **B. 完整终端 — 采用 node-pty**（参考 Natives2 方案）
 
 **推理**:
 - `better-sqlite3` 已经是 native 模块，"零原生依赖" 本身不成立
 - node-pty 的额外编译成本几乎为零（Electron 项目已有 native 模块）
 - 完整终端体验（resize、TUI 程序、光标定位）是基本可用性要求
-- FanBox 已验证 node-pty + xterm 的方案可行
+- Natives2 已验证 node-pty + xterm 的方案可行
 
 ### Q27: 插件生命周期契约
 
@@ -647,7 +647,7 @@ window.natives.lifecycle.onHeartbeat(() => { // 响应心跳
 
 **问题**: `~/.natives/` 下的 JSON 配置文件（用户设置、主题配置等）在写入过程中如果应用崩溃，可能损坏为空文件或不完整 JSON。SQLite 有 WAL 模式保护，但 JSON 文件没有。
 
-**决策**: ✅ **A. 采用原子写入**（参考 FanBox 的 `_cfgChain` 模式）
+**决策**: ✅ **A. 采用原子写入**（参考 Natives2 的 `_cfgChain` 模式）
 
 **实现策略**:
 1. **原子写入**: 写入临时文件 → `fsync()` → `rename()` 覆盖原文件
@@ -768,9 +768,9 @@ CLI 工具自动获得 API Key
 
 | # | 决策项 | 决策结果 | 来源参考 |
 |---|--------|----------|----------|
-| 26 | 终端实现 | node-pty（完整 PTY）+ 降级到 spawn | FanBox |
+| 26 | 终端实现 | node-pty（完整 PTY）+ 降级到 spawn | Natives2 |
 | 27 | 插件生命周期 | 标准事件：ready / unload / error / heartbeat | CodePilot ChannelPlugin |
-| 28 | 配置文件安全 | 原子写入（临时文件 + fsync + rename） | FanBox _cfgChain |
+| 28 | 配置文件安全 | 原子写入（临时文件 + fsync + rename） | Natives2 _cfgChain |
 | 29 | 错误分类 | 12 类结构化错误，含用户提示和操作建议 | CodePilot error-classifier |
 | 30 | 环境注入 | 多组环境配置，加密存储，终端启动时选择注入 | CodePilot Provider 简化 |
 | 31 | DB 迁移 | 增量迁移（PRAGMA table_info + ALTER TABLE） | CodePilot db.ts |

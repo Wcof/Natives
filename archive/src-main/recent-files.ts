@@ -14,7 +14,7 @@ function expandTilde(p: string): string {
 
 // ── Constants ──
 
-/** 跳过目录（fanbox 移植） */
+/** 跳过目录（Natives2 移植） */
 const IGNORE_DIRS = new Set([
   'node_modules', '.git', '.svn', '.hg', '.next', '.cache',
   '__pycache__', '.DS_Store', 'dist', 'out', 'build',
@@ -41,7 +41,7 @@ export interface WalkFile {
 // ── BFS Walk ──
 
 /**
- * BFS 目录遍历（fanbox 移植）
+ * BFS 目录遍历（Natives2 移植）
  * 跳过 IGNORE_DIRS，带文件数/时间上限
  *
  * 改进点：

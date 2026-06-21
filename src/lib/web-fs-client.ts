@@ -1,70 +1,42 @@
 /**
- * Web 模式下的文件系统客户端
- * 当 window.nativesAPI 不可用时（浏览器 dev 模式），通过 Next.js API Routes 实现文件操作
+ * Web 模式下的文件系统客户端（退化方案）
+ *
+ * Natives2 Tauri 模式默认走 window.nativesAPI 通道。
+ * 此模块仅作为浏览器 dev 模式的退化方案保留 —— 所有方法返回错误提示。
+ * 实际文件操作走 Tauri 原生 IPC，不在前端实现 HTTP fallback。
  */
 
 import type { FileEntry } from '@/types/file';
 import type { DiskUsageItem } from '@/types/file';
 
-async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `HTTP ${res.status}`);
-  }
-  return res.json();
+const WEB_MODE_UNAVAILABLE = 'Browser mode: file operations require Tauri IPC';
+
+async function webUnavailable<T>(): Promise<T> {
+  throw new Error(WEB_MODE_UNAVAILABLE);
 }
 
 export const webFsClient = {
-  listDir(dirPath: string, options?: { sortBy?: string; sortDir?: string; showHidden?: boolean }): Promise<FileEntry[]> {
-    const params = new URLSearchParams({ path: dirPath });
-    if (options?.sortBy) params.set('sortBy', options.sortBy);
-    if (options?.sortDir) params.set('sortDir', options.sortDir);
-    if (options?.showHidden) params.set('showHidden', 'true');
-    return fetchJSON<FileEntry[]>(`/api/fs/listDir?${params}`);
+  listDir(_dirPath: string, _options?: { sortBy?: string; sortDir?: string; showHidden?: boolean }): Promise<FileEntry[]> {
+    return webUnavailable();
   },
 
-  recentFiles(root: string): Promise<Array<{ path: string; mtime: number; size: number }>> {
-    return fetchJSON(`/api/fs/recentFiles?path=${encodeURIComponent(root)}`);
+  recentFiles(_root: string): Promise<Array<{ path: string; mtime: number; size: number }>> {
+    return webUnavailable();
   },
 
-  async renameEntry(oldPath: string, newPath: string): Promise<{ ok: boolean; error?: string }> {
-    try {
-      return await fetchJSON('/api/fs/renameEntry', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ oldPath, newPath }),
-      });
-    } catch (err: any) {
-      return { ok: false, error: err.message };
-    }
+  renameEntry(_oldPath: string, _newPath: string): Promise<{ ok: boolean; error?: string }> {
+    return webUnavailable();
   },
 
-  async trashEntry(filePath: string): Promise<{ ok: boolean; error?: string }> {
-    try {
-      return await fetchJSON('/api/fs/trashEntry', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: filePath }),
-      });
-    } catch (err: any) {
-      return { ok: false, error: err.message };
-    }
+  trashEntry(_filePath: string): Promise<{ ok: boolean; error?: string }> {
+    return webUnavailable();
   },
 
-  async createEntry(targetPath: string, type: string): Promise<{ ok: boolean; error?: string }> {
-    try {
-      return await fetchJSON('/api/fs/createEntry', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: targetPath, type }),
-      });
-    } catch (err: any) {
-      return { ok: false, error: err.message };
-    }
+  createEntry(_targetPath: string, _type: string): Promise<{ ok: boolean; error?: string }> {
+    return webUnavailable();
   },
 
-  diskUsage(dirPath: string): Promise<DiskUsageItem[]> {
-    return fetchJSON<DiskUsageItem[]>(`/api/fs/du?path=${encodeURIComponent(dirPath)}`);
+  diskUsage(_dirPath: string): Promise<DiskUsageItem[]> {
+    return webUnavailable();
   },
 };

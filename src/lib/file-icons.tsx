@@ -4,7 +4,7 @@ import React from 'react';
 import { getBadgeExt, EXT_BADGES, KIND_COLORS } from '@/lib/file-badges';
 import type { FileEntry, FileKind } from '@/types/file';
 
-/* ── SVG 图标系统（移植自 fanbox，强辨识度专属图形）── */
+/* ── SVG 图标系统（移植自 Natives2，强辨识度专属图形）── */
 
 interface IconProps {
   size?: number;
@@ -197,7 +197,7 @@ const EXT_ICON_KIND: Record<string, React.ComponentType<IconProps>> = {
 };
 
 /**
- * 根据文件的 kind 和扩展名选取合适的 fanbox 风格图标。
+ * 根据文件的 kind 和扩展名选取合适的 Natives2 风格图标。
  * 优先顺序：专属扩展名(md/html) > code 类 > kind 类
  */
 export function getFileIcon(entry: Pick<FileEntry, 'name' | 'kind' | 'isDir'>): React.ComponentType<IconProps> {

@@ -17,7 +17,7 @@ interface UseFileDropOptions {
  * Supports two drag payloads:
  *  1. System files (Finder) → resolves `file.path` and calls onFilesDropped
  *  2. text/uri-list (WeChat images, browser <img> drags) → fetches the URL,
- *     saves to currentDir via /api/fs/save, calls onUrlDropped
+ *     saves to currentDir via Tauri IPC (fs.saveBlob), calls onUrlDropped
  *
  * The drop zone covers the entire bound element — empty space below files is
  * included, so "下半截拖不进" is fixed.
@@ -102,7 +102,7 @@ export function useFileDrop({ onFilesDropped, onUrlDropped, currentDir }: UseFil
 
 /**
  * Fetch an image URL and save it to the target directory.
- * Mirrors fanbox's dropUrlInto pattern.
+ * Mirrors Natives2's dropUrlInto pattern.
  */
 async function dropUrlInto(
   url: string,
@@ -139,24 +139,17 @@ async function dropUrlInto(
     name = `image-${Date.now()}.${ext}`;
   }
 
-  // POST binary data to /api/fs/save
-  const port = (window as any).__nativesHttpPort || 3001;
+  // POST binary data via Tauri command (or HTTP fallback for web mode)
   const arrayBuf = await blob.arrayBuffer();
-  const saveResp = await fetch(
-    `http://localhost:${port}/api/fs/save?dir=${encodeURIComponent(dir)}&name=${encodeURIComponent(name)}`,
-    {
-      method: 'POST',
-      body: arrayBuf,
-    },
-  );
+  const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuf)));
 
-  if (!saveResp.ok) {
-    const err = await saveResp.text();
-    throw new Error(`Save failed: ${err}`);
-  }
-
-  const result = await saveResp.json();
-  if (result?.path && onSaved) {
-    onSaved(result.path);
+  const api = (window as any).nativesAPI;
+  if (api?.fs?.saveBlob) {
+    const savedPath = await api.fs.saveBlob(dir, name, base64);
+    if (savedPath && onSaved) {
+      onSaved(savedPath);
+    }
+  } else {
+    throw new Error('[useFileDrop] saveBlob API not available (Tauri IPC required)');
   }
 }

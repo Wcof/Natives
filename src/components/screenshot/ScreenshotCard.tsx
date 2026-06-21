@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { Image, Terminal, FolderOpen, X } from 'lucide-react';
 import { FONT_SIZE, SPACING, BORDER_RADIUS } from '@/lib/design-tokens';
 import { t, type Locale } from '@/i18n';
+import { useHydrated } from '@/hooks/useHydrated';
 
 interface ScreenshotCardProps {
   locale: Locale;
@@ -23,9 +24,9 @@ export default function ScreenshotCard({
 }: ScreenshotCardProps) {
   const [filePath, setFilePath] = useState<string | null>(null);
   const [visible, setVisible] = useState(false);
-  const [mounted, setMounted] = useState(false);
+  const mounted = useHydrated();
 
-  useEffect(() => { setMounted(true); }, []);
+  
 
   useEffect(() => {
     const api = window.nativesAPI;

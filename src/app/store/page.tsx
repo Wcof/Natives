@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Rocket } from 'lucide-react';
 import { useAsyncData } from '@/hooks/useAsyncData';
-import { EmptyState } from '@/components/ui/EmptyState';
+import { EmptyState, LoadingState } from '@/components/ui/EmptyState';
 import { t, type Locale } from '@/i18n';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
 
@@ -134,9 +134,7 @@ export default function StorePage() {
         </div>
 
         {loading ? (
-          <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-faint)', fontSize: FONT_SIZE.lg }}>
-            {t(locale, 'common.loading')}
-          </div>
+          <LoadingState message={t(locale, 'common.loading')} />
         ) : filteredModules.length === 0 ? (
           <EmptyState title={t(locale, 'store.noModules')} />
         ) : (

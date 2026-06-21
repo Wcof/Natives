@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { useCanvasQuota } from '@/context/ThemeContext';
+import { useHydrated } from '@/hooks/useHydrated';
 
 interface LiquidGlassProps {
   isActive: boolean;
@@ -285,13 +286,11 @@ function ActiveLiquidGlass({
   const saturationRef = useRef(saturation);
   const aberrationIntensityRef = useRef(aberrationIntensity);
   const elasticityRef = useRef(elasticity);
-  const [mounted, setMounted] = useState(false);
+  const mounted = useHydrated();
   const [webGLUnavailable, setWebGLUnavailable] = useState(false);
   const { allowed, release } = useCanvasQuota(mounted && !webGLUnavailable);
 
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  
 
   useEffect(() => {
     blurAmountRef.current = blurAmount;

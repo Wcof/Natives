@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
+import { SPACING, FONT_SIZE, BORDER_RADIUS, SHADOW } from '@/lib/design-tokens';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 
@@ -70,9 +70,9 @@ export default function CrashMonitor() {
       position: 'fixed', bottom: 60, right: 16, zIndex: 100,
       width: 320, maxHeight: 240, overflow: 'auto',
       background: 'var(--vibe-toolbar-bg)',
-      border: '1px solid #f24b4b',
+      border: '1px solid var(--danger)',
       borderRadius: BORDER_RADIUS.lg,
-      boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+      boxShadow: SHADOW.elevated,
     }}>
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',

@@ -3,6 +3,7 @@
 import { type ReactNode } from 'react';
 import { Inbox, AlertTriangle, RefreshCw } from 'lucide-react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { MathCurveLoader } from './MathCurveLoader';
 
 // ── Empty State (TASK-017) ──
 
@@ -41,13 +42,11 @@ interface LoadingStateProps {
 export function LoadingState({ message = 'Loading...' }: LoadingStateProps) {
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      padding: SPACING.xxl,
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      padding: SPACING.xxl, gap: SPACING.md,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.sm }}>
-        <span className="anim-livePulse" style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--accent)' }} />
-        <span style={{ fontSize: FONT_SIZE.md, color: 'var(--text-faint)' }}>{message}</span>
-      </div>
+      <MathCurveLoader size={60} />
+      <span style={{ fontSize: FONT_SIZE.md, color: 'var(--text-faint)', letterSpacing: '0.03em' }}>{message}</span>
     </div>
   );
 }

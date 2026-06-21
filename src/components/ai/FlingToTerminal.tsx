@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Zap } from 'lucide-react';
-import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION, SHADOW } from '@/lib/design-tokens';
 
 interface FlingToTerminalProps {
   /** Ref to the terminal panel element for targeting the flight animation */
@@ -14,7 +14,7 @@ interface FlingToTerminalProps {
 /**
  * Fling to Terminal — select text in file preview, fly it to the terminal.
  *
- * Inspired by fanbox's fling-to-terminal pattern:
+ * Inspired by Natives2's fling-to-terminal pattern:
  * - Shows "Send to Terminal" button near text selection
  * - Flight animation with cubic-bezier curve
  * - Terminal catches with accent glow
@@ -105,14 +105,14 @@ export default function FlingToTerminal({ terminalRef, onFling }: FlingToTermina
             transform: 'translate(-50%, -100%)',
             zIndex: 9999,
             background: 'var(--accent)',
-            color: 'var(--vibe-content-bg)',
+            color: 'var(--accent-ink)',
             border: 'none',
             borderRadius: BORDER_RADIUS.md,
             padding: '4px 10px',
             fontSize: FONT_SIZE.sm,
             fontWeight: 600,
             cursor: 'pointer',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+            boxShadow: SHADOW.elevated,
             animation: 'fadeIn 0.15s ease',
             whiteSpace: 'nowrap',
           }}
@@ -131,7 +131,7 @@ export default function FlingToTerminal({ terminalRef, onFling }: FlingToTermina
             transform: 'translate(-50%, -100%)',
             zIndex: 10000,
             background: 'var(--accent)',
-            color: 'var(--vibe-content-bg)',
+            color: 'var(--accent-ink)',
             borderRadius: BORDER_RADIUS.md,
             padding: '4px 10px',
             fontSize: FONT_SIZE.sm,
@@ -140,7 +140,7 @@ export default function FlingToTerminal({ terminalRef, onFling }: FlingToTermina
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
-            boxShadow: '0 4px 16px var(--accent-soft, #cdf24b44)',
+            boxShadow: '0 4px 16px var(--accent-soft)',
             pointerEvents: 'none',
             transition: 'transform 0.55s cubic-bezier(0.45, 0, 0.2, 1), opacity 0.55s ease',
             // Animate to terminal position

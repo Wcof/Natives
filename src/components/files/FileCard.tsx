@@ -1,36 +1,43 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { Star, Play } from 'lucide-react';
 import { type FileEntry } from '@/types/file';
 import { EXT_BADGES, KIND_COLORS, getBadgeExt } from '@/lib/file-badges';
 import { getFileIcon, getIconColor, FbFolder, FbImage } from '@/lib/file-icons';
+import { useThumbnail } from '@/lib/use-thumbnail';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 
 interface FileCardProps {
   entry: FileEntry;
   onSelect: (entry: FileEntry) => void;
   onContextMenu?: (e: React.MouseEvent, entry: FileEntry) => void;
+  selected?: boolean;
+  onDoubleClick?: () => void;
+  isFavorite?: boolean;
+  onFavoriteToggle?: (entry: FileEntry) => void;
 }
 
 const BADGE_LABELS: Record<string, string> = {
-  node: 'Node', web: 'Web', python: 'Py', rust: 'Rust', go: 'Go', git: 'Git',
+  node: 'node', web: 'web', python: 'py', rust: 'rs', go: 'go', git: 'git',
 };
 
-const BADGE_COLORS: Record<string, { bg: string; text: string }> = {
-  node: { bg: '#33993320', text: '#339933' },
-  web: { bg: '#E44D2620', text: '#E44D26' },
-  python: { bg: '#3776AB20', text: '#3776AB' },
-  rust: { bg: '#DEA58420', text: '#DEA584' },
-  go: { bg: '#00ADD820', text: '#00ADD8' },
-  git: { bg: '#F0503320', text: '#F05033' },
+const BADGE_COLORS: Record<string, { bg: string; text: string; border: string }> = {
+  node: { bg: '#3fb95018', text: '#3fb950', border: '#3fb95066' },
+  web: { bg: 'var(--accent-soft)', text: 'var(--accent)', border: 'color-mix(in srgb, var(--accent) 50%, transparent)' },
+  python: { bg: '#4b8bbe18', text: '#4b8bbe', border: '#4b8bbe66' },
+  rust: { bg: '#d2691e18', text: '#d2691e', border: '#d2691e66' },
+  go: { bg: '#00add818', text: '#00add8', border: '#00add866' },
+  git: { bg: 'transparent', text: 'var(--text-dim)', border: 'var(--border)' },
 };
 
-export default function FileCard({ entry, onSelect, onContextMenu }: FileCardProps) {
+export default function FileCard({ entry, onSelect, onContextMenu, selected, onDoubleClick, isFavorite, onFavoriteToggle }: FileCardProps) {
   const [flash, setFlash] = useState(false);
   const [heat, setHeat] = useState(0);
   const [showRipple, setShowRipple] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const heatDecayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -52,7 +59,10 @@ export default function FileCard({ entry, onSelect, onContextMenu }: FileCardPro
       }
     };
     window.addEventListener('file-flash', handler);
-    return () => window.removeEventListener('file-flash', handler);
+    return () => {
+      window.removeEventListener('file-flash', handler);
+      if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+    };
   }, [entry.path]);
 
   const ext = !entry.isDir ? getBadgeExt(entry.name) : '';
@@ -61,15 +71,10 @@ export default function FileCard({ entry, onSelect, onContextMenu }: FileCardPro
   const renderThumbContent = () => {
     // Image thumbnail with broken-image fallback
     if (entry.kind === 'image' && !entry.isDir) {
-      return (
-        <ImageThumb
-          src={`/api/fs/thumb?path=${encodeURIComponent(entry.path)}&w=160`}
-          alt={entry.name}
-        />
-      );
+      return <ImageThumb entry={entry} size={256} />;
     }
 
-    // Folder icon (fanbox style)
+    // Folder icon (Natives2 style)
     if (entry.isDir) {
       return <FbFolder size={64} />;
     }
@@ -82,22 +87,13 @@ export default function FileCard({ entry, onSelect, onContextMenu }: FileCardPro
           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
           width: 60, height: 60, borderRadius: BORDER_RADIUS.md,
           background: extBadge.bg + '20', color: extBadge.bg,
-          position: 'relative',
         }}>
           <Icon size={44} color={extBadge.bg} />
-          <span style={{
-            position: 'absolute', bottom: 2, right: 4,
-            fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-mono)',
-            color: extBadge.fg, background: extBadge.bg,
-            padding: '0 3px', borderRadius: 2, lineHeight: '13px',
-          }}>
-            {extBadge.label}
-          </span>
         </span>
       );
     }
 
-    // Fanbox-style icon based on file type
+    // Natives2-style icon based on file type
     const Icon = getFileIcon(entry);
     const iconColor = getIconColor(entry);
     return <Icon size={64} color={iconColor} />;
@@ -113,7 +109,22 @@ export default function FileCard({ entry, onSelect, onContextMenu }: FileCardPro
       className={'file-card' + (flash ? ' anim-liveZap' : '') + (isChanged ? ' changed' : '')}
       data-file-entry={entry.path}
       data-heat={heat.toFixed(2)}
-      onClick={() => onSelect(entry)}
+      onClick={() => {
+        // Delay single-click to distinguish from double-click
+        if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = setTimeout(() => {
+          onSelect(entry);
+          clickTimerRef.current = null;
+        }, 200);
+      }}
+      onDoubleClick={() => {
+        // Cancel pending single-click
+        if (clickTimerRef.current) {
+          clearTimeout(clickTimerRef.current);
+          clickTimerRef.current = null;
+        }
+        onDoubleClick?.();
+      }}
       onContextMenu={(e) => onContextMenu?.(e, entry)}
       role="button"
       tabIndex={0}
@@ -122,14 +133,15 @@ export default function FileCard({ entry, onSelect, onContextMenu }: FileCardPro
         padding: SPACING.md,
         borderRadius: 'var(--radius, 4px)',
         cursor: 'pointer',
-        border: `1px solid ${isChanged ? 'var(--accent)' : 'var(--vibe-btn-border)'}`,
-        background: flash ? 'var(--accent-soft)' : 'var(--vibe-toolbar-bg)',
+        border: `1px solid ${selected ? 'var(--accent)' : isChanged ? 'var(--accent)' : 'var(--vibe-btn-border)'}`,
+        background: selected ? 'var(--accent-soft)' : flash ? 'var(--accent-soft)' : 'transparent',
         boxShadow: isChanged
           ? `0 0 calc(6px + 20px * ${heat}) color-mix(in srgb, var(--accent) calc(55% * ${heat}), transparent)`
-          : 'none',
-        transition: 'background 0.12s, border-color 0.12s, transform 0.12s, box-shadow 0.3s',
+          : selected ? '0 0 0 1px var(--accent)' : 'none',
+        transition: 'background 0.12s, border-color 0.12s, transform 0.12s, box-shadow 0.3s, opacity 0.12s',
         position: 'relative',
         overflow: 'hidden',
+        opacity: entry.hidden ? 0.5 : 1,
         animation: isChanged ? 'changedBreath 2.2s ease-in-out infinite' : undefined,
       }}
       onMouseEnter={(e) => {
@@ -138,18 +150,63 @@ export default function FileCard({ entry, onSelect, onContextMenu }: FileCardPro
         (e.currentTarget as HTMLElement).style.transform = 'translateY(-1px)';
       }}
       onMouseLeave={(e) => {
-        (e.currentTarget as HTMLElement).style.background = isChanged ? 'var(--accent-soft)' : 'var(--vibe-toolbar-bg)';
-        (e.currentTarget as HTMLElement).style.borderColor = isChanged ? 'var(--accent)' : 'var(--vibe-btn-border)';
+        (e.currentTarget as HTMLElement).style.background = selected ? 'var(--accent-soft)' : isChanged ? 'var(--accent-soft)' : 'transparent';
+        (e.currentTarget as HTMLElement).style.borderColor = selected ? 'var(--accent)' : isChanged ? 'var(--accent)' : 'var(--vibe-btn-border)';
         (e.currentTarget as HTMLElement).style.transform = 'translateY(0)';
       }}
     >
       {/* Thumbnail / Icon */}
-      <div style={{
+      <div className="file-card-thumb" style={{
         width: '100%', aspectRatio: '1', display: 'flex', alignItems: 'center', justifyContent: 'center',
         fontSize: 56, marginBottom: SPACING.sm, borderRadius: 'calc(var(--radius, 4px) - 2px)',
         background: 'var(--vibe-content-bg)', overflow: 'hidden', position: 'relative',
       }}>
         {renderThumbContent()}
+
+        {/* Combined badges — top-right of icon area: project type + file extension */}
+        {(badge && badgeStyle || extBadge) && (
+          <div style={{
+            position: 'absolute', top: 4, right: 4, zIndex: 2,
+            display: 'flex', flexDirection: 'column', gap: 3,
+          }}>
+            {badge && badgeStyle && (
+              <div style={{
+                fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 700,
+                lineHeight: 1, letterSpacing: '0.02em', textTransform: 'lowercase',
+                padding: '2px 4px', borderRadius: 4,
+                background: 'color-mix(in srgb, var(--vibe-content-bg) 78%, transparent)',
+                backdropFilter: 'blur(3px)',
+                WebkitBackdropFilter: 'blur(3px)',
+                color: badgeStyle.text, border: `1px solid ${badgeStyle.border}`,
+                alignSelf: 'flex-end',
+              }}>
+                {BADGE_LABELS[badge]}
+              </div>
+            )}
+            {extBadge && (
+              <div style={{
+                fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 700,
+                lineHeight: 1, padding: '2px 4px', borderRadius: 4,
+                color: extBadge.fg, background: extBadge.bg,
+                alignSelf: 'flex-end',
+              }}>
+                {extBadge.label}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Video play badge — centered frosted circle */}
+        {entry.kind === 'video' && !entry.isDir && (
+          <span style={{
+            position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
+            width: 34, height: 34, borderRadius: '50%',
+            background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            backdropFilter: 'blur(2px)', pointerEvents: 'none',
+          }}>
+            <Play size={16} fill="#fff" color="#fff" />
+          </span>
+        )}
 
         {/* Edit ripple — expanding ring from icon center */}
         {showRipple && (
@@ -171,19 +228,30 @@ export default function FileCard({ entry, onSelect, onContextMenu }: FileCardPro
         {entry.name}
       </div>
 
+      {/* Favorite star — below filename, hidden until hover */}
+      <button
+        type="button"
+        className="file-card-fav"
+        data-fav={isFavorite ? 'on' : 'off'}
+        onClick={(e) => {
+          e.stopPropagation();
+          onFavoriteToggle?.(entry);
+        }}
+        title={isFavorite ? '取消收藏' : '收藏'}
+        style={{
+          position: 'absolute', top: 6, right: 6,
+          color: isFavorite ? 'var(--yellow, #e3b341)' : 'var(--text-faint)',
+          cursor: 'pointer',
+          background: 'none', border: 'none', padding: 0,
+          lineHeight: 0,
+        }}
+      >
+        <Star size={15} fill={isFavorite ? 'currentColor' : 'none'} />
+      </button>
+
       {/* Symlink indicator */}
       {entry.symlink && (
         <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--vibe-btn-text)' }}>→ {entry.symlink}</div>
-      )}
-
-      {/* Badge */}
-      {badge && badgeStyle && (
-        <div style={{
-          position: 'absolute', top: 8, right: 8, padding: '1px 5px', borderRadius: BORDER_RADIUS.sm,
-          fontSize: 9, fontWeight: 600, background: badgeStyle.bg, color: badgeStyle.text, lineHeight: '16px',
-        }}>
-          {BADGE_LABELS[badge]}
-        </div>
       )}
 
       {/* Changed count badge — shows when heat > 0 */}
@@ -210,18 +278,25 @@ export default function FileCard({ entry, onSelect, onContextMenu }: FileCardPro
   );
 }
 
-// ── Image Thumbnail with broken-image fallback ──
+// ── Image Thumbnail with loading + error states ──
 
-function ImageThumb({ src, alt }: { src: string; alt: string }) {
-  const [error, setError] = useState(false);
-  if (error) {
-    return <FbImage size={64} />;
+function ImageThumb({ entry, size }: { entry: FileEntry; size: number }) {
+  const { dataUrl, loading, error } = useThumbnail(entry.path, size);
+
+  if (loading) {
+    // 加载中显示文件图标，避免空白闪烁
+    const Icon = getFileIcon(entry);
+    const tint = getIconColor(entry);
+    // eslint-disable-next-line react-hooks/static-components
+    return <Icon size={size} color={tint} />;
+  }
+  if (error || !dataUrl) {
+    return <FbImage size={size} />;
   }
   return (
     <img
-      src={src}
-      alt={alt}
-      onError={() => setError(true)}
+      src={dataUrl}
+      alt={entry.name}
       style={{ width: '100%', height: '100%', objectFit: 'cover' }}
       loading="lazy"
     />

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
 import type {
   ButtonHTMLAttributes,
   DragEvent,
@@ -23,7 +23,9 @@ import {
   X,
   Zap,
 } from 'lucide-react';
+import * as LucideIcons from 'lucide-react';
 import { t, type Locale } from '@/i18n';
+import { BUILTIN_TOOLS, seedAllBuiltinTools } from '@/lib/builtin-tools';
 
 interface ModuleManifest {
   id: string;
@@ -73,6 +75,11 @@ const QUICK_ACCESS_ITEMS: readonly QuickAccessItem[] = [
   },
 ];
 
+interface FavoriteItem {
+  path: string;
+  addedAt: number;
+}
+
 interface SidebarProps {
   isCollapsed: boolean;
   onToggle: () => void;
@@ -95,6 +102,7 @@ function getNavigationId(activeModuleId?: string): string | null {
   if (activeModuleId === 'workshop' || activeModuleId === '__workshop__') return '__workshop__';
   if (activeModuleId.startsWith('module:')) return activeModuleId;
   if (activeModuleId.startsWith('__files__:')) return activeModuleId;
+  if (activeModuleId.startsWith('builtin:')) return activeModuleId;
   // Other views (files/ai/tools/modules/store) are not sidebar entries —
   // returning null keeps the previous highlight from sticking after navigation.
   return null;
@@ -157,13 +165,44 @@ export default function Sidebar({
 }: SidebarProps) {
   const [modules, setModules] = useState<ModuleItem[]>([]);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
-  const [favorites, setFavorites] = useState<string[]>([]);
+  const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
+  const [favoritesExpanded, setFavoritesExpanded] = useState(false);
   const [activeNavigationId, setActiveNavigationId] = useState<string | null>(
     () => getNavigationId(activeModuleId),
   );
 
+  // Builtin tool enabled state (from DB)
+  const [enabledTools, setEnabledTools] = useState<Array<{ id: string; driver: string }>>([]);
+
+  const loadEnabledTools = useCallback(async () => {
+    try {
+      const api = window.nativesAPI;
+      if (!api?.builtinTool) return;
+      // Seed all tools first
+      await seedAllBuiltinTools();
+      const list = await api.builtinTool.list();
+      setEnabledTools(
+        list
+          .filter((t: { enabled: boolean }) => t.enabled)
+          .map((t: { id: string; driver: string }) => ({ id: t.id, driver: t.driver })),
+      );
+    } catch { /* browser dev mode */ }
+  }, []);
+
   useEffect(() => {
-    setActiveNavigationId(getNavigationId(activeModuleId));
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadEnabledTools();
+    let unsub: (() => void) | undefined;
+    try {
+      if (window.nativesAPI?.onDbStateChanged) {
+        unsub = window.nativesAPI.onDbStateChanged(() => loadEnabledTools());
+      }
+    } catch { /* browser dev mode */ }
+    return () => { unsub?.(); };
+  }, [loadEnabledTools]);
+
+  useEffect(() => {
+    startTransition(() => { setActiveNavigationId(getNavigationId(activeModuleId)); });
   }, [activeModuleId]);
 
   const selectNavigation = useCallback(
@@ -177,13 +216,22 @@ export default function Sidebar({
   const loadFavorites = useCallback(async () => {
     try {
       const stored = await window.nativesAPI?.db?.get('settings:favorites');
-      setFavorites(stored ? JSON.parse(stored as string) : []);
+      if (!stored) { setFavorites([]); return; }
+      const parsed = JSON.parse(stored as string);
+      // Migrate old format: string[] → FavoriteItem[]
+      if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
+        const migrated: FavoriteItem[] = (parsed as string[]).map((p, i) => ({ path: p, addedAt: Date.now() + i }));
+        setFavorites(migrated);
+      } else {
+        setFavorites(parsed as FavoriteItem[]);
+      }
     } catch {
       setFavorites([]);
     }
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadFavorites();
     const handleFavoritesChanged = () => void loadFavorites();
     window.addEventListener('favorites-changed', handleFavoritesChanged);
@@ -381,14 +429,14 @@ export default function Sidebar({
       data-sidebar
     >
       {/* ── 窗口控制 + Brand Header ── */}
-      <div className="shrink-0" data-tauri-drag-region style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
+      <div className="shrink-0" data-tauri-drag-region >
         {/* 窗口控制按钮行 */}
       <div className="flex items-center justify-start gap-[6px] px-3 pt-2.5 pb-1">
         {/* 关闭 — macOS 红圆 */}
         <button
           onClick={() => handleWindowAction('close')}
           className="group flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--mac-red)] hover:bg-[var(--mac-red-hover)] hover:shadow-[0_0_6px_var(--mac-red-glow)] transition-all"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+         
           aria-label="关闭"
           title="关闭"
         >
@@ -398,7 +446,7 @@ export default function Sidebar({
         <button
           onClick={() => handleWindowAction('minimize')}
           className="group flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--mac-yellow)] hover:bg-[var(--mac-yellow-hover)] hover:shadow-[0_0_6px_var(--mac-yellow-glow)] transition-all"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+         
           aria-label="最小化"
           title="最小化"
         >
@@ -430,7 +478,7 @@ export default function Sidebar({
               }
             }}
             className="group flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--mac-green)] hover:bg-[var(--mac-green-hover)] hover:shadow-[0_0_6px_var(--mac-green-glow)] transition-all"
-            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+           
             aria-label={isMaximized ? '还原' : '最大化'}
             title={isMaximized ? '还原' : '最大化'}
           >
@@ -446,7 +494,7 @@ export default function Sidebar({
             {zoomMenuOpen && zoomMenuPos && (
               <div
                 className="fixed z-50 min-w-[180px] rounded-xl border border-[var(--vibe-btn-border)] bg-[var(--vibe-toolbar-bg)] backdrop-blur-2xl p-1.5 shadow-2xl"
-                style={{ left: zoomMenuPos.x, top: zoomMenuPos.y, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                style={{ left: zoomMenuPos.x, top: zoomMenuPos.y }}
               >
                 <p className="px-2.5 pb-1 pt-0.5 text-[0.625rem] font-medium uppercase tracking-[0.06em] text-[var(--text-faint)]">
                   移动与调整大小
@@ -462,7 +510,7 @@ export default function Sidebar({
                       key={opt.id}
                       data-tile-action={opt.id}
                       className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-[0.625rem] text-[var(--text-dim)] hover:bg-[var(--vibe-btn-bg)] hover:text-[var(--text)] transition-all"
-                      style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                     
                       title={opt.label}
                     >
                       {opt.icon}
@@ -485,7 +533,7 @@ export default function Sidebar({
                       key={opt.id}
                       data-tile-action={opt.id}
                       className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-[0.625rem] text-[var(--text-dim)] hover:bg-[var(--vibe-btn-bg)] hover:text-[var(--text)] transition-all"
-                      style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                     
                       title={opt.label}
                     >
                       {opt.icon}
@@ -499,7 +547,7 @@ export default function Sidebar({
         </div>
 
         {/* Brand Header */}
-        <div className="flex items-center gap-3 px-4 pb-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+        <div className="flex items-center gap-3 px-4 pb-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--vibe-search-border)] bg-[var(--vibe-search-bg)]">
             <Zap size={18} className="text-[var(--vibe-nav-icon)]" />
           </div>
@@ -513,14 +561,14 @@ export default function Sidebar({
       {/* 中间可滚动区域 */}
       <div className="flex-1 overflow-y-auto min-h-0">
         {/* Search Capsule */}
-        <div className="px-4 pb-3" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+        <div className="px-4 pb-3">
           <div className="flex h-10 items-center gap-2 rounded-xl border border-[var(--vibe-search-border)] bg-[var(--vibe-search-bg)] px-3">
             <Search size={14} className="text-[var(--vibe-search-placeholder)] shrink-0" />
             <input
               type="text"
               placeholder={t(locale, 'sidebar.searchPlaceholder')}
               className="min-w-0 flex-1 bg-transparent text-sm text-[var(--vibe-brand-text)] outline-none focus-visible:outline-none placeholder:text-[var(--vibe-search-placeholder)]"
-              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+             
             />
             <span className="shrink-0 rounded-md bg-[var(--vibe-btn-bg)] px-1.5 py-0.5 text-[0.6875rem] font-medium text-[var(--vibe-search-placeholder)]">
               ⌘K
@@ -557,19 +605,62 @@ export default function Sidebar({
           })}
         </div>
 
-        {/* Modules section (existing modules from scanning) */}
-        {modules.length > 0 && (
-          <>
-            <div className="px-4 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--vibe-section-header)]">
-              {t(locale, 'nav.modules')}
+        {/* Favorites section — same level as Quick Access */}
+        <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--vibe-section-header)]">
+          {t(locale, 'sidebar.favorites')}
+        </div>
+        <div className="mb-3 flex flex-col gap-0.5 px-3">
+          {favorites.length > 0 ? (() => {
+            const sorted = [...favorites].sort((a, b) => b.addedAt - a.addedAt);
+            const visible = favoritesExpanded ? sorted : sorted.slice(0, 3);
+            return (
+              <>
+                <div className={favoritesExpanded ? 'max-h-48 overflow-y-auto flex flex-col gap-0.5' : 'flex flex-col gap-0.5'}>
+                  {visible.map((fav) => {
+                    const navigationId = `__files__:${fav.path}`;
+                    const label = fav.path.split('/').pop() || fav.path;
+                    return (
+                      <SidebarNavItem
+                        key={fav.path}
+                        isActive={activeNavigationId === navigationId}
+                        icon={<Star size={15} />}
+                        label={label}
+                        onClick={() => selectNavigation(navigationId, navigationId)}
+                        title={fav.path}
+                      />
+                    );
+                  })}
+                </div>
+                {favorites.length > 3 && (
+                  <button
+                    type="button"
+                    onClick={() => setFavoritesExpanded((prev) => !prev)}
+                    className="flex w-full items-center gap-2 rounded-lg px-3 py-1 text-[0.75rem] text-[var(--text-faint)] hover:text-[var(--text-dim)] hover:bg-[var(--vibe-btn-hover-bg)] transition-all"
+                  >
+                    <span>{favoritesExpanded ? t(locale, 'sidebar.showLess') : t(locale, 'sidebar.showMore', { count: String(favorites.length - 3) })}</span>
+                  </button>
+                )}
+              </>
+            );
+          })() : (
+            <div className="px-3 py-2 text-xs text-[var(--text-faint)] italic">
+              {t(locale, 'sidebar.noFavorites')}
             </div>
-            <div
-              className="flex flex-col gap-0.5 px-3"
-              role="listbox"
-              aria-label={t(locale, 'nav.modules')}
-              aria-live="polite"
-              onDragEnd={() => void handleDragEnd()}
-            >
+          )}
+        </div>
+
+        {/* Modules section — same level as Quick Access */}
+        <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--vibe-section-header)]">
+          {t(locale, 'nav.modules')}
+        </div>
+        {modules.length > 0 ? (
+          <div
+            className="mb-3 flex flex-col gap-0.5 px-3"
+            role="listbox"
+            aria-label={t(locale, 'nav.modules')}
+            aria-live="polite"
+            onDragEnd={() => void handleDragEnd()}
+          >
               {modules.map((module, index) => {
                 const moduleId = getModuleId(module);
                 const moduleName =
@@ -580,7 +671,7 @@ export default function Sidebar({
                 const navigationId = `module:${moduleId}`;
                 return (
                   <SidebarNavItem
-                    key={moduleId}
+                    key={`${moduleId}-${index}`}
                     isActive={activeNavigationId === navigationId}
                     icon={
                       moduleIcon ? (
@@ -601,33 +692,42 @@ export default function Sidebar({
                 );
               })}
             </div>
-          </>
+        ) : (
+          <div className="mb-3 px-3 py-2 text-xs text-[var(--text-faint)] italic">
+            {t(locale, 'sidebar.noModules')}
+          </div>
         )}
 
-        {/* Favorites */}
-        {favorites.length > 0 && (
+        {/* Builtin tools — dynamically rendered from registry */}
+        {enabledTools.length > 0 && (
           <>
-            <div className="px-4 pb-1 pt-3 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--vibe-section-header)]">
-              {t(locale, 'sidebar.favorites')}
+            <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--vibe-section-header)]">
+              {t(locale, 'nav.builtinTools')}
             </div>
-            <div className="flex flex-col gap-0.5 px-3">
-              {favorites.map((favoritePath) => {
-                const navigationId = `__files__:${favoritePath}`;
-                const label = favoritePath.split('/').pop() || favoritePath;
+            <div className="mb-3 flex flex-col gap-0.5 px-3">
+              {enabledTools.map((et) => {
+                const toolDef = BUILTIN_TOOLS.find((t) => t.id === et.id);
+                if (!toolDef) return null;
+                const navigationId = `builtin:${et.id}`;
+                const toolLabel = locale.startsWith('zh') ? toolDef.label.zh : toolDef.label.en;
+                // Dynamic icon lookup from lucide
+                const IconComp = (LucideIcons as unknown as Record<string, React.ComponentType<{ size?: number; className?: string }>>)[toolDef.icon];
                 return (
                   <SidebarNavItem
-                    key={favoritePath}
+                    key={et.id}
                     isActive={activeNavigationId === navigationId}
-                    icon={<Star size={15} />}
-                    label={label}
+                    icon={IconComp ? <IconComp size={15} /> : <Square size={15} />}
+                    label={toolLabel}
                     onClick={() => selectNavigation(navigationId, navigationId)}
-                    title={favoritePath}
+                    title={toolLabel}
                   />
                 );
               })}
             </div>
           </>
         )}
+
+        {/* Bottom spacer */}
       </div>
 
       {/* 底部固定区域：通知、设置、创意工坊 */}

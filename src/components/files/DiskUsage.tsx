@@ -30,10 +30,12 @@ export default function DiskUsage({ dirPath, onNavigate }: DiskUsageProps) {
     async function load() {
       setLoading(true);
       try {
-        const res = await fetch(`/api/fs/du?path=${encodeURIComponent(dirPath)}`);
-        if (res.ok) {
-          const data = await res.json();
+        const api = window.nativesAPI;
+        if (api?.disk?.usage) {
+          const data = await api.disk.usage(dirPath);
           setItems(Array.isArray(data) ? data : []);
+        } else {
+          console.warn('[DiskUsage] disk.usage API not available (Tauri IPC required)');
         }
       } catch { /* ignore */ }
       setLoading(false);

@@ -14,7 +14,7 @@ const THUMBNAILABLE_EXTENSIONS = new Set([...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIO
 let CACHE_DIR = path.join(os.homedir(), '.natives', 'thumbs');
 const MAX_CACHE_SIZE = 400 * 1024 * 1024; // 400MB
 
-// ── In-Flight Deduplication（对标 fanbox — 防止并发重复生成）──
+// ── In-Flight Deduplication（对标 Natives2 — 防止并发重复生成）──
 const thumbInflight = new Map<string, Promise<{ buffer: Buffer; contentType: string; cached: boolean } | null>>();
 
 // ── Configuration ──

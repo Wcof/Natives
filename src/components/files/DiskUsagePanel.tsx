@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { startTransition, useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { t, type Locale } from '@/i18n';
 import { X } from 'lucide-react';
 import { FbFolder, FbText } from '@/lib/file-icons';
 import { webFsClient } from '@/lib/web-fs-client';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
+import { useHydrated } from '@/hooks/useHydrated';
 
 interface DiskUsageItem {
   name: string;
@@ -28,12 +29,10 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
   const [currentPath, setCurrentPath] = useState(dirPath);
   const [locale, setLocale] = useState<Locale>('zh');
   const [error, setError] = useState<string | null>(null);
-  const [mounted, setMounted] = useState(false);
+  const mounted = useHydrated();
   const [elapsed, setElapsed] = useState(0);
 
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  
 
   useEffect(() => {
     window.nativesAPI?.getLocale?.().then((l) => { if (l === 'en') setLocale('en'); }).catch(() => {});
@@ -51,7 +50,7 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
   // Elapsed timer while loading
   useEffect(() => {
     if (!loading) return;
-    setElapsed(0);
+    startTransition(() => { setElapsed(0); });
     const id = setInterval(() => setElapsed((s) => s + 1), 1000);
     return () => clearInterval(id);
   }, [loading]);
@@ -81,6 +80,7 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load(currentPath);
   }, [currentPath, load]);
 

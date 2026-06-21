@@ -1,9 +1,12 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
-  output: 'standalone',
-  distDir: '.next',
-  // Tauri: no serverExternalPackages needed — SQLite and PTY are in Rust backend
+  output: 'export',
+  distDir: 'out',
+  // Fix "multiple lockfiles" warning: set root to the project directory
+  outputFileTracingRoot: process.cwd(),
+  // Tauri: static export, no server needed
+  trailingSlash: true,
 };
 
 export default nextConfig;

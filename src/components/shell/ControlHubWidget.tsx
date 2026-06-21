@@ -173,9 +173,8 @@ export default function ControlHubWidget() {
     setShowBlobs(false);
   };
 
-  // Window draggability helper styles
-  const dragStyle: React.CSSProperties = { WebkitAppRegion: 'drag' } as any;
-  const noDragStyle: React.CSSProperties = { WebkitAppRegion: 'no-drag' } as any;
+  // Window draggability helper styles (Tauri v2 uses data-tauri-drag-region attribute)
+  const dragAttr = { 'data-tauri-drag-region': '' as string } as React.HTMLAttributes<HTMLDivElement>;
 
   return (
     <div
@@ -234,12 +233,12 @@ export default function ControlHubWidget() {
       >
         <div
           className="flex flex-col text-white"
+          data-tauri-drag-region
           style={{
             width: '390px',
             minHeight: '490px',
             padding: '24px',
             boxSizing: 'border-box',
-            ...dragStyle,
           }}
         >
           {/* Header */}
@@ -268,7 +267,7 @@ export default function ControlHubWidget() {
           {/* Segmented Tab Bar */}
           <div
             className="flex p-1 bg-black/20 rounded-xl mb-5 border border-white/5 backdrop-blur-md"
-            style={noDragStyle}
+            
           >
             <button
               onClick={() => setActiveTab('control')}
@@ -295,7 +294,7 @@ export default function ControlHubWidget() {
           </div>
 
           {/* Tab Contents */}
-          <div className="flex-1 flex flex-col justify-between" style={noDragStyle}>
+          <div className="flex-1 flex flex-col justify-between" >
             {activeTab === 'control' ? (
               // --- CONTROL HUB VIEW ---
               <div className="flex flex-col gap-4 animate-fade-in">

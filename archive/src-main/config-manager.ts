@@ -51,7 +51,7 @@ export function updateConfig<T>(
       }
     });
   });
-  // Keep chain alive on error（对标 fanbox 的 _cfgChain 模式）
+  // Keep chain alive on error（对标 Natives2 的 _cfgChain 模式）
   // Without this, a rejected mutation would break all subsequent updateConfig calls.
   cfgChain = run.catch(() => {});
   return run;

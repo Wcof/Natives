@@ -28,3 +28,4 @@ pub mod watch_preview;
 pub mod wechat;
 pub mod widget;
 pub mod window;
+pub mod plugins;

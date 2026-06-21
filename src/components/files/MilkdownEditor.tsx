@@ -61,7 +61,7 @@ export default function MilkdownEditor({ content, onSave }: MilkdownEditorProps)
         });
 
         await editor.create();
-        if (disposed) { try { editor.destroy(); } catch {} return; }
+        if (disposed) { try { editor.destroy(); } catch { /* no-op */ } return; }
 
         editorRef.current = editor;
         getValueRef.current = () => editor.getMarkdown();
@@ -99,7 +99,7 @@ export default function MilkdownEditor({ content, onSave }: MilkdownEditorProps)
       disposed = true;
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       if (editorRef.current) {
-        try { editorRef.current.destroy(); } catch {}
+        try { editorRef.current.destroy(); } catch { /* no-op */ }
         editorRef.current = null;
       }
     };

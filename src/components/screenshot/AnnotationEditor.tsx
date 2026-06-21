@@ -152,6 +152,7 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
 
   return (
     <div
+    // eslint-disable-next-line react-hooks/refs
       ref={trap.dialogRef}
       role="dialog"
       aria-modal="true"
@@ -325,6 +326,7 @@ function drawAction(ctx: CanvasRenderingContext2D, action: DrawAction) {
         return;
       }
       ctx.beginPath();
+      // eslint-disable-next-line no-case-declarations
       const first = action.points[0]!;
       ctx.moveTo(first.x, first.y);
       for (let i = 1; i < action.points.length; i++) {

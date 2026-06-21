@@ -41,7 +41,7 @@ export function shouldIgnoreEvent(
   return false;
 }
 
-// ── Stat-Based Cache（对标 fanbox 的 mtime+size 缓存） ──
+// ── Stat-Based Cache（对标 Natives2 的 mtime+size 缓存） ──
 
 /** 文件元数据缓存 — 跳过 metadata-only 的 FSEvents */
 const statCache = new Map<string, { size: number; mtimeMs: number }>();
@@ -51,7 +51,7 @@ const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const DEBOUNCE_MS = 300;
 
 /**
- * 检查文件内容是否真正变更（stat-based，对标 fanbox）
+ * 检查文件内容是否真正变更（stat-based，对标 Natives2）
  * 返回 true 表示文件未变更（应跳过）
  */
 function isMetadataOnly(filePath: string): boolean {
@@ -102,7 +102,7 @@ type WatchCallback = (event: FileChangeEvent) => void;
 /**
  * 启动文件监控
  *
- * 噪声过滤策略（对标 fanbox + CodePilot）：
+ * 噪声过滤策略（对标 Natives2 + CodePilot）：
  * 1. 文件名模式过滤（隐藏文件、sidecar、node_modules）
  * 2. Stat-based 内容变更检测（mtime+size，跳过 metadata-only FSEvents）
  * 3. Per-file 防抖（300ms，合并快速连续事件）

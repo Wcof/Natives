@@ -5,7 +5,7 @@ import { applyTheme } from '@/lib/theme-engine';
 import { applyLiquidGlassConfig } from '@/context/ThemeContext';
 import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
-import { X, Check, Star, Edit2 } from 'lucide-react';
+import { X, Check, Star, Edit2, Download, RefreshCw, Trash2, ExternalLink, AlertCircle, Terminal } from 'lucide-react';
 import { FONT_SIZE, SPACING } from '@/lib/design-tokens';
 
 interface EnvProfile {
@@ -57,18 +57,159 @@ export default function SettingsPage() {
   const [deleteProfileTarget, setDeleteProfileTarget] = useState<string | null>(null);
   const [deleteVarTarget, setDeleteVarTarget] = useState<string | null>(null);
 
-  const [activeTab, setActiveTab] = useState<'theme' | 'visual' | 'env'>('theme');
+  const [activeTab, setActiveTab] = useState<'theme' | 'visual' | 'env' | 'plugins'>('theme');
 
   const TABS = [
     { id: 'theme' as const, label: t(locale, 'settings.tabTheme') },
     { id: 'visual' as const, label: t(locale, 'settings.tabVisual') },
     { id: 'env' as const, label: t(locale, 'settings.tabEnv') },
+    { id: 'plugins' as const, label: t(locale, 'settings.tabPlugins') },
   ];
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
   }, []);
+
+  // --- Plugins State ---
+  const [pluginVersions, setPluginVersions] = useState<Record<string, string | null>>({
+    rtk: null,
+    ccusage: null,
+    codegraph: null,
+  });
+  const [detecting, setDetecting] = useState<Record<string, boolean>>({
+    rtk: false,
+    ccusage: false,
+    codegraph: false,
+  });
+  const [installing, setInstalling] = useState<Record<string, 'installing' | 'uninstalling' | 'updating' | null>>({
+    rtk: null,
+    ccusage: null,
+    codegraph: null,
+  });
+  const [installLogs, setInstallLogs] = useState<Record<string, string>>({
+    rtk: '',
+    ccusage: '',
+    codegraph: '',
+  });
+  const [activeLogPlugin, setActiveLogPlugin] = useState<string | null>(null);
+
+  const detectPlugin = useCallback(async (name: string) => {
+    setDetecting(prev => ({ ...prev, [name]: true }));
+    try {
+      const api = window.nativesAPI;
+      if (api?.plugins?.detect) {
+        const version = await api.plugins.detect(name);
+        setPluginVersions(prev => ({ ...prev, [name]: version }));
+      }
+    } catch (err) {
+      console.error(`Failed to detect plugin ${name}:`, err);
+    } finally {
+      setDetecting(prev => ({ ...prev, [name]: false }));
+    }
+  }, []);
+
+  const detectAllPlugins = useCallback(async () => {
+    await Promise.all([
+      detectPlugin('rtk'),
+      detectPlugin('ccusage'),
+      detectPlugin('codegraph'),
+    ]);
+  }, [detectPlugin]);
+
+  useEffect(() => {
+    if (activeTab === 'plugins') {
+      detectAllPlugins();
+    }
+  }, [activeTab, detectAllPlugins]);
+
+  // Bind Tauri install/uninstall logs and complete events
+  useEffect(() => {
+    let unlistenLog: (() => void) | undefined;
+    let unlistenInstallComplete: (() => void) | undefined;
+    let unlistenUninstallComplete: (() => void) | undefined;
+
+    async function setupListeners() {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        
+        const unsubLog = await listen<{ name: string; log: string }>('plugin:install-log', (event) => {
+          const { name, log } = event.payload;
+          setInstallLogs(prev => ({
+            ...prev,
+            [name]: (prev[name] || '') + log
+          }));
+        });
+        unlistenLog = unsubLog;
+
+        const unsubInstall = await listen<{ name: string; success: boolean; error?: string }>('plugin:install-complete', (event) => {
+          const { name, success, error } = event.payload;
+          setInstalling(prev => ({ ...prev, [name]: null }));
+          if (success) {
+            showToast(t(locale, 'settings.plugins.success').replace('{name}', name));
+          } else {
+            showToast(t(locale, 'settings.plugins.failed').replace('{name}', name).replace('{error}', error || ''));
+          }
+          detectPlugin(name);
+        });
+        unlistenInstallComplete = unsubInstall;
+
+        const unsubUninstall = await listen<{ name: string; success: boolean; error?: string }>('plugin:uninstall-complete', (event) => {
+          const { name, success, error } = event.payload;
+          setInstalling(prev => ({ ...prev, [name]: null }));
+          if (success) {
+            showToast(t(locale, 'settings.plugins.success').replace('{name}', name));
+          } else {
+            showToast(t(locale, 'settings.plugins.failed').replace('{name}', name).replace('{error}', error || ''));
+          }
+          detectPlugin(name);
+        });
+        unlistenUninstallComplete = unsubUninstall;
+      } catch (err) {
+        console.error('Failed to bind plugin installation listeners:', err);
+      }
+    }
+
+    setupListeners();
+
+    return () => {
+      if (unlistenLog) unlistenLog();
+      if (unlistenInstallComplete) unlistenInstallComplete();
+      if (unlistenUninstallComplete) unlistenUninstallComplete();
+    };
+  }, [detectPlugin, locale, showToast]);
+
+  const handleInstallPlugin = useCallback(async (name: string, isUpdate = false) => {
+    setInstalling(prev => ({ ...prev, [name]: isUpdate ? 'updating' : 'installing' }));
+    setInstallLogs(prev => ({ ...prev, [name]: '' }));
+    setActiveLogPlugin(name);
+    try {
+      const api = window.nativesAPI;
+      if (api?.plugins?.install) {
+        await api.plugins.install(name);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(t(locale, 'settings.plugins.failed').replace('{name}', name).replace('{error}', msg));
+      setInstalling(prev => ({ ...prev, [name]: null }));
+    }
+  }, [locale, showToast]);
+
+  const handleUninstallPlugin = useCallback(async (name: string) => {
+    setInstalling(prev => ({ ...prev, [name]: 'uninstalling' }));
+    setInstallLogs(prev => ({ ...prev, [name]: '' }));
+    setActiveLogPlugin(name);
+    try {
+      const api = window.nativesAPI;
+      if (api?.plugins?.uninstall) {
+        await api.plugins.uninstall(name);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(t(locale, 'settings.plugins.failed').replace('{name}', name).replace('{error}', msg));
+      setInstalling(prev => ({ ...prev, [name]: null }));
+    }
+  }, [locale, showToast]);
 
   // Load persisted settings on mount
   useEffect(() => { // eslint-disable-line react-hooks/rules-of-hooks
@@ -808,6 +949,264 @@ export default function SettingsPage() {
         </section>
         </div>
         {/* ⇡ Tab 2 end ⇡ */}
+
+        {/* Tab 4: 插件设置 */}
+        <div style={{ display: activeTab === 'plugins' ? 'flex' : 'none', flexDirection: 'column', gap: 28 }}>
+          <section style={sectionCardStyle}>
+            <div style={sectionTitleStyle}>
+              {t(locale, 'settings.tabPlugins')}
+            </div>
+            
+            {/* Glassmorphism Plugins Table */}
+            <div style={{
+              overflowX: 'auto',
+              borderRadius: 'calc(var(--vibe-content-radius, 12px) - 2px)',
+              border: '1px solid var(--vibe-btn-border, var(--border))',
+              background: 'rgba(255, 255, 255, 0.02)',
+              backdropFilter: 'blur(8px)',
+              WebkitBackdropFilter: 'blur(8px)',
+            }}>
+              <table style={{
+                width: '100%',
+                borderCollapse: 'collapse',
+                textAlign: 'left',
+                fontSize: FONT_SIZE.md,
+                color: 'var(--text)',
+              }}>
+                <thead>
+                  <tr style={{
+                    borderBottom: '1px solid var(--vibe-btn-border, var(--border))',
+                    background: 'rgba(255, 255, 255, 0.03)',
+                  }}>
+                    <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text-dim)' }}>
+                      {t(locale, 'settings.plugins.name')}
+                    </th>
+                    <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text-dim)' }}>
+                      {t(locale, 'settings.plugins.description')}
+                    </th>
+                    <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text-dim)' }}>
+                      {t(locale, 'settings.plugins.version')}
+                    </th>
+                    <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text-dim)', textAlign: 'right' }}>
+                      {t(locale, 'settings.plugins.actions')}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    {
+                      id: 'rtk',
+                      name: 'RTK',
+                      url: 'https://github.com/rtk-ai/rtk',
+                      desc: locale === 'zh' 
+                        ? 'AI Native CLI 辅助工具，用于节省 Token 并追踪执行过程。' 
+                        : 'AI Native CLI helper for token savings and execution tracing.',
+                    },
+                    {
+                      id: 'ccusage',
+                      name: 'ccusage',
+                      url: 'https://github.com/ccusage/ccusage',
+                      desc: locale === 'zh'
+                        ? 'AI 编码助手的 Token 使用量及估算成本计算器。'
+                        : 'Token usage and estimated cost calculator for AI coding agents.',
+                    },
+                    {
+                      id: 'codegraph',
+                      name: 'CodeGraph',
+                      url: 'https://github.com/colbymchenry/codegraph',
+                      desc: locale === 'zh'
+                        ? '代码结构浏览器与项目依赖关系可视化分析器。'
+                        : 'Code structure explorer and dependency relationships visualizer.',
+                    }
+                  ].map((plugin) => {
+                    const version = pluginVersions[plugin.id];
+                    const isDetecting = detecting[plugin.id];
+                    const installStatus = installing[plugin.id];
+                    const isBusy = isDetecting || !!installStatus;
+                    const isInstalled = version !== null;
+
+                    return (
+                      <tr key={plugin.id} style={{
+                        borderBottom: '1px solid var(--vibe-btn-border, var(--border))',
+                        background: activeLogPlugin === plugin.id ? 'rgba(255, 255, 255, 0.02)' : 'transparent',
+                        transition: 'background 0.2s ease',
+                      }}>
+                        {/* Name */}
+                        <td style={{ padding: '14px 16px', fontWeight: 600 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span>{plugin.name}</span>
+                            <a 
+                              href={plugin.url} 
+                              target="_blank" 
+                              rel="noreferrer"
+                              title={plugin.url}
+                              style={{ display: 'inline-flex', color: 'var(--text-dim)' }}
+                            >
+                              <ExternalLink size={12} />
+                            </a>
+                          </div>
+                        </td>
+                        
+                        {/* Description */}
+                        <td style={{ padding: '14px 16px', color: 'var(--text-dim)', maxWidth: '400px' }}>
+                          {plugin.desc}
+                        </td>
+
+                        {/* Version */}
+                        <td style={{ padding: '14px 16px' }}>
+                          {isDetecting ? (
+                            <span style={{ color: 'var(--text-dim)', fontSize: FONT_SIZE.sm }}>
+                              {t(locale, 'common.loading') || '检测中...'}
+                            </span>
+                          ) : isInstalled ? (
+                            <span style={{
+                              background: 'var(--vibe-active-bg)',
+                              color: 'var(--vibe-active-color)',
+                              padding: '2px 8px',
+                              borderRadius: '12px',
+                              fontSize: FONT_SIZE.sm,
+                              fontWeight: 600,
+                              border: '1px solid var(--vibe-accent-color)',
+                            }}>
+                              v{version}
+                            </span>
+                          ) : (
+                            <span style={{
+                              color: 'var(--text-dim)',
+                              fontSize: FONT_SIZE.sm,
+                              fontStyle: 'italic'
+                            }}>
+                              {t(locale, 'settings.plugins.notInstalled')}
+                            </span>
+                          )}
+                        </td>
+
+                        {/* Actions */}
+                        <td style={{ padding: '14px 16px', textAlign: 'right' }}>
+                          <div style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+                            {!isInstalled ? (
+                              <button
+                                disabled={isBusy}
+                                onClick={() => handleInstallPlugin(plugin.id)}
+                                className="btn btn-primary"
+                                style={{
+                                  padding: '5px 12px',
+                                  fontSize: FONT_SIZE.sm,
+                                  opacity: isBusy ? 0.6 : 1,
+                                  cursor: isBusy ? 'not-allowed' : 'pointer',
+                                }}
+                              >
+                                {installStatus === 'installing' ? t(locale, 'settings.plugins.installing') : t(locale, 'settings.plugins.install')}
+                              </button>
+                            ) : (
+                              <>
+                                <button
+                                  disabled={isBusy}
+                                  onClick={() => handleInstallPlugin(plugin.id, true)}
+                                  className="btn"
+                                  style={{
+                                    padding: '5px 12px',
+                                    fontSize: FONT_SIZE.sm,
+                                    borderColor: 'var(--vibe-btn-border)',
+                                    color: 'var(--text)',
+                                    opacity: isBusy ? 0.6 : 1,
+                                    cursor: isBusy ? 'not-allowed' : 'pointer',
+                                  }}
+                                >
+                                  {installStatus === 'updating' ? t(locale, 'settings.plugins.updating') : t(locale, 'settings.plugins.update')}
+                                </button>
+                                <button
+                                  disabled={isBusy}
+                                  onClick={() => handleUninstallPlugin(plugin.id)}
+                                  className="btn"
+                                  style={{
+                                    padding: '5px 12px',
+                                    fontSize: FONT_SIZE.sm,
+                                    background: 'rgba(239, 68, 68, 0.1)',
+                                    border: '1px solid rgba(239, 68, 68, 0.2)',
+                                    borderRadius: 'calc(var(--vibe-content-radius, 12px) - 6px)',
+                                    color: 'rgba(239, 68, 68, 0.9)',
+                                    cursor: isBusy ? 'not-allowed' : 'pointer',
+                                    opacity: isBusy ? 0.6 : 1,
+                                  }}
+                                >
+                                  {installStatus === 'uninstalling' ? t(locale, 'settings.plugins.uninstalling') : t(locale, 'settings.plugins.uninstall')}
+                                </button>
+                              </>
+                            )}
+
+                            {/* Log expansion trigger */}
+                            {installLogs[plugin.id] && (
+                              <button
+                                onClick={() => setActiveLogPlugin(activeLogPlugin === plugin.id ? null : plugin.id)}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: 'var(--text-dim)',
+                                  cursor: 'pointer',
+                                  padding: '4px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                }}
+                                title="查看日志"
+                              >
+                                <Terminal size={14} style={{ color: activeLogPlugin === plugin.id ? 'var(--vibe-active-color)' : 'inherit' }} />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Collapsible Log Card */}
+            {activeLogPlugin && installLogs[activeLogPlugin] && (
+              <div style={{
+                marginTop: 12,
+                borderRadius: 'calc(var(--vibe-content-radius, 12px) - 2px)',
+                border: '1px solid var(--vibe-btn-border, var(--border))',
+                background: 'rgba(0, 0, 0, 0.25)',
+                boxShadow: 'inset 0 1px 4px rgba(0, 0, 0, 0.3)',
+                padding: '12px 16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--vibe-brand-text)', fontSize: FONT_SIZE.sm, fontWeight: 600 }}>
+                    <Terminal size={14} className="text-[var(--vibe-active-color)]" />
+                    <span>{t(locale, 'settings.plugins.consoleTitle')} - {activeLogPlugin.toUpperCase()}</span>
+                  </div>
+                  <button 
+                    onClick={() => setActiveLogPlugin(null)}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: FONT_SIZE.sm }}
+                  >
+                    {t(locale, 'common.close') || '关闭'}
+                  </button>
+                </div>
+                <pre style={{
+                  margin: 0,
+                  padding: '8px 10px',
+                  background: 'rgba(0, 0, 0, 0.3)',
+                  borderRadius: 4,
+                  fontFamily: 'monospace',
+                  fontSize: '12px',
+                  color: '#10b981',
+                  overflowY: 'auto',
+                  maxHeight: '220px',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-all',
+                  textAlign: 'left',
+                }}>
+                  {installLogs[activeLogPlugin]}
+                </pre>
+              </div>
+            )}
+          </section>
+        </div>
       </div>
 
       {/* Confirm dialogs */}

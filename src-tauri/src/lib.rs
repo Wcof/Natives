@@ -168,6 +168,7 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 if let Some(state) = window.try_state::<AppState>() {
                     state.ghostty_manager.kill_all();
+                    state.terminal_manager.kill_all();
                 }
             }
         })
@@ -209,6 +210,10 @@ pub fn run() {
             commands::terminal::terminal_list_sessions,
             #[cfg(feature = "ghostty-vt")]
             commands::terminal::terminal_render_state,
+            // Plugins
+            commands::plugins::plugin_detect,
+            commands::plugins::plugin_install,
+            commands::plugins::plugin_uninstall,
             // Builtin Tool Registry
             commands::terminal::builtin_tool_detect,
             commands::terminal::builtin_tool_launch,

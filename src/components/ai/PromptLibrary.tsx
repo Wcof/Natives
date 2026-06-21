@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { startTransition, useState, useCallback, useEffect } from 'react';
 import { Edit2, Trash2 } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import Modal from '@/components/ui/Modal';
 
 interface PromptItem {
   id: string;
@@ -46,7 +47,7 @@ export default function PromptLibrary() {
       } catch { /* ignore */ }
     }
     loadLocale();
-    setPrompts(loadPrompts());
+    startTransition(() => { setPrompts(loadPrompts()); });
   }, []);
 
   const handleSave = useCallback(() => {
@@ -155,7 +156,7 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
               <div style={{ display: 'flex', gap: SPACING.xs, flexWrap: 'wrap' }}>
                 {prompt.tags.map((tag) => (
                   <span key={tag} style={{
-                    fontSize: 9, padding: '1px 5px', borderRadius: BORDER_RADIUS.sm,
+                    fontSize: FONT_SIZE.xs, padding: '1px 5px', borderRadius: BORDER_RADIUS.sm,
                     background: 'var(--accent-soft)', color: 'var(--accent)',
                   }}>
                     #{tag}
@@ -168,66 +169,46 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
       </div>
 
       {/* Editor dialog */}
-      {showEditor && (
-        <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60,
-        }} onClick={() => setShowEditor(false)}>
-          <div style={{
-            background: 'var(--vibe-toolbar-bg)', border: '1px solid var(--vibe-btn-border)',
-            borderRadius: BORDER_RADIUS.xl, padding: 'var(--space-md)', width: 440, maxWidth: '90vw',
-            boxShadow: 'var(--vibe-toolbar-shadow)',
-            backdropFilter: 'blur(var(--vibe-toolbar-blur, 22px)) saturate(var(--vibe-toolbar-saturation, 145%))',
-            WebkitBackdropFilter: 'blur(var(--vibe-toolbar-blur, 22px)) saturate(var(--vibe-toolbar-saturation, 145%))',
-          }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ fontSize: 'var(--fs-md)', fontWeight: 600, color: 'var(--text)', marginBottom: SPACING.md }}>
-              {editId ? 'Edit Prompt' : 'New Prompt'}
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)' }}>
-              <input
-                type="text"
-                value={editTitle}
-                onChange={(e) => setEditTitle(e.target.value)}
-                placeholder="Prompt title"
-                style={{
-                  width: '100%', padding: '6px 8px', fontSize: 'var(--fs-sm)',
-                  background: 'var(--vibe-content-bg)', border: '1px solid var(--vibe-btn-border)',
-                  borderRadius: BORDER_RADIUS.sm, color: 'var(--text)', outline: 'none',
-                }}
-                autoFocus
-              />
-              <textarea
-                value={editContent}
-                onChange={(e) => setEditContent(e.target.value)}
-                placeholder="Prompt content..."
-                rows={6}
-                style={{
-                  width: '100%', padding: '6px 8px', fontSize: FONT_SIZE.sm, fontFamily: 'var(--font-mono)',
-                  background: 'var(--vibe-content-bg)', border: '1px solid var(--vibe-btn-border)',
-                  borderRadius: BORDER_RADIUS.sm, color: 'var(--text)', outline: 'none', resize: 'vertical',
-                }}
-              />
-              <input
-                type="text"
-                value={editTags}
-                onChange={(e) => setEditTags(e.target.value)}
-                placeholder="Tags (comma separated: code-review, typescript)"
-                style={{
-                  width: '100%', padding: '6px 8px', fontSize: FONT_SIZE.sm,
-                  background: 'var(--vibe-content-bg)', border: '1px solid var(--vibe-btn-border)',
-                  borderRadius: BORDER_RADIUS.sm, color: 'var(--text)', outline: 'none',
-                }}
-              />
-            </div>
-            <div style={{ display: 'flex', gap: 'var(--space-sm)', marginTop: SPACING.md, justifyContent: 'flex-end' }}>
-              <button className="btn" onClick={() => setShowEditor(false)} style={{ fontSize: FONT_SIZE.sm }}>Cancel</button>
-              <button className="btn btn-primary" onClick={handleSave} style={{ fontSize: FONT_SIZE.sm }} disabled={!editTitle.trim() || !editContent.trim()}>
-                Save
-              </button>
-            </div>
-          </div>
+      <Modal
+        isOpen={showEditor}
+        onClose={() => setShowEditor(false)}
+        title={editId ? 'Edit Prompt' : 'New Prompt'}
+        width={440}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.sm }}>
+          <input
+            type="text"
+            value={editTitle}
+            onChange={(e) => setEditTitle(e.target.value)}
+            placeholder="Prompt title"
+            className="input"
+            style={{ width: '100%', fontSize: FONT_SIZE.sm }}
+            autoFocus
+          />
+          <textarea
+            value={editContent}
+            onChange={(e) => setEditContent(e.target.value)}
+            placeholder="Prompt content..."
+            rows={6}
+            className="input"
+            style={{ width: '100%', fontSize: FONT_SIZE.sm, fontFamily: 'var(--font-mono)', resize: 'vertical' }}
+          />
+          <input
+            type="text"
+            value={editTags}
+            onChange={(e) => setEditTags(e.target.value)}
+            placeholder="Tags (comma separated: code-review, typescript)"
+            className="input"
+            style={{ width: '100%', fontSize: FONT_SIZE.sm }}
+          />
         </div>
-      )}
+        <div style={{ display: 'flex', gap: SPACING.sm, marginTop: SPACING.md, justifyContent: 'flex-end' }}>
+          <button className="btn btn-ghost" onClick={() => setShowEditor(false)} style={{ fontSize: FONT_SIZE.sm }}>Cancel</button>
+          <button className="btn btn-primary" onClick={handleSave} style={{ fontSize: FONT_SIZE.sm }} disabled={!editTitle.trim() || !editContent.trim()}>
+            Save
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }

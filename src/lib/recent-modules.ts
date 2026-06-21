@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { startTransition, useState, useEffect, useCallback } from 'react';
 
 // Lightweight LRU tracker for "recently used modules" on the Dashboard.
 //
@@ -67,6 +67,7 @@ export function useRecentModules(limit = MAX_ENTRIES): {
   }, [limit]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     refresh();
     const onChange = () => refresh();
     // Cross-tab updates:

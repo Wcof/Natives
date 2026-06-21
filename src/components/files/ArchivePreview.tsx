@@ -26,7 +26,7 @@ export default function ArchivePreview({ path, locale }: ArchivePreviewProps) {
     let cancelled = false;
     (async () => {
       try {
-        const result = await window.nativesAPI?.archive?.list?.(path);
+        const result = await window.nativesAPI?.archive?.list?.(path) as { entries: ArchiveEntry[]; truncated: boolean } | undefined;
         if (!cancelled && result) {
           setEntries(result.entries || []);
           setTruncated(result.truncated || false);

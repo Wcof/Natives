@@ -55,6 +55,14 @@
 - **为什么**：广播是单向总线（防线 4）的设计姿态；轮询浪费 CPU 与 IPC 带宽。
 - **检查方法**：搜 `setInterval` 配合 IPC 调用的组合。
 
+#### R-E11b · 重 IO 数据使用 Session 缓存 + 冷热分离
+- **等级**：SHOULD
+- **分类**：状态、性能
+- **规则**：需要从后端读取的重 IO 数据（如 Claude usage 统计、Codex session 扫描）**应该**在前端层使用 Session 级别的模块级缓存（`Map<string, CacheEntry>`，TTL 按数据类型分档），避免同一 SPA 会话内重复 IPC 调用。热数据（轻量、高频变化）TTL ≤ 60s，冷数据（重量、低频变化）TTL ≤ 120s。**禁止**无缓存地在每次组件挂载时重新发起重 IO IPC 全量调用。
+- **为什么**：Dashboard 等页面用户频繁切换进出，无缓存每次挂载都触发 3-5 次 IPC + 文件 I/O，造成卡顿和资源浪费。
+- **正例**：`page.tsx` 用 `getCached<T>('usage')` 检查缓存，命中则不发起 `usage.refresh()`；冷数据用 `Promise.resolve().then()` 延迟到下一帧加载，不阻塞热数据渲染。
+- **检查方法**：重 IO IPC 调用（`usage.refresh`、耗时的 `fs.*`）是否有前端缓存保护。**简单滞后刷新**（用户进入 Dashboard 时展示旧缓存，后台静默更新）是可接受的手段。
+
 ---
 
 ## 四、错误处理

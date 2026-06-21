@@ -131,7 +131,7 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
               }}
               title={ch.path}
             >
-              <span style={{ fontSize: 9, marginRight: 4, color: typeColors[ch.type] }}>
+              <span style={{ fontSize: FONT_SIZE.xs, marginRight: 4, color: typeColors[ch.type] }}>
                 {typeIcons[ch.type] || '✎'}
               </span>
               <span style={{ opacity: 0.5, fontSize: FONT_SIZE.xs, marginRight: 4 }}>

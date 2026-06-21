@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
+import { startTransition, useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { applyTheme } from '@/lib/theme-engine';
 import { t, type Locale } from '@/i18n';
@@ -21,6 +21,7 @@ import {
   Globe,
 } from 'lucide-react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { useHydrated } from '@/hooks/useHydrated';
 
 interface CommandItem {
   id: string;
@@ -59,8 +60,8 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
   const [allCommands, setAllCommands] = useState<CommandItem[]>(() => getStaticCommands(locale));
   const [results, setResults] = useState<CommandItem[]>(() => getStaticCommands(locale));
   const [searchScope, setSearchScope] = useState<'global' | 'local'>('global');
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => { setMounted(true); }, []);
+  const mounted = useHydrated();
+  
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Load locale
@@ -77,6 +78,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
 
   // Update static commands when locale changes
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAllCommands(() => {
       const statics = getStaticCommands(locale);
       // Re-add module commands if any
@@ -114,7 +116,8 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
   useEffect(() => {
     if (isOpen) {
       setTimeout(() => inputRef.current?.focus(), 50);
-      setQuery('');
+      startTransition(() => { setQuery(''); });
+    // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedIndex(0);
       setResults(allCommands);
     }
@@ -123,7 +126,8 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
   // Filter results + file search
   useEffect(() => {
     if (!query.trim()) {
-      setResults(allCommands);
+      startTransition(() => { setResults(allCommands); });
+    // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedIndex(0);
       return;
     }
@@ -185,6 +189,46 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
     }
   }, [query, allCommands]);
 
+  const handleSearchNow = useCallback(() => {
+    const q = query.trim();
+    if (!q) return;
+    const root = searchScope === 'local' ? (process.env.HOME || '/') : '/';
+    // Search files by name
+    window.nativesAPI?.search?.files?.(q, root, { maxResults: 8 }).then((fileResults) => {
+      if (Array.isArray(fileResults) && fileResults.length > 0) {
+        const fileCommands: CommandItem[] = fileResults.map((f: { path: string; name: string }) => ({
+          id: `__file__:${f.path}`,
+          label: f.name,
+          category: 'navigation' as const,
+          icon: <FileText size={14} />,
+          description: f.path,
+        }));
+        setResults((prev) => {
+          const cmdIds = new Set(prev.map((c) => c.id));
+          const newFiles = fileCommands.filter((f) => !cmdIds.has(f.id));
+          return [...prev, ...newFiles];
+        });
+      }
+    }).catch(() => { /* ignore */ });
+    // Search file content
+    window.nativesAPI?.search?.grep?.(q, root, { maxResults: 8 }).then((contentResults) => {
+      if (Array.isArray(contentResults) && contentResults.length > 0) {
+        const contentCommands: CommandItem[] = contentResults.map((r: { path: string; name: string; line?: number; match?: string }) => ({
+          id: `__file__:${r.path}`,
+          label: `${r.name}${r.line ? `:${r.line}` : ''}`,
+          category: 'navigation' as const,
+          icon: <Search size={14} />,
+          description: r.match || r.path,
+        }));
+        setResults((prev) => {
+          const cmdIds = new Set(prev.map((c) => c.id));
+          const newItems = contentCommands.filter((f) => !cmdIds.has(f.id));
+          return [...prev, ...newItems];
+        });
+      }
+    }).catch(() => { /* ignore */ });
+  }, [query, searchScope]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // Tab handled by shared useFocusTrap hook on the dialog container
     switch (e.key) {
@@ -200,6 +244,9 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
         e.preventDefault();
         if (results[selectedIndex]) {
           handleSelect(results[selectedIndex]!);
+        } else if (query.trim().length >= 2) {
+          // Spotlight-style: trigger search when no command is highlighted
+          handleSearchNow();
         }
         break;
       case 'Escape':
@@ -242,31 +289,29 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
   if (!mounted) return null;
 
   return createPortal((
-    <>
-      {/* Overlay */}
-      <div
-        style={{
-          position: 'fixed', inset: 0, zIndex: 9999,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(0,0,0,0.45)',
-          backdropFilter: 'blur(var(--glass-overlay-blur, 24px)) saturate(var(--glass-overlay-saturation, 150%))',
-          WebkitBackdropFilter: 'blur(var(--glass-overlay-blur, 24px)) saturate(var(--glass-overlay-saturation, 150%))',
-          animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
-        }}
-        onClick={onClose}
-        aria-hidden="true"
-      />
-
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: '20vh',
+        background: 'rgba(0,0,0,0.45)',
+        backdropFilter: 'blur(var(--glass-overlay-blur, 24px)) saturate(var(--glass-overlay-saturation, 150%))',
+        WebkitBackdropFilter: 'blur(var(--glass-overlay-blur, 24px)) saturate(var(--glass-overlay-saturation, 150%))',
+        animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
+      }}
+      onClick={onClose}
+      aria-hidden="true"
+    >
       {/* Command Palette — vibe-* glassmorphic style */}
       <div
         ref={dialogRef}
         role="dialog"
         aria-label={t(locale, 'commandPalette.placeholder')}
         aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => { trapKeyDown(e); handleKeyDown(e); }}
         className="anim-dropIn"
         style={{
-          position: 'absolute', top: '20%', left: '50%', transform: 'translateX(-50%)',
+          position: 'relative', marginTop: 0,
           width: 520, maxWidth: '90vw',
           background: 'var(--vibe-toolbar-bg)',
           backdropFilter: 'blur(var(--vibe-toolbar-blur, 22px)) saturate(var(--vibe-toolbar-saturation, 145%))',
@@ -274,7 +319,6 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
           border: '0.0625rem solid var(--vibe-toolbar-border)',
           borderRadius: 'var(--radius)',
           boxShadow: 'var(--vibe-toolbar-shadow)',
-          zIndex: 101,
           overflow: 'hidden',
         }}
       >
@@ -301,7 +345,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
               border: 'none',
               outline: 'none',
               color: 'var(--vibe-brand-text)',
-              fontSize: 15,
+              fontSize: FONT_SIZE.heading,
               fontFamily: 'inherit',
             }}
             aria-label={t(locale, 'commandPalette.placeholder')}
@@ -376,7 +420,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
             style={{
               background: 'var(--vibe-btn-bg)',
               border: '0.0625rem solid var(--vibe-btn-border)',
-              borderRadius: '0.5rem',
+              borderRadius: BORDER_RADIUS.lg,
               padding: '2px 6px', fontSize: FONT_SIZE.xs, cursor: 'pointer',
               color: searchScope === 'local' ? 'var(--vibe-active-color)' : 'var(--vibe-btn-text)',
               display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -397,6 +441,6 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
           </button>
         </div>
       </div>
-    </>
+    </div>
   ), document.body);
 }
