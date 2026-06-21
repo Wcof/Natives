@@ -469,6 +469,9 @@ export default function TerminalPanel({
     // Remove from map
     sessionMapRef.current.delete(sessionId);
 
+    // Clean up exit tracking set
+    exitedSessionIds.current.delete(sessionId);
+
     // Update state
     setSessions((prev) => {
       const remaining = prev.filter((s) => s.id !== sessionId);
