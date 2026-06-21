@@ -181,6 +181,28 @@ pub fn sync_modules_to_db(conn: &Connection, modules_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn get_actual_manifest_dir(extract_dir: &Path) -> std::path::PathBuf {
+    if let Ok(entries) = std::fs::read_dir(extract_dir) {
+        let mut subdirs = Vec::new();
+        let mut file_count = 0;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || name == "__MACOSX" {
+                continue;
+            }
+            if entry.path().is_dir() {
+                subdirs.push(entry.path());
+            } else {
+                file_count += 1;
+            }
+        }
+        if subdirs.len() == 1 && file_count == 0 {
+            return subdirs[0].clone();
+        }
+    }
+    extract_dir.to_path_buf()
+}
+
 /// Install a module from a directory or zip file
 pub fn install_module(conn: &Connection, modules_dir: &Path, source: &str) -> Result<String> {
     std::fs::create_dir_all(modules_dir).map_err(Error::Io)?;
@@ -194,18 +216,27 @@ pub fn install_module(conn: &Connection, modules_dir: &Path, source: &str) -> Re
             "__extract_{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_millis()
         ));
         extract_zip(source_path, &temp_dir)?;
+        
         // Find manifest in extracted content
-        let manifest = read_manifest_from_dir(&temp_dir).map_err(|e| Error::InvalidInput(e))?;
+        let actual_dir = get_actual_manifest_dir(&temp_dir);
+        let manifest = read_manifest_from_dir(&actual_dir).map_err(|e| Error::InvalidInput(e))?;
+        
         // Move to final location
         let dest = modules_dir.join(&manifest.id);
         if dest.exists() {
             std::fs::remove_dir_all(&dest).map_err(Error::Io)?;
         }
-        std::fs::rename(&temp_dir, &dest).map_err(Error::Io)?;
+        std::fs::rename(&actual_dir, &dest).map_err(Error::Io)?;
+        
+        // Clean up temp_dir if it was nested
+        if actual_dir != temp_dir {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+        }
+        
         manifest
     } else {
         return Err(Error::InvalidInput(
@@ -258,6 +289,131 @@ pub fn install_module(conn: &Connection, modules_dir: &Path, source: &str) -> Re
 }
 
 /// Uninstall a module (remove from disk + DB)
+/// Update a module from a new source (directory or .zip).
+/// Flow: read new manifest → backup old dir → replace files → re-sync DB (permissions etc.)
+/// On failure, rolls back from backup.
+pub fn update_module(
+    conn: &Connection,
+    modules_dir: &Path,
+    module_id: &str,
+    source: &str,
+) -> Result<String> {
+    let module_dir = modules_dir.join(module_id);
+    if !module_dir.exists() {
+        return Err(Error::InvalidInput(format!(
+            "module '{}' is not installed",
+            module_id
+        )));
+    }
+
+    // 1. Read new manifest from source
+    let source_path = Path::new(source);
+    let (manifest, extracted_temp) = if source_path.is_dir() {
+        let m = read_manifest_from_dir(source_path).map_err(|e| Error::InvalidInput(e))?;
+        (m, None)
+    } else if source.ends_with(".zip") {
+        let temp_dir = modules_dir.join(format!(
+            "__update_extract_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        ));
+        extract_zip(source_path, &temp_dir)?;
+        let actual_dir = get_actual_manifest_dir(&temp_dir);
+        let m = read_manifest_from_dir(&actual_dir).map_err(|e| Error::InvalidInput(e))?;
+        (m, Some((temp_dir, actual_dir)))
+    } else {
+        return Err(Error::InvalidInput(
+            "source must be a directory or .zip file".into(),
+        ));
+    };
+
+    // Verify manifest id matches
+    if manifest.id != module_id {
+        // Clean up temp extraction if any
+        if let Some((temp, _)) = &extracted_temp {
+            let _ = std::fs::remove_dir_all(temp);
+        }
+        return Err(Error::InvalidInput(format!(
+            "manifest id '{}' does not match module_id '{}'",
+            manifest.id, module_id
+        )));
+    }
+
+    // 2. Backup existing module directory (atomic: rename to .bak)
+    let backup_dir = modules_dir.join(format!("{}.bak", module_id));
+    if backup_dir.exists() {
+        let _ = std::fs::remove_dir_all(&backup_dir);
+    }
+    std::fs::rename(&module_dir, &backup_dir).map_err(Error::Io)?;
+
+    // 3. Replace files
+    let replace_result: Result<()> = if let Some((temp, actual_dir)) = &extracted_temp {
+        // Move extracted content to module dir
+        std::fs::rename(actual_dir, &module_dir).map_err(Error::Io)?;
+        // Clean up temp_dir if it was nested
+        if *actual_dir != *temp {
+            let _ = std::fs::remove_dir_all(temp);
+        }
+        Ok(())
+    } else {
+        // Copy from source directory
+        copy_dir_recursive(source_path, &module_dir)
+    };
+
+    if let Err(e) = replace_result {
+        // Rollback: restore from backup
+        let _ = std::fs::rename(&backup_dir, &module_dir);
+        return Err(e);
+    }
+
+    // 4. Re-sync DB: update manifest fields + permissions
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE modules SET name=?1, version=?2, entry=?3, type=?4, description=?5, author=?6, icon=?7, min_natives_version=?8, state='installed', updated_at=?9 WHERE id=?10",
+        rusqlite::params![
+            manifest.name, manifest.version, manifest.entry,
+            manifest.module_type, manifest.description, manifest.author, manifest.icon,
+            manifest.min_natives_version, now, manifest.id
+        ],
+    ).map_err(Error::Database)?;
+
+    // Re-sync permissions: delete old, insert new (preserve granted status for matching perms)
+    let existing_granted: std::collections::HashMap<String, bool> = {
+        let mut map = std::collections::HashMap::new();
+        let mut stmt = conn.prepare("SELECT permission, granted FROM module_permissions WHERE module_id = ?1").map_err(Error::Database)?;
+        let rows = stmt.query_map(rusqlite::params![manifest.id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
+        }).map_err(Error::Database)?;
+        for row in rows {
+            if let Ok((perm, granted)) = row {
+                map.insert(perm, granted);
+            }
+        }
+        map
+    };
+
+    conn.execute(
+        "DELETE FROM module_permissions WHERE module_id = ?1",
+        rusqlite::params![manifest.id],
+    ).map_err(Error::Database)?;
+
+    for perm in &manifest.permissions {
+        // Preserve previously granted status; new perms default to not granted
+        let granted = existing_granted.get(perm).copied().unwrap_or(false);
+        conn.execute(
+            "INSERT INTO module_permissions (module_id, permission, granted) VALUES (?1, ?2, ?3)",
+            rusqlite::params![manifest.id, perm, granted],
+        ).map_err(Error::Database)?;
+    }
+
+    // 5. Remove backup on success
+    let _ = std::fs::remove_dir_all(&backup_dir);
+
+    Ok(manifest.id.clone())
+}
+
 pub fn uninstall_module(conn: &Connection, modules_dir: &Path, module_id: &str) -> Result<()> {
     let module_dir = modules_dir.join(module_id);
     if module_dir.exists() {
@@ -341,11 +497,12 @@ pub fn read_manifest_from_source(
             "__read_{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_millis()
         ));
         extract_zip(source_path, &temp_dir).map_err(|e| e.to_string())?;
-        let manifest = read_manifest_from_dir(&temp_dir);
+        let actual_dir = get_actual_manifest_dir(&temp_dir);
+        let manifest = read_manifest_from_dir(&actual_dir);
         let _ = std::fs::remove_dir_all(&temp_dir);
         manifest
     } else {
@@ -385,6 +542,71 @@ fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {
             std::io::copy(&mut entry, &mut outfile).map_err(Error::Io)?;
         }
     }
+    Ok(())
+}
+
+/// Write an AI-generated module to disk atomically, then hot-sync into DB.
+///
+/// This is the core of the "AI App Engine": the AI brain generates HTML/JS/Tailwind
+/// code, and this function writes it to the modules directory with full atomic
+/// guarantees (temp file → fsync → rename), then calls `sync_modules_to_db` to
+/// bring it online immediately without restart.
+pub fn write_generated_module(
+    conn: &Connection,
+    modules_dir: &Path,
+    module_id: &str,
+    name: &str,
+    html_content: &str,
+    permissions: &[String],
+) -> Result<()> {
+    let app_dir = modules_dir.join(module_id);
+    std::fs::create_dir_all(&app_dir).map_err(Error::Io)?;
+
+    // Build manifest matching existing Manifest struct
+    let manifest = Manifest {
+        id: module_id.to_string(),
+        name: name.to_string(),
+        version: "0.1.0".to_string(),
+        entry: "index.html".to_string(),
+        module_type: "web".to_string(),
+        description: Some(format!("AI-generated module: {name}")),
+        author: Some("ai-engine".to_string()),
+        icon: None,
+        min_natives_version: None,
+        permissions: permissions.to_vec(),
+    };
+    let manifest_json = serde_json::to_string_pretty(&manifest).map_err(Error::Json)?;
+
+    // Atomic write helper: write to temp → fsync → rename
+    atomic_write(&app_dir.join("manifest.json"), &manifest_json)?;
+    atomic_write(&app_dir.join("index.html"), html_content)?;
+
+    // Hot-sync: re-scan all modules and UPSERT into SQLite
+    // This reuses the existing transactional sync logic (UPSERT + permission
+    // refresh + module_order append + orphan cleanup) — zero duplication.
+    sync_modules_to_db(conn, modules_dir)?;
+
+    Ok(())
+}
+
+/// Atomic file write: write to a temp file in the same directory, fsync, then
+/// rename over the target. On POSIX, rename is atomic, so a crash at any point
+/// leaves either the old or the new file intact — never a partial write.
+fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    use std::io::Write;
+    let dir = path.parent().ok_or_else(|| Error::Internal("no parent dir".into()))?;
+    let tmp_path = dir.join(format!(
+        ".{}.tmp",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file")
+    ));
+    {
+        let mut f = std::fs::File::create(&tmp_path).map_err(Error::Io)?;
+        f.write_all(content.as_bytes()).map_err(Error::Io)?;
+        f.sync_all().map_err(Error::Io)?;
+    }
+    std::fs::rename(&tmp_path, path).map_err(Error::Io)?;
     Ok(())
 }
 

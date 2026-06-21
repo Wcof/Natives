@@ -37,7 +37,9 @@ impl TokenManager {
             Ok(Some(s)) => s,
             _ => {
                 let new_secret = Self::generate_random_hex(32);
-                let _ = db::set_setting(conn, SECRET_KEY, &new_secret);
+                if let Err(e) = db::set_setting(conn, SECRET_KEY, &new_secret) {
+                    eprintln!("[TokenManager] failed to persist secret: {e}");
+                }
                 new_secret
             }
         }
@@ -45,9 +47,11 @@ impl TokenManager {
 
     fn generate_random_hex(bytes: usize) -> String {
         use std::io::Read;
-        let mut rng = std::fs::File::open("/dev/urandom").unwrap();
+        let mut rng = std::fs::File::open("/dev/urandom")
+            .expect("failed to open /dev/urandom");
         let mut buf = vec![0u8; bytes];
-        rng.read_exact(&mut buf).unwrap();
+        rng.read_exact(&mut buf)
+            .expect("failed to read from /dev/urandom");
         hex::encode(buf)
     }
 
@@ -87,7 +91,7 @@ impl TokenManager {
     fn now_ms() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as u64
     }
 
@@ -122,11 +126,11 @@ impl TokenManager {
 
         // Lazy eviction of expired tokens
         let now = Self::now_ms();
-        tokens.retain(|_, entry| now - entry.created_at < TOKEN_TTL_MS);
+        tokens.retain(|_, entry| now.saturating_sub(entry.created_at) < TOKEN_TTL_MS);
 
         match tokens.get(hash) {
             Some(entry) => {
-                entry.module_id == module_id && (now - entry.created_at) < TOKEN_TTL_MS
+                entry.module_id == module_id && now.saturating_sub(entry.created_at) < TOKEN_TTL_MS
             }
             None => false,
         }
@@ -137,7 +141,7 @@ impl TokenManager {
         let mut tokens = self.tokens.lock().unwrap();
         let now = Self::now_ms();
         let before = tokens.len();
-        tokens.retain(|_, entry| now - entry.created_at < ROTATION_INTERVAL_MS);
+        tokens.retain(|_, entry| now.saturating_sub(entry.created_at) < ROTATION_INTERVAL_MS);
         before - tokens.len()
     }
 }

@@ -13,6 +13,9 @@ pub enum Error {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[error("Notify error: {0}")]
+    Notify(#[from] notify::Error),
+
     #[error("Not found: {0}")]
     NotFound(String),
 

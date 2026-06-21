@@ -209,7 +209,7 @@ pub fn list_dir(dir_path: &str, options: &ListDirOptions) -> Result<Vec<FileEntr
     let ascending = options.sort_dir == "asc";
     match options.sort_by.as_str() {
         "name" => entries.sort_by(|a, b| {
-            let cmp = a.name.to_lowercase().cmp(&b.name.to_lowercase());
+            let cmp = natural_cmp(&a.name, &b.name);
             if ascending {
                 cmp
             } else {
@@ -318,7 +318,7 @@ pub fn write_file_atomic(
         ".tmp-{basename}-{}-{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis(),
         rand_suffix()
     );
@@ -556,11 +556,7 @@ pub fn recent_files(root: &str) -> Result<Vec<serde_json::Value>> {
 // ── Helpers ──
 
 fn rand_suffix() -> u32 {
-    use std::io::Read;
-    let mut rng = std::fs::File::open("/dev/urandom").unwrap();
-    let mut buf = [0u8; 4];
-    rng.read_exact(&mut buf).unwrap();
-    u32::from_ne_bytes(buf)
+    rand::random::<u32>()
 }
 
 fn deduplicate_path(path: &Path) -> PathBuf {
@@ -601,4 +597,61 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Natural sort comparison (Natives2 localeCompare with numeric: true).
+/// Compares character-by-character without heap allocation.
+/// - Text segments: case-insensitive comparison
+/// - Numeric segments: numeric comparison (file2 < file10)
+fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let mut a_iter = a.chars();
+    let mut b_iter = b.chars();
+
+    loop {
+        let a_ch = a_iter.next();
+        let b_ch = b_iter.next();
+
+        match (a_ch, b_ch) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            (Some(ac), Some(bc)) => {
+                if ac.is_ascii_digit() && bc.is_ascii_digit() {
+                    // Numeric segment: consume all digits and compare as numbers
+                    let mut a_num: u64 = (ac as u8 - b'0') as u64;
+                    let mut b_num: u64 = (bc as u8 - b'0') as u64;
+                    loop {
+                        match a_iter.clone().next() {
+                            Some(c) if c.is_ascii_digit() => {
+                                a_num = a_num * 10 + (c as u8 - b'0') as u64;
+                                a_iter.next();
+                            }
+                            _ => break,
+                        }
+                    }
+                    loop {
+                        match b_iter.clone().next() {
+                            Some(c) if c.is_ascii_digit() => {
+                                b_num = b_num * 10 + (c as u8 - b'0') as u64;
+                                b_iter.next();
+                            }
+                            _ => break,
+                        }
+                    }
+                    match a_num.cmp(&b_num) {
+                        std::cmp::Ordering::Equal => continue,
+                        other => return other,
+                    }
+                } else {
+                    // Text segment: case-insensitive character comparison
+                    let ac_lower = ac.to_lowercase().next().unwrap_or(ac);
+                    let bc_lower = bc.to_lowercase().next().unwrap_or(bc);
+                    match ac_lower.cmp(&bc_lower) {
+                        std::cmp::Ordering::Equal => continue,
+                        other => return other,
+                    }
+                }
+            }
+        }
+    }
 }

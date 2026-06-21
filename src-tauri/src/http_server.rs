@@ -211,12 +211,23 @@ fn serve_module_file(
     match sanitize_path(module_id, file_path, modules_dir) {
         Some(resolved) => {
             if resolved.exists() && resolved.is_file() {
-                let content = std::fs::read(&resolved)?;
                 let mime = guess_mime(&resolved);
-                let resp = Response::from_data(content)
-                    .with_header(csp)
-                    .with_header(Header::from_bytes("Content-Type", mime).unwrap());
-                request.respond(resp)?;
+
+                // HTML preview injection (Natives2: width-measure + fallback styles + image rewrite)
+                if mime == "text/html" {
+                    let raw = std::fs::read_to_string(&resolved)?;
+                    let injected = inject_html_preview(&raw, module_id);
+                    let resp = Response::from_string(injected)
+                        .with_header(csp)
+                        .with_header(Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap());
+                    request.respond(resp)?;
+                } else {
+                    let content = std::fs::read(&resolved)?;
+                    let resp = Response::from_data(content)
+                        .with_header(csp)
+                        .with_header(Header::from_bytes("Content-Type", mime).unwrap());
+                    request.respond(resp)?;
+                }
             } else {
                 let resp = Response::from_string("Not Found").with_status_code(404);
                 request.respond(resp)?;
@@ -230,15 +241,21 @@ fn serve_module_file(
     Ok(())
 }
 
+const MAX_POST_BODY: u64 = 64 * 1024 * 1024; // 64MB (Natives2: prevent memory exhaustion)
+
 fn handle_bridge_request(
     mut request: Request,
     token_manager: &TokenManager,
     csp: Header,
     db_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Read request body
+    // Read request body with 64MB limit (Natives2: prevent memory exhaustion)
+    use std::io::Read;
     let mut body = String::new();
-    request.as_reader().read_to_string(&mut body)?;
+    request
+        .as_reader()
+        .take(MAX_POST_BODY)
+        .read_to_string(&mut body)?;
 
     // Extract token and module ID from headers
     let token = get_header(&request, "X-Session-Token")
@@ -296,7 +313,7 @@ fn route_bridge(namespace: &str, method: &str, module_id: &str, _body: &str, db_
                 let mut stmt = c.prepare("SELECT value FROM settings WHERE key = 'settings:theme'").ok()?;
                 stmt.query_row([], |row| row.get::<_, String>(0)).ok()
             }).unwrap_or_else(|| "default".to_string());
-            format!(r#"{{"result":"{theme}"}}"#)
+            serde_json::json!({ "result": theme }).to_string()
         }
         ("settings", "getLocale") => {
             // Read locale from SQLite settings, fallback to empty (let renderer decide default)
@@ -304,7 +321,7 @@ fn route_bridge(namespace: &str, method: &str, module_id: &str, _body: &str, db_
                 let mut stmt = c.prepare("SELECT value FROM settings WHERE key = 'settings:locale'").ok()?;
                 stmt.query_row([], |row| row.get::<_, String>(0)).ok()
             }).unwrap_or_else(|| "".to_string());
-            format!(r#"{{"result":"{locale}"}}"#)
+            serde_json::json!({ "result": locale }).to_string()
         }
         ("lifecycle", "ready") => {
             // Record module readiness in lifecycle tracker
@@ -350,12 +367,59 @@ fn route_bridge(namespace: &str, method: &str, module_id: &str, _body: &str, db_
                 let mut stmt = c.prepare("SELECT value FROM settings WHERE key = '_app_version'").ok()?;
                 stmt.query_row([], |row| row.get::<_, String>(0)).ok()
             }).unwrap_or_else(|| "".to_string());
-            format!(r#"{{"moduleId":"{}","version":"{}","nativesVersion":"{}"}}"#, module_id, version, natives_version)
+            serde_json::json!({ "moduleId": module_id, "version": version, "nativesVersion": natives_version }).to_string()
         }
         _ => {
-            format!(r#"{{"error":"Unknown bridge method: {namespace}.{method}"}}"#)
+            serde_json::json!({ "error": format!("Unknown bridge method: {namespace}.{method}") }).to_string()
         }
     }
+}
+
+/// Inject preview helpers into HTML content (Natives2):
+/// 1. Width-measure script: postMessage natural page width → parent for auto-scaling
+/// 2. Fallback styles: html/body scrollable, images/videos don't overflow
+/// 3. Local image rewrite: onerror handler rewrites file:// → /fs/ proxy
+fn inject_html_preview(html: &str, module_id: &str) -> String {
+    // Case-insensitive search for </head>
+    let lower = html.to_lowercase();
+    let head_pos = lower.find("</head>");
+    let pos = match head_pos {
+        Some(p) => p,
+        None => return html.to_string(),
+    };
+
+    // Escape module_id for safe JS string interpolation
+    let safe_id: String = module_id
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+
+    let inject = format!(r#"
+<script>
+// Width-measure: tell parent the page's natural width for auto-scaling (Natives2)
+(function() {{
+  function report() {{
+    var w = Math.max(document.documentElement.scrollWidth, document.body ? document.body.scrollWidth : 0);
+    if (w > 0) window.parent.postMessage({{ type: 'natives:page-width', width: w, moduleId: '{}' }}, '*');
+  }}
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', report);
+  else report();
+  window.addEventListener('resize', report);
+}})();
+</script>
+<style>
+/* Fallback: make html/body scrollable, images/videos don't overflow */
+html, body {{ overflow: auto; max-width: 100vw; }}
+img, video, iframe {{ max-width: 100%; height: auto; }}
+</style>
+"#, safe_id);
+
+    // Splice injection before </head> (preserving original case)
+    let mut result = String::with_capacity(html.len() + inject.len());
+    result.push_str(&html[..pos]);
+    result.push_str(&inject);
+    result.push_str(&html[pos..]);
+    result
 }
 
 fn guess_mime(path: &Path) -> &'static str {

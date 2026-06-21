@@ -21,3 +21,14 @@ pub fn generate_token(module_id: String, state: State<'_, AppState>) -> Result<S
 pub fn validate_token(token: String, module_id: String, state: State<'_, AppState>) -> Result<bool> {
     Ok(state.token_manager.validate(&token, &module_id))
 }
+
+#[cfg(test)]
+mod tests {
+    // Bridge commands need AppState context — token validation logic is
+    // tested in token_manager.rs. This placeholder verifies the test
+    // harness is functional.
+    #[test]
+    fn test_harness_works() {
+        assert_eq!(2 + 2, 4);
+    }
+}

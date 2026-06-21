@@ -1,9 +1,16 @@
 use crate::{Error, Result};
 use rusqlite::OptionalExtension;
 use rusqlite::Connection;
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
 use std::path::Path;
 
+/// Database connection pool type alias
+pub type DbPool = Pool<SqliteConnectionManager>;
+
 /// Initialize the SQLite database with WAL mode, foreign keys, and all tables.
+/// Kept for standalone DB initialization (e.g., tests, CLI tools).
+#[allow(dead_code)]
 pub fn init_db(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;
     conn.execute_batch(
@@ -14,6 +21,33 @@ pub fn init_db(path: &Path) -> Result<Connection> {
     create_tables(&conn)?;
     apply_migrations(&conn)?;
     Ok(conn)
+}
+
+/// Initialize a connection pool (size 4, idle timeout 30s).
+/// Each connection gets WAL mode, foreign keys, and busy_timeout set.
+pub fn init_db_pool(path: &Path) -> Result<DbPool> {
+    let manager = SqliteConnectionManager::file(path)
+        .with_init(|conn| {
+            conn.execute_batch(
+                "PRAGMA journal_mode = WAL;
+                 PRAGMA foreign_keys = ON;
+                 PRAGMA busy_timeout = 5000;",
+            )?;
+            Ok(())
+        });
+    let pool = Pool::builder()
+        .max_size(4)
+        .idle_timeout(Some(std::time::Duration::from_secs(30)))
+        .build(manager)
+        .map_err(|e| Error::Internal(format!("failed to create DB pool: {e}")))?;
+
+    // Run schema creation/migration on one connection
+    let conn = pool.get()
+        .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
+    create_tables(&conn)?;
+    apply_migrations(&conn)?;
+
+    Ok(pool)
 }
 
 fn create_tables(conn: &Connection) -> Result<()> {
@@ -151,6 +185,72 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '2')",
             [],
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // Migration v2→v3: builtin_tools table for extensible built-in tool registry.
+    // Each row = one tool (terminal, editor, browser…) with enabled flag and driver choice.
+    if current_version < 3 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS builtin_tools (
+                id TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                driver TEXT NOT NULL DEFAULT 'native',
+                updated_at TEXT
+            );
+
+            -- Seed default rows for known built-in tools (all disabled by default)
+            INSERT OR IGNORE INTO builtin_tools (id, enabled, driver) VALUES ('terminal', 0, 'native');
+
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '3');
+            ",
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // Migration v3→v4: structured usage_stats and skill_usage tables.
+    // Replaces the previous JSON-blob approach (settings key "usage:cached")
+    // with proper relational rows for queryability and source breadcrumbs.
+    if current_version < 4 {
+        conn.execute_batch(
+            "
+            -- Per-model daily usage statistics with source breadcrumb
+            CREATE TABLE IF NOT EXISTS usage_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,           -- YYYY-MM-DD
+                source TEXT NOT NULL,         -- 'claude' | 'codex' | 'rtk'
+                source_path TEXT,             -- breadcrumb: e.g. '~/.claude/stats-cache.json'
+                model TEXT NOT NULL,          -- model identifier
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                request_count INTEGER NOT NULL DEFAULT 0,
+                cost_usd REAL NOT NULL DEFAULT 0.0,
+                UNIQUE(date, source, model)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_usage_stats_date ON usage_stats(date);
+            CREATE INDEX IF NOT EXISTS idx_usage_stats_source ON usage_stats(source);
+
+            -- Skill invocation tracking with source breadcrumb
+            CREATE TABLE IF NOT EXISTS skill_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,           -- YYYY-MM-DD
+                source TEXT NOT NULL,         -- 'claude-log' | 'codex-session' | 'manual'
+                source_path TEXT,             -- breadcrumb: log file path or session ID
+                skill_name TEXT NOT NULL,
+                trigger_count INTEGER NOT NULL DEFAULT 1,
+                UNIQUE(date, source, skill_name)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_skill_usage_date ON skill_usage(date);
+            CREATE INDEX IF NOT EXISTS idx_skill_usage_skill ON skill_usage(skill_name);
+
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '4');
+            ",
         )
         .map_err(Error::Database)?;
     }
@@ -375,4 +475,187 @@ pub fn mark_all_notifications_read(conn: &Connection) -> Result<()> {
     conn.execute("UPDATE notifications SET read = 1 WHERE read = 0", [])
         .map_err(Error::Database)?;
     Ok(())
+}
+
+// ──────────────────────────────────────────────
+// Builtin tools CRUD (extensible tool registry)
+// ──────────────────────────────────────────────
+
+/// List all builtin tools from DB
+pub fn list_builtin_tools(conn: &Connection) -> Result<Vec<serde_json::Value>> {
+    let mut stmt = conn
+        .prepare("SELECT id, enabled, driver FROM builtin_tools")
+        .map_err(Error::Database)?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "enabled": row.get::<_, i64>(1)? != 0,
+                "driver": row.get::<_, String>(2)?,
+            }))
+        })
+        .map_err(Error::Database)?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Error::Database)
+}
+
+/// Update a builtin tool's enabled/driver state
+pub fn update_builtin_tool(conn: &Connection, id: &str, enabled: bool, driver: &str) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO builtin_tools (id, enabled, driver, updated_at) VALUES (?1, ?2, ?3, datetime('now'))",
+        rusqlite::params![id, enabled as i64, driver],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// Ensure a builtin tool row exists (seed from frontend registry)
+pub fn seed_builtin_tool(conn: &Connection, id: &str, driver: &str) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO builtin_tools (id, enabled, driver) VALUES (?1, 0, ?2)",
+        rusqlite::params![id, driver],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+// ──────────────────────────────────────────────
+// Usage stats CRUD (structured per-model daily stats)
+// ──────────────────────────────────────────────
+
+/// Upsert a daily model usage stat row with source breadcrumb.
+pub fn upsert_usage_stat(
+    conn: &Connection,
+    date: &str,
+    source: &str,
+    source_path: Option<&str>,
+    model: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_creation_tokens: u64,
+    cache_read_tokens: u64,
+    request_count: u64,
+    cost_usd: f64,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO usage_stats (date, source, source_path, model, input_tokens, output_tokens,
+            cache_creation_tokens, cache_read_tokens, request_count, cost_usd)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(date, source, model) DO UPDATE SET
+            input_tokens = excluded.input_tokens,
+            output_tokens = excluded.output_tokens,
+            cache_creation_tokens = excluded.cache_creation_tokens,
+            cache_read_tokens = excluded.cache_read_tokens,
+            request_count = excluded.request_count,
+            cost_usd = excluded.cost_usd,
+            source_path = excluded.source_path",
+        rusqlite::params![date, source, source_path, model,
+            input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+            request_count, cost_usd],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// Query usage stats, optionally filtered by source and date range.
+/// Returns array of JSON objects with all columns.
+#[allow(dead_code)]
+pub fn query_usage_stats(
+    conn: &Connection,
+    source: Option<&str>,
+    from_date: Option<&str>,
+    to_date: Option<&str>,
+) -> Result<Vec<serde_json::Value>> {
+    let mut sql = "SELECT date, source, source_path, model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, request_count, cost_usd FROM usage_stats WHERE 1=1".to_string();
+    if source.is_some() { sql.push_str(" AND source = ?"); }
+    if from_date.is_some() { sql.push_str(" AND date >= ?"); }
+    if to_date.is_some() { sql.push_str(" AND date <= ?"); }
+    sql.push_str(" ORDER BY date DESC, model");
+
+    let mut stmt = conn.prepare(&sql).map_err(Error::Database)?;
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    if let Some(s) = source { params.push(Box::new(s.to_string())); }
+    if let Some(d) = from_date { params.push(Box::new(d.to_string())); }
+    if let Some(d) = to_date { params.push(Box::new(d.to_string())); }
+
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let rows = stmt
+        .query_map(param_refs.as_slice(), |row| {
+            Ok(serde_json::json!({
+                "date": row.get::<_, String>(0)?,
+                "source": row.get::<_, String>(1)?,
+                "sourcePath": row.get::<_, Option<String>>(2)?,
+                "model": row.get::<_, String>(3)?,
+                "inputTokens": row.get::<_, u64>(4)?,
+                "outputTokens": row.get::<_, u64>(5)?,
+                "cacheCreationTokens": row.get::<_, u64>(6)?,
+                "cacheReadTokens": row.get::<_, u64>(7)?,
+                "requestCount": row.get::<_, u64>(8)?,
+                "costUsd": row.get::<_, f64>(9)?,
+            }))
+        })
+        .map_err(Error::Database)?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Error::Database)
+}
+
+// ──────────────────────────────────────────────
+// Skill usage CRUD (skill invocation tracking)
+// ──────────────────────────────────────────────
+
+/// Upsert a daily skill usage row with source breadcrumb.
+pub fn upsert_skill_usage(
+    conn: &Connection,
+    date: &str,
+    source: &str,
+    source_path: Option<&str>,
+    skill_name: &str,
+    trigger_count: u64,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO skill_usage (date, source, source_path, skill_name, trigger_count)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(date, source, skill_name) DO UPDATE SET
+            trigger_count = excluded.trigger_count,
+            source_path = excluded.source_path",
+        rusqlite::params![date, source, source_path, skill_name, trigger_count],
+    )
+    .map_err(Error::Database)?;
+    Ok(())
+}
+
+/// Query skill usage stats, optionally filtered by skill name and date range.
+#[allow(dead_code)]
+pub fn query_skill_usage(
+    conn: &Connection,
+    skill_name: Option<&str>,
+    from_date: Option<&str>,
+    to_date: Option<&str>,
+) -> Result<Vec<serde_json::Value>> {
+    let mut sql = "SELECT date, source, source_path, skill_name, trigger_count FROM skill_usage WHERE 1=1".to_string();
+    if skill_name.is_some() { sql.push_str(" AND skill_name = ?"); }
+    if from_date.is_some() { sql.push_str(" AND date >= ?"); }
+    if to_date.is_some() { sql.push_str(" AND date <= ?"); }
+    sql.push_str(" ORDER BY date DESC, skill_name");
+
+    let mut stmt = conn.prepare(&sql).map_err(Error::Database)?;
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    if let Some(s) = skill_name { params.push(Box::new(s.to_string())); }
+    if let Some(d) = from_date { params.push(Box::new(d.to_string())); }
+    if let Some(d) = to_date { params.push(Box::new(d.to_string())); }
+
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let rows = stmt
+        .query_map(param_refs.as_slice(), |row| {
+            Ok(serde_json::json!({
+                "date": row.get::<_, String>(0)?,
+                "source": row.get::<_, String>(1)?,
+                "sourcePath": row.get::<_, Option<String>>(2)?,
+                "skillName": row.get::<_, String>(3)?,
+                "triggerCount": row.get::<_, u64>(4)?,
+            }))
+        })
+        .map_err(Error::Database)?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Error::Database)
 }

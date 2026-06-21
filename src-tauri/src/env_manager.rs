@@ -34,9 +34,11 @@ pub fn get_encryption_key(conn: &Connection) -> Result<String> {
 
 fn generate_random_hex(bytes: usize) -> String {
     use std::io::Read;
-    let mut rng = std::fs::File::open("/dev/urandom").unwrap();
+    let mut rng = std::fs::File::open("/dev/urandom")
+        .expect("failed to open /dev/urandom");
     let mut buf = vec![0u8; bytes];
-    rng.read_exact(&mut buf).unwrap();
+    rng.read_exact(&mut buf)
+        .expect("failed to read from /dev/urandom");
     hex::encode(buf)
 }
 

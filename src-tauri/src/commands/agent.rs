@@ -30,17 +30,9 @@ pub fn agent_get_sessions(project_path: String) -> Result<Vec<JsonValue>> {
 }
 
 #[tauri::command]
-pub fn agent_scan_skills() -> Result<Vec<JsonValue>> {
-    let skills = agent::scan_skills()?;
-    serde_json::to_value(skills)
-        .map(|v| {
-            if let JsonValue::Array(arr) = v {
-                arr
-            } else {
-                vec![]
-            }
-        })
-        .map_err(|e| Error::Internal(e.to_string()))
+pub fn agent_scan_skills() -> Result<JsonValue> {
+    let skills_data = agent::scan_skills()?;
+    serde_json::to_value(skills_data).map_err(|e| Error::Internal(e.to_string()))
 }
 
 #[tauri::command]

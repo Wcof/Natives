@@ -5,6 +5,10 @@ description = "AI Steam Base — Desktop Application Container"
 authors = ["Natives"]
 edition = "2021"
 
+[features]
+default = ["ghostty-vt"]
+ghostty-vt = []
+
 [lib]
 name = "natives_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
@@ -13,7 +17,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["macos-private-api", "protocol-asset"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
@@ -24,6 +28,8 @@ tauri-plugin-log = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
 portable-pty = "0.8"
 tokio = { version = "1", features = ["full"] }
 thiserror = "2"
@@ -35,6 +41,8 @@ whoami = "1"
 glob = "0.3"
 sha2 = "0.10"
 aes-gcm = "0.10"
+# Build dependencies for portable-pty on macOS
+objc = "0.2"
 rand = "0.8"
 hex = "0.4"
 zip = "2"
@@ -42,3 +50,8 @@ base64 = "0.22"
 open = "5"
 tiny_http = "0.12"
 dirs = "6"
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+encoding_rs = "0.8.35"
+sysinfo = "0.33"
+libc = "0.2"
+regex = "1"

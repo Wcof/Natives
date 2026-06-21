@@ -1,13 +1,19 @@
 use crate::{screenshot, Result};
+use std::sync::atomic::Ordering;
+use tauri::State;
+
+use crate::AppState;
 
 #[tauri::command]
-pub fn screenshot_start_watching(app: tauri::AppHandle) -> Result<()> {
-    screenshot::start_watching(app)
+pub fn screenshot_start_watching(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<()> {
+    // Reset stop flag so a previously stopped watcher can be restarted
+    state.screenshot_stop_flag.store(false, Ordering::Relaxed);
+    screenshot::start_watching(app, state.screenshot_stop_flag.clone())
 }
 
 #[tauri::command]
-pub fn screenshot_stop_watching() -> Result<()> {
-    // TODO: implement stop mechanism
+pub fn screenshot_stop_watching(state: State<'_, AppState>) -> Result<()> {
+    state.screenshot_stop_flag.store(true, Ordering::Relaxed);
     Ok(())
 }
 
