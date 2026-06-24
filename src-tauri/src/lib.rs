@@ -133,6 +133,16 @@ pub fn run() {
             db::init_assistant_db()
                 .map_err(|e| format!("failed to init assistant database: {e}"))?;
 
+            // Pre-warm env encryption key cache from Keychain (single prompt at startup,
+            // instead of prompting every time the user opens Settings → env vars)
+            {
+                let pool_conn = pool.get()
+                    .map_err(|e| format!("failed to get DB connection for env key init: {e}"))?;
+                let conn: &rusqlite::Connection = &*pool_conn;
+                env_manager::init_env_encryption_key(conn)
+                    .map_err(|e| format!("failed to init env encryption key: {e}"))?;
+            }
+
             // Start local HTTP server for module assets and bridge API
             let mut server = http_server::HttpServer::new(modules_dir, tm.clone(), db_path.clone());
             let port = server.start(0).unwrap_or_else(|e| {

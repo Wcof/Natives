@@ -3,14 +3,23 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
+use lazy_static::lazy_static;
 use rusqlite::Connection;
 use serde::Serialize;
+use std::sync::Mutex;
 
 const ENCRYPTION_KEY_SETTING: &str = "env_encryption_key";
 
 /// Ciphertext format prefix — identifies AES-256-GCM v2 payloads
 const V2_PREFIX: &str = "v2:";
 /// Old XOR format was just raw base64 (no prefix)
+
+lazy_static! {
+    /// In-memory cache of the env encryption key, loaded once from OS keychain.
+    /// Mirrors provider_key_manager::KEK_CACHE — avoids re-prompting Keychain
+    /// on every env command call.
+    static ref ENV_KEY_CACHE: Mutex<Option<String>> = Mutex::new(None);
+}
 
 #[derive(Debug, Serialize)]
 pub struct EnvProfile {
@@ -26,57 +35,89 @@ pub struct EnvProfile {
 /// via the `keyring` crate. Falls back to SQLite `settings` table if keyring
 /// is unavailable (e.g., headless CI), and migrates the key on first successful
 /// keyring access.
+///
+/// Result is cached in `ENV_KEY_CACHE` after first access — subsequent calls
+/// never touch the OS keychain. Call `init_env_encryption_key` at startup to
+/// populate the cache eagerly (single Keychain prompt).
 pub fn get_encryption_key(conn: &Connection) -> Result<String> {
+    let cache = ENV_KEY_CACHE.lock().unwrap();
+    if let Some(key) = cache.as_ref() {
+        return Ok(key.clone());
+    }
+    drop(cache);
+    init_env_encryption_key(conn)
+}
+
+/// Initialize the env encryption key from the OS keychain and cache it.
+/// Called once at app startup (or lazily by `get_encryption_key` on first
+/// access). Generates and stores a new key if none exists.
+pub fn init_env_encryption_key(conn: &Connection) -> Result<String> {
     const SERVICE: &str = "natives";
     const USERNAME: &str = "env_encryption_key";
 
-    // 1. Try OS keyring first
-    if let Ok(entry) = keyring::Entry::new(SERVICE, USERNAME) {
-        match entry.get_password() {
-            Ok(key) => {
-                // Key found in keyring — if SQLite still has the old key, migrate & delete
-                if let Ok(Some(db_key)) = db::get_setting(conn, ENCRYPTION_KEY_SETTING) {
-                    if db_key == key {
-                        // Same key — safe to remove from SQLite
-                        let _ = db::delete_setting(conn, ENCRYPTION_KEY_SETTING);
+    let key: String = {
+        // 1. Try OS keyring first
+        if let Ok(entry) = keyring::Entry::new(SERVICE, USERNAME) {
+            match entry.get_password() {
+                Ok(key) => {
+                    // Key found in keyring — if SQLite still has the old key, migrate & delete
+                    if let Ok(Some(db_key)) = db::get_setting(conn, ENCRYPTION_KEY_SETTING) {
+                        if db_key == key {
+                            // Same key — safe to remove from SQLite
+                            let _ = db::delete_setting(conn, ENCRYPTION_KEY_SETTING);
+                        }
+                        // If different, keyring takes precedence; don't delete SQLite key
+                        // (it may be needed for a rollback)
                     }
-                    // If different, keyring takes precedence; don't delete SQLite key
-                    // (it may be needed for a rollback)
+                    key
                 }
-                return Ok(key);
-            }
-            Err(keyring::Error::NoEntry) => {
-                // Not in keyring yet — check SQLite for migration
-                if let Ok(Some(db_key)) = db::get_setting(conn, ENCRYPTION_KEY_SETTING) {
-                    // Migrate existing SQLite key to keyring
-                    if entry.set_password(&db_key).is_ok() {
-                        let _ = db::delete_setting(conn, ENCRYPTION_KEY_SETTING);
+                Err(keyring::Error::NoEntry) => {
+                    // Not in keyring yet — check SQLite for migration
+                    if let Ok(Some(db_key)) = db::get_setting(conn, ENCRYPTION_KEY_SETTING) {
+                        // Migrate existing SQLite key to keyring
+                        if entry.set_password(&db_key).is_ok() {
+                            let _ = db::delete_setting(conn, ENCRYPTION_KEY_SETTING);
+                        }
+                        db_key
+                    } else {
+                        // No key anywhere — generate new one, store in keyring
+                        let new_key = generate_random_hex(32);
+                        if entry.set_password(&new_key).is_err() {
+                            // Keyring write failed — fall back to SQLite
+                            let _ = db::set_setting(conn, ENCRYPTION_KEY_SETTING, &new_key);
+                        }
+                        new_key
                     }
-                    return Ok(db_key);
                 }
-                // No key anywhere — generate new one, store in keyring
-                let new_key = generate_random_hex(32);
-                if entry.set_password(&new_key).is_err() {
-                    // Keyring write failed — fall back to SQLite
-                    let _ = db::set_setting(conn, ENCRYPTION_KEY_SETTING, &new_key);
+                Err(_) => {
+                    // Keyring access error — fall through to SQLite fallback
+                    match db::get_setting(conn, ENCRYPTION_KEY_SETTING)? {
+                        Some(key) => key,
+                        None => {
+                            let new_key = generate_random_hex(32);
+                            db::set_setting(conn, ENCRYPTION_KEY_SETTING, &new_key)?;
+                            new_key
+                        }
+                    }
                 }
-                return Ok(new_key);
             }
-            Err(_) => {
-                // Keyring access error — fall through to SQLite fallback
+        } else {
+            // keyring::Entry::new unavailable — SQLite fallback
+            match db::get_setting(conn, ENCRYPTION_KEY_SETTING)? {
+                Some(key) => key,
+                None => {
+                    let new_key = generate_random_hex(32);
+                    db::set_setting(conn, ENCRYPTION_KEY_SETTING, &new_key)?;
+                    new_key
+                }
             }
         }
-    }
+    };
 
-    // 2. Fallback: SQLite settings table (for headless/CI environments)
-    match db::get_setting(conn, ENCRYPTION_KEY_SETTING)? {
-        Some(key) => Ok(key),
-        None => {
-            let new_key = generate_random_hex(32);
-            db::set_setting(conn, ENCRYPTION_KEY_SETTING, &new_key)?;
-            Ok(new_key)
-        }
-    }
+    // Cache in memory — subsequent get_encryption_key calls never touch keychain
+    let mut cache = ENV_KEY_CACHE.lock().unwrap();
+    *cache = Some(key.clone());
+    Ok(key)
 }
 
 fn generate_random_hex(bytes: usize) -> String {
