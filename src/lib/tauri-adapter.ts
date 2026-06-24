@@ -97,6 +97,7 @@ export interface NativesAPI {
       htmlContent: string,
       permissions: string[],
     ) => Promise<{ moduleId: string; ok: boolean }>;
+    rollback: (params: { moduleId: string; oldContent: string }) => Promise<void>;
   };
   env: {
     getVariables: (profileId: string) => Promise<unknown>;
@@ -214,6 +215,7 @@ export interface NativesAPI {
     delete: (id: string) => Promise<void>;
     addKey: (data: { providerId: string; label: string; apiKey: string }) => Promise<unknown>;
     deleteKey: (id: string) => Promise<void>;
+    test: (data: { providerId: string; keyId: string }) => Promise<{ success: boolean; error?: string }>;
   };
   windowControls: {
     minimize: () => Promise<void>;
@@ -258,6 +260,36 @@ export interface NativesAPI {
     detect: (name: string) => Promise<string | null>;
     install: (name: string) => Promise<void>;
     uninstall: (name: string) => Promise<void>;
+  };
+  assistant: {
+    listSessions: (params: { projectId: string | null }) => Promise<unknown>;
+    getMessages: (sessionId: string) => Promise<unknown>;
+    createSession: (params: { projectId: string | null; title: string; modelId: string; providerId: string }) => Promise<unknown>;
+    deleteSession: (sessionId: string) => Promise<void>;
+    saveMessage: (params: { sessionId: string; role: string; content: string; status: string; tokenCount: number; toolCalls?: string; toolResult?: string }) => Promise<unknown>;
+    updateMessageStatus: (params: { messageId: string; status: string; toolResult?: string }) => Promise<void>;
+    updateSessionTitle: (params: { sessionId: string; title: string }) => Promise<void>;
+    updateSessionModel: (params: { sessionId: string; modelId: string; providerId: string }) => Promise<void>;
+    streamChat: (params: { sessionId: string; model: string; messages: Array<{ role: string; content: string }> }) => Promise<void>;
+    cancelStream: (sessionId: string) => Promise<void>;
+  };
+  /** 执行引擎设置（PRD 3.4） */
+  executorSettings: {
+    get: () => Promise<{ enabledTools: Record<string, boolean>; maxSelfHeal: number; maxSteps?: number }>;
+    save: (settings: { enabledTools: Record<string, boolean>; maxSelfHeal: number; maxSteps?: number }) => Promise<void>;
+  };
+  /** Runtime 抽象层（Slice B） */
+  runtime: {
+    listAvailable: () => Promise<Array<{ id: string; displayName: string; available: boolean }>>;
+    detectCli: () => Promise<{ claude_cli: boolean; codex_cli: boolean }>;
+  };
+  /** Task Scheduler（Slice J） */
+  scheduler: {
+    listTasks: () => Promise<Array<{
+      id: string; name: string; prompt: string; scheduleType: string;
+      scheduleValue: string; enabled: boolean; lastStatus: string | null;
+      consecutiveErrors: number; nextRun: string;
+    }>>;
   };
 }
 
@@ -417,6 +449,8 @@ const nativesAPI: NativesAPI = {
         htmlContent,
         permissions,
       }),
+    rollback: (params: { moduleId: string; oldContent: string }) =>
+      cmd('rollback_module', params),
   },
 
   // Environment
@@ -613,6 +647,50 @@ const nativesAPI: NativesAPI = {
     addKey: (data: { providerId: string; label: string; apiKey: string }) =>
       cmd('add_provider_key', data),
     deleteKey: (id: string) => cmd('delete_provider_key', { id }),
+    test: (data: { providerId: string; keyId: string }) =>
+      cmd('provider_test', { input: data }),
+  },
+
+  // Assistant
+  assistant: {
+    listSessions: (params: { projectId: string | null }) =>
+      cmd('assistant_list_sessions', params),
+    getMessages: (sessionId: string) =>
+      cmd('assistant_get_messages', { sessionId }),
+    createSession: (params: { projectId: string | null; title: string; modelId: string; providerId: string }) =>
+      cmd('assistant_create_session', params),
+    deleteSession: (sessionId: string) =>
+      cmd('assistant_delete_session', { sessionId }),
+    saveMessage: (params: { sessionId: string; role: string; content: string; status: string; tokenCount: number; toolCalls?: string; toolResult?: string }) =>
+      cmd('assistant_save_message', params),
+    updateMessageStatus: (params: { messageId: string; status: string; toolResult?: string }) =>
+      cmd('assistant_update_message_status', params),
+    updateSessionTitle: (params: { sessionId: string; title: string }) =>
+      cmd('assistant_update_session_title', params),
+    updateSessionModel: (params: { sessionId: string; modelId: string; providerId: string }) =>
+      cmd('assistant_update_session_model', params),
+    streamChat: (params: { sessionId: string; model: string; messages: Array<{ role: string; content: string }> }) =>
+      cmd('stream_chat', { input: params }),
+    cancelStream: (sessionId: string) =>
+      cmd('cancel_stream', { sessionId }),
+  },
+
+  // Execution Engine settings（PRD 3.4）
+  executorSettings: {
+    get: () => cmd('executor_get_settings'),
+    save: (settings: { enabledTools: Record<string, boolean>; maxSelfHeal: number; maxSteps?: number }) =>
+      cmd('executor_save_settings', { settings }),
+  },
+
+  // Runtime abstraction（Slice B）
+  runtime: {
+    listAvailable: () => cmd('runtime_list_available'),
+    detectCli: () => cmd('runtime_detect_cli'),
+  },
+
+  // Task Scheduler（Slice J）
+  scheduler: {
+    listTasks: () => cmd('scheduler_list_tasks'),
   },
 
   // Window Controls

@@ -1,7 +1,9 @@
 pub mod agent;
 pub mod app;
-pub mod bridge;
 pub mod archive;
+pub mod assistant;
+pub mod executor_settings;
+pub mod bridge;
 pub mod clipboard;
 pub mod codegraph;
 pub mod db;
@@ -14,6 +16,7 @@ pub mod module;
 pub mod notification;
 pub mod provider;
 pub mod release;
+pub mod runtime;
 pub mod screenshot;
 pub mod search;
 pub mod shell;

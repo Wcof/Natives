@@ -61,6 +61,7 @@ declare global {
         enable: (moduleId: string) => Promise<{ ok: boolean }>;
         disable: (moduleId: string) => Promise<{ ok: boolean }>;
         update: (moduleId: string) => Promise<{ ok: boolean }>;
+        rollback: (params: { moduleId: string; oldContent: string }) => Promise<void>;
       };
       env: {
         getVariables: (profileId: string) => Promise<{ key: string; value: string }[]>;
@@ -204,6 +205,44 @@ declare global {
         ghosttyFocus: () => Promise<void>;
         ghosttyLaunch: () => Promise<void>;
         ghosttyVtAvailable: () => Promise<boolean>;
+      };
+      provider: {
+        list: () => Promise<unknown>;
+        add: (data: { presetName: string; name: string; websiteUrl: string; baseUrl: string; keys: { label: string; apiKey: string }[] }) => Promise<unknown>;
+        delete: (id: string) => Promise<void>;
+        addKey: (data: { providerId: string; label: string; apiKey: string }) => Promise<unknown>;
+        deleteKey: (id: string) => Promise<void>;
+        test: (data: { providerId: string; keyId: string }) => Promise<{ success: boolean; error?: string }>;
+      };
+      assistant: {
+        listSessions: (params: { projectId: string | null }) => Promise<unknown>;
+        getMessages: (sessionId: string) => Promise<unknown>;
+        createSession: (params: { projectId: string | null; title: string; modelId: string; providerId: string }) => Promise<unknown>;
+        deleteSession: (sessionId: string) => Promise<void>;
+        saveMessage: (params: { sessionId: string; role: string; content: string; status: string; tokenCount: number; toolCalls?: string; toolResult?: string }) => Promise<unknown>;
+        updateMessageStatus: (params: { messageId: string; status: string; toolResult?: string }) => Promise<void>;
+        updateSessionTitle: (params: { sessionId: string; title: string }) => Promise<void>;
+        updateSessionModel: (params: { sessionId: string; modelId: string; providerId: string }) => Promise<void>;
+        streamChat: (params: { sessionId: string; model: string; messages: Array<{ role: string; content: string }> }) => Promise<void>;
+        cancelStream: (sessionId: string) => Promise<void>;
+      };
+      /** 执行引擎设置（PRD 3.4）：工具开关 + 自愈上限持久化 */
+      executorSettings: {
+        get: () => Promise<{ enabledTools: Record<string, boolean>; maxSelfHeal: number; maxSteps?: number }>;
+        save: (settings: { enabledTools: Record<string, boolean>; maxSelfHeal: number; maxSteps?: number }) => Promise<void>;
+      };
+      /** Runtime 抽象层（Slice B） */
+      runtime: {
+        listAvailable: () => Promise<Array<{ id: string; displayName: string; available: boolean }>>;
+        detectCli: () => Promise<{ claude_cli: boolean; codex_cli: boolean }>;
+      };
+      /** Task Scheduler（Slice J） */
+      scheduler: {
+        listTasks: () => Promise<Array<{
+          id: string; name: string; prompt: string; scheduleType: string;
+          scheduleValue: string; enabled: boolean; lastStatus: string | null;
+          consecutiveErrors: number; nextRun: string;
+        }>>;
       };
     };
   }

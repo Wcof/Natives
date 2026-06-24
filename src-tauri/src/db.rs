@@ -8,6 +8,153 @@ use std::path::Path;
 /// Database connection pool type alias
 pub type DbPool = Pool<SqliteConnectionManager>;
 
+use lazy_static::lazy_static;
+use std::sync::Mutex;
+
+lazy_static! {
+    static ref ASSISTANT_DB_POOL: Mutex<Option<DbPool>> = Mutex::new(None);
+    /// 主 natives.db pool（全局持有，供 runtime 等无法 access AppState 的模块使用）
+    static ref MAIN_DB_POOL: Mutex<Option<DbPool>> = Mutex::new(None);
+}
+
+/// 注册主 natives.db pool（lib.rs setup 钩子调用）
+pub fn register_main_pool(pool: DbPool) {
+    let mut guard = MAIN_DB_POOL.lock().unwrap();
+    *guard = Some(pool);
+}
+
+/// 获取主 natives.db pool 的连接（runtime 等无 State 上下文场景）
+pub fn get_main_conn() -> Result<r2d2::PooledConnection<SqliteConnectionManager>> {
+    let guard = MAIN_DB_POOL.lock().unwrap();
+    match guard.as_ref() {
+        Some(pool) => pool.get()
+            .map_err(|e| Error::Internal(format!("Failed to get main DB connection: {e}"))),
+        None => Err(Error::Internal("main DB pool not initialized".into())),
+    }
+}
+
+/// Initialize the assistant database pool at ~/.natives/assistant.db.
+/// This is a separate SQLite database isolated from the core natives.db.
+pub fn init_assistant_db() -> Result<()> {
+    let data_dir = dirs::home_dir()
+        .ok_or_else(|| Error::Internal("Cannot find home dir".to_string()))?
+        .join(".natives");
+    std::fs::create_dir_all(&data_dir)
+        .map_err(|e| Error::Internal(format!("Cannot create .natives dir: {e}")))?;
+    let db_path = data_dir.join("assistant.db");
+    let pool = init_db_pool(&db_path)?;
+
+    // Create assistant-specific tables
+    let conn = pool.get()
+        .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS assistant_sessions (
+            id TEXT PRIMARY KEY,
+            project_id TEXT,
+            title TEXT NOT NULL DEFAULT '',
+            model_id TEXT NOT NULL DEFAULT '',
+            provider_id TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            summary TEXT NOT NULL DEFAULT '',
+            token_used INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active'
+        );
+
+        CREATE TABLE IF NOT EXISTS assistant_messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL REFERENCES assistant_sessions(id) ON DELETE CASCADE,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            tool_calls TEXT,
+            tool_result TEXT,
+            status TEXT NOT NULL DEFAULT '',
+            token_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            sequence INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_assistant_messages_session
+            ON assistant_messages(session_id, sequence);
+        ",
+    )?;
+
+    // 增量迁移：assistant_sessions 加 runtime_override / sdk_session_id 字段（Slice B）
+    // R-D3：用 PRAGMA table_info 检查列存在，ALTER TABLE ADD COLUMN 补齐，禁 DROP
+    let existing_cols: Vec<String> = conn
+        .prepare("PRAGMA table_info(assistant_sessions)")
+        .map_err(Error::Database)?
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(Error::Database)?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !existing_cols.iter().any(|c| c == "runtime_override") {
+        conn.execute(
+            "ALTER TABLE assistant_sessions ADD COLUMN runtime_override TEXT",
+            [],
+        ).map_err(Error::Database)?;
+    }
+    if !existing_cols.iter().any(|c| c == "sdk_session_id") {
+        conn.execute(
+            "ALTER TABLE assistant_sessions ADD COLUMN sdk_session_id TEXT",
+            [],
+        ).map_err(Error::Database)?;
+    }
+
+    // scheduled_tasks + task_runs 表（Slice J Task Scheduler）
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS scheduled_tasks (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            runtime_override TEXT,
+            schedule_type TEXT NOT NULL,
+            schedule_value TEXT NOT NULL,
+            next_run TEXT NOT NULL,
+            last_status TEXT,
+            consecutive_errors INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            expires_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS task_runs (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            status TEXT,
+            result_summary TEXT,
+            error TEXT
+        );
+        ",
+    ).map_err(Error::Database)?;
+
+    let mut guard = ASSISTANT_DB_POOL.lock().unwrap();
+    *guard = Some(pool);
+    Ok(())
+}
+
+/// Get a connection from the assistant database pool.
+pub fn get_assistant_db_conn() -> Result<r2d2::PooledConnection<SqliteConnectionManager>> {
+    let guard = ASSISTANT_DB_POOL.lock().unwrap();
+    match guard.as_ref() {
+        Some(pool) => pool.get()
+            .map_err(|e| Error::Internal(format!("Failed to get assistant DB connection: {e}"))),
+        None => {
+            drop(guard);
+            init_assistant_db()?;
+            let guard = ASSISTANT_DB_POOL.lock().unwrap();
+            match guard.as_ref() {
+                Some(pool) => pool.get()
+                    .map_err(|e| Error::Internal(format!("Failed to get assistant DB connection: {e}"))),
+                None => Err(Error::Internal("Failed to initialize assistant DB".to_string())),
+            }
+        }
+    }
+}
+
 /// Initialize the SQLite database with WAL mode, foreign keys, and all tables.
 /// Kept for standalone DB initialization (e.g., tests, CLI tools).
 #[allow(dead_code)]
@@ -152,6 +299,15 @@ fn create_tables(conn: &Connection) -> Result<()> {
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
+        -- 11. Kernel-owned module contracts (KI-1 audit tree)
+        CREATE TABLE IF NOT EXISTS module_contracts (
+            module_id TEXT PRIMARY KEY,
+            contract_id TEXT NOT NULL,
+            schema_version TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
         -- Indexes
         CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(read, created_at);
         CREATE INDEX IF NOT EXISTS idx_audit_log_module ON permission_audit_log(module_id, created_at);
@@ -251,6 +407,30 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
 
             INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '4');
             ",
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // Migration v4→v5: provider_api_keys 加 dek_encrypted 列（信封加密）
+    // 原迁移在 init_kek() 里有时序问题——list_providers 可能在 init_kek 之前调用
+    if current_version < 5 {
+        // PRAGMA table_info 检查列是否已存在（幂等）
+        let existing_cols: Vec<String> = conn
+            .prepare("PRAGMA table_info(provider_api_keys)")
+            .map_err(Error::Database)?
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(Error::Database)?
+            .filter_map(|r| r.ok())
+            .collect();
+        if !existing_cols.iter().any(|c| c == "dek_encrypted") {
+            conn.execute_batch(
+                "ALTER TABLE provider_api_keys ADD COLUMN dek_encrypted TEXT NOT NULL DEFAULT '';",
+            )
+            .map_err(Error::Database)?;
+        }
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '5')",
+            [],
         )
         .map_err(Error::Database)?;
     }

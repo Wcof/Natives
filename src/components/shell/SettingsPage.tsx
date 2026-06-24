@@ -7,6 +7,7 @@ import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { X, Check, Star, Edit2, Download, RefreshCw, Trash2, ExternalLink, AlertCircle, Terminal } from 'lucide-react';
 import { FONT_SIZE, SPACING } from '@/lib/design-tokens';
+import RuntimePanel from '@/components/assistant/RuntimePanel';
 
 interface EnvProfile {
   id: number;
@@ -54,16 +55,24 @@ export default function SettingsPage() {
   const [editingVar, setEditingVar] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const [toast, setToast] = useState<string | null>(null);
+  // 执行引擎设置（PRD 3.4）：工具开关 + 自愈上限，持久化到 DB
+  const [enabledTools, setEnabledTools] = useState<Record<string, boolean>>({
+    read_file: true, list_dir: true, write_file: true,
+    write_module: true, run_terminal: false, lint_module: true,
+  });
+  const [maxSelfHeal, setMaxSelfHeal] = useState(3);
+  const [executorLoaded, setExecutorLoaded] = useState(false);
   const [deleteProfileTarget, setDeleteProfileTarget] = useState<string | null>(null);
   const [deleteVarTarget, setDeleteVarTarget] = useState<string | null>(null);
 
-  const [activeTab, setActiveTab] = useState<'theme' | 'visual' | 'env' | 'plugins'>('theme');
+  const [activeTab, setActiveTab] = useState<'theme' | 'visual' | 'env' | 'plugins' | 'executor'>('theme');
 
   const TABS = [
     { id: 'theme' as const, label: t(locale, 'settings.tabTheme') },
     { id: 'visual' as const, label: t(locale, 'settings.tabVisual') },
     { id: 'env' as const, label: t(locale, 'settings.tabEnv') },
     { id: 'plugins' as const, label: t(locale, 'settings.tabPlugins') },
+    { id: 'executor' as const, label: t(locale, 'settings.tabExecutor') },
   ];
 
   const showToast = useCallback((msg: string) => {
@@ -93,6 +102,51 @@ export default function SettingsPage() {
     codegraph: '',
   });
   const [activeLogPlugin, setActiveLogPlugin] = useState<string | null>(null);
+
+  // 执行引擎设置：启动时从 DB 加载（PRD 3.4 持久化）
+  useEffect(() => {
+    (async () => {
+      try {
+        const api = window.nativesAPI;
+        if (api?.executorSettings?.get) {
+          const s = await api.executorSettings.get();
+          setEnabledTools(s.enabledTools);
+          setMaxSelfHeal(s.maxSelfHeal);
+        }
+      } catch (e) {
+        console.error('Failed to load executor settings:', e);
+      } finally {
+        setExecutorLoaded(true);
+      }
+    })();
+  }, []);
+
+  // 执行引擎设置：变更时保存到 DB（防抖：loaded 后才保存，避免初始化覆盖）
+  const saveExecutorSettings = useCallback(async (next: { enabledTools: Record<string, boolean>; maxSelfHeal: number }) => {
+    if (!executorLoaded) return;
+    try {
+      const api = window.nativesAPI;
+      if (api?.executorSettings?.save) {
+        await api.executorSettings.save(next);
+      }
+    } catch (e) {
+      console.error('Failed to save executor settings:', e);
+    }
+  }, [executorLoaded]);
+
+  const toggleTool = useCallback((key: string) => {
+    setEnabledTools(prev => {
+      const next = { ...prev, [key]: !prev[key] };
+      void saveExecutorSettings({ enabledTools: next, maxSelfHeal });
+      return next;
+    });
+  }, [saveExecutorSettings, maxSelfHeal]);
+
+  const updateMaxSelfHeal = useCallback((value: number) => {
+    const clamped = Math.max(1, Math.min(10, value));
+    setMaxSelfHeal(clamped);
+    void saveExecutorSettings({ enabledTools, maxSelfHeal: clamped });
+  }, [saveExecutorSettings, enabledTools]);
 
   const detectPlugin = useCallback(async (name: string) => {
     setDetecting(prev => ({ ...prev, [name]: true }));
@@ -1206,6 +1260,11 @@ export default function SettingsPage() {
               </div>
             )}
           </section>
+        </div>
+
+        {/* Tab 5: 执行引擎 (Execution Engine) — RuntimePanel */}
+        <div style={{ display: activeTab === 'executor' ? 'block' : 'none' }}>
+          <RuntimePanel locale={locale} />
         </div>
       </div>
 

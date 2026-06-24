@@ -4,12 +4,18 @@ use tauri::{Emitter, Manager};
 
 mod agent;
 mod archive;
-mod commands;
+pub mod assistant_executor;
+pub mod assistant_stream_proxy;
+pub mod context_window;
+pub mod contract_linter;
+pub mod sequence_id;
+pub mod vendor_whitelist;
+pub mod commands;
 mod db;
 mod disk_usage;
 mod env_manager;
 mod error;
-mod file_manager;
+pub mod file_manager;
 mod fs_watch;
 #[cfg(feature = "ghostty-vt")]
 mod ghostty_vt;
@@ -20,7 +26,10 @@ mod http_server;
 mod lid_guard;
 mod module_manager;
 mod permission_center;
+pub mod provider_key_manager;
 mod release_wizard;
+mod runtime;
+mod scheduler;
 mod screenshot;
 mod search;
 mod terminal;
@@ -38,25 +47,17 @@ pub use ghostty_vt::GhosttyTerminal;
 
 /// Emit a `db-state-changed` event so the frontend can react to state changes
 /// without polling.  All write commands (theme, locale, module, notification, env)
-/// must call this helper to satisfy the "unidirectional bus" constraint.
-#[allow(dead_code)]
+/// must call this helper to satisfy the "unidirectional bus" constraint (KI-4).
+///
+/// The payload carries `version + sequence_id` so consumers can reconcile state
+/// and discard out-of-order events.
 pub fn emit_db_state_changed(
     app_handle: &tauri::AppHandle,
     channel: &str,
     data: serde_json::Value,
 ) {
-    #[derive(Clone, serde::Serialize)]
-    struct Payload {
-        channel: String,
-        data: serde_json::Value,
-    }
-    let _ = app_handle.emit(
-        "db-state-changed",
-        Payload {
-            channel: channel.to_string(),
-            data,
-        },
-    );
+    let payload = crate::sequence_id::envelope(channel, data);
+    let _ = app_handle.emit("db-state-changed", payload);
 }
 
 /// Application state shared across commands
@@ -106,6 +107,8 @@ pub fn run() {
             let db_path = data_dir.join("natives.db");
             let pool = db::init_db_pool(&db_path)
                 .map_err(|e| format!("failed to init database pool: {e}"))?;
+            // 注册主 pool 到全局，供 runtime 等无 State 上下文模块访问
+            db::register_main_pool(pool.clone());
 
             // ── Window Vibrancy (macOS Liquid Glass) ──
             // CSS backdrop-filter blur() is configured in globals.css for cross-platform glass effect.
@@ -125,6 +128,10 @@ pub fn run() {
             let modules_dir = data_dir.join("modules");
             std::fs::create_dir_all(&modules_dir)
                 .map_err(|e| format!("failed to create modules dir: {e}"))?;
+
+            // Initialize assistant database (isolated from core natives.db)
+            db::init_assistant_db()
+                .map_err(|e| format!("failed to init assistant database: {e}"))?;
 
             // Start local HTTP server for module assets and bridge API
             let mut server = http_server::HttpServer::new(modules_dir, tm.clone(), db_path.clone());
@@ -159,6 +166,19 @@ pub fn run() {
                 lid_guard: lid_guard::LidGuard::new(),
                 wechat_bridge: Mutex::new(Some(wechat::bridge::Bridge::new())),
             });
+
+            // ── P1 Runtime 抽象层：注册 Native runtime（兜底永远 available）──
+            // CLI runtime 在各自 Slice 注册；此处先注册 Native 保证降级路径可用
+            tauri::async_runtime::block_on(runtime::registry::register(std::sync::Arc::new(
+                runtime::native_runtime::NativeRuntime::new(app.handle().clone()),
+            )));
+            // 注册 Claude CLI + Codex CLI runtime（自动检测二进制可用性）
+            tauri::async_runtime::block_on(runtime::registry::register(std::sync::Arc::new(
+                runtime::claude_cli::ClaudeCliRuntime::new(),
+            )));
+            tauri::async_runtime::block_on(runtime::registry::register(std::sync::Arc::new(
+                runtime::codex_cli::CodexCliRuntime::new(),
+            )));
 
             // FOUC guard: window starts hidden (tauri.conf.json has visible: false)
             // It will be shown by theme_ready_signal command from frontend
@@ -341,6 +361,33 @@ pub fn run() {
             commands::wechat::wechat_set_persona,
             commands::wechat::wechat_detect_agents,
             commands::wechat::wechat_status,
+            // Assistant
+            crate::assistant_stream_proxy::stream_chat,
+            crate::assistant_stream_proxy::cancel_stream,
+            // Runtime abstraction (Slice B)
+            commands::runtime::runtime_list_available,
+            commands::runtime::runtime_detect_cli,
+            // Scheduler (Slice J)
+            crate::scheduler::scheduler_list_tasks,
+            crate::scheduler::scheduler_create_task,
+            crate::scheduler::scheduler_update_task,
+            crate::scheduler::scheduler_delete_task,
+            crate::scheduler::scheduler_run_task_now,
+            crate::scheduler::scheduler_list_runs,
+            commands::assistant::assistant_list_sessions,
+            commands::assistant::assistant_get_messages,
+            commands::assistant::assistant_create_session,
+            commands::assistant::assistant_delete_session,
+            commands::assistant::assistant_save_message,
+            commands::assistant::assistant_update_message_status,
+            commands::assistant::assistant_update_session_title,
+            commands::assistant::assistant_update_session_model,
+            commands::provider::provider_test,
+            // Execution Engine settings（PRD 3.4）
+            commands::executor_settings::executor_get_settings,
+            commands::executor_settings::executor_save_settings,
+            // Module rollback（US-6 一键回滚）
+            commands::module::rollback_module,
             // Bridge / Security
             commands::bridge::get_http_port,
             commands::bridge::generate_token,
