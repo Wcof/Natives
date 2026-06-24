@@ -100,6 +100,7 @@ pub fn assistant_create_session(
     title: String,
     model_id: String,
     provider_id: String,
+    runtime_override: Option<String>,
 ) -> Result<AssistantSession, String> {
     let conn = crate::db::get_assistant_db_conn().map_err(|e| e.to_string())?;
 
@@ -107,9 +108,9 @@ pub fn assistant_create_session(
     let now = chrono_now();
 
     conn.execute(
-        "INSERT INTO assistant_sessions (id, project_id, title, model_id, provider_id, created_at, updated_at, status)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active')",
-        params![id, project_id, title, model_id, provider_id, now, now],
+        "INSERT INTO assistant_sessions (id, project_id, title, model_id, provider_id, runtime_override, created_at, updated_at, status)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'active')",
+        params![id, project_id, title, model_id, provider_id, runtime_override, now, now],
     ).map_err(|e| e.to_string())?;
 
     Ok(AssistantSession {
