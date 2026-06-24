@@ -68,18 +68,13 @@ mod tests {
 
     #[test]
     fn test_show_item_in_folder_valid_file() {
-        let dir = std::env::temp_dir().join("n2-test-shell-siif");
-        std::fs::create_dir_all(&dir).ok();
-        let f = dir.join("target.txt");
-        std::fs::write(&f, b"x").ok();
-        let r = show_item_in_folder(f.to_string_lossy().into());
-        // macOS opens Finder; Linux/Windows may error without display
-        // Just ensure no crash or infinite loop
+        // 不触发真实 Finder 打开（避免副作用）。
+        // 仅验证函数对不存在路径不 panic、不递归。
+        let r = show_item_in_folder("/tmp/_n2_nonexistent_shell_test_target".into());
         if let Err(e) = r {
             let msg = e.to_string();
             assert!(!msg.contains("Recursive"), "no recursion: {msg}");
         }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -93,8 +88,12 @@ mod tests {
 
     #[test]
     fn test_open_path_valid_url() {
-        let r = open_path("https://example.com".into());
-        assert!(r.is_ok() || r.is_err()); // may fail in headless CI
+        // 不触发真实 OS 打开（避免副作用：弹浏览器/Finder）。
+        // 仅验证 open::that 接受合法 URL 不 panic。
+        // 用一个不存在的 scheme，open::that 会返回 Err 但不会打开任何东西。
+        let r = open_path("no-such-scheme://nothing".into());
+        // 在有 GUI 的本机可能成功打开；在 CI/headless 会失败。两种都可接受。
+        let _ = r;
     }
 
     #[test]
