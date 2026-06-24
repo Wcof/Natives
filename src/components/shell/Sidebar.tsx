@@ -605,6 +605,26 @@ export default function Sidebar({
           })}
         </div>
 
+        {/* Assistant entry — fixed first-level menu item, same level as Quick Access */}
+        <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--vibe-section-header)]">
+          {t(locale, 'nav.assistant')}
+        </div>
+        <div className="mb-3 flex flex-col gap-0.5 px-3">
+          <SidebarNavItem
+            isActive={activeNavigationId === '__assistant__'}
+            icon={
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
+                <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                <path d="M2 17l10 5 10-5" />
+                <path d="M2 12l10 5 10-5" />
+              </svg>
+            }
+            label={t(locale, 'nav.assistant')}
+            onClick={() => selectNavigation('__assistant__', '__assistant__')}
+            title={t(locale, 'nav.assistant')}
+          />
+        </div>
+
         {/* Favorites section — same level as Quick Access */}
         <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--vibe-section-header)]">
           {t(locale, 'sidebar.favorites')}

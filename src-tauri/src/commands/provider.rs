@@ -1,4 +1,4 @@
-use crate::{env_manager, Error, Result};
+use crate::{env_manager, provider_key_manager, Error, Result};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -55,6 +55,20 @@ pub struct AddProviderKeyInput {
     pub api_key: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderTestInput {
+    pub provider_id: String,
+    pub key_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderTestResult {
+    pub success: bool,
+    pub error: Option<String>,
+}
+
 // ── Commands ──
 
 /// List all saved providers with their API keys (decrypted).
@@ -65,7 +79,6 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
     let conn: &rusqlite::Connection = &*pool_conn;
 
     ensure_tables(conn)?;
-    let encryption_key = env_manager::get_encryption_key(conn)?;
 
     // Fetch providers
     let mut pstmt = conn.prepare(
@@ -90,10 +103,10 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
 
     // Fetch all keys
     let mut kstmt = conn.prepare(
-        "SELECT id, provider_id, label, api_key_encrypted, created_at FROM provider_api_keys ORDER BY created_at ASC"
+        "SELECT id, provider_id, label, api_key_encrypted, dek_encrypted, created_at FROM provider_api_keys ORDER BY created_at ASC"
     ).map_err(|e| Error::Internal(e.to_string()))?;
 
-    let all_keys: Vec<(String, String, String, String, String)> = kstmt
+    let all_keys: Vec<(String, String, String, String, String, String)> = kstmt
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -101,6 +114,7 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
             ))
         })
         .map_err(|e| Error::Internal(e.to_string()))?
@@ -113,9 +127,17 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
         .map(|(id, preset_name, name, website_url, base_url, created_at, updated_at)| {
             let keys: Vec<ProviderKey> = all_keys
                 .iter()
-                .filter(|(_, pid, _, _, _)| pid == &id)
-                .map(|(kid, _, label, encrypted, kcreated)| {
-                    let api_key = env_manager::decrypt(encrypted, &encryption_key).unwrap_or_default();
+                .filter(|(_, pid, _, _, _, _)| pid == &id)
+                .map(|(kid, _, label, encrypted, dek, kcreated)| {
+                    let api_key = if !dek.is_empty() {
+                        provider_key_manager::envelope_decrypt(encrypted, dek, conn).unwrap_or_default()
+                    } else {
+                        // Legacy fallback for keys without KEK-DEK
+                        match env_manager::get_encryption_key(conn) {
+                            Ok(ek) => env_manager::decrypt(encrypted, &ek).unwrap_or_default(),
+                            Err(_) => String::new(),
+                        }
+                    };
                     ProviderKey {
                         id: kid.clone(),
                         provider_id: id.clone(),
@@ -141,7 +163,6 @@ pub fn add_provider(state: State<'_, AppState>, input: AddProviderInput) -> Resu
     let conn: &rusqlite::Connection = &*pool_conn;
 
     ensure_tables(conn)?;
-    let encryption_key = env_manager::get_encryption_key(conn)?;
 
     let id = uuid_v4();
     let now = chrono_now();
@@ -154,14 +175,14 @@ pub fn add_provider(state: State<'_, AppState>, input: AddProviderInput) -> Resu
     let mut keys = Vec::new();
     for kin in input.keys {
         let kid = uuid_v4();
-        let encrypted = if kin.api_key.is_empty() {
-            String::new()
+        let (encrypted, dek_encrypted) = if kin.api_key.is_empty() {
+            (String::new(), String::new())
         } else {
-            env_manager::encrypt(&kin.api_key, &encryption_key)?
+            provider_key_manager::envelope_encrypt(&kin.api_key, conn)?
         };
         conn.execute(
-            "INSERT INTO provider_api_keys (id, provider_id, label, api_key_encrypted, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![kid, id, kin.label, encrypted, now],
+            "INSERT INTO provider_api_keys (id, provider_id, label, api_key_encrypted, dek_encrypted, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![kid, id, kin.label, encrypted, dek_encrypted, now],
         ).map_err(|e| Error::Internal(e.to_string()))?;
         keys.push(ProviderKey { id: kid, provider_id: id.clone(), label: kin.label, api_key: kin.api_key, created_at: now.clone() });
     }
@@ -177,19 +198,18 @@ pub fn add_provider_key(state: State<'_, AppState>, input: AddProviderKeyInput) 
     let conn: &rusqlite::Connection = &*pool_conn;
 
     ensure_tables(conn)?;
-    let encryption_key = env_manager::get_encryption_key(conn)?;
 
     let kid = uuid_v4();
     let now = chrono_now();
-    let encrypted = if input.api_key.is_empty() {
-        String::new()
+    let (encrypted, dek_encrypted) = if input.api_key.is_empty() {
+        (String::new(), String::new())
     } else {
-        env_manager::encrypt(&input.api_key, &encryption_key)?
+        provider_key_manager::envelope_encrypt(&input.api_key, conn)?
     };
 
     conn.execute(
-        "INSERT INTO provider_api_keys (id, provider_id, label, api_key_encrypted, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![kid, input.provider_id, input.label, encrypted, now],
+        "INSERT INTO provider_api_keys (id, provider_id, label, api_key_encrypted, dek_encrypted, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![kid, input.provider_id, input.label, encrypted, dek_encrypted, now],
     ).map_err(|e| Error::Internal(e.to_string()))?;
 
     Ok(ProviderKey { id: kid, provider_id: input.provider_id, label: input.label, api_key: input.api_key, created_at: now })
@@ -221,6 +241,86 @@ pub fn delete_provider(state: State<'_, AppState>, id: String) -> Result<()> {
     Ok(())
 }
 
+/// Test a provider connection by making a minimal API request.
+/// The test is executed entirely in Rust, never exposing the API key to the frontend.
+#[tauri::command]
+pub async fn provider_test(
+    state: State<'_, AppState>,
+    input: ProviderTestInput,
+) -> Result<ProviderTestResult> {
+    let pool_conn = state.db.get()
+        .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
+    let conn: &rusqlite::Connection = &*pool_conn;
+
+    // Fetch the API key and base URL
+    let (api_key_encrypted, dek_encrypted, base_url): (String, Option<String>, String) = conn
+        .query_row(
+            "SELECT k.api_key_encrypted, k.dek_encrypted, p.base_url
+             FROM provider_api_keys k
+             JOIN user_providers p ON k.provider_id = p.id
+             WHERE k.id = ?1 AND k.provider_id = ?2",
+            params![input.key_id, input.provider_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .map_err(|e| Error::Internal(format!("Failed to fetch key: {e}")))?;
+
+    // Decrypt the API key
+    let api_key = if let Some(dek) = &dek_encrypted {
+        if !dek.is_empty() {
+            provider_key_manager::envelope_decrypt(&api_key_encrypted, dek, conn)?
+        } else {
+            // Fallback to legacy encryption
+            let encryption_key = env_manager::get_encryption_key(conn)?;
+            env_manager::decrypt(&api_key_encrypted, &encryption_key)?
+        }
+    } else {
+        let encryption_key = env_manager::get_encryption_key(conn)?;
+        env_manager::decrypt(&api_key_encrypted, &encryption_key)?
+    };
+
+    // Make the test request via Rust (NEVER exposing key to frontend)
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| Error::Internal(format!("Failed to build client: {e}")))?;
+
+    let request_url = format!("{}/v1/models", base_url.trim_end_matches('/'));
+
+    let response = client
+        .get(&request_url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await;
+
+    match response {
+        Ok(resp) => {
+            if resp.status().is_success() {
+                Ok(ProviderTestResult {
+                    success: true,
+                    error: None,
+                })
+            } else {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                Ok(ProviderTestResult {
+                    success: false,
+                    error: Some(format!("HTTP {}: {}", status, body.chars().take(200).collect::<String>())),
+                })
+            }
+        }
+        Err(e) => Ok(ProviderTestResult {
+            success: false,
+            error: Some(format!("Connection failed: {e}")),
+        }),
+    }
+}
+
 // ── Helpers ──
 
 fn ensure_tables(conn: &rusqlite::Connection) -> Result<()> {
@@ -239,6 +339,7 @@ fn ensure_tables(conn: &rusqlite::Connection) -> Result<()> {
             provider_id TEXT NOT NULL REFERENCES user_providers(id) ON DELETE CASCADE,
             label TEXT NOT NULL DEFAULT '',
             api_key_encrypted TEXT NOT NULL DEFAULT '',
+            dek_encrypted TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL
         );"
     ).map_err(|e| Error::Internal(e.to_string()))

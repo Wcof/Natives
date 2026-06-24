@@ -558,6 +558,21 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     return null;
   }, [entries]);
 
+  // Persist active project path and badge to localStorage for other components (like Assistant) to read
+  useEffect(() => {
+    if (currentPath && currentPath !== '/') {
+      localStorage.setItem('natives:active_project_path', currentPath);
+      if (detectedProject) {
+        localStorage.setItem('natives:active_project_badge', detectedProject);
+      } else {
+        localStorage.removeItem('natives:active_project_badge');
+      }
+    } else {
+      localStorage.removeItem('natives:active_project_path');
+      localStorage.removeItem('natives:active_project_badge');
+    }
+  }, [currentPath, detectedProject]);
+
   // ── Event bridge: broadcast file-browser state for Header ──
   useEffect(() => {
     const detail = {

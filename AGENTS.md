@@ -35,6 +35,12 @@
 
 每条规则用 **MUST / SHOULD / MAY** 标注强度（见 [`00-glossary.md`](docs/standards/00-glossary.md)）。若任务必然违反某条 MUST，先停止、向用户确认，或补一条 ADR 说明豁免理由后再实施。
 
+### 功能域架构文档（涉及该功能域时必须先读）
+
+| 功能域 | 核心架构文档 |
+|--------|-------------|
+| **模块管理 / 创意工坊** | [`docs/architecture/module-workshop-kernel-runtime.md`](docs/architecture/module-workshop-kernel-runtime.md) — 5 大内核不变量（KI-1 ~ KI-5） |
+
 ## Key Constraints（摘要 — 详见 standards/）
 
 - No fake data: All user-visible fields must have real source breadcrumbs → [`product/02`](docs/standards/product/02-feature-spec.md)

@@ -179,6 +179,7 @@ pub struct CcusageHistoryPoint {
     pub cache_creation_tokens: u64,
     pub cache_read_tokens: u64,
     pub total_tokens: u64,
+    #[allow(dead_code)]
     pub total_cost: f64,
     pub model_breakdowns: Vec<CcusageModelBreakdown>,
 }

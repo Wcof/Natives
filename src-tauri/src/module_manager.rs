@@ -2,6 +2,7 @@ use crate::{Error, Result};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use sha2::{Sha256, Digest};
 
 /// Module manifest — mirrors Natives Zod schema
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,6 +62,14 @@ fn read_manifest_from_dir(dir: &Path) -> std::result::Result<Manifest, String> {
     let data: serde_json::Value =
         serde_json::from_str(&content).map_err(|e| format!("invalid JSON: {e}"))?;
     validate_manifest(&data)
+}
+
+/// Return the modules root directory (~/.natives/modules).
+pub fn modules_root() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".natives")
+        .join("modules")
 }
 
 /// Scan all modules in the modules directory
@@ -545,12 +554,55 @@ fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Compute the kernel-owned contract_id and content hash (KI-1).
+///
+/// $$contract_id = SHA256(domain + schema_version + SHA256(html_content))$$
+///
+/// The AI must never generate this; it is computed by the Rust kernel from
+/// the manifest's `domain` + `schema_version` + the content fingerprint.
+///
+/// Returns `(contract_id, content_hash)` where `content_hash = SHA256(html_content)`,
+/// so callers can persist the true content fingerprint in the audit tree without
+/// recomputing it.
+fn compute_contract_id(domain: &str, schema_version: &str, html_content: &str) -> (String, String) {
+    let mut content_hasher = Sha256::new();
+    content_hasher.update(html_content.as_bytes());
+    let content_hash = hex::encode(content_hasher.finalize());
+
+    let mut id_hasher = Sha256::new();
+    id_hasher.update(domain.as_bytes());
+    id_hasher.update(schema_version.as_bytes());
+    id_hasher.update(content_hash.as_bytes());
+    let contract_id = hex::encode(id_hasher.finalize());
+
+    (contract_id, content_hash)
+}
+
 /// Write an AI-generated module to disk atomically, then hot-sync into DB.
 ///
 /// This is the core of the "AI App Engine": the AI brain generates HTML/JS/Tailwind
 /// code, and this function writes it to the modules directory with full atomic
 /// guarantees (temp file → fsync → rename), then calls `sync_modules_to_db` to
 /// bring it online immediately without restart.
+///
+/// **KI-1 (Kernel-Owned Identity)**: `contract_id` is computed by the kernel,
+/// never accepted from the AI caller.
+/// **KI-3 (Contract Enforcement Gate)**: HTML and manifest are passed through
+/// `contract_linter` before any bytes hit the disk. Lint failure aborts the write.
+/// 写盘产出的快照信息（US-6 一键回滚所需）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteModuleOutcome {
+    /// 写盘前的旧 index.html 内容（首次创建时为 None）。
+    pub old_content: Option<String>,
+    /// 本次写入的新 index.html 内容。
+    pub new_content: String,
+    /// Kernel 回填的 contract_id（KI-1）。
+    pub contract_id: String,
+    /// Kernel 计算的 content_hash（SHA256）。
+    pub content_hash: String,
+}
+
 pub fn write_generated_module(
     conn: &Connection,
     modules_dir: &Path,
@@ -558,9 +610,47 @@ pub fn write_generated_module(
     name: &str,
     html_content: &str,
     permissions: &[String],
-) -> Result<()> {
+) -> Result<WriteModuleOutcome> {
+    // ── KI-3: Contract Linter gate — reject before any filesystem mutation ──
+    let html_lint = crate::contract_linter::lint_html(html_content);
+    if !html_lint.passed {
+        return Err(Error::Internal(format!(
+            "Contract Linter rejected HTML: {}",
+            html_lint.errors.join("; ")
+        )));
+    }
+
+    // Build a manifest JSON value for lint_manifest (checks schema_version + permissions)
+    let manifest_value = serde_json::json!({
+        "id": module_id,
+        "name": name,
+        "schema_version": "1.0",
+        "permissions": permissions,
+    });
+    let manifest_lint = crate::contract_linter::lint_manifest(&manifest_value);
+    if !manifest_lint.passed {
+        return Err(Error::Internal(format!(
+            "Contract Linter rejected manifest: {}",
+            manifest_lint.errors.join("; ")
+        )));
+    }
+
+    // ── KI-1: Kernel computes contract_id; AI caller cannot influence it ──
+    let domain = module_id; // module_id doubles as domain namespace
+    let schema_version = "1.0";
+    let (contract_id, content_hash) = compute_contract_id(domain, schema_version, html_content);
+
     let app_dir = modules_dir.join(module_id);
     std::fs::create_dir_all(&app_dir).map_err(Error::Io)?;
+
+    // ── 快照旧 index.html 内容（供 US-6 一键回滚）──
+    // 在任何写盘前读取，避免污染旧内容。无旧文件时为 None。
+    let old_html_path = app_dir.join("index.html");
+    let old_content: Option<String> = if old_html_path.exists() {
+        std::fs::read_to_string(&old_html_path).ok()
+    } else {
+        None
+    };
 
     // Build manifest matching existing Manifest struct
     let manifest = Manifest {
@@ -581,18 +671,63 @@ pub fn write_generated_module(
     atomic_write(&app_dir.join("manifest.json"), &manifest_json)?;
     atomic_write(&app_dir.join("index.html"), html_content)?;
 
+    // Persist the kernel-computed contract_id alongside the module for audit (KI-1).
+    // Propagate errors — a failed audit write must abort the installation, otherwise
+    // the module goes live with a broken audit invariant.
+    conn.execute(
+        "INSERT INTO module_contracts (module_id, contract_id, schema_version, content_hash)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(module_id) DO UPDATE SET
+            contract_id = excluded.contract_id,
+            schema_version = excluded.schema_version,
+            content_hash = excluded.content_hash",
+        rusqlite::params![
+            module_id,
+            contract_id,
+            schema_version,
+            &content_hash,
+        ],
+    )
+    .map_err(|e| Error::Internal(format!("Failed to persist contract audit record: {e}")))?;
+
     // Hot-sync: re-scan all modules and UPSERT into SQLite
     // This reuses the existing transactional sync logic (UPSERT + permission
     // refresh + module_order append + orphan cleanup) — zero duplication.
     sync_modules_to_db(conn, modules_dir)?;
 
+    Ok(WriteModuleOutcome {
+        old_content,
+        new_content: html_content.to_string(),
+        contract_id,
+        content_hash,
+    })
+}
+
+/// 回滚模块到上一版本（US-6 一键回滚）。
+///
+/// 用调用方持有的 `oldContent`（来自 `write_generated_module` 返回的快照）
+/// 原子写回 `index.html`。不撤销 manifest/权限变更——US-6 明确只回滚非破坏性
+/// 修改（不改 contract_id、不升级 schema、不扩张权限），所以 manifest 不需动。
+pub fn rollback_module_html(modules_dir: &Path, module_id: &str, old_content: &str) -> Result<()> {
+    let app_dir = modules_dir.join(module_id);
+    let html_path = app_dir.join("index.html");
+    if !html_path.exists() {
+        return Err(Error::InvalidInput(format!(
+            "module '{module_id}' has no index.html to rollback"
+        )));
+    }
+    atomic_write(&html_path, old_content)?;
+    // 重新同步注册表（content_hash 已变，但 contract_id 不变 —— 非破坏性修改）
+    let pool_conn = crate::db::get_assistant_db_conn()?;
+    let conn: &rusqlite::Connection = &*pool_conn;
+    sync_modules_to_db(conn, modules_dir)?;
     Ok(())
 }
 
 /// Atomic file write: write to a temp file in the same directory, fsync, then
 /// rename over the target. On POSIX, rename is atomic, so a crash at any point
 /// leaves either the old or the new file intact — never a partial write.
-fn atomic_write(path: &Path, content: &str) -> Result<()> {
+pub fn atomic_write(path: &Path, content: &str) -> Result<()> {
     use std::io::Write;
     let dir = path.parent().ok_or_else(|| Error::Internal("no parent dir".into()))?;
     let tmp_path = dir.join(format!(

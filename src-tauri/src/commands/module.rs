@@ -220,6 +220,24 @@ pub fn write_generated_module(
     Ok(serde_json::json!({ "moduleId": module_id, "ok": true }))
 }
 
+/// 回滚模块到上一版本（US-6 一键回滚）。
+/// 参数 `oldContent` 来自写盘时 `write_generated_module` 返回的快照，由前端持有。
+#[tauri::command]
+pub fn rollback_module(
+    module_id: String,
+    old_content: String,
+    app_handle: tauri::AppHandle,
+) -> Result<()> {
+    let modules_dir = modules_dir();
+    module_manager::rollback_module_html(&modules_dir, &module_id, &old_content)?;
+    emit_db_state_changed(
+        &app_handle,
+        "module",
+        serde_json::json!({ "action": "rollback", "moduleId": module_id }),
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

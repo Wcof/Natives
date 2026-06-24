@@ -250,6 +250,8 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       setActiveView('settings');
     } else if (moduleId === '__workshop__') {
       setActiveView('workshop');
+    } else if (moduleId === '__assistant__') {
+      setActiveView('assistant');
     } else if (moduleId === '__notifications__') {
       toggleRightPanel('notifications');
     } else if (moduleId.startsWith('__files__:')) {

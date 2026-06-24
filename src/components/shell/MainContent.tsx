@@ -15,6 +15,7 @@ const LazyFilePreview = lazy(() => import('@/components/files/FilePreview'));
 const LazyAiWorkbench = lazy(() => import('@/components/ai/AiWorkbench'));
 const LazyToolsPage = lazy(() => import('@/components/tools/ToolsPage'));
 const LazyModulesPage = lazy(() => import('@/app/modules/page'));
+const LazyAssistantWorkbench = lazy(() => import('@/components/assistant/AssistantWorkbench'));
 
 const BUILTIN_LAZY_MAP: Record<string, React.LazyExoticComponent<any>> = {};
 
@@ -103,6 +104,8 @@ export default function MainContent({
       );
     case 'ai':
       return <Suspense fallback={<LazyFallback />}><LazyAiWorkbench /></Suspense>;
+    case 'assistant':
+      return <Suspense fallback={<LazyFallback />}><LazyAssistantWorkbench locale={locale} /></Suspense>;
     case 'tools':
       return <Suspense fallback={<LazyFallback />}><LazyToolsPage /></Suspense>;
     case 'modules':

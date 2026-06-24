@@ -44,6 +44,13 @@ docs/standards/
     └── 03-feedback.md                   反馈与动效（聚焦环、动效曲线、声音）
 ```
 
+**关联架构文档（非规范，但涉及规范的功能域必须同步参考）：**
+
+| 领域 | 文档 | 关联规范 |
+|------|------|----------|
+| **模块管理 / 创意工坊** | [`docs/architecture/module-workshop-kernel-runtime.md`](../architecture/module-workshop-kernel-runtime.md) | technical/02 · technical/03 · frontend/02 |
+| | 5 大内核不变量（KI-1 ~ KI-5） | 详见下方"功能域规范映射" |
+
 共 13 篇。**所有新增功能或重构都必须先检索相关规范篇。**
 
 ---
@@ -106,6 +113,18 @@ docs/standards/
 
 ---
 
+## 功能域规范映射
+
+部分功能域涉及跨篇约束，本表汇总其引用入口：
+
+| 功能域 | 核心架构文档 | 关联规范篇 | 关键不变量 |
+|--------|-------------|-----------|-----------|
+| **模块管理 / 创意工坊** (Module Management / Creative Workshop) | [`docs/architecture/module-workshop-kernel-runtime.md`](../architecture/module-workshop-kernel-runtime.md) | `technical/02` · `technical/03` · `frontend/02` | KI-1: 内核主权身份 · KI-2: 串行 WAL 事务 · KI-3: 契约门禁 · KI-4: 最终一致性事件总线 · KI-5: 封闭供应链 |
+
+> **使用方式**：当任务涉及上述功能域时，先读对应的核心架构文档，再读关联规范篇。
+
+---
+
 ## 与现有文档的对应关系
 
 | 现有文档 | 角色 | 对应规范篇 |
@@ -130,3 +149,4 @@ docs/standards/
 - [ ] 所有用户可见文案**中英文同时更新**（MUST，见 `frontend/03`）。
 - [ ] 没有破坏五大防线（看门狗 / iframe 沙箱 / PTY / DB 单向总线 / FOUC，见 `technical/02`）。
 - [ ] 若违反了某条 MUST，已写 ADR 说明豁免理由。
+- [ ] 若涉及**模块管理 / 创意工坊**功能，已校验 5 大内核不变量（KI-1~KI-5，见 [`docs/architecture/module-workshop-kernel-runtime.md`](../architecture/module-workshop-kernel-runtime.md)）。
