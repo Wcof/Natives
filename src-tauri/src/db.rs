@@ -308,6 +308,27 @@ fn create_tables(conn: &Connection) -> Result<()> {
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
+        -- 12. User-configured LLM providers (native_runtime / provider commands)
+        CREATE TABLE IF NOT EXISTS user_providers (
+            id TEXT PRIMARY KEY,
+            preset_name TEXT NOT NULL,
+            name TEXT NOT NULL,
+            website_url TEXT NOT NULL DEFAULT '',
+            base_url TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        -- 13. Provider API keys (envelope-encrypted, KEK-DEK)
+        CREATE TABLE IF NOT EXISTS provider_api_keys (
+            id TEXT PRIMARY KEY,
+            provider_id TEXT NOT NULL REFERENCES user_providers(id) ON DELETE CASCADE,
+            label TEXT NOT NULL DEFAULT '',
+            api_key_encrypted TEXT NOT NULL DEFAULT '',
+            dek_encrypted TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+
         -- Indexes
         CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(read, created_at);
         CREATE INDEX IF NOT EXISTS idx_audit_log_module ON permission_audit_log(module_id, created_at);
