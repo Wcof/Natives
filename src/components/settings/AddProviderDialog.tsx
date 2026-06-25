@@ -254,7 +254,7 @@ export default function AddProviderDialog({ locale, onClose, onSave }: AddProvid
                       <input
                         value={k.label}
                         onChange={(e) => updateKey(idx, 'label', e.target.value)}
-                        placeholder="Label"
+                        placeholder={t('settings.keyLabel')}
                         style={{ ...inputStyle, fontSize: FONT_SIZE.xs, padding: '3px 6px' }}
                       />
                       <input
@@ -272,7 +272,7 @@ export default function AddProviderDialog({ locale, onClose, onSave }: AddProvid
                           background: 'none', border: 'none', color: 'var(--danger)',
                           cursor: 'pointer', padding: '6px 2px', flexShrink: 0,
                         }}
-                        title="Remove"
+                        title={t('settings.remove')}
                       >
                         <Trash2 size={12} />
                       </button>

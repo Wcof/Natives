@@ -437,8 +437,8 @@ export default function Sidebar({
           onClick={() => handleWindowAction('close')}
           className="group flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--mac-red)] hover:bg-[var(--mac-red-hover)] hover:shadow-[0_0_6px_var(--mac-red-glow)] transition-all"
          
-          aria-label="关闭"
-          title="关闭"
+          aria-label={t(locale, 'header.close')}
+          title={t(locale, 'header.close')}
         >
           <X size={9} className="text-[#1a1a1e] opacity-0 group-hover:opacity-100 transition-opacity" strokeWidth={2.5} />
         </button>
@@ -446,9 +446,9 @@ export default function Sidebar({
         <button
           onClick={() => handleWindowAction('minimize')}
           className="group flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--mac-yellow)] hover:bg-[var(--mac-yellow-hover)] hover:shadow-[0_0_6px_var(--mac-yellow-glow)] transition-all"
-         
-          aria-label="最小化"
-          title="最小化"
+
+          aria-label={t(locale, 'header.minimize')}
+          title={t(locale, 'header.minimize')}
         >
           <Minus size={9} className="text-[#1a1a1e] opacity-0 group-hover:opacity-100 transition-opacity" strokeWidth={2.5} />
         </button>

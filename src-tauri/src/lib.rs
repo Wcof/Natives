@@ -319,6 +319,7 @@ pub fn run() {
             // Disk
             commands::disk::disk_usage,
             commands::disk::disk_system_info,
+            commands::disk::system_metrics,
             // Thumbnail
             commands::thumbnail::thumbnail_generate,
             // Agent

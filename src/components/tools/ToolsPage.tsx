@@ -6,7 +6,7 @@ import { t, type Locale } from '@/i18n';
 import ScreenshotCard from './ScreenshotCard';
 import ImageAnnotator from './ImageAnnotator';
 import ReleaseWizardDialog from './ReleaseWizardDialog';
-import UpdateNotification from './UpdateNotification';
+import UpdateNotification from '@/components/update/UpdateNotification';
 
 type ToolsTab = 'screenshot' | 'release' | 'update';
 

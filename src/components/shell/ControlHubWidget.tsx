@@ -40,8 +40,9 @@ export default function ControlHubWidget() {
   // --- Widget State ---
   const [activeTab, setActiveTab] = useState<'control' | 'settings'>('control');
   const [clicks, setClicks] = useState(0);
-  const [cpuUsage, setCpuUsage] = useState(38);
-  const [memoryUsage, setMemoryUsage] = useState(132);
+  const [cpuUsage, setCpuUsage] = useState(0);
+  const [memoryUsedBytes, setMemoryUsedBytes] = useState(0);
+  const [memoryTotalBytes, setMemoryTotalBytes] = useState(0);
   const [isSandboxActive, setIsSandboxActive] = useState(false);
   const [isWifiOn, setIsWifiOn] = useState(true);
   const [isBluetoothOn, setIsBluetoothOn] = useState(true);
@@ -138,15 +139,31 @@ export default function ControlHubWidget() {
     elasticity, cornerRadius, overLight, mode, showWallpaper, showBlobs,
   ]);
 
-  // --- CPU Simulation ---
+  // --- Real System Metrics Polling (R-NO-FAKE-DATA) ---
+  // Replaces previous Math.random() CPU simulation with real sysinfo backend.
   useEffect(() => {
-    const timer = setInterval(() => {
-      setCpuUsage((prev) => {
-        const delta = Math.floor(Math.random() * 11) - 5;
-        return Math.max(12, Math.min(94, prev + delta));
-      });
-    }, 1500);
-    return () => clearInterval(timer);
+    let cancelled = false;
+    const api = window.nativesAPI;
+    if (!api?.disk?.systemMetrics) return;
+
+    const poll = async () => {
+      try {
+        const m = await api.disk.systemMetrics();
+        if (cancelled) return;
+        setCpuUsage(Math.round(m.cpuUsage));
+        setMemoryUsedBytes(m.memoryUsedBytes);
+        setMemoryTotalBytes(m.memoryTotalBytes);
+      } catch (err) {
+        console.warn('Failed to fetch system metrics:', err);
+      }
+    };
+
+    poll();
+    const timer = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, []);
 
   // --- Language Toggle helper ---
@@ -232,7 +249,7 @@ export default function ControlHubWidget() {
         }}
       >
         <div
-          className="flex flex-col text-white"
+          className="main-card flex flex-col text-white"
           data-tauri-drag-region
           style={{
             width: '390px',
@@ -426,10 +443,10 @@ export default function ControlHubWidget() {
                   <div>
                     <div className="flex justify-between text-[10px] text-white/60 mb-1">
                       <span>{t(locale, 'controlHub.memoryFootprint')}</span>
-                      <span className="font-mono">{memoryUsage} MB / 256 MB</span>
+                      <span className="font-mono">{Math.round(memoryUsedBytes / 1024 / 1024)} MB / {Math.round(memoryTotalBytes / 1024 / 1024)} MB</span>
                     </div>
                     <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
-                      <div className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-300" style={{ width: `${(memoryUsage / 256) * 100}%` }} />
+                      <div className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-300" style={{ width: `${memoryTotalBytes > 0 ? (memoryUsedBytes / memoryTotalBytes) * 100 : 0}%` }} />
                     </div>
                   </div>
 
@@ -451,7 +468,7 @@ export default function ControlHubWidget() {
 
                 {/* State & Sandbox Interactive Actions */}
                 <div className="grid grid-cols-2 gap-2 mt-1">
-                  <button onClick={() => { setClicks((c) => c + 1); setMemoryUsage((m) => Math.min(256, m + 6)); }}
+                  <button onClick={() => { setClicks((c) => c + 1); }}
                     className="py-2.5 px-3 rounded-xl bg-white/10 hover:bg-white/15 border border-white/10 text-xs font-semibold text-center transition-all active:scale-[0.97]">
                     {t(locale, 'controlHub.incrementState').replace('{n}', clicks.toString())}
                   </button>

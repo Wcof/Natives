@@ -108,7 +108,7 @@ export default function RightPanel({
               onModeChange('file-preview');
               onPreviewSubModeChange?.('git');
             }}
-            title="Git"
+            title={t(locale, 'rightPanel.git')}
           >
             <GitBranch size={15} />
           </button>
@@ -139,7 +139,7 @@ export default function RightPanel({
           className="flex items-center justify-center p-1.5 rounded-lg text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)] transition-all"
           onClick={handleClose}
           title={t(locale, 'rightPanel.closePanel')}
-          aria-label="Close panel"
+          aria-label={t(locale, 'rightPanel.closePanel')}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M18 6L6 18M6 6l12 12" />

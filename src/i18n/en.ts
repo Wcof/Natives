@@ -77,6 +77,7 @@ export const en = {
     viewAllSkills: 'View All',
     // Token usage
     tokenUsage: 'Token Usage',
+    tokenSavings: 'Token Savings',
     realTotalTokens: 'Real Tokens Used',
     totalRequests: 'Total Requests',
     totalCost: 'Total Cost',
@@ -123,6 +124,20 @@ export const en = {
     loading: 'Loading...',
     noActivity: 'No recent activity yet',
     sourceBreadcrumb: 'Data source',
+    // Skill stat cards
+    allSkills: 'All Skills',
+    allSkillsTitle: 'All skills and module distribution',
+    activeSkills: 'Active',
+    activeSkillsSubtext: '{count} triggers total',
+    activeSkillsTitle: 'Skills triggered in the last 45 days',
+    dustSkills: 'Dusty',
+    dustSkillsSubtext: 'Zero triggers in 45 days',
+    dustSkillsTitle: 'Enabled but not triggered recently',
+    issueSkills: 'Issues',
+    issueSkillsSubtext: 'Health anomalies',
+    issueSkillsTitle: 'Missing frontmatter / truncated description / leftover folders',
+    budgetLabel: 'Claude Budget',
+    budgetTitle: 'Claude persistent description character usage',
   },
 
   // Module Manager
@@ -142,6 +157,7 @@ export const en = {
     ariaEnable: 'Enable {name}',
     ariaDisable: 'Disable {name}',
     ariaUninstall: 'Uninstall {name}',
+    ariaRegion: 'Module manager',
   },
 
   // Store
@@ -222,6 +238,9 @@ export const en = {
     tabVisual: 'Visual Tuning',
     tabEnv: 'Environment',
     tabPlugins: 'Plugins',
+    viewLog: 'View Log',
+    keyLabel: 'Label',
+    remove: 'Remove',
     tabExecutor: 'Execution Engine',
     executorTitle: 'Execution Engine',
     executorDesc: 'Configure which tools the AI assistant can use, and set self-heal / circuit-breaker policies.',
@@ -385,6 +404,7 @@ export const en = {
     },
     closePanel: 'Close panel',
     filePreview: 'File Preview',
+    git: 'Git',
   },
 
   // Command Palette
@@ -521,11 +541,15 @@ export const en = {
     personal: 'Home',
     aiWorkbench: 'AI Workbench',
     showFull: 'Show full path',
+    close: 'Close',
+    minimize: 'Minimize',
+    maximize: 'Maximize',
   },
 
   // AI Workbench
   aiWorkbench: {
     agentChanges: 'Agent Changes',
+    sessionTitlePlaceholder: 'Session Title',
     waitingForChanges: 'Waiting for agent changes...',
     changeInbox: 'Change Inbox',
     noChanges: 'No changes yet',
@@ -667,6 +691,9 @@ export const en = {
       cancel: 'Cancel',
       delete: 'Delete',
       tags: 'Tags',
+      editTitlePlaceholder: 'Prompt title',
+      editContentPlaceholder: 'Prompt content...',
+      editTagsPlaceholder: 'Tags (comma separated: code-review, typescript)',
     },
   },
 
@@ -743,6 +770,8 @@ export const en = {
     skipToContent: 'Skip to content',
     rename: 'Rename',
     create: 'Create',
+    edit: 'Edit',
+    refresh: 'Refresh',
     notificationTitle: 'Task Complete',
     notificationBody: 'A long-running task has completed.',
     welcome: 'Welcome',
@@ -770,6 +799,7 @@ export const en = {
     clearAll: 'Clear All',
     close: 'Close Annotation',
     noImage: 'No image selected',
+    textPlaceholder: 'Enter text...',
   },
 
   // ── Phase 3: Release Wizard ──
@@ -948,5 +978,23 @@ export const en = {
     rollback: 'Rollback to previous version',
     tokensUsed: '{count} tokens used',
     selfHeal: 'Build failed, retrying ({count}/3)',
+  },
+
+  // ── WeChat ClawBot Bridge ──
+  wechat: {
+    title: 'WeChat ClawBot',
+    close: 'Close',
+    scanHint: 'Scan with WeChat to remote-control local Claude Code / Codex',
+    getQrcode: 'Get QR Code',
+    loading: 'Loading…',
+    scanToLogin: 'Scan with WeChat to log in',
+    messagePlaceholder: 'Send a message to the local agent…',
+  },
+
+  // ── Image Editor ──
+  imageEditor: {
+    color: 'Color',
+    thickness: 'Thickness',
+    undo: 'Undo ⌘Z',
   },
 };

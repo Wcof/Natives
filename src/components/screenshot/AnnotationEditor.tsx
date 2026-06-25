@@ -283,7 +283,7 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
               if (e.key === 'Enter') handleTextSubmit();
               if (e.key === 'Escape') setTextPos(null);
             }}
-            placeholder="Enter text..."
+            placeholder={t(locale, 'screenshot.textPlaceholder')}
             style={{
               background: 'var(--bg)',
               border: '1px solid var(--vibe-toolbar-border)',

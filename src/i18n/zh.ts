@@ -73,6 +73,7 @@ export const zh = {
     viewAllSkills: '查看全部',
     // Token usage
     tokenUsage: 'Token 使用量',
+    tokenSavings: 'Token 节约量',
     realTotalTokens: '真实消耗 Tokens',
     totalRequests: '总请求数',
     totalCost: '总成本',
@@ -119,6 +120,20 @@ export const zh = {
     loading: '加载中...',
     noActivity: '暂无最近活动',
     sourceBreadcrumb: '数据来源',
+    // Skill stat cards
+    allSkills: '全部 Skills',
+    allSkillsTitle: '全部技能及模块分布',
+    activeSkills: '活跃技能',
+    activeSkillsSubtext: '共 {count} 次触发',
+    activeSkillsTitle: '45天内被触发的技能数量',
+    dustSkills: '吃灰中',
+    dustSkillsSubtext: '45天零触发',
+    dustSkillsTitle: '已启用但近期未触发的技能',
+    issueSkills: '异常 / 问题',
+    issueSkillsSubtext: '健康度异常',
+    issueSkillsTitle: 'frontmatter 缺失/描述截断/残留文件夹等异常',
+    budgetLabel: 'Claude 常驻预算',
+    budgetTitle: 'Claude 常驻描述字符量占用情况',
   },
 
   modules: {
@@ -137,6 +152,7 @@ export const zh = {
     ariaEnable: '启用 {name}',
     ariaDisable: '禁用 {name}',
     ariaUninstall: '卸载 {name}',
+    ariaRegion: '模块管理',
   },
 
   store: {
@@ -214,6 +230,9 @@ export const zh = {
     tabVisual: '视觉微调',
     tabEnv: '环境配置',
     tabPlugins: '插件设置',
+    viewLog: '查看日志',
+    keyLabel: '标签',
+    remove: '移除',
     tabExecutor: '执行引擎',
     executorTitle: '执行引擎',
     executorDesc: '配置 AI 助理可使用的工具，以及自愈/熔断策略。',
@@ -374,6 +393,7 @@ export const zh = {
     },
     closePanel: '关闭面板',
     filePreview: '文件预览',
+    git: 'Git',
   },
 
   commandPalette: {
@@ -509,11 +529,15 @@ export const zh = {
     personal: '个人主页',
     aiWorkbench: 'AI 工作台',
     showFull: '展开完整路径',
+    close: '关闭',
+    minimize: '最小化',
+    maximize: '最大化',
   },
 
   // AI 工作台
   aiWorkbench: {
     agentChanges: 'Agent 变更',
+    sessionTitlePlaceholder: '会话标题',
     waitingForChanges: '等待 Agent 变更...',
     changeInbox: '变更收件箱',
     noChanges: '暂无变更',
@@ -656,6 +680,9 @@ export const zh = {
       cancel: '取消',
       delete: '删除',
       tags: '标签',
+      editTitlePlaceholder: '提示词标题',
+      editContentPlaceholder: '提示词内容…',
+      editTagsPlaceholder: '标签（逗号分隔：code-review, typescript）',
     },
   },
 
@@ -723,6 +750,8 @@ export const zh = {
     skipToContent: '跳转到内容',
     rename: '重命名',
     create: '创建',
+    edit: '编辑',
+    refresh: '刷新',
     notificationTitle: '任务完成',
     notificationBody: '长时间运行的任务已完成。',
     welcome: '欢迎使用',
@@ -757,6 +786,7 @@ export const zh = {
     clearAll: '清除全部',
     close: '关闭标注',
     noImage: '未选择图片',
+    textPlaceholder: '输入文字…',
   },
 
   // ── Phase 3: Release Wizard ──
@@ -936,5 +966,23 @@ export const zh = {
     rollback: '回滚到上一版本',
     tokensUsed: '消耗 {count} Tokens',
     selfHeal: '构建失败，正在重试 ({count}/3)',
+  },
+
+  // ── WeChat ClawBot Bridge ──
+  wechat: {
+    title: '微信 ClawBot',
+    close: '关闭',
+    scanHint: '扫码登录微信，遥控本机的 Claude Code / Codex',
+    getQrcode: '获取二维码',
+    loading: '加载中…',
+    scanToLogin: '用微信扫码登录',
+    messagePlaceholder: '发送消息给本机 agent…',
+  },
+
+  // ── Image Editor ──
+  imageEditor: {
+    color: '颜色',
+    thickness: '粗细',
+    undo: '撤销 ⌘Z',
   },
 };

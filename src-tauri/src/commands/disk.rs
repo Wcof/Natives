@@ -1,13 +1,20 @@
 use crate::{disk_usage, Error, Result};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use sysinfo::Disks;
+use sysinfo::{Disks, System};
 
 #[derive(Serialize)]
 pub struct DiskSystemInfo {
     pub total_bytes: u64,
     pub used_bytes: u64,
     pub available_bytes: u64,
+}
+
+#[derive(Serialize)]
+pub struct SystemMetrics {
+    pub cpu_usage: f32,
+    pub memory_used_bytes: u64,
+    pub memory_total_bytes: u64,
 }
 
 #[tauri::command]
@@ -41,6 +48,27 @@ pub fn disk_system_info() -> Result<DiskSystemInfo> {
         total_bytes: total,
         used_bytes: used,
         available_bytes: available,
+    })
+}
+
+/// Real-time system metrics (CPU + memory) for Control Hub live monitor.
+/// Returns real data sources instead of hardcoded mock values (R-NO-FAKE-DATA).
+#[tauri::command]
+pub fn system_metrics() -> Result<SystemMetrics> {
+    let mut sys = System::new_all();
+    sys.refresh_cpu_usage();
+    // CPU usage needs two samples to be meaningful; sleep briefly to get a delta.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    sys.refresh_cpu_usage();
+
+    let cpu_usage = sys.global_cpu_usage();
+    let memory_used_bytes = sys.used_memory();
+    let memory_total_bytes = sys.total_memory();
+
+    Ok(SystemMetrics {
+        cpu_usage,
+        memory_used_bytes,
+        memory_total_bytes,
     })
 }
 

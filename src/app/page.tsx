@@ -415,44 +415,44 @@ export default function DashboardPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr) 1.6fr', gap: SPACING.sm }}>
           <StatCard
             icon={<Grid3x3 size={16} />}
-            label="全部 Skills"
+            label={t(locale, 'dashboard.allSkills')}
             value={isSkillsLoading ? '…' : `${skillsOverview.unique}/${skillsOverview.total}`}
-            subtext={`${moduleCount} 模块 · ${isStorageLoading ? '…' : storageSize}`}
+            subtext={`${moduleCount} ${t(locale, 'dashboard.modulesLabel')} · ${isStorageLoading ? '…' : storageSize}`}
             hoverColor="#3b82f6"
-            title="全部技能及模块分布"
+            title={t(locale, 'dashboard.allSkillsTitle')}
             onClick={() => window.dispatchEvent(new CustomEvent('navigate', { detail: 'modules' }))}
           />
           <StatCard
             icon={<Zap size={16} />}
-            label="活跃技能"
+            label={t(locale, 'dashboard.activeSkills')}
             value={isSkillsLoading ? '…' : String(skillsOverview.active)}
-            subtext={`共 ${skillsOverview.totalHits} 次触发`}
+            subtext={t(locale, 'dashboard.activeSkillsSubtext', { count: skillsOverview.totalHits })}
             hoverColor="#10b981"
-            title="45天内被触发的技能数量"
+            title={t(locale, 'dashboard.activeSkillsTitle')}
           />
           <StatCard
             icon={<Inbox size={16} />}
-            label="吃灰中"
+            label={t(locale, 'dashboard.dustSkills')}
             value={isSkillsLoading ? '…' : String(skillsOverview.dust)}
-            subtext="45天零触发"
+            subtext={t(locale, 'dashboard.dustSkillsSubtext')}
             hoverColor="var(--text-faint)"
-            title="已启用但近期未触发的技能"
+            title={t(locale, 'dashboard.dustSkillsTitle')}
           />
           <StatCard
             icon={<CircleAlert size={16} />}
-            label="异常 / 问题"
+            label={t(locale, 'dashboard.issueSkills')}
             value={isSkillsLoading ? '…' : String(skillsOverview.issues)}
-            subtext="健康度异常"
+            subtext={t(locale, 'dashboard.issueSkillsSubtext')}
             hoverColor={skillsOverview.issues > 0 ? 'var(--danger)' : 'var(--text-faint)'}
             valueColor={skillsOverview.issues > 0 ? 'var(--danger)' : undefined}
-            title="frontmatter 缺失/描述截断/残留文件夹等异常"
+            title={t(locale, 'dashboard.issueSkillsTitle')}
           />
           <StatCard
             icon={<Layers size={16} />}
-            label="Claude 常驻预算"
+            label={t(locale, 'dashboard.budgetLabel')}
             value={`${(skillsOverview.budgetChars / 1000).toFixed(1)}k / ${(skillsOverview.budgetLimit / 1000).toFixed(0)}k`}
             hoverColor={skillsOverview.budgetChars > skillsOverview.budgetLimit ? 'var(--danger)' : '#a855f7'}
-            title="Claude 常驻描述字符量占用情况"
+            title={t(locale, 'dashboard.budgetTitle')}
           >
             <div style={{ marginTop: 6 }}>
               <div style={{
@@ -537,7 +537,7 @@ export default function DashboardPage() {
             {/* Card 3: Token Savings */}
             <KanbanCard
               icon={<Coins size={16} />}
-              title="Token 节约量"
+              title={t(locale, 'dashboard.tokenSavings')}
               accentColor="#f59e0b"
               summary={rtkSaved > 0 ? fmtCount(rtkSaved) : '—'}
               badge={rtkCmds > 0 ? `${rtkCmds} commands` : undefined}

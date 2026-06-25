@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Pen, Square, Minus, ArrowRight, Type, Grid3x3, Undo2, Save, FileOutput } from 'lucide-react';
+import { t, useLocale } from '@/i18n';
 
 /**
  * ImageEditor — Canvas-based image editor.
@@ -28,6 +29,7 @@ const MAX_UNDO = 25;
 const OOM_LIMIT = 60_000_000; // 60MP
 
 export default function ImageEditor({ imagePath, imageName, onSave, onClose }: ImageEditorProps) {
+  const locale = useLocale();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const stateRef = useRef<{
@@ -370,7 +372,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
           type="color"
           value={color}
           onChange={(e) => setColor(e.target.value)}
-          title="颜色"
+          title={t(locale, 'imageEditor.color')}
           className="w-7 h-7 rounded cursor-pointer border-0"
         />
         <div className="flex items-center gap-2">
@@ -380,14 +382,14 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
             max={60}
             value={size}
             onChange={(e) => setSize(Number(e.target.value))}
-            title="粗细"
+            title={t(locale, 'imageEditor.thickness')}
             className="w-20"
           />
           <span className="text-xs" style={{ color: 'var(--text-faint)' }}>{size}px</span>
         </div>
         <button
           onClick={handleUndo}
-          title="撤销 ⌘Z"
+          title={t(locale, 'imageEditor.undo')}
           className="p-1.5 rounded transition-colors"
           style={{ color: 'var(--text-dim)' }}
         >

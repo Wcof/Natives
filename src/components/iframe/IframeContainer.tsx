@@ -22,6 +22,7 @@ export default function IframeContainer({ moduleId, url, isVisible, onReady, onE
   const [retryCount, setRetryCount] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadIframe = useCallback(() => {
     setLoading(true);
@@ -44,7 +45,7 @@ export default function IframeContainer({ moduleId, url, isVisible, onReady, onE
     setLoading(false);
     if (retryCount < MAX_RETRIES) {
       setRetryCount((c) => c + 1);
-      setTimeout(() => loadIframe(), 1000 * (retryCount + 1));
+      retryTimerRef.current = setTimeout(() => loadIframe(), 1000 * (retryCount + 1));
     } else {
       const errMsg = `Failed to load module: ${moduleId}`;
       setError(errMsg);
@@ -61,6 +62,10 @@ export default function IframeContainer({ moduleId, url, isVisible, onReady, onE
   // Cleanup iframe on unmount
   useEffect(() => {
     return () => {
+      if (retryTimerRef.current) {
+        clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
       cleanupRef.current?.();
       const iframe = iframeRef.current;
       if (iframe) {

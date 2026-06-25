@@ -158,6 +158,7 @@ export interface NativesAPI {
   disk: {
     usage: (dirPath: string) => Promise<unknown>;
     systemInfo: () => Promise<unknown>;
+    systemMetrics: () => Promise<{ cpuUsage: number; memoryUsedBytes: number; memoryTotalBytes: number }>;
   };
   thumbnail: {
     generate: (filePath: string, width: number) => Promise<string>;
@@ -551,6 +552,7 @@ const nativesAPI: NativesAPI = {
   disk: {
     usage: (dirPath: string) => cmd('disk_usage', { dirPath }),
     systemInfo: () => cmd('disk_system_info'),
+    systemMetrics: () => cmd('system_metrics'),
   },
 
   // Thumbnail

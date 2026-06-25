@@ -820,7 +820,7 @@ export default function SettingsPage() {
                               className="btn"
                               style={{ fontSize: FONT_SIZE.xs, padding: '2px 6px' }}
                               onClick={() => { setEditingVar(v.key); setEditValue(v.value); }}
-                              title="Edit"
+                              title={t(locale, 'common.edit')}
                             >
                               <Edit2 size={12} />
                             </button>
@@ -1202,7 +1202,7 @@ export default function SettingsPage() {
                                   display: 'flex',
                                   alignItems: 'center',
                                 }}
-                                title="查看日志"
+                                title={t(locale, 'settings.viewLog')}
                               >
                                 <Terminal size={14} style={{ color: activeLogPlugin === plugin.id ? 'var(--vibe-active-color)' : 'inherit' }} />
                               </button>

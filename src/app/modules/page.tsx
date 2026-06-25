@@ -82,7 +82,7 @@ export default function ModulesPage() {
   }
 
   return (
-    <div style={{ height: '100%', overflow: 'auto' }} role="region" aria-label="Module manager">
+    <div style={{ height: '100%', overflow: 'auto' }} role="region" aria-label={t(locale, 'modules.ariaRegion')}>
       {/* Minimal action bar — no title (shown in top Header) */}
       <div style={{ padding: `${SPACING.md}px ${SPACING.xl}px`, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
         <button

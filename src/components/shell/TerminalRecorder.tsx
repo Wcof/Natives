@@ -11,6 +11,7 @@ import { startTransition, useCallback, useEffect, useRef, useState } from 'react
 import { Play, Square, List, X, Download, Trash2, RefreshCw } from 'lucide-react';
 import { FONT_SIZE, SPACING, BORDER_RADIUS } from '@/lib/design-tokens';
 import { TERMINAL_THEMES } from '@/lib/theme-engine';
+import { t, type Locale } from '@/i18n';
 
 interface RecordingMeta {
   id: string;
@@ -33,10 +34,19 @@ export default function TerminalRecorder({ isCollapsed, onClose }: Props) {
   const [castData, setCastData] = useState<string[]>([]);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
+  const [locale, setLocale] = useState<Locale>('zh');
   const playRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<{ write: (data: string) => void; dispose: () => void } | null>(null);
   const startTimeRef = useRef(0);
+
+  useEffect(() => {
+    async function loadLocale() {
+      const saved = await window.nativesAPI?.getLocale?.();
+      if (saved) setLocale(saved === 'en' ? 'en' : 'zh');
+    }
+    loadLocale();
+  }, []);
 
   const loadRecordings = useCallback(async () => {
     const api = window.nativesAPI;
@@ -245,12 +255,12 @@ export default function TerminalRecorder({ isCollapsed, onClose }: Props) {
         borderBottom: '1px solid var(--vibe-sidebar-border, var(--border))',
         fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text)',
       }}>
-        <span>Recordings</span>
+        <span>{t(locale, 'terminal.recordings')}</span>
         <div style={{ display: 'flex', gap: 4 }}>
-          <button onClick={loadRecordings} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: 2 }} title="Refresh" aria-label="Refresh">
+          <button onClick={loadRecordings} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: 2 }} title={t(locale, 'common.refresh')} aria-label={t(locale, 'common.refresh')}>
             <RefreshCw size={12} />
           </button>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: 2 }} title="Close" aria-label="Close">
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: 2 }} title={t(locale, 'common.close')} aria-label={t(locale, 'common.close')}>
             <X size={14} />
           </button>
         </div>

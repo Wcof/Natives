@@ -6,18 +6,18 @@ use std::path::Path;
 #[tauri::command]
 pub fn skills_enable(path: String) -> Result<()> {
     if !agent::validate_skill_dir(&path).unwrap_or(true) {
-        return Err(Error::Internal("不在已扫描的 skills 清单里".into()));
+        return Err(Error::Internal("skill not in scanned skills list".into()));
     }
 
     let skill_path = Path::new(&path);
     let skill_name = match skill_path.file_name().and_then(|n| n.to_str()) {
         Some(n) => n.to_string(),
-        None => return Err(Error::Internal("无效的 skill 路径".into())),
+        None => return Err(Error::Internal("invalid skill path".into())),
     };
 
     let parent = match skill_path.parent() {
         Some(p) => p,
-        None => return Err(Error::Internal("无效路径".into())),
+        None => return Err(Error::Internal("invalid path".into())),
     };
 
     let parent_name = parent.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -28,12 +28,12 @@ pub fn skills_enable(path: String) -> Result<()> {
 
     let grandparent = match parent.parent() {
         Some(p) => p,
-        None => return Err(Error::Internal("无效路径".into())),
+        None => return Err(Error::Internal("invalid path".into())),
     };
     let dest = grandparent.join(&skill_name);
 
     if dest.exists() {
-        return Err(Error::Internal("目标位置已有同名目录".into()));
+        return Err(Error::Internal("a directory with the same name already exists at the target location".into()));
     }
 
     let meta = std::fs::symlink_metadata(skill_path).map_err(Error::Io)?;
@@ -55,18 +55,18 @@ pub fn skills_enable(path: String) -> Result<()> {
 #[tauri::command]
 pub fn skills_disable(path: String) -> Result<()> {
     if !agent::validate_skill_dir(&path).unwrap_or(true) {
-        return Err(Error::Internal("不在已扫描的 skills 清单里".into()));
+        return Err(Error::Internal("skill not in scanned skills list".into()));
     }
 
     let skill_path = Path::new(&path);
     let skill_name = match skill_path.file_name().and_then(|n| n.to_str()) {
         Some(n) => n.to_string(),
-        None => return Err(Error::Internal("无效的 skill 路径".into())),
+        None => return Err(Error::Internal("invalid skill path".into())),
     };
 
     let parent = match skill_path.parent() {
         Some(p) => p,
-        None => return Err(Error::Internal("无效路径".into())),
+        None => return Err(Error::Internal("invalid path".into())),
     };
 
     let disabled_dir = parent.join("_disabled");
@@ -75,7 +75,7 @@ pub fn skills_disable(path: String) -> Result<()> {
     std::fs::create_dir_all(&disabled_dir).map_err(Error::Io)?;
 
     if dest.exists() {
-        return Err(Error::Internal("目标位置已有同名目录".into()));
+        return Err(Error::Internal("a directory with the same name already exists at the target location".into()));
     }
 
     let meta = std::fs::symlink_metadata(skill_path).map_err(Error::Io)?;
@@ -103,12 +103,12 @@ pub fn skills_get_deactivated_path(path: String) -> Result<String> {
 #[tauri::command]
 pub fn skills_uninstall(path: String) -> Result<()> {
     if !agent::validate_skill_dir(&path).unwrap_or(true) {
-        return Err(Error::Internal("不在已扫描的 skills 清单里".into()));
+        return Err(Error::Internal("skill not in scanned skills list".into()));
     }
 
     let skill_path = Path::new(&path);
     if !skill_path.exists() {
-        return Err(Error::Internal("skill 目录不存在".into()));
+        return Err(Error::Internal("skill directory does not exist".into()));
     }
 
     trash_or_delete(skill_path)?;
@@ -142,7 +142,7 @@ fn trash_or_delete(skill_path: &Path) -> Result<()> {
                     // Finder 自动化未授权，降级为永久删除
                     return force_delete(skill_path);
                 }
-                return Err(Error::Internal(format!("移到废纸篓失败: {}", stderr)));
+                return Err(Error::Internal(format!("failed to move to trash: {}", stderr)));
             }
             Err(_) => {
                 // osascript 不可用，降级为永久删除

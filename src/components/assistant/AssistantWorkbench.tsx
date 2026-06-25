@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import type { Locale } from '@/i18n';
+import { t, type Locale } from '@/i18n';
 import { useAssistantStream } from './hooks/useAssistantStream';
 import MessageList from './MessageList';
 import MessageInput from './MessageInput';
@@ -341,7 +341,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
                   type="text"
                   className="w-full bg-transparent text-sm font-medium text-[var(--vibe-brand-text)] border-none outline-none placeholder-[var(--text-faint)]"
                   value={sessions.find(s => s.id === activeSessionId)?.title || ''}
-                  placeholder="Session Title"
+                  placeholder={t(locale, 'aiWorkbench.sessionTitlePlaceholder')}
                   onChange={(e) => {
                     const newTitle = e.target.value;
                     setSessions((prev) => prev.map(s =>

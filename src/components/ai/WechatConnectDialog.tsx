@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { QrCode, Send, Wifi, WifiOff, RefreshCw } from 'lucide-react';
+import { t, useLocale } from '@/i18n';
 
 interface WechatConnectDialogProps {
   onClose: () => void;
@@ -34,6 +35,7 @@ const api = (typeof window !== 'undefined' ? (window as any).nativesAPI?.wechat 
   | undefined;
 
 export default function WechatConnectDialog({ onClose }: WechatConnectDialogProps) {
+  const locale = useLocale();
   const [env, setEnv] = useState<BridgeEnv | null>(null);
   const [qrcode, setQrcode] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -106,7 +108,7 @@ export default function WechatConnectDialog({ onClose }: WechatConnectDialogProp
           ) : (
             <WifiOff size={16} style={{ color: 'var(--text-faint)' }} />
           )}
-          <span className="text-sm font-medium">微信 ClawBot</span>
+          <span className="text-sm font-medium">{t(locale, 'wechat.title')}</span>
           <span className="text-xs px-1.5 py-0.5 rounded" style={{
             background: env.connected ? 'var(--accent-soft)' : 'var(--vibe-btn-bg)',
             color: env.connected ? 'var(--accent)' : 'var(--text-faint)'
@@ -114,7 +116,7 @@ export default function WechatConnectDialog({ onClose }: WechatConnectDialogProp
             {env.state}
           </span>
         </div>
-        <button onClick={onClose} className="text-xs" style={{ color: 'var(--text-dim)' }}>关闭</button>
+        <button onClick={onClose} className="text-xs" style={{ color: 'var(--text-dim)' }}>{t(locale, 'wechat.close')}</button>
       </div>
 
       <div className="flex-1 overflow-auto p-4">
@@ -122,7 +124,7 @@ export default function WechatConnectDialog({ onClose }: WechatConnectDialogProp
           <div className="flex flex-col items-center gap-4 py-8">
             <QrCode size={48} style={{ color: 'var(--text-faint)' }} />
             <p className="text-sm text-center" style={{ color: 'var(--text-dim)' }}>
-              扫码登录微信，遥控本机的 Claude Code / Codex
+              {t(locale, 'wechat.scanHint')}
             </p>
             <button
               onClick={handleLogin}
@@ -130,7 +132,7 @@ export default function WechatConnectDialog({ onClose }: WechatConnectDialogProp
               className="px-4 py-2 rounded text-sm"
               style={{ background: 'var(--accent)', color: 'var(--accent-ink)' }}
             >
-              {loading ? '加载中…' : '获取二维码'}
+              {loading ? t(locale, 'wechat.loading') : t(locale, 'wechat.getQrcode')}
             </button>
           </div>
         )}
@@ -138,7 +140,7 @@ export default function WechatConnectDialog({ onClose }: WechatConnectDialogProp
         {qrcode && !env.connected && (
           <div className="flex flex-col items-center gap-4 py-4">
             <img src={qrcode} alt="QR Code" className="w-48 h-48" />
-            <p className="text-xs" style={{ color: 'var(--text-faint)' }}>用微信扫码登录</p>
+            <p className="text-xs" style={{ color: 'var(--text-faint)' }}>{t(locale, 'wechat.scanToLogin')}</p>
           </div>
         )}
 
@@ -163,7 +165,7 @@ export default function WechatConnectDialog({ onClose }: WechatConnectDialogProp
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') handleSend(); }}
-            placeholder="发送消息给本机 agent…"
+            placeholder={t(locale, 'wechat.messagePlaceholder')}
             className="flex-1 bg-transparent border rounded px-2 py-1 text-sm"
             style={{ borderColor: 'var(--border)', color: 'var(--text)' }}
           />

@@ -123,6 +123,11 @@ declare global {
           used_bytes: number;
           available_bytes: number;
         }>;
+        systemMetrics: () => Promise<{
+          cpuUsage: number;
+          memoryUsedBytes: number;
+          memoryTotalBytes: number;
+        }>;
       };
       thumbnail: {
         /** Generate a JPEG thumbnail at the given width, returning a base64-encoded string. */

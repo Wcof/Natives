@@ -345,9 +345,8 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
             <div className="liquid-blob liquid-blob-3" />
           </div>
         )}
-
         {/* Global WebGL Liquid Glass Canvas Layer */}
-        <div className="absolute inset-0 opacity-40 z-20">
+        <div className="absolute inset-0 opacity-[0.22] z-0 pointer-events-none">
           <LiquidGlass
             isActive={true}
             className="w-full h-full border-none bg-transparent shadow-none animate-none"

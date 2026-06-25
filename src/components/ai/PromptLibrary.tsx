@@ -142,10 +142,10 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: SPACING.xs }}>
                 <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 600, color: 'var(--text)' }}>{prompt.title}</div>
                 <div style={{ display: 'flex', gap: SPACING.xs, alignItems: 'center' }}>
-                  <button className="btn-ghost" onClick={() => handleEdit(prompt)} style={{ padding: '2px 4px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }} title="Edit">
+                  <button className="btn-ghost" onClick={() => handleEdit(prompt)} style={{ padding: '2px 4px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }} title={t(locale,'aiWorkbench.promptLibrary.edit')}>
                     <Edit2 size={10} />
                   </button>
-                  <button className="btn-ghost" onClick={() => handleDelete(prompt.id)} style={{ padding: '2px 4px', color: 'var(--danger)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }} title="Delete">
+                  <button className="btn-ghost" onClick={() => handleDelete(prompt.id)} style={{ padding: '2px 4px', color: 'var(--danger)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }} title={t(locale,'aiWorkbench.promptLibrary.delete')}>
                     <Trash2 size={10} />
                   </button>
                 </div>
@@ -180,7 +180,7 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
             type="text"
             value={editTitle}
             onChange={(e) => setEditTitle(e.target.value)}
-            placeholder="Prompt title"
+            placeholder={t(locale,'aiWorkbench.promptLibrary.editTitlePlaceholder')}
             className="input"
             style={{ width: '100%', fontSize: FONT_SIZE.sm }}
             autoFocus
@@ -188,7 +188,7 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
           <textarea
             value={editContent}
             onChange={(e) => setEditContent(e.target.value)}
-            placeholder="Prompt content..."
+            placeholder={t(locale,'aiWorkbench.promptLibrary.editContentPlaceholder')}
             rows={6}
             className="input"
             style={{ width: '100%', fontSize: FONT_SIZE.sm, fontFamily: 'var(--font-mono)', resize: 'vertical' }}
@@ -197,7 +197,7 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
             type="text"
             value={editTags}
             onChange={(e) => setEditTags(e.target.value)}
-            placeholder="Tags (comma separated: code-review, typescript)"
+            placeholder={t(locale,'aiWorkbench.promptLibrary.editTagsPlaceholder')}
             className="input"
             style={{ width: '100%', fontSize: FONT_SIZE.sm }}
           />
