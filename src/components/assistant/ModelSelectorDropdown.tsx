@@ -8,7 +8,7 @@ interface ModelSelectorDropdownProps {
     name: string;
     presetName: string;
     baseUrl: string;
-    keys: Array<{ id: string; label: string; apiKey: string }>;
+    keys: Array<{ id: string; label: string; maskedKey: string }>;
   }>;
   selectedProviderId: string;
   selectedModel?: string;
@@ -55,7 +55,7 @@ export default function ModelSelectorDropdown({
     <div ref={dropdownRef} className="relative">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-[0.6875rem] text-[var(--text-dim)] hover:bg-[var(--vibe-btn-hover-bg)] transition-all"
+        className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-[0.6875rem] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-all"
       >
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <circle cx="12" cy="12" r="10" />
@@ -69,9 +69,9 @@ export default function ModelSelectorDropdown({
       </button>
 
       {isOpen && (
-        <div className="absolute bottom-full left-0 mb-1 min-w-[200px] rounded-xl border border-[var(--vibe-btn-border)] bg-[var(--vibe-toolbar-bg)] backdrop-blur-2xl p-1.5 shadow-2xl z-50">
+        <div className="absolute bottom-full left-0 mb-1 min-w-[200px] rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5 shadow-popup z-50">
           {providers.length === 0 ? (
-            <div className="px-2.5 py-3 text-[0.6875rem] text-[var(--text-faint)] text-center">
+            <div className="px-2.5 py-3 text-[0.6875rem] text-[var(--text-disabled)] text-center">
               {locale.startsWith('zh') ? '暂无可用供应商' : 'No providers available'}
             </div>
           ) : (
@@ -79,7 +79,7 @@ export default function ModelSelectorDropdown({
               const providerModels = PRESET_MODELS[provider.presetName] || ['gpt-4o'];
               return (
                 <div key={provider.id}>
-                  <div className="px-2.5 pb-1 pt-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.06em] text-[var(--text-faint)]">
+                  <div className="px-2.5 pb-1 pt-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.06em] text-[var(--text-disabled)]">
                     {provider.name}
                   </div>
                   {providerModels.map((model) => (
@@ -92,8 +92,8 @@ export default function ModelSelectorDropdown({
                       }}
                       className={`flex items-center gap-2 w-full rounded-lg px-2.5 py-1.5 text-left text-sm transition-all ${
                         selectedProviderId === provider.id && selectedModel === model
-                          ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)] font-medium'
-                          : 'text-[var(--text-dim)] hover:bg-[var(--vibe-btn-hover-bg)]'
+                          ? 'bg-[var(--primary-soft)] text-[var(--primary)] font-medium'
+                          : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]'
                       }`}
                     >
                       <span className="text-xs font-mono">{model}</span>

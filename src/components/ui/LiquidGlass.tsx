@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { useCanvasQuota } from '@/context/ThemeContext';
 import { useHydrated } from '@/hooks/useHydrated';
 
 interface LiquidGlassProps {
@@ -288,7 +287,9 @@ function ActiveLiquidGlass({
   const elasticityRef = useRef(elasticity);
   const mounted = useHydrated();
   const [webGLUnavailable, setWebGLUnavailable] = useState(false);
-  const { allowed, release } = useCanvasQuota(mounted && !webGLUnavailable);
+  // V1.0 已退役：WebGL canvas quota（纯色 Surface 体系，LiquidGlass 永不渲染）
+  const allowed = false;
+  const release = () => {};
 
   
 

@@ -1,0 +1,17 @@
+{
+  "name": "natives-plugins",
+  "version": "1.0.0",
+  "description": "Bundled plugins for Natives native engine — hooks, commands, agents, and skills",
+  "owner": {
+    "name": "Natives Project",
+    "email": "natives@example.com"
+  },
+  "plugins": [
+    {
+      "name": "natives-example",
+      "description": "Example Natives plugin demonstrating hook, agent, and command integration",
+      "source": "./plugins/natives-example",
+      "category": "productivity"
+    }
+  ]
+}

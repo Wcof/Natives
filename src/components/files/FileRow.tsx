@@ -103,16 +103,16 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir, selec
         alignItems: 'center',
         cursor: 'pointer',
         fontSize: FONT_SIZE.lg,
-        color: 'var(--vibe-brand-text)',
-        borderBottom: '1px solid var(--vibe-btn-border)',
-        background: selected ? 'var(--accent-soft)' : flash ? 'var(--accent-soft)' : 'transparent',
-        outline: selected ? '1px solid var(--accent)' : 'none',
+        color: 'var(--text)',
+        borderBottom: '1px solid var(--border)',
+        background: selected ? 'var(--primary-soft)' : flash ? 'var(--primary-soft)' : 'transparent',
+        outline: selected ? '1px solid var(--primary)' : 'none',
         outlineOffset: -1,
         transition: 'background 0.12s, opacity 0.12s',
         opacity: entry.hidden ? 0.5 : 1,
       }}
-      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--vibe-toolbar-bg)'; }}
-      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = selected ? 'var(--accent-soft)' : 'transparent'; }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--surface)'; }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = selected ? 'var(--primary-soft)' : 'transparent'; }}
     >
       {/* Icon */}
       <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
@@ -139,28 +139,28 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir, selec
         {entry.projectBadge && (
           <span style={{
             fontSize: 8, fontWeight: 600, padding: '0 3px', borderRadius: 2,
-            background: 'var(--accent-soft)', color: 'var(--accent)',
+            background: 'var(--primary-soft)', color: 'var(--primary)',
             lineHeight: '14px', textTransform: 'uppercase',
           }}>
             {entry.projectBadge}
           </span>
         )}
         {showDir && entry.dirHint && (
-          <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--vibe-btn-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>
+          <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>
             — {entry.dirHint}
           </span>
         )}
-        {entry.hidden && <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--vibe-btn-text)' }}>(hidden)</span>}
-        {entry.symlink && <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--vibe-btn-text)' }}>→ link</span>}
+        {entry.hidden && <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)' }}>(hidden)</span>}
+        {entry.symlink && <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)' }}>→ link</span>}
       </div>
 
       {/* Modified time (relative) */}
-      <div style={{ color: 'var(--vibe-btn-text)', fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.md }}>
+      <div style={{ color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.md }}>
         {fmtTime(entry.mtime)}
       </div>
 
       {/* Size */}
-      <div style={{ color: 'var(--vibe-btn-text)', fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.md }}>
+      <div style={{ color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.md }}>
         {entry.isDir ? '—' : fmtSize(entry.size)}
       </div>
 
@@ -174,7 +174,7 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir, selec
         title={isFavorite ? '取消收藏' : '收藏'}
         style={{
           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          color: isFavorite ? 'var(--yellow, #e3b341)' : 'var(--text-faint)',
+          color: isFavorite ? 'var(--yellow, #e3b341)' : 'var(--text-disabled)',
           cursor: 'pointer', background: 'none', border: 'none', padding: 0,
           transition: 'color 0.12s, transform 0.12s',
           opacity: isFavorite ? 1 : 0.5,

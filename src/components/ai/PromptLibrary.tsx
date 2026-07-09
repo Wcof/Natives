@@ -105,8 +105,8 @@ export default function PromptLibrary() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Header */}
-      <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--vibe-btn-border)' }}>
-        <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+      <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)' }}>
+        <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
           {t(locale,'aiWorkbench.promptLibrary.title')}
         </div>
         <div style={{ display: 'flex', gap: SPACING.xs }}>
@@ -117,7 +117,7 @@ export default function PromptLibrary() {
 placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
             style={{
               flex: 1, fontSize: FONT_SIZE.sm, padding: '4px 8px',
-              background: 'var(--vibe-content-bg)', border: '1px solid var(--vibe-btn-border)',
+              background: 'var(--surface)', border: '1px solid var(--border)',
               borderRadius: BORDER_RADIUS.sm, color: 'var(--text)', outline: 'none',
             }}
           />
@@ -130,14 +130,14 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
       {/* Prompt list */}
       <div style={{ flex: 1, overflow: 'auto', padding: 6 }}>
         {filtered.length === 0 ? (
-          <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
+          <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-disabled)', fontSize: 'var(--fs-sm)' }}>
             {search ? t(locale,'aiWorkbench.promptLibrary.noMatching') : t(locale,'aiWorkbench.promptLibrary.empty')}
           </div>
         ) : (
           filtered.map((prompt) => (
             <div key={prompt.id} style={{
               padding: '8px 10px', marginBottom: SPACING.xs, borderRadius: BORDER_RADIUS.md,
-              border: '1px solid var(--vibe-btn-border)', background: 'var(--vibe-toolbar-bg)',
+              border: '1px solid var(--border)', background: 'var(--surface)',
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: SPACING.xs }}>
                 <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 600, color: 'var(--text)' }}>{prompt.title}</div>
@@ -150,14 +150,14 @@ placeholder={t(locale,'aiWorkbench.promptLibrary.searchPlaceholder')}
                   </button>
                 </div>
               </div>
-              <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-dim)', marginBottom: SPACING.xs, whiteSpace: 'pre-wrap', maxHeight: 40, overflow: 'hidden' }}>
+              <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)', marginBottom: SPACING.xs, whiteSpace: 'pre-wrap', maxHeight: 40, overflow: 'hidden' }}>
                 {prompt.content.slice(0, 120)}{prompt.content.length > 120 ? '...' : ''}
               </div>
               <div style={{ display: 'flex', gap: SPACING.xs, flexWrap: 'wrap' }}>
                 {prompt.tags.map((tag) => (
                   <span key={tag} style={{
                     fontSize: FONT_SIZE.xs, padding: '1px 5px', borderRadius: BORDER_RADIUS.sm,
-                    background: 'var(--accent-soft)', color: 'var(--accent)',
+                    background: 'var(--primary-soft)', color: 'var(--primary)',
                   }}>
                     #{tag}
                   </span>

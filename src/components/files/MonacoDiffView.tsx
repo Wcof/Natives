@@ -7,7 +7,7 @@ import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 // Dynamic import — Monaco DiffEditor is ~2MB, only load when viewing diffs
 const DiffEditor = dynamic(() => import('@monaco-editor/react').then((m) => m.DiffEditor), {
   ssr: false,
-  loading: () => <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: FONT_SIZE.md }}>Loading diff view…</div>,
+  loading: () => <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', fontSize: FONT_SIZE.md }}>Loading diff view…</div>,
 });
 
 interface MonacoDiffViewProps {
@@ -28,7 +28,7 @@ function MonacoDiffView({ original, modified, language = 'plaintext', fileName }
   const getMonacoTheme = (): string => {
     if (typeof document !== 'undefined') {
       const htmlTheme = document.documentElement.getAttribute('data-theme');
-      if (htmlTheme === 'frosted-jasmine') return 'vs-light';
+      if (htmlTheme === 'light') return 'vs-light';
     }
     return 'vs-dark';
   };
@@ -48,11 +48,11 @@ function MonacoDiffView({ original, modified, language = 'plaintext', fileName }
     };
   }, []);
   return (
-    <div style={{ height: '100%', minHeight: 300, border: '1px solid var(--vibe-btn-border)', borderRadius: BORDER_RADIUS.md, overflow: 'hidden' }}>
+    <div style={{ height: '100%', minHeight: 300, border: '1px solid var(--border)', borderRadius: BORDER_RADIUS.md, overflow: 'hidden' }}>
       {fileName && (
         <div style={{
-          padding: '4px 10px', fontSize: FONT_SIZE.sm, color: 'var(--text-faint)',
-          background: 'var(--vibe-toolbar-bg)', borderBottom: '1px solid var(--vibe-btn-border)',
+          padding: '4px 10px', fontSize: FONT_SIZE.sm, color: 'var(--text-disabled)',
+          background: 'var(--surface)', borderBottom: '1px solid var(--border)',
           fontFamily: 'var(--font-mono)',
         }}>
           {fileName}
@@ -65,7 +65,7 @@ function MonacoDiffView({ original, modified, language = 'plaintext', fileName }
         theme={monacoTheme}
         options={{
           renderSideBySide: true,
-          fontSize: FONT_SIZE.md,
+          fontSize: 13,
           fontFamily: 'Menlo, Monaco, "Courier New", monospace',
           minimap: { enabled: false },
           scrollBeyondLastLine: false,
@@ -76,7 +76,7 @@ function MonacoDiffView({ original, modified, language = 'plaintext', fileName }
         }}
         height="100%"
         loading={
-          <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-faint)', fontSize: FONT_SIZE.md }}>
+          <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-disabled)', fontSize: FONT_SIZE.md }}>
             Loading diff editor...
           </div>
         }

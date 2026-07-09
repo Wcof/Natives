@@ -1,10 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAsyncData } from '@/hooks/useAsyncData';
 import { t, type Locale } from '@/i18n';
-import { EmptyState } from '@/components/ui/EmptyState';
+import { EmptyState, ErrorState } from '@/components/ui/EmptyState';
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
+import { useToast } from '@/components/ui/Toast';
+import { classifyError } from '@/lib/error-classifier';
 
 interface Notification {
   id: number;
@@ -27,64 +29,121 @@ const levelDot: Record<string, string> = {
 };
 
 export default function NotificationPanel({ locale }: NotificationPanelProps) {
+  const { toast } = useToast();
+  const [markingAll, setMarkingAll] = useState(false);
+  const [markingIds, setMarkingIds] = useState<Set<number>>(new Set());
+
   const { data: notifications, loading, error, reload: loadNotifications } = useAsyncData(async () => {
-    const api = window.nativesAPI;
-    if (api?.notification?.list) {
-      const list = await api.notification.list();
-      if (Array.isArray(list)) return list as Notification[];
+    const api = window.nativesAPI?.notification;
+    if (!api?.list) {
+      throw new Error('Notification API unavailable');
     }
+    const list = await api.list();
+    if (Array.isArray(list)) return list as Notification[];
     return [];
   }, []);
 
+  const apiUnavailableMsg = t(locale, 'notifications.apiUnavailable');
+  const isApiUnavailable = (rawMessage?: string) =>
+    rawMessage?.includes('Notification API unavailable') ?? false;
+
+  // ── Listen for db-state-changed to refresh ──
+
   useEffect(() => {
     loadNotifications();
-    const interval = setInterval(loadNotifications, 30000);
-    return () => clearInterval(interval);
   }, [loadNotifications]);
 
-  const handleMarkRead = async (id: number) => {
+  useEffect(() => {
+    const unsub = window.nativesAPI?.onDbStateChanged?.(
+      (_event: unknown, channel: string) => {
+        if (channel === 'notification') {
+          loadNotifications();
+        }
+      },
+    );
+    return () => {
+      if (unsub) unsub();
+    };
+  }, [loadNotifications]);
+
+  // ── Handlers ──
+
+  const handleMarkRead = useCallback(async (id: number) => {
+    const api = window.nativesAPI?.notification;
+    if (!api?.markRead) {
+      toast(apiUnavailableMsg, 'error');
+      return;
+    }
+    setMarkingIds((prev) => new Set(prev).add(id));
     try {
-      await window.nativesAPI?.notification?.markRead(id);
+      await api.markRead(id);
+      toast(t(locale, 'notifications.markReadSuccess'), 'success');
       loadNotifications();
     } catch (err) {
-      console.error('[Notifications] Mark read failed:', err);
+      const classified = classifyError(err);
+      toast(classified.userMessage, 'error');
+    } finally {
+      setMarkingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
-  };
+  }, [locale, toast, loadNotifications, apiUnavailableMsg]);
 
-  const handleMarkAllRead = async () => {
+  const handleMarkAllRead = useCallback(async () => {
+    const api = window.nativesAPI?.notification;
+    if (!api?.markAllAsRead) {
+      toast(apiUnavailableMsg, 'error');
+      return;
+    }
+    setMarkingAll(true);
     try {
-      await window.nativesAPI?.notification?.markAllAsRead();
+      await api.markAllAsRead();
+      toast(t(locale, 'notifications.markAllReadSuccess'), 'success');
       loadNotifications();
     } catch (err) {
-      console.error('[Notifications] Mark all read failed:', err);
+      const classified = classifyError(err);
+      toast(classified.userMessage, 'error');
+    } finally {
+      setMarkingAll(false);
     }
-  };
-
-  const handleClear = async () => {
-    await handleMarkAllRead();
-  };
+  }, [locale, toast, loadNotifications, apiUnavailableMsg]);
 
   const unreadCount = (notifications ?? []).filter((n) => !n.read).length;
 
+  // ── Loading state ──
+
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center py-12 gap-3 text-sm text-[var(--text-faint)]">
+      <div className="flex flex-col items-center justify-center py-12 gap-3 text-sm text-[var(--text-disabled)]">
         <MathCurveLoader size={40} />
         <span>{t(locale, 'common.loading')}</span>
       </div>
     );
   }
 
+  // ── Error state ──
+
+  if (error) {
+    const errorMsg = isApiUnavailable(error.rawMessage)
+      ? apiUnavailableMsg
+      : error.userMessage;
+    return <ErrorState message={errorMsg} onRetry={loadNotifications} />;
+  }
+
+  // ── Normal render ──
+
   return (
     <div>
       {/* Header with actions */}
-      <div className="flex items-center justify-between pb-3 mb-3 border-b border-[var(--vibe-border-subtle)]">
+      <div className="flex items-center justify-between pb-3 mb-3 border-b border-[var(--border-subtle)]">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-[var(--text-dim)]">
+          <span className="text-xs font-semibold text-[var(--text-secondary)]">
             {t(locale, 'notifications.title')}
           </span>
           {unreadCount > 0 && (
-            <span className="text-[0.625rem] font-semibold px-1.5 py-0.5 rounded bg-[var(--vibe-notif-badge)] text-white">
+            <span className="text-[0.625rem] font-semibold px-1.5 py-0.5 rounded bg-[var(--danger)] text-white">
               {unreadCount}
             </span>
           )}
@@ -93,29 +152,27 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
           {unreadCount > 0 && (
             <button
               onClick={handleMarkAllRead}
-              className="text-[0.625rem] text-[var(--vibe-accent-color)] hover:text-[var(--vibe-active-color)] transition-colors px-1.5 py-0.5 rounded hover:bg-[var(--vibe-notif-hover)]"
+              disabled={markingAll}
+              className="text-[0.625rem] text-[var(--primary)] hover:text-[var(--primary)] transition-colors px-1.5 py-0.5 rounded hover:bg-[var(--surface-hover)] disabled:opacity-40"
             >
               {t(locale, 'notifications.markAllRead')}
             </button>
           )}
-          <button
-            onClick={handleClear}
-            className="text-[0.625rem] text-[var(--text-faint)] hover:text-[var(--text-dim)] transition-colors px-1.5 py-0.5 rounded hover:bg-[var(--vibe-notif-hover)]"
-          >
-            {t(locale, 'notifications.clear')}
-          </button>
         </div>
       </div>
 
       {/* Notification list */}
       {(notifications ?? []).length === 0 ? (
-        <EmptyState title={t(locale, 'notifications.empty')} />
+        <EmptyState
+          title={t(locale, 'notifications.noNotifications')}
+          description={t(locale, 'notifications.emptyDescription')}
+        />
       ) : (
         <div className="flex flex-col">
           {(notifications ?? []).map((notif) => (
             <div
               key={notif.id}
-              className="py-2.5 border-b border-[var(--vibe-border-subtle)] last:border-b-0 transition-opacity"
+              className="py-2.5 border-b border-[var(--border-subtle)] last:border-b-0 transition-opacity"
               style={{ opacity: notif.read ? 0.45 : 1 }}
             >
               <div className="flex justify-between items-start gap-2">
@@ -125,16 +182,16 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
                       className="w-1.5 h-1.5 rounded-full shrink-0"
                       style={{ background: levelDot[notif.level] || levelDot.info }}
                     />
-                    <span className="text-xs font-semibold text-[var(--vibe-brand-text)] truncate">
+                    <span className="text-xs font-semibold text-[var(--text)] truncate">
                       {notif.title}
                     </span>
                   </div>
                   {notif.body && (
-                    <div className="text-[0.6875rem] text-[var(--text-dim)] ml-[18px] leading-relaxed">
+                    <div className="text-[0.6875rem] text-[var(--text-secondary)] ml-[18px] leading-relaxed">
                       {notif.body}
                     </div>
                   )}
-                  <div className="text-[0.625rem] text-[var(--text-faint)] ml-[18px] mt-0.5">
+                  <div className="text-[0.625rem] text-[var(--text-disabled)] ml-[18px] mt-0.5">
                     {notif.moduleId && <span className="mr-1.5">{notif.moduleId}</span>}
                     <span>{notif.createdAt}</span>
                   </div>
@@ -142,7 +199,10 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
                 {!notif.read && (
                   <button
                     onClick={() => handleMarkRead(notif.id)}
-                    className="text-[0.625rem] text-[var(--vibe-accent-color)] hover:text-[var(--vibe-active-color)] transition-colors px-1.5 py-0.5 rounded hover:bg-[var(--vibe-notif-hover)] shrink-0"
+                    disabled={markingIds.has(notif.id)}
+                    title={t(locale, 'notifications.markRead')}
+                    aria-label={t(locale, 'notifications.markRead')}
+                    className="text-[0.625rem] text-[var(--primary)] hover:text-[var(--primary)] transition-colors px-1.5 py-0.5 rounded hover:bg-[var(--surface-hover)] shrink-0 disabled:opacity-40"
                   >
                     ✓
                   </button>
@@ -161,24 +221,39 @@ export default function NotificationPanel({ locale }: NotificationPanelProps) {
 export function NotificationBadge({ locale }: { locale: Locale }) {
   const [count, setCount] = useState(0);
 
-  useEffect(() => {
-    async function loadCount() {
-      try {
-        const list = await window.nativesAPI?.notification?.list?.(true);
-        if (Array.isArray(list)) {
-          setCount((list as Array<{ read?: number }>).filter((n) => !n.read).length);
-        }
-      } catch { /* ignore */ }
+  const loadCount = useCallback(async () => {
+    try {
+      const list = await window.nativesAPI?.notification?.list?.(true);
+      if (Array.isArray(list)) {
+        setCount((list as Array<{ read?: number }>).filter((n) => !n.read).length);
+      }
+    } catch {
+      // Silently degrade to 0
+      setCount(0);
     }
-    loadCount();
-    const interval = setInterval(loadCount, 30000);
-    return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    loadCount();
+  }, [loadCount]);
+
+  useEffect(() => {
+    const unsub = window.nativesAPI?.onDbStateChanged?.(
+      (_event: unknown, channel: string) => {
+        if (channel === 'notification') {
+          loadCount();
+        }
+      },
+    );
+    return () => {
+      if (unsub) unsub();
+    };
+  }, [loadCount]);
 
   if (count === 0) return null;
 
   return (
-    <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] flex items-center justify-center bg-[var(--vibe-notif-badge)] text-white text-[9px] font-bold rounded-full px-[3px]">
+    <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] flex items-center justify-center bg-[var(--danger)] text-white text-[9px] font-bold rounded-full px-[3px]">
       {count > 99 ? '99+' : count}
     </span>
   );

@@ -88,7 +88,8 @@ impl Recorder {
             height: rows,
         };
 
-        let mut sessions = self.sessions
+        let mut sessions = self
+            .sessions
             .lock()
             .map_err(|e| crate::Error::Internal(format!("lock recorder: {e}")))?;
         sessions.insert(session_id.to_string(), session);
@@ -108,7 +109,8 @@ impl Recorder {
 
     /// Record a resize event (asciinema "r" event with [cols, rows]).
     pub fn record_resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<()> {
-        let mut sessions = self.sessions
+        let mut sessions = self
+            .sessions
             .lock()
             .map_err(|e| crate::Error::Internal(format!("lock recorder: {e}")))?;
 
@@ -122,8 +124,7 @@ impl Recorder {
         session.height = rows;
 
         let elapsed = session.start_time.elapsed();
-        let secs = elapsed.as_secs() as f64
-            + f64::from(elapsed.subsec_nanos()) / 1_000_000_000.0;
+        let secs = elapsed.as_secs() as f64 + f64::from(elapsed.subsec_nanos()) / 1_000_000_000.0;
 
         // asciinema resize event: [elapsed, "r", [cols, rows]]
         let event = serde_json::json!([secs, "r", [cols, rows]]);
@@ -135,7 +136,8 @@ impl Recorder {
 
     /// Internal: write an asciinema event with the given type ("o"|"i") and data.
     fn write_event(&self, session_id: &str, event_type: &str, data: &str) -> Result<()> {
-        let mut sessions = self.sessions
+        let mut sessions = self
+            .sessions
             .lock()
             .map_err(|e| crate::Error::Internal(format!("lock recorder: {e}")))?;
 
@@ -145,11 +147,12 @@ impl Recorder {
         };
 
         let elapsed = session.start_time.elapsed();
-        let secs = elapsed.as_secs() as f64
-            + f64::from(elapsed.subsec_nanos()) / 1_000_000_000.0;
+        let secs = elapsed.as_secs() as f64 + f64::from(elapsed.subsec_nanos()) / 1_000_000_000.0;
 
-        // asciinema event: [elapsed, type, data]
-        let event = serde_json::json!([secs, event_type, data]);
+        // asciinema event: [elapsed, type, data]. Terminal recordings are
+        // persisted logs, so redact credentials before they touch disk.
+        let redacted = crate::log_sanitizer::sanitize(data);
+        let event = serde_json::json!([secs, event_type, redacted]);
         writeln!(session.file, "{}", event)
             .map_err(|e| crate::Error::Internal(format!("write cast event: {e}")))?;
 
@@ -158,7 +161,8 @@ impl Recorder {
 
     /// Stop recording and flush.
     pub fn stop(&self, session_id: &str) -> Result<()> {
-        let mut sessions = self.sessions
+        let mut sessions = self
+            .sessions
             .lock()
             .map_err(|e| crate::Error::Internal(format!("lock recorder: {e}")))?;
         if let Some(session) = sessions.remove(session_id) {
@@ -183,14 +187,16 @@ impl Recorder {
 
         let mut recordings = Vec::new();
         for entry in fs::read_dir(&rec_dir)
-            .map_err(|e| crate::Error::Internal(format!("read recordings dir: {e}")))? {
+            .map_err(|e| crate::Error::Internal(format!("read recordings dir: {e}")))?
+        {
             let entry = entry.map_err(|e| crate::Error::Internal(format!("read entry: {e}")))?;
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("cast") {
                 continue;
             }
 
-            let filename = path.file_stem()
+            let filename = path
+                .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("unknown");
 
@@ -202,11 +208,13 @@ impl Recorder {
 
             recordings.push(RecordingMeta {
                 id: filename.to_string(),
-                session_id: filename.strip_prefix("recording-")
+                session_id: filename
+                    .strip_prefix("recording-")
                     .and_then(|s| s.rsplit_once('-'))
                     .map(|(sid, _)| sid.to_string())
                     .unwrap_or_else(|| "unknown".into()),
-                created_at: meta.created()
+                created_at: meta
+                    .created()
                     .ok()
                     .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                     .map(|d| d.as_secs())
@@ -229,7 +237,8 @@ impl Recorder {
             Err(_) => return (80, 24, 0.0),
         };
         let reader = BufReader::new(file);
-        let lines: Vec<String> = reader.lines()
+        let lines: Vec<String> = reader
+            .lines()
             .filter_map(|l| l.ok())
             .filter(|l| !l.trim().is_empty())
             .collect();
@@ -239,13 +248,14 @@ impl Recorder {
         }
 
         // 第1行：header
-        let (width, height) = if let Ok(header) = serde_json::from_str::<serde_json::Value>(&lines[0]) {
-            let w = header.get("width").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
-            let h = header.get("height").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
-            (w, h)
-        } else {
-            (80, 24)
-        };
+        let (width, height) =
+            if let Ok(header) = serde_json::from_str::<serde_json::Value>(&lines[0]) {
+                let w = header.get("width").and_then(|v| v.as_u64()).unwrap_or(80) as u16;
+                let h = header.get("height").and_then(|v| v.as_u64()).unwrap_or(24) as u16;
+                (w, h)
+            } else {
+                (80, 24)
+            };
 
         // 最后一行：最后一个事件的时间戳
         let duration = if lines.len() > 1 {
@@ -272,11 +282,12 @@ impl Recorder {
             return Err(crate::Error::NotFound(format!("recording not found: {id}")));
         }
 
-        fs::read(&path)
-            .map_err(|e| crate::Error::Internal(format!("read cast: {e}")))
+        fs::read(&path).map_err(|e| crate::Error::Internal(format!("read cast: {e}")))
     }
 
-    /// Export a recording to MP4 / GIF / WebM using ffmpeg.
+    /// Export a recording. Video formats require an external terminal renderer;
+    /// when unavailable, the command returns a real `.cast` fallback instead of
+    /// pretending the cast bytes are a video file.
     /// Reference: fanbox/electron/main.js:629-663
     ///
     /// Strategy:
@@ -287,16 +298,12 @@ impl Recorder {
     ///
     /// To keep deps minimal and behavior aligned with fanbox, we:
     /// - Save the recording bytes to a temp .cast file.
-    /// - If format == "gif": try `agg` first (best quality), then `asciinema2gif`, else fallback to webm.
-    /// - If format == "mp4": requires `asciinema` + `ffmpeg` combo — fall back to webm on failure.
-    /// - If format == "webm": direct copy.
+    /// - If format == "gif": try `agg` first (best quality), else fallback to `.cast`.
+    /// - If format == "mp4": requires `ffmpeg` plus a renderer, else fallback to `.cast`.
+    /// - If format == "webm": currently unsupported, fallback to `.cast`.
     ///
     /// Returns `{ ok, path, format }` on success, or `{ ok: false, error }`.
-    pub fn export_recording(
-        &self,
-        id: &str,
-        format: &str,
-    ) -> Result<serde_json::Value> {
+    pub fn export_recording(&self, id: &str, format: &str) -> Result<serde_json::Value> {
         let home = dirs::home_dir()
             .ok_or_else(|| crate::Error::Internal("cannot find home dir".into()))?;
         let rec_dir = home.join(RECORDINGS_DIR);
@@ -324,17 +331,9 @@ impl Recorder {
         let result = match format {
             "gif" => self.export_gif(&cast_path, &target_path),
             "mp4" => self.export_mp4(&cast_path, &target_path),
-            "webm" => {
-                // Just copy the .cast as .webm placeholder — fanbox behavior is to save raw bytes.
-                // Actually for webm we need a real renderer. For now, copy the cast file.
-                fs::copy(&cast_path, &target_path)
-                    .map_err(|e| crate::Error::Internal(format!("copy webm: {e}")))?;
-                Ok(serde_json::json!({
-                    "ok": true,
-                    "path": target_path,
-                    "format": "webm"
-                }))
-            }
+            "webm" => Err(crate::Error::Internal(
+                "WebM export requires a terminal-to-video renderer. Falling back to cast.".into(),
+            )),
             _ => Err(crate::Error::InvalidInput("unsupported format".into())),
         };
 
@@ -377,17 +376,13 @@ impl Recorder {
             }
         }
 
-        // Fallback: try `asciinema2gif` or other tools
-        // For now, return an error and let caller fallback
         Err(crate::Error::Internal(
-            "GIF export requires `agg` tool. Install with: cargo install agg. Falling back to webm.".into()
+            "GIF export requires `agg` tool. Install with: cargo install agg. Falling back to cast.".into()
         ))
     }
 
     /// Export to MP4 using `ffmpeg`.
-    /// Strategy: convert .cast → frames → mp4 (requires ffmpeg + a cast renderer)
-    /// Simplified: use `asciinema` to play to a virtual terminal, capture, convert.
-    /// For now, we use a simpler approach: try ffmpeg with the cast file directly.
+    /// Strategy: convert .cast → frames → mp4 with an external terminal-to-video renderer.
     fn export_mp4(
         &self,
         _cast_path: &std::path::Path,
@@ -396,16 +391,8 @@ impl Recorder {
         let _ffmpeg = Self::find_ffmpeg()
             .ok_or_else(|| crate::Error::Internal("ffmpeg not found in PATH".into()))?;
 
-        // Simplified MP4 export: requires `agg` for GIF or `asciinema` + `ffmpeg` for MP4
-        // For MP4, we need to render the cast to video first.
-        // Try using `asciinema` with `--pipe` to a renderer, then ffmpeg to mp4.
-        //
-        // This is a placeholder — actual MP4 export requires a terminal-to-video renderer
-        // like `agg` (GIF only) or `terminalizer` (Node.js).
-        //
-        // For now, we save the .cast as-is and return a fallback message.
         Err(crate::Error::Internal(
-            "MP4 export requires additional rendering tools. Falling back to webm.".into()
+            "MP4 export requires a terminal-to-video renderer. Falling back to cast.".into(),
         ))
     }
 
@@ -455,7 +442,8 @@ impl Recorder {
         let mut recordings: Vec<(std::path::PathBuf, std::time::SystemTime, u64)> = Vec::new();
 
         for entry in fs::read_dir(&rec_dir)
-            .map_err(|e| crate::Error::Internal(format!("read recordings dir: {e}")))? {
+            .map_err(|e| crate::Error::Internal(format!("read recordings dir: {e}")))?
+        {
             let entry = entry.map_err(|e| crate::Error::Internal(format!("read entry: {e}")))?;
             let path = entry.path();
 
@@ -502,5 +490,105 @@ impl Recorder {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+    use std::sync::Mutex as StdMutex;
+
+    static TEST_FILE_LOCK: StdMutex<()> = StdMutex::new(());
+
+    fn unique_cast_path(name: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!("natives-{name}-{nanos}.cast"))
+    }
+
+    #[test]
+    fn terminal_recording_redacts_output_before_disk_write() {
+        let _guard = TEST_FILE_LOCK.lock().unwrap();
+        let path = unique_cast_path("redact-output");
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let recorder = Recorder::new();
+        recorder.sessions.lock().unwrap().insert(
+            "s1".to_string(),
+            RecorderSession {
+                file,
+                start_time: Instant::now(),
+                header_written: true,
+                width: 80,
+                height: 24,
+            },
+        );
+
+        recorder
+            .record(
+                "s1",
+                "Authorization: Bearer sk-ant-abcdef1234567890abcdef1234567890",
+            )
+            .unwrap();
+        recorder.stop("s1").unwrap();
+
+        let mut content = String::new();
+        File::open(&path)
+            .unwrap()
+            .read_to_string(&mut content)
+            .unwrap();
+        let _ = fs::remove_file(&path);
+
+        assert!(
+            !content.contains("sk-ant-abcdef1234567890abcdef1234567890"),
+            "recording must not persist full API keys"
+        );
+        assert!(content.contains("Bearer ***"));
+    }
+
+    #[test]
+    fn terminal_recording_redacts_input_before_disk_write() {
+        let _guard = TEST_FILE_LOCK.lock().unwrap();
+        let path = unique_cast_path("redact-input");
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let recorder = Recorder::new();
+        recorder.sessions.lock().unwrap().insert(
+            "s2".to_string(),
+            RecorderSession {
+                file,
+                start_time: Instant::now(),
+                header_written: true,
+                width: 80,
+                height: 24,
+            },
+        );
+
+        recorder
+            .record_input("s2", "export API_KEY=sk-live-abcdef1234567890")
+            .unwrap();
+        recorder.stop("s2").unwrap();
+
+        let mut content = String::new();
+        File::open(&path)
+            .unwrap()
+            .read_to_string(&mut content)
+            .unwrap();
+        let _ = fs::remove_file(&path);
+
+        assert!(
+            !content.contains("sk-live-abcdef1234567890"),
+            "recording must not persist full typed keys"
+        );
+        assert!(content.contains("sk-***"));
     }
 }

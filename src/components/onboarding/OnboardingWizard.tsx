@@ -62,7 +62,7 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: 9999,
-      background: 'var(--vibe-content-bg)',
+      background: 'var(--surface)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
     }}>
       <div style={{ width: 480, maxWidth: '90vw' }}>
@@ -71,7 +71,7 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
           {STEPS.map((s) => (
             <div key={s} style={{
               width: 8, height: 8, borderRadius: '50%',
-              background: STEPS.indexOf(s) <= STEPS.indexOf(step) ? 'var(--accent)' : 'var(--vibe-btn-bg)',
+              background: STEPS.indexOf(s) <= STEPS.indexOf(step) ? 'var(--primary)' : 'var(--surface)',
               transition: 'background 0.2s',
             }} />
           ))}
@@ -81,10 +81,10 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
         {step === 'welcome' && (
           <div style={{ textAlign: 'center' }}>
             <Rocket size={48} style={{ marginBottom: SPACING.lg }} />
-            <h1 style={{ fontSize: FONT_SIZE.title, fontWeight: 700, color: 'var(--text)', margin: '0 0 8px' }}>
+            <h1 style={{ fontSize: FONT_SIZE.xl, fontWeight: 700, color: 'var(--text)', margin: '0 0 8px' }}>
               {t(locale, 'onboarding.welcome')}
             </h1>
-            <p style={{ fontSize: FONT_SIZE.lg, color: 'var(--text-dim)', lineHeight: 1.5, marginBottom: SPACING.xl }}>
+            <p style={{ fontSize: FONT_SIZE.lg, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: SPACING.xl }}>
               {t(locale, 'onboarding.welcomeDesc')}
             </p>
             <div style={{ display: 'flex', gap: SPACING.sm, justifyContent: 'center' }}>
@@ -97,11 +97,11 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
         {/* Environment Check */}
         {step === 'env-check' && (
           <div style={{ textAlign: 'center' }}>
-            <Search size={48} style={{ color: 'var(--text-faint)', marginBottom: SPACING.lg }} />
-            <h1 style={{ fontSize: FONT_SIZE.heading, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' }}>
+            <Search size={48} style={{ color: 'var(--text-disabled)', marginBottom: SPACING.lg }} />
+            <h1 style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' }}>
               {t(locale, 'onboarding.envCheck')}
             </h1>
-            <p style={{ fontSize: FONT_SIZE.lg, color: 'var(--text-dim)', marginBottom: SPACING.xl }}>
+            <p style={{ fontSize: FONT_SIZE.lg, color: 'var(--text-secondary)', marginBottom: SPACING.xl }}>
               {t(locale, 'onboarding.envCheckDesc')}
             </p>
             {envOk === null ? (
@@ -110,7 +110,7 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
               </button>
             ) : envOk ? (
               <div>
-                <div style={{ fontSize: FONT_SIZE.xl, color: 'var(--accent)', marginBottom: SPACING.lg }}>{t(locale, 'onboarding.allReady')}</div>
+                <div style={{ fontSize: FONT_SIZE.xl, color: 'var(--primary)', marginBottom: SPACING.lg }}>{t(locale, 'onboarding.allReady')}</div>
                 <button className="btn btn-primary" onClick={handleNext} style={{ fontSize: FONT_SIZE.md }}>{t(locale, 'onboarding.continue')}</button>
               </div>
             ) : (
@@ -126,10 +126,10 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
         {step === 'ai-config' && (
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 48, marginBottom: SPACING.lg }}>🤖</div>
-            <h1 style={{ fontSize: FONT_SIZE.heading, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' }}>
+            <h1 style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' }}>
               {t(locale, 'onboarding.aiConfig')}
             </h1>
-            <p style={{ fontSize: FONT_SIZE.lg, color: 'var(--text-dim)', marginBottom: SPACING.lg }}>
+            <p style={{ fontSize: FONT_SIZE.lg, color: 'var(--text-secondary)', marginBottom: SPACING.lg }}>
               {t(locale, 'onboarding.aiConfigDesc')}
             </p>
             <input
@@ -138,8 +138,8 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
               onChange={(e) => setApiKey(e.target.value)}
               placeholder="sk-ant-..."
               style={{
-                width: '100%', padding: `px px`, fontSize: FONT_SIZE.lg,
-                background: 'var(--vibe-toolbar-bg)', border: '1px solid var(--vibe-btn-border)',
+                width: '100%', padding: `${SPACING.md}px`, fontSize: FONT_SIZE.lg,
+                background: 'var(--surface)', border: '1px solid var(--border)',
                 borderRadius: BORDER_RADIUS.md, color: 'var(--text)', outline: 'none', marginBottom: SPACING.lg,
                 fontFamily: 'var(--font-mono)',
               }}
@@ -157,10 +157,10 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
         {step === 'module-install' && (
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 48, marginBottom: SPACING.lg }}>🧩</div>
-            <h1 style={{ fontSize: FONT_SIZE.heading, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' }}>
+            <h1 style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' }}>
               {t(locale, 'onboarding.moduleInstall')}
             </h1>
-            <p style={{ fontSize: FONT_SIZE.lg, color: 'var(--text-dim)', marginBottom: SPACING.xl }}>
+            <p style={{ fontSize: FONT_SIZE.lg, color: 'var(--text-secondary)', marginBottom: SPACING.xl }}>
               {t(locale, 'onboarding.moduleInstallDesc')}
             </p>
             <div style={{ display: 'flex', gap: SPACING.sm, justifyContent: 'center' }}>
@@ -176,10 +176,10 @@ export default function OnboardingWizard({ locale, onComplete }: OnboardingWizar
         {step === 'done' && (
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 48, marginBottom: SPACING.lg }}>🎉</div>
-            <h1 style={{ fontSize: FONT_SIZE.heading, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' }}>
+            <h1 style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' }}>
               {t(locale, 'onboarding.allSet')}
             </h1>
-            <p style={{ fontSize: FONT_SIZE.lg, color: 'var(--text-dim)', marginBottom: SPACING.xl }}>
+            <p style={{ fontSize: FONT_SIZE.lg, color: 'var(--text-secondary)', marginBottom: SPACING.xl }}>
               {t(locale, 'onboarding.allSetDesc')}
             </p>
             <button className="btn btn-primary" onClick={onComplete} style={{ fontSize: FONT_SIZE.md }}>

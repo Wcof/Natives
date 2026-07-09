@@ -73,7 +73,6 @@ declare global {
         setVariable: (profileId: string, key: string, value: string) => Promise<void>;
         deleteVariable: (profileId: string, key: string) => Promise<void>;
         encrypt: (text: string) => Promise<string>;
-        decrypt: (encrypted: string) => Promise<string>;
       };
       plugins: {
         detect: (name: string) => Promise<string | null>;
@@ -217,7 +216,8 @@ declare global {
         delete: (id: string) => Promise<void>;
         addKey: (data: { providerId: string; label: string; apiKey: string }) => Promise<unknown>;
         deleteKey: (id: string) => Promise<void>;
-        test: (data: { providerId: string; keyId: string }) => Promise<{ success: boolean; error?: string }>;
+        test: (data: { providerId: string; keyId: string; model?: string }) => Promise<{ success: boolean; error?: string }>;
+        testRaw: (data: { baseUrl: string; apiKey: string; model?: string }) => Promise<{ success: boolean; error?: string }>;
       };
       assistant: {
         listSessions: (params: { projectId: string | null }) => Promise<unknown>;
@@ -241,6 +241,51 @@ declare global {
         listAvailable: () => Promise<Array<{ id: string; displayName: string; available: boolean }>>;
         detectCli: () => Promise<{ claude_cli: boolean; codex_cli: boolean }>;
       };
+      wechat: {
+        env: () => Promise<{ target: string; cwd: string; persona: string; state: string; connected: boolean }>;
+        login: () => Promise<{ qrcode: string; qrcode_img_content: string; state: string }>;
+        pollLogin: (qrcode: string, verifyCode?: string) => Promise<{ state: string; error?: string }>;
+        disconnect: () => Promise<{ ok: boolean }>;
+        check: () => Promise<{ ok: boolean; state: string }>;
+        send: (text: string) => Promise<{ ok: boolean; cid: string }>;
+        setTarget: (target: string) => Promise<void>;
+        setCwd: (dir: string) => Promise<void>;
+        setPersona: (persona: string) => Promise<void>;
+        detectAgents: () => Promise<{ claude: boolean; codex: boolean }>;
+        status: () => Promise<{ state: string; connected: boolean; target: string; cwd: string }>;
+      };
+      subagent: {
+        list: () => Promise<unknown>;
+        get: (id: string) => Promise<unknown>;
+        create: (data: {
+          name: string;
+          role?: string;
+          instructions?: string;
+          tools?: string;
+          providerId?: string;
+          providerKeyId?: string;
+          modelId?: string;
+          fallbackEnabled?: boolean;
+          maxRuns?: number;
+        }) => Promise<unknown>;
+        update: (data: {
+          id: string;
+          name: string;
+          role?: string;
+          instructions?: string;
+          tools?: string;
+          providerId?: string;
+          providerKeyId?: string;
+          modelId?: string;
+          fallbackEnabled?: boolean;
+          maxRuns?: number;
+          enabled?: boolean;
+        }) => Promise<void>;
+        delete: (id: string) => Promise<void>;
+        run: (data: { subagentId: string; inputText: string }) => Promise<unknown>;
+        listRuns: (subagentId: string) => Promise<unknown>;
+        resolveBinding: (subagentId: string) => Promise<unknown>;
+      };
       /** Task Scheduler（Slice J） */
       scheduler: {
         listTasks: () => Promise<Array<{
@@ -248,6 +293,25 @@ declare global {
           scheduleValue: string; enabled: boolean; lastStatus: string | null;
           consecutiveErrors: number; nextRun: string;
         }>>;
+      };
+      /** Library (fanbox clone — G4) */
+      library: {
+        listFolders: () => Promise<unknown>;
+        createFolder: (data: { name: string; parentId?: string }) => Promise<unknown>;
+        updateFolder: (data: { id: string; name: string }) => Promise<void>;
+        deleteFolder: (id: string, moveItems: boolean) => Promise<void>;
+        listTags: () => Promise<unknown>;
+        createTag: (data: { name: string; color: string }) => Promise<unknown>;
+        deleteTag: (id: string) => Promise<void>;
+        listItems: (filter: { folderId?: string; tagId?: string; keyword?: string; status?: string; itemType?: string; limit?: number; offset?: number }) => Promise<unknown>;
+        getItem: (id: string) => Promise<unknown>;
+        createItem: (data: { folderId?: string; title: string; description?: string; content?: string; sourceUrl?: string; itemType?: string; status?: string; tagIds?: string[] }) => Promise<unknown>;
+        updateItem: (data: { id: string; folderId?: string; title: string; description?: string; content?: string; sourceUrl?: string; status?: string; tagIds?: string[] }) => Promise<void>;
+        deleteItem: (id: string) => Promise<void>;
+        batchTag: (data: { itemIds: string[]; tagIds: string[] }) => Promise<void>;
+        batchMove: (data: { itemIds: string[]; folderId?: string }) => Promise<void>;
+        batchDelete: (data: { itemIds: string[] }) => Promise<void>;
+        getStats: () => Promise<unknown>;
       };
     };
   }

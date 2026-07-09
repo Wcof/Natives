@@ -4,13 +4,15 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use rand::RngCore;
 use std::sync::Mutex;
 
-use crate::{Error, Result};
+use crate::{db, Error, Result};
+
+const PROVIDER_KEK_SETTING: &str = "provider_kek";
 
 /// KEK-DEK envelope encryption for provider API keys.
 ///
 /// Architecture:
-/// - KEK (Key Encryption Key): Stored in OS keychain, fetched once at startup,
-///   held in Rust memory, NEVER sent to frontend.
+/// - KEK (Key Encryption Key): Stored in SQLite settings as a 32-byte hex key,
+///   cached in Rust memory, NEVER sent to frontend.
 /// - DEK (Data Encryption Key): Randomly generated per provider key write.
 ///   Encrypted with KEK before storage in SQLite.
 /// - API Key: Encrypted with DEK (AES-256-GCM) before storage.
@@ -24,43 +26,30 @@ use crate::{Error, Result};
 use lazy_static::lazy_static;
 
 lazy_static! {
-    /// In-memory cache of the KEK, loaded once from OS keychain.
+    /// In-memory cache of the KEK, loaded once from SQLite.
     /// Guarded by a mutex for interior mutability on first access.
     static ref KEK_CACHE: Mutex<Option<[u8; 32]>> = Mutex::new(None);
 }
 
-/// Initialize the KEK from the OS keychain.
+#[cfg(test)]
+fn reset_kek_cache_for_tests() {
+    let mut cache = KEK_CACHE.lock().unwrap();
+    *cache = None;
+}
+
+/// Initialize the KEK from SQLite.
 /// Called once at app startup. If no KEK exists, generates and stores one.
 pub fn init_kek(conn: &rusqlite::Connection) -> Result<[u8; 32]> {
-    let entry = keyring::Entry::new("com.natives.assistant", "provider-kek")
-        .map_err(|e| Error::Internal(format!("Failed to create keyring entry: {e}")))?;
-    
-    let kek: [u8; 32] = match entry.get_password() {
-        Ok(pw) => {
-            // Decode existing KEK from hex
-            let bytes = hex::decode(&pw).map_err(|e| {
-                Error::Internal(format!("Failed to decode KEK: {e}"))
-            })?;
-            if bytes.len() != 32 {
-                return Err(Error::Internal("KEK has wrong length".to_string()));
-            }
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&bytes);
-            arr
-        }
-        Err(..) => {
-            // Generate new KEK
+    let kek = match db::get_setting(conn, PROVIDER_KEK_SETTING)? {
+        Some(value) => decode_kek_hex(&value)?,
+        None => {
             let mut new_kek = [0u8; 32];
             OsRng.fill_bytes(&mut new_kek);
-            let hex_str = hex::encode(new_kek);
-            entry.set_password(&hex_str).map_err(|e| {
-                Error::Internal(format!("Failed to store KEK: {e}"))
-            })?;
+            db::set_setting(conn, PROVIDER_KEK_SETTING, &hex::encode(new_kek))?;
             new_kek
         }
     };
 
-    // Cache in memory
     let mut cache = KEK_CACHE.lock().unwrap();
     *cache = Some(kek);
 
@@ -72,7 +61,21 @@ pub fn init_kek(conn: &rusqlite::Connection) -> Result<[u8; 32]> {
     Ok(kek)
 }
 
-/// Get the cached KEK, loading from keychain if needed.
+fn decode_kek_hex(value: &str) -> Result<[u8; 32]> {
+    let bytes =
+        hex::decode(value).map_err(|e| Error::Internal(format!("Failed to decode KEK: {e}")))?;
+    if bytes.len() != 32 {
+        return Err(Error::Internal(format!(
+            "KEK has wrong length: expected 32 bytes, got {}",
+            bytes.len()
+        )));
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    Ok(arr)
+}
+
+/// Get the cached KEK, loading from SQLite if needed.
 pub fn get_kek(conn: &rusqlite::Connection) -> Result<[u8; 32]> {
     let cache = KEK_CACHE.lock().unwrap();
     match *cache {
@@ -175,11 +178,21 @@ pub fn envelope_decrypt(
 mod tests {
     use super::*;
     use rusqlite::Connection;
+    use std::sync::Mutex;
+
+    lazy_static! {
+        static ref TEST_MUTEX: Mutex<()> = Mutex::new(());
+    }
 
     fn setup_test_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS provider_api_keys (
+            "CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS provider_api_keys (
                 id TEXT PRIMARY KEY,
                 provider_id TEXT NOT NULL,
                 label TEXT NOT NULL DEFAULT '',
@@ -193,9 +206,7 @@ mod tests {
 
     #[test]
     fn test_envelope_encrypt_decrypt_roundtrip() {
-        let conn = setup_test_db();
-        // init_kek will try to use keyring which may fail in CI/test env
-        // So we test the core AES-GCM logic directly
+        let _conn = setup_test_db();
         let kek = [0u8; 32]; // deterministic KEK for testing
 
         // Encrypt
@@ -240,8 +251,7 @@ mod tests {
 
     #[test]
     fn test_envelope_encrypt_different_keys_produce_different_ciphertexts() {
-        let conn = setup_test_db();
-        let kek = [0u8; 32];
+        let _conn = setup_test_db();
         let plaintext = "same-api-key";
 
         // First encryption
@@ -274,11 +284,28 @@ mod tests {
     }
 
     #[test]
-    fn test_init_kek_generates_valid_key() {
-        // Verify SHA256 provides proper key material
-        use sha2::{Digest, Sha256};
-        let test_material = b"test-key-material";
-        let hash = Sha256::digest(test_material);
-        assert_eq!(hash.len(), 32, "SHA256 should produce 32 bytes for KEK");
+    fn test_init_kek_stores_valid_key_in_sqlite() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        reset_kek_cache_for_tests();
+        let conn = setup_test_db();
+
+        let kek = init_kek(&conn).unwrap();
+        assert_eq!(kek.len(), 32);
+
+        let stored = db::get_setting(&conn, PROVIDER_KEK_SETTING).unwrap().unwrap();
+        assert_eq!(hex::decode(stored).unwrap().len(), 32);
+    }
+
+    #[test]
+    fn test_envelope_encrypt_decrypt_uses_sqlite_kek() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        reset_kek_cache_for_tests();
+        let conn = setup_test_db();
+
+        let plaintext = "sk-test-api-key-12345";
+        let (api_key_encrypted, dek_encrypted) = envelope_encrypt(plaintext, &conn).unwrap();
+        let decrypted = envelope_decrypt(&api_key_encrypted, &dek_encrypted, &conn).unwrap();
+
+        assert_eq!(decrypted, plaintext);
     }
 }

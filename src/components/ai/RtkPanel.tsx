@@ -37,7 +37,7 @@ export default function RtkPanel() {
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         marginBottom: SPACING.md,
       }}>
-        <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+        <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
           {t(locale, 'aiWorkbench.rtkUsage')}
         </div>
         <div style={{ display: 'flex', gap: SPACING.xs }}>
@@ -46,7 +46,7 @@ export default function RtkPanel() {
             onClick={() => setPaused(!paused)}
             style={{
               fontSize: FONT_SIZE.xs, padding: '2px 6px', borderRadius: BORDER_RADIUS.sm,
-              color: paused ? 'var(--warning)' : 'var(--text-faint)',
+              color: paused ? 'var(--warning)' : 'var(--text-disabled)',
             }}
             title={paused ? t(locale, 'aiWorkbench.rtk.resumeTracking') : t(locale, 'aiWorkbench.rtk.pauseTracking')}
           >
@@ -67,30 +67,30 @@ export default function RtkPanel() {
       <div style={{ display: 'flex', gap: 'var(--space-sm)', marginBottom: SPACING.md }}>
         <div style={{
           flex: 1, padding: 10, borderRadius: BORDER_RADIUS.md,
-          background: 'var(--bg-2)', border: '1px solid var(--border)',
+          background: 'var(--surface)', border: '1px solid var(--border)',
         }}>
-          <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--accent)' }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--primary)' }}>
             {usage?.totalSaved ?? 0}
           </div>
-          <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-faint)', marginTop: 2 }}>
+          <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)', marginTop: 2 }}>
             {t(locale, 'aiWorkbench.tokensSaved')}
           </div>
         </div>
         <div style={{
           flex: 1, padding: 10, borderRadius: BORDER_RADIUS.md,
-          background: 'var(--bg-2)', border: '1px solid var(--border)',
+          background: 'var(--surface)', border: '1px solid var(--border)',
         }}>
           <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)' }}>
             {usage?.totalCommands ?? 0}
           </div>
-          <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-faint)', marginTop: 2 }}>
+          <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)', marginTop: 2 }}>
             {t(locale, 'aiWorkbench.commands')}
           </div>
         </div>
       </div>
 
       {/* Top commands */}
-      <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text-dim)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+      <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>
         {t(locale, 'aiWorkbench.rtk.topCommands')}
       </div>
       <div style={{ flex: 1, overflow: 'auto' }}>
@@ -101,12 +101,12 @@ export default function RtkPanel() {
             <div key={cmd.command} style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               padding: '6px 8px', marginBottom: 3, borderRadius: BORDER_RADIUS.sm,
-              background: 'var(--bg-2)', fontSize: FONT_SIZE.sm,
+              background: 'var(--surface)', fontSize: FONT_SIZE.sm,
             }}>
-              <span style={{ color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
+              <span style={{ color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
                 {cmd.command}
               </span>
-              <span style={{ color: 'var(--text-faint)', fontSize: FONT_SIZE.xs }}>
+              <span style={{ color: 'var(--text-disabled)', fontSize: FONT_SIZE.xs }}>
                 {cmd.count}x · {cmd.totalSaved} {t(locale, 'aiWorkbench.tokensSaved')}
               </span>
             </div>

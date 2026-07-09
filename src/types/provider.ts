@@ -17,12 +17,13 @@ export interface ProviderPreset {
   iconColor?: string;
 }
 
-/** 单条 API Key */
+/** 单条 API Key — 返回给前端的始终是脱敏版本 */
 export interface ProviderKey {
   id: string;
   providerId: string;
   label: string;
-  apiKey: string;
+  /** 脱敏后的 Key（如 "sk-a…1b2c"），绝不含完整 Key */
+  maskedKey: string;
   createdAt: string;
 }
 

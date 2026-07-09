@@ -230,7 +230,9 @@ fn execute_one(
 // ── 具体工具实现 ──
 
 fn exec_read_file(args: &serde_json::Value) -> Result<serde_json::Value> {
-    let path = args["path"].as_str().ok_or_else(|| Error::InvalidInput("missing path".into()))?;
+    let path = args["path"].as_str()
+        .or_else(|| args["file_path"].as_str())
+        .ok_or_else(|| Error::InvalidInput("missing path".into()))?;
     let result = crate::file_manager::read_file(path)?;
     Ok(serde_json::to_value(result).map_err(|e| Error::Internal(e.to_string()))?)
 }
@@ -242,7 +244,9 @@ fn exec_list_dir(args: &serde_json::Value) -> Result<serde_json::Value> {
 }
 
 fn exec_write_file(args: &serde_json::Value) -> Result<serde_json::Value> {
-    let path = args["path"].as_str().ok_or_else(|| Error::InvalidInput("missing path".into()))?;
+    let path = args["path"].as_str()
+        .or_else(|| args["file_path"].as_str())
+        .ok_or_else(|| Error::InvalidInput("missing path".into()))?;
     let content = args["content"].as_str().ok_or_else(|| Error::InvalidInput("missing content".into()))?;
     crate::module_manager::atomic_write(std::path::Path::new(path), content)?;
     Ok(serde_json::json!({ "path": path, "bytes": content.len() }))
@@ -330,6 +334,248 @@ fn exec_lint_module(args: &serde_json::Value) -> Result<serde_json::Value> {
         "passed": result.passed,
         "errors": result.errors
     }))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 原子能力层实现 (AtomicCapability trait)
+// 参考 Claude Code 的原子工具模型，将每个工具封装为独立能力单元
+// ─────────────────────────────────────────────────────────────────────────────
+
+use crate::runtime::native::capability::{
+    AtomicCapability, CancellationToken, CapabilityContext, CapabilityMeta, CapabilityPermission,
+    CapabilityRequest, CapabilitySideEffect, CapabilityVisibility,
+};
+
+// ── ReadFileCapability ──
+
+pub struct ReadFileCapability;
+
+impl ReadFileCapability {
+    pub fn new() -> Self { Self }
+}
+
+#[async_trait::async_trait]
+impl AtomicCapability for ReadFileCapability {
+    fn meta(&self) -> CapabilityMeta {
+        CapabilityMeta::new(
+            "Read",
+            "Read a local file's content (UTF-8, with truncation above 1MB).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "file_path": { "type": "string", "description": "Absolute, relative, or ~-prefixed file path." },
+                    "path": { "type": "string", "description": "Legacy alias for file_path." }
+                },
+                "required": ["file_path"]
+            }),
+            "file",
+        )
+        .with_side_effects(vec![CapabilitySideEffect::ReadFs])
+    }
+
+    async fn execute(
+        &self,
+        request: &CapabilityRequest,
+        _context: &CapabilityContext,
+        _cancellation: &CancellationToken,
+    ) -> crate::Result<serde_json::Value> {
+        exec_read_file(&request.arguments)
+    }
+}
+
+// ── ListDirCapability ──
+
+pub struct ListDirCapability;
+
+impl ListDirCapability {
+    pub fn new() -> Self { Self }
+}
+
+#[async_trait::async_trait]
+impl AtomicCapability for ListDirCapability {
+    fn meta(&self) -> CapabilityMeta {
+        CapabilityMeta::new(
+            "LS",
+            "List entries of a directory.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" }
+                },
+                "required": ["path"]
+            }),
+            "file",
+        )
+        .with_side_effects(vec![CapabilitySideEffect::ReadFs])
+    }
+
+    async fn execute(
+        &self,
+        request: &CapabilityRequest,
+        _context: &CapabilityContext,
+        _cancellation: &CancellationToken,
+    ) -> crate::Result<serde_json::Value> {
+        exec_list_dir(&request.arguments)
+    }
+}
+
+// ── WriteFileCapability ──
+
+pub struct WriteFileCapability;
+
+impl WriteFileCapability {
+    pub fn new() -> Self { Self }
+}
+
+#[async_trait::async_trait]
+impl AtomicCapability for WriteFileCapability {
+    fn meta(&self) -> CapabilityMeta {
+        CapabilityMeta::new(
+            "Write",
+            "Atomically write content to a local file.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "file_path": { "type": "string" },
+                    "path": { "type": "string", "description": "Legacy alias for file_path." },
+                    "content": { "type": "string" }
+                },
+                "required": ["file_path", "content"]
+            }),
+            "file",
+        )
+        .with_side_effects(vec![CapabilitySideEffect::WriteFs])
+        .with_permission(CapabilityPermission::Ask)
+        .with_rule_event("file")
+    }
+
+    async fn execute(
+        &self,
+        request: &CapabilityRequest,
+        _context: &CapabilityContext,
+        _cancellation: &CancellationToken,
+    ) -> crate::Result<serde_json::Value> {
+        exec_write_file(&request.arguments)
+    }
+}
+
+// ── WriteModuleCapability ──
+
+pub struct WriteModuleCapability {
+    modules_dir: std::path::PathBuf,
+}
+
+impl WriteModuleCapability {
+    pub fn new(modules_dir: std::path::PathBuf) -> Self { Self { modules_dir } }
+}
+
+#[async_trait::async_trait]
+impl AtomicCapability for WriteModuleCapability {
+    fn meta(&self) -> CapabilityMeta {
+        CapabilityMeta::new(
+            "write_module",
+            "Write an AI-generated SPA module to ~/.natives/modules/, with Contract Linter gate (KI-3) + contract_id audit (KI-1).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "moduleId": { "type": "string" },
+                    "name": { "type": "string" },
+                    "htmlContent": { "type": "string" },
+                    "permissions": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["moduleId", "name", "htmlContent", "permissions"]
+            }),
+            "module",
+        )
+        .with_side_effects(vec![CapabilitySideEffect::ModuleWrite])
+        .with_permission(CapabilityPermission::Ask)
+        .with_rule_event("file")
+    }
+
+    async fn execute(
+        &self,
+        request: &CapabilityRequest,
+        _context: &CapabilityContext,
+        _cancellation: &CancellationToken,
+    ) -> crate::Result<serde_json::Value> {
+        exec_write_module(&request.arguments, &self.modules_dir)
+    }
+}
+
+// ── RunTerminalCapability ──
+
+pub struct RunTerminalCapability;
+
+impl RunTerminalCapability {
+    pub fn new() -> Self { Self }
+}
+
+#[async_trait::async_trait]
+impl AtomicCapability for RunTerminalCapability {
+    fn meta(&self) -> CapabilityMeta {
+        CapabilityMeta::new(
+            "Bash",
+            "Execute a terminal command with timeout, cwd, permission, hook, and rule checks.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "Command line to execute." },
+                    "cwd": { "type": "string" },
+                    "timeoutMs": { "type": "integer", "default": 30000 }
+                },
+                "required": ["command"]
+            }),
+            "terminal",
+        )
+        .with_side_effects(vec![CapabilitySideEffect::ExecuteProcess])
+        .with_permission(CapabilityPermission::Ask)
+        .with_visibility(CapabilityVisibility::RequiresApproval)
+        .with_rule_event("bash")
+    }
+
+    async fn execute(
+        &self,
+        request: &CapabilityRequest,
+        _context: &CapabilityContext,
+        _cancellation: &CancellationToken,
+    ) -> crate::Result<serde_json::Value> {
+        exec_run_terminal(&request.arguments)
+    }
+}
+
+// ── LintModuleCapability ──
+
+pub struct LintModuleCapability;
+
+impl LintModuleCapability {
+    pub fn new() -> Self { Self }
+}
+
+#[async_trait::async_trait]
+impl AtomicCapability for LintModuleCapability {
+    fn meta(&self) -> CapabilityMeta {
+        CapabilityMeta::new(
+            "lint_module",
+            "Run Contract Linter on HTML content without writing to disk.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "htmlContent": { "type": "string" }
+                },
+                "required": ["htmlContent"]
+            }),
+            "quality",
+        )
+    }
+
+    async fn execute(
+        &self,
+        request: &CapabilityRequest,
+        _context: &CapabilityContext,
+        _cancellation: &CancellationToken,
+    ) -> crate::Result<serde_json::Value> {
+        exec_lint_module(&request.arguments)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

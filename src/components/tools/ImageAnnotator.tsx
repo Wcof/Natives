@@ -25,7 +25,7 @@ export default function ImageAnnotator({ imageUrl, onClose }: { imageUrl?: strin
   if (!imageUrl) {
     return (
       <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ padding: 40, color: 'var(--text-faint)', fontSize: FONT_SIZE.lg }}>
+        <div style={{ padding: 40, color: 'var(--text-disabled)', fontSize: FONT_SIZE.lg }}>
           {t(locale, 'screenshot.noImage')}
           <button className="btn btn-ghost" style={{ display: 'block', marginTop: SPACING.md }} onClick={onClose}>{t(locale, 'common.close')}</button>
         </div>
@@ -36,7 +36,7 @@ export default function ImageAnnotator({ imageUrl, onClose }: { imageUrl?: strin
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.9)', display: 'flex', flexDirection: 'column' }}>
       {/* Toolbar */}
-      <div style={{ display: 'flex', gap: SPACING.xs, padding: SPACING.sm, background: 'var(--vibe-toolbar-bg)', borderBottom: '0.0625rem solid var(--vibe-toolbar-border)', alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: SPACING.xs, padding: SPACING.sm, background: 'var(--surface)', borderBottom: '0.0625rem solid var(--border)', alignItems: 'center' }}>
         {(['pen', 'arrow', 'text', 'blur'] as const).map((toolType) => (
           <button
             key={toolType}

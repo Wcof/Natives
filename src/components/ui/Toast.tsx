@@ -67,22 +67,20 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           <div
             key={t.id}
             style={{
-              padding: `${SPACING.sm}px ${SPACING.lg}px`, borderRadius: BORDER_RADIUS.lg, fontSize: FONT_SIZE.lg, fontWeight: 500,
-              color: 'var(--vibe-brand-text)',
-              background: 'var(--vibe-toolbar-bg)',
-              backdropFilter: 'blur(12px)',
-              WebkitBackdropFilter: 'blur(12px)',
-              border: '0.0625rem solid var(--vibe-toolbar-border)',
-              borderLeft: `3px solid ${t.type === 'success' ? 'var(--diff-add)' : t.type === 'error' ? 'var(--danger)' : t.type === 'warning' ? 'var(--warning)' : 'var(--accent)'}`,
-              boxShadow: 'var(--vibe-toolbar-shadow)',
+              padding: `${SPACING.sm}px ${SPACING.lg}px`, borderRadius: BORDER_RADIUS.sm, fontSize: FONT_SIZE.sm, fontWeight: 500,
+              color: 'var(--text)',
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderLeft: `3px solid ${t.type === 'success' ? 'var(--success)' : t.type === 'error' ? 'var(--danger)' : t.type === 'warning' ? 'var(--warning)' : 'var(--primary)'}`,
+              boxShadow: 'var(--shadow-popup)',
               opacity: t.dismissing ? 0 : 1,
-              transform: t.dismissing ? 'translateY(8px) scale(0.98)' : 'translateY(0) scale(1)',
-              transition: `opacity ${TRANSITION.slow}, transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1)`,
+              transform: t.dismissing ? 'translateY(8px)' : 'translateY(0)',
+              transition: `opacity ${TRANSITION.slow}, transform ${TRANSITION.slow}`,
               pointerEvents: 'auto',
               cursor: 'pointer',
               maxWidth: 360,
               display: 'inline-flex', alignItems: 'center', gap: SPACING.xs,
-              animation: !t.dismissing ? `toastSlideUp 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)` : undefined,
+              animation: !t.dismissing ? `toastSlideUp 0.2s ease` : undefined,
             }}
             onClick={() => removeToast(t.id)}
           >

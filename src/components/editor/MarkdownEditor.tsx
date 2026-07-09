@@ -41,9 +41,9 @@ export default function MarkdownEditor({
     onChange?.(val || '');
   };
 
-  // Detect current theme from CSS variable
+  // Detect current theme from data-theme attribute
   const isDark = typeof document !== 'undefined'
-    ? getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() === '#0b0c0a'
+    ? document.documentElement.getAttribute('data-theme') !== 'light'
     : true;
 
   return (
@@ -52,15 +52,15 @@ export default function MarkdownEditor({
         <div style={{
           display: 'flex', gap: 4, padding: '6px 8px',
           borderBottom: '1px solid var(--border)',
-          background: 'var(--bg-2)',
+          background: 'var(--surface)',
         }}>
           <button
             className={`btn-ghost ${mode === 'edit' ? 'active' : ''}`}
             onClick={() => setMode('edit')}
             style={{
               fontSize: FONT_SIZE.sm, padding: '2px 8px', borderRadius: BORDER_RADIUS.sm,
-              color: mode === 'edit' ? 'var(--accent)' : 'var(--text-faint)',
-              background: mode === 'edit' ? 'var(--accent-soft)' : 'transparent',
+              color: mode === 'edit' ? 'var(--primary)' : 'var(--text-disabled)',
+              background: mode === 'edit' ? 'var(--primary-soft)' : 'transparent',
             }}
           >
             Edit
@@ -70,8 +70,8 @@ export default function MarkdownEditor({
             onClick={() => setMode('preview')}
             style={{
               fontSize: FONT_SIZE.sm, padding: '2px 8px', borderRadius: BORDER_RADIUS.sm,
-              color: mode === 'preview' ? 'var(--accent)' : 'var(--text-faint)',
-              background: mode === 'preview' ? 'var(--accent-soft)' : 'transparent',
+              color: mode === 'preview' ? 'var(--primary)' : 'var(--text-disabled)',
+              background: mode === 'preview' ? 'var(--primary-soft)' : 'transparent',
             }}
           >
             Preview

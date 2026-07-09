@@ -7,7 +7,7 @@
  *   1. 页面标题 + 描述
  *   2. 默认引擎选择器（3 个 EnginePickerCard）
  *   3. "新会话会用什么" 只读解释块
- *   4. Claude CLI 详情卡片（状态 + CLI 行 + settings.json 折叠编辑器）
+ *   4. Claude CLI 详情卡片（状态 + CLI 行 + 安全边界说明）
  *   5. Codex CLI 详情卡片（状态 + app-server 行）
  *   6. Native 详情卡片（状态 + 能力/权限/上下文 三块）
  *   7. 能力矩阵表格
@@ -24,6 +24,8 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { Locale } from '@/i18n';
+import { classifyError } from '@/lib/error-classifier';
+import { useToast } from '@/components/ui/Toast';
 
 // ═══════════════════════════════════════════════════════════════
 // 类型
@@ -51,6 +53,15 @@ interface ScheduledTask {
   consecutiveErrors: number; nextRun: string;
 }
 
+const DEFAULT_ENABLED_TOOLS: Record<string, boolean> = {
+  read_file: true,
+  list_dir: true,
+  write_file: true,
+  write_module: true,
+  run_terminal: false,
+  lint_module: true,
+};
+
 // ═══════════════════════════════════════════════════════════════
 // i18n — 全量双语表
 // ═══════════════════════════════════════════════════════════════
@@ -61,7 +72,7 @@ const ZH = {
   defaultEngine: '默认引擎',
   defaultEngineDesc: '选择新会话默认使用哪个 Runtime。当前正在运行的回复不受影响；后续每条新消息会按「默认 Runtime + Provider」重新解析。',
   whatNewChatUses: '新会话会用什么',
-  whatNewChatDesc: '按当前默认设置，下一条新消息会解析为以下运行组合。每次发送前都会重新检查 Runtime、Provider 和模型兼容性 — 不持久绑定到某个会话。',
+  whatNewChatDesc: '按当前默认设置，下一条新消息会解析为以下运行组合。每次发送前都会重新检查 Runtime、Provider 和模型兼容性 - 不持久绑定到某个会话。',
   runtimeLabel: 'Runtime',
   defaultProvider: '默认 Provider',
   defaultModel: '默认模型',
@@ -84,7 +95,7 @@ const ZH = {
   // Status
   installed: '已安装',
   installedV: '已安装 v',
-  notInstalled: '未安装 — 选用后自动降级到 Native',
+  notInstalled: '未安装 - 选用后自动降级到 Native',
   alwaysAvailable: '随应用自带，始终可用',
   ready: '已就绪',
   notReady: '未就绪',
@@ -108,8 +119,11 @@ const ZH = {
   update: '升级',
   refresh: '刷新',
   codexHome: 'Codex 目录',
-  viewCodexAccount: '查看 Codex 账户 →',
-  viewCodexModels: '查看 Codex 模型 →',
+  codexInspectionUnavailable: 'Codex 账户与模型读取尚未接入真实 app-server API；当前版本只展示 CLI 可用性，避免显示不可信账户信息。',
+  loadRuntimeFailed: '执行引擎设置加载失败',
+  saveRuntimeFailed: '执行引擎设置保存失败',
+  detectRuntimeFailed: 'CLI 检测失败',
+  tasksLoadFailed: '定时任务加载失败',
   // Native detail
   capabilities: '能力',
   capabilitiesDesc: '内置工具（Read / Edit / Bash 等），MCP 工具集，文件 / 终端 / 浏览器全套支持',
@@ -139,7 +153,6 @@ const ZH = {
   tasksTitle: '定时任务',
   tasksDesc: '管理定时执行的 Agent 任务。调度器触发 runtime 层的 stream，不关心具体走哪个 runtime。',
   noTasks: '暂无任务',
-  addTask: '新建任务',
   taskName: '任务名',
   taskPrompt: 'Prompt',
   taskSchedule: '调度',
@@ -148,28 +161,22 @@ const ZH = {
   // Detect button
   detect: '检测',
   detectingBtn: '检测中…',
-  // settings.json
-  cliConfig: 'settings.json 配置',
-  cliConfigDesc: '直接编辑 Claude CLI 的 settings.json（高级）',
-  form: '表单',
-  json: 'JSON',
-  save: '保存',
-  reset: '重置',
-  format: '格式化',
-  settingsSaved: '已保存',
-  permissionsField: '权限 (permissions)',
-  permissionsFieldDesc: 'CLI 的文件系统 / 网络权限配置',
-  envVars: '环境变量 (env)',
-  envVarsDesc: 'CLI 运行时注入的环境变量',
+  // Claude CLI safety
+  cliConfig: 'Claude CLI 配置边界',
+  cliConfigDesc: 'AiNative 会读取 Claude CLI 是否可用，并在运行时通过受控子进程调用它；当前版本不会编辑 ~/.claude/settings.json，也不会修改你的 shell、终端或全局 Claude 配置。',
+  cliConfigUserOwned: '用户自主管理',
+  cliConfigUserOwnedDesc: '权限、hooks、MCP server 和 OAuth 登录仍由 Claude CLI 自己管理；需要变更时请在 Claude 官方 CLI 中完成。',
+  cliConfigSandbox: 'AiNative 沙盒',
+  cliConfigSandboxDesc: 'AiNative 只管理自己的 Runtime、Provider、Key 和终端沙盒配置；所有 Key 仍由后端加密管理，不写入 Claude 全局配置。',
 };
 
 const EN: Record<string, string> = {
   pageTitle: 'Execution Engine',
-  pageDesc: 'Inspect which runtime is currently in charge of the Agent — why it\'s in this state, what the impact is, and how to recover. Providers govern assets, Models govern exposure, Runtime governs environment.',
+  pageDesc: 'Inspect which runtime is currently in charge of the Agent - why it\'s in this state, what the impact is, and how to recover. Providers govern assets, Models govern exposure, Runtime governs environment.',
   defaultEngine: 'Default engine',
   defaultEngineDesc: 'Choose which runtime new chats use by default. Replies already streaming aren\'t interrupted; every subsequent message re-resolves the default runtime + provider on send.',
   whatNewChatUses: 'What a new chat will use',
-  whatNewChatDesc: 'With the current defaults, your next new message resolves to the combination below. Runtime, provider, and model compatibility are re-checked on every send — nothing is pinned to a session.',
+  whatNewChatDesc: 'With the current defaults, your next new message resolves to the combination below. Runtime, provider, and model compatibility are re-checked on every send - nothing is pinned to a session.',
   runtimeLabel: 'Runtime',
   defaultProvider: 'Default provider',
   defaultModel: 'Default model',
@@ -178,19 +185,19 @@ const EN: Record<string, string> = {
   cliDisabledFallback: 'CLI disabled → routes to Native',
   cliUnavailableFallback: 'Claude CLI unavailable → falls back to Native',
   driftWarningCliDisabled: 'Stored preference is Claude CLI but CLI was explicitly disabled in a previous setting, so runtime actually routes to Native. Click either card above to rewrite both fields together.',
-  driftWarningCliMissing: 'Stored preference is Claude CLI but the CLI isn\'t currently detected (not installed or OAuth expired), so runtime actually routes to Native. Use the Install button on the Claude CLI card below — or pick Native as your default instead.',
+  driftWarningCliMissing: 'Stored preference is Claude CLI but the CLI isn\'t currently detected (not installed or OAuth expired), so runtime actually routes to Native. Use the Install button on the Claude CLI card below - or pick Native as your default instead.',
   claudeCli: 'Claude CLI',
   claudeCliTag: 'Anthropic official CLI',
-  claudeCliPitch: 'Runs the Agent through Anthropic\'s official CLI. Fully compatible with the Claude Code ecosystem — ~/.claude/settings.json, hooks, and MCP servers all work as-is.',
+  claudeCliPitch: 'Runs the Agent through Anthropic\'s official CLI. Fully compatible with the Claude Code ecosystem - ~/.claude/settings.json, hooks, and MCP servers all work as-is.',
   codexCli: 'Codex CLI',
   codexCliTag: 'OpenAI Codex app-server',
   codexCliPitch: 'Routes through the Codex app-server for Codex Account models (gpt-5.5 etc., quota covered by your ChatGPT plan), and also serves configured Natives providers via the provider proxy.',
   nativeRuntime: 'Native Engine',
   nativeTag: 'Natives built-in',
-  nativePitch: 'Natives calls provider APIs directly. Built for multi-provider, observable, recoverable runs — context and permissions stay inside Natives, no external CLI required.',
+  nativePitch: 'Natives calls provider APIs directly. Built for multi-provider, observable, recoverable runs - context and permissions stay inside Natives, no external CLI required.',
   installed: 'Installed',
   installedV: 'Installed v',
-  notInstalled: 'Not installed — selecting it falls back to Native',
+  notInstalled: 'Not installed - selecting it falls back to Native',
   alwaysAvailable: 'Bundled with the app, always available',
   ready: 'Ready',
   notReady: 'Not ready',
@@ -213,8 +220,11 @@ const EN: Record<string, string> = {
   update: 'Upgrade',
   refresh: 'Refresh',
   codexHome: 'Codex home',
-  viewCodexAccount: 'View Codex account →',
-  viewCodexModels: 'View Codex models →',
+  codexInspectionUnavailable: 'Codex account and model inspection are not wired to a real app-server API yet. This version only shows CLI availability to avoid untrusted account data.',
+  loadRuntimeFailed: 'Failed to load execution engine settings',
+  saveRuntimeFailed: 'Failed to save execution engine settings',
+  detectRuntimeFailed: 'CLI detection failed',
+  tasksLoadFailed: 'Failed to load scheduled tasks',
   capabilities: 'Capabilities',
   capabilitiesDesc: 'Built-in tools (Read / Edit / Bash / etc.), MCP toolsets, full file / terminal / browser stack',
   shipsWithApp: 'ships with app',
@@ -239,7 +249,6 @@ const EN: Record<string, string> = {
   tasksTitle: 'Scheduled Tasks',
   tasksDesc: 'Manage scheduled Agent tasks. The scheduler triggers runtime-level stream, regardless of which runtime is used.',
   noTasks: 'No tasks yet',
-  addTask: 'New task',
   taskName: 'Task name',
   taskPrompt: 'Prompt',
   taskSchedule: 'Schedule',
@@ -247,18 +256,12 @@ const EN: Record<string, string> = {
   taskNextRun: 'Next run',
   detect: 'Detect',
   detectingBtn: 'Detecting…',
-  cliConfig: 'settings.json config',
-  cliConfigDesc: 'Directly edit Claude CLI\'s settings.json (advanced)',
-  form: 'Form',
-  json: 'JSON',
-  save: 'Save',
-  reset: 'Reset',
-  format: 'Format',
-  settingsSaved: 'Saved',
-  permissionsField: 'Permissions (permissions)',
-  permissionsFieldDesc: 'CLI filesystem / network permission config',
-  envVars: 'Environment variables (env)',
-  envVarsDesc: 'Environment variables injected at CLI runtime',
+  cliConfig: 'Claude CLI config boundary',
+  cliConfigDesc: 'AiNative detects whether Claude CLI is available and invokes it through a controlled child process at runtime. This version does not edit ~/.claude/settings.json or modify your shell, terminal, or global Claude configuration.',
+  cliConfigUserOwned: 'User-managed',
+  cliConfigUserOwnedDesc: 'Permissions, hooks, MCP servers, and OAuth login remain owned by Claude CLI. Change them through the official Claude CLI when needed.',
+  cliConfigSandbox: 'AiNative sandbox',
+  cliConfigSandboxDesc: 'AiNative only manages its own Runtime, Provider, Key, and terminal sandbox settings. Keys stay encrypted in the backend and are not written into Claude global config.',
 };
 
 function tt(locale: Locale, key: string): string {
@@ -272,10 +275,10 @@ function tt(locale: Locale, key: string): string {
 function RuntimeStatusPill({ state, locale }: { state: RuntimeState; locale: Locale }) {
   const tone: Record<RuntimeState, string> = {
     selected: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
-    available: 'bg-zinc-500/10 text-[var(--text-dim)] dark:text-[var(--text-faint)]',
+    available: 'bg-zinc-500/10 text-[var(--text-secondary)] dark:text-[var(--text-disabled)]',
     degraded: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
     blocked: 'bg-red-500/15 text-red-600 dark:text-red-400',
-    disabled: 'bg-zinc-500/10 text-[var(--text-dim)] dark:text-[var(--text-faint)]',
+    disabled: 'bg-zinc-500/10 text-[var(--text-secondary)] dark:text-[var(--text-disabled)]',
   };
   const dot: Record<RuntimeState, string> = {
     selected: 'bg-emerald-500', available: 'bg-zinc-400', degraded: 'bg-amber-500',
@@ -300,10 +303,10 @@ function RuntimeStatusExplanation({ info, locale }: { info: RuntimeStatusInfo; l
     ...(info.recovery ? [{ label: tt(locale, 'recovery'), value: info.recovery }] : []),
   ];
   return (
-    <div className="rounded-md bg-[var(--vibe-content-bg)] px-3.5 divide-y divide-[var(--vibe-btn-border)]">
+    <div className="rounded-md bg-[var(--surface)] px-3.5 divide-y divide-[var(--border)]">
       {rows.map((r) => (
         <div key={r.label} className="py-2.5 flex items-start justify-between gap-3">
-          <span className="text-[11px] text-[var(--text-dim)] shrink-0">{r.label}</span>
+          <span className="text-[11px] text-[var(--text-secondary)] shrink-0">{r.label}</span>
           <span className="text-xs text-[var(--text)] text-right">{r.value}</span>
         </div>
       ))}
@@ -319,7 +322,7 @@ function RuntimeCard({ name, state, locale, children }: {
   name: string; state: RuntimeState; locale: Locale; children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-lg bg-[var(--vibe-btn-bg)] border border-[var(--vibe-btn-border)] p-5 flex flex-col gap-4">
+    <div className="rounded-lg bg-[var(--surface)] border border-[var(--border)] p-5 flex flex-col gap-4">
       <div className="flex items-center gap-2 flex-wrap">
         <h3 className="text-sm font-semibold leading-tight text-[var(--text)]">{name}</h3>
         <RuntimeStatusPill state={state} locale={locale} />
@@ -349,13 +352,13 @@ function EnginePickerCard({
       role="button" tabIndex={0} onClick={handleClick}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(); } }}
       aria-pressed={selected}
-      className={`relative w-full text-left rounded-lg border p-5 flex flex-col gap-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--vibe-active-color)] ${
-        selected ? 'border-[var(--vibe-active-color)] bg-[var(--vibe-active-bg)] ring-1 ring-[var(--vibe-active-color)]/30' : 'border-[var(--vibe-btn-border)] bg-[var(--vibe-btn-bg)] hover:bg-[var(--vibe-content-bg)]'
+      className={`relative w-full text-left rounded-lg border p-5 flex flex-col gap-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)] ${
+        selected ? 'border-[var(--primary)] bg-[var(--primary-soft)] ring-1 ring-[var(--primary)]/30' : 'border-[var(--border)] bg-[var(--surface)] hover:bg-[var(--surface)]'
       }`}
     >
       <span className="absolute top-4 right-4 pointer-events-none">
         {selected ? (
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[var(--vibe-active-color)]"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" /></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[var(--primary)]"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" /></svg>
         ) : (
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-zinc-300 dark:text-zinc-600"><circle cx="12" cy="12" r="10" /></svg>
         )}
@@ -363,11 +366,11 @@ function EnginePickerCard({
       <div className="pr-8 flex items-start gap-2.5">
         <span className="shrink-0 mt-0.5">{icon}</span>
         <div className="min-w-0">
-          <h4 className={`text-sm font-semibold ${selected ? 'text-[var(--vibe-active-color)]' : 'text-[var(--text)]'}`}>{title}</h4>
-          <p className="text-sm text-[var(--text-dim)] mt-1.5">{tagline}</p>
+          <h4 className={`text-sm font-semibold ${selected ? 'text-[var(--primary)]' : 'text-[var(--text)]'}`}>{title}</h4>
+          <p className="text-sm text-[var(--text-secondary)] mt-1.5">{tagline}</p>
         </div>
       </div>
-      <p className="text-xs text-[var(--text-dim)] leading-relaxed line-clamp-2">{pitch}</p>
+      <p className="text-xs text-[var(--text-secondary)] leading-relaxed line-clamp-2">{pitch}</p>
       <div className="flex items-center justify-between gap-2 mt-auto flex-wrap">
         <div className="flex items-center gap-1.5 text-[11px]">
           {statusKind === 'ok' ? (
@@ -389,14 +392,28 @@ function EnginePickerCard({
 function InfoRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="py-2.5 flex items-center justify-between gap-3">
-      <span className="text-[11px] text-[var(--text-dim)] shrink-0">{label}</span>
-      <div className="flex items-center gap-2 text-xs text-[var(--text-dim)]">{children}</div>
+      <span className="text-[11px] text-[var(--text-secondary)] shrink-0">{label}</span>
+      <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">{children}</div>
     </div>
   );
 }
 
 function InfoBlock({ children }: { children: React.ReactNode }) {
-  return <div className="rounded-md bg-[var(--vibe-content-bg)] px-3.5 divide-y divide-[var(--vibe-btn-border)]">{children}</div>;
+  return <div className="rounded-md bg-[var(--surface)] px-3.5 divide-y divide-[var(--border)]">{children}</div>;
+}
+
+function InlineNotice({ tone = 'info', children }: { tone?: 'info' | 'warning' | 'error'; children: React.ReactNode }) {
+  const toneClass = tone === 'error'
+    ? 'border-red-500/20 bg-red-500/5 text-red-600 dark:text-red-400'
+    : tone === 'warning'
+      ? 'border-amber-500/20 bg-amber-500/5 text-amber-600 dark:text-amber-400'
+      : 'border-blue-500/20 bg-blue-500/5 text-blue-600 dark:text-blue-400';
+
+  return (
+    <div className={`rounded-md border px-3 py-2 text-[11px] leading-relaxed ${toneClass}`}>
+      {children}
+    </div>
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -430,9 +447,9 @@ function CapabilityMatrix({ locale }: { locale: Locale }) {
     <div className="overflow-x-auto">
       <table className="w-full text-xs border-collapse">
         <thead>
-          <tr className="border-b border-[var(--vibe-btn-border)]">
-            <th className="py-2 px-3 text-left text-[var(--text-dim)] font-medium">{tt(locale, 'capability')}</th>
-            {runtimes.map((r) => <th key={r.id} className="py-2 px-3 text-center text-[var(--text-dim)] font-medium">{r.label}</th>)}
+          <tr className="border-b border-[var(--border)]">
+            <th className="py-2 px-3 text-left text-[var(--text-secondary)] font-medium">{tt(locale, 'capability')}</th>
+            {runtimes.map((r) => <th key={r.id} className="py-2 px-3 text-center text-[var(--text-secondary)] font-medium">{r.label}</th>)}
           </tr>
         </thead>
         <tbody>
@@ -456,13 +473,13 @@ function ToolToggle({ label, sideEffect, enabled, onToggle, locale }: {
   label: string; sideEffect: boolean; enabled: boolean; onToggle: () => void; locale: Locale;
 }) {
   return (
-    <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-[var(--vibe-content-bg)] border border-[var(--vibe-btn-border)]">
+    <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
       <div className="flex items-center gap-2">
         <span className="text-sm text-[var(--text)]">{label}</span>
         {sideEffect && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400">{tt(locale, 'sideEffect')}</span>}
       </div>
       <button onClick={onToggle} role="switch" aria-checked={enabled}
-        className={`relative w-9 h-5 rounded-full transition-colors ${enabled ? 'bg-[var(--vibe-active-bg)]' : 'bg-zinc-300 dark:bg-zinc-600'}`}>
+        className={`relative w-9 h-5 rounded-full transition-colors ${enabled ? 'bg-[var(--primary-soft)]' : 'bg-zinc-300 dark:bg-zinc-600'}`}>
         <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${enabled ? 'left-[18px]' : 'left-0.5'}`} />
       </button>
     </div>
@@ -474,33 +491,51 @@ function ToolToggle({ label, sideEffect, enabled, onToggle, locale }: {
 // ═══════════════════════════════════════════════════════════════
 
 function ScheduledTasksPanel({ locale }: { locale: Locale }) {
+  const { toast } = useToast();
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      try { const r = await window.nativesAPI?.scheduler?.listTasks?.() as ScheduledTask[] | undefined; if (r) setTasks(r); } catch { /* */ }
-      finally { setLoading(false); }
+      try {
+        const r = await window.nativesAPI?.scheduler?.listTasks?.() as ScheduledTask[] | undefined;
+        if (cancelled) return;
+        setTasks(r ?? []);
+        setErrorMessage(null);
+      } catch (error) {
+        if (cancelled) return;
+        const classified = classifyError(error);
+        const message = `${tt(locale, 'tasksLoadFailed')}: ${classified.userMessage}`;
+        setErrorMessage(`${message}. ${classified.actionHint}`);
+        toast(message, 'error');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     })();
-  }, []);
+    return () => { cancelled = true; };
+  }, [locale, toast]);
+
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-sm text-[var(--text-dim)]">{tt(locale, 'tasksDesc')}</p>
-      {loading ? <div className="text-sm text-[var(--text-faint)] py-4 text-center">…</div>
-        : tasks.length === 0 ? <div className="text-sm text-[var(--text-faint)] py-4 text-center">{tt(locale, 'noTasks')}</div>
+      <p className="text-sm text-[var(--text-secondary)]">{tt(locale, 'tasksDesc')}</p>
+      {loading ? <div className="text-sm text-[var(--text-disabled)] py-4 text-center">…</div>
+        : errorMessage ? <InlineNotice tone="error">{errorMessage}</InlineNotice>
+        : tasks.length === 0 ? <div className="text-sm text-[var(--text-disabled)] py-4 text-center">{tt(locale, 'noTasks')}</div>
         : <div className="flex flex-col gap-2">{tasks.map((t) => (
-          <div key={t.id} className="flex items-center justify-between py-2 px-3 rounded-lg bg-[var(--vibe-content-bg)] border border-[var(--vibe-btn-border)]">
+          <div key={t.id} className="flex items-center justify-between py-2 px-3 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
             <div className="flex flex-col gap-0.5 min-w-0">
               <span className="text-sm font-medium text-[var(--text)] truncate">{t.name}</span>
-              <span className="text-xs text-[var(--text-dim)] truncate">{t.prompt}</span>
+              <span className="text-xs text-[var(--text-secondary)] truncate">{t.prompt}</span>
             </div>
             <div className="flex items-center gap-3 shrink-0">
-              <span className={`text-[10px] px-1.5 py-0.5 rounded ${t.enabled ? 'bg-emerald-500/15 text-emerald-600' : 'bg-zinc-500/10 text-[var(--text-dim)]'}`}>{t.enabled ? tt(locale, 'taskEnabled') : 'Off'}</span>
-              <span className="text-[11px] text-[var(--text-dim)]">{t.nextRun}</span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded ${t.enabled ? 'bg-emerald-500/15 text-emerald-600' : 'bg-zinc-500/10 text-[var(--text-secondary)]'}`}>{t.enabled ? tt(locale, 'taskEnabled') : 'Off'}</span>
+              <span className="text-[11px] text-[var(--text-secondary)]">{t.nextRun}</span>
             </div>
           </div>
         ))}</div>
       }
-      <button className="self-start text-xs text-[var(--vibe-active-color)] hover:text-blue-600 font-medium">{tt(locale, 'addTask')}</button>
     </div>
   );
 }
@@ -527,6 +562,7 @@ const Icons = {
 
 export default function RuntimePanel({ locale }: { locale: Locale }) {
   const isZh = locale.startsWith('zh');
+  const { toast } = useToast();
 
   // ── Runtime state ──
   const [selectedRuntime, setSelectedRuntime] = useState<RuntimeId>('native');
@@ -535,18 +571,17 @@ export default function RuntimePanel({ locale }: { locale: Locale }) {
   const [codexAvailable, setCodexAvailable] = useState(false);
   const [claudeVersion, setClaudeVersion] = useState<string | null>(null);
   const [codexVersion, setCodexVersion] = useState<string | null>(null);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
 
   // ── Tool settings ──
-  const [enabledTools, setEnabledTools] = useState<Record<string, boolean>>({
-    read_file: true, list_dir: true, write_file: true,
-    write_module: true, run_terminal: false, lint_module: true,
-  });
+  const [enabledTools, setEnabledTools] = useState<Record<string, boolean>>(DEFAULT_ENABLED_TOOLS);
   const [maxSelfHeal, setMaxSelfHeal] = useState(3);
   const [maxSteps, setMaxSteps] = useState(50);
   const [executorLoaded, setExecutorLoaded] = useState(false);
 
   // ── Load data ──
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         const [rtResult, execResult] = await Promise.all([
@@ -554,24 +589,42 @@ export default function RuntimePanel({ locale }: { locale: Locale }) {
           window.nativesAPI?.executorSettings?.get?.() as { enabledTools: Record<string, boolean>; maxSelfHeal: number; maxSteps?: number } | undefined,
         ]);
         if (rtResult) {
+          if (cancelled) return;
           setClaudeAvailable(rtResult.some(r => r.id === 'claude_cli' && r.available));
           setCodexAvailable(rtResult.some(r => r.id === 'codex_cli' && r.available));
         }
         if (execResult) {
-          setEnabledTools(execResult.enabledTools ?? enabledTools);
+          if (cancelled) return;
+          setEnabledTools(execResult.enabledTools ?? DEFAULT_ENABLED_TOOLS);
           setMaxSelfHeal(execResult.maxSelfHeal ?? 3);
           setMaxSteps(execResult.maxSteps ?? 50);
           setExecutorLoaded(true);
         }
-      } catch (e) { console.error('Failed to load runtime settings:', e); }
+        if (!cancelled) setRuntimeError(null);
+      } catch (error) {
+        if (cancelled) return;
+        const classified = classifyError(error);
+        const message = `${tt(locale, 'loadRuntimeFailed')}: ${classified.userMessage}`;
+        setRuntimeError(`${message}. ${classified.actionHint}`);
+        toast(message, 'error');
+      }
     })();
-  }, []);
+    return () => { cancelled = true; };
+  }, [locale, toast]);
 
   // ── Save executor ──
   const saveExecutor = useCallback(async (next: Record<string, boolean>, selfHeal: number, steps: number) => {
     if (!executorLoaded) return;
-    try { await window.nativesAPI?.executorSettings?.save?.({ enabledTools: next, maxSelfHeal: selfHeal, maxSteps: steps }); } catch (e) { console.error('Failed to save:', e); }
-  }, [executorLoaded]);
+    try {
+      await window.nativesAPI?.executorSettings?.save?.({ enabledTools: next, maxSelfHeal: selfHeal, maxSteps: steps });
+      setRuntimeError(null);
+    } catch (error) {
+      const classified = classifyError(error);
+      const message = `${tt(locale, 'saveRuntimeFailed')}: ${classified.userMessage}`;
+      setRuntimeError(`${message}. ${classified.actionHint}`);
+      toast(message, 'error');
+    }
+  }, [executorLoaded, locale, toast]);
 
   const toggleTool = useCallback((key: string) => {
     setEnabledTools(prev => { const next = { ...prev, [key]: !prev[key] }; saveExecutor(next, maxSelfHeal, maxSteps); return next; });
@@ -591,9 +644,15 @@ export default function RuntimePanel({ locale }: { locale: Locale }) {
     try {
       const result = await window.nativesAPI?.runtime?.detectCli?.() as { claude_cli: boolean; codex_cli: boolean } | undefined;
       if (result) { setClaudeAvailable(result.claude_cli); setCodexAvailable(result.codex_cli); }
-    } catch { /* */ }
+      setRuntimeError(null);
+    } catch (error) {
+      const classified = classifyError(error);
+      const message = `${tt(locale, 'detectRuntimeFailed')}: ${classified.userMessage}`;
+      setRuntimeError(`${message}. ${classified.actionHint}`);
+      toast(message, 'error');
+    }
     finally { setDetecting(false); }
-  }, []);
+  }, [locale, toast]);
 
   // ── Runtime status computation ──
   const getRuntimeStatus = useMemo(() => (id: RuntimeId): RuntimeStatusInfo => {
@@ -627,7 +686,7 @@ export default function RuntimePanel({ locale }: { locale: Locale }) {
     { key: 'lint_module', label: isZh ? '检查模块' : 'Lint Module', sideEffect: false },
   ];
 
-  const sectionCard = 'rounded-lg bg-[var(--vibe-btn-bg)] border border-[var(--vibe-btn-border)] p-5 flex flex-col gap-4';
+  const sectionCard = 'rounded-lg bg-[var(--surface)] border border-[var(--border)] p-5 flex flex-col gap-4';
   const sectionTitle = 'text-sm font-semibold text-[var(--text)] uppercase tracking-wider';
 
   return (
@@ -635,18 +694,20 @@ export default function RuntimePanel({ locale }: { locale: Locale }) {
       {/* ── 1. 页面标题 ── */}
       <div>
         <h2 className="text-xl font-semibold tracking-tight text-[var(--text)]">{tt(locale, 'pageTitle')}</h2>
-        <p className="text-sm text-[var(--text-dim)] mt-1.5">{tt(locale, 'pageDesc')}</p>
+        <p className="text-sm text-[var(--text-secondary)] mt-1.5">{tt(locale, 'pageDesc')}</p>
       </div>
+
+      {runtimeError && <InlineNotice tone="error">{runtimeError}</InlineNotice>}
 
       {/* ── 2. 默认引擎选择器 ── */}
       <div>
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-sm font-semibold text-[var(--text)]">{tt(locale, 'defaultEngine')}</h3>
-          <button onClick={handleDetect} disabled={detecting} className="text-xs text-[var(--vibe-active-color)] hover:text-blue-600 font-medium disabled:opacity-50">
+          <button onClick={handleDetect} disabled={detecting} className="text-xs text-[var(--primary)] hover:text-blue-600 font-medium disabled:opacity-50">
             {detecting ? tt(locale, 'detectingBtn') : tt(locale, 'detect')}
           </button>
         </div>
-        <p className="text-[11px] text-[var(--text-dim)] mb-3">{tt(locale, 'defaultEngineDesc')}</p>
+        <p className="text-[11px] text-[var(--text-secondary)] mb-3">{tt(locale, 'defaultEngineDesc')}</p>
 
         {driftWarning && (
           <div className="mb-3 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
@@ -677,7 +738,7 @@ export default function RuntimePanel({ locale }: { locale: Locale }) {
       {/* ── 3. "新会话会用什么" 只读解释块 ── */}
       <div className={sectionCard}>
         <h3 className="text-sm font-semibold leading-tight text-[var(--text)]">{tt(locale, 'whatNewChatUses')}</h3>
-        <p className="text-[11px] text-[var(--text-dim)]">{tt(locale, 'whatNewChatDesc')}</p>
+        <p className="text-[11px] text-[var(--text-secondary)]">{tt(locale, 'whatNewChatDesc')}</p>
         <InfoBlock>
           <InfoRow label={tt(locale, 'runtimeLabel')}>{selectedRuntime === 'claude_cli' ? tt(locale, 'claudeCli') : selectedRuntime === 'codex_cli' ? tt(locale, 'codexCli') : tt(locale, 'nativeRuntime')}</InfoRow>
           <InfoRow label={tt(locale, 'defaultProvider')}>{tt(locale, 'notConfigured')}</InfoRow>
@@ -692,26 +753,24 @@ export default function RuntimePanel({ locale }: { locale: Locale }) {
         <InfoBlock>
           <InfoRow label={tt(locale, 'cliStatus')}>
             {claudeAvailable ? (<><Icons.Check /><span className="font-mono">v{claudeVersion ?? '?'}</span></>) : (<><Icons.X /><span>{tt(locale, 'notInstalledShort')}</span></>)}
-            <button onClick={handleDetect} className="p-1 rounded hover:bg-[var(--vibe-content-bg)]"><Icons.Refresh /></button>
+            <button onClick={handleDetect} className="p-1 rounded hover:bg-[var(--surface)]"><Icons.Refresh /></button>
           </InfoRow>
         </InfoBlock>
-        {/* settings.json 折叠编辑器（CodePilot 风格） */}
-        <details className="rounded-md bg-[var(--vibe-content-bg)] px-3.5 py-2 group">
-          <summary className="flex items-center justify-between gap-2 cursor-pointer text-xs font-medium select-none list-none text-[var(--text-dim)]">
+        {/* Claude CLI 的全局配置属于用户环境，当前版本只展示边界，不提供假编辑器。 */}
+        <details className="rounded-md bg-[var(--surface)] px-3.5 py-2 group">
+          <summary className="flex items-center justify-between gap-2 cursor-pointer text-xs font-medium select-none list-none text-[var(--text-secondary)]">
             <span className="flex items-center gap-1.5"><Icons.Code />{tt(locale, 'cliConfig')}</span>
             <span className="transition-transform group-open:rotate-180"><Icons.Chevron /></span>
           </summary>
-          <p className="mt-1 mb-3 text-[11px] text-[var(--text-dim)]">{tt(locale, 'cliConfigDesc')}</p>
-          <div className="space-y-3">
-            <div>
-              <label className="text-xs font-medium text-[var(--text)]">{tt(locale, 'permissionsField')}</label>
-              <p className="mb-1.5 text-[11px] text-[var(--text-dim)]">{tt(locale, 'permissionsFieldDesc')}</p>
-              <textarea className="w-full font-mono text-xs rounded-md border border-[var(--vibe-btn-border)] bg-white dark:bg-zinc-800 p-2 outline-none focus:ring-1 focus:ring-[var(--vibe-active-color)]" rows={3} placeholder='{"allow": ["Read", "Write"]}' />
+          <p className="mt-1 mb-3 text-[11px] text-[var(--text-secondary)]">{tt(locale, 'cliConfigDesc')}</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="rounded-md border border-[var(--border)] bg-white/60 px-3 py-2 dark:bg-zinc-900/40">
+              <div className="text-xs font-medium text-[var(--text)]">{tt(locale, 'cliConfigUserOwned')}</div>
+              <p className="mt-1 text-[11px] leading-relaxed text-[var(--text-secondary)]">{tt(locale, 'cliConfigUserOwnedDesc')}</p>
             </div>
-            <div>
-              <label className="text-xs font-medium text-[var(--text)]">{tt(locale, 'envVars')}</label>
-              <p className="mb-1.5 text-[11px] text-[var(--text-dim)]">{tt(locale, 'envVarsDesc')}</p>
-              <textarea className="w-full font-mono text-xs rounded-md border border-[var(--vibe-btn-border)] bg-white dark:bg-zinc-800 p-2 outline-none focus:ring-1 focus:ring-[var(--vibe-active-color)]" rows={3} placeholder='{"KEY": "value"}' />
+            <div className="rounded-md border border-[var(--border)] bg-white/60 px-3 py-2 dark:bg-zinc-900/40">
+              <div className="text-xs font-medium text-[var(--text)]">{tt(locale, 'cliConfigSandbox')}</div>
+              <p className="mt-1 text-[11px] leading-relaxed text-[var(--text-secondary)]">{tt(locale, 'cliConfigSandboxDesc')}</p>
             </div>
           </div>
         </details>
@@ -723,12 +782,11 @@ export default function RuntimePanel({ locale }: { locale: Locale }) {
         <InfoBlock>
           <InfoRow label={tt(locale, 'appServer')}>
             {codexAvailable ? (<><Icons.Check /><span className="font-mono">{codexVersion ?? ''}</span></>) : (<><Icons.X /><span>{tt(locale, 'notInstalledShort')}</span></>)}
-            <button onClick={handleDetect} className="p-1 rounded hover:bg-[var(--vibe-content-bg)]"><Icons.Refresh /></button>
+            <button onClick={handleDetect} className="p-1 rounded hover:bg-[var(--surface)]"><Icons.Refresh /></button>
           </InfoRow>
         </InfoBlock>
         <div className="flex flex-wrap gap-2 justify-end">
-          <button className="text-xs text-[var(--vibe-active-color)] hover:text-blue-600 font-medium">{tt(locale, 'viewCodexAccount')}</button>
-          <button className="text-xs text-[var(--vibe-active-color)] hover:text-blue-600 font-medium">{tt(locale, 'viewCodexModels')}</button>
+          <InlineNotice tone="warning">{tt(locale, 'codexInspectionUnavailable')}</InlineNotice>
         </div>
       </RuntimeCard>
 
@@ -739,23 +797,23 @@ export default function RuntimePanel({ locale }: { locale: Locale }) {
           <div className="py-2.5 flex items-start justify-between gap-3">
             <div className="flex flex-col gap-0.5 max-w-[55%]">
               <span className="text-xs font-medium text-[var(--text)]">{tt(locale, 'capabilities')}</span>
-              <span className="text-[11px] text-[var(--text-dim)] leading-snug">{tt(locale, 'capabilitiesDesc')}</span>
+              <span className="text-[11px] text-[var(--text-secondary)] leading-snug">{tt(locale, 'capabilitiesDesc')}</span>
             </div>
-            <span className="text-[10px] text-[var(--text-faint)]">{tt(locale, 'shipsWithApp')}</span>
+            <span className="text-[10px] text-[var(--text-disabled)]">{tt(locale, 'shipsWithApp')}</span>
           </div>
           <div className="py-2.5 flex items-start justify-between gap-3">
             <div className="flex flex-col gap-0.5 max-w-[55%]">
               <span className="text-xs font-medium text-[var(--text)]">{tt(locale, 'permissions')}</span>
-              <span className="text-[11px] text-[var(--text-dim)] leading-snug">{tt(locale, 'permissionsDesc')}</span>
+              <span className="text-[11px] text-[var(--text-secondary)] leading-snug">{tt(locale, 'permissionsDesc')}</span>
             </div>
-            <span className="text-[10px] text-[var(--text-faint)]">{tt(locale, 'perSession')}</span>
+            <span className="text-[10px] text-[var(--text-disabled)]">{tt(locale, 'perSession')}</span>
           </div>
           <div className="py-2.5 flex items-start justify-between gap-3">
             <div className="flex flex-col gap-0.5 max-w-[55%]">
               <span className="text-xs font-medium text-[var(--text)]">{tt(locale, 'context')}</span>
-              <span className="text-[11px] text-[var(--text-dim)] leading-snug">{tt(locale, 'contextDesc')}</span>
+              <span className="text-[11px] text-[var(--text-secondary)] leading-snug">{tt(locale, 'contextDesc')}</span>
             </div>
-            <span className="text-[10px] text-[var(--text-faint)]">{tt(locale, 'local')}</span>
+            <span className="text-[10px] text-[var(--text-disabled)]">{tt(locale, 'local')}</span>
           </div>
         </InfoBlock>
       </RuntimeCard>
@@ -780,13 +838,13 @@ export default function RuntimePanel({ locale }: { locale: Locale }) {
           <div className="flex items-center justify-between">
             <span className="text-sm text-[var(--text)]">{tt(locale, 'maxSelfHeal')}</span>
             <input type="number" min={1} max={10} value={maxSelfHeal} onChange={(e) => updateMaxSelfHeal(Number(e.target.value))}
-              className="w-14 text-sm font-semibold text-[var(--vibe-active-color)] text-center py-1 px-2 rounded-md bg-zinc-50 dark:bg-zinc-800 border border-[var(--vibe-btn-border)] outline-none" />
+              className="w-14 text-sm font-semibold text-[var(--primary)] text-center py-1 px-2 rounded-md bg-zinc-50 dark:bg-zinc-800 border border-[var(--border)] outline-none" />
           </div>
-          <p className="text-xs text-[var(--text-dim)]">{tt(locale, 'selfHealDesc')}</p>
+          <p className="text-xs text-[var(--text-secondary)]">{tt(locale, 'selfHealDesc')}</p>
           <div className="flex items-center justify-between">
             <span className="text-sm text-[var(--text)]">{tt(locale, 'maxSteps')}</span>
             <input type="number" min={10} max={200} value={maxSteps} onChange={(e) => updateMaxSteps(Number(e.target.value))}
-              className="w-14 text-sm font-semibold text-[var(--vibe-active-color)] text-center py-1 px-2 rounded-md bg-zinc-50 dark:bg-zinc-800 border border-[var(--vibe-btn-border)] outline-none" />
+              className="w-14 text-sm font-semibold text-[var(--primary)] text-center py-1 px-2 rounded-md bg-zinc-50 dark:bg-zinc-800 border border-[var(--border)] outline-none" />
           </div>
           <div className="flex items-center justify-between">
             <span className="text-sm text-[var(--text)]">{tt(locale, 'circuitBreaker')}</span>
@@ -794,9 +852,9 @@ export default function RuntimePanel({ locale }: { locale: Locale }) {
           </div>
           <div className="flex items-center justify-between">
             <span className="text-sm text-[var(--text)]">{tt(locale, 'doomLoop')}</span>
-            <span className="text-xs text-[var(--text-dim)]">3 {isZh ? '次' : 'times'}</span>
+            <span className="text-xs text-[var(--text-secondary)]">3 {isZh ? '次' : 'times'}</span>
           </div>
-          <p className="text-xs text-[var(--text-dim)]">{tt(locale, 'doomLoopDesc')}</p>
+          <p className="text-xs text-[var(--text-secondary)]">{tt(locale, 'doomLoopDesc')}</p>
         </div>
       </div>
 

@@ -42,8 +42,8 @@ export default function GitPanel({ repoPath }: GitPanelProps) {
     load();
   }, [repoPath]);
 
-  if (loading) return <div style={{ padding: SPACING.md, color: 'var(--text-faint)' }}>{t(locale, 'fileBrowser.loadingGitStatus')}</div>;
-  if (!status) return <div style={{ padding: SPACING.md, color: 'var(--text-faint)' }}>{t(locale, 'fileBrowser.notInRepo')}</div>;
+  if (loading) return <div style={{ padding: SPACING.md, color: 'var(--text-disabled)' }}>{t(locale, 'fileBrowser.loadingGitStatus')}</div>;
+  if (!status) return <div style={{ padding: SPACING.md, color: 'var(--text-disabled)' }}>{t(locale, 'fileBrowser.notInRepo')}</div>;
 
   const STATUS_LABELS: Record<string, string> = {
     M: t(locale, 'filePreview.gitModified'),
@@ -55,7 +55,7 @@ export default function GitPanel({ repoPath }: GitPanelProps) {
   };
 
   const STATUS_COLORS: Record<string, string> = {
-    M: 'var(--diff-mod)', A: 'var(--diff-add)', D: 'var(--diff-del)', R: 'var(--diff-mod)', '??': 'var(--text-faint)', UU: 'var(--danger)',
+    M: 'var(--diff-mod)', A: 'var(--diff-add)', D: 'var(--diff-del)', R: 'var(--diff-mod)', '??': 'var(--text-disabled)', UU: 'var(--danger)',
   };
 
   return (
@@ -64,20 +64,20 @@ export default function GitPanel({ repoPath }: GitPanelProps) {
       <div style={{
         display: 'flex', alignItems: 'center', gap: SPACING.xs,
         padding: '6px 8px', marginBottom: SPACING.sm,
-        background: 'var(--vibe-toolbar-bg)',
+        background: 'var(--surface)',
         borderRadius: 'var(--radius, 4px)',
-        fontSize: FONT_SIZE.md, fontWeight: 600, color: 'var(--vibe-brand-text)',
+        fontSize: FONT_SIZE.md, fontWeight: 600, color: 'var(--text)',
       }}>
         <span>⎇</span>
         <span>{status.branch}</span>
-        <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--vibe-btn-text)' }}>
+        <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)' }}>
           {status.files.length}
         </span>
       </div>
 
       {/* File list */}
       {status.files.length === 0 ? (
-        <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--vibe-btn-text)', fontSize: FONT_SIZE.md }}>
+        <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-secondary)', fontSize: FONT_SIZE.md }}>
           {t(locale, 'fileBrowser.workingTreeClean')}
         </div>
       ) : (
@@ -87,8 +87,8 @@ export default function GitPanel({ repoPath }: GitPanelProps) {
             style={{
               display: 'flex', alignItems: 'center', gap: SPACING.xs,
               padding: '4px 8px', fontSize: FONT_SIZE.md,
-              borderBottom: '1px solid var(--vibe-btn-border)',
-              color: 'var(--vibe-brand-text)',
+              borderBottom: '1px solid var(--border)',
+              color: 'var(--text)',
             }}
           >
             <span className="anim-changedBreath" style={{
@@ -102,7 +102,7 @@ export default function GitPanel({ repoPath }: GitPanelProps) {
               {file.path}
             </span>
             {file.oldPath && (
-              <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--vibe-btn-text)' }}>
+              <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)' }}>
                 ← {file.oldPath}
               </span>
             )}

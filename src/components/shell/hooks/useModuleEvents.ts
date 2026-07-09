@@ -65,7 +65,7 @@ export function useModuleEvents({
               const classified = classifyError(new Error(`Plugin ${moduleId} crashed: Heartbeat timeout`), moduleId);
               window.nativesAPI?.notification?.send?.(
                 `Plugin ${moduleId} crashed`,
-                `Heartbeat timeout — ${classified.actionHint}`,
+                `Heartbeat timeout - ${classified.actionHint}`,
                 'error',
               );
             } catch { /* notification persistence is best-effort */ }

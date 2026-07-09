@@ -1,406 +1,406 @@
-//! runtime/native_runtime.rs — Native Runtime（无 CLI 降级方案）
+//! runtime/native_runtime.rs — Native Runtime 协调层（增强版）
 //!
-//! 把现有 `assistant_stream_proxy.rs` 的 agentic loop 平移过来，实现 `AgentRuntime`。
-//! 含 Protocol Adapter（OpenAI 兼容）+ Agent Loop + 自愈熔断。
-//! Context Assembler / 步限 / doom loop 在后续切片补齐。
+//! 将各原子能力层组装为 `AgentRuntime` 实现。
+//! 职责仅为编排协调，不包含具体逻辑。
+//!
+//! 增强特性：
+//!   - 集成 PluginManager（从 plugins/ 目录加载插件）
+//!   - 集成 HookPipeline（4 点 Hook：PreToolUse/PostToolUse/Stop/UserPromptSubmit）
+//!   - 集成 RuleEngine（.local.md 规则引擎）
+//!   - 集成 CapabilityRegistry（原子能力注册表）
+//!   - 集成 AgentLoop（带循环检测/自愈熔断的状态机）
+//!
+//! 架构：
+//!   NativeRuntime (协调器)
+//!     ├── PluginManager ─── 插件发现/加载
+//!     ├── CapabilityRegistry (原子能力注册表)
+//!     │     └── 插件注册的额外能力
+//!     ├── HookPipeline (Pre/PostToolUse + Stop + UserPromptSubmit)
+//!     │     └── 插件注册的外部脚本 hooks
+//!     ├── RuleEngine (.local.md 规则匹配 + 动态规则)
+//!     ├── AgentLoop (带循环检测的状态机)
+//!     └── SseClient (流式通信)
 
 use super::{AgentRuntime, EventStream, RuntimeEvent, RuntimeStreamOptions};
-use crate::assistant_executor;
 use crate::commands::executor_settings::load_executor_settings;
 use crate::module_manager::modules_root;
+use crate::runtime::native::agent_loop::{AgentLoop, LoopConfig};
+use crate::runtime::native::capability::{CapabilityMeta, CapabilityRegistry};
+use crate::runtime::native::command_agent_skill::{Agent, Command, Skill};
+use crate::runtime::native::hook_pipeline::HookPipeline;
+use crate::runtime::native::plugin_system::{McpManifest, PluginManager, PluginMeta};
+use crate::runtime::native::rule_engine::RuleEngine;
 use crate::Result;
 use async_trait::async_trait;
-use futures_util::StreamExt;
-use reqwest::Client;
 use serde_json::json;
-use tauri::Emitter;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeRuntimeCatalog {
+    pub capabilities: Vec<CapabilityMeta>,
+    pub plugins: Vec<PluginMeta>,
+    pub hooks: Vec<HookCatalogItem>,
+    pub rules: Vec<RuleCatalogItem>,
+    pub commands: Vec<Command>,
+    pub skills: Vec<Skill>,
+    pub agents: Vec<Agent>,
+    pub mcp_servers: Vec<McpManifest>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookCatalogItem {
+    pub plugin_name: String,
+    pub hook_point: String,
+    pub count: usize,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleCatalogItem {
+    pub name: String,
+    pub event: String,
+    pub action: String,
+    pub priority: i32,
+}
 
 pub struct NativeRuntime {
     app_handle: tauri::AppHandle,
+    /// 全局能力注册表（线程安全）
+    registry: Arc<Mutex<CapabilityRegistry>>,
+    /// 全局 hook 管道
+    hook_pipeline: Arc<Mutex<HookPipeline>>,
+    /// 全局规则引擎
+    rule_engine: Arc<Mutex<RuleEngine>>,
+    /// 全局插件管理器
+    plugin_manager: Arc<Mutex<PluginManager>>,
+    /// 项目根目录
+    project_root: Option<PathBuf>,
 }
 
 impl NativeRuntime {
     pub fn new(app_handle: tauri::AppHandle) -> Self {
-        Self { app_handle }
+        let modules_dir = modules_root();
+
+        // 初始化能力注册表
+        let mut registry = CapabilityRegistry::new();
+        for cap in crate::runtime::native::capability::create_default_capabilities(&modules_dir) {
+            registry.register(cap);
+        }
+
+        // 初始化 hook 管道
+        let mut pipeline = HookPipeline::new();
+        pipeline.register_defaults();
+
+        // 初始化规则引擎
+        let mut rule_engine = RuleEngine::new();
+
+        // 初始化插件管理器
+        let mut plugin_manager = PluginManager::new();
+        
+        // 添加插件搜索路径：项目根目录的 plugins/
+        let project_root = std::env::current_dir().ok();
+        if let Some(ref root) = project_root {
+            let plugins_dir = root.join("plugins");
+            if plugins_dir.exists() {
+                plugin_manager.add_search_path(plugins_dir);
+            }
+            // 也检查 ~/.natives/plugins/
+            if let Some(home) = dirs::home_dir() {
+                let global_plugins = home.join(".natives").join("plugins");
+                plugin_manager.add_search_path(global_plugins);
+            }
+        }
+
+        // 发现并加载插件
+        plugin_manager.discover_all();
+
+        // 从插件注册 hooks
+        plugin_manager.register_hooks(&mut pipeline);
+
+        // 从插件加载规则
+        plugin_manager.load_plugin_rules(&mut rule_engine);
+
+        // 从 .claude 目录加载规则
+        if let Some(ref root) = project_root {
+            let claude_dir = root.join(".claude");
+            if claude_dir.exists() {
+                rule_engine.load_rules(&claude_dir);
+                println!("[NativeRuntime] Loaded rules from .claude/");
+            }
+        }
+
+        let rt = Self {
+            app_handle,
+            registry: Arc::new(Mutex::new(registry)),
+            hook_pipeline: Arc::new(Mutex::new(pipeline)),
+            rule_engine: Arc::new(Mutex::new(rule_engine)),
+            plugin_manager: Arc::new(Mutex::new(plugin_manager)),
+            project_root,
+        };
+
+        println!(
+            "[NativeRuntime] Initialized with {} capabilities, {} rules, {} plugins",
+            rt.registry.blocking_lock().count(),
+            rt.rule_engine.blocking_lock().rules().len(),
+            rt.plugin_manager.blocking_lock().plugin_count(),
+        );
+        rt
+    }
+
+    /// 获取能力注册表（供其他模块查询/管理）
+    pub fn registry(&self) -> Arc<Mutex<CapabilityRegistry>> {
+        self.registry.clone()
+    }
+
+    /// 获取插件管理器（供其他模块查询）
+    pub fn plugin_manager(&self) -> Arc<Mutex<PluginManager>> {
+        self.plugin_manager.clone()
+    }
+
+    /// 获取 hook 管道（供其他模块注册额外 hook）
+    pub fn hook_pipeline(&self) -> Arc<Mutex<HookPipeline>> {
+        self.hook_pipeline.clone()
+    }
+
+    /// 获取规则引擎（供其他模块添加规则）
+    pub fn rule_engine(&self) -> Arc<Mutex<RuleEngine>> {
+        self.rule_engine.clone()
+    }
+
+    pub async fn catalog(&self) -> NativeRuntimeCatalog {
+        let registry = self.registry.lock().await;
+        let plugin_manager = self.plugin_manager.lock().await;
+        let rule_engine = self.rule_engine.lock().await;
+        build_catalog_from_parts(&registry, &plugin_manager, &rule_engine, self.project_root.as_ref())
+    }
+}
+
+pub fn build_native_runtime_catalog() -> NativeRuntimeCatalog {
+    let modules_dir = modules_root();
+    let mut registry = CapabilityRegistry::new();
+    registry.register_all(crate::runtime::native::capability::create_default_capabilities(&modules_dir));
+
+    let project_root = std::env::current_dir().ok();
+    let mut plugin_manager = PluginManager::new();
+    if let Some(ref root) = project_root {
+        let plugins_dir = root.join("plugins");
+        if plugins_dir.exists() {
+            plugin_manager.add_search_path(plugins_dir);
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        let global_plugins = home.join(".natives").join("plugins");
+        plugin_manager.add_search_path(global_plugins);
+    }
+    plugin_manager.discover_all();
+
+    let mut rule_engine = RuleEngine::new();
+    plugin_manager.load_plugin_rules(&mut rule_engine);
+    if let Some(ref root) = project_root {
+        let claude_dir = root.join(".claude");
+        if claude_dir.exists() {
+            rule_engine.load_rules(&claude_dir);
+        }
+    }
+
+    build_catalog_from_parts(&registry, &plugin_manager, &rule_engine, project_root.as_ref())
+}
+
+fn build_catalog_from_parts(
+    registry: &CapabilityRegistry,
+    plugin_manager: &PluginManager,
+    rule_engine: &RuleEngine,
+    project_root: Option<&PathBuf>,
+) -> NativeRuntimeCatalog {
+    let plugin_roots = plugin_manager.plugin_roots();
+    let project_root = project_root.cloned().unwrap_or_else(|| PathBuf::from("."));
+    let mut cas = crate::runtime::native::command_agent_skill::CasManager::new(project_root, plugin_roots);
+    cas.load_all();
+
+    let hooks = plugin_manager
+        .hooks_summary()
+        .into_iter()
+        .map(|(plugin_name, hook_point, count)| HookCatalogItem {
+            plugin_name,
+            hook_point,
+            count,
+        })
+        .collect();
+
+    let rules = rule_engine
+        .rules()
+        .iter()
+        .map(|rule| RuleCatalogItem {
+            name: rule.name.clone(),
+            event: format!("{:?}", rule.event),
+            action: format!("{:?}", rule.action),
+            priority: rule.priority,
+        })
+        .collect();
+
+    NativeRuntimeCatalog {
+        capabilities: registry.list_metadata(),
+        plugins: plugin_manager.list_plugins(),
+        hooks,
+        rules,
+        commands: cas.commands().to_vec(),
+        skills: cas.skills().to_vec(),
+        agents: cas.agents().to_vec(),
+        mcp_servers: plugin_manager.list_mcp_manifests(),
     }
 }
 
 #[async_trait]
 impl AgentRuntime for NativeRuntime {
     fn id(&self) -> &'static str { "native" }
-    fn display_name(&self) -> &'static str { "Native Runtime" }
-    fn is_available(&self) -> bool { true } // 永远兜底可用
+    fn display_name(&self) -> &'static str { "Native Runtime (Atomic Capability Engine v2)" }
+    fn is_available(&self) -> bool { true }
 
     async fn stream(&self, options: RuntimeStreamOptions) -> Result<EventStream> {
-        // 解密 API key + base URL（P1 安全：全程 Rust 内存）
-        let (api_key, base_url) = resolve_provider_credentials(&options.provider_id).await?;
-
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(300))
-            .build()
-            .map_err(|e| crate::Error::Internal(format!("Failed to build HTTP client: {e}")))?;
+        // ── 1. 解密凭据（P1 安全）──
+        let provider_id = options.provider_id.clone();
+        let (api_key, base_url) = resolve_provider_credentials(&provider_id).await?;
 
         let app = self.app_handle.clone();
         let session_id = options.session_id.clone();
         let mut cancel_rx = options.abort_receiver;
+        let modules_dir = modules_root();
 
-        // 把 prompt 转为 messages（首轮 = user prompt；后续轮由 loop 内部累加）
-        // Context Assembler 注入 system prompt（静态摘要 + 模块生成规约）
-        let system_prompt = if let Some(wd) = options.working_directory.as_ref() {
-            let ctx = crate::runtime::native::context_assembler::assemble(
+        // ── 2. 使用可选的工作目录 ──
+        let working_dir = options.working_directory.clone()
+            .or_else(|| self.project_root.clone());
+
+        // 组装上下文
+        let system_prompt = if let Some(ref wd) = working_dir {
+            crate::runtime::native::context_assembler::assemble(
                 Some(wd), &options.prompt, 8000,
-            ).await.ok();
-            ctx.map(|c| c.system_prompt).unwrap_or_default()
+            ).await.ok().map(|c| c.system_prompt).unwrap_or_default()
         } else {
             String::new()
         };
-        let mut round_messages: Vec<serde_json::Value> = vec![];
+        let mut initial_messages: Vec<serde_json::Value> = vec![];
         if !system_prompt.is_empty() {
-            round_messages.push(json!({ "role": "system", "content": system_prompt }));
+            initial_messages.push(json!({ "role": "system", "content": system_prompt }));
         }
-        round_messages.push(json!({ "role": "user", "content": options.prompt }));
 
-        // 用 channel 把事件转成 Stream
-        let (tx, rx) = tokio::sync::mpsc::channel::<RuntimeEvent>(64);
-
-        tokio::spawn(async move {
-            let exec_settings = load_executor_settings();
-            let enabled_tools = exec_settings.enabled_tools;
-            let max_self_heal: u32 = exec_settings.max_self_heal;
-            let max_steps: u32 = exec_settings.max_steps.unwrap_or(50);
-            let mut self_heal_count: u32 = 0;
-            let mut step: u32 = 0;
-            let mut last_tool_signature: Option<String> = None;
-            let mut doom_count: u32 = 0;
-            let modules_dir = modules_root();
-
-            loop {
-                // ── 步数上限（Q17 S1）──
-                step += 1;
-                if step > max_steps {
-                    let _ = app.emit("assistant:stream_update", crate::assistant_stream_proxy::StreamPayload {
-                        session_id: session_id.clone(),
-                        done: true,
-                        error: Some(format!("Max steps ({}) exceeded", max_steps)),
-                        ..Default::default()
-                    });
-                    let _ = tx.send(RuntimeEvent::RunFailed { error: format!("max steps ({max_steps}) exceeded") }).await;
-                    return;
+        // UserPromptSubmit hook
+        {
+            let pipeline = self.hook_pipeline.lock().await;
+            let context = json!({
+                "session_id": session_id,
+                "working_directory": working_dir,
+            });
+            match pipeline.on_prompt_submit(&options.prompt, &context) {
+                crate::runtime::native::hook_pipeline::PromptAction::Allow(modified) => {
+                    initial_messages.push(json!({ "role": "user", "content": modified }));
                 }
-                let body = json!({
-                    "model": options.model,
-                    "messages": round_messages,
-                    "stream": true,
-                    "tools": assistant_executor::list_tools().iter().map(|t| json!({
-                        "type": "function",
-                        "function": {
-                            "name": t.name,
-                            "description": t.description,
-                            "parameters": t.parameters,
-                        }
-                    })).collect::<Vec<_>>(),
-                });
-
-                let request = client
-                    .post(format!("{}/v1/chat/completions", base_url.trim_end_matches('/')))
-                    .header("Content-Type", "application/json")
-                    .header("Authorization", format!("Bearer {}", api_key))
-                    .json(&body);
-
-                let response = tokio::select! {
-                    biased;
-                    _ = &mut cancel_rx => {
-                        let _ = app.emit("assistant:stream_update", crate::assistant_stream_proxy::StreamPayload {
-                            session_id: session_id.clone(),
-                            done: true,
-                            error: Some("Cancelled".into()),
-                            ..Default::default()
-                        });
-                        let _ = tx.send(RuntimeEvent::RunCompleted { reason: "cancelled".into() }).await;
-                        return;
-                    }
-                    result = request.send() => result
-                };
-
-                let response = match response {
-                    Ok(r) => r,
-                    Err(e) => {
-                        let _ = app.emit("assistant:stream_update", crate::assistant_stream_proxy::StreamPayload {
-                            session_id: session_id.clone(),
-                            done: true,
-                            error: Some(format!("HTTP request failed: {e}")),
-                            ..Default::default()
-                        });
-                        let _ = tx.send(RuntimeEvent::RunFailed { error: format!("HTTP: {e}") }).await;
-                        return;
-                    }
-                };
-
-                if !response.status().is_success() {
-                    let status = response.status();
-                    let body_text = response.text().await.unwrap_or_default();
-                    let _ = app.emit("assistant:stream_update", crate::assistant_stream_proxy::StreamPayload {
-                        session_id: session_id.clone(),
-                        done: true,
-                        error: Some(format!("API error {}: {}", status, body_text)),
-                        ..Default::default()
-                    });
-                    let _ = tx.send(RuntimeEvent::RunFailed { error: format!("API {status}: {body_text}") }).await;
-                    return;
-                }
-
-                let mut stream = response.bytes_stream();
-                let mut buffer = String::new();
-                let mut assistant_text = String::new();
-                let mut accumulated_tool_calls: Vec<serde_json::Value> = Vec::new();
-
-                while let Some(chunk_result) = stream.next().await {
-                    if cancel_rx.try_recv().is_ok() {
-                        let _ = app.emit("assistant:stream_update", crate::assistant_stream_proxy::StreamPayload {
-                            session_id: session_id.clone(),
-                            done: true,
-                            error: Some("Cancelled".into()),
-                            ..Default::default()
-                        });
-                        let _ = tx.send(RuntimeEvent::RunCompleted { reason: "cancelled".into() }).await;
-                        return;
-                    }
-
-                    let chunk = match chunk_result {
-                        Ok(c) => c,
-                        Err(e) => {
-                            let _ = app.emit("assistant:stream_update", crate::assistant_stream_proxy::StreamPayload {
-                                session_id: session_id.clone(),
-                                done: true,
-                                error: Some(format!("Stream error: {e}")),
-                                ..Default::default()
-                            });
-                            let _ = tx.send(RuntimeEvent::RunFailed { error: format!("stream: {e}") }).await;
-                            return;
-                        }
-                    };
-
-                    let chunk_str = String::from_utf8_lossy(&chunk);
-                    buffer.push_str(&chunk_str);
-
-                    while let Some(line_end) = buffer.find('\n') {
-                        let line = buffer[..line_end].trim().to_string();
-                        buffer = buffer[line_end + 1..].to_string();
-                        if line.is_empty() || line.starts_with(':') { continue; }
-                        let Some(data) = line.strip_prefix("data: ") else { continue; };
-                        if data == "[DONE]" { continue; }
-                        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) else { continue; };
-
-                        let reasoning = parsed["choices"][0]["delta"]["reasoning_content"]
-                            .as_str().map(|s| s.to_string());
-
-                        if let Some(delta) = parsed["choices"][0]["delta"]["content"].as_str() {
-                            assistant_text.push_str(delta);
-                            let (clean_delta, think_part) = crate::assistant_stream_proxy::extract_think_tag(delta);
-                            let combined_reasoning = match (&reasoning, think_part) {
-                                (Some(r), Some(t)) => Some(format!("{}{}", r, t)),
-                                (Some(r), None) => Some(r.clone()),
-                                (None, Some(t)) => Some(t),
-                                (None, None) => None,
-                            };
-                            let _ = app.emit("assistant:stream_update", crate::assistant_stream_proxy::StreamPayload {
-                                session_id: session_id.clone(),
-                                delta: Some(clean_delta.clone()),
-                                reasoning: combined_reasoning,
-                                ..Default::default()
-                            });
-                            let _ = tx.send(RuntimeEvent::AssistantDelta { text: clean_delta }).await;
-                        } else if let Some(r) = &reasoning {
-                            let _ = app.emit("assistant:stream_update", crate::assistant_stream_proxy::StreamPayload {
-                                session_id: session_id.clone(),
-                                reasoning: Some(r.clone()),
-                                ..Default::default()
-                            });
-                        }
-
-                        // 累积 tool_calls
-                        if let Some(tc_arr) = parsed["choices"][0]["delta"]["tool_calls"].as_array() {
-                            for tc in tc_arr {
-                                let idx = tc["index"].as_u64().unwrap_or(0) as usize;
-                                while accumulated_tool_calls.len() <= idx {
-                                    accumulated_tool_calls.push(json!({
-                                        "id": "", "function": { "name": "", "arguments": "" }
-                                    }));
-                                }
-                                let slot = &mut accumulated_tool_calls[idx];
-                                if let Some(id) = tc["id"].as_str() { slot["id"] = json!(id); }
-                                if let Some(fn_obj) = tc.get("function") {
-                                    if let Some(n) = fn_obj["name"].as_str() {
-                                        slot["function"]["name"] = json!(n);
-                                    }
-                                    if let Some(a) = fn_obj["arguments"].as_str() {
-                                        let prev = slot["function"]["arguments"].as_str().unwrap_or("").to_string();
-                                        slot["function"]["arguments"] = json!(format!("{}{}", prev, a));
-                                    }
-                                }
-                                let _ = app.emit("assistant:stream_update", crate::assistant_stream_proxy::StreamPayload {
-                                    session_id: session_id.clone(),
-                                    tool_call: Some(tc.to_string()),
-                                    ..Default::default()
-                                });
-                            }
-                        }
-                    }
-                }
-
-                // 本轮 SSE 收完
-                if accumulated_tool_calls.is_empty() {
-                    let _ = app.emit("assistant:stream_update", crate::assistant_stream_proxy::StreamPayload {
-                        session_id: session_id.clone(),
-                        done: true,
-                        ..Default::default()
-                    });
-                    let _ = tx.send(RuntimeEvent::RunCompleted { reason: "done".into() }).await;
-                    return;
-                }
-
-                round_messages.push(json!({
-                    "role": "assistant",
-                    "content": assistant_text.clone(),
-                    "tool_calls": accumulated_tool_calls
-                }));
-
-                let _ = app.emit("assistant:stream_update", crate::assistant_stream_proxy::StreamPayload {
-                    session_id: session_id.clone(),
-                    tool_status: Some("pending".into()),
-                    tool_result: Some(json!({ "count": accumulated_tool_calls.len() })),
-                    ..Default::default()
-                });
-                for tc in &accumulated_tool_calls {
-                    let tool_name = tc["function"]["name"].as_str().unwrap_or("").to_string();
-                    let tool_call_id = tc["id"].as_str().unwrap_or("").to_string();
-                    let args = tc["function"]["arguments"].as_str().unwrap_or("{}").to_string();
-                    let args_json = serde_json::from_str(&args).unwrap_or(json!({}));
-                    let _ = tx.send(RuntimeEvent::ToolStarted {
-                        tool_name,
-                        tool_call_id,
-                        args: args_json,
-                    }).await;
-                }
-
-                let invocations: Vec<assistant_executor::ToolInvocation> = accumulated_tool_calls
-                    .iter()
-                    .filter_map(|tc| {
-                        let id = tc["id"].as_str().unwrap_or("").to_string();
-                        let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
-                        let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
-                        let arguments = serde_json::from_str(args_str).unwrap_or(json!({}));
-                        if name.is_empty() { None } else {
-                            Some(assistant_executor::ToolInvocation { id, name, arguments })
-                        }
-                    })
-                    .collect();
-
-                let results = assistant_executor::execute_batch(&invocations, &modules_dir, &enabled_tools);
-                let failed_count = results.iter().filter(|r| r.status == "error").count() as u32;
-
-                // ── Doom Loop 检测（Q17 D1：相同工具签名连续 3 次中断）──
-                let sig = invocations.iter()
-                    .map(|i| i.name.clone())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                if Some(&sig) == last_tool_signature.as_ref() {
-                    doom_count += 1;
-                    if doom_count >= 3 {
-                        let _ = app.emit("assistant:stream_update", crate::assistant_stream_proxy::StreamPayload {
-                            session_id: session_id.clone(),
-                            done: true,
-                            error: Some("Doom loop detected: same tool combination repeated 3 times".into()),
-                            ..Default::default()
-                        });
-                        let _ = tx.send(RuntimeEvent::RunFailed { error: "doom loop detected".into() }).await;
-                        return;
-                    }
-                } else {
-                    doom_count = 0;
-                    last_tool_signature = Some(sig);
-                }
-
-                for tr in &results {
-                    let _ = app.emit("assistant:stream_update", crate::assistant_stream_proxy::StreamPayload {
-                        session_id: session_id.clone(),
-                        tool_status: Some(tr.status.clone()),
-                        tool_result: Some(tr.output.clone()),
-                        self_heal_count: if tr.status == "error" { Some(self_heal_count + failed_count) } else { Some(self_heal_count) },
-                        ..Default::default()
-                    });
-                    let _ = tx.send(RuntimeEvent::ToolCompleted {
-                        tool_call_id: tr.tool_call_id.clone(),
-                        status: tr.status.clone(),
-                        output: tr.output.clone(),
-                    }).await;
-                    round_messages.push(json!({
-                        "role": "tool",
-                        "tool_call_id": tr.tool_call_id,
-                        "content": serde_json::to_string(&tr.output).unwrap_or_else(|_| "null".into())
-                    }));
-                }
-
-                if failed_count > 0 {
-                    self_heal_count += failed_count;
-                    if assistant_executor::should_circuit_break(self_heal_count, max_self_heal) {
-                        let _ = app.emit("assistant:stream_update", crate::assistant_stream_proxy::StreamPayload {
-                            session_id: session_id.clone(),
-                            done: true,
-                            tool_status: Some("circuit_broken".into()),
-                            self_heal_count: Some(self_heal_count),
-                            error: Some(format!("Circuit broken after {} failed attempts", self_heal_count)),
-                            ..Default::default()
-                        });
-                        let _ = tx.send(RuntimeEvent::RunFailed { error: format!("circuit broken after {self_heal_count}") }).await;
-                        return;
-                    }
+                crate::runtime::native::hook_pipeline::PromptAction::Block(msg) => {
+                    return Err(crate::Error::InvalidInput(format!("Prompt blocked by hook: {msg}")));
                 }
             }
-            // tx dropped here ends the stream
+        }
+
+        // ── 3. 加载执行设置 ──
+        let exec_settings = load_executor_settings();
+        let enabled_tools = exec_settings.enabled_tools;
+        let max_self_heal: u32 = exec_settings.max_self_heal;
+        let max_steps: u32 = exec_settings.max_steps.unwrap_or(50);
+
+        // ── 4. 创建事件通道 ──
+        let (tx, rx) = tokio::sync::mpsc::channel::<RuntimeEvent>(64);
+
+        // ── 5. 启动 Agent Loop（传递所有增强组件） ──
+        let app2 = app.clone();
+        let sid = session_id.clone();
+
+        // 提前 clone 需要跨 async 闭包的 Arc<Mutex<...>>
+        let hook_pipeline_clone = self.hook_pipeline.clone();
+        let rule_engine_clone = self.rule_engine.clone();
+
+        tokio::spawn(async move {
+            let config = LoopConfig {
+                max_steps,
+                max_self_heal,
+                doom_threshold: 3,
+                model: options.model.clone(),
+                base_url,
+                api_key,
+            };
+
+            // 从 Arc<Mutex> 获取共享引用
+            let pipeline = hook_pipeline_clone.lock().await;
+            let engine = rule_engine_clone.lock().await;
+
+            let mut loop_runner = AgentLoop::new(config, initial_messages);
+            loop_runner.run(
+                &tx,
+                &app2,
+                &sid,
+                &modules_dir,
+                working_dir.clone(),
+                &enabled_tools,
+                &pipeline,
+                &engine,
+                &mut cancel_rx,
+            ).await;
+
+            // 记录最终状态
+            println!(
+                "[NativeRuntime] Session {} completed: {:?} ({} steps, {} self-heal)",
+                sid, loop_runner.state(), loop_runner.step(), loop_runner.self_heal_count(),
+            );
+
+            // pipeline 和 engine 在闭包结束自动释放
         });
 
         Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)))
     }
 
     fn interrupt(&self, session_id: &str) {
-        // cancel_stream 是 async tauri command，这里同步触发——直接操作 STREAM_REGISTRY
         crate::assistant_stream_proxy::cancel_stream_sync(session_id);
     }
 
-    fn dispose(&self) {}
+    fn dispose(&self) {
+        println!("[NativeRuntime] Disposed");
+    }
 }
 
-/// 从 provider_id 解析出明文 API key + base URL（服务端解密，不下发前端）
+/// 解密 provider 凭据（P1 安全：全程 Rust 内存，不经过前端）
 async fn resolve_provider_credentials(provider_id: &str) -> Result<(String, String)> {
-    let pool_conn = crate::db::get_main_conn()?;
-    let conn: &rusqlite::Connection = &*pool_conn;
+    let db = crate::db::get_assistant_db_conn()
+        .map_err(|e| crate::Error::Internal(format!("DB connection: {e}")))?;
 
-    let (api_key_encrypted, dek_encrypted, base_url): (String, Option<String>, String) = conn
-        .query_row(
-            "SELECT k.api_key_encrypted, k.dek_encrypted, p.base_url
-             FROM provider_api_keys k
-             JOIN user_providers p ON k.provider_id = p.id
-             WHERE k.provider_id = ?1
-             ORDER BY k.created_at ASC
-             LIMIT 1",
-            rusqlite::params![provider_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .map_err(|e| crate::Error::Internal(format!("Failed to fetch provider key: {e}")))?;
-
-    let api_key = if let Some(dek) = &dek_encrypted {
-        if !dek.is_empty() {
-            crate::provider_key_manager::envelope_decrypt(&api_key_encrypted, dek, conn)?
-        } else {
-            let encryption_key = crate::env_manager::get_encryption_key(conn)?;
-            crate::env_manager::decrypt(&api_key_encrypted, &encryption_key)?
+    let row = db.query_row(
+        "SELECT k.api_key_encrypted, k.dek_encrypted, p.base_url
+         FROM provider_api_keys k
+         JOIN user_providers p ON k.provider_id = p.id
+         WHERE k.provider_id = ?1
+         ORDER BY k.created_at ASC LIMIT 1",
+        rusqlite::params![provider_id],
+        |row| {
+            let encrypted_key: String = row.get(0)?;
+            let dek_encrypted: String = row.get(1)?;
+            let base_url: String = row.get(2)?;
+            Ok((encrypted_key, dek_encrypted, base_url))
         }
+    ).map_err(|e| crate::Error::InvalidInput(format!("Provider '{provider_id}' not found: {e}")))?;
+
+    let (encrypted_key, dek_encrypted, base_url) = row;
+
+    // 解密 API key — 优先使用信封解密，遗留 Key 回退到旧版解密
+    let api_key = if !dek_encrypted.is_empty() {
+        crate::provider_key_manager::envelope_decrypt(&encrypted_key, &dek_encrypted, &db)
+            .map_err(|e| crate::Error::Internal(format!("Decrypt API key: {e}")))?
     } else {
-        let encryption_key = crate::env_manager::get_encryption_key(conn)?;
-        crate::env_manager::decrypt(&api_key_encrypted, &encryption_key)?
+        let encryption_key = crate::env_manager::get_encryption_key(&db)
+            .map_err(|e| crate::Error::Internal(format!("Get encryption key: {e}")))?;
+        crate::env_manager::decrypt(&encrypted_key, &encryption_key)
+            .map_err(|e| crate::Error::Internal(format!("Decrypt API key (legacy): {e}")))?
     };
 
-    // 消除未使用警告（asst_conn 持有 assistant DB 连接供后续扩展使用）
     Ok((api_key, base_url))
 }

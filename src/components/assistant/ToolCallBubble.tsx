@@ -83,7 +83,7 @@ export default function ToolCallBubble({
     <div className={`rounded-lg border ${config.bg} ${config.border} p-3 text-sm`}>
       <div className="flex items-center gap-2">
         {config.icon}
-        <span className="font-medium text-[var(--vibe-brand-text)]">{toolName}</span>
+        <span className="font-medium text-[var(--text)]">{toolName}</span>
         <span className={`text-[0.625rem] px-1.5 py-0.5 rounded ${
           status === 'pending' ? 'bg-blue-500/10 text-blue-400' :
           status === 'result' ? 'bg-green-500/10 text-green-400' :
@@ -94,7 +94,7 @@ export default function ToolCallBubble({
         </span>
       </div>
 
-      <div className="mt-2 text-xs text-[var(--text-dim)] font-mono truncate">
+      <div className="mt-2 text-xs text-[var(--text-secondary)] font-mono truncate">
         {params}
       </div>
 
@@ -121,13 +121,13 @@ export default function ToolCallBubble({
           {result && (
             <button
               onClick={() => setResultExpanded(!resultExpanded)}
-              className="text-[0.625rem] text-[var(--text-faint)] hover:text-[var(--text-dim)] transition-colors"
+              className="text-[0.625rem] text-[var(--text-disabled)] hover:text-[var(--text-secondary)] transition-colors"
             >
               {resultExpanded ? 'Collapse' : 'Expand'} result
             </button>
           )}
           {resultExpanded && result && (
-            <pre className="text-[0.625rem] text-[var(--text-dim)] bg-[var(--vibe-btn-bg)] rounded p-2 overflow-x-auto mt-1">
+            <pre className="text-[0.625rem] text-[var(--text-secondary)] bg-[var(--surface)] rounded p-2 overflow-x-auto mt-1">
               {result}
             </pre>
           )}

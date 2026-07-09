@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Pen, Square, Minus, ArrowRight, Type, Grid3x3, Undo2, Save, FileOutput } from 'lucide-react';
+import { Pen, Square, Minus, ArrowRight, Type, Grid3x3, Undo2, Save, FileOutput, X } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
 
 /**
@@ -56,6 +56,11 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
   const [format, setFormat] = useState<'png' | 'jpeg' | 'webp'>('png');
   const [width, setWidth] = useState(0);
   const [quality, setQuality] = useState(85);
+
+  // Text tool dialog state — replaces window.prompt()
+  const [textInput, setTextInput] = useState('');
+  const [showTextInput, setShowTextInput] = useState(false);
+  const [pendingTextPos, setPendingTextPos] = useState<Point | null>(null);
 
   // Snapshot helper
   const snapshot = useCallback((canvas: HTMLCanvasElement): HTMLCanvasElement => {
@@ -186,17 +191,9 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
     const { x, y } = getPos(canvas, ev);
 
     if (st.tool === 'text') {
-      const txt = window.prompt('输入文字');
-      if (!txt) return;
-      st.undo.push(snapshot(canvas));
-      if (st.undo.length > MAX_UNDO) st.undo.shift();
-      ctx.save();
-      ctx.fillStyle = st.color;
-      ctx.textBaseline = 'top';
-      ctx.font = `600 ${Math.max(14, st.size * 6)}px ${getComputedStyle(document.documentElement).getPropertyValue('--font-ui') || 'sans-serif'}`;
-      ctx.fillText(txt, x, y);
-      ctx.restore();
-      st.dirty = true;
+      setPendingTextPos({ x, y });
+      setTextInput('');
+      setShowTextInput(true);
       return;
     }
 
@@ -334,7 +331,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full text-sm" style={{ color: 'var(--text-dim)' }}>
+      <div className="flex items-center justify-center h-full text-sm" style={{ color: 'var(--text-secondary)' }}>
         加载图片…
       </div>
     );
@@ -342,7 +339,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
 
   if (oomError) {
     return (
-      <div className="flex items-center justify-center h-full text-sm" style={{ color: 'var(--text-dim)' }}>
+      <div className="flex items-center justify-center h-full text-sm" style={{ color: 'var(--text-secondary)' }}>
         图片加载失败或过大（&gt;60MP），暂不支持编辑
       </div>
     );
@@ -360,8 +357,8 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
               onClick={() => setTool(t)}
               className="p-1.5 rounded transition-colors"
               style={{
-                background: tool === t ? 'var(--vibe-btn-hover-bg)' : 'transparent',
-                color: tool === t ? 'var(--vibe-btn-hover-color)' : 'var(--text-dim)',
+                background: tool === t ? 'var(--surface-hover)' : 'transparent',
+                color: tool === t ? 'var(--primary)' : 'var(--text-secondary)',
               }}
             >
               <Icon size={16} />
@@ -385,20 +382,20 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
             title={t(locale, 'imageEditor.thickness')}
             className="w-20"
           />
-          <span className="text-xs" style={{ color: 'var(--text-faint)' }}>{size}px</span>
+          <span className="text-xs" style={{ color: 'var(--text-disabled)' }}>{size}px</span>
         </div>
         <button
           onClick={handleUndo}
           title={t(locale, 'imageEditor.undo')}
           className="p-1.5 rounded transition-colors"
-          style={{ color: 'var(--text-dim)' }}
+          style={{ color: 'var(--text-secondary)' }}
         >
           <Undo2 size={16} />
         </button>
       </div>
 
       {/* Canvas area */}
-      <div className="flex-1 overflow-auto flex items-center justify-center p-4" style={{ background: 'var(--bg-3)' }}>
+      <div className="flex-1 overflow-auto flex items-center justify-center p-4" style={{ background: 'var(--surface-hover)' }}>
         <canvas
           ref={canvasRef}
           onPointerDown={onPointerDown}
@@ -411,7 +408,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
 
       {/* Export bar */}
       <div className="flex items-center gap-3 p-2 border-t" style={{ borderColor: 'var(--border)' }}>
-        <label className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-dim)' }}>
+        <label className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
           格式
           <select
             value={format}
@@ -424,7 +421,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
             <option value="webp">WEBP</option>
           </select>
         </label>
-        <label className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-dim)' }}>
+        <label className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
           宽度
           <input
             type="number"
@@ -436,7 +433,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
           />
         </label>
         {format !== 'png' && (
-          <label className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-dim)' }}>
+          <label className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
             质量
             <input
               type="range"
@@ -446,7 +443,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
               onChange={(e) => setQuality(Number(e.target.value))}
               className="w-20"
             />
-            <span className="text-xs" style={{ color: 'var(--text-faint)' }}>{quality}%</span>
+            <span className="text-xs" style={{ color: 'var(--text-disabled)' }}>{quality}%</span>
           </label>
         )}
         <div className="flex-1" />
@@ -454,8 +451,8 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
           onClick={() => handleSave(true)}
           className="flex items-center gap-1 px-3 py-1.5 rounded text-xs transition-colors"
           style={{
-            background: 'var(--vibe-btn-bg)',
-            color: 'var(--text-dim)',
+            background: 'var(--surface)',
+            color: 'var(--text-secondary)',
           }}
         >
           <FileOutput size={14} />
@@ -465,14 +462,106 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
           onClick={() => handleSave(false)}
           className="flex items-center gap-1 px-3 py-1.5 rounded text-xs transition-colors"
           style={{
-            background: 'var(--accent)',
-            color: 'var(--accent-ink)',
+            background: 'var(--primary)',
+            color: '#FFFFFF',
           }}
         >
           <Save size={14} />
           保存
         </button>
       </div>
+      {/* Text input dialog — replaces window.prompt() */}
+      {showTextInput && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 100,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0,0,0,0.3)',
+        }} onClick={() => setShowTextInput(false)}>
+          <div
+            style={{
+              background: 'var(--surface)', borderRadius: 12,
+              border: '1px solid var(--border)', padding: 20,
+              boxShadow: '0 20px 40px rgba(0,0,0,0.12)',
+              minWidth: 280,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 12 }}>
+              {locale.startsWith('zh') ? '输入文字' : 'Enter text'}
+            </div>
+            <input
+              autoFocus
+              value={textInput}
+              onChange={(e) => setTextInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && textInput.trim()) {
+                  const canvas = canvasRef.current;
+                  const st = stateRef.current;
+                  if (!canvas || !pendingTextPos) return;
+                  const ctx = canvas.getContext('2d');
+                  if (!ctx) return;
+                  st.undo.push(snapshot(canvas));
+                  if (st.undo.length > MAX_UNDO) st.undo.shift();
+                  ctx.save();
+                  ctx.fillStyle = st.color;
+                  ctx.textBaseline = 'top';
+                  ctx.font = `600 ${Math.max(14, st.size * 6)}px ${getComputedStyle(document.documentElement).getPropertyValue('--font-ui') || 'sans-serif'}`;
+                  ctx.fillText(textInput.trim(), pendingTextPos.x, pendingTextPos.y);
+                  ctx.restore();
+                  st.dirty = true;
+                  setShowTextInput(false);
+                }
+                if (e.key === 'Escape') setShowTextInput(false);
+              }}
+              placeholder={locale.startsWith('zh') ? '输入文字…' : 'Type text…'}
+              style={{
+                width: '100%', padding: '8px 10px', borderRadius: 8,
+                border: '1px solid var(--border)', background: 'var(--background)',
+                color: 'var(--text)', fontSize: 14, outline: 'none',
+                boxSizing: 'border-box',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowTextInput(false)}
+                style={{
+                  padding: '6px 14px', borderRadius: 8,
+                  background: 'var(--surface)', border: '1px solid var(--border)',
+                  color: 'var(--text)', cursor: 'pointer', fontSize: 13,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const canvas = canvasRef.current;
+                  const st = stateRef.current;
+                  if (!canvas || !pendingTextPos || !textInput.trim()) return;
+                  const ctx = canvas.getContext('2d');
+                  if (!ctx) return;
+                  st.undo.push(snapshot(canvas));
+                  if (st.undo.length > MAX_UNDO) st.undo.shift();
+                  ctx.save();
+                  ctx.fillStyle = st.color;
+                  ctx.textBaseline = 'top';
+                  ctx.font = `600 ${Math.max(14, st.size * 6)}px ${getComputedStyle(document.documentElement).getPropertyValue('--font-ui') || 'sans-serif'}`;
+                  ctx.fillText(textInput.trim(), pendingTextPos.x, pendingTextPos.y);
+                  ctx.restore();
+                  st.dirty = true;
+                  setShowTextInput(false);
+                }}
+                style={{
+                  padding: '6px 14px', borderRadius: 8,
+                  background: 'var(--primary)', border: 'none',
+                  color: '#FFFFFF', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                }}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

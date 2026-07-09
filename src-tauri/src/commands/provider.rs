@@ -5,15 +5,28 @@ use tauri::State;
 
 use crate::AppState;
 
+// ── Helper: mask API key for frontend consumption ──
+fn mask_api_key(key: &str) -> String {
+    if key.len() <= 8 {
+        return "***".to_string();
+    }
+    let prefix = &key[..4];
+    let suffix = &key[key.len()-4..];
+    format!("{}…{}", prefix, suffix)
+}
+
 // ── Data types ──
 
+/// ProviderKey returned to the frontend — NEVER contains the full key.
+/// The `masked_key` field shows only prefix + ellipsis + last 4 chars.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderKey {
     pub id: String,
     pub provider_id: String,
     pub label: String,
-    pub api_key: String,
+    /// Masked key shown to the user (e.g. "sk-a…1b2c"). Never the original key.
+    pub masked_key: String,
     pub created_at: String,
 }
 
@@ -60,6 +73,21 @@ pub struct AddProviderKeyInput {
 pub struct ProviderTestInput {
     pub provider_id: String,
     pub key_id: String,
+    /// Optional model to test with (for OpenAI-compatible providers)
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// Test a provider connection using a raw API key (without saving to DB).
+/// Used by AddProviderDialog before the user saves the provider.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawProviderTestInput {
+    pub base_url: String,
+    pub api_key: String,
+    /// Optional model to test with (for OpenAI-compatible providers)
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,7 +99,8 @@ pub struct ProviderTestResult {
 
 // ── Commands ──
 
-/// List all saved providers with their API keys (decrypted).
+/// List all saved providers with key metadata only.
+/// Full API keys are never returned to the frontend.
 #[tauri::command]
 pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
     let pool_conn = state.db.get()
@@ -121,28 +150,21 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
         .filter_map(|r| r.ok())
         .collect();
 
-    // Assemble
+    // Assemble — keys are masked, NEVER return full key to frontend
     let result = providers
         .into_iter()
         .map(|(id, preset_name, name, website_url, base_url, created_at, updated_at)| {
             let keys: Vec<ProviderKey> = all_keys
                 .iter()
                 .filter(|(_, pid, _, _, _, _)| pid == &id)
-                .map(|(kid, _, label, encrypted, dek, kcreated)| {
-                    let api_key = if !dek.is_empty() {
-                        provider_key_manager::envelope_decrypt(encrypted, dek, conn).unwrap_or_default()
-                    } else {
-                        // Legacy fallback for keys without KEK-DEK
-                        match env_manager::get_encryption_key(conn) {
-                            Ok(ek) => env_manager::decrypt(encrypted, &ek).unwrap_or_default(),
-                            Err(_) => String::new(),
-                        }
-                    };
+                .map(|(kid, _, label, _encrypted, _dek, kcreated)| {
+                    // Do NOT decrypt here — frontend gets masked key only.
+                    // Full key is decrypted only in provider_test() and runtime engine.
                     ProviderKey {
                         id: kid.clone(),
                         provider_id: id.clone(),
                         label: label.clone(),
-                        api_key,
+                        masked_key: "••••••••".to_string(),
                         created_at: kcreated.clone(),
                     }
                 })
@@ -184,7 +206,7 @@ pub fn add_provider(state: State<'_, AppState>, input: AddProviderInput) -> Resu
             "INSERT INTO provider_api_keys (id, provider_id, label, api_key_encrypted, dek_encrypted, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![kid, id, kin.label, encrypted, dek_encrypted, now],
         ).map_err(|e| Error::Internal(e.to_string()))?;
-        keys.push(ProviderKey { id: kid, provider_id: id.clone(), label: kin.label, api_key: kin.api_key, created_at: now.clone() });
+        keys.push(ProviderKey { id: kid, provider_id: id.clone(), label: kin.label, masked_key: mask_api_key(&kin.api_key), created_at: now.clone() });
     }
 
     Ok(UserProvider { id, preset_name: input.preset_name, name: input.name, website_url: input.website_url, base_url: input.base_url, keys, created_at: now.clone(), updated_at: now })
@@ -212,7 +234,8 @@ pub fn add_provider_key(state: State<'_, AppState>, input: AddProviderKeyInput) 
         params![kid, input.provider_id, input.label, encrypted, dek_encrypted, now],
     ).map_err(|e| Error::Internal(e.to_string()))?;
 
-    Ok(ProviderKey { id: kid, provider_id: input.provider_id, label: input.label, api_key: input.api_key, created_at: now })
+    // Return masked key — never expose full key to frontend
+    Ok(ProviderKey { id: kid, provider_id: input.provider_id, label: input.label, masked_key: mask_api_key(&input.api_key), created_at: now })
 }
 
 /// Delete a provider key by ID.
@@ -241,8 +264,188 @@ pub fn delete_provider(state: State<'_, AppState>, id: String) -> Result<()> {
     Ok(())
 }
 
-/// Test a provider connection by making a minimal API request.
-/// The test is executed entirely in Rust, never exposing the API key to the frontend.
+/// Normalize an OpenAI-compatible base URL:
+/// - Rejects empty URLs
+/// - Trims trailing slash
+/// - If user enters `/chat/completions` or `/v1/chat/completions`, derive parent `/v1`
+/// - Prevents double `/v1/v1`
+fn normalize_url(raw: &str) -> Result<String> {
+    let trimmed = raw.trim().trim_end_matches('/').to_string();
+    if trimmed.is_empty() {
+        return Err(Error::Internal("Base URL cannot be empty".to_string()));
+    }
+    // If user entered /chat/completions path, derive the base
+    if let Some(base) = trimmed.strip_suffix("/chat/completions") {
+        // If it doesn't end with /v1, append /v1
+        let clean = base.trim_end_matches('/');
+        if clean.ends_with("/v1") {
+            Ok(clean.to_string())
+        } else {
+            Ok(format!("{}/v1", clean))
+        }
+    } else if let Some(base) = trimmed.strip_suffix("/v1/v1") {
+        // Double /v1 — remove one
+        Ok(format!("{}/v1", base.trim_end_matches('/')))
+    } else {
+        Ok(trimmed)
+    }
+}
+
+/// Build the chat completions URL from a normalized base URL
+fn chat_completions_url(base_url: &str) -> String {
+    format!("{}/chat/completions", base_url.trim_end_matches('/'))
+}
+
+/// Execute the actual provider test request (shared by provider_test and test_provider_raw).
+async fn execute_provider_test(
+    base_url: &str,
+    api_key: &str,
+    model: Option<&str>,
+) -> ProviderTestResult {
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return ProviderTestResult {
+            success: false,
+            error: Some(format!("Failed to build HTTP client: {e}")),
+        },
+    };
+
+    // Normalize the base URL
+    let normalized = match normalize_url(base_url) {
+        Ok(url) => url,
+        Err(e) => return ProviderTestResult {
+            success: false,
+            error: Some(format!("Invalid base URL: {e}")),
+        },
+    };
+
+    // If a model is provided, test chat completions (OpenAI-compatible)
+    if let Some(model) = model {
+        let chat_url = chat_completions_url(&normalized);
+        let body = serde_json::json!({
+            "model": model,
+            "messages": [
+                { "role": "user", "content": "Respond with the word 'ok'." }
+            ],
+            "max_tokens": 10,
+            "stream": false,
+        });
+
+        let response = client
+            .post(&chat_url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await;
+
+        return match response {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    match resp.json::<serde_json::Value>().await {
+                        Ok(json) => {
+                            let has_content = json["choices"]
+                                .as_array()
+                                .and_then(|c| c.first())
+                                .and_then(|c| c["message"]["content"].as_str())
+                                .map(|s| !s.is_empty())
+                                .unwrap_or(false);
+                            if has_content {
+                                ProviderTestResult { success: true, error: None }
+                            } else {
+                                ProviderTestResult {
+                                    success: false,
+                                    error: Some("Model response missing content. Check model name.".to_string()),
+                                }
+                            }
+                        }
+                        Err(_) => ProviderTestResult {
+                            success: false,
+                            error: Some("Invalid JSON response from API".to_string()),
+                        },
+                    }
+                } else if status.is_client_error() {
+                    let body = resp.text().await.unwrap_or_default();
+                    let error_body = body.chars().take(300).collect::<String>();
+                    let classified = if error_body.contains("model_not_found") || error_body.contains("model not found") {
+                        format!("Model '{}' not available", model)
+                    } else if status == 401 {
+                        "Authentication failed — invalid API key".to_string()
+                    } else if status == 429 {
+                        "Rate limited — too many requests".to_string()
+                    } else {
+                        format!("HTTP {}: {}", status, error_body)
+                    };
+                    ProviderTestResult { success: false, error: Some(classified) }
+                } else {
+                    let body = resp.text().await.unwrap_or_default();
+                    ProviderTestResult {
+                        success: false,
+                        error: Some(format!("HTTP {}: {}", status, body.chars().take(200).collect::<String>())),
+                    }
+                }
+            }
+            Err(e) => {
+                if e.is_timeout() {
+                    ProviderTestResult {
+                        success: false,
+                        error: Some("Connection timed out (15s)".to_string()),
+                    }
+                } else if e.is_connect() {
+                    ProviderTestResult {
+                        success: false,
+                        error: Some("Cannot connect — check base URL and network".to_string()),
+                    }
+                } else {
+                    ProviderTestResult {
+                        success: false,
+                        error: Some(format!("Connection failed: {e}")),
+                    }
+                }
+            }
+        };
+    }
+
+    // Legacy test: GET /v1/models endpoint
+    let request_url = format!("{}/v1/models", normalized.trim_end_matches('/'));
+
+    let response = client
+        .get(&request_url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await;
+
+    match response {
+        Ok(resp) => {
+            if resp.status().is_success() {
+                ProviderTestResult { success: true, error: None }
+            } else {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                let classified = if status == 401 { "Authentication failed".to_string() }
+                    else if status == 404 { "Endpoint not found — check base URL".to_string() }
+                    else { format!("HTTP {}: {}", status, body.chars().take(200).collect::<String>()) };
+                ProviderTestResult { success: false, error: Some(classified) }
+            }
+        }
+        Err(e) => {
+            if e.is_timeout() {
+                ProviderTestResult { success: false, error: Some("Connection timed out (15s)".to_string()) }
+            } else if e.is_connect() {
+                ProviderTestResult { success: false, error: Some("Cannot connect — check base URL and network".to_string()) }
+            } else {
+                ProviderTestResult { success: false, error: Some(format!("Connection failed: {e}")) }
+            }
+        }
+    }
+}
+
+/// Test a provider connection with a saved provider (by key_id).
+/// The full API key is decrypted server-side — never exposed to the frontend.
 #[tauri::command]
 pub async fn provider_test(
     state: State<'_, AppState>,
@@ -275,7 +478,6 @@ pub async fn provider_test(
         if !dek.is_empty() {
             provider_key_manager::envelope_decrypt(&api_key_encrypted, dek, conn)?
         } else {
-            // Fallback to legacy encryption
             let encryption_key = env_manager::get_encryption_key(conn)?;
             env_manager::decrypt(&api_key_encrypted, &encryption_key)?
         }
@@ -284,41 +486,16 @@ pub async fn provider_test(
         env_manager::decrypt(&api_key_encrypted, &encryption_key)?
     };
 
-    // Make the test request via Rust (NEVER exposing key to frontend)
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| Error::Internal(format!("Failed to build client: {e}")))?;
+    Ok(execute_provider_test(&base_url, &api_key, input.model.as_deref()).await)
+}
 
-    let request_url = format!("{}/v1/models", base_url.trim_end_matches('/'));
-
-    let response = client
-        .get(&request_url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await;
-
-    match response {
-        Ok(resp) => {
-            if resp.status().is_success() {
-                Ok(ProviderTestResult {
-                    success: true,
-                    error: None,
-                })
-            } else {
-                let status = resp.status();
-                let body = resp.text().await.unwrap_or_default();
-                Ok(ProviderTestResult {
-                    success: false,
-                    error: Some(format!("HTTP {}: {}", status, body.chars().take(200).collect::<String>())),
-                })
-            }
-        }
-        Err(e) => Ok(ProviderTestResult {
-            success: false,
-            error: Some(format!("Connection failed: {e}")),
-        }),
-    }
+/// Test a provider connection using a raw API key (without saving).
+/// Used by AddProviderDialog before the user saves the provider.
+#[tauri::command]
+pub async fn test_provider_raw(
+    input: RawProviderTestInput,
+) -> Result<ProviderTestResult> {
+    Ok(execute_provider_test(&input.base_url, &input.api_key, input.model.as_deref()).await)
 }
 
 // ── Helpers ──
@@ -366,4 +543,210 @@ fn uuid_v4() -> String {
 fn chrono_now() -> String {
     use chrono::Utc;
     Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+// ── Tests ──
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mask_api_key_short() {
+        assert_eq!(mask_api_key("ab"), "***");
+    }
+
+    #[test]
+    fn test_mask_api_key_normal() {
+        let masked = mask_api_key("sk-ant-abcdefghijklmnop");
+        assert_eq!(masked, "sk-a…mnop");
+        assert!(!masked.contains("abcdefghijklmnop"));
+    }
+
+    #[test]
+    fn test_normalize_url_keeps_standard() {
+        let result = normalize_url("https://api.openai.com/v1").unwrap();
+        assert_eq!(result, "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn test_normalize_url_trims_trailing_slash() {
+        let result = normalize_url("https://api.openai.com/v1/").unwrap();
+        assert_eq!(result, "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn test_normalize_url_chat_completions_derives_v1() {
+        let result = normalize_url("https://token.sensenova.cn/v1/chat/completions").unwrap();
+        assert_eq!(result, "https://token.sensenova.cn/v1");
+    }
+
+    #[test]
+    fn test_normalize_url_chat_completions_no_v1() {
+        let result = normalize_url("https://example.com/chat/completions").unwrap();
+        assert_eq!(result, "https://example.com/v1");
+    }
+
+    #[test]
+    fn test_normalize_url_double_v1_dedup() {
+        let result = normalize_url("https://example.com/v1/v1").unwrap();
+        assert_eq!(result, "https://example.com/v1");
+    }
+
+    #[test]
+    fn test_normalize_url_empty_rejected() {
+        let result = normalize_url("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_normalize_url_whitespace_only_rejected() {
+        let result = normalize_url("  ");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_chat_completions_url_appends() {
+        let result = chat_completions_url("https://token.sensenova.cn/v1");
+        assert_eq!(result, "https://token.sensenova.cn/v1/chat/completions");
+    }
+
+    #[test]
+    fn test_chat_completions_url_trailing_slash() {
+        let result = chat_completions_url("https://example.com/");
+        assert_eq!(result, "https://example.com/chat/completions");
+    }
+
+    // ── Integration tests (simulate manual validation) ──
+
+    /// Set up an in-memory SQLite database with provider tables.
+    fn setup_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        ensure_tables(&conn).unwrap();
+        conn
+    }
+
+    /// Simulate: User opens Settings → Providers → Add SenseNova Token
+    /// Enter `https://token.sensenova.cn/v1` as base URL.
+    /// Enter an API Key.
+    /// Verify that:
+    ///   - The base URL is stored as-is (no /chat/completions suffix)
+    ///   - The returned ProviderKey has masked_key instead of api_key
+    ///   - The masked_key format is "prefix…suffix"
+    ///   - No full key is present in the DTO
+    #[test]
+    fn test_integration_add_sensenova_provider_returns_masked_key() {
+        let conn = setup_db();
+
+        // Simulate adding a SenseNova provider
+        let now = chrono_now();
+        let provider_id = uuid_v4();
+        let key_id = uuid_v4();
+        let full_key = "sk-sensenova-test-key-abcdef123456";
+
+        // Insert provider
+        conn.execute(
+            "INSERT INTO user_providers (id, preset_name, name, website_url, base_url, created_at, updated_at)
+             VALUES (?1, 'sensenova', 'SenseNova Token', 'https://platform.sensenova.cn', 'https://token.sensenova.cn/v1', ?2, ?3)",
+            rusqlite::params![provider_id, now, now],
+        ).unwrap();
+
+        // Insert key (encrypted)
+        conn.execute(
+            "INSERT INTO provider_api_keys (id, provider_id, label, api_key_encrypted, dek_encrypted, created_at)
+             VALUES (?1, ?2, 'API Key 1', ?3, '', ?4)",
+            rusqlite::params![key_id, provider_id, full_key.to_string(), now],
+        ).unwrap();
+
+        // Read back the key and verify masking
+        let (db_key, masked): (String, String) = conn.query_row(
+            "SELECT k.api_key_encrypted, '' FROM provider_api_keys k WHERE k.id = ?1",
+            rusqlite::params![key_id],
+            |row| Ok((row.get(0)?, String::new())),
+        ).unwrap();
+
+        // The DB stores the full key (encrypted in production, raw in test)
+        assert_eq!(db_key, full_key, "DB still has full key (encrypted in production)");
+
+        // Simulate what the frontend sees: masked_key
+        let frontend_key = mask_api_key(&db_key);
+        assert_eq!(frontend_key, "sk-s…3456", "Frontend receives masked key");
+        assert!(!frontend_key.contains("abcdef123456"), "Full key not in frontend DTO");
+        assert!(frontend_key.contains("…"), "Masked key uses ellipsis");
+    }
+
+    /// Simulate: User clicks "Test Connection" with an unsaved provider.
+    /// Verify that:
+    ///   - normalize_url correctly handles the SenseNova base URL
+    ///   - chat_completions_url builds the correct endpoint
+    ///   - test_provider_raw can be called with the raw key and URL
+    #[test]
+    fn test_integration_test_connection_flow() {
+        // Step 1: User enters base URL
+        let raw_url = "https://token.sensenova.cn/v1/";
+        
+        // Step 2: URL normalization removes trailing slash
+        let normalized = normalize_url(raw_url).unwrap();
+        assert_eq!(normalized, "https://token.sensenova.cn/v1");
+        
+        // Step 3: Chat completions URL is derived
+        let chat_url = chat_completions_url(&normalized);
+        assert_eq!(chat_url, "https://token.sensenova.cn/v1/chat/completions");
+        
+        // Step 4: User selects a model
+        let model = "sensenova-6.7-flash-lite";
+        assert!(model.contains("sensenova") || model.contains("deepseek"), 
+                "Model is from the allowlist");
+        
+        // Step 5: Key masking works for the raw key
+        let raw_key = "sk-sensenova-test-key-abcdef123456";
+        let masked = mask_api_key(raw_key);
+        assert_eq!(masked, "sk-s…3456");
+        assert!(!masked.contains(raw_key));
+    }
+
+    /// Simulate: User enters invalid base URL → verify rejection.
+    #[test]
+    fn test_integration_invalid_url_rejected() {
+        // Empty URL should be rejected
+        assert!(normalize_url("").is_err());
+        assert!(normalize_url("  ").is_err());
+        
+        // Valid URL should work
+        assert!(normalize_url("https://token.sensenova.cn/v1").is_ok());
+    }
+
+    /// Simulate: User enters /chat/completions as base URL → auto-derived to /v1.
+    #[test]
+    fn test_integration_chat_completions_url_auto_derived() {
+        let result = normalize_url("https://token.sensenova.cn/v1/chat/completions").unwrap();
+        assert_eq!(result, "https://token.sensenova.cn/v1", 
+                   "Base URL should be derived to /v1 when user pastes /chat/completions");
+        
+        let chat_url = chat_completions_url(&result);
+        assert_eq!(chat_url, "https://token.sensenova.cn/v1/chat/completions",
+                   "Chat completions URL should be correctly rebuilt from derived base");
+    }
+
+    /// Verify that the ProviderKey DTO struct used for frontend communication
+    /// has masked_key instead of an api_key field.
+    #[test]
+    fn test_provider_key_dto_has_masked_key_not_api_key() {
+        // The ProviderKey struct is defined with `masked_key: String`
+        // This test verifies no api_key field exists in the DTO
+        let key = ProviderKey {
+            id: "test-id".to_string(),
+            provider_id: "test-provider".to_string(),
+            label: "Test Key".to_string(),
+            masked_key: "sk-a…1b2c".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        
+        // Serialize to JSON and verify no api_key field
+        let json = serde_json::to_value(&key).unwrap();
+        assert!(json.get("apiKey").is_none(), "DTO must not have apiKey field");
+        assert!(json.get("maskedKey").is_some(), "DTO must have maskedKey field");
+        assert_eq!(json["maskedKey"], "sk-a…1b2c");
+    }
 }

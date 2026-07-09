@@ -24,11 +24,11 @@ const BADGE_LABELS: Record<string, string> = {
 
 const BADGE_COLORS: Record<string, { bg: string; text: string; border: string }> = {
   node: { bg: '#3fb95018', text: '#3fb950', border: '#3fb95066' },
-  web: { bg: 'var(--accent-soft)', text: 'var(--accent)', border: 'color-mix(in srgb, var(--accent) 50%, transparent)' },
+  web: { bg: 'var(--primary-soft)', text: 'var(--primary)', border: 'color-mix(in srgb, var(--primary) 50%, transparent)' },
   python: { bg: '#4b8bbe18', text: '#4b8bbe', border: '#4b8bbe66' },
   rust: { bg: '#d2691e18', text: '#d2691e', border: '#d2691e66' },
   go: { bg: '#00add818', text: '#00add8', border: '#00add866' },
-  git: { bg: 'transparent', text: 'var(--text-dim)', border: 'var(--border)' },
+  git: { bg: 'transparent', text: 'var(--text-secondary)', border: 'var(--border)' },
 };
 
 export default function FileCard({ entry, onSelect, onContextMenu, selected, onDoubleClick, isFavorite, onFavoriteToggle }: FileCardProps) {
@@ -133,11 +133,11 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
         padding: SPACING.md,
         borderRadius: 'var(--radius, 4px)',
         cursor: 'pointer',
-        border: `1px solid ${selected ? 'var(--accent)' : isChanged ? 'var(--accent)' : 'var(--vibe-btn-border)'}`,
-        background: selected ? 'var(--accent-soft)' : flash ? 'var(--accent-soft)' : 'transparent',
+        border: `1px solid ${selected ? 'var(--primary)' : isChanged ? 'var(--primary)' : 'var(--border)'}`,
+        background: selected ? 'var(--primary-soft)' : flash ? 'var(--primary-soft)' : 'transparent',
         boxShadow: isChanged
-          ? `0 0 calc(6px + 20px * ${heat}) color-mix(in srgb, var(--accent) calc(55% * ${heat}), transparent)`
-          : selected ? '0 0 0 1px var(--accent)' : 'none',
+          ? `0 0 calc(6px + 20px * ${heat}) color-mix(in srgb, var(--primary) calc(55% * ${heat}), transparent)`
+          : selected ? '0 0 0 1px var(--primary)' : 'none',
         transition: 'background 0.12s, border-color 0.12s, transform 0.12s, box-shadow 0.3s, opacity 0.12s',
         position: 'relative',
         overflow: 'hidden',
@@ -145,13 +145,13 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
         animation: isChanged ? 'changedBreath 2.2s ease-in-out infinite' : undefined,
       }}
       onMouseEnter={(e) => {
-        (e.currentTarget as HTMLElement).style.background = 'var(--vibe-btn-bg)';
-        (e.currentTarget as HTMLElement).style.borderColor = 'var(--accent)';
+        (e.currentTarget as HTMLElement).style.background = 'var(--surface)';
+        (e.currentTarget as HTMLElement).style.borderColor = 'var(--primary)';
         (e.currentTarget as HTMLElement).style.transform = 'translateY(-1px)';
       }}
       onMouseLeave={(e) => {
-        (e.currentTarget as HTMLElement).style.background = selected ? 'var(--accent-soft)' : isChanged ? 'var(--accent-soft)' : 'transparent';
-        (e.currentTarget as HTMLElement).style.borderColor = selected ? 'var(--accent)' : isChanged ? 'var(--accent)' : 'var(--vibe-btn-border)';
+        (e.currentTarget as HTMLElement).style.background = selected ? 'var(--primary-soft)' : isChanged ? 'var(--primary-soft)' : 'transparent';
+        (e.currentTarget as HTMLElement).style.borderColor = selected ? 'var(--primary)' : isChanged ? 'var(--primary)' : 'var(--border)';
         (e.currentTarget as HTMLElement).style.transform = 'translateY(0)';
       }}
     >
@@ -159,7 +159,7 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
       <div className="file-card-thumb" style={{
         width: '100%', aspectRatio: '1', display: 'flex', alignItems: 'center', justifyContent: 'center',
         fontSize: 56, marginBottom: SPACING.sm, borderRadius: 'calc(var(--radius, 4px) - 2px)',
-        background: 'var(--vibe-content-bg)', overflow: 'hidden', position: 'relative',
+        background: 'var(--surface)', overflow: 'hidden', position: 'relative',
       }}>
         {renderThumbContent()}
 
@@ -174,9 +174,7 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
                 fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 700,
                 lineHeight: 1, letterSpacing: '0.02em', textTransform: 'lowercase',
                 padding: '2px 4px', borderRadius: 4,
-                background: 'color-mix(in srgb, var(--vibe-content-bg) 78%, transparent)',
-                backdropFilter: 'blur(3px)',
-                WebkitBackdropFilter: 'blur(3px)',
+                background: 'var(--surface)',
                 color: badgeStyle.text, border: `1px solid ${badgeStyle.border}`,
                 alignSelf: 'flex-end',
               }}>
@@ -202,7 +200,7 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
             position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
             width: 34, height: 34, borderRadius: '50%',
             background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            backdropFilter: 'blur(2px)', pointerEvents: 'none',
+            pointerEvents: 'none',
           }}>
             <Play size={16} fill="#fff" color="#fff" />
           </span>
@@ -212,7 +210,7 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
         {showRipple && (
           <span style={{
             position: 'absolute', inset: 0, borderRadius: '50%',
-            border: '2px solid var(--accent)',
+            border: '2px solid var(--primary)',
             animation: 'editRipple 0.8s ease-out forwards',
             pointerEvents: 'none',
           }} />
@@ -221,7 +219,7 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
 
       {/* File name — up to 2 lines */}
       <div style={{
-        fontSize: FONT_SIZE.md, color: 'var(--vibe-brand-text)', lineHeight: 1.35,
+        fontSize: FONT_SIZE.md, color: 'var(--text)', lineHeight: 1.35,
         display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
         overflow: 'hidden',
       }}>
@@ -240,7 +238,7 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
         title={isFavorite ? '取消收藏' : '收藏'}
         style={{
           position: 'absolute', top: 6, right: 6,
-          color: isFavorite ? 'var(--yellow, #e3b341)' : 'var(--text-faint)',
+          color: isFavorite ? 'var(--yellow, #e3b341)' : 'var(--text-disabled)',
           cursor: 'pointer',
           background: 'none', border: 'none', padding: 0,
           lineHeight: 0,
@@ -251,7 +249,7 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
 
       {/* Symlink indicator */}
       {entry.symlink && (
-        <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--vibe-btn-text)' }}>→ {entry.symlink}</div>
+        <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)' }}>→ {entry.symlink}</div>
       )}
 
       {/* Changed count badge — shows when heat > 0 */}
@@ -259,7 +257,7 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
         <div style={{
           position: 'absolute', top: 6, left: 6,
           width: 16, height: 16, borderRadius: '50%',
-          background: 'var(--accent)', color: 'var(--vibe-content-bg)',
+          background: 'var(--primary)', color: 'var(--surface)',
           fontSize: 9, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
           animation: 'changedPulse 0.5s ease-out',
         }}>
@@ -271,7 +269,7 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
       {entry.hidden && (
         <div style={{
           position: 'absolute', bottom: 8, right: 8,
-          width: 6, height: 6, borderRadius: '50%', background: 'var(--vibe-btn-text)',
+          width: 6, height: 6, borderRadius: '50%', background: 'var(--text-secondary)',
         }} />
       )}
     </div>

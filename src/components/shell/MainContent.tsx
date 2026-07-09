@@ -72,7 +72,7 @@ export default function MainContent({
           </Suspense>
         );
       }
-      return <div style={{ padding: 40, color: 'var(--text-dim)' }}>Component not registered: {toolDef.componentPath}</div>;
+      return <div style={{ padding: 40, color: 'var(--text-secondary)' }}>Component not registered: {toolDef.componentPath}</div>;
     }
 
     if (toolDef) {

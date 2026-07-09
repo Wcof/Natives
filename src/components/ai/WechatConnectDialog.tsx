@@ -1,100 +1,209 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { QrCode, Send, Wifi, WifiOff, RefreshCw } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
+import { classifyError } from '@/lib/error-classifier';
+import { useToast } from '@/components/ui/Toast';
 
 interface WechatConnectDialogProps {
   onClose: () => void;
 }
 
-type ConnState = 'uninstalled' | 'installed_off' | 'gateway_online' | 'selecting_agent' | 'qr_generated' | 'qr_showing' | 'connected' | 'expired';
+type ConnState =
+  | 'uninstalled'
+  | 'installed_off'
+  | 'gateway_online'
+  | 'selecting_agent'
+  | 'qr_generated'
+  | 'qr_showing'
+  | 'connected'
+  | 'expired'
+  | 'canceled'
+  | 'wait'
+  | 'unreachable';
 
 interface BridgeEnv {
   target: string;
   cwd: string;
   persona: string;
-  state: ConnState;
+  state: ConnState | string;
   connected: boolean;
 }
 
-// Use the global nativesAPI exposed by tauri-adapter (cast to any to access optional wechat namespace)
-const api = (typeof window !== 'undefined' ? (window as any).nativesAPI?.wechat : undefined) as
-  | {
-      env: () => Promise<BridgeEnv>;
-      login: () => Promise<{ qrcode: string; qrcode_img_content: string; state: string }>;
-      disconnect: () => Promise<{ ok: boolean }>;
-      check: () => Promise<{ ok: boolean; state: string }>;
-      send: (text: string) => Promise<{ ok: boolean; cid: string }>;
-      setTarget: (target: string) => Promise<void>;
-      setCwd: (dir: string) => Promise<void>;
-      setPersona: (persona: string) => Promise<void>;
-      detectAgents: () => Promise<{ claude: boolean; codex: boolean }>;
-      status: () => Promise<{ state: string; connected: boolean; target: string; cwd: string }>;
-    }
-  | undefined;
+interface QrLoginState {
+  token: string;
+  image: string;
+}
+
+function stateLabel(locale: string, state: string | undefined): string {
+  if (!state) return t(locale, 'wechat.disconnected');
+  const key = `wechat.state.${state}`;
+  const translated = t(locale, key);
+  return translated === key ? state : translated;
+}
+
+function buildUserError(locale: string, titleKey: string, error: unknown): string {
+  const classified = classifyError(error);
+  return `${t(locale, titleKey)}: ${classified.userMessage}. ${classified.actionHint}`;
+}
 
 export default function WechatConnectDialog({ onClose }: WechatConnectDialogProps) {
   const locale = useLocale();
+  const { toast } = useToast();
+  const api = typeof window !== 'undefined' ? window.nativesAPI?.wechat : undefined;
+  const mountedRef = useRef(true);
   const [env, setEnv] = useState<BridgeEnv | null>(null);
-  const [qrcode, setQrcode] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [qrcode, setQrcode] = useState<QrLoginState | null>(null);
+  const [envLoading, setEnvLoading] = useState(true);
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState<Array<{ role: string; text: string }>>([]);
 
-  const refreshEnv = useCallback(async () => {
-    if (!api) return;
+  const showError = useCallback((titleKey: string, error: unknown) => {
+    if (!mountedRef.current) return;
+    const message = buildUserError(locale, titleKey, error);
+    setErrorMessage(message);
+    toast(message, 'error');
+  }, [locale, toast]);
+
+  const refreshEnv = useCallback(async (showFailure = true) => {
+    if (!api) {
+      if (!mountedRef.current) return;
+      setErrorMessage(t(locale, 'wechat.unavailable'));
+      setEnvLoading(false);
+      return;
+    }
     try {
       const e = await api.env();
+      if (!mountedRef.current) return;
       setEnv(e);
-    } catch (err) {
-      console.error('Failed to fetch wechat env:', err);
+      setErrorMessage(null);
+    } catch (error) {
+      if (showFailure) showError('wechat.loadFailed', error);
+    } finally {
+      if (mountedRef.current) setEnvLoading(false);
     }
-  }, []);
+  }, [api, locale, showError]);
 
   useEffect(() => {
-    refreshEnv();
-    const interval = setInterval(refreshEnv, 2000);
-    return () => clearInterval(interval);
+    mountedRef.current = true;
+    refreshEnv(true);
+    return () => { mountedRef.current = false; };
   }, [refreshEnv]);
+
+  useEffect(() => {
+    if (!api || !qrcode || env?.connected) return;
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const result = await api.pollLogin(qrcode.token);
+        if (cancelled) return;
+        const state = result.state;
+        if (state === 'connected') {
+          setQrcode(null);
+          setErrorMessage(null);
+          toast(t(locale, 'wechat.connected'), 'success');
+          await refreshEnv(false);
+          return;
+        }
+        if (state === 'expired') {
+          setQrcode(null);
+          setEnv(prev => prev ? { ...prev, state: 'expired', connected: false } : prev);
+          setErrorMessage(result.error || t(locale, 'wechat.qrExpired'));
+          return;
+        }
+        if (state === 'canceled') {
+          setQrcode(null);
+          setEnv(prev => prev ? { ...prev, state: 'canceled', connected: false } : prev);
+          return;
+        }
+        setEnv(prev => prev ? { ...prev, state, connected: false } : prev);
+      } catch (error) {
+        if (!cancelled) showError('wechat.pollFailed', error);
+      }
+    };
+
+    poll();
+    const interval = window.setInterval(poll, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [api, env?.connected, locale, qrcode, refreshEnv, showError, toast]);
 
   const handleLogin = useCallback(async () => {
     if (!api) return;
-    setLoading(true);
+    setLoginLoading(true);
+    setErrorMessage(null);
     try {
       const r = await api.login();
-      if (r.qrcode_img_content) {
-        setQrcode(r.qrcode_img_content);
+      if (!mountedRef.current) return;
+      if (r.qrcode && r.qrcode_img_content) {
+        setQrcode({ token: r.qrcode, image: r.qrcode_img_content });
+        setEnv(prev => prev ? { ...prev, state: 'qr_showing', connected: false } : prev);
+      } else {
+        throw new Error('QR code response is incomplete');
       }
-    } catch (err) {
-      console.error('Login failed:', err);
+    } catch (error) {
+      showError('wechat.loginFailed', error);
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoginLoading(false);
     }
-  }, []);
+  }, [api, showError]);
 
   const handleDisconnect = useCallback(async () => {
     if (!api) return;
-    await api.disconnect();
-    setQrcode(null);
-    refreshEnv();
-  }, [refreshEnv]);
+    setDisconnecting(true);
+    setErrorMessage(null);
+    try {
+      await api.disconnect();
+      if (!mountedRef.current) return;
+      setQrcode(null);
+      setMessages([]);
+      await refreshEnv(false);
+      toast(t(locale, 'wechat.disconnected'), 'success');
+    } catch (error) {
+      showError('wechat.disconnectFailed', error);
+    } finally {
+      if (mountedRef.current) setDisconnecting(false);
+    }
+  }, [api, locale, refreshEnv, showError, toast]);
 
   const handleSend = useCallback(async () => {
-    if (!api || !message.trim()) return;
+    const text = message.trim();
+    if (!api || !text || sending) return;
+    setSending(true);
+    setErrorMessage(null);
     try {
-      await api.send(message);
-      setMessages(prev => [...prev, { role: 'user', text: message }]);
+      await api.send(text);
+      if (!mountedRef.current) return;
+      setMessages(prev => [...prev, { role: 'user', text }]);
       setMessage('');
-    } catch (err) {
-      console.error('Send failed:', err);
+      toast(t(locale, 'wechat.sent'), 'success');
+    } catch (error) {
+      showError('wechat.sendFailed', error);
+    } finally {
+      if (mountedRef.current) setSending(false);
     }
-  }, [message]);
+  }, [api, locale, message, sending, showError, toast]);
 
-  if (!env) {
+  if (envLoading || !env) {
     return (
-      <div className="flex items-center justify-center p-8">
-        <RefreshCw className="animate-spin" size={20} />
+      <div className="flex flex-col items-center justify-center gap-3 p-8">
+        {envLoading && <RefreshCw className="animate-spin" size={20} />}
+        {errorMessage && (
+          <>
+            <p className="text-sm text-center" style={{ color: 'var(--danger)' }}>{errorMessage}</p>
+            <button onClick={() => refreshEnv(true)} className="px-3 py-1.5 rounded text-xs" style={{ background: 'var(--surface)', color: 'var(--text)' }}>
+              {t(locale, 'wechat.retry')}
+            </button>
+          </>
+        )}
       </div>
     );
   }
@@ -104,43 +213,50 @@ export default function WechatConnectDialog({ onClose }: WechatConnectDialogProp
       <div className="flex items-center justify-between p-3 border-b" style={{ borderColor: 'var(--border)' }}>
         <div className="flex items-center gap-2">
           {env.connected ? (
-            <Wifi size={16} style={{ color: 'var(--accent)' }} />
+            <Wifi size={16} style={{ color: 'var(--primary)' }} />
           ) : (
-            <WifiOff size={16} style={{ color: 'var(--text-faint)' }} />
+            <WifiOff size={16} style={{ color: 'var(--text-disabled)' }} />
           )}
           <span className="text-sm font-medium">{t(locale, 'wechat.title')}</span>
           <span className="text-xs px-1.5 py-0.5 rounded" style={{
-            background: env.connected ? 'var(--accent-soft)' : 'var(--vibe-btn-bg)',
-            color: env.connected ? 'var(--accent)' : 'var(--text-faint)'
+            background: env.connected ? 'var(--primary-soft)' : 'var(--surface)',
+            color: env.connected ? 'var(--primary)' : 'var(--text-disabled)'
           }}>
-            {env.state}
+            {stateLabel(locale, env.state)}
           </span>
         </div>
-        <button onClick={onClose} className="text-xs" style={{ color: 'var(--text-dim)' }}>{t(locale, 'wechat.close')}</button>
+        <button onClick={onClose} className="text-xs" style={{ color: 'var(--text-secondary)' }}>{t(locale, 'wechat.close')}</button>
       </div>
 
       <div className="flex-1 overflow-auto p-4">
+        {errorMessage && (
+          <div className="mb-3 rounded border px-3 py-2 text-xs" style={{ borderColor: 'var(--danger)', color: 'var(--danger)', background: 'var(--surface)' }}>
+            {errorMessage}
+          </div>
+        )}
+
         {!env.connected && !qrcode && (
           <div className="flex flex-col items-center gap-4 py-8">
-            <QrCode size={48} style={{ color: 'var(--text-faint)' }} />
-            <p className="text-sm text-center" style={{ color: 'var(--text-dim)' }}>
+            <QrCode size={48} style={{ color: 'var(--text-disabled)' }} />
+            <p className="text-sm text-center" style={{ color: 'var(--text-secondary)' }}>
               {t(locale, 'wechat.scanHint')}
             </p>
             <button
               onClick={handleLogin}
-              disabled={loading}
+              disabled={loginLoading}
               className="px-4 py-2 rounded text-sm"
-              style={{ background: 'var(--accent)', color: 'var(--accent-ink)' }}
+              style={{ background: 'var(--primary)', color: '#FFFFFF', opacity: loginLoading ? 0.7 : 1 }}
             >
-              {loading ? t(locale, 'wechat.loading') : t(locale, 'wechat.getQrcode')}
+              {loginLoading ? t(locale, 'wechat.loading') : t(locale, 'wechat.getQrcode')}
             </button>
           </div>
         )}
 
         {qrcode && !env.connected && (
           <div className="flex flex-col items-center gap-4 py-4">
-            <img src={qrcode} alt="QR Code" className="w-48 h-48" />
-            <p className="text-xs" style={{ color: 'var(--text-faint)' }}>{t(locale, 'wechat.scanToLogin')}</p>
+            <img src={qrcode.image} alt="QR Code" className="w-48 h-48" />
+            <p className="text-xs" style={{ color: 'var(--text-disabled)' }}>{t(locale, 'wechat.scanToLogin')}</p>
+            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{t(locale, 'wechat.waitingConfirm')}</p>
           </div>
         )}
 
@@ -148,8 +264,8 @@ export default function WechatConnectDialog({ onClose }: WechatConnectDialogProp
           <div className="flex flex-col gap-3">
             {messages.map((m, i) => (
               <div key={i} className={`text-sm p-2 rounded ${m.role === 'user' ? 'ml-8' : 'mr-8'}`} style={{
-                background: m.role === 'user' ? 'var(--accent-soft)' : 'var(--vibe-btn-bg)',
-                color: m.role === 'user' ? 'var(--accent)' : 'var(--text)'
+                background: m.role === 'user' ? 'var(--primary-soft)' : 'var(--surface)',
+                color: m.role === 'user' ? 'var(--primary)' : 'var(--text)'
               }}>
                 {m.text}
               </div>
@@ -164,24 +280,29 @@ export default function WechatConnectDialog({ onClose }: WechatConnectDialogProp
             type="text"
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleSend(); }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !sending) handleSend(); }}
             placeholder={t(locale, 'wechat.messagePlaceholder')}
+            disabled={sending}
             className="flex-1 bg-transparent border rounded px-2 py-1 text-sm"
             style={{ borderColor: 'var(--border)', color: 'var(--text)' }}
           />
           <button
             onClick={handleSend}
+            disabled={sending || !message.trim()}
             className="p-1.5 rounded"
-            style={{ background: 'var(--accent)', color: 'var(--accent-ink)' }}
+            style={{ background: 'var(--primary)', color: '#FFFFFF', opacity: sending || !message.trim() ? 0.6 : 1 }}
+            title={sending ? t(locale, 'wechat.sending') : undefined}
           >
             <Send size={14} />
           </button>
           <button
             onClick={handleDisconnect}
+            disabled={disconnecting}
             className="p-1.5 rounded"
-            style={{ background: 'var(--vibe-btn-bg)', color: 'var(--text-dim)' }}
+            style={{ background: 'var(--surface)', color: 'var(--text-secondary)', opacity: disconnecting ? 0.6 : 1 }}
+            title={t(locale, 'wechat.disconnect')}
           >
-            <WifiOff size={14} />
+            {disconnecting ? <RefreshCw className="animate-spin" size={14} /> : <WifiOff size={14} />}
           </button>
         </div>
       )}

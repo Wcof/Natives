@@ -177,11 +177,11 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
           alignItems: 'center',
           gap: SPACING.sm,
           padding: `${SPACING.sm}px ${SPACING.lg}px`,
-          background: 'var(--vibe-toolbar-bg)',
-          borderBottom: '0.0625rem solid var(--vibe-toolbar-border)',
+          background: 'var(--surface)',
+          borderBottom: '0.0625rem solid var(--border)',
         }}
       >
-        <span style={{ fontSize: FONT_SIZE.md, fontWeight: 600, color: 'var(--vibe-btn-text)', marginRight: 8 }}>
+        <span style={{ fontSize: FONT_SIZE.md, fontWeight: 600, color: 'var(--text-secondary)', marginRight: 8 }}>
           {t(locale, 'screenshot.annotationTools')}
         </span>
 
@@ -215,7 +215,7 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
                   height: 20,
                   borderRadius: '50%',
                   background: c,
-                  border: color === c ? '2px solid var(--accent)' : '1px solid var(--vibe-toolbar-border)',
+                  border: color === c ? '2px solid var(--primary)' : '1px solid var(--border)',
                   cursor: 'pointer',
                 }}
               />
@@ -268,8 +268,8 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
             top: '50%',
             left: '50%',
             transform: 'translate(-50%, -50%)',
-            background: 'var(--vibe-toolbar-bg)',
-            border: '1px solid var(--vibe-toolbar-border)',
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
             borderRadius: BORDER_RADIUS.lg,
             padding: SPACING.lg,
             zIndex: 10001,
@@ -285,8 +285,8 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
             }}
             placeholder={t(locale, 'screenshot.textPlaceholder')}
             style={{
-              background: 'var(--bg)',
-              border: '1px solid var(--vibe-toolbar-border)',
+              background: 'var(--background)',
+              border: '1px solid var(--border)',
               borderRadius: BORDER_RADIUS.sm,
               padding: '6px 10px',
               color: 'var(--text)',

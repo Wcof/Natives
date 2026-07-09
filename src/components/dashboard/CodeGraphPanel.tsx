@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
+import { useLocale, t as tr } from '@/i18n';
 import {
   ChevronRight, ChevronDown, File, Folder, FolderOpen,
   Code, Box, GitBranch, Database,
@@ -27,12 +28,12 @@ function getNodeIcon(node: CodeGraphNode, expanded: boolean) {
 }
 
 function getNodeColor(node: CodeGraphNode): string {
-  if (node.kind === 'dir') return 'var(--vibe-accent-color)';
+  if (node.kind === 'dir') return 'var(--primary)';
   if (node.kind === 'index') return 'var(--info, #8b5cf6)';
-  if (node.symbolType === 'function' || node.symbolType === 'method') return 'var(--vibe-accent-color)';
+  if (node.symbolType === 'function' || node.symbolType === 'method') return 'var(--primary)';
   if (node.symbolType === 'class' || node.symbolType === 'struct' || node.symbolType === 'interface') return 'var(--warning, #f97316)';
   if (node.symbolType === 'dep' || node.kind === 'dep') return 'var(--diff-add, #22c55e)';
-  return 'var(--vibe-btn-text)';
+  return 'var(--text-secondary)';
 }
 
 function TreeNode({ node, depth = 0 }: { node: CodeGraphNode; depth?: number }) {
@@ -47,16 +48,16 @@ function TreeNode({ node, depth = 0 }: { node: CodeGraphNode; depth?: number }) 
           display: 'flex', alignItems: 'center', gap: SPACING.xs,
           padding: `${SPACING.xs}px ${SPACING.xs}px`, paddingLeft: SPACING.sm + depth * 18,
           borderRadius: BORDER_RADIUS.sm, cursor: hasChildren ? 'pointer' : 'default',
-          fontSize: FONT_SIZE.xs, color: 'var(--vibe-brand-text)',
+          fontSize: FONT_SIZE.xs, color: 'var(--text)',
           transition: 'background 0.1s',
         }}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--vibe-btn-bg)'; }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--surface)'; }}
         onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
       >
         {/* Expand/collapse arrow */}
         <span style={{ width: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
           {hasChildren ? (
-            expanded ? <ChevronDown size={12} style={{ color: 'var(--text-faint)' }} /> : <ChevronRight size={12} style={{ color: 'var(--text-faint)' }} />
+            expanded ? <ChevronDown size={12} style={{ color: 'var(--text-disabled)' }} /> : <ChevronRight size={12} style={{ color: 'var(--text-disabled)' }} />
           ) : (
             <span style={{ width: 12 }} />
           )}
@@ -75,7 +76,7 @@ function TreeNode({ node, depth = 0 }: { node: CodeGraphNode; depth?: number }) 
         {/* Type badge */}
         {node.symbolType && (
           <span style={{
-            fontSize: FONT_SIZE.xs, color: 'var(--text-dim)', background: 'var(--vibe-btn-bg)',
+            fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)', background: 'var(--surface)',
             padding: `0 ${SPACING.xs}px`, borderRadius: BORDER_RADIUS.sm, lineHeight: '14px', flexShrink: 0,
           }}>
             {node.symbolType}
@@ -84,7 +85,7 @@ function TreeNode({ node, depth = 0 }: { node: CodeGraphNode; depth?: number }) 
 
         {/* Line number */}
         {node.line && (
-          <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
+          <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
             :{node.line}
           </span>
         )}
@@ -114,6 +115,7 @@ interface CodeGraphPanelProps {
  * levels are collapsed by default.
  */
 export default function CodeGraphPanel({ minimal }: CodeGraphPanelProps) {
+  const locale = useLocale();
   const [nodes, setNodes] = useState<CodeGraphNode[] | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -133,16 +135,16 @@ export default function CodeGraphPanel({ minimal }: CodeGraphPanelProps) {
 
   if (loading) {
     return (
-      <div style={{ padding: `${SPACING.md}px 0`, textAlign: 'center', color: 'var(--text-faint)', fontSize: FONT_SIZE.xs }}>
-        Loading Code Graph…
+      <div style={{ padding: `${SPACING.md}px 0`, textAlign: 'center', color: 'var(--text-disabled)', fontSize: FONT_SIZE.xs }}>
+        {tr(locale, 'dashboard.codeGraphLoading')}
       </div>
     );
   }
 
   if (!nodes || nodes.length === 0) {
     return (
-      <div style={{ padding: `${SPACING.md}px 0`, textAlign: 'center', color: 'var(--text-faint)', fontSize: FONT_SIZE.xs }}>
-        No Code Graph data found (run `codegraph explore` to generate)
+      <div style={{ padding: `${SPACING.md}px 0`, textAlign: 'center', color: 'var(--text-disabled)', fontSize: FONT_SIZE.xs }}>
+        {tr(locale, 'dashboard.codeGraphEmpty')}
       </div>
     );
   }
@@ -150,8 +152,8 @@ export default function CodeGraphPanel({ minimal }: CodeGraphPanelProps) {
   return (
     <div style={{
       borderRadius: minimal ? undefined : BORDER_RADIUS.md,
-      border: minimal ? undefined : '0.0625rem solid var(--vibe-btn-border)',
-      background: 'var(--vibe-btn-bg)',
+      border: minimal ? undefined : '0.0625rem solid var(--border)',
+      background: 'var(--surface)',
       padding: `${SPACING.xs}px 0`,
       maxHeight: 400,
       overflow: 'auto',

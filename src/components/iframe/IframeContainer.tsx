@@ -87,7 +87,7 @@ export default function IframeContainer({ moduleId, url, isVisible, onReady, onE
         }}
       >
         <div style={{ fontSize: '2.75rem', marginBottom: '1rem' }}>&#9888;&#65039;</div>
-        <p style={{ fontSize: '0.875rem', color: 'var(--vibe-brand-text)', marginBottom: '0.5rem' }}>{error}</p>
+        <p style={{ fontSize: '0.875rem', color: 'var(--text)', marginBottom: '0.5rem' }}>{error}</p>
         <button className="btn btn-primary" onClick={handleRetry}>
           Retry
         </button>
@@ -110,7 +110,7 @@ export default function IframeContainer({ moduleId, url, isVisible, onReady, onE
       {loading && (
         <div style={{
           position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center',
-          justifyContent: 'center', color: 'var(--text-dim)', fontSize: FONT_SIZE.md,
+          justifyContent: 'center', color: 'var(--text-secondary)', fontSize: FONT_SIZE.md,
           padding: 30, gap: 16
         }}>
           <MathCurveLoader size={60} />

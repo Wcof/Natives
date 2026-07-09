@@ -1,0 +1,10 @@
+{
+  "name": "natives-example",
+  "version": "1.0.0",
+  "description": "Example Natives plugin demonstrating hooks, agents, commands, and skills",
+  "author": {
+    "name": "Natives Team",
+    "email": "team@natives.dev"
+  },
+  "category": "productivity"
+}

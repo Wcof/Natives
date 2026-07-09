@@ -9,7 +9,7 @@ import ShortcutHelp from '@/components/ui/ShortcutHelp';
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: SPACING.xs / 2 }}>{label}</div>
+      <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: SPACING.xs / 2 }}>{label}</div>
       <div style={{ color: 'var(--text)', wordBreak: 'break-all' }}>{value}</div>
     </div>
   );
@@ -63,17 +63,17 @@ export default function ModuleDetails({ moduleId, locale }: ModuleDetailsProps) 
       </div>
       {modulePerms.length > 0 && (
         <div style={{ marginTop: SPACING.lg }}>
-          <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: SPACING.xs }}>
+          <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: SPACING.xs }}>
             Permissions
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.xs }}>
             {modulePerms.map((perm) => (
               <div key={perm.permission} style={{
                 display: 'flex', alignItems: 'center', gap: SPACING.sm,
-                padding: `${SPACING.xs}px ${SPACING.sm}px`, background: 'var(--vibe-btn-bg)',
+                padding: `${SPACING.xs}px ${SPACING.sm}px`, background: 'var(--surface)',
                 borderRadius: BORDER_RADIUS.sm, fontSize: FONT_SIZE.sm,
               }}>
-                <span style={{ color: perm.granted ? 'var(--accent)' : 'var(--text-faint)' }}>
+                <span style={{ color: perm.granted ? 'var(--primary)' : 'var(--text-disabled)' }}>
                   {perm.granted ? '✓' : '✗'}
                 </span>
                 <span style={{ color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>{perm.permission}</span>

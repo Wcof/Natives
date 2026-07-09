@@ -112,7 +112,7 @@ export default function Modal({
 
   return createPortal(
     <div
-      style={{ position: 'absolute', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(var(--glass-overlay-blur, 24px)) saturate(var(--glass-overlay-saturation, 150%))', WebkitBackdropFilter: 'blur(var(--glass-overlay-blur, 24px)) saturate(var(--glass-overlay-saturation, 150%))', animation: `fadeIn ${TRANSITION.normal}` }}
+      style={{ position: 'absolute', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0, 0, 0, 0.4)', animation: `fadeIn ${TRANSITION.normal}` }}
       onMouseDown={(event) => {
         if (
           closeOnBackdropClick &&
@@ -131,12 +131,10 @@ export default function Modal({
         className={['anim-dropIn', className].filter(Boolean).join(' ')}
         style={{
           ...widthStyle,
-          background: 'var(--vibe-toolbar-bg)',
-          backdropFilter: 'blur(var(--vibe-sidebar-blur, 28px)) saturate(var(--vibe-sidebar-saturation, 145%))',
-          WebkitBackdropFilter: 'blur(var(--vibe-sidebar-blur, 28px)) saturate(var(--vibe-sidebar-saturation, 145%))',
-          border: '0.0625rem solid var(--vibe-toolbar-border)',
-          borderRadius: 'var(--radius)',
-          boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent), var(--vibe-toolbar-shadow)',
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: BORDER_RADIUS.lg,
+          boxShadow: 'var(--shadow-modal)',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
@@ -148,11 +146,11 @@ export default function Modal({
         onMouseDown={(event) => event.stopPropagation()}
       >
         {showHeader && (
-          <div style={{ display: 'flex', flexShrink: 0, alignItems: 'center', justifyContent: 'space-between', borderBottom: '0.0625rem solid var(--vibe-toolbar-border)', padding: `${SPACING.sm}px ${SPACING.lg}px` }}>
+          <div style={{ display: 'flex', flexShrink: 0, alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', padding: `${SPACING.sm}px ${SPACING.lg}px` }}>
             {title ? (
               <h2
                 id={titleId}
-                style={{ fontFamily: 'var(--vibe-font-display, inherit)', fontSize: FONT_SIZE.xl, fontWeight: 600, lineHeight: 1.25, color: 'var(--vibe-accent)' }}
+                style={{ fontFamily: 'var(--font-display, inherit)', fontSize: FONT_SIZE.xl, fontWeight: 600, lineHeight: 1.25, color: 'var(--text)' }}
               >
                 {title}
               </h2>
@@ -165,9 +163,9 @@ export default function Modal({
                 onClick={onClose}
                 aria-label={t(locale, 'common.close')}
                 title={t(locale, 'common.close')}
-                style={{ display: 'flex', height: '2rem', width: '2rem', flexShrink: 0, alignItems: 'center', justifyContent: 'center', borderRadius: BORDER_RADIUS.lg, border: 'none', cursor: 'pointer', color: 'var(--vibe-btn-text)', background: 'transparent', transition: `all ${TRANSITION.fast}` }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--vibe-btn-bg)'; (e.currentTarget as HTMLElement).style.color = 'var(--vibe-accent)'; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; (e.currentTarget as HTMLElement).style.color = 'var(--vibe-btn-text)'; }}
+                style={{ display: 'flex', height: '32px', width: '32px', flexShrink: 0, alignItems: 'center', justifyContent: 'center', borderRadius: BORDER_RADIUS.xs, border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', background: 'transparent', transition: `all ${TRANSITION.fast}` }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-hover)'; (e.currentTarget as HTMLElement).style.color = 'var(--text)'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; (e.currentTarget as HTMLElement).style.color = 'var(--text-secondary)'; }}
               >
                 <X size={17} />
               </button>

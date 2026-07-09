@@ -42,10 +42,20 @@ pub enum RuntimeEvent {
         tool_call_id: String,
         args: serde_json::Value,
     },
+    PermissionRequested {
+        tool_name: String,
+        tool_call_id: String,
+        reason: String,
+    },
     ToolCompleted {
         tool_call_id: String,
         status: String,
         output: serde_json::Value,
+    },
+    ToolRejected {
+        tool_name: String,
+        tool_call_id: String,
+        reason: String,
     },
     FileChanged {
         path: String,

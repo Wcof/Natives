@@ -91,15 +91,27 @@ export function initRuntimeLog(): void {
 
   console.error = (...args: unknown[]) => {
     pushEntry('error', args);
-    state.originalError.apply(console, args);
+    state.originalError.apply(console, sanitizeConsoleArgs(args));
   };
 
   console.warn = (...args: unknown[]) => {
     pushEntry('warn', args);
-    state.originalWarn.apply(console, args);
+    state.originalWarn.apply(console, sanitizeConsoleArgs(args));
   };
 
   state.installed = true;
+}
+
+function sanitizeConsoleArgs(args: unknown[]): unknown[] {
+  return args.map((arg) => {
+    if (typeof arg === 'string') return scrubMessage(arg);
+    if (arg instanceof Error) return new Error(scrubMessage(arg.message));
+    try {
+      return scrubMessage(JSON.stringify(arg));
+    } catch {
+      return scrubMessage(String(arg));
+    }
+  });
 }
 
 /**

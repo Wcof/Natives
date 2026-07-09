@@ -112,7 +112,7 @@ export default function MessageInput({
       : null;
 
   return (
-    <div className="flex flex-col gap-2 px-4 py-3 border-t border-[var(--vibe-border-subtle)] relative">
+    <div className="flex flex-col gap-2 px-4 py-3 border-t border-[var(--border-subtle)] relative">
       {noProject && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-600 dark:text-amber-400">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -135,7 +135,7 @@ export default function MessageInput({
           anchorRect={textareaRef.current?.getBoundingClientRect() ?? null}
         />
 
-        <div className="flex items-end gap-2 rounded-xl border border-[var(--vibe-search-border)] bg-[var(--vibe-search-bg)] px-3 py-2 focus-within:border-[var(--vibe-active-color)] transition-colors">
+        <div className="flex items-end gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 focus-within:border-[var(--primary)] transition-colors">
           <textarea
             ref={textareaRef}
             value={input}
@@ -144,7 +144,7 @@ export default function MessageInput({
             placeholder={helperText || placeholder || t('inputPlaceholder')}
             disabled={effectiveDisabled}
             rows={1}
-            className="min-w-0 flex-1 bg-transparent text-sm text-[var(--vibe-brand-text)] outline-none resize-none placeholder:text-[var(--vibe-search-placeholder)] max-h-[200px]"
+            className="min-w-0 flex-1 bg-transparent text-sm text-[var(--text)] outline-none resize-none placeholder:text-[var(--text-disabled)] max-h-[200px]"
           />
           {isStreaming ? (
             <button
@@ -160,7 +160,7 @@ export default function MessageInput({
             <button
               onClick={handleSend}
               disabled={!input.trim() || effectiveDisabled}
-              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)] hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--primary-soft)] text-[var(--primary)] hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <line x1="22" y1="2" x2="11" y2="13" />

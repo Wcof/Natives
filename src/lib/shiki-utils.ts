@@ -41,7 +41,7 @@ export async function highlightCode(code: string, lang: string): Promise<string>
     let theme = 'dark-plus';
     if (typeof document !== 'undefined') {
       const htmlTheme = document.documentElement.getAttribute('data-theme');
-      if (htmlTheme === 'frosted-jasmine') {
+      if (htmlTheme === 'light') {
         theme = 'light-plus';
       }
     }
@@ -60,7 +60,7 @@ export async function highlightCode(code: string, lang: string): Promise<string>
     let textColor = 'var(--text)';
     if (typeof document !== 'undefined') {
       const htmlTheme = document.documentElement.getAttribute('data-theme');
-      if (htmlTheme === 'frosted-jasmine') {
+      if (htmlTheme === 'light') {
         bgColor = '#f5f0eb';
         textColor = '#2c2a26';
       }

@@ -195,7 +195,7 @@ export default function FileContextMenu({
             <span>{item.label}</span>
             {item.shortcut && (
               <span style={{
-                fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--vibe-btn-text)',
+                fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)',
                 opacity: 0.6, flexShrink: 0,
               }}>
                 {item.shortcut}

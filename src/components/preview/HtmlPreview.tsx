@@ -21,8 +21,8 @@ export default function HtmlPreview({
     }}>
       {fileName && (
         <div style={{
-          padding: '6px 10px', fontSize: FONT_SIZE.sm, color: 'var(--text-dim)',
-          background: 'var(--bg-2)', borderBottom: '1px solid var(--border)',
+          padding: '6px 10px', fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)',
+          background: 'var(--surface)', borderBottom: '1px solid var(--border)',
           fontFamily: 'var(--font-mono)',
         }}>
           {fileName}

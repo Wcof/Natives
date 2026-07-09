@@ -24,6 +24,7 @@ mod git;
 mod html_preview;
 mod http_server;
 mod lid_guard;
+pub mod log_sanitizer;
 mod module_manager;
 mod permission_center;
 pub mod provider_key_manager;
@@ -133,8 +134,7 @@ pub fn run() {
             db::init_assistant_db()
                 .map_err(|e| format!("failed to init assistant database: {e}"))?;
 
-            // Pre-warm env encryption key cache from Keychain (single prompt at startup,
-            // instead of prompting every time the user opens Settings → env vars)
+            // Pre-warm env encryption key cache from SQLite settings.
             {
                 let pool_conn = pool.get()
                     .map_err(|e| format!("failed to get DB connection for env key init: {e}"))?;
@@ -286,7 +286,6 @@ pub fn run() {
             commands::env::env_set_variable,
             commands::env::env_delete_variable,
             commands::env::env_encrypt,
-            commands::env::env_decrypt,
             // Notifications
             commands::notification::notification_send,
             commands::notification::notification_list,
@@ -364,6 +363,7 @@ pub fn run() {
             // WeChat ClawBot
             commands::wechat::wechat_env,
             commands::wechat::wechat_login,
+            commands::wechat::wechat_poll_login,
             commands::wechat::wechat_disconnect,
             commands::wechat::wechat_check,
             commands::wechat::wechat_send,
@@ -378,6 +378,8 @@ pub fn run() {
             // Runtime abstraction (Slice B)
             commands::runtime::runtime_list_available,
             commands::runtime::runtime_detect_cli,
+            commands::runtime::runtime_list_catalog,
+            commands::runtime::runtime_set_capability_enabled,
             // Scheduler (Slice J)
             crate::scheduler::scheduler_list_tasks,
             crate::scheduler::scheduler_create_task,
@@ -394,6 +396,33 @@ pub fn run() {
             commands::assistant::assistant_update_session_title,
             commands::assistant::assistant_update_session_model,
             commands::provider::provider_test,
+            commands::provider::test_provider_raw,
+            // Library (fanbox clone — G4)
+            commands::library::library_list_folders,
+            commands::library::library_create_folder,
+            commands::library::library_update_folder,
+            commands::library::library_delete_folder,
+            commands::library::library_list_tags,
+            commands::library::library_create_tag,
+            commands::library::library_delete_tag,
+            commands::library::library_list_items,
+            commands::library::library_get_item,
+            commands::library::library_create_item,
+            commands::library::library_update_item,
+            commands::library::library_delete_item,
+            commands::library::library_batch_tag,
+            commands::library::library_batch_move,
+            commands::library::library_batch_delete,
+            commands::library::library_get_stats,
+            // Subagent (G8)
+            commands::subagent::subagent_list,
+            commands::subagent::subagent_get,
+            commands::subagent::subagent_create,
+            commands::subagent::subagent_update,
+            commands::subagent::subagent_delete,
+            commands::subagent::subagent_run,
+            commands::subagent::subagent_list_runs,
+            commands::subagent::subagent_resolve_binding,
             // Execution Engine settings（PRD 3.4）
             commands::executor_settings::executor_get_settings,
             commands::executor_settings::executor_save_settings,

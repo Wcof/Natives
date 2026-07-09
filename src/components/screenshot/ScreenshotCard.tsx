@@ -65,35 +65,30 @@ export default function ScreenshotCard({
     (
       <div
         style={{
-          position: 'absolute',
-          bottom: 20,
-          right: 20,
-          zIndex: 9999,
-          background: 'var(--vibe-toolbar-bg)',
-          backdropFilter: 'blur(var(--vibe-toolbar-blur, 22px)) saturate(var(--vibe-toolbar-saturation, 145%))',
-          WebkitBackdropFilter: 'blur(var(--vibe-toolbar-blur, 22px)) saturate(var(--vibe-toolbar-saturation, 145%))',
-          border: '0.0625rem solid var(--vibe-toolbar-border)',
-          borderRadius: '0.75rem',
+          position: 'absolute', bottom: 20, right: 20, zIndex: 9999,
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-md)',
           padding: `${SPACING.md}px ${SPACING.lg}px`,
-          boxShadow: 'var(--vibe-toolbar-shadow)',
+          boxShadow: 'var(--shadow-popup)',
           minWidth: 220,
-          animation: 'slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+          animation: 'slideUp 200ms ease',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.sm, marginBottom: SPACING.sm }}>
-          <Image size={18} style={{ color: 'var(--accent)' }} />
-          <span style={{ fontSize: FONT_SIZE.md, color: 'var(--vibe-brand-text)', flex: 1 }}>
+          <Image size={18} style={{ color: 'var(--primary)' }} />
+          <span style={{ fontSize: FONT_SIZE.md, color: 'var(--text)', flex: 1 }}>
             {t(locale, 'screenshot.newScreenshot')}
           </span>
           <button
             onClick={() => { setVisible(false); onDismiss(); }}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--vibe-btn-text)', padding: 2 }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: 2 }}
           >
             <X size={14} />
           </button>
         </div>
 
-        <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--vibe-btn-text)', marginBottom: SPACING.sm, wordBreak: 'break-all' }}>
+        <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)', marginBottom: SPACING.sm, wordBreak: 'break-all' }}>
           {filePath.split('/').pop()}
         </div>
 

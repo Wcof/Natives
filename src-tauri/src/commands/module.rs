@@ -239,11 +239,14 @@ pub fn rollback_module(
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_placeholder() {
-        assert!(true);
+    fn test_module_dir_resolves_without_crash() {
+        // Verify the modules directory helper returns a path
+        let path = modules_dir();
+        assert!(path.to_string_lossy().len() > 0);
     }
 }

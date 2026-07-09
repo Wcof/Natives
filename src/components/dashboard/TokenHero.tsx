@@ -104,9 +104,9 @@ export function TokenHero({ usage, isLoading, sourceConfigured, minimal }: Token
           minHeight: 120,
         } : {
           borderRadius: BORDER_RADIUS.lg,
-          border: '0.0625rem solid var(--vibe-content-border)',
-          background: 'var(--vibe-content-bg)',
-          backdropFilter: 'blur(var(--vibe-content-blur, 24px))',
+          border: '0.0625rem solid var(--border)',
+          background: 'var(--surface)',
+          // V1.0: backdrop-filter 已移除
           padding: `${SPACING.lg}px`,
           display: 'flex',
           alignItems: 'center',
@@ -127,15 +127,15 @@ export function TokenHero({ usage, isLoading, sourceConfigured, minimal }: Token
           padding: `${SPACING.md}px 0 0`,
         } : {
           borderRadius: BORDER_RADIUS.lg,
-          border: '0.0625rem solid var(--vibe-content-border)',
-          background: 'var(--vibe-content-bg)',
-          backdropFilter: 'blur(var(--vibe-content-blur, 24px))',
+          border: '0.0625rem solid var(--border)',
+          background: 'var(--surface)',
+          // V1.0: backdrop-filter 已移除
           padding: `${SPACING.lg}px`,
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: `${SPACING.sm}px` }}>
-          <Info size={14} style={{ color: 'var(--text-faint)' }} />
-          <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-faint)' }}>
+          <Info size={14} style={{ color: 'var(--text-disabled)' }} />
+          <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-disabled)' }}>
             {t(locale, 'dashboard.usageNotConfigured')}
           </span>
         </div>
@@ -150,15 +150,15 @@ export function TokenHero({ usage, isLoading, sourceConfigured, minimal }: Token
           padding: `${SPACING.md}px 0 0`,
         } : {
           borderRadius: BORDER_RADIUS.lg,
-          border: '0.0625rem solid var(--vibe-content-border)',
-          background: 'var(--vibe-content-bg)',
-          backdropFilter: 'blur(var(--vibe-content-blur, 24px))',
+          border: '0.0625rem solid var(--border)',
+          background: 'var(--surface)',
+          // V1.0: backdrop-filter 已移除
           padding: `${SPACING.lg}px`,
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: `${SPACING.sm}px` }}>
-          <Info size={14} style={{ color: 'var(--text-faint)' }} />
-          <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-faint)' }}>
+          <Info size={14} style={{ color: 'var(--text-disabled)' }} />
+          <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-disabled)' }}>
             {t(locale, 'dashboard.noData')}
           </span>
         </div>
@@ -175,9 +175,8 @@ export function TokenHero({ usage, isLoading, sourceConfigured, minimal }: Token
         padding: `${SPACING.md}px 0 0`,
       } : {
         borderRadius: BORDER_RADIUS.lg,
-        border: '0.0625rem solid var(--vibe-content-border)',
-        background: 'var(--vibe-content-bg)',
-        backdropFilter: 'blur(var(--vibe-content-blur, 24px)) saturate(var(--vibe-content-saturation, 145%))',
+        border: '0.0625rem solid var(--border)',
+        background: 'var(--surface)',
         padding: `${SPACING.lg}px`,
       }}
     >
@@ -185,10 +184,10 @@ export function TokenHero({ usage, isLoading, sourceConfigured, minimal }: Token
         {/* Top row: Main token count + requests + cost */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.sm }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: SPACING.sm }}>
-            <span style={{ fontSize: FONT_SIZE.xl, fontWeight: 700, color: 'var(--vibe-brand-text)', letterSpacing: '-0.02em' }}>
+            <span style={{ fontSize: FONT_SIZE.xl, fontWeight: 700, color: 'var(--text)', letterSpacing: '-0.02em' }}>
               {fmtCount(breakdown.realTotal)}
             </span>
-            <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-faint)' }}>
+            <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-disabled)' }}>
               {t(locale, 'dashboard.realTotalTokens')}
             </span>
           </div>
@@ -199,24 +198,24 @@ export function TokenHero({ usage, isLoading, sourceConfigured, minimal }: Token
               gap: `${SPACING.xl}px`,
               padding: `${SPACING.sm}px ${SPACING.md}px`,
               borderRadius: BORDER_RADIUS.md,
-              background: 'var(--vibe-btn-bg)',
-              border: '0.0625rem solid var(--vibe-btn-border)',
+              background: 'var(--surface)',
+              border: '0.0625rem solid var(--border)',
             }}
           >
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-              <span style={{ fontSize: '10px', color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              <span style={{ fontSize: '10px', color: 'var(--text-disabled)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 {t(locale, 'dashboard.totalRequests')}
               </span>
-              <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--vibe-brand-text)', fontFamily: 'var(--font-mono)' }}>
+              <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>
                 {fmtCount(breakdown.requests)}
               </span>
             </div>
-            <div style={{ width: '0.0625rem', height: 24, background: 'var(--vibe-content-border)' }} />
+            <div style={{ width: '0.0625rem', height: 24, background: 'var(--border)' }} />
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-              <span style={{ fontSize: '10px', color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              <span style={{ fontSize: '10px', color: 'var(--text-disabled)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 {t(locale, 'dashboard.totalCost')}
               </span>
-              <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--vibe-brand-text)', fontFamily: 'var(--font-mono)' }}>
+              <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>
                 {breakdown.cost !== null ? `$${breakdown.cost.toFixed(2)}` : '--'}
               </span>
             </div>
@@ -256,12 +255,12 @@ export function TokenHero({ usage, isLoading, sourceConfigured, minimal }: Token
               gap: '4px',
               padding: `${SPACING.xs}px ${SPACING.sm}px`,
               borderRadius: BORDER_RADIUS.md,
-              background: 'var(--vibe-btn-bg)',
-              border: '0.0625rem solid var(--vibe-btn-border)',
+              background: 'var(--surface)',
+              border: '0.0625rem solid var(--border)',
               justifyContent: 'center',
             }}
           >
-            <span style={{ fontSize: '10px', color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            <span style={{ fontSize: '10px', color: 'var(--text-disabled)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
               {t(locale, 'dashboard.cacheHitRate')}
             </span>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px' }}>
@@ -269,7 +268,7 @@ export function TokenHero({ usage, isLoading, sourceConfigured, minimal }: Token
                 {hitPercentLabel}%
               </span>
             </div>
-            <div style={{ height: 3, borderRadius: '999px', background: 'var(--vibe-btn-bg)', overflow: 'hidden' }}>
+            <div style={{ height: 3, borderRadius: '999px', background: 'var(--surface)', overflow: 'hidden' }}>
               <div
                 style={{
                   height: '100%',
@@ -305,17 +304,17 @@ function MiniStat({
         gap: '4px',
         padding: `${SPACING.xs}px ${SPACING.sm}px`,
         borderRadius: BORDER_RADIUS.md,
-        background: 'var(--vibe-btn-bg)',
-        border: '0.0625rem solid var(--vibe-btn-border)',
+        background: 'var(--surface)',
+        border: '0.0625rem solid var(--border)',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
         {icon}
-        <span style={{ fontSize: '10px', color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+        <span style={{ fontSize: '10px', color: 'var(--text-disabled)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
           {label}
         </span>
       </div>
-      <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--vibe-brand-text)', fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {value}
       </span>
     </div>

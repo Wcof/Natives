@@ -91,10 +91,10 @@ export default function SessionReplay() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Header */}
       <div style={{
-        padding: '8px 10px', borderBottom: '1px solid var(--vibe-btn-border)',
+        padding: '8px 10px', borderBottom: '1px solid var(--border)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       }}>
-        <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+        <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
           {t(locale, 'aiWorkbench.sessionReplay')}
         </div>
       </div>
@@ -103,11 +103,11 @@ export default function SessionReplay() {
       {!selectedSession && (
         <div style={{ flex: 1, overflow: 'auto', padding: 6 }}>
           {loading ? (
-            <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
+            <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-disabled)', fontSize: 'var(--fs-sm)' }}>
               {t(locale, 'common.loading')}
             </div>
           ) : (sessions ?? []).length === 0 ? (
-            <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
+            <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-disabled)', fontSize: 'var(--fs-sm)' }}>
               {t(locale, 'aiWorkbench.selectSession')}
             </div>
           ) : (
@@ -117,12 +117,12 @@ export default function SessionReplay() {
                 onClick={() => handleSelectSession(s)}
                 style={{
                   padding: '8px 10px', marginBottom: SPACING.xs, borderRadius: BORDER_RADIUS.md, cursor: 'pointer',
-                  background: 'var(--vibe-toolbar-bg)', border: '1px solid var(--vibe-btn-border)',
+                  background: 'var(--surface)', border: '1px solid var(--border)',
                   transition: 'border-color 0.12s',
                 }}
               >
                 <div style={{ fontSize: 'var(--fs-sm)', fontWeight: 600, color: 'var(--text)' }}>{s.title}</div>
-                <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-faint)' }}>
+                <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)' }}>
                   {s.engine} · {s.filesModified.length} {t(locale, 'aiWorkbench.files')} · {new Date(s.startTime).toLocaleDateString()}
                 </div>
               </div>
@@ -192,7 +192,7 @@ export default function SessionReplay() {
             >
               ⏭
             </button>
-            <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-faint)', marginLeft: 'auto' }}>
+            <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)', marginLeft: 'auto' }}>
               {t(locale, 'aiWorkbench.step')} {currentStep + 1} {t(locale, 'aiWorkbench.of')} {steps.length}
             </span>
           </div>
@@ -203,20 +203,20 @@ export default function SessionReplay() {
               onClick={() => handleNavigateToFile(steps[currentStep]!.path)}
               style={{
                 padding: 10, borderRadius: BORDER_RADIUS.md, cursor: 'pointer',
-                background: 'var(--vibe-toolbar-bg)', border: '1px solid var(--vibe-btn-border)',
+                background: 'var(--surface)', border: '1px solid var(--border)',
               }}
             >
-              <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--accent)', fontFamily: 'var(--font-mono)', marginBottom: SPACING.xs }}>
+              <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--primary)', fontFamily: 'var(--font-mono)', marginBottom: SPACING.xs }}>
                 {steps[currentStep]!.path.split('/').pop()}
               </div>
-              <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-faint)' }}>
+              <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)' }}>
                 {steps[currentStep]!.path}
               </div>
             </div>
           )}
 
           {/* File list */}
-          <div style={{ marginTop: 8, fontSize: FONT_SIZE.xs, color: 'var(--text-faint)' }}>
+          <div style={{ marginTop: 8, fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)' }}>
             {t(locale, 'aiWorkbench.files')} ({steps.length}):
           </div>
           <div style={{ flex: 1, overflow: 'auto', marginTop: SPACING.xs }}>
@@ -226,8 +226,8 @@ export default function SessionReplay() {
                 onClick={() => { setCurrentStep(i); handleNavigateToFile(step.path); }}
                 style={{
                   padding: '3px 8px', fontSize: FONT_SIZE.xs, cursor: 'pointer', borderRadius: BORDER_RADIUS.sm,
-                  color: i === currentStep ? 'var(--accent)' : 'var(--text-dim)',
-                  background: i === currentStep ? 'var(--accent-soft)' : 'transparent',
+                  color: i === currentStep ? 'var(--primary)' : 'var(--text-secondary)',
+                  background: i === currentStep ? 'var(--primary-soft)' : 'transparent',
                 }}
               >
                 {step.path.split('/').pop()}
@@ -238,7 +238,7 @@ export default function SessionReplay() {
       )}
 
       {selectedSession && steps.length === 0 && (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-disabled)', fontSize: 'var(--fs-sm)' }}>
           {t(locale, 'aiWorkbench.replay.noFiles')}
         </div>
       )}

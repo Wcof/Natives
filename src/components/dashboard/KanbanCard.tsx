@@ -40,7 +40,7 @@ export default function KanbanCard({
   title,
   summary,
   badge,
-  accentColor = 'var(--vibe-accent-color)',
+  accentColor = 'var(--primary)',
   isLoading,
   emptyText,
   children,
@@ -70,12 +70,11 @@ export default function KanbanCard({
       style={{
         position: 'relative',
         borderRadius: BORDER_RADIUS.lg,
-        border: `0.0625rem solid ${hovered ? accentColor : 'var(--vibe-content-border)'}`,
-        background: 'var(--vibe-content-bg)',
-        backdropFilter: 'blur(var(--vibe-content-blur, 24px)) saturate(var(--vibe-content-saturation, 145%))',
+        border: `0.0625rem solid ${hovered ? accentColor : 'var(--border)'}`,
+        background: 'var(--surface)',
         overflow: 'hidden',
         transform: active ? 'scale(0.995) translateY(-1px)' : hovered ? 'translateY(-1px)' : 'none',
-        boxShadow: hovered ? `0 12px 36px ${accentColor}12, 0 0 0 1px ${accentColor}25` : 'var(--vibe-content-shadow)',
+        boxShadow: hovered ? `0 12px 36px ${accentColor}12, 0 0 0 1px ${accentColor}25` : 'none',
         transition: 'border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
       }}
     >
@@ -110,11 +109,11 @@ export default function KanbanCard({
           cursor: 'pointer',
           userSelect: 'none',
           minHeight: 48,
-          borderBottom: expanded ? '1px solid var(--vibe-content-border)' : '0px solid transparent',
+          borderBottom: expanded ? '1px solid var(--border)' : '0px solid transparent',
           transition: 'background 0.12s, border-color 0.2s',
           paddingTop: SPACING.sm + 2, // offset for top accent bar
         }}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--vibe-btn-bg)'; }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--surface)'; }}
         onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
       >
         {/* Icon */}
@@ -131,16 +130,16 @@ export default function KanbanCard({
         </div>
 
         {/* Title */}
-        <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--vibe-brand-text)', flexShrink: 0 }}>
+        <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text)', flexShrink: 0 }}>
           {title}
         </span>
 
         {/* Summary value */}
         <div style={{ flex: 1, textAlign: 'right', minWidth: 0, overflow: 'hidden' }}>
           {isLoading ? (
-            <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-faint)' }}>…</span>
+            <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-disabled)' }}>…</span>
           ) : (
-            <span style={{ fontSize: FONT_SIZE.md, fontWeight: 700, color: 'var(--vibe-brand-text)', fontFamily: 'var(--font-mono)' }}>
+            <span style={{ fontSize: FONT_SIZE.md, fontWeight: 700, color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>
               {summary}
             </span>
           )}
@@ -149,7 +148,7 @@ export default function KanbanCard({
         {/* Badge */}
         {badge && !isLoading && (
           <span style={{
-            fontSize: FONT_SIZE.xs, color: 'var(--text-dim)', background: 'var(--vibe-btn-bg)',
+            fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)', background: 'var(--surface)',
             padding: `1px ${SPACING.xs}px`, borderRadius: 999, whiteSpace: 'nowrap',
           }}>
             {badge}
@@ -157,7 +156,7 @@ export default function KanbanCard({
         )}
 
         {/* Expand indicator */}
-        <div style={{ color: 'var(--text-faint)', flexShrink: 0, transition: 'transform 0.2s' }}>
+        <div style={{ color: 'var(--text-disabled)', flexShrink: 0, transition: 'transform 0.2s' }}>
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </div>
       </div>

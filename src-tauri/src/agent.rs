@@ -93,6 +93,10 @@ struct SkillLogStat {
 
 static SKILLS_CACHE: Mutex<Option<(Instant, SkillsData)>> = Mutex::new(None);
 
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
 // ── 扫描：项目 ──
 
 pub fn scan_projects() -> Result<Vec<ProjectInfo>> {
@@ -408,7 +412,7 @@ fn scan_skill_root(
         out.push(SkillInfo {
             name: name_str.to_string(),
             description: if description.len() > 240 {
-                description[..240].to_string()
+                truncate_chars(&description, 240)
             } else {
                 description
             },
@@ -941,4 +945,17 @@ fn dir_size(dir: &Path) -> u64 {
         }
     }
     size
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_chars;
+
+    #[test]
+    fn truncate_chars_keeps_utf8_boundaries() {
+        let text = format!("{}end", "、".repeat(80));
+        let truncated = truncate_chars(&text, 80);
+
+        assert_eq!(truncated, "、".repeat(80));
+    }
 }

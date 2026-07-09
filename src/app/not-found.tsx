@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { motion } from 'framer-motion';
 import { t, type Locale } from '@/i18n';
-import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { SPACING, BORDER_RADIUS } from '@/lib/design-tokens';
 
 export default function NotFound() {
   const [locale, setLocale] = useState<Locale>('zh');
@@ -18,20 +19,51 @@ export default function NotFound() {
   }, []);
 
   return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      height: '100%', padding: 40, textAlign: 'center',
-    }}>
-      <div style={{ fontSize: 48, marginBottom: SPACING.lg }}>404</div>
-      <h1 style={{ fontSize: 18, fontWeight: 600, color: 'var(--vibe-brand-text)', marginBottom: SPACING.sm }}>
-        {t(locale, 'notFound.title')}
-      </h1>
-      <p style={{ fontSize: FONT_SIZE.lg, color: 'var(--vibe-btn-text)', marginBottom: 24 }}>
-        {t(locale, 'notFound.description')}
-      </p>
-      <button className="btn btn-primary" onClick={() => window.location.href = '/'}>
-        {t(locale, 'notFound.goHome')}
-      </button>
+    <div className="doppelrand-outer h-full w-full flex items-center justify-center">
+      <div className="doppelrand-inner flex flex-col items-center justify-center h-full w-full p-10">
+        <div className="flex flex-col items-center text-center max-w-sm">
+          {/* Large 404 with accent gradient */}
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ duration: 0.4, delay: 0.1, ease: [0.16, 1, 0.3, 1] }}
+            className="text-[5rem] font-extrabold leading-none tracking-tight mb-6"
+            style={{
+              fontFamily: 'var(--font-mono)',
+              background: 'linear-gradient(135deg, var(--primary) 0%, var(--primary-soft) 100%)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+            }}
+          >
+            404
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, delay: 0.2 }}
+          >
+            <h1 className="text-base font-semibold text-[var(--text)] mb-2">
+              {t(locale, 'notFound.title')}
+            </h1>
+            <p className="text-sm text-[var(--text-secondary)] mb-7 leading-relaxed max-w-xs">
+              {t(locale, 'notFound.description')}
+            </p>
+
+            <button
+              onClick={() => window.location.href = '/'}
+              className="cta-pill"
+            >
+              {t(locale, 'notFound.goHome')}
+              <span className="cta-icon-wrap">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <path d="M5 12h14M12 5l7 7-7 7"/>
+                </svg>
+              </span>
+            </button>
+          </motion.div>
+        </div>
+      </div>
     </div>
   );
 }

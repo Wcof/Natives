@@ -82,7 +82,7 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
     return (
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        height: '100%', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)',
+        height: '100%', color: 'var(--text-disabled)', fontSize: 'var(--fs-sm)',
       }}>
         Follow mode active — waiting for agent edits...
       </div>
@@ -98,11 +98,11 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
   if (prio === 0) {
     return (
       <div style={{ padding: SPACING.xl, textAlign: 'center' }}>
-        <Package size={32} style={{ color: 'var(--accent)', marginBottom: SPACING.sm }} />
+        <Package size={32} style={{ color: 'var(--primary)', marginBottom: SPACING.sm }} />
         <div style={{ color: 'var(--text)', fontSize: 'var(--fs-md)', fontWeight: 600 }}>
           {filePath.split('/').pop()}
         </div>
-        <div style={{ color: 'var(--text-faint)', fontSize: FONT_SIZE.sm, marginTop: SPACING.xs }}>
+        <div style={{ color: 'var(--text-disabled)', fontSize: FONT_SIZE.sm, marginTop: SPACING.xs }}>
           Build artifact generated
         </div>
         {narration && <NarrationBar text={narration} />}
@@ -377,7 +377,7 @@ function LiveCodePreview({ content, highlightedLines, ext }: {
           flex: 1, overflow: 'auto', padding: 12,
           fontSize: 'var(--fs-sm)', lineHeight: 1.6,
           fontFamily: 'var(--font-mono, monospace)',
-          background: 'var(--vibe-toolbar-bg)',
+          background: 'var(--surface)',
         }}
       />
     );
@@ -389,7 +389,7 @@ function LiveCodePreview({ content, highlightedLines, ext }: {
       fontSize: 'var(--fs-sm)', lineHeight: 1.6,
       fontFamily: 'var(--font-mono, monospace)',
       color: 'var(--text)', whiteSpace: 'pre-wrap',
-      background: 'var(--vibe-toolbar-bg)',
+      background: 'var(--surface)',
     }}>
       {content}
     </pre>
@@ -403,10 +403,10 @@ function NarrationBar({ text }: { text: string }) {
   return (
     <div style={{
       padding: '4px 12px',
-      borderTop: '1px solid var(--vibe-btn-border)',
+      borderTop: '1px solid var(--border)',
       fontSize: FONT_SIZE.sm,
-      color: 'var(--vibe-btn-text)',
-      background: 'var(--vibe-content-bg)',
+      color: 'var(--text-secondary)',
+      background: 'var(--surface)',
       whiteSpace: 'nowrap',
       overflow: 'hidden',
       textOverflow: 'ellipsis',

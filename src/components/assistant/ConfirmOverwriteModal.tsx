@@ -32,8 +32,8 @@ export default function ConfirmOverwriteModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onCancel} />
-      <div className="relative rounded-xl border border-[var(--vibe-btn-border)] bg-[var(--vibe-toolbar-bg)] backdrop-blur-2xl p-6 shadow-2xl max-w-md w-full mx-4">
+      <div className="absolute inset-0 bg-black/40" onClick={onCancel} />
+      <div className="relative rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-modal max-w-md w-full mx-4">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-amber-400">
@@ -43,14 +43,14 @@ export default function ConfirmOverwriteModal({
             </svg>
           </div>
           <div>
-            <h3 className="text-sm font-semibold text-[var(--vibe-brand-text)]">{t('title')}</h3>
-            <p className="text-xs text-[var(--text-dim)] mt-1">{t('body')}</p>
+            <h3 className="text-sm font-semibold text-[var(--text)]">{t('title')}</h3>
+            <p className="text-xs text-[var(--text-secondary)] mt-1">{t('body')}</p>
           </div>
         </div>
         <div className="flex justify-end gap-2 mt-6">
           <button
             onClick={onCancel}
-            className="px-4 py-2 rounded-lg text-sm text-[var(--text-dim)] hover:bg-[var(--vibe-btn-hover-bg)] transition-all"
+            className="px-4 py-2 rounded-lg text-sm text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-all"
           >
             {t('cancel')}
           </button>

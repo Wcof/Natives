@@ -85,7 +85,7 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
         {step === 'info' && (
           <div className="space-y-4">
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-[var(--vibe-btn-text)]">
+              <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
                 {t(locale, 'version') || 'Version'}
               </label>
               <input
@@ -98,7 +98,7 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
             </div>
 
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-[var(--vibe-btn-text)]">
+              <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
                 {t(locale, 'release_notes') || 'Release Notes'}
               </label>
               <textarea
@@ -111,7 +111,7 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
             </div>
 
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-[var(--vibe-btn-text)]">
+              <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
                 {t(locale, 'target_platform') || 'Target Platform'}
               </label>
               <div className="flex gap-2">
@@ -139,12 +139,12 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
         {/* Step: Assets */}
         {step === 'assets' && (
           <div className="space-y-4">
-            <div className="rounded-lg border border-dashed border-[var(--border)] bg-[var(--bg-2)] p-8 text-center">
-              <Upload size={24} className="mx-auto mb-2 text-[var(--text-faint)]" />
-              <p className="text-xs text-[var(--text-dim)]">
+            <div className="rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface)] p-8 text-center">
+              <Upload size={24} className="mx-auto mb-2 text-[var(--text-disabled)]" />
+              <p className="text-xs text-[var(--text-secondary)]">
                 {t(locale, 'assets_auto_detected') || 'Build assets will be auto-detected'}
               </p>
-              <p className="mt-1 text-[10px] text-[var(--text-faint)]">
+              <p className="mt-1 text-[10px] text-[var(--text-disabled)]">
                 {releaseInfo.platform === 'all'
                   ? 'macOS (.dmg) · Windows (.exe) · Linux (.AppImage)'
                   : releaseInfo.platform === 'mac'
@@ -164,13 +164,13 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
             <p className="text-sm text-[var(--text)]">
               {t(locale, 'publishing') || 'Publishing...'}
             </p>
-            <div className="mx-auto h-1.5 w-48 overflow-hidden rounded-full bg-[var(--bg-3)]">
+            <div className="mx-auto h-1.5 w-48 overflow-hidden rounded-full bg-[var(--surface-hover)]">
               <div
-                className="h-full rounded-full bg-[var(--accent)] transition-all duration-300"
+                className="h-full rounded-full bg-[var(--primary)] transition-all duration-300"
                 style={{ width: `${progress}%` }}
               />
             </div>
-            <p className="text-xs text-[var(--text-dim)]">{progress}%</p>
+            <p className="text-xs text-[var(--text-secondary)]">{progress}%</p>
           </div>
         )}
 
@@ -184,7 +184,7 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
               <p className="text-sm font-medium text-[var(--text)]">
                 {t(locale, 'release_published') || 'Release Published'}
               </p>
-              <p className="mt-1 text-xs text-[var(--text-dim)]">
+              <p className="mt-1 text-xs text-[var(--text-secondary)]">
                 v{releaseInfo.version}
               </p>
             </div>
@@ -193,7 +193,7 @@ export default function ReleaseWizardDialog({ locale, isOpen, onClose }: Release
       </div>
 
       {/* Footer */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'end', gap: '8px', borderTop: '0.0625rem solid var(--border)', padding: '12px 20px', background: 'var(--bg-2)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'end', gap: '8px', borderTop: '0.0625rem solid var(--border)', padding: '12px 20px', background: 'var(--surface)' }}>
         {step === 'info' && (
           <>
             <button onClick={handleClose} className="btn btn-ghost">

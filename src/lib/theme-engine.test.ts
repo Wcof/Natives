@@ -1,59 +1,50 @@
-import { describe, it } from 'node:test';
-import assert from 'node:assert/strict';
-import { validateTheme, THEMES, TERMINAL_THEMES } from './theme-engine';
+import { test } from 'node:test';
+import assert from 'node:assert';
+import { THEMES, validateTheme, normalizeThemeId } from './theme-engine';
 
-describe('ThemeEngine', () => {
-  it('should have exactly two themes (editorial-index removed)', () => {
-    const ids = Object.keys(THEMES);
-    assert.equal(ids.length, 2);
-    assert.ok(ids.includes('frosted-jasmine'));
-    assert.ok(ids.includes('terminal-volt'));
-    assert.equal(ids.includes('editorial-index'), false);
-  });
+// ── AI Natives V1.0 Theme Engine Tests ──
+// V1.0 双主题：light / dark（已废弃 terminal-volt / frosted-jasmine）
 
-  it('should validate a valid theme', () => {
-    const theme = validateTheme(THEMES['frosted-jasmine']!);
-    assert.equal(theme.accent, '#ff793f');
-    assert.equal(theme.bg, '#fffdfa');
-  });
+test('should have exactly two themes (light / dark)', () => {
+  const ids = Object.keys(THEMES);
+  assert.equal(ids.length, 2);
+  assert.ok(ids.includes('light'));
+  assert.ok(ids.includes('dark'));
+});
 
-  it('should reject invalid hex color', () => {
-    assert.throws(() => {
-      validateTheme({ ...THEMES['frosted-jasmine'], accent: 'not-a-color' });
-    });
-  });
+test('should validate a valid theme', () => {
+  const theme = validateTheme(THEMES.light!);
+  assert.equal(theme.primary, '#FF6B2C');
+  assert.equal(theme.background, '#F7F7F5');
+});
 
-  it('should reject missing fields', () => {
-    assert.throws(() => {
-      validateTheme({ bg: '#000000' } as Record<string, unknown>);
-    });
-  });
-
-  it('should have terminal ANSI themes for all visual themes', () => {
-    for (const themeId of Object.keys(THEMES)) {
-      assert.ok(TERMINAL_THEMES[themeId], `Missing terminal theme for ${themeId}`);
-    }
-  });
-
-  it('should have only 2 terminal ANSI themes', () => {
-    const ids = Object.keys(TERMINAL_THEMES);
-    assert.equal(ids.length, 2);
-    assert.equal(ids.includes('editorial-index'), false);
-  });
-
-  it('should have valid hex colors in all themes', () => {
-    const hexRegex = /^#[0-9a-fA-F]{6}$/;
-    for (const [id, theme] of Object.entries(THEMES)) {
-      for (const [key, value] of Object.entries(theme)) {
-        if (key.startsWith('bg') || key.startsWith('text') || key === 'accent' || key === 'accent-ink' || key === 'panel' || key === 'border') {
-          assert.ok(hexRegex.test(value as string), `${id}.${key} = ${value} is not a valid hex`);
-        }
-      }
-    }
-  });
-
-  it('should not have editorial-index in the theme registry', () => {
-    assert.equal(THEMES['editorial-index'], undefined);
-    assert.equal(TERMINAL_THEMES['editorial-index'], undefined);
+test('should reject invalid hex color', () => {
+  assert.throws(() => {
+    validateTheme({ ...THEMES.light!, primary: 'not-a-color' });
   });
 });
+
+test('light and dark share the same brand primary', () => {
+  assert.equal(THEMES.light!.primary, THEMES.dark!.primary);
+  assert.equal(THEMES.light!.primary, '#FF6B2C');
+});
+
+test('dark theme uses dark surfaces', () => {
+  assert.equal(THEMES.dark!.background, '#0F1115');
+  assert.equal(THEMES.dark!.surface, '#171A21');
+});
+
+test('light theme uses light surfaces', () => {
+  assert.equal(THEMES.light!.background, '#F7F7F5');
+  assert.equal(THEMES.light!.surface, '#FFFFFF');
+});
+
+test('normalizes legacy theme aliases to V1 theme ids', () => {
+  assert.equal(normalizeThemeId('terminal-volt'), 'dark');
+  assert.equal(normalizeThemeId('frosted-jasmine'), 'light');
+  assert.equal(normalizeThemeId('dark'), 'dark');
+  assert.equal(normalizeThemeId('light'), 'light');
+  assert.equal(normalizeThemeId('unknown'), 'light');
+});
+
+// applyTheme 需要 DOM 环境，在浏览器集成测试中覆盖

@@ -12,8 +12,8 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
   const [filter, setFilter] = useState<'all' | 'create' | 'modify' | 'delete'>('all');
   const [locale, setLocale] = useState<Locale>('zh');
 
-  const isJasmine = typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'frosted-jasmine';
-  const highlightRgb = isJasmine ? '255, 121, 63' : '205, 242, 75';
+  const isLightTheme = typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'light';
+  const highlightRgb = isLightTheme ? '255, 121, 63' : '205, 242, 75';
 
   useEffect(() => {
     async function loadLocale() {
@@ -56,17 +56,17 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
   const getIntensity = (idx: number) => Math.max(0.2, 1 - idx * 0.03);
 
   const typeIcons: Record<string, string> = { create: '+', delete: '−', modify: '✎' };
-  const typeColors: Record<string, string> = { create: 'var(--diff-add)', delete: 'var(--danger)', modify: 'var(--accent)' };
+  const typeColors: Record<string, string> = { create: 'var(--diff-add)', delete: 'var(--danger)', modify: 'var(--primary)' };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Header */}
       <div style={{
         padding: '8px 10px',
-        borderBottom: '1px solid var(--vibe-btn-border)',
+        borderBottom: '1px solid var(--border)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       }}>
-        <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+        <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
           {t(locale, 'aiWorkbench.agentChanges')}
         </div>
         <div style={{ display: 'flex', gap: SPACING.xs }}>
@@ -78,8 +78,8 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
               onClick={() => setFilter(f)}
               style={{
                 fontSize: FONT_SIZE.xs, padding: '2px 6px', borderRadius: BORDER_RADIUS.sm,
-                color: filter === f ? 'var(--accent)' : 'var(--text-faint)',
-                background: filter === f ? 'var(--accent-soft)' : 'transparent',
+                color: filter === f ? 'var(--primary)' : 'var(--text-disabled)',
+                background: filter === f ? 'var(--primary-soft)' : 'transparent',
               }}
             >
               {f === 'all' ? t(locale, 'aiWorkbench.dashboard.all') : `${typeIcons[f]} ${t(locale, 'aiWorkbench.dashboard.' + f)}`}
@@ -91,7 +91,7 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
             onClick={() => setPaused(!paused)}
             style={{
               fontSize: FONT_SIZE.xs, padding: '2px 6px', borderRadius: BORDER_RADIUS.sm,
-              color: paused ? 'var(--warning)' : 'var(--text-faint)',
+              color: paused ? 'var(--warning)' : 'var(--text-disabled)',
             }}
             title={paused ? t(locale, 'aiWorkbench.dashboard.resume') : t(locale, 'aiWorkbench.dashboard.pause')}
           >
@@ -101,7 +101,7 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
           <button
             className="btn-ghost"
             onClick={handleClear}
-            style={{ fontSize: FONT_SIZE.xs, padding: '2px 6px', borderRadius: BORDER_RADIUS.sm, color: 'var(--text-faint)' }}
+            style={{ fontSize: FONT_SIZE.xs, padding: '2px 6px', borderRadius: BORDER_RADIUS.sm, color: 'var(--text-disabled)' }}
             title={t(locale, 'aiWorkbench.dashboard.clear')}
           >
             <X size={12} />
@@ -112,7 +112,7 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
       {/* Changes list */}
       <div style={{ flex: 1, overflow: 'auto', padding: 6 }}>
         {filtered.length === 0 ? (
-          <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
+          <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-disabled)', fontSize: 'var(--fs-sm)' }}>
             {paused ? t(locale, 'aiWorkbench.dashboard.paused') : t(locale, 'aiWorkbench.waitingForChanges')}
           </div>
         ) : (
@@ -145,8 +145,8 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
 
       {/* Footer */}
       <div style={{
-        padding: '4px 10px', borderTop: '1px solid var(--vibe-btn-border)',
-        fontSize: FONT_SIZE.xs, color: 'var(--text-faint)', display: 'flex', justifyContent: 'space-between',
+        padding: '4px 10px', borderTop: '1px solid var(--border)',
+        fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)', display: 'flex', justifyContent: 'space-between',
       }}>
         <span>{t(locale, 'aiWorkbench.dashboard.changesCount').replace('{n}', String(filtered.length))}</span>
         {paused && <span style={{ color: 'var(--warning)' }}>⏸ {t(locale, 'aiWorkbench.dashboard.paused')}</span>}

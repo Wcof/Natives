@@ -175,7 +175,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         setEntries(data || []);
       }
     } catch (err) {
-      console.error('[FileBrowser] loadEntries error:', err);
+      showToast(t(locale, 'fileBrowser.loadFailed'));
       setEntries([]);
     } finally {
       setLoading(false);
@@ -198,11 +198,9 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           await loadEntries();
           showToast(t(locale, 'fileBrowser.filesDropped'));
         } else {
-          console.error('[FileBrowser] fs.importFiles API not available');
-          showToast(t(locale, 'fileBrowser.importFailed'));
+          showToast(t(locale, 'fileBrowser.importApiUnavailable'));
         }
       } catch (err) {
-        console.error('[FileBrowser] import files failed:', err);
         showToast(t(locale, 'fileBrowser.importFailed'));
       }
     }, [currentPath, locale, loadEntries, showToast]),
@@ -588,7 +586,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       display: 'flex',
       flexDirection: 'column',
       height: '100%',
-      background: 'var(--vibe-content-bg)',
+      background: 'var(--surface)',
       position: 'relative',
     }}>
       {/* File area — drop zone covers entire height including empty space */}
@@ -618,10 +616,10 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
               alignItems: 'center',
               justifyContent: 'center',
               pointerEvents: 'none',
-              border: '2px dashed var(--accent)',
+              border: '2px dashed var(--primary)',
               borderRadius: 'var(--radius, 4px)',
               background: 'var(--accent-soft, rgba(205,242,75,0.08))',
-              color: 'var(--accent)',
+              color: 'var(--primary)',
               fontSize: FONT_SIZE.lg,
               fontWeight: 600,
             }}
@@ -677,9 +675,9 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           <div style={{
             display: 'flex', alignItems: 'center', gap: SPACING.md,
             padding: `${SPACING.sm}px ${SPACING.md}px`, fontSize: FONT_SIZE.sm, fontFamily: 'var(--font-mono)',
-            color: 'var(--vibe-btn-text)',
-            borderTop: '1px solid var(--vibe-btn-border)',
-            background: 'var(--vibe-toolbar-bg)',
+            color: 'var(--text-secondary)',
+            borderTop: '1px solid var(--border)',
+            background: 'var(--surface)',
           }}>
             <span>{filteredEntries.length} 项</span>
             {dirs > 0 && <span>{dirs} 个文件夹</span>}
@@ -689,7 +687,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             <span
               onClick={() => setDiskUsageTarget(currentPath)}
               style={{
-                cursor: 'pointer', color: 'var(--accent)',
+                cursor: 'pointer', color: 'var(--primary)',
                 textDecoration: 'none', fontSize: FONT_SIZE.sm,
               }}
               onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.textDecoration = 'underline'; }}
@@ -813,10 +811,9 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           aria-live="polite"
           style={{
             position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
-            background: 'var(--vibe-btn-bg)', border: '1px solid var(--vibe-btn-border)',
-            padding: `${SPACING.sm}px 18px`, borderRadius: BORDER_RADIUS.xl, fontSize: FONT_SIZE.lg, color: 'var(--text)',
-            boxShadow: 'var(--vibe-sidebar-shadow)', zIndex: 200, animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
-            backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)',
+            background: 'var(--surface)', border: '1px solid var(--border)',
+            padding: `${SPACING.sm}px 18px`, borderRadius: BORDER_RADIUS.xl, fontSize: FONT_SIZE.sm, color: 'var(--text)',
+            boxShadow: 'var(--shadow-popup)', zIndex: 200, animation: 'fadeIn 150ms ease',
           }}
         >
           {toast}

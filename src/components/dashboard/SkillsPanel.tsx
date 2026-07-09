@@ -135,9 +135,9 @@ export function SkillsPanel({ skills, isLoading, minimal }: SkillsPanelProps) {
           minHeight: 120,
         } : {
           borderRadius: BORDER_RADIUS.lg,
-          border: '0.0625rem solid var(--vibe-content-border)',
-          background: 'var(--vibe-content-bg)',
-          backdropFilter: 'blur(var(--vibe-content-blur, 24px))',
+          border: '0.0625rem solid var(--border)',
+          background: 'var(--surface)',
+          // V1.0: backdrop-filter 已移除
           padding: `${SPACING.lg}px`,
           minHeight: 200,
           display: 'flex',
@@ -156,9 +156,8 @@ export function SkillsPanel({ skills, isLoading, minimal }: SkillsPanelProps) {
         paddingTop: SPACING.md,
       } : {
         borderRadius: BORDER_RADIUS.lg,
-        border: '0.0625rem solid var(--vibe-content-border)',
-        background: 'var(--vibe-content-bg)',
-        backdropFilter: 'blur(var(--vibe-content-blur, 24px)) saturate(var(--vibe-content-saturation, 145%))',
+        border: '0.0625rem solid var(--border)',
+        background: 'var(--surface)',
         padding: `${SPACING.lg}px`,
       }}
     >
@@ -173,17 +172,17 @@ export function SkillsPanel({ skills, isLoading, minimal }: SkillsPanelProps) {
               width: 32,
               height: 32,
               borderRadius: BORDER_RADIUS.md,
-              background: 'var(--vibe-accent-soft)',
-              color: 'var(--vibe-accent-color)',
+              background: 'var(--primary-soft)',
+              color: 'var(--primary)',
             }}
           >
             <Code2 size={16} />
           </div>
           <div>
-            <h3 style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--vibe-brand-text)' }}>
+            <h3 style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)' }}>
               {t(locale, 'dashboard.skillsTitle')}
             </h3>
-            <p style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-faint)' }}>
+            <p style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-disabled)' }}>
               {t(locale, 'dashboard.installed')}: {skillUsages.length}  ·  {t(locale, 'dashboard.enabled')}: {enabledCount}
               {sourceDistribution && `  ·  ${t(locale, 'dashboard.sourceDistribution')}: ${sourceDistribution}`}
             </p>
@@ -194,10 +193,10 @@ export function SkillsPanel({ skills, isLoading, minimal }: SkillsPanelProps) {
       {/* Sort dropdown & Tool Filter tabs */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: SPACING.sm, gap: SPACING.sm, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.md }}>
-          <h4 style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.08em', margin: 0 }}>
+          <h4 style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text-disabled)', textTransform: 'uppercase', letterSpacing: '0.08em', margin: 0 }}>
             {t(locale, 'dashboard.usageRank')}
           </h4>
-          <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.xs, background: 'var(--vibe-btn-bg)', padding: SPACING.xs, borderRadius: BORDER_RADIUS.md, border: '0.0625rem solid var(--vibe-btn-border)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.xs, background: 'var(--surface)', padding: SPACING.xs, borderRadius: BORDER_RADIUS.md, border: '0.0625rem solid var(--border)' }}>
             {(['all', 'claude', 'codex'] as const).map(filterVal => {
               const active = toolFilter === filterVal;
               return (
@@ -209,8 +208,8 @@ export function SkillsPanel({ skills, isLoading, minimal }: SkillsPanelProps) {
                     borderRadius: BORDER_RADIUS.sm,
                     fontSize: FONT_SIZE.xs,
                     fontWeight: active ? 600 : 400,
-                    background: active ? 'var(--vibe-active-bg)' : 'transparent',
-                    color: active ? 'var(--vibe-active-color)' : 'var(--text-dim)',
+                    background: active ? 'var(--primary-soft)' : 'transparent',
+                    color: active ? 'var(--primary)' : 'var(--text-secondary)',
                     border: 'none',
                     cursor: 'pointer',
                     transition: 'all 0.15s ease',
@@ -231,10 +230,10 @@ export function SkillsPanel({ skills, isLoading, minimal }: SkillsPanelProps) {
               gap: SPACING.xs,
               padding: `${SPACING.xs}px ${SPACING.sm}px`,
               borderRadius: BORDER_RADIUS.sm,
-              background: 'var(--vibe-btn-bg)',
-              border: '0.0625rem solid var(--vibe-btn-border)',
+              background: 'var(--surface)',
+              border: '0.0625rem solid var(--border)',
               fontSize: FONT_SIZE.xs,
-              color: 'var(--vibe-brand-text)',
+              color: 'var(--text)',
               cursor: 'pointer',
             }}
           >
@@ -250,9 +249,9 @@ export function SkillsPanel({ skills, isLoading, minimal }: SkillsPanelProps) {
                 top: '100%',
                 marginTop: SPACING.xs,
                 borderRadius: BORDER_RADIUS.sm,
-                background: 'var(--bg-3)',
+                background: 'var(--surface-hover)',
                 border: '0.0625rem solid var(--border)',
-                boxShadow: SHADOW.elevated,
+                boxShadow: SHADOW.popup,
                 zIndex: 100,
                 minWidth: 140,
               }}
@@ -265,8 +264,8 @@ export function SkillsPanel({ skills, isLoading, minimal }: SkillsPanelProps) {
                   padding: `${SPACING.xs}px ${SPACING.sm}px`,
                   textAlign: 'left',
                   fontSize: FONT_SIZE.xs,
-                  color: sortBy === 'hits' ? 'var(--vibe-active-color)' : 'var(--text)',
-                  background: sortBy === 'hits' ? 'var(--vibe-active-bg)' : 'transparent',
+                  color: sortBy === 'hits' ? 'var(--primary)' : 'var(--text)',
+                  background: sortBy === 'hits' ? 'var(--primary-soft)' : 'transparent',
                   cursor: 'pointer',
                   border: 'none',
                 }}
@@ -281,8 +280,8 @@ export function SkillsPanel({ skills, isLoading, minimal }: SkillsPanelProps) {
                   padding: `${SPACING.xs}px ${SPACING.sm}px`,
                   textAlign: 'left',
                   fontSize: FONT_SIZE.xs,
-                  color: sortBy === 'recent' ? 'var(--vibe-active-color)' : 'var(--text)',
-                  background: sortBy === 'recent' ? 'var(--vibe-active-bg)' : 'transparent',
+                  color: sortBy === 'recent' ? 'var(--primary)' : 'var(--text)',
+                  background: sortBy === 'recent' ? 'var(--primary-soft)' : 'transparent',
                   cursor: 'pointer',
                   border: 'none',
                   borderTop: '0.0625rem solid var(--border)',
@@ -297,7 +296,7 @@ export function SkillsPanel({ skills, isLoading, minimal }: SkillsPanelProps) {
 
       {/* Skills list */}
       {filteredUsages.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: `${SPACING.xl}px 0`, color: 'var(--text-faint)', fontSize: FONT_SIZE.sm }}>
+        <div style={{ textAlign: 'center', padding: `${SPACING.xl}px 0`, color: 'var(--text-disabled)', fontSize: FONT_SIZE.sm }}>
           {t(locale, 'dashboard.noData')}
         </div>
       ) : (
@@ -321,19 +320,19 @@ export function SkillsPanel({ skills, isLoading, minimal }: SkillsPanelProps) {
                   gap: SPACING.sm,
                   padding: `${SPACING.sm}px ${SPACING.md}px`,
                   borderRadius: index === 0 ? BORDER_RADIUS.md : 0,
-                  background: index === 0 ? 'var(--vibe-active-bg)' : 'transparent',
-                  borderTop: '0.0625rem solid var(--vibe-content-border)',
+                  background: index === 0 ? 'var(--primary-soft)' : 'transparent',
+                  borderTop: '0.0625rem solid var(--border)',
                   cursor: usage.skill.path ? 'pointer' : 'default',
                   transition: 'background 0.2s ease, transform 0.2s ease',
                 }}
                 onMouseEnter={(e) => {
                   if (usage.skill.path) {
-                    (e.currentTarget as HTMLElement).style.background = 'var(--vibe-btn-bg)';
+                    (e.currentTarget as HTMLElement).style.background = 'var(--surface)';
                     (e.currentTarget as HTMLElement).style.transform = 'translateX(3px)';
                   }
                 }}
                 onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLElement).style.background = index === 0 ? 'var(--vibe-active-bg)' : 'transparent';
+                  (e.currentTarget as HTMLElement).style.background = index === 0 ? 'var(--primary-soft)' : 'transparent';
                   (e.currentTarget as HTMLElement).style.transform = 'none';
                 }}
               >
@@ -342,7 +341,7 @@ export function SkillsPanel({ skills, isLoading, minimal }: SkillsPanelProps) {
                   {index === 0 ? (
                     <Trophy size={16} style={{ color: '#fbbf24' }} />
                   ) : (
-                    <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)' }}>
+                    <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-disabled)', fontFamily: 'var(--font-mono)' }}>
                       #{index + 1}
                     </span>
                   )}
@@ -357,19 +356,19 @@ export function SkillsPanel({ skills, isLoading, minimal }: SkillsPanelProps) {
                     width: 28,
                     height: 28,
                     borderRadius: BORDER_RADIUS.sm,
-                    background: 'var(--vibe-btn-bg)',
+                    background: 'var(--surface)',
                   }}
                 >
                   {usage.skill.icon ? (
                     <img src={usage.skill.icon} alt="" style={{ width: 16, height: 16 }} />
                   ) : (
-                    <Zap size={14} style={{ color: 'var(--vibe-accent-color)' }} />
+                    <Zap size={14} style={{ color: 'var(--primary)' }} />
                   )}
                 </div>
 
                 {/* Name & Context Badges */}
                 <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: SPACING.xs, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 500, color: 'var(--vibe-brand-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 500, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {usage.skill.name}
                   </span>
                   {toolContext && (
@@ -391,8 +390,8 @@ export function SkillsPanel({ skills, isLoading, minimal }: SkillsPanelProps) {
                       padding: `1px ${SPACING.xs}px`,
                       borderRadius: '999px',
                       fontSize: FONT_SIZE.xs,
-                      color: 'var(--vibe-active-color)',
-                      background: 'var(--vibe-active-bg)',
+                      color: 'var(--primary)',
+                      background: 'var(--primary-soft)',
                     }}>
                       {t(locale, 'dashboard.enabled')}
                     </span>
@@ -401,16 +400,16 @@ export function SkillsPanel({ skills, isLoading, minimal }: SkillsPanelProps) {
 
                 {/* Hit count */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.xs, minWidth: 70 }}>
-                  <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--vibe-brand-text)', fontFamily: 'var(--font-mono)' }}>
+                  <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>
                     {usage.hitCount.toLocaleString()}
                   </span>
-                  <span style={{ fontSize: '10px', color: 'var(--text-faint)' }}>hits</span>
+                  <span style={{ fontSize: '10px', color: 'var(--text-disabled)' }}>hits</span>
                 </div>
 
                 {/* Last triggered */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.xs, minWidth: 80 }}>
-                  <Calendar size={12} style={{ color: 'var(--text-faint)' }} />
-                  <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>
+                  <Calendar size={12} style={{ color: 'var(--text-disabled)' }} />
+                  <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
                     {formatTimeAgo(usage.lastTriggered)}
                   </span>
                 </div>

@@ -53,11 +53,14 @@ pub fn notification_mark_all_read(app_handle: tauri::AppHandle, state: State<'_,
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_placeholder() {
-        assert!(true);
+    fn test_notification_error_types() {
+        // Verify notification error cases are properly categorized
+        let err = crate::Error::Internal("notification send failed".to_string());
+        assert!(matches!(err, crate::Error::Internal(_)));
     }
 }

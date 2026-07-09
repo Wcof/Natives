@@ -59,9 +59,9 @@ export function ModelStatsTable({ modelStats, isLoading, minimal }: ModelStatsTa
           minHeight: 120,
         } : {
           borderRadius: BORDER_RADIUS.lg,
-          border: '0.0625rem solid var(--vibe-content-border)',
-          background: 'var(--vibe-content-bg)',
-          backdropFilter: 'blur(var(--vibe-content-blur, 24px))',
+          border: '0.0625rem solid var(--border)',
+          background: 'var(--surface)',
+          // V1.0: backdrop-filter 已移除
           padding: `${SPACING.lg}px`,
           minHeight: 200,
           display: 'flex',
@@ -87,9 +87,9 @@ export function ModelStatsTable({ modelStats, isLoading, minimal }: ModelStatsTa
           paddingTop: SPACING.md,
         } : {
           borderRadius: BORDER_RADIUS.lg,
-          border: '0.0625rem solid var(--vibe-content-border)',
-          background: 'var(--vibe-content-bg)',
-          backdropFilter: 'blur(var(--vibe-content-blur, 24px))',
+          border: '0.0625rem solid var(--border)',
+          background: 'var(--surface)',
+          // V1.0: backdrop-filter 已移除
           padding: `${SPACING.lg}px`,
           minHeight: 200,
           display: 'flex',
@@ -99,10 +99,10 @@ export function ModelStatsTable({ modelStats, isLoading, minimal }: ModelStatsTa
           gap: SPACING.sm,
         }}
       >
-        <span style={{ fontSize: FONT_SIZE.md, color: 'var(--text-faint)' }}>
+        <span style={{ fontSize: FONT_SIZE.md, color: 'var(--text-disabled)' }}>
           {t(locale, 'dashboard.noData')}
         </span>
-        <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-faint)' }}>
+        <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-disabled)' }}>
           {t(locale, 'dashboard.modelStats')}
         </span>
       </div>
@@ -116,9 +116,8 @@ export function ModelStatsTable({ modelStats, isLoading, minimal }: ModelStatsTa
         overflow: 'hidden',
       } : {
         borderRadius: BORDER_RADIUS.lg,
-        border: '0.0625rem solid var(--vibe-content-border)',
-        background: 'var(--vibe-content-bg)',
-        backdropFilter: 'blur(var(--vibe-content-blur, 24px)) saturate(var(--vibe-content-saturation, 145%))',
+        border: '0.0625rem solid var(--border)',
+        background: 'var(--surface)',
         padding: `${SPACING.lg}px`,
         overflow: 'hidden',
       }}
@@ -126,8 +125,8 @@ export function ModelStatsTable({ modelStats, isLoading, minimal }: ModelStatsTa
       {/* Header */}
       {!minimal && (
         <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.sm, marginBottom: SPACING.sm }}>
-          <TrendingUp size={16} style={{ color: 'var(--vibe-accent-color)' }} />
-          <h3 style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--vibe-brand-text)' }}>
+          <TrendingUp size={16} style={{ color: 'var(--primary)' }} />
+          <h3 style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)' }}>
             {t(locale, 'dashboard.modelStats')}
           </h3>
         </div>
@@ -137,13 +136,13 @@ export function ModelStatsTable({ modelStats, isLoading, minimal }: ModelStatsTa
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: FONT_SIZE.sm }}>
           <thead>
-            <tr style={{ borderBottom: '0.0625rem solid var(--vibe-content-border)' }}>
+            <tr style={{ borderBottom: '0.0625rem solid var(--border)' }}>
               <th
                 style={{
                   textAlign: 'left',
                   padding: `${SPACING.sm}px ${SPACING.sm}px`,
                   fontSize: FONT_SIZE.xs,
-                  color: 'var(--text-faint)',
+                  color: 'var(--text-disabled)',
                   textTransform: 'uppercase',
                   letterSpacing: '0.08em',
                   fontWeight: 600,
@@ -156,7 +155,7 @@ export function ModelStatsTable({ modelStats, isLoading, minimal }: ModelStatsTa
                   textAlign: 'right',
                   padding: `${SPACING.sm}px ${SPACING.sm}px`,
                   fontSize: FONT_SIZE.xs,
-                  color: 'var(--text-faint)',
+                  color: 'var(--text-disabled)',
                   textTransform: 'uppercase',
                   letterSpacing: '0.08em',
                   fontWeight: 600,
@@ -169,7 +168,7 @@ export function ModelStatsTable({ modelStats, isLoading, minimal }: ModelStatsTa
                   textAlign: 'right',
                   padding: `${SPACING.sm}px ${SPACING.sm}px`,
                   fontSize: FONT_SIZE.xs,
-                  color: 'var(--text-faint)',
+                  color: 'var(--text-disabled)',
                   textTransform: 'uppercase',
                   letterSpacing: '0.08em',
                   fontWeight: 600,
@@ -182,7 +181,7 @@ export function ModelStatsTable({ modelStats, isLoading, minimal }: ModelStatsTa
                   textAlign: 'right',
                   padding: `${SPACING.sm}px ${SPACING.sm}px`,
                   fontSize: FONT_SIZE.xs,
-                  color: 'var(--text-faint)',
+                  color: 'var(--text-disabled)',
                   textTransform: 'uppercase',
                   letterSpacing: '0.08em',
                   fontWeight: 600,
@@ -195,7 +194,7 @@ export function ModelStatsTable({ modelStats, isLoading, minimal }: ModelStatsTa
                   textAlign: 'right',
                   padding: `${SPACING.sm}px ${SPACING.sm}px`,
                   fontSize: FONT_SIZE.xs,
-                  color: 'var(--text-faint)',
+                  color: 'var(--text-disabled)',
                   textTransform: 'uppercase',
                   letterSpacing: '0.08em',
                   fontWeight: 600,
@@ -210,22 +209,22 @@ export function ModelStatsTable({ modelStats, isLoading, minimal }: ModelStatsTa
               <tr
                 key={stat.model}
                 style={{
-                  borderBottom: '0.0625rem solid var(--vibe-content-border)',
+                  borderBottom: '0.0625rem solid var(--border)',
                 }}
               >
-                <td style={{ padding: `${SPACING.sm}px ${SPACING.sm}px`, fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.sm, color: 'var(--vibe-brand-text)' }}>
+                <td style={{ padding: `${SPACING.sm}px ${SPACING.sm}px`, fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.sm, color: 'var(--text)' }}>
                   {stat.model}
                 </td>
-                <td style={{ padding: `${SPACING.sm}px ${SPACING.sm}px`, textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.sm, color: 'var(--vibe-brand-text)' }}>
+                <td style={{ padding: `${SPACING.sm}px ${SPACING.sm}px`, textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.sm, color: 'var(--text)' }}>
                   {stat.requestCount.toLocaleString()}
                 </td>
-                <td style={{ padding: `${SPACING.sm}px ${SPACING.sm}px`, textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.sm, color: 'var(--vibe-brand-text)' }}>
+                <td style={{ padding: `${SPACING.sm}px ${SPACING.sm}px`, textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.sm, color: 'var(--text)' }}>
                   {formatTokenShort(stat.totalTokens)}
                 </td>
-                <td style={{ padding: `${SPACING.sm}px ${SPACING.sm}px`, textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.sm, color: 'var(--vibe-brand-text)' }}>
+                <td style={{ padding: `${SPACING.sm}px ${SPACING.sm}px`, textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.sm, color: 'var(--text)' }}>
                   ${stat.totalCost.toFixed(2)}
                 </td>
-                <td style={{ padding: `${SPACING.sm}px ${SPACING.sm}px`, textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.xs, color: 'var(--text-dim)' }}>
+                <td style={{ padding: `${SPACING.sm}px ${SPACING.sm}px`, textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)' }}>
                   ${stat.avgCostPerRequest.toFixed(4)}
                 </td>
               </tr>

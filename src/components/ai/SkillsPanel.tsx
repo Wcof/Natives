@@ -8,8 +8,11 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
 import Modal from '@/components/ui/Modal';
+import { classifyError } from '@/lib/error-classifier';
+import { useToast } from '@/components/ui/Toast';
 
 export default function SkillsPanel() {
+  const { toast } = useToast();
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [overview, setOverview] = useState<SkillsOverview | null>(null);
   const [filter, setFilter] = useState<'all' | 'healthy' | 'issues' | 'residue'>('all');
@@ -46,11 +49,11 @@ export default function SkillsPanel() {
         }
       }
     } catch (err) {
-      console.error('[SkillsPanel] Failed to load skills:', err);
+      toast(classifyError(err).userMessage, 'error');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [toast]);
 
   const handleToggle = useCallback(async (skill: SkillInfo) => {
     try {
@@ -62,9 +65,9 @@ export default function SkillsPanel() {
       }
       await loadSkills();
     } catch (err) {
-      console.error('[SkillsPanel] Failed to toggle skill:', err);
+      toast(classifyError(err).userMessage, 'error');
     }
-  }, [loadSkills]);
+  }, [loadSkills, toast]);
 
   const handleUninstall = useCallback((skill: SkillInfo) => {
     setUninstallTarget(skill);
@@ -77,11 +80,11 @@ export default function SkillsPanel() {
       await api?.skills?.uninstall(uninstallTarget.dir || uninstallTarget.path);
       await loadSkills();
     } catch (err) {
-      console.error('[SkillsPanel] Failed to uninstall skill:', err);
+      toast(classifyError(err).userMessage, 'error');
     } finally {
       setUninstallTarget(null);
     }
-  }, [uninstallTarget, loadSkills]);
+  }, [uninstallTarget, loadSkills, toast]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -107,14 +110,14 @@ export default function SkillsPanel() {
       {overview && (
         <div style={{
           display: 'flex', gap: SPACING.md, padding: '8px 10px', flexWrap: 'wrap',
-          borderBottom: '1px solid var(--vibe-btn-border)',
-          fontSize: FONT_SIZE.xs, color: 'var(--text-dim)',
+          borderBottom: '1px solid var(--border)',
+          fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)',
         }}>
           <span>{t(locale, 'aiWorkbench.skills.total')} <b style={{ color: 'var(--text)' }}>{overview.total}</b></span>
           <span>{t(locale, 'aiWorkbench.skillsLabel')} <b style={{ color: 'var(--text)' }}>{overview.unique}</b></span>
           <span>{t(locale, 'aiWorkbench.skills.active')} <b style={{ color: 'var(--info)' }}>{overview.active}</b></span>
-          <span>{t(locale, 'aiWorkbench.skills.dust')} <b style={{ color: 'var(--text-faint)' }}>{overview.dust}</b></span>
-          <span>{t(locale, 'aiWorkbench.skills.issues')} <b style={{ color: overview.issues > 0 ? 'var(--danger)' : 'var(--text-faint)' }}>{overview.issues}</b></span>
+          <span>{t(locale, 'aiWorkbench.skills.dust')} <b style={{ color: 'var(--text-disabled)' }}>{overview.dust}</b></span>
+          <span>{t(locale, 'aiWorkbench.skills.issues')} <b style={{ color: overview.issues > 0 ? 'var(--danger)' : 'var(--text-disabled)' }}>{overview.issues}</b></span>
           {residueItems.length > 0 && (
             <span style={{ color: 'var(--warning)' }}>⚠ {residueItems.length} residue</span>
           )}
@@ -123,15 +126,15 @@ export default function SkillsPanel() {
 
       {/* 描述预算条 */}
       {overview && (
-        <div style={{ padding: '4px 10px 6px', borderBottom: '1px solid var(--vibe-btn-border)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: 'var(--text-dim)', marginBottom: 2 }}>
+        <div style={{ padding: '4px 10px 6px', borderBottom: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: 'var(--text-secondary)', marginBottom: 2 }}>
             <span>{t(locale, 'aiWorkbench.skills.budget')}</span>
-            <span style={{ color: budgetOver ? 'var(--danger)' : 'var(--text-dim)' }}>
+            <span style={{ color: budgetOver ? 'var(--danger)' : 'var(--text-secondary)' }}>
               {overview.budgetChars.toLocaleString()} / {overview.budgetLimit.toLocaleString()}
             </span>
           </div>
           <div style={{
-            height: 3, borderRadius: 2, background: 'var(--vibe-btn-border)',
+            height: 3, borderRadius: 2, background: 'var(--border)',
             overflow: 'hidden',
           }}>
             <div style={{
@@ -151,7 +154,7 @@ export default function SkillsPanel() {
       {/* Filter tabs */}
       <div style={{
         display: 'flex', gap: SPACING.xs, padding: '6px 10px',
-        borderBottom: '1px solid var(--vibe-btn-border)',
+        borderBottom: '1px solid var(--border)',
       }}>
         {(['all', 'healthy', 'issues', 'residue'] as const).map((f) => {
           const count = f === 'all' ? skills.length
@@ -165,8 +168,8 @@ export default function SkillsPanel() {
               onClick={() => setFilter(f)}
               style={{
                 fontSize: FONT_SIZE.xs, padding: '3px 8px', borderRadius: BORDER_RADIUS.sm,
-                color: filter === f ? 'var(--accent)' : 'var(--text-faint)',
-                background: filter === f ? 'var(--accent-soft)' : 'transparent',
+                color: filter === f ? 'var(--primary)' : 'var(--text-disabled)',
+                background: filter === f ? 'var(--primary-soft)' : 'transparent',
               }}
             >
               {f === 'all' ? t(locale, 'aiWorkbench.skillsLabel')
@@ -186,7 +189,7 @@ export default function SkillsPanel() {
       {/* Skills list */}
       <div style={{ flex: 1, overflow: 'auto', padding: 6 }}>
         {loading ? (
-          <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
+          <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-disabled)', fontSize: 'var(--fs-sm)' }}>
             {t(locale, 'common.loading')}
           </div>
         ) : filtered.length === 0 ? (
@@ -196,8 +199,8 @@ export default function SkillsPanel() {
             <div key={`${skill.source}:${skill.name}-${index}`} style={{
               padding: '8px 10px', marginBottom: SPACING.xs,
               borderRadius: BORDER_RADIUS.md,
-              border: `1px solid ${skill.residue ? 'var(--warning)' : 'var(--vibe-btn-border)'}`,
-              background: skill.residue ? 'rgba(255,180,0,0.05)' : 'var(--vibe-toolbar-bg)',
+              border: `1px solid ${skill.residue ? 'var(--warning)' : 'var(--border)'}`,
+              background: skill.residue ? 'rgba(255,180,0,0.05)' : 'var(--surface)',
               opacity: skill.enabled ? 1 : 0.6,
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACING.xs }}>
@@ -220,9 +223,9 @@ export default function SkillsPanel() {
                   {!skill.residue && (
                     <button onClick={() => handleToggle(skill)} style={{
                       fontSize: FONT_SIZE.xs, padding: '2px 6px', borderRadius: BORDER_RADIUS.sm,
-                      border: '1px solid var(--vibe-btn-border)',
-                      background: skill.enabled ? 'var(--accent-soft)' : 'transparent',
-                      color: skill.enabled ? 'var(--accent)' : 'var(--text-faint)',
+                      border: '1px solid var(--border)',
+                      background: skill.enabled ? 'var(--primary-soft)' : 'transparent',
+                      color: skill.enabled ? 'var(--primary)' : 'var(--text-disabled)',
                       cursor: 'pointer',
                     }}>
                       {skill.enabled ? t(locale, 'aiWorkbench.skills.enabled') : t(locale, 'aiWorkbench.skills.disabled')}
@@ -237,7 +240,7 @@ export default function SkillsPanel() {
 
               {/* Description */}
               {skill.description && (
-                <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-faint)', marginBottom: 2 }}>
+                <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)', marginBottom: 2 }}>
                   {skill.description.slice(0, 100)}{skill.description.length > 100 ? '...' : ''}
                 </div>
               )}
@@ -258,7 +261,7 @@ export default function SkillsPanel() {
               )}
 
               {/* Meta info */}
-              <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-dim)' }}>
+              <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)' }}>
                 {t(locale, 'aiWorkbench.triggered')} {skill.triggerCount || 0}x · {skill.label || skill.source}
                 {skill.lastTriggered ? <span> · {new Date(skill.lastTriggered).toLocaleDateString()}</span> : null}
                 {skill.descLen && skill.descLen > (overview?.descCut || 1536) ? (
@@ -287,8 +290,8 @@ export default function SkillsPanel() {
                   setSkillLogs(meta);
                 }} style={{
                   fontSize: 9, padding: '2px 5px', borderRadius: BORDER_RADIUS.sm,
-                  border: '1px solid var(--vibe-btn-border)', background: 'transparent',
-                  color: 'var(--text-faint)', cursor: 'pointer',
+                  border: '1px solid var(--border)', background: 'transparent',
+                  color: 'var(--text-disabled)', cursor: 'pointer',
                   display: 'inline-flex', alignItems: 'center', gap: 2,
                 }}>
                   <Clipboard size={10} /> Logs
@@ -315,7 +318,7 @@ export default function SkillsPanel() {
       >
         <div style={{ fontSize: FONT_SIZE.sm, lineHeight: 1.6, fontFamily: 'var(--font-mono)', maxHeight: '50vh', overflowY: 'auto' }}>
           {skillLogs.map((line, i) => (
-            <div key={i} style={{ color: 'var(--text-dim)', whiteSpace: 'pre-wrap' }}>{line}</div>
+            <div key={i} style={{ color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>{line}</div>
           ))}
         </div>
       </Modal>

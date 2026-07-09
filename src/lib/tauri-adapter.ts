@@ -109,8 +109,7 @@ export interface NativesAPI {
     setVariable: (profileId: string, key: string, value: string) => Promise<void>;
     deleteVariable: (profileId: string, key: string) => Promise<void>;
     encrypt: (text: string) => Promise<string>;
-    decrypt: (encrypted: string) => Promise<string>;
-  };
+    };
   getTheme: () => Promise<string>;
   setTheme: (theme: string) => Promise<void>;
   shell: {
@@ -216,7 +215,8 @@ export interface NativesAPI {
     delete: (id: string) => Promise<void>;
     addKey: (data: { providerId: string; label: string; apiKey: string }) => Promise<unknown>;
     deleteKey: (id: string) => Promise<void>;
-    test: (data: { providerId: string; keyId: string }) => Promise<{ success: boolean; error?: string }>;
+    test: (data: { providerId: string; keyId: string; model?: string }) => Promise<{ success: boolean; error?: string }>;
+    testRaw: (data: { baseUrl: string; apiKey: string; model?: string }) => Promise<{ success: boolean; error?: string }>;
   };
   windowControls: {
     minimize: () => Promise<void>;
@@ -248,6 +248,7 @@ export interface NativesAPI {
   wechat: {
     env: () => Promise<{ target: string; cwd: string; persona: string; state: string; connected: boolean }>;
     login: () => Promise<{ qrcode: string; qrcode_img_content: string; state: string }>;
+    pollLogin: (qrcode: string, verifyCode?: string) => Promise<{ state: string; error?: string }>;
     disconnect: () => Promise<{ ok: boolean }>;
     check: () => Promise<{ ok: boolean; state: string }>;
     send: (text: string) => Promise<{ ok: boolean; cid: string }>;
@@ -283,6 +284,8 @@ export interface NativesAPI {
   runtime: {
     listAvailable: () => Promise<Array<{ id: string; displayName: string; available: boolean }>>;
     detectCli: () => Promise<{ claude_cli: boolean; codex_cli: boolean }>;
+    listCatalog: () => Promise<unknown>;
+    setCapabilityEnabled: (name: string, enabled: boolean) => Promise<void>;
   };
   /** Task Scheduler（Slice J） */
   scheduler: {
@@ -291,6 +294,36 @@ export interface NativesAPI {
       scheduleValue: string; enabled: boolean; lastStatus: string | null;
       consecutiveErrors: number; nextRun: string;
     }>>;
+  };
+  /** Library (fanbox clone — G4) */
+  library: {
+    listFolders: () => Promise<unknown>;
+    createFolder: (data: { name: string; parentId?: string }) => Promise<unknown>;
+    updateFolder: (data: { id: string; name: string }) => Promise<void>;
+    deleteFolder: (id: string, moveItems: boolean) => Promise<void>;
+    listTags: () => Promise<unknown>;
+    createTag: (data: { name: string; color: string }) => Promise<unknown>;
+    deleteTag: (id: string) => Promise<void>;
+    listItems: (filter: { folderId?: string; tagId?: string; keyword?: string; status?: string; itemType?: string; limit?: number; offset?: number }) => Promise<unknown>;
+    getItem: (id: string) => Promise<unknown>;
+    createItem: (data: { folderId?: string; title: string; description?: string; content?: string; sourceUrl?: string; itemType?: string; status?: string; tagIds?: string[] }) => Promise<unknown>;
+    updateItem: (data: { id: string; folderId?: string; title: string; description?: string; content?: string; sourceUrl?: string; status?: string; tagIds?: string[] }) => Promise<void>;
+    deleteItem: (id: string) => Promise<void>;
+    batchTag: (data: { itemIds: string[]; tagIds: string[] }) => Promise<void>;
+    batchMove: (data: { itemIds: string[]; folderId?: string }) => Promise<void>;
+    batchDelete: (data: { itemIds: string[] }) => Promise<void>;
+    getStats: () => Promise<unknown>;
+  };
+  /** Subagent (G8) */
+  subagent: {
+    list: () => Promise<unknown>;
+    get: (id: string) => Promise<unknown>;
+    create: (data: { name: string; role?: string; instructions?: string; tools?: string; providerId?: string; providerKeyId?: string; modelId?: string; fallbackEnabled?: boolean; maxRuns?: number }) => Promise<unknown>;
+    update: (data: { id: string; name: string; role?: string; instructions?: string; tools?: string; providerId?: string; providerKeyId?: string; modelId?: string; fallbackEnabled?: boolean; maxRuns?: number; enabled?: boolean }) => Promise<void>;
+    delete: (id: string) => Promise<void>;
+    run: (data: { subagentId: string; inputText: string }) => Promise<unknown>;
+    listRuns: (subagentId: string) => Promise<unknown>;
+    resolveBinding: (subagentId: string) => Promise<unknown>;
   };
 }
 
@@ -467,7 +500,6 @@ const nativesAPI: NativesAPI = {
     deleteVariable: (profileId: string, key: string) =>
       cmd('env_delete_variable', { profileId, key }),
     encrypt: (text: string) => cmd('env_encrypt', { text }),
-    decrypt: (encrypted: string) => cmd('env_decrypt', { encrypted }),
   },
 
   // Theme
@@ -649,8 +681,10 @@ const nativesAPI: NativesAPI = {
     addKey: (data: { providerId: string; label: string; apiKey: string }) =>
       cmd('add_provider_key', data),
     deleteKey: (id: string) => cmd('delete_provider_key', { id }),
-    test: (data: { providerId: string; keyId: string }) =>
+    test: (data: { providerId: string; keyId: string; model?: string }) =>
       cmd('provider_test', { input: data }),
+    testRaw: (data: { baseUrl: string; apiKey: string; model?: string }) =>
+      cmd('test_provider_raw', { input: data }),
   },
 
   // Assistant
@@ -688,6 +722,9 @@ const nativesAPI: NativesAPI = {
   runtime: {
     listAvailable: () => cmd('runtime_list_available'),
     detectCli: () => cmd('runtime_detect_cli'),
+    listCatalog: () => cmd('runtime_list_catalog'),
+    setCapabilityEnabled: (name: string, enabled: boolean) =>
+      cmd('runtime_set_capability_enabled', { name, enabled }),
   },
 
   // Task Scheduler（Slice J）
@@ -746,6 +783,7 @@ const nativesAPI: NativesAPI = {
   wechat: {
     env: () => cmd<{ target: string; cwd: string; persona: string; state: string; connected: boolean }>('wechat_env'),
     login: () => cmd<{ qrcode: string; qrcode_img_content: string; state: string }>('wechat_login'),
+    pollLogin: (qrcode: string, verifyCode?: string) => cmd<{ state: string; error?: string }>('wechat_poll_login', { qrcode, verifyCode }),
     disconnect: () => cmd<{ ok: boolean }>('wechat_disconnect'),
     check: () => cmd<{ ok: boolean; state: string }>('wechat_check'),
     send: (text: string) => cmd<{ ok: boolean; cid: string }>('wechat_send', { text }),
@@ -760,6 +798,68 @@ const nativesAPI: NativesAPI = {
     detect: (name: string) => cmd<string | null>('plugin_detect', { name }),
     install: (name: string) => cmd<void>('plugin_install', { name }),
     uninstall: (name: string) => cmd<void>('plugin_uninstall', { name }),
+  },
+
+  // ── Library (fanbox clone — G4) ──
+  library: {
+    listFolders: () => cmd('library_list_folders'),
+    createFolder: (data: { name: string; parentId?: string }) =>
+      cmd('library_create_folder', { input: data }),
+    updateFolder: (data: { id: string; name: string }) =>
+      cmd('library_update_folder', { input: data }),
+    deleteFolder: (id: string, moveItems: boolean) =>
+      cmd('library_delete_folder', { id, moveItems }),
+    listTags: () => cmd('library_list_tags'),
+    createTag: (data: { name: string; color: string }) =>
+      cmd('library_create_tag', { input: data }),
+    deleteTag: (id: string) =>
+      cmd('library_delete_tag', { id }),
+    listItems: (filter: {
+      folderId?: string; tagId?: string; keyword?: string;
+      status?: string; itemType?: string; limit?: number; offset?: number;
+    }) => cmd('library_list_items', { filter }),
+    getItem: (id: string) =>
+      cmd('library_get_item', { id }),
+    createItem: (data: {
+      folderId?: string; title: string; description?: string;
+      content?: string; sourceUrl?: string; itemType?: string;
+      status?: string; tagIds?: string[];
+    }) => cmd('library_create_item', { input: data }),
+    updateItem: (data: {
+      id: string; folderId?: string; title: string; description?: string;
+      content?: string; sourceUrl?: string; status?: string; tagIds?: string[];
+    }) => cmd('library_update_item', { input: data }),
+    deleteItem: (id: string) =>
+      cmd('library_delete_item', { id }),
+    batchTag: (data: { itemIds: string[]; tagIds: string[] }) =>
+      cmd('library_batch_tag', { input: data }),
+    batchMove: (data: { itemIds: string[]; folderId?: string }) =>
+      cmd('library_batch_move', { input: data }),
+    batchDelete: (data: { itemIds: string[] }) =>
+      cmd('library_batch_delete', { input: data }),
+    getStats: () => cmd('library_get_stats'),
+  },
+
+  // ── Subagent (G8) ──
+  subagent: {
+    list: () => cmd('subagent_list'),
+    get: (id: string) => cmd('subagent_get', { id }),
+    create: (data: {
+      name: string; role?: string; instructions?: string; tools?: string;
+      providerId?: string; providerKeyId?: string; modelId?: string; fallbackEnabled?: boolean; maxRuns?: number;
+    }) => cmd('subagent_create', { input: data }),
+    update: (data: {
+      id: string; name: string; role?: string; instructions?: string; tools?: string;
+      providerId?: string; providerKeyId?: string; modelId?: string; fallbackEnabled?: boolean;
+      maxRuns?: number; enabled?: boolean;
+    }) => cmd('subagent_update', { input: data }),
+    delete: (id: string) => cmd('subagent_delete', { id }),
+    run: (data: { subagentId: string; inputText: string }) =>
+      cmd('subagent_run', { input: data }),
+    listRuns: (subagentId: string) =>
+      cmd('subagent_list_runs', { subagentId }),
+    resolveBinding: (subagentId: string) =>
+      cmd('subagent_resolve_binding', { subagentId }),
   },
 };
 

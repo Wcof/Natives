@@ -23,7 +23,7 @@ export function EmptyState({ icon, title, description, action }: EmptyStateProps
     }}>
       <div style={{ display: 'flex', justifyContent: 'center', marginBottom: SPACING.md }}>{renderedIcon}</div>
       <div style={{ fontSize: FONT_SIZE.xl, fontWeight: 600, color: 'var(--text)', marginBottom: SPACING.xs }}>{title}</div>
-      {description && <div style={{ fontSize: FONT_SIZE.md, color: 'var(--text-faint)', marginBottom: SPACING.lg, maxWidth: 280 }}>{description}</div>}
+      {description && <div style={{ fontSize: FONT_SIZE.md, color: 'var(--text-disabled)', marginBottom: SPACING.lg, maxWidth: 280 }}>{description}</div>}
       {action && (
         <button className="btn btn-primary" onClick={action.onClick} style={{ fontSize: FONT_SIZE.md }}>
           {action.label}
@@ -46,7 +46,7 @@ export function LoadingState({ message = 'Loading...' }: LoadingStateProps) {
       padding: SPACING.xxl, gap: SPACING.md,
     }}>
       <MathCurveLoader size={60} />
-      <span style={{ fontSize: FONT_SIZE.md, color: 'var(--text-faint)', letterSpacing: '0.03em' }}>{message}</span>
+      <span style={{ fontSize: FONT_SIZE.md, color: 'var(--text-disabled)', letterSpacing: '0.03em' }}>{message}</span>
     </div>
   );
 }
@@ -67,7 +67,7 @@ export function ErrorState({ message, onRetry, icon }: ErrorStateProps) {
       padding: SPACING.xxl, textAlign: 'center',
     }}>
       <div style={{ display: 'flex', justifyContent: 'center', marginBottom: SPACING.sm }}>{renderedIcon}</div>
-      <div style={{ fontSize: FONT_SIZE.md, color: 'var(--text-dim)', marginBottom: SPACING.md }}>{message}</div>
+      <div style={{ fontSize: FONT_SIZE.md, color: 'var(--text-secondary)', marginBottom: SPACING.md }}>{message}</div>
       {onRetry && (
         <button className="btn" onClick={onRetry} style={{ fontSize: FONT_SIZE.sm }}>
           <RefreshCw size={14} style={{ marginRight: SPACING.xs }} /> Retry
@@ -90,11 +90,11 @@ export function Skeleton({ width = '100%', height = 12, count = 1, borderRadius 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.sm }}>
       {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className="anim-livePulse" style={{
+        <div key={i} className="anim-skeleton" style={{
           width: typeof width === 'number' ? `${width}px` : width,
           height: typeof height === 'number' ? `${height}px` : height,
           borderRadius,
-          background: 'var(--vibe-btn-bg)',
+          background: 'var(--surface)',
         }} />
       ))}
     </div>

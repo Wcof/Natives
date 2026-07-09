@@ -1,13 +1,16 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { applyTheme } from '@/lib/theme-engine';
-import { applyLiquidGlassConfig } from '@/context/ThemeContext';
+import { applyTheme, normalizeThemeId } from '@/lib/theme-engine';
 import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useToast } from '@/components/ui/Toast';
+import { classifyError } from '@/lib/error-classifier';
 import { X, Check, Star, Edit2, Download, RefreshCw, Trash2, ExternalLink, AlertCircle, Terminal } from 'lucide-react';
-import { FONT_SIZE, SPACING } from '@/lib/design-tokens';
+import { FONT_SIZE, SPACING, BORDER_RADIUS } from '@/lib/design-tokens';
 import RuntimePanel from '@/components/assistant/RuntimePanel';
+import AddProviderDialog from '@/components/settings/AddProviderDialog';
+import type { UserProvider } from '@/types/provider';
 
 interface EnvProfile {
   id: number;
@@ -22,26 +25,12 @@ interface EnvVariable {
 }
 
 export default function SettingsPage() {
-  const [theme, setThemeState] = useState('terminal-volt');
+  const { toast: globalToast } = useToast();
+  const [theme, setThemeState] = useState('dark');
   const [locale, setLocaleState] = useState<Locale>('zh');
   const [sidebarWidth, setSidebarWidth] = useState(248);
   const [panelWidth, setPanelWidth] = useState(320);
   const [terminalHeight, setTerminalHeight] = useState(280);
-
-  // Liquid Glass visual config (shared with ControlHubWidget)
-  const [liquidGlassConfig, setLiquidGlassConfig] = useState({
-    blurAmount: 0.40,
-    displacementScale: 64,
-    saturation: 135,
-    aberrationIntensity: 2,
-    elasticity: 0,
-    cornerRadius: 28,
-    showWallpaper: true,
-    showBlobs: true,
-  });
-
-  // Guard flag: once persisted settings have been loaded from DB, allow saves
-  const [hasLoaded, setHasLoaded] = useState(false);
 
   // Environment profiles state
   const [profiles, setProfiles] = useState<EnvProfile[]>([]);
@@ -64,16 +53,59 @@ export default function SettingsPage() {
   const [executorLoaded, setExecutorLoaded] = useState(false);
   const [deleteProfileTarget, setDeleteProfileTarget] = useState<string | null>(null);
   const [deleteVarTarget, setDeleteVarTarget] = useState<string | null>(null);
+  const [deleteProviderTarget, setDeleteProviderTarget] = useState<string | null>(null);
 
-  const [activeTab, setActiveTab] = useState<'theme' | 'visual' | 'env' | 'plugins' | 'executor'>('theme');
+  const [activeTab, setActiveTab] = useState<'theme' | 'env' | 'plugins' | 'executor' | 'providers'>('theme');
 
   const TABS = [
     { id: 'theme' as const, label: t(locale, 'settings.tabTheme') },
-    { id: 'visual' as const, label: t(locale, 'settings.tabVisual') },
     { id: 'env' as const, label: t(locale, 'settings.tabEnv') },
     { id: 'plugins' as const, label: t(locale, 'settings.tabPlugins') },
     { id: 'executor' as const, label: t(locale, 'settings.tabExecutor') },
+    { id: 'providers' as const, label: t(locale, 'settings.tabProviders') },
   ];
+
+  // Providers state
+  const [providers, setProviders] = useState<UserProvider[]>([]);
+  const [showAddProvider, setShowAddProvider] = useState(false);
+  const [providersLoading, setProvidersLoading] = useState(false);
+
+  useEffect(() => {
+    if (activeTab === 'providers') {
+      loadProviders();
+    }
+  }, [activeTab]);
+
+  async function loadProviders() {
+    setProvidersLoading(true);
+    try {
+      const api = window.nativesAPI;
+      if (api?.provider?.list) {
+        const result = await api.provider.list() as UserProvider[];
+        setProviders(Array.isArray(result) ? result : []);
+      }
+    } catch (e) {
+      globalToast(classifyError(e).userMessage, 'error');
+    } finally {
+      setProvidersLoading(false);
+    }
+  }
+
+  async function handleSaveProvider(data: { presetName: string; name: string; websiteUrl: string; baseUrl: string; keys: { label: string; apiKey: string }[] }) {
+    const api = window.nativesAPI;
+    if (!api?.provider?.add) throw new Error('Provider API not available');
+    await api.provider.add(data);
+    globalToast(t(locale, 'settings.providerAdded'), 'success');
+    await loadProviders();
+  }
+
+  async function handleDeleteProvider(id: string) {
+    const api = window.nativesAPI;
+    if (!api?.provider?.delete) return;
+    await api.provider.delete(id);
+    globalToast(t(locale, 'settings.providerDeleted'), 'success');
+    await loadProviders();
+  }
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -114,12 +146,12 @@ export default function SettingsPage() {
           setMaxSelfHeal(s.maxSelfHeal);
         }
       } catch (e) {
-        console.error('Failed to load executor settings:', e);
+        globalToast(classifyError(e).userMessage, 'error');
       } finally {
         setExecutorLoaded(true);
       }
     })();
-  }, []);
+  }, [toast]);
 
   // 执行引擎设置：变更时保存到 DB（防抖：loaded 后才保存，避免初始化覆盖）
   const saveExecutorSettings = useCallback(async (next: { enabledTools: Record<string, boolean>; maxSelfHeal: number }) => {
@@ -130,9 +162,9 @@ export default function SettingsPage() {
         await api.executorSettings.save(next);
       }
     } catch (e) {
-      console.error('Failed to save executor settings:', e);
+      globalToast(classifyError(e).userMessage, 'error');
     }
-  }, [executorLoaded]);
+  }, [executorLoaded, toast]);
 
   const toggleTool = useCallback((key: string) => {
     setEnabledTools(prev => {
@@ -157,11 +189,11 @@ export default function SettingsPage() {
         setPluginVersions(prev => ({ ...prev, [name]: version }));
       }
     } catch (err) {
-      console.error(`Failed to detect plugin ${name}:`, err);
+      globalToast(classifyError(err).userMessage, 'error');
     } finally {
       setDetecting(prev => ({ ...prev, [name]: false }));
     }
-  }, []);
+  }, [toast]);
 
   const detectAllPlugins = useCallback(async () => {
     await Promise.all([
@@ -220,7 +252,7 @@ export default function SettingsPage() {
         });
         unlistenUninstallComplete = unsubUninstall;
       } catch (err) {
-        console.error('Failed to bind plugin installation listeners:', err);
+        globalToast(classifyError(err).userMessage, 'error');
       }
     }
 
@@ -243,11 +275,11 @@ export default function SettingsPage() {
         await api.plugins.install(name);
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      showToast(t(locale, 'settings.plugins.failed').replace('{name}', name).replace('{error}', msg));
+      const classified = classifyError(err);
+      showToast(t(locale, 'settings.plugins.failed').replace('{name}', name).replace('{error}', classified.userMessage));
       setInstalling(prev => ({ ...prev, [name]: null }));
     }
-  }, [locale, showToast]);
+  }, [locale, showToast, t]);
 
   const handleUninstallPlugin = useCallback(async (name: string) => {
     setInstalling(prev => ({ ...prev, [name]: 'uninstalling' }));
@@ -259,11 +291,11 @@ export default function SettingsPage() {
         await api.plugins.uninstall(name);
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      showToast(t(locale, 'settings.plugins.failed').replace('{name}', name).replace('{error}', msg));
+      const classified = classifyError(err);
+      showToast(t(locale, 'settings.plugins.failed').replace('{name}', name).replace('{error}', classified.userMessage));
       setInstalling(prev => ({ ...prev, [name]: null }));
     }
-  }, [locale, showToast]);
+  }, [locale, showToast, t]);
 
   // Load persisted settings on mount
   useEffect(() => { // eslint-disable-line react-hooks/rules-of-hooks
@@ -276,8 +308,9 @@ export default function SettingsPage() {
           api.getLocale().catch(() => null),
         ]);
         if (savedTheme) {
-          setThemeState(savedTheme);
-          applyTheme(savedTheme);
+          const normalizedTheme = normalizeThemeId(savedTheme);
+          setThemeState(normalizedTheme);
+          applyTheme(normalizedTheme);
         }
         if (savedLocale) setLocaleState(savedLocale as Locale);
 
@@ -291,31 +324,8 @@ export default function SettingsPage() {
           if (sw) setSidebarWidth(Number(sw));
           if (pw) setPanelWidth(Number(pw));
           if (th) setTerminalHeight(Number(th));
-
-          // eslint-disable-next-line @typescript-eslint/no-use-before-define
-          const savedVisuals = await db.get(CONFIG_DB_KEY).catch(() => null);
-          if (savedVisuals) {
-            try {
-              const saved = JSON.parse(savedVisuals as string);
-              if (saved) {
-                setLiquidGlassConfig((prev) => ({
-                  ...prev,
-                  ...(typeof saved.blurAmount === 'number' && { blurAmount: saved.blurAmount }),
-                  ...(typeof saved.displacementScale === 'number' && { displacementScale: saved.displacementScale }),
-                  ...(typeof saved.saturation === 'number' && { saturation: saved.saturation }),
-                  ...(typeof saved.aberrationIntensity === 'number' && { aberrationIntensity: saved.aberrationIntensity }),
-                  ...(typeof saved.elasticity === 'number' && { elasticity: saved.elasticity }),
-                  ...(typeof saved.cornerRadius === 'number' && { cornerRadius: saved.cornerRadius }),
-                  ...(typeof saved.showWallpaper === 'boolean' && { showWallpaper: saved.showWallpaper }),
-                  ...(typeof saved.showBlobs === 'boolean' && { showBlobs: saved.showBlobs }),
-                }));
-              }
-            } catch { /* ignore parse errors */ }
-          }
         }
-      } catch (_e) { /* browser dev mode */ } finally {
-        setHasLoaded(true);
-      }
+      } catch (_e) { /* browser dev mode */ }
     }
     loadSettings();
   }, []);
@@ -357,8 +367,8 @@ export default function SettingsPage() {
   }, [selectedProfile, loadVariables]);
 
   const THEMES = [
-    { id: 'terminal-volt', label: t(locale, 'settings.themeTerminal'), desc: t(locale, 'settings.themeDescTerminal') },
-    { id: 'frosted-jasmine', label: t(locale, 'settings.themeJasmine'), desc: t(locale, 'settings.themeDescJasmine') },
+    { id: 'dark', label: t(locale, 'settings.themeTerminal'), desc: t(locale, 'settings.themeDescTerminal') },
+    { id: 'light', label: t(locale, 'settings.themeJasmine'), desc: t(locale, 'settings.themeDescJasmine') },
   ];
 
   const LOCALES = [
@@ -367,9 +377,10 @@ export default function SettingsPage() {
   ];
 
   const handleThemeChange = (themeId: string) => {
-    setThemeState(themeId);
-    applyTheme(themeId);
-    try { window.nativesAPI?.setTheme?.(themeId); } catch (_e) { /* browser dev mode */ }
+    const normalizedTheme = normalizeThemeId(themeId);
+    setThemeState(normalizedTheme);
+    applyTheme(normalizedTheme);
+    try { window.nativesAPI?.setTheme?.(normalizedTheme); } catch (_e) { /* browser dev mode */ }
   };
 
   const handleLocaleChange = async (localeId: string) => {
@@ -382,36 +393,6 @@ export default function SettingsPage() {
       window.dispatchEvent(new CustomEvent('locale-changed', { detail: localeId }));
     } catch (_e) { /* browser dev mode */ }
   };
-
-  // Liquid glass visual config — 500ms debounced save to SQLite
-  const CONFIG_DB_KEY = 'settings:controlHubVisuals';
-  useEffect(() => { // eslint-disable-line react-hooks/rules-of-hooks
-    if (!hasLoaded) return;
-
-    // Apply styles instantly to this window (compute and set variables directly to bypass Chromium nested repaint bug)
-    applyLiquidGlassConfig(liquidGlassConfig);
-
-    // Dispatch custom event for real-time synchronization in the same window (e.g. ShellLayout background)
-    window.dispatchEvent(new CustomEvent('visual-config-changed', { detail: liquidGlassConfig }));
-
-    const api = window.nativesAPI;
-    if (!api?.db?.set) return;
-
-    const timer = setTimeout(() => {
-      const config = {
-        blurAmount: liquidGlassConfig.blurAmount,
-        displacementScale: liquidGlassConfig.displacementScale,
-        saturation: liquidGlassConfig.saturation,
-        aberrationIntensity: liquidGlassConfig.aberrationIntensity,
-        elasticity: liquidGlassConfig.elasticity,
-        cornerRadius: liquidGlassConfig.cornerRadius,
-        showWallpaper: liquidGlassConfig.showWallpaper,
-        showBlobs: liquidGlassConfig.showBlobs,
-      };
-      api.db.set(CONFIG_DB_KEY, JSON.stringify(config)).catch(() => {});
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [liquidGlassConfig, hasLoaded]);
 
   const saveLayoutSetting = (key: string, value: number) => {
     try { window.nativesAPI?.db?.set?.(`settings:${key}`, String(value)); } catch (_e) { /* browser dev mode */ }
@@ -429,7 +410,7 @@ export default function SettingsPage() {
       await loadProfiles();
       showToast(t(locale, 'settings.profileCreated'));
     } catch (err) {
-      console.error('[Settings] Create profile failed:', err);
+      globalToast(t(locale, 'settings.profileCreated') + ' ' + t(locale, 'common.error'), 'error');
     }
   };
 
@@ -443,7 +424,7 @@ export default function SettingsPage() {
       await loadProfiles();
       showToast(t(locale, 'settings.profileDeleted'));
     } catch (err) {
-      console.error('[Settings] Delete profile failed:', err);
+      globalToast(t(locale, 'settings.profileDeleted') + ' ' + t(locale, 'common.error'), 'error');
     }
   };
 
@@ -470,7 +451,7 @@ export default function SettingsPage() {
       await loadVariables(selectedProfile);
       showToast(t(locale, 'settings.variableSaved'));
     } catch (err) {
-      console.error('[Settings] Set variable failed:', err);
+      globalToast(classifyError(err).userMessage, 'error');
     }
   };
 
@@ -485,7 +466,7 @@ export default function SettingsPage() {
       if (selectedProfile) await loadVariables(selectedProfile);
       showToast(t(locale, 'settings.variableDeleted'));
     } catch (err) {
-      console.error('[Settings] Delete variable failed:', err);
+      globalToast(classifyError(err).userMessage, 'error');
     } finally {
       setDeleteVarTarget(null);
     }
@@ -500,7 +481,7 @@ export default function SettingsPage() {
       await loadVariables(selectedProfile);
       showToast(t(locale, 'settings.variableSaved'));
     } catch (err) {
-      console.error('[Settings] Edit variable failed:', err);
+      globalToast(classifyError(err).userMessage, 'error');
     }
   };
 
@@ -513,17 +494,17 @@ export default function SettingsPage() {
     <div style={{ height: '100%', overflow: 'auto', position: 'relative' }}>
       <div style={{ padding: `${SPACING.lg}px 20px`, display: 'flex', flexDirection: 'column', gap: 28 }}>
         {/* Tab Bar */}
-        <div style={{ display: 'flex', gap: 4, background: 'var(--bg-3)', border: '1px solid var(--vibe-toolbar-border)', borderRadius: 'var(--vibe-content-radius, 10px)', padding: 3 }}>
+        <div style={{ display: 'flex', gap: 4, background: 'var(--surface-hover)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: 3 }}>
           {TABS.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               style={{
                 flex: 1, textAlign: 'center', padding: '7px 4px',
-                borderRadius: 'calc(var(--vibe-content-radius, 10px) - 2px)', cursor: 'pointer',
-                background: activeTab === tab.id ? 'var(--vibe-active-bg)' : 'transparent',
-                color: activeTab === tab.id ? 'var(--vibe-active-color)' : 'var(--text-dim)',
-                border: activeTab === tab.id ? '1px solid var(--vibe-accent-color)' : '1px solid transparent',
+                borderRadius: 'calc(var(--radius-sm) - 2px)', cursor: 'pointer',
+                background: activeTab === tab.id ? 'var(--primary-soft)' : 'transparent',
+                color: activeTab === tab.id ? 'var(--primary)' : 'var(--text-secondary)',
+                border: activeTab === tab.id ? '1px solid var(--primary)' : '1px solid transparent',
                 fontSize: FONT_SIZE.md, fontWeight: activeTab === tab.id ? 600 : 400,
                 transition: 'all 0.12s ease-out',
               }}
@@ -549,7 +530,7 @@ export default function SettingsPage() {
                 style={{ flex: 1, textAlign: 'center', padding: '10px 8px' }}
               >
                 <div style={{ fontWeight: 600, fontSize: FONT_SIZE.md }}>{th.label}</div>
-                <div style={{ fontSize: FONT_SIZE.xs, color: theme === th.id ? 'var(--accent-ink)' : 'var(--text-faint)', marginTop: SPACING.xs }}>{th.desc}</div>
+                <div style={{ fontSize: FONT_SIZE.xs, color: theme === th.id ? '#FFFFFF' : 'var(--text-disabled)', marginTop: SPACING.xs }}>{th.desc}</div>
               </button>
             ))}
           </div>
@@ -575,6 +556,8 @@ export default function SettingsPage() {
         </section>
 
         {/* Layout */}
+        <div style={SectionCardOuter}>
+        <div style={SectionCardInner}>
         <div style={sectionCardStyle}>
         <section>
           <h2 style={sectionTitleStyle}>
@@ -605,17 +588,23 @@ export default function SettingsPage() {
           </div>
         </section>
         </div>
+        </div>
+        </div>
 
         {/* About */}
+        <div style={SectionCardOuter}>
+        <div style={SectionCardInner}>
         <div style={sectionCardStyle}>
         <section>
           <h2 style={sectionTitleStyle}>
             {t(locale, 'settings.about')}
           </h2>
-          <p style={{ fontSize: FONT_SIZE.md, color: 'var(--text-faint)' }}>
+          <p style={{ fontSize: FONT_SIZE.md, color: 'var(--text-disabled)' }}>
             {t(locale, 'settings.aboutVersion')}
           </p>
         </section>
+        </div>
+        </div>
         </div>
         </div>
         {/* ⇡ Tab 1 end ⇡ */}
@@ -632,9 +621,9 @@ export default function SettingsPage() {
             <div style={{
               padding: `${SPACING.xl}px ${SPACING.lg}px`,
               textAlign: 'center',
-              border: '1px dashed var(--vibe-toolbar-border)',
-              borderRadius: 'var(--vibe-content-radius, 12px)',
-              color: 'var(--vibe-btn-text)',
+              border: '1px dashed var(--border)',
+              borderRadius: 'var(--radius-md)',
+              color: 'var(--text-secondary)',
             }}>
               <div style={{ fontSize: FONT_SIZE.lg, marginBottom: SPACING.xs }}>{t(locale, 'settings.noProfiles')}</div>
               <div style={{ fontSize: FONT_SIZE.sm, marginBottom: SPACING.md }}>{t(locale, 'settings.noProfilesDesc')}</div>
@@ -645,6 +634,8 @@ export default function SettingsPage() {
           ) : (
             <>
               {/* Profile list */}
+              <div style={SectionCardOuter}>
+              <div style={SectionCardInner}>
               <div style={{ ...sectionCardStyle, marginBottom: SPACING.md }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.xs }}>
                   {profiles.map((p) => (
@@ -656,10 +647,10 @@ export default function SettingsPage() {
                         alignItems: 'center',
                         justifyContent: 'space-between',
                         padding: `${SPACING.sm}px 10px`,
-                        borderRadius: 'calc(var(--vibe-content-radius, 12px) - 2px)',
+                        borderRadius: 'calc(var(--radius-md) - 2px)',
                         cursor: 'pointer',
-                        background: selectedProfile === p.name ? 'var(--accent-soft)' : 'transparent',
-                        border: selectedProfile === p.name ? '1px solid var(--accent)' : '1px solid transparent',
+                        background: selectedProfile === p.name ? 'var(--primary-soft)' : 'transparent',
+                        border: selectedProfile === p.name ? '1px solid var(--primary)' : '1px solid transparent',
                         transition: 'all 0.12s',
                       }}
                     >
@@ -671,9 +662,9 @@ export default function SettingsPage() {
                           <span style={{
                             fontSize: 9,
                             padding: '1px 5px',
-                            borderRadius: 'calc(var(--vibe-content-radius, 12px) - 4px)',
-                            background: 'var(--accent)',
-                            color: 'var(--accent-ink)',
+                            borderRadius: 'calc(var(--radius-md) - 4px)',
+                            background: 'var(--primary)',
+                            color: '#FFFFFF',
                             fontWeight: 600,
                             textTransform: 'uppercase',
                             letterSpacing: 0.5,
@@ -716,6 +707,8 @@ export default function SettingsPage() {
                   ))}
                 </div>
               </div>
+              </div>
+              </div>
 
               {/* Add profile inline */}
               {showNewProfile ? (
@@ -745,19 +738,19 @@ export default function SettingsPage() {
               {/* Variables for selected profile */}
               {selectedProfile && (
                 <div style={{
-                  border: '1px solid var(--vibe-toolbar-border)',
-                  borderRadius: 'var(--vibe-content-radius, 12px)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-md)',
                   overflow: 'hidden',
                 }}>
                   <div style={{
                     padding: `${SPACING.sm}px 10px`,
-                    background: 'var(--vibe-toolbar-bg)',
+                    background: 'var(--surface)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    borderBottom: '1px solid var(--vibe-toolbar-border)',
+                    borderBottom: '1px solid var(--border)',
                   }}>
-                    <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1 }}>
+                    <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 1 }}>
                       {t(locale, 'settings.variables')}
                     </span>
                     <button
@@ -772,7 +765,7 @@ export default function SettingsPage() {
                   {/* Variable list */}
                   <div style={{ maxHeight: 240, overflow: 'auto' }}>
                     {variables.filter(v => v.value !== '').length === 0 && !showNewVar ? (
-                      <div style={{ padding: `${SPACING.lg}px 10px`, textAlign: 'center', color: 'var(--text-faint)', fontSize: FONT_SIZE.md }}>
+                      <div style={{ padding: `${SPACING.lg}px 10px`, textAlign: 'center', color: 'var(--text-disabled)', fontSize: FONT_SIZE.md }}>
                         {t(locale, 'settings.noVariables')}
                       </div>
                     ) : (
@@ -781,7 +774,7 @@ export default function SettingsPage() {
                           key={v.key}
                           style={{
                             padding: '6px 10px',
-                            borderBottom: '1px solid var(--vibe-toolbar-border)',
+                            borderBottom: '1px solid var(--border)',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'space-between',
@@ -789,7 +782,7 @@ export default function SettingsPage() {
                           }}
                         >
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: FONT_SIZE.md, fontWeight: 600, color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>
+                            <div style={{ fontSize: FONT_SIZE.md, fontWeight: 600, color: 'var(--primary)', fontFamily: 'var(--font-mono)' }}>
                               {v.key}
                             </div>
                             {editingVar === v.key ? (
@@ -810,7 +803,7 @@ export default function SettingsPage() {
                                 </button>
                               </div>
                             ) : (
-                              <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
+                              <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-disabled)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
                                 {maskValue(v.value)}
                               </div>
                             )}
@@ -875,150 +868,21 @@ export default function SettingsPage() {
         </div>
         {/* ⇡ Tab 3 end ⇡ */}
 
-        {/* Tab 2: 视觉微调 */}
-        <div style={{ display: activeTab === 'visual' ? 'flex' : 'none', flexDirection: 'column', gap: 28 }}>
-          {/* Liquid Glass Visual Tuning */}
-        <section>
-          <h2 style={sectionTitleStyle}>
-            {t(locale, 'settings.visualTuningTitle')}
-          </h2>
-          <div style={sectionCardStyle}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.md }}>
-              {/* Blur Amount: 0–1, default 0.40 */}
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
-                  <span>{t(locale, 'settings.visualBlur')}</span>
-                  <span>{liquidGlassConfig.blurAmount.toFixed(2)}</span>
-                </div>
-                <input type="range" min="0" max="1" step="0.05" value={liquidGlassConfig.blurAmount}
-                  onChange={(e) => setLiquidGlassConfig(c => ({ ...c, blurAmount: Number(e.target.value) }))}
-                  style={{ width: '100%', accentColor: 'var(--vibe-accent-color)' }} />
-              </div>
-              {/* Displacement Scale: 0–150, default 64 */}
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
-                  <span>{t(locale, 'settings.visualDisplacement')}</span>
-                  <span>{liquidGlassConfig.displacementScale}</span>
-                </div>
-                <input type="range" min="0" max="150" value={liquidGlassConfig.displacementScale}
-                  onChange={(e) => setLiquidGlassConfig(c => ({ ...c, displacementScale: Number(e.target.value) }))}
-                  style={{ width: '100%', accentColor: 'var(--vibe-accent-color)' }} />
-              </div>
-              {/* Saturation: 100–250%, default 135% */}
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
-                  <span>{t(locale, 'settings.visualSaturation')}</span>
-                  <span>{liquidGlassConfig.saturation}%</span>
-                </div>
-                <input type="range" min="100" max="250" step="5" value={liquidGlassConfig.saturation}
-                  onChange={(e) => setLiquidGlassConfig(c => ({ ...c, saturation: Number(e.target.value) }))}
-                  style={{ width: '100%', accentColor: 'var(--vibe-accent-color)' }} />
-              </div>
-              {/* Chromatic Aberration: 0–10, default 2 */}
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
-                  <span>{t(locale, 'settings.visualAberration')}</span>
-                  <span>{liquidGlassConfig.aberrationIntensity}</span>
-                </div>
-                <input type="range" min="0" max="10" step="1" value={liquidGlassConfig.aberrationIntensity}
-                  onChange={(e) => setLiquidGlassConfig(c => ({ ...c, aberrationIntensity: Number(e.target.value) }))}
-                  style={{ width: '100%', accentColor: 'var(--vibe-accent-color)' }} />
-              </div>
-              {/* Elasticity: 0–0.8, default 0 */}
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
-                  <span>{t(locale, 'settings.visualElasticity')}</span>
-                  <span>{liquidGlassConfig.elasticity.toFixed(2)}</span>
-                </div>
-                <input type="range" min="0" max="0.8" step="0.05" value={liquidGlassConfig.elasticity}
-                  onChange={(e) => setLiquidGlassConfig(c => ({ ...c, elasticity: Number(e.target.value) }))}
-                  style={{ width: '100%', accentColor: 'var(--vibe-accent-color)' }} />
-              </div>
-              {/* Corner Radius: 12–48px, default 28px */}
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
-                  <span>{t(locale, 'settings.visualCornerRadius')}</span>
-                  <span>{liquidGlassConfig.cornerRadius}px</span>
-                </div>
-                <input type="range" min="12" max="48" step="2" value={liquidGlassConfig.cornerRadius}
-                  onChange={(e) => setLiquidGlassConfig(c => ({ ...c, cornerRadius: Number(e.target.value) }))}
-                  style={{ width: '100%', accentColor: 'var(--vibe-accent-color)' }} />
-              </div>
-              {/* Toggles */}
-              <div style={{ display: 'flex', gap: SPACING.lg, marginTop: SPACING.xs }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: FONT_SIZE.sm, color: 'var(--text-dim)', cursor: 'pointer' }}>
-                  <input type="checkbox" checked={liquidGlassConfig.showWallpaper}
-                    onChange={(e) => setLiquidGlassConfig(c => ({ ...c, showWallpaper: e.target.checked }))} />
-                  {t(locale, 'settings.visualMockupWallpaper')}
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: FONT_SIZE.sm, color: 'var(--text-dim)', cursor: 'pointer' }}>
-                  <input type="checkbox" checked={liquidGlassConfig.showBlobs}
-                    onChange={(e) => setLiquidGlassConfig(c => ({ ...c, showBlobs: e.target.checked }))} />
-                  {t(locale, 'settings.visualBubbles')}
-                </label>
-              </div>
-            </div>
-            {/* Live preview mini card */}
-            <div style={{
-              marginTop: SPACING.md, padding: 12, borderRadius: 'var(--vibe-content-radius, 12px)',
-              background: 'var(--vibe-btn-bg, var(--bg-2))',
-              border: '1px solid var(--border)',
-              textAlign: 'center', fontSize: FONT_SIZE.sm, color: 'var(--text-dim)',
-            }}>
-              <div style={{ fontSize: FONT_SIZE.xs, fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>
-                {t(locale, 'settings.visualPreview')}
-              </div>
-              <div style={{
-                width: '100%', height: 40, borderRadius: liquidGlassConfig.cornerRadius,
-                background: 'linear-gradient(135deg, var(--accent-soft) 0%, transparent 100%)',
-                backdropFilter: `blur(${liquidGlassConfig.blurAmount * 40}px) saturate(${liquidGlassConfig.saturation}%)`,
-                WebkitBackdropFilter: `blur(${liquidGlassConfig.blurAmount * 40}px) saturate(${liquidGlassConfig.saturation}%)`,
-                border: '0.5px solid rgba(255,255,255,0.15)',
-              }} />
-            </div>
-          </div>
-        </section>
- 
-        {/* Widget Launcher */}
-        <section>
-          <h2 style={sectionTitleStyle}>
-            {t(locale, 'settings.widgetTitle')}
-          </h2>
-          <div style={sectionCardStyle}>
-            <p style={{ fontSize: FONT_SIZE.md, color: 'var(--text-faint)', margin: 0 }}>
-              {t(locale, 'settings.widgetDesc')}
-            </p>
-            <div>
-              <button
-                className="btn btn-primary"
-                onClick={() => {
-                  try { window.nativesAPI?.openWidgetWindow?.(); } catch (_e) { /* empty */ }
-                }}
-                style={{ fontSize: FONT_SIZE.md, padding: '6px 14px' }}
-              >
-                {t(locale, 'settings.widgetLaunch')}
-              </button>
-            </div>
-          </div>
-        </section>
-        </div>
-        {/* ⇡ Tab 2 end ⇡ */}
-
         {/* Tab 4: 插件设置 */}
         <div style={{ display: activeTab === 'plugins' ? 'flex' : 'none', flexDirection: 'column', gap: 28 }}>
+          <div style={SectionCardOuter}>
+          <div style={SectionCardInner}>
           <section style={sectionCardStyle}>
             <div style={sectionTitleStyle}>
               {t(locale, 'settings.tabPlugins')}
             </div>
             
-            {/* Glassmorphism Plugins Table */}
+            {/* V1.0 Plugins Table — 纯色 Surface */}
             <div style={{
               overflowX: 'auto',
-              borderRadius: 'calc(var(--vibe-content-radius, 12px) - 2px)',
-              border: '1px solid var(--vibe-btn-border, var(--border))',
-              background: 'rgba(255, 255, 255, 0.02)',
-              backdropFilter: 'blur(8px)',
-              WebkitBackdropFilter: 'blur(8px)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--border)',
+              background: 'var(--surface)',
             }}>
               <table style={{
                 width: '100%',
@@ -1029,19 +893,19 @@ export default function SettingsPage() {
               }}>
                 <thead>
                   <tr style={{
-                    borderBottom: '1px solid var(--vibe-btn-border, var(--border))',
+                    borderBottom: '1px solid var(--border)',
                     background: 'rgba(255, 255, 255, 0.03)',
                   }}>
-                    <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text-dim)' }}>
+                    <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text-secondary)' }}>
                       {t(locale, 'settings.plugins.name')}
                     </th>
-                    <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text-dim)' }}>
+                    <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text-secondary)' }}>
                       {t(locale, 'settings.plugins.description')}
                     </th>
-                    <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text-dim)' }}>
+                    <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text-secondary)' }}>
                       {t(locale, 'settings.plugins.version')}
                     </th>
-                    <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text-dim)', textAlign: 'right' }}>
+                    <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text-secondary)', textAlign: 'right' }}>
                       {t(locale, 'settings.plugins.actions')}
                     </th>
                   </tr>
@@ -1081,7 +945,7 @@ export default function SettingsPage() {
 
                     return (
                       <tr key={plugin.id} style={{
-                        borderBottom: '1px solid var(--vibe-btn-border, var(--border))',
+                        borderBottom: '1px solid var(--border)',
                         background: activeLogPlugin === plugin.id ? 'rgba(255, 255, 255, 0.02)' : 'transparent',
                         transition: 'background 0.2s ease',
                       }}>
@@ -1094,7 +958,7 @@ export default function SettingsPage() {
                               target="_blank" 
                               rel="noreferrer"
                               title={plugin.url}
-                              style={{ display: 'inline-flex', color: 'var(--text-dim)' }}
+                              style={{ display: 'inline-flex', color: 'var(--text-secondary)' }}
                             >
                               <ExternalLink size={12} />
                             </a>
@@ -1102,31 +966,31 @@ export default function SettingsPage() {
                         </td>
                         
                         {/* Description */}
-                        <td style={{ padding: '14px 16px', color: 'var(--text-dim)', maxWidth: '400px' }}>
+                        <td style={{ padding: '14px 16px', color: 'var(--text-secondary)', maxWidth: '400px' }}>
                           {plugin.desc}
                         </td>
 
                         {/* Version */}
                         <td style={{ padding: '14px 16px' }}>
                           {isDetecting ? (
-                            <span style={{ color: 'var(--text-dim)', fontSize: FONT_SIZE.sm }}>
+                            <span style={{ color: 'var(--text-secondary)', fontSize: FONT_SIZE.sm }}>
                               {t(locale, 'common.loading') || '检测中...'}
                             </span>
                           ) : isInstalled ? (
                             <span style={{
-                              background: 'var(--vibe-active-bg)',
-                              color: 'var(--vibe-active-color)',
+                              background: 'var(--primary-soft)',
+                              color: 'var(--primary)',
                               padding: '2px 8px',
                               borderRadius: '12px',
                               fontSize: FONT_SIZE.sm,
                               fontWeight: 600,
-                              border: '1px solid var(--vibe-accent-color)',
+                              border: '1px solid var(--primary)',
                             }}>
                               v{version}
                             </span>
                           ) : (
                             <span style={{
-                              color: 'var(--text-dim)',
+                              color: 'var(--text-secondary)',
                               fontSize: FONT_SIZE.sm,
                               fontStyle: 'italic'
                             }}>
@@ -1161,7 +1025,7 @@ export default function SettingsPage() {
                                   style={{
                                     padding: '5px 12px',
                                     fontSize: FONT_SIZE.sm,
-                                    borderColor: 'var(--vibe-btn-border)',
+                                    borderColor: 'var(--border)',
                                     color: 'var(--text)',
                                     opacity: isBusy ? 0.6 : 1,
                                     cursor: isBusy ? 'not-allowed' : 'pointer',
@@ -1178,7 +1042,7 @@ export default function SettingsPage() {
                                     fontSize: FONT_SIZE.sm,
                                     background: 'rgba(239, 68, 68, 0.1)',
                                     border: '1px solid rgba(239, 68, 68, 0.2)',
-                                    borderRadius: 'calc(var(--vibe-content-radius, 12px) - 6px)',
+                                    borderRadius: 'calc(var(--radius-md) - 6px)',
                                     color: 'rgba(239, 68, 68, 0.9)',
                                     cursor: isBusy ? 'not-allowed' : 'pointer',
                                     opacity: isBusy ? 0.6 : 1,
@@ -1196,7 +1060,7 @@ export default function SettingsPage() {
                                 style={{
                                   background: 'none',
                                   border: 'none',
-                                  color: 'var(--text-dim)',
+                                  color: 'var(--text-secondary)',
                                   cursor: 'pointer',
                                   padding: '4px',
                                   display: 'flex',
@@ -1204,7 +1068,7 @@ export default function SettingsPage() {
                                 }}
                                 title={t(locale, 'settings.viewLog')}
                               >
-                                <Terminal size={14} style={{ color: activeLogPlugin === plugin.id ? 'var(--vibe-active-color)' : 'inherit' }} />
+                                <Terminal size={14} style={{ color: activeLogPlugin === plugin.id ? 'var(--primary)' : 'inherit' }} />
                               </button>
                             )}
                           </div>
@@ -1220,8 +1084,8 @@ export default function SettingsPage() {
             {activeLogPlugin && installLogs[activeLogPlugin] && (
               <div style={{
                 marginTop: 12,
-                borderRadius: 'calc(var(--vibe-content-radius, 12px) - 2px)',
-                border: '1px solid var(--vibe-btn-border, var(--border))',
+                borderRadius: 'calc(var(--radius-md) - 2px)',
+                border: '1px solid var(--border)',
                 background: 'rgba(0, 0, 0, 0.25)',
                 boxShadow: 'inset 0 1px 4px rgba(0, 0, 0, 0.3)',
                 padding: '12px 16px',
@@ -1230,13 +1094,13 @@ export default function SettingsPage() {
                 gap: 8,
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--vibe-brand-text)', fontSize: FONT_SIZE.sm, fontWeight: 600 }}>
-                    <Terminal size={14} className="text-[var(--vibe-active-color)]" />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text)', fontSize: FONT_SIZE.sm, fontWeight: 600 }}>
+                    <Terminal size={14} className="text-[var(--primary)]" />
                     <span>{t(locale, 'settings.plugins.consoleTitle')} - {activeLogPlugin.toUpperCase()}</span>
                   </div>
                   <button 
                     onClick={() => setActiveLogPlugin(null)}
-                    style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: FONT_SIZE.sm }}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: FONT_SIZE.sm }}
                   >
                     {t(locale, 'common.close') || '关闭'}
                   </button>
@@ -1260,11 +1124,108 @@ export default function SettingsPage() {
               </div>
             )}
           </section>
+          </div>
+          </div>
         </div>
 
         {/* Tab 5: 执行引擎 (Execution Engine) — RuntimePanel */}
         <div style={{ display: activeTab === 'executor' ? 'block' : 'none' }}>
           <RuntimePanel locale={locale} />
+        </div>
+
+        {/* Tab 6: 供应商管理 (Providers) */}
+        <div style={{ display: activeTab === 'providers' ? 'block' : 'none' }}>
+          <section>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: SPACING.md }}>
+              <h2 style={sectionTitleStyle}>
+                {t(locale, 'settings.providers')}
+              </h2>
+              <button
+                onClick={() => setShowAddProvider(true)}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  padding: '6px 12px', borderRadius: BORDER_RADIUS.md,
+                  background: 'var(--primary)', border: 'none',
+                  color: '#FFFFFF', fontWeight: 600, cursor: 'pointer',
+                  fontSize: FONT_SIZE.sm,
+                }}
+              >
+                  {t(locale, 'settings.addProvider')}
+              </button>
+            </div>
+
+            {providersLoading ? (
+              <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-disabled)' }}>
+                {t(locale, 'settings.providersLoading')}
+              </div>
+            ) : providers.length === 0 ? (
+              <div style={{
+                padding: SPACING.xxl, textAlign: 'center', color: 'var(--text-disabled)',
+                border: '1px dashed var(--border)', borderRadius: BORDER_RADIUS.lg,
+              }}>
+                <div style={{ fontSize: FONT_SIZE.sm, marginBottom: SPACING.sm }}>
+                  {t(locale, 'settings.noProviders')}
+                </div>
+                <button
+                  onClick={() => setShowAddProvider(true)}
+                  style={{
+                    padding: '6px 14px', borderRadius: BORDER_RADIUS.md,
+                    background: 'var(--primary)', border: 'none',
+                    color: '#FFFFFF', cursor: 'pointer', fontSize: FONT_SIZE.sm,
+                  }}
+                >
+                  {t(locale, 'settings.addProvider')}
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.sm }}>
+                {providers.map((p) => (
+                  <div
+                    key={p.id}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      padding: `${SPACING.md}px ${SPACING.lg}px`,
+                      borderRadius: BORDER_RADIUS.lg,
+                      border: '1px solid var(--border)',
+                      background: 'var(--surface)',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: FONT_SIZE.md, color: 'var(--text)' }}>
+                        {p.name}
+                      </div>
+                      <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
+                        {p.baseUrl || p.websiteUrl}
+                      </div>
+                      <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)', marginTop: 4 }}>
+                        {t(locale, 'settings.providerKeyCount', { count: (p.keys || []).length })}
+                        {(p.keys || []).slice(0, 3).map(k => (
+                          <span key={k.id} style={{ marginLeft: 8, fontSize: '0.625rem', color: 'var(--text-disabled)' }}>
+                            {k.label}: {k.maskedKey}
+                          </span>
+                        ))}
+                        {(p.keys || []).length > 3 && (
+                          <span style={{ marginLeft: 4, color: 'var(--text-disabled)', fontSize: '0.625rem' }}>
+                            {t(locale, 'settings.providerMoreKeys', { count: p.keys.length - 3 })}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setDeleteProviderTarget(p.id)}
+                      style={{
+                        background: 'none', border: 'none', color: 'var(--danger)',
+                        cursor: 'pointer', padding: 6,
+                      }}
+                      title={t(locale, 'settings.deleteProvider')}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
         </div>
       </div>
 
@@ -1290,6 +1251,30 @@ export default function SettingsPage() {
         onCancel={() => setDeleteVarTarget(null)}
       />
 
+      {/* Add Provider Dialog */}
+      {showAddProvider && (
+        <AddProviderDialog
+          locale={locale}
+          onClose={() => setShowAddProvider(false)}
+          onSave={handleSaveProvider}
+        />
+      )}
+
+      {/* Delete Provider confirmation */}
+      <ConfirmDialog
+        open={deleteProviderTarget !== null}
+        title={t(locale, 'settings.deleteProvider')}
+        message={t(locale, 'settings.confirmDeleteProvider')}
+        confirmLabel={t(locale, 'common.delete')}
+        cancelLabel={t(locale, 'common.cancel')}
+        danger
+        onConfirm={() => {
+          if (deleteProviderTarget) handleDeleteProvider(deleteProviderTarget);
+          setDeleteProviderTarget(null);
+        }}
+        onCancel={() => setDeleteProviderTarget(null)}
+      />
+
       {/* Toast */}
       {toast && (
         <div style={{
@@ -1297,17 +1282,15 @@ export default function SettingsPage() {
           bottom: SPACING.xl,
           left: '50%',
           transform: 'translateX(-50%)',
-          background: 'var(--vibe-btn-bg)',
-          border: '1px solid var(--vibe-btn-border)',
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
           padding: '10px 18px',
-          borderRadius: 'calc(var(--vibe-content-radius, 12px) + 4px)',
-          fontSize: FONT_SIZE.lg,
+          borderRadius: 'var(--radius-lg)',
+          fontSize: FONT_SIZE.sm,
           color: 'var(--text)',
           zIndex: 200,
-          animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
-          boxShadow: 'var(--vibe-sidebar-shadow)',
-          backdropFilter: 'blur(12px)',
-          WebkitBackdropFilter: 'blur(12px)',
+          animation: 'fadeIn 150ms ease',
+          boxShadow: 'var(--shadow-popup)',
         }}>
           {toast}
         </div>
@@ -1319,7 +1302,7 @@ export default function SettingsPage() {
 const sectionTitleStyle: React.CSSProperties = {
   fontSize: FONT_SIZE.lg,
   fontWeight: 600,
-  color: 'var(--vibe-btn-text)',
+  color: 'var(--text-secondary)',
   marginBottom: SPACING.sm,
   textTransform: 'uppercase',
   letterSpacing: 1,
@@ -1328,17 +1311,32 @@ const sectionTitleStyle: React.CSSProperties = {
 const inputStyle: React.CSSProperties = {
   width: 80,
   padding: `${SPACING.xs}px ${SPACING.sm}px`,
-  background: 'var(--vibe-content-bg)',
-  border: '1px solid var(--vibe-btn-border)',
-  borderRadius: 'calc(var(--vibe-content-radius, 12px) - 4px)',
+  background: 'var(--surface)',
+  border: '1px solid var(--border)',
+  borderRadius: 'calc(var(--radius-md) - 4px)',
   color: 'var(--text)',
   fontSize: FONT_SIZE.md,
 };
 
+// ── Section Card — Doppelrand for settings panels ──
+const SectionCardOuter: React.CSSProperties = {
+  background: 'rgba(255,255,255,0.05)',
+  border: '1px solid rgba(255,255,255,0.10)',
+  borderRadius: '2rem',
+  padding: '0.5rem',
+};
+
+const SectionCardInner: React.CSSProperties = {
+  background: 'var(--surface)',
+  borderRadius: 'calc(2rem - 0.5rem)',
+  boxShadow: 'inset 0 1px 1px rgba(255,255,255,0.15)',
+  overflow: 'hidden',
+};
+
 const sectionCardStyle: React.CSSProperties = {
-  background: 'var(--vibe-btn-bg, var(--bg-2))',
-  border: '1px solid var(--vibe-btn-border, var(--border))',
-  borderRadius: 'var(--vibe-content-radius, 12px)',
+  background: 'var(--surface)',
+  border: '1px solid var(--border)',
+  borderRadius: 'var(--radius-md)',
   padding: `${SPACING.md}px ${SPACING.lg}px`,
   display: 'flex',
   flexDirection: 'column',

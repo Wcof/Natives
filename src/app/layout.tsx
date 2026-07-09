@@ -1,16 +1,24 @@
 import './globals.css';
+import { GeistSans, GeistMono } from 'geist/font';
 import RootClient from './RootClient';
 
 /* ═══════════════════════════════════════════════
    Root Layout — Server Component
-   Global CSS import must live in a Server Component
-   to prevent Next.js from treating it as a CSS module.
+   AI Natives Design System V1.0 — Light/Dark 双主题
+   Brand accent #FF6B2C (Primary Orange)
+   Font-locked: Geist Sans (display) + Geist Mono (code).
    ═══════════════════════════════════════════════ */
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="zh-CN" data-theme="terminal-volt" className="h-full bg-transparent">
-      <body className="h-full overflow-hidden bg-transparent text-content-text antialiased">
+    <html
+      lang="zh-CN"
+      data-theme="light"
+      className={`h-full ${GeistSans.variable} ${GeistMono.variable}`}
+      style={{ background: 'var(--background)' }}
+      suppressHydrationWarning
+    >
+      <body className="h-full overflow-hidden antialiased" style={{ background: 'var(--background)', color: 'var(--text)' }}>
         <RootClient>{children}</RootClient>
       </body>
     </html>

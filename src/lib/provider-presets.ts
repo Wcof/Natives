@@ -354,4 +354,14 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     descriptionZh: 'SudoCode API 服务',
     category: 'third_party', icon: 'sudocode',
   },
+  // ── OpenAI-compatible test providers ──
+  {
+    name: 'SenseNova Token',
+    nameZh: '商汤 SenseNova',
+    websiteUrl: 'https://platform.sensenova.cn',
+    baseUrl: 'https://token.sensenova.cn/v1',
+    description: 'SenseNova OpenAI-compatible endpoint. Models: sensenova-6.7-flash-lite, deepseek-v4-flash',
+    descriptionZh: '商汤 SenseNova OpenAI 兼容接口。模型：sensenova-6.7-flash-lite、deepseek-v4-flash',
+    category: 'cn_official', icon: 'sensenova', iconColor: '#0B7BFF',
+  },
 ];

@@ -42,7 +42,7 @@ export default function ReleaseWizardDialog({ onClose }: { onClose?: () => void 
     >
       {/* Version input */}
       <div style={{ marginBottom: SPACING.md }}>
-        <label style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-dim)', display: 'block', marginBottom: SPACING.xs }}>
+        <label style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)', display: 'block', marginBottom: SPACING.xs }}>
           {t(locale, 'release.newVersion')}
         </label>
         <input
@@ -58,7 +58,7 @@ export default function ReleaseWizardDialog({ onClose }: { onClose?: () => void 
       {/* Checklist */}
       <div style={{ marginBottom: SPACING.md }}>
         {checks.map((c, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: SPACING.xs, padding: `${SPACING.xs}px 0`, fontSize: FONT_SIZE.md, color: 'var(--text-dim)' }}>
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: SPACING.xs, padding: `${SPACING.xs}px 0`, fontSize: FONT_SIZE.md, color: 'var(--text-secondary)' }}>
             <span style={{ display: 'inline-flex' }}>
               {c.ok ? (
                 <Check size={12} style={{ color: 'var(--diff-add)' }} />
@@ -67,7 +67,7 @@ export default function ReleaseWizardDialog({ onClose }: { onClose?: () => void 
               )}
             </span>
             <span>{c.label}</span>
-            <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-faint)' }}>{c.message}</span>
+            <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)' }}>{c.message}</span>
           </div>
         ))}
       </div>

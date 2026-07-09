@@ -83,14 +83,14 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
     } catch { /* ignore */ }
   };
   return (
-    <div className="my-3 rounded-lg bg-[var(--vibe-btn-bg)] overflow-hidden">
+    <div className="my-3 rounded-lg bg-[var(--surface)] overflow-hidden">
       <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-black/20">
-        <span className="text-[0.625rem] font-mono uppercase tracking-wider text-[var(--text-faint)]">
+        <span className="text-[0.625rem] font-mono uppercase tracking-wider text-[var(--text-disabled)]">
           {lang || 'code'}
         </span>
         <button
           onClick={handleCopy}
-          className="text-[0.625rem] text-[var(--text-faint)] hover:text-[var(--text-dim)] transition-colors px-1.5 py-0.5"
+          className="text-[0.625rem] text-[var(--text-disabled)] hover:text-[var(--text-secondary)] transition-colors px-1.5 py-0.5"
         >
           {copied ? 'Copied' : 'Copy Code'}
         </button>
@@ -124,7 +124,7 @@ function MarkdownRenderer({ content }: { content: string }) {
     })();
   }, [content]);
 
-  if (loading) return <div className="text-sm text-[var(--text-dim)]">...</div>;
+  if (loading) return <div className="text-sm text-[var(--text-secondary)]">...</div>;
 
   // Split into code blocks (preserve custom CodeBlock rendering) and rendered HTML
   // Note: marked output handles code blocks as <pre><code> already
@@ -162,7 +162,7 @@ function BuildErrorBubble({ count, maxRetries = 3, onRetry, onManualEdit, onAban
         </svg>
         <span className="font-medium text-red-400">Build Failed ({count}/{maxRetries})</span>
       </div>
-      <div className="mt-2 text-xs text-[var(--text-dim)]">
+      <div className="mt-2 text-xs text-[var(--text-secondary)]">
         {isCircuitBroken
           ? 'Max retries reached. Please choose an action below.'
           : 'Linter validation failed. Retrying with error context...'}
@@ -178,7 +178,7 @@ function BuildErrorBubble({ count, maxRetries = 3, onRetry, onManualEdit, onAban
             <button onClick={onManualEdit} className="text-[0.625rem] text-amber-400 hover:text-amber-300 underline transition-colors">
               Manual Edit
             </button>
-            <button onClick={onAbandon} className="text-[0.625rem] text-[var(--text-faint)] hover:text-[var(--text-dim)] underline transition-colors">
+            <button onClick={onAbandon} className="text-[0.625rem] text-[var(--text-disabled)] hover:text-[var(--text-secondary)] underline transition-colors">
               Abandon
             </button>
           </>
@@ -207,7 +207,7 @@ export default function MessageList({ messages, locale, streamingContent, stream
     switch (role) {
       case 'user':
         return (
-          <div className="w-7 h-7 rounded-full bg-[var(--vibe-active-bg)] flex items-center justify-center text-xs font-bold text-[var(--vibe-active-color)]">
+          <div className="w-7 h-7 rounded-full bg-[var(--primary-soft)] flex items-center justify-center text-xs font-bold text-[var(--primary)]">
             U
           </div>
         );
@@ -239,7 +239,7 @@ export default function MessageList({ messages, locale, streamingContent, stream
               <path d="M2 12l10 5 10-5" />
             </svg>
           </div>
-          <p className="text-sm text-[var(--text-dim)]">{t('empty')}</p>
+          <p className="text-sm text-[var(--text-secondary)]">{t('empty')}</p>
         </div>
       </div>
     );
@@ -257,7 +257,7 @@ export default function MessageList({ messages, locale, streamingContent, stream
             <div className="shrink-0 mt-1">{roleIcon(msg.role)}</div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
-                <span className="text-xs font-medium text-[var(--text-dim)]">{t(msg.role)}</span>
+                <span className="text-xs font-medium text-[var(--text-secondary)]">{t(msg.role)}</span>
                 {msg.status === 'error' && (
                   <span className="text-xs text-red-400 bg-red-500/10 px-1.5 py-0.5 rounded">Error</span>
                 )}
@@ -270,13 +270,13 @@ export default function MessageList({ messages, locale, streamingContent, stream
               {storedThinking && <ThinkingBlock text={storedThinking} />}
 
               {/* Content */}
-              <div className="text-sm text-[var(--vibe-brand-text)]">
+              <div className="text-sm text-[var(--text)]">
                 <MarkdownRenderer content={displayContent} />
               </div>
 
               {/* Token count for assistant messages */}
               {msg.role === 'assistant' && msg.token_count != null && msg.token_count > 0 && (
-                <div className="mt-1 text-[0.625rem] text-[var(--text-faint)]">
+                <div className="mt-1 text-[0.625rem] text-[var(--text-disabled)]">
                   {msg.token_count} tokens used
                 </div>
               )}
@@ -324,20 +324,12 @@ export default function MessageList({ messages, locale, streamingContent, stream
                             newContent={diffData.new}
                             fileName={diffData.file}
                             onRollback={() => {
-                              // US-6 一键回滚：用快照旧内容原子写回 index.html
                               const moduleId = tc.input?.moduleId || tc.input?.module_id || diffData?.file?.split('/')?.[0];
-                              if (!moduleId) {
-                                console.error('Rollback failed: missing moduleId');
-                                return;
-                              }
+                              if (!moduleId) return;
                               const api = window.nativesAPI;
-                              if (!api?.module?.rollback) {
-                                console.error('Rollback API not available');
-                                return;
-                              }
+                              if (!api?.module?.rollback) return;
                               api.module.rollback({ moduleId: String(moduleId), oldContent: diffData.old })
-                                .then(() => console.log('Rollback succeeded for', moduleId))
-                                .catch((e: unknown) => console.error('Rollback failed:', e));
+                                .catch(() => {});
                             }}
                           />
                         )}
@@ -357,7 +349,7 @@ export default function MessageList({ messages, locale, streamingContent, stream
           <div className="shrink-0 mt-1">{roleIcon('assistant')}</div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs font-medium text-[var(--text-dim)]">{t('assistant')}</span>
+              <span className="text-xs font-medium text-[var(--text-secondary)]">{t('assistant')}</span>
               <span className="flex gap-0.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-bounce" style={{ animationDelay: '0ms' }} />
                 <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-bounce" style={{ animationDelay: '150ms' }} />
@@ -370,7 +362,7 @@ export default function MessageList({ messages, locale, streamingContent, stream
 
             {/* Streaming content */}
             {streamingContent && (
-              <div className="text-sm text-[var(--vibe-brand-text)]">
+              <div className="text-sm text-[var(--text)]">
                 <MarkdownRenderer content={streamingContent} />
               </div>
             )}

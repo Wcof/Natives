@@ -12,7 +12,7 @@ use tauri::State;
 
 use crate::AppState;
 
-const EXECUTOR_KEY: &str = "executor:settings";
+pub const EXECUTOR_KEY: &str = "executor:settings";
 
 /// 持久化的执行引擎配置。前端 Settings ↔ Rust stream_chat 共用。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

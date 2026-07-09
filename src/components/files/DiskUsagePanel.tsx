@@ -118,10 +118,8 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
       style={{
         position: 'fixed', inset: 0, zIndex: 9999,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: 'rgba(0,0,0,0.45)',
-        backdropFilter: 'blur(var(--glass-overlay-blur, 24px)) saturate(var(--glass-overlay-saturation, 150%))',
-        WebkitBackdropFilter: 'blur(var(--glass-overlay-blur, 24px)) saturate(var(--glass-overlay-saturation, 150%))',
-        animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
+        background: 'rgba(0, 0, 0, 0.4)',
+        animation: 'fadeIn 150ms ease',
       }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
@@ -129,12 +127,10 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
         className="anim-dropIn"
         style={{
           width: 540, maxWidth: '92vw',
-          background: 'var(--vibe-toolbar-bg)',
-          backdropFilter: 'blur(var(--vibe-sidebar-blur, 28px)) saturate(var(--vibe-sidebar-saturation, 145%))',
-          WebkitBackdropFilter: 'blur(var(--vibe-sidebar-blur, 28px)) saturate(var(--vibe-sidebar-saturation, 145%))',
-          border: '0.0625rem solid var(--vibe-toolbar-border)',
-          borderRadius: 'var(--radius)',
-          boxShadow: 'var(--vibe-toolbar-shadow)',
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-md)',
+          boxShadow: 'var(--shadow-modal)',
           padding: SPACING.lg,
           maxHeight: '70vh', display: 'flex', flexDirection: 'column',
         }}
@@ -144,9 +140,9 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           marginBottom: SPACING.md, paddingBottom: 10,
-          borderBottom: '1px solid var(--vibe-btn-border)',
+          borderBottom: '1px solid var(--border)',
         }}>
-          <span style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--vibe-brand-text)' }}>
+          <span style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)' }}>
             {t(locale, 'fileBrowser.diskUsage')} · {formatPath(currentPath)}
           </span>
           <button
@@ -155,10 +151,10 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
             style={{
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               width: 24, height: 24, borderRadius: BORDER_RADIUS.md, border: 'none',
-              background: 'transparent', color: 'var(--vibe-btn-text)',
+              background: 'transparent', color: 'var(--text-secondary)',
               cursor: 'pointer',
             }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--vibe-btn-hover-bg)'; }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-hover)'; }}
             onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
           >
             <X size={14} />
@@ -167,7 +163,7 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
 
         {/* Loading */}
         {loading && (
-          <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--vibe-btn-text)', fontSize: FONT_SIZE.md }}>
+          <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-secondary)', fontSize: FONT_SIZE.md }}>
             {t(locale, 'fileBrowser.diskUsageLoading')}（{elapsed}s）
           </div>
         )}
@@ -183,7 +179,7 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
         {!loading && !error && (
           <div style={{ flex: 1, overflow: 'auto' }}>
             {totalSize > 0 && (
-              <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--vibe-btn-text)', marginBottom: SPACING.sm }}>
+              <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)', marginBottom: SPACING.sm }}>
                 {t(locale, 'fileBrowser.diskUsageTotal')}: {fmtBytes(totalSize)}
                 {items.length > DISPLAY_COUNT && (
                   <span> · {t(locale, 'fileBrowser.diskUsageShowFirst')} {DISPLAY_COUNT}</span>
@@ -198,9 +194,9 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8,
                   padding: '6px 8px', borderRadius: BORDER_RADIUS.md, cursor: 'pointer',
-                  fontSize: FONT_SIZE.md, color: 'var(--accent)', marginBottom: SPACING.xs,
+                  fontSize: FONT_SIZE.md, color: 'var(--primary)', marginBottom: SPACING.xs,
                 }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--vibe-btn-bg)'; }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--surface)'; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
               >
                 ↑ {t(locale, 'fileBrowser.diskUsageUp')}
@@ -219,7 +215,7 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
                     cursor: item.isDir ? 'pointer' : 'default',
                     position: 'relative', overflow: 'hidden',
                   }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--vibe-btn-bg)'; }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--surface)'; }}
                   onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
                 >
                   <div style={{
@@ -230,7 +226,7 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
                   }} />
                   <span style={{
                     position: 'relative', zIndex: 1, display: 'inline-flex',
-                    color: item.isDir ? 'var(--accent)' : 'var(--vibe-btn-text)',
+                    color: item.isDir ? 'var(--primary)' : 'var(--text-secondary)',
                     flexShrink: 0,
                   }}>
                     {item.isDir ? <FbFolder size={18} /> : <FbText size={18} />}
@@ -238,14 +234,14 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
                   <div style={{
                     position: 'relative', zIndex: 1,
                     flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    fontSize: FONT_SIZE.md, color: 'var(--vibe-brand-text)',
+                    fontSize: FONT_SIZE.md, color: 'var(--text)',
                   }}>
                     {item.name}
                   </div>
                   <div style={{
                     position: 'relative', zIndex: 1,
                     fontSize: FONT_SIZE.sm, fontFamily: 'var(--font-mono)',
-                    color: 'var(--vibe-btn-text)', flexShrink: 0,
+                    color: 'var(--text-secondary)', flexShrink: 0,
                   }}>
                     {item.sizeFormatted || fmtBytes(item.size)}
                   </div>

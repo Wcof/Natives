@@ -8,7 +8,10 @@ use tauri::State;
 
 #[tauri::command]
 pub fn wechat_env(state: State<'_, AppState>) -> Result<Value, crate::Error> {
-    let bridge_lock = state.wechat_bridge.lock().map_err(|e| crate::Error::Internal(e.to_string()))?;
+    let bridge_lock = state
+        .wechat_bridge
+        .lock()
+        .map_err(|e| crate::Error::Internal(e.to_string()))?;
     if let Some(bridge) = bridge_lock.as_ref() {
         Ok(bridge.env())
     } else {
@@ -18,7 +21,10 @@ pub fn wechat_env(state: State<'_, AppState>) -> Result<Value, crate::Error> {
 
 #[tauri::command]
 pub fn wechat_login(state: State<'_, AppState>) -> Result<Value, crate::Error> {
-    let mut bridge_lock = state.wechat_bridge.lock().map_err(|e| crate::Error::Internal(e.to_string()))?;
+    let mut bridge_lock = state
+        .wechat_bridge
+        .lock()
+        .map_err(|e| crate::Error::Internal(e.to_string()))?;
     if let Some(bridge) = bridge_lock.as_mut() {
         bridge.login().map_err(crate::Error::Internal)
     } else {
@@ -27,8 +33,30 @@ pub fn wechat_login(state: State<'_, AppState>) -> Result<Value, crate::Error> {
 }
 
 #[tauri::command]
+pub fn wechat_poll_login(
+    qrcode: String,
+    verify_code: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Value, crate::Error> {
+    let mut bridge_lock = state
+        .wechat_bridge
+        .lock()
+        .map_err(|e| crate::Error::Internal(e.to_string()))?;
+    if let Some(bridge) = bridge_lock.as_mut() {
+        bridge
+            .poll_login(&qrcode, verify_code.as_deref())
+            .map_err(crate::Error::Internal)
+    } else {
+        Err(crate::Error::Internal("bridge not initialized".into()))
+    }
+}
+
+#[tauri::command]
 pub fn wechat_disconnect(state: State<'_, AppState>) -> Result<Value, crate::Error> {
-    let mut bridge_lock = state.wechat_bridge.lock().map_err(|e| crate::Error::Internal(e.to_string()))?;
+    let mut bridge_lock = state
+        .wechat_bridge
+        .lock()
+        .map_err(|e| crate::Error::Internal(e.to_string()))?;
     if let Some(bridge) = bridge_lock.as_mut() {
         Ok(bridge.disconnect())
     } else {
@@ -38,7 +66,10 @@ pub fn wechat_disconnect(state: State<'_, AppState>) -> Result<Value, crate::Err
 
 #[tauri::command]
 pub fn wechat_check(state: State<'_, AppState>) -> Result<Value, crate::Error> {
-    let mut bridge_lock = state.wechat_bridge.lock().map_err(|e| crate::Error::Internal(e.to_string()))?;
+    let mut bridge_lock = state
+        .wechat_bridge
+        .lock()
+        .map_err(|e| crate::Error::Internal(e.to_string()))?;
     if let Some(bridge) = bridge_lock.as_mut() {
         Ok(bridge.check())
     } else {
@@ -48,7 +79,10 @@ pub fn wechat_check(state: State<'_, AppState>) -> Result<Value, crate::Error> {
 
 #[tauri::command]
 pub fn wechat_send(text: String, state: State<'_, AppState>) -> Result<Value, crate::Error> {
-    let mut bridge_lock = state.wechat_bridge.lock().map_err(|e| crate::Error::Internal(e.to_string()))?;
+    let mut bridge_lock = state
+        .wechat_bridge
+        .lock()
+        .map_err(|e| crate::Error::Internal(e.to_string()))?;
     if let Some(bridge) = bridge_lock.as_mut() {
         bridge.send(&text).map_err(crate::Error::Internal)
     } else {
@@ -58,7 +92,10 @@ pub fn wechat_send(text: String, state: State<'_, AppState>) -> Result<Value, cr
 
 #[tauri::command]
 pub fn wechat_set_target(target: String, state: State<'_, AppState>) -> Result<(), crate::Error> {
-    let mut bridge_lock = state.wechat_bridge.lock().map_err(|e| crate::Error::Internal(e.to_string()))?;
+    let mut bridge_lock = state
+        .wechat_bridge
+        .lock()
+        .map_err(|e| crate::Error::Internal(e.to_string()))?;
     if let Some(bridge) = bridge_lock.as_mut() {
         bridge.set_target(&target);
     }
@@ -67,7 +104,10 @@ pub fn wechat_set_target(target: String, state: State<'_, AppState>) -> Result<(
 
 #[tauri::command]
 pub fn wechat_set_cwd(dir: String, state: State<'_, AppState>) -> Result<(), crate::Error> {
-    let mut bridge_lock = state.wechat_bridge.lock().map_err(|e| crate::Error::Internal(e.to_string()))?;
+    let mut bridge_lock = state
+        .wechat_bridge
+        .lock()
+        .map_err(|e| crate::Error::Internal(e.to_string()))?;
     if let Some(bridge) = bridge_lock.as_mut() {
         bridge.set_cwd(&dir);
     }
@@ -76,7 +116,10 @@ pub fn wechat_set_cwd(dir: String, state: State<'_, AppState>) -> Result<(), cra
 
 #[tauri::command]
 pub fn wechat_set_persona(persona: String, state: State<'_, AppState>) -> Result<(), crate::Error> {
-    let mut bridge_lock = state.wechat_bridge.lock().map_err(|e| crate::Error::Internal(e.to_string()))?;
+    let mut bridge_lock = state
+        .wechat_bridge
+        .lock()
+        .map_err(|e| crate::Error::Internal(e.to_string()))?;
     if let Some(bridge) = bridge_lock.as_mut() {
         bridge.set_persona(&persona);
     }
@@ -90,7 +133,10 @@ pub fn wechat_detect_agents() -> Result<Value, crate::Error> {
 
 #[tauri::command]
 pub fn wechat_status(state: State<'_, AppState>) -> Result<Value, crate::Error> {
-    let bridge_lock = state.wechat_bridge.lock().map_err(|e| crate::Error::Internal(e.to_string()))?;
+    let bridge_lock = state
+        .wechat_bridge
+        .lock()
+        .map_err(|e| crate::Error::Internal(e.to_string()))?;
     if let Some(bridge) = bridge_lock.as_ref() {
         Ok(serde_json::json!({
             "state": bridge.state.as_str(),

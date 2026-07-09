@@ -55,13 +55,13 @@ export default function CsvTable({ content, delimiter = ',', maxRows = 500 }: Cs
               <th key={i} style={{
                 padding: '6px 10px',
                 textAlign: 'left',
-                borderBottom: '2px solid var(--vibe-btn-border)',
-                color: 'var(--vibe-btn-text)',
+                borderBottom: '2px solid var(--border)',
+                color: 'var(--text-secondary)',
                 fontWeight: 600,
                 whiteSpace: 'nowrap',
                 position: 'sticky',
                 top: 0,
-                background: 'var(--vibe-content-bg)',
+                background: 'var(--surface)',
               }}>
                 {h}
               </th>
@@ -71,12 +71,12 @@ export default function CsvTable({ content, delimiter = ',', maxRows = 500 }: Cs
         <tbody>
           {rows.map((row, ri) => (
             <tr key={ri} style={{
-              borderBottom: '1px solid var(--vibe-btn-border)',
+              borderBottom: '1px solid var(--border)',
             }}>
               {row.map((cell, ci) => (
                 <td key={ci} style={{
                   padding: '4px 10px',
-                  color: 'var(--vibe-brand-text)',
+                  color: 'var(--text)',
                   whiteSpace: 'nowrap',
                   maxWidth: 300,
                   overflow: 'hidden',
@@ -92,7 +92,7 @@ export default function CsvTable({ content, delimiter = ',', maxRows = 500 }: Cs
       {content.split('\n').length > maxRows + 1 && (
         <div style={{
           padding: `px px`,
-          color: 'var(--text-faint)',
+          color: 'var(--text-disabled)',
           fontSize: FONT_SIZE.sm,
           textAlign: 'center',
         }}>

@@ -358,7 +358,9 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
     // Migration v1→v2: v1 schema already includes all 10 tables created at init,
     // so this is a no-op for now. Future migrations go here.
     if current_version < 2 {
-        // v2: (placeholder — no column additions needed yet)
+        // v2: reserved migration slot — no schema changes needed yet.
+        // Future migrations that require column additions or new tables should
+        // increment this version and add their DDL here.
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '2')",
             [],

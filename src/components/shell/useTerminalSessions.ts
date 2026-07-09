@@ -66,12 +66,12 @@ export function useTerminalSessions({
       import('@xterm/addon-unicode11'),
     ]);
 
-    const activeTheme = typeof document !== 'undefined' ? (document.documentElement.getAttribute('data-theme') || 'terminal-volt') : 'terminal-volt';
-    const initialTerminalTheme = TERMINAL_THEMES[activeTheme] || TERMINAL_THEMES['terminal-volt']!;
+    const activeTheme = typeof document !== 'undefined' ? (document.documentElement.getAttribute('data-theme') || 'dark') : 'dark';
+    const initialTerminalTheme = TERMINAL_THEMES[activeTheme] || TERMINAL_THEMES.dark!;
 
     const term = new Terminal({
       allowProposedApi: true,
-      fontSize: FONT_SIZE.lg,
+      fontSize: 14,
       fontFamily: '"JetBrainsMono Nerd Font", "MesloLGS NF", "FiraCode Nerd Font", "Hack Nerd Font", Menlo, Monaco, "Courier New", monospace',
       theme: {
         background: 'rgba(0, 0, 0, 0)',
@@ -102,9 +102,9 @@ export function useTerminalSessions({
     });
     term.loadAddon(webLinksAddon);
 
-    const placeholderId = `placeholder-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const pendingSessionId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const sessionContainer = document.createElement('div');
-    sessionContainer.setAttribute('data-terminal-session', placeholderId);
+    sessionContainer.setAttribute('data-terminal-session', pendingSessionId);
     sessionContainer.style.cssText = 'width:100%;height:100%;display:none;';
     container.appendChild(sessionContainer);
 

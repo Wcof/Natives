@@ -29,9 +29,9 @@ export default function DiffViewer({ oldContent, newContent, fileName, onRollbac
   });
 
   return (
-    <div className="rounded-lg border border-[var(--vibe-border-subtle)] overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 bg-[var(--vibe-btn-bg)] border-b border-[var(--vibe-border-subtle)]">
-        <span className="text-xs font-medium text-[var(--text-dim)]">{fileName}</span>
+    <div className="rounded-lg border border-[var(--border-subtle)] overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 bg-[var(--surface)] border-b border-[var(--border-subtle)]">
+        <span className="text-xs font-medium text-[var(--text-secondary)]">{fileName}</span>
         <div className="flex gap-3 text-[0.625rem]">
           <span className="text-green-400">+{lines.filter(l => l.type === 'added').length}</span>
           <span className="text-red-400">-{lines.filter(l => l.type === 'removed').length}</span>
@@ -54,14 +54,14 @@ export default function DiffViewer({ oldContent, newContent, fileName, onRollbac
                 line.type === 'changed' ? 'bg-amber-500/5' : '';
               const textColor = line.type === 'added' ? 'text-green-400' :
                 line.type === 'removed' ? 'text-red-400' :
-                line.type === 'changed' ? 'text-amber-400' : 'text-[var(--text-dim)]';
+                line.type === 'changed' ? 'text-amber-400' : 'text-[var(--text-secondary)]';
 
               return (
-                <tr key={line.lineNum} className={`${bgColor} hover:bg-[var(--vibe-btn-hover-bg)]`}>
-                  <td className="px-2 py-0.5 text-right text-[var(--text-faint)] select-none w-10 border-r border-[var(--vibe-border-subtle)]">
+                <tr key={line.lineNum} className={`${bgColor} hover:bg-[var(--surface-hover)]`}>
+                  <td className="px-2 py-0.5 text-right text-[var(--text-disabled)] select-none w-10 border-r border-[var(--border-subtle)]">
                     {line.lineNum}
                   </td>
-                  <td className="px-2 py-0.5 text-[var(--text-faint)] select-none w-6 text-center border-r border-[var(--vibe-border-subtle)]">
+                  <td className="px-2 py-0.5 text-[var(--text-disabled)] select-none w-6 text-center border-r border-[var(--border-subtle)]">
                     {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
                   </td>
                   <td className={`px-2 py-0.5 whitespace-pre ${textColor}`}>

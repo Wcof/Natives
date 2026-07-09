@@ -5,6 +5,8 @@ import { Package, Edit2, Trash2, Archive, ClipboardList, Ruler, RotateCcw } from
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 import { t, type Locale } from '@/i18n';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { classifyError } from '@/lib/error-classifier'; // toast+classifyError for catch
+import { useToast } from '@/components/ui/Toast';
 
 interface AIProposal {
   id: string;
@@ -99,6 +101,7 @@ async function appendPreference(preference: string, existingContent?: string): P
 }
 
 export default function AIFileOrganizer() {
+  const { toast } = useToast();
   const [proposals, setProposals] = useState<AIProposal[]>([]);
   const [approved, setApproved] = useState<Set<string>>(new Set());
   const [analyzing, setAnalyzing] = useState(false);
@@ -212,11 +215,11 @@ export default function AIFileOrganizer() {
 
       setProposals(newProposals);
     } catch (err) {
-      console.error('[AIFileOrganizer] Analysis failed:', err);
+      toast(classifyError(err).userMessage, 'error');
     } finally {
       setAnalyzing(false);
     }
-  }, [currentDir, analysisMode, locale]);
+  }, [currentDir, analysisMode, locale, toast]);
 
   const handleExecute = useCallback(async () => {
     setExecuting(true);
@@ -258,11 +261,11 @@ export default function AIFileOrganizer() {
       setProposals((prev) => prev.filter((p) => !approved.has(p.id)));
       setApproved(new Set());
     } catch (err) {
-      console.error('[AIFileOrganizer] Execution failed:', err);
+      toast(classifyError(err).userMessage, 'error');
     } finally {
       setExecuting(false);
     }
-  }, [proposals, approved, currentDir]);
+  }, [proposals, approved, currentDir, toast]);
 
   const handleUndo = useCallback(() => {
     setProposals([]);
@@ -286,22 +289,22 @@ export default function AIFileOrganizer() {
       }
       setLastRollback(null);
     } catch (err) {
-      console.error('[AIFileOrganizer] Undo failed:', err);
+      toast(classifyError(err).userMessage, 'error');
     } finally {
       setExecuting(false);
     }
-  }, [lastRollback]);
+  }, [lastRollback, toast]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Header */}
       <div style={{
-        padding: '8px 10px', borderBottom: '1px solid var(--vibe-btn-border)',
+        padding: '8px 10px', borderBottom: '1px solid var(--border)',
       }}>
-        <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+        <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
           {t(locale, 'aiWorkbench.aiFileOrganizer')}
         </div>
-        <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-faint)', marginTop: 2 }}>
+        <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)', marginTop: 2 }}>
           {t(locale, 'aiWorkbench.organizer.description')}
         </div>
         <div style={{ display: 'flex', gap: SPACING.xs, marginTop: 6 }}>
@@ -313,8 +316,8 @@ export default function AIFileOrganizer() {
               style={{
                 fontSize: FONT_SIZE.xs, padding: '2px 6px', borderRadius: BORDER_RADIUS.sm,
                 display: 'inline-flex', alignItems: 'center', gap: 3,
-                color: analysisMode === mode ? 'var(--accent)' : 'var(--text-faint)',
-                background: analysisMode === mode ? 'var(--accent-soft)' : 'transparent',
+                color: analysisMode === mode ? 'var(--primary)' : 'var(--text-disabled)',
+                background: analysisMode === mode ? 'var(--primary-soft)' : 'transparent',
               }}
             >
               {mode === 'organize' ? <><Package size={10} /> Organize</> : mode === 'duplicates' ? <><ClipboardList size={10} /> Duplicates</> : <><Ruler size={10} /> Large Files</>}
@@ -327,7 +330,7 @@ export default function AIFileOrganizer() {
       <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-sm)' }}>
         {proposals.length === 0 ? (
           <div style={{ textAlign: 'center', padding: SPACING.xl }}>
-            <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-faint)', marginBottom: SPACING.md }}>
+            <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-disabled)', marginBottom: SPACING.md }}>
               {analyzing ? t(locale, 'aiWorkbench.organizer.analyzing') : t(locale, 'aiWorkbench.noSuggestions')}
             </div>
             <button
@@ -344,8 +347,8 @@ export default function AIFileOrganizer() {
             {proposals.map((p) => (
               <div key={p.id} style={{
                 padding: 'var(--space-sm)', marginBottom: 6, borderRadius: BORDER_RADIUS.md,
-                border: `1px solid ${approved.has(p.id) ? 'var(--accent)' : 'var(--vibe-btn-border)'}`,
-                background: approved.has(p.id) ? 'var(--vibe-active-bg)' : 'var(--vibe-toolbar-bg)',
+                border: `1px solid ${approved.has(p.id) ? 'var(--primary)' : 'var(--border)'}`,
+                background: approved.has(p.id) ? 'var(--primary-soft)' : 'var(--surface)',
               }}>
                 <label style={{ display: 'flex', gap: 'var(--space-sm)', cursor: 'pointer', fontSize: 'var(--fs-sm)' }}>
                   <input
@@ -362,15 +365,15 @@ export default function AIFileOrganizer() {
                   />
                    <div>
                     <div style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: SPACING.xs, flexWrap: 'wrap' }}>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: SPACING.xs, color: 'var(--accent)' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: SPACING.xs, color: 'var(--primary)' }}>
                         {p.action === 'move' ? <Package size={12} /> : p.action === 'rename' ? <Edit2 size={12} /> : p.action === 'delete' ? <Trash2 size={12} /> : <Archive size={12} />}
                         <span>{t(locale, `aiWorkbench.organizer.actions.${p.action}`)}</span>
                       </span>
                       <span style={{ fontFamily: 'var(--font-mono)' }}>{p.filePath.split('/').pop()}</span>
                     </div>
-                    <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-faint)', marginTop: 2 }}>{p.reason}</div>
+                    <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)', marginTop: 2 }}>{p.reason}</div>
                     {p.targetPath && (
-                      <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-dim)', marginTop: 1 }}>
+                      <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)', marginTop: 1 }}>
                         → {p.targetPath.split('/').slice(-2).join('/')}
                       </div>
                     )}

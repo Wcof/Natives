@@ -1,0 +1,40 @@
+{
+  "description": "Example Natives hooks — demonstrating the complete Claude Code-compatible hook system",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"systemMessage\": \"[natives-example] PreToolUse: running ${tool_name}\"}'",
+            "timeout": 5
+          }
+        ],
+        "matcher": "Write|Edit"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"metrics\": {\"hook_executed\": true}}'",
+            "timeout": 5
+          }
+        ],
+        "matcher": "*"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"decision\": \"allow\"}'",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

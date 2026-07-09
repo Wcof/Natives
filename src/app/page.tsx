@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
+import { motion, useReducedMotion } from 'framer-motion';
+import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION, SHADOW } from '@/lib/design-tokens';
 import { fmtCount, fmtSize } from '@/lib/format';
 import type { SkillInfo, ClaudeUsage, ModelTokenUsage, CodexUsage, RtkUsage } from '@/types/agent';
 import { TokenHero } from '@/components/dashboard/TokenHero';
@@ -74,6 +75,7 @@ interface RtkGainResult {
 export default function DashboardPage() {
   const locale = useLocale();
   const [loc, setLoc] = useState(locale);
+  const prefersReducedMotion = useReducedMotion();
 
   const [skills, setSkills] = useState<SkillInfo[]>(() => getCached<SkillInfo[]>('skills') ?? []);
   const [usageResult, setUsageResult] = useState<UsageResult | null>(() => getCached<UsageResult>('usage'));
@@ -287,7 +289,7 @@ export default function DashboardPage() {
       } catch (err) {
         console.error('Failed to get storage info:', err);
       }
-      setStorageSize('—');
+      setStorageSize('-');
       setStorageDetail(null);
       setIsStorageLoading(false);
     }
@@ -366,14 +368,24 @@ export default function DashboardPage() {
   }, [skills]);
 
   return (
-    <div className="w-full h-full flex flex-col overflow-y-auto">
+    <motion.div
+      className="w-full h-full flex flex-col overflow-y-auto"
+      initial={prefersReducedMotion ? undefined : { opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={prefersReducedMotion ? undefined : { type: 'spring', stiffness: 60, damping: 16, mass: 1 }}
+    >
       {/* ── Greeting ── */}
-      <div style={{ padding: `${SPACING.lg}px ${SPACING.xl}px ${SPACING.sm}px`, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <motion.div
+        initial={prefersReducedMotion ? undefined : { opacity: 0, y: -8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={prefersReducedMotion ? undefined : { type: 'spring', stiffness: 80, damping: 15, mass: 0.9 }}
+        style={{ padding: `${SPACING.lg}px ${SPACING.xl}px ${SPACING.sm}px`, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+      >
         <div>
-          <h1 style={{ fontSize: '22px', fontWeight: 700, color: 'var(--vibe-brand-text)', letterSpacing: '-0.02em' }}>
+          <h1 style={{ fontSize: '22px', fontWeight: 700, color: 'var(--text)', letterSpacing: '-0.02em' }}>
             {t(loc, 'dashboard.greeting')}
           </h1>
-          <p style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-faint)', marginTop: 1 }}>
+          <p style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-disabled)', marginTop: 1 }}>
             {t(loc, 'dashboard.subtitle')}
           </p>
         </div>
@@ -389,9 +401,9 @@ export default function DashboardPage() {
               gap: 6,
               padding: '5px 10px',
               borderRadius: BORDER_RADIUS.md,
-              background: accordionMode ? 'var(--vibe-active-bg)' : 'var(--vibe-btn-bg)',
-              border: `0.0625rem solid ${accordionMode ? 'var(--vibe-active-color)' : 'var(--vibe-btn-border)'}`,
-              color: accordionMode ? 'var(--vibe-active-color)' : 'var(--vibe-brand-text)',
+              background: accordionMode ? 'var(--primary-soft)' : 'var(--surface)',
+              border: `0.0625rem solid ${accordionMode ? 'var(--primary)' : 'var(--border)'}`,
+              color: accordionMode ? 'var(--primary)' : 'var(--text)',
               fontSize: FONT_SIZE.xs,
               cursor: 'pointer',
               transition: 'all 0.2s ease',
@@ -403,22 +415,28 @@ export default function DashboardPage() {
 
           {/* Refresh button */}
           <button onClick={handleRefresh} disabled={isRefreshing} title={t(loc, 'dashboard.refresh')}
-            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: BORDER_RADIUS.md, background: 'var(--vibe-btn-bg)', border: '0.0625rem solid var(--vibe-btn-border)', color: 'var(--vibe-brand-text)', fontSize: FONT_SIZE.xs, cursor: isRefreshing ? 'default' : 'pointer', opacity: isRefreshing ? 0.6 : 1, transition: 'opacity 0.15s' }}>
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: BORDER_RADIUS.md, background: 'var(--surface)', border: '0.0625rem solid var(--border)', color: 'var(--text)', fontSize: FONT_SIZE.xs, cursor: isRefreshing ? 'default' : 'pointer', opacity: isRefreshing ? 0.6 : 1, transition: 'opacity 0.15s' }}>
             <RefreshCw size={12} style={{ animation: isRefreshing ? 'spin 0.8s linear infinite' : undefined }} />
             {isRefreshing ? t(loc, 'dashboard.refreshing') : t(loc, 'dashboard.refresh')}
           </button>
         </div>
-      </div>
+      </motion.div>
 
       {/* ── Top stat cards ── */}
-      <div style={{ padding: `0 ${SPACING.xl}px ${SPACING.sm}px`, flexShrink: 0 }}>
+      <motion.div
+        initial={prefersReducedMotion ? undefined : { opacity: 0, y: 12 }}
+        whileInView={prefersReducedMotion ? undefined : { opacity: 1, y: 0 }}
+        viewport={{ once: true, margin: '-40px' }}
+        transition={prefersReducedMotion ? undefined : { type: 'spring', stiffness: 100, damping: 20 }}
+        style={{ padding: `0 ${SPACING.xl}px ${SPACING.sm}px`, flexShrink: 0 }}
+      >
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr) 1.6fr', gap: SPACING.sm }}>
           <StatCard
             icon={<Grid3x3 size={16} />}
             label={t(locale, 'dashboard.allSkills')}
             value={isSkillsLoading ? '…' : `${skillsOverview.unique}/${skillsOverview.total}`}
             subtext={`${moduleCount} ${t(locale, 'dashboard.modulesLabel')} · ${isStorageLoading ? '…' : storageSize}`}
-            hoverColor="#3b82f6"
+            hoverColor="var(--semantic-blue)"
             title={t(locale, 'dashboard.allSkillsTitle')}
             onClick={() => window.dispatchEvent(new CustomEvent('navigate', { detail: 'modules' }))}
           />
@@ -427,7 +445,7 @@ export default function DashboardPage() {
             label={t(locale, 'dashboard.activeSkills')}
             value={isSkillsLoading ? '…' : String(skillsOverview.active)}
             subtext={t(locale, 'dashboard.activeSkillsSubtext', { count: skillsOverview.totalHits })}
-            hoverColor="#10b981"
+            hoverColor="var(--semantic-green)"
             title={t(locale, 'dashboard.activeSkillsTitle')}
           />
           <StatCard
@@ -435,7 +453,7 @@ export default function DashboardPage() {
             label={t(locale, 'dashboard.dustSkills')}
             value={isSkillsLoading ? '…' : String(skillsOverview.dust)}
             subtext={t(locale, 'dashboard.dustSkillsSubtext')}
-            hoverColor="var(--text-faint)"
+            hoverColor="var(--text-disabled)"
             title={t(locale, 'dashboard.dustSkillsTitle')}
           />
           <StatCard
@@ -443,7 +461,7 @@ export default function DashboardPage() {
             label={t(locale, 'dashboard.issueSkills')}
             value={isSkillsLoading ? '…' : String(skillsOverview.issues)}
             subtext={t(locale, 'dashboard.issueSkillsSubtext')}
-            hoverColor={skillsOverview.issues > 0 ? 'var(--danger)' : 'var(--text-faint)'}
+            hoverColor={skillsOverview.issues > 0 ? 'var(--danger)' : 'var(--text-disabled)'}
             valueColor={skillsOverview.issues > 0 ? 'var(--danger)' : undefined}
             title={t(locale, 'dashboard.issueSkillsTitle')}
           />
@@ -458,7 +476,7 @@ export default function DashboardPage() {
               <div style={{
                 height: 6,
                 borderRadius: 3,
-                background: 'var(--vibe-btn-bg)',
+                background: 'var(--surface)',
                 overflow: 'hidden',
                 position: 'relative'
               }}>
@@ -467,7 +485,7 @@ export default function DashboardPage() {
                   width: `${Math.min(100, (skillsOverview.budgetChars / skillsOverview.budgetLimit) * 100)}%`,
                   background: skillsOverview.budgetChars > skillsOverview.budgetLimit 
                     ? 'var(--danger)' 
-                    : 'linear-gradient(90deg, #a855f7, var(--accent))',
+                    : 'linear-gradient(90deg, var(--semantic-purple), var(--primary))',
                   borderRadius: 3,
                   transition: 'width 0.3s ease'
                 }} />
@@ -475,10 +493,16 @@ export default function DashboardPage() {
             </div>
           </StatCard>
         </div>
-      </div>
+      </motion.div>
 
       {/* ── Two-Column Kanban Grid (Independent Columns to prevent stretching) ── */}
-      <div style={{ padding: `0 ${SPACING.xl}px`, flexShrink: 0 }}>
+      <motion.div
+        initial={prefersReducedMotion ? undefined : { opacity: 0, y: 16 }}
+        whileInView={prefersReducedMotion ? undefined : { opacity: 1, y: 0 }}
+        viewport={{ once: true, margin: '-60px' }}
+        transition={prefersReducedMotion ? undefined : { type: 'spring', stiffness: 100, damping: 20, delay: 0.1 }}
+        style={{ padding: `0 ${SPACING.xl}px`, flexShrink: 0 }}
+      >
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: SPACING.sm, alignItems: 'start', marginBottom: SPACING.sm }}>
           
           {/* Left Column */}
@@ -488,8 +512,8 @@ export default function DashboardPage() {
             <KanbanCard
               icon={<Sparkles size={16} />}
               title={t(loc, 'dashboard.tokenUsage')}
-              accentColor="#3b82f6"
-              summary={totalTokens > 0 ? fmtCount(totalTokens) : '—'}
+              accentColor="var(--semantic-blue)"
+              summary={totalTokens > 0 ? fmtCount(totalTokens) : '-'}
               badge={modelCount > 0 ? `${modelCount} models` : undefined}
               isLoading={isUsageLoading}
               expanded={expandedCards.tokens}
@@ -502,14 +526,17 @@ export default function DashboardPage() {
               />
               {modelSummaryLines.length > 0 && (
                 <div style={{ marginTop: SPACING.sm }}>
-                  <div style={{ fontSize: FONT_SIZE.xs, fontWeight: 600, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>
+                  <div style={{ fontSize: FONT_SIZE.xs, fontWeight: 600, color: 'var(--text-disabled)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>
                     {t(loc, 'dashboard.modelStats')}
                   </div>
                   {modelSummaryLines.map(m => (
-                    <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: SPACING.sm, padding: '3px 0', fontSize: FONT_SIZE.xs, borderTop: '0.0625rem solid var(--vibe-btn-border)' }}>
-                      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--vibe-brand-text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</span>
-                      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>{fmtCount(m.tokens)}</span>
-                      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)', width: 60, textAlign: 'right' }}>{m.cost > 0 ? `$${m.cost.toFixed(2)}` : '—'}</span>
+                  <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: SPACING.sm, padding: '5px 4px', fontSize: FONT_SIZE.xs, borderRadius: BORDER_RADIUS.sm, transition: 'background 0.1s' }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--surface)'; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                  >
+                      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</span>
+                      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>{fmtCount(m.tokens)}</span>
+                      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', width: 60, textAlign: 'right' }}>{m.cost > 0 ? `$${m.cost.toFixed(2)}` : '-'}</span>
                     </div>
                   ))}
                 </div>
@@ -520,8 +547,8 @@ export default function DashboardPage() {
             <KanbanCard
               icon={<BarChart3 size={16} />}
               title={t(loc, 'dashboard.modelStats') || '模型统计'}
-              accentColor="#22c55e"
-              summary={modelCount > 0 ? `${modelCount} models` : '—'}
+              accentColor="var(--semantic-green)"
+              summary={modelCount > 0 ? `${modelCount} models` : '-'}
               badge="Table"
               isLoading={isUsageLoading}
               expanded={expandedCards.models}
@@ -538,8 +565,8 @@ export default function DashboardPage() {
             <KanbanCard
               icon={<Coins size={16} />}
               title={t(locale, 'dashboard.tokenSavings')}
-              accentColor="#f59e0b"
-              summary={rtkSaved > 0 ? fmtCount(rtkSaved) : '—'}
+              accentColor="var(--semantic-amber)"
+              summary={rtkSaved > 0 ? fmtCount(rtkSaved) : '-'}
               badge={rtkCmds > 0 ? `${rtkCmds} commands` : undefined}
               isLoading={false}
               expanded={expandedCards.savings}
@@ -551,18 +578,18 @@ export default function DashboardPage() {
                     display: 'flex', alignItems: 'center', gap: SPACING.sm,
                     padding: `${SPACING.sm}px ${SPACING.md}px`,
                     borderRadius: BORDER_RADIUS.md, marginBottom: SPACING.sm,
-                    background: 'var(--vibe-btn-bg)', border: '0.0625rem solid var(--vibe-btn-border)',
+                    background: 'var(--surface)', border: '0.0625rem solid var(--border)',
                   }}>
-                    <Coins size={16} style={{ color: '#f59e0b' }} />
-                    <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--vibe-brand-text)' }}>
+                    <Coins size={16} style={{ color: 'var(--semantic-amber)' }} />
+                    <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--text)' }}>
                       <strong>{fmtCount(rtkSaved)}</strong> tokens saved
                     </span>
-                    <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-dim)', flex: 1, textAlign: 'right' }}>
+                    <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)', flex: 1, textAlign: 'right' }}>
                       {rtkCmds} commands · {((rtkSaved as number) / Math.max(totalTokens, 1) * 100).toFixed(1)}% of total
                     </span>
                   </div>
 
-                  <div style={{ fontSize: FONT_SIZE.xs, fontWeight: 600, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4, padding: `0 ${SPACING.xs}px` }}>
+                  <div style={{ fontSize: FONT_SIZE.xs, fontWeight: 600, color: 'var(--text-disabled)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4, padding: `0 ${SPACING.xs}px` }}>
                     By Command
                   </div>
                   {rtkData.commands.slice(0, 15).map((cmd, i) => {
@@ -575,12 +602,12 @@ export default function DashboardPage() {
                         gap: SPACING.sm,
                         padding: '6px 8px',
                         fontSize: FONT_SIZE.xs,
-                        borderTop: '0.0625rem solid var(--vibe-btn-border)',
+                        borderTop: '0.0625rem solid var(--border)',
                         borderRadius: BORDER_RADIUS.sm,
                         overflow: 'hidden',
                         transition: 'background 0.1s',
                       }}
-                        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--vibe-btn-bg)'; }}
+                        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--surface)'; }}
                         onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
                       >
                         {/* Visual progress bar behind row */}
@@ -590,25 +617,25 @@ export default function DashboardPage() {
                           top: 0,
                           bottom: 0,
                           width: `${percentage}%`,
-                          background: '#f59e0b0d', // very subtle amber tint
+                          background: 'color-mix(in srgb, var(--semantic-amber) 5%, transparent)',
                           zIndex: 0,
                         }} />
                         
                         <div style={{ display: 'flex', alignItems: 'center', width: '100%', zIndex: 1 }}>
                           {/* Rank */}
-                          <span style={{ width: 18, textAlign: 'center', color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', fontSize: 10 }}>
+                          <span style={{ width: 18, textAlign: 'center', color: 'var(--text-disabled)', fontFamily: 'var(--font-mono)', fontSize: 10 }}>
                             #{i + 1}
                           </span>
                           {/* Command name */}
-                          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--vibe-brand-text)', fontFamily: 'var(--font-mono)' }}>
+                          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>
                             {cmd.command}
                           </span>
                           {/* Count */}
-                          <span style={{ color: 'var(--text-dim)', textAlign: 'right', minWidth: 40, marginRight: 8 }}>
+                          <span style={{ color: 'var(--text-secondary)', textAlign: 'right', minWidth: 40, marginRight: 8 }}>
                             {cmd.count}x
                           </span>
                           {/* Tokens saved */}
-                          <span style={{ color: '#f59e0b', fontFamily: 'var(--font-mono)', fontWeight: 700, textAlign: 'right', minWidth: 60 }}>
+                          <span style={{ color: 'var(--semantic-amber)', fontFamily: 'var(--font-mono)', fontWeight: 700, textAlign: 'right', minWidth: 60 }}>
                             {fmtCount(cmd.tokensSaved)}
                           </span>
                         </div>
@@ -616,14 +643,14 @@ export default function DashboardPage() {
                     );
                   })}
                   {rtkData.commands.length > 15 && (
-                    <div style={{ textAlign: 'center', padding: `${SPACING.xs}px 0`, fontSize: FONT_SIZE.xs, color: 'var(--text-faint)' }}>
+                    <div style={{ textAlign: 'center', padding: `${SPACING.xs}px 0`, fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)' }}>
                       +{rtkData.commands.length - 15} more commands
                     </div>
                   )}
                 </div>
               ) : (
-                <div style={{ padding: `${SPACING.sm}px 0`, textAlign: 'center', color: 'var(--text-faint)', fontSize: FONT_SIZE.xs }}>
-                  Run <code style={{ background: 'var(--vibe-btn-bg)', padding: '1px 4px', borderRadius: 3 }}>rtk init -g</code> to start tracking token savings
+                <div style={{ padding: `${SPACING.sm}px 0`, textAlign: 'center', color: 'var(--text-disabled)', fontSize: FONT_SIZE.xs }}>
+                  Run <code style={{ background: 'var(--surface)', padding: '1px 4px', borderRadius: 3 }}>rtk init -g</code> to start tracking token savings
                 </div>
               )}
             </KanbanCard>
@@ -637,7 +664,7 @@ export default function DashboardPage() {
             <KanbanCard
               icon={<Wrench size={16} />}
               title={t(loc, 'dashboard.toolsUsage')}
-              accentColor="#f97316"
+              accentColor="var(--semantic-orange)"
               summary={String(totalRequests)}
               badge={`${totalRequests} reqs · ${skillCount} skills`}
               isLoading={isUsageLoading}
@@ -647,47 +674,47 @@ export default function DashboardPage() {
               {usageResult?.claude ? (
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.sm, marginBottom: SPACING.sm }}>
-                    <Code2 size={14} style={{ color: '#3b82f6' }} />
-                    <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--vibe-brand-text)' }}>Code</span>
+                    <Code2 size={14} style={{ color: 'var(--semantic-blue)' }} />
+                    <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text)' }}>Code</span>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: SPACING.sm, marginBottom: SPACING.md }}>
-                    <MiniMetric label={t(loc, 'dashboard.totalRequests')} value={fmtCount(usageResult.claude.totalRequests ?? 0)} accent="#3b82f6" />
-                    <MiniMetric label={t(loc, 'dashboard.totalCost')} value={usageResult.claude.totalCost != null ? `$${usageResult.claude.totalCost.toFixed(2)}` : '—'} accent="#22c55e" />
-                    <MiniMetric label={t(loc, 'dashboard.cacheHitRate')} value={`${usageResult.claude.activity?.totalSessions ?? 0}`} accent="#8b5cf6" />
+                    <MiniMetric label={t(loc, 'dashboard.totalRequests')} value={fmtCount(usageResult.claude.totalRequests ?? 0)} accent="var(--semantic-blue)" />
+                    <MiniMetric label={t(loc, 'dashboard.totalCost')} value={usageResult.claude.totalCost != null ? `$${usageResult.claude.totalCost.toFixed(2)}` : '-'} accent="var(--semantic-green)" />
+                    <MiniMetric label={t(loc, 'dashboard.cacheHitRate')} value={`${usageResult.claude.activity?.totalSessions ?? 0}`} accent="var(--semantic-purple)" />
                   </div>
 
-                  <div style={{ borderTop: '0.0625rem solid var(--vibe-btn-border)', paddingTop: SPACING.sm }}>
+                  <div style={{ borderTop: '0.0625rem solid var(--border)', paddingTop: SPACING.sm }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.sm, marginBottom: SPACING.sm }}>
-                      <Database size={14} style={{ color: '#8b5cf6' }} />
-                      <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--vibe-brand-text)' }}>Codex</span>
+                      <Database size={14} style={{ color: 'var(--semantic-purple)' }} />
+                      <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text)' }}>Codex</span>
                     </div>
                     {codexUsage ? (
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: SPACING.sm }}>
-                        <MiniMetric label="Total" value={fmtCount(codexUsage.totalTokens)} accent="#8b5cf6" />
-                        <MiniMetric label="Sessions" value={fmtCount(codexUsage.totalSessions)} accent="#f97316" />
-                        <MiniMetric label="Today" value={fmtCount(codexUsage.todayTokens)} accent="#22c55e" />
+                        <MiniMetric label="Total" value={fmtCount(codexUsage.totalTokens)} accent="var(--semantic-purple)" />
+                        <MiniMetric label="Sessions" value={fmtCount(codexUsage.totalSessions)} accent="var(--semantic-orange)" />
+                        <MiniMetric label="Today" value={fmtCount(codexUsage.todayTokens)} accent="var(--semantic-green)" />
                         {codexUsage.totalCost > 0 && (
-                          <MiniMetric label="Cost" value={`$${codexUsage.totalCost.toFixed(2)}`} accent="#eab308" />
+                          <MiniMetric label="Cost" value={`$${codexUsage.totalCost.toFixed(2)}`} accent="var(--semantic-amber)" />
                         )}
                       </div>
                     ) : (
-                      <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-faint)', textAlign: 'center', padding: `${SPACING.sm}px 0` }}>
+                      <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)', textAlign: 'center', padding: `${SPACING.sm}px 0` }}>
                         No Codex usage data available
                       </div>
                     )}
                   </div>
 
                   {/* Skills ranking panel merged directly inside */}
-                  <div style={{ borderTop: '0.0625rem solid var(--vibe-btn-border)', paddingTop: SPACING.sm, marginTop: SPACING.md }}>
+                  <div style={{ borderTop: '0.0625rem solid var(--border)', paddingTop: SPACING.sm, marginTop: SPACING.md }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.sm, marginBottom: SPACING.sm }}>
-                      <Zap size={14} style={{ color: '#f43f5e' }} />
-                      <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--vibe-brand-text)' }}>{t(loc, 'dashboard.skillsTitle') || 'Skills'}</span>
+                      <Zap size={14} style={{ color: 'var(--semantic-red)' }} />
+                      <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text)' }}>{t(loc, 'dashboard.skillsTitle') || 'Skills'}</span>
                     </div>
                     <SkillsPanel skills={skills ?? undefined} isLoading={false} minimal />
                   </div>
                 </div>
               ) : (
-                <div style={{ padding: `${SPACING.sm}px 0`, textAlign: 'center', color: 'var(--text-faint)', fontSize: FONT_SIZE.xs }}>
+                <div style={{ padding: `${SPACING.sm}px 0`, textAlign: 'center', color: 'var(--text-disabled)', fontSize: FONT_SIZE.xs }}>
                   {t(loc, 'dashboard.noData')}
                 </div>
               )}
@@ -697,8 +724,8 @@ export default function DashboardPage() {
             <KanbanCard
               icon={<Activity size={16} />}
               title={t(loc, 'dashboard.trendTitle') || '使用趋势'}
-              accentColor="#8b5cf6"
-              summary={usageHistory.length > 0 ? `${usageHistory.length} days` : '—'}
+              accentColor="var(--semantic-purple)"
+              summary={usageHistory.length > 0 ? `${usageHistory.length} days` : '-'}
               badge="Chart"
               isLoading={isUsageLoading}
               expanded={expandedCards.trend}
@@ -725,24 +752,23 @@ export default function DashboardPage() {
               display: 'flex', alignItems: 'center', gap: SPACING.sm,
               padding: `${SPACING.sm}px ${SPACING.md}px`,
               borderRadius: BORDER_RADIUS.lg,
-              border: '0.0625rem solid var(--vibe-content-border)',
-              background: 'var(--vibe-content-bg)',
-              backdropFilter: 'blur(var(--vibe-content-blur, 24px)) saturate(var(--vibe-content-saturation, 145%))',
-              cursor: 'pointer', userSelect: 'none', transition: 'background 0.12s',
+              border: '1px solid var(--border)',
+              background: 'var(--surface)',
+              cursor: 'pointer', userSelect: 'none', transition: 'background 150ms ease',
             }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--vibe-btn-bg)'; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--vibe-content-bg)'; }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-hover)'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--surface)'; }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: BORDER_RADIUS.md, background: '#8b5cf618', color: '#8b5cf6', flexShrink: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: BORDER_RADIUS.md, background: 'color-mix(in srgb, var(--semantic-purple) 10%, transparent)', color: 'var(--semantic-purple)', flexShrink: 0 }}>
               <Layers size={16} />
             </div>
-            <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--vibe-brand-text)', flex: 1 }}>
+            <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text)', flex: 1 }}>
               Code Graph
             </span>
-            <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-dim)' }}>
+            <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)' }}>
               {codeGraphExpanded ? '收起' : '展开'}
             </span>
-            <div style={{ color: 'var(--text-faint)', flexShrink: 0, transition: 'transform 0.2s' }}>
+            <div style={{ color: 'var(--text-disabled)', flexShrink: 0, transition: 'transform 0.2s' }}>
               {codeGraphExpanded ? (
                 <ChevronDown size={14} />
               ) : (
@@ -756,10 +782,10 @@ export default function DashboardPage() {
             </div>
           )}
         </div>
-      </div>
+      </motion.div>
 
       <div style={{ height: SPACING.xl, flexShrink: 0 }} />
-    </div>
+    </motion.div>
   );
 }
 
@@ -783,10 +809,10 @@ function ChevronRight({ size }: { size: number }) {
 function MiniMetric({ label, value, accent }: { label: string; value: string; accent: string }) {
   return (
     <div style={{
-      borderRadius: BORDER_RADIUS.sm, background: 'var(--vibe-btn-bg)',
-      border: '0.0625rem solid var(--vibe-btn-border)', padding: `${SPACING.xs}px ${SPACING.sm}px`,
+      borderRadius: BORDER_RADIUS.sm, background: 'var(--surface)',
+      border: '0.0625rem solid var(--border)', padding: `${SPACING.xs}px ${SPACING.sm}px`,
     }}>
-      <div style={{ fontSize: '9px', color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: '9px', color: 'var(--text-disabled)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 2 }}>{label}</div>
       <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 700, color: accent, fontFamily: 'var(--font-mono)' }}>{value}</div>
     </div>
   );
@@ -812,7 +838,7 @@ const StatCard = React.memo(function StatCard({
   value,
   onClick,
   title,
-  hoverColor = 'var(--vibe-accent-color)',
+  hoverColor = 'var(--primary)',
   badge,
   subtext,
   valueColor,
@@ -830,9 +856,8 @@ const StatCard = React.memo(function StatCard({
       title={title}
       style={{
         borderRadius: BORDER_RADIUS.md,
-        border: `0.0625rem solid ${hovered ? hoverColor : 'var(--vibe-content-border)'}`,
-        background: 'var(--vibe-content-bg)',
-        backdropFilter: 'blur(var(--vibe-content-blur, 24px)) saturate(var(--vibe-content-saturation, 145%))',
+        border: `1px solid ${hovered ? hoverColor : 'var(--border)'}`,
+        background: 'var(--surface)',
         padding: `${SPACING.sm}px ${SPACING.md}px`,
         display: 'flex',
         alignItems: 'center',
@@ -856,18 +881,18 @@ const StatCard = React.memo(function StatCard({
         {icon}
       </div>
       <div style={{ minWidth: 0, flex: 1 }}>
-        <p style={{ fontSize: '10px', color: 'var(--text-faint)', lineHeight: 1.2 }}>{label}</p>
+        <p style={{ fontSize: '10px', color: 'var(--text-disabled)', lineHeight: 1.2 }}>{label}</p>
         <p style={{
           fontSize: '18px',
           fontWeight: 700,
-          color: valueColor || 'var(--vibe-brand-text)',
+          color: valueColor || 'var(--text)',
           fontFamily: 'var(--font-mono)',
           lineHeight: 1.3,
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
         }}>{value}</p>
-        {subtext && <p style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{subtext}</p>}
+        {subtext && <p style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{subtext}</p>}
         {children}
       </div>
       {badge && (

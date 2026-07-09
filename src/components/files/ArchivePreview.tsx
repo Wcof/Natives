@@ -40,7 +40,7 @@ export default function ArchivePreview({ path, locale }: ArchivePreviewProps) {
 
   if (error) {
     return (
-      <div style={{ color: 'var(--text-faint)', fontSize: FONT_SIZE.md, padding: SPACING.xl, textAlign: 'center' }}>
+      <div style={{ color: 'var(--text-disabled)', fontSize: FONT_SIZE.md, padding: SPACING.xl, textAlign: 'center' }}>
         {error}
       </div>
     );
@@ -48,7 +48,7 @@ export default function ArchivePreview({ path, locale }: ArchivePreviewProps) {
 
   if (!entries) {
     return (
-      <div style={{ color: 'var(--text-faint)', fontSize: FONT_SIZE.md, padding: SPACING.xl, textAlign: 'center' }}>
+      <div style={{ color: 'var(--text-disabled)', fontSize: FONT_SIZE.md, padding: SPACING.xl, textAlign: 'center' }}>
         {t(locale, 'common.loading')}
       </div>
     );
@@ -56,7 +56,7 @@ export default function ArchivePreview({ path, locale }: ArchivePreviewProps) {
 
   if (entries.length === 0) {
     return (
-      <div style={{ color: 'var(--text-faint)', fontSize: FONT_SIZE.md, padding: SPACING.xl, textAlign: 'center' }}>
+      <div style={{ color: 'var(--text-disabled)', fontSize: FONT_SIZE.md, padding: SPACING.xl, textAlign: 'center' }}>
         Empty archive
       </div>
     );
@@ -66,8 +66,8 @@ export default function ArchivePreview({ path, locale }: ArchivePreviewProps) {
     <div style={{ fontSize: FONT_SIZE.md }}>
       <div style={{
         padding: '6px 10px',
-        color: 'var(--text-dim)',
-        borderBottom: '1px solid var(--vibe-btn-border)',
+        color: 'var(--text-secondary)',
+        borderBottom: '1px solid var(--border)',
         marginBottom: SPACING.xs,
       }}>
         {entries.length} entries{truncated ? ' (showing first 1000)' : ''}
@@ -79,14 +79,14 @@ export default function ArchivePreview({ path, locale }: ArchivePreviewProps) {
             alignItems: 'center',
             gap: SPACING.sm,
             padding: '3px 10px',
-            borderBottom: '1px solid var(--vibe-btn-border)',
+            borderBottom: '1px solid var(--border)',
           }}>
-            <span style={{ color: entry.isDir ? 'var(--accent)' : 'var(--text-dim)', fontSize: FONT_SIZE.xl, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+            <span style={{ color: entry.isDir ? 'var(--primary)' : 'var(--text-secondary)', fontSize: FONT_SIZE.xl, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
               {entry.isDir ? <FbFolder size={18} /> : <FbText size={18} />}
             </span>
             <span style={{
               flex: 1,
-              color: 'var(--vibe-brand-text)',
+              color: 'var(--text)',
               fontFamily: 'var(--font-mono, monospace)',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -95,7 +95,7 @@ export default function ArchivePreview({ path, locale }: ArchivePreviewProps) {
               {entry.name}
             </span>
             {!entry.isDir && entry.size > 0 && (
-              <span style={{ color: 'var(--text-faint)', whiteSpace: 'nowrap' }}>
+              <span style={{ color: 'var(--text-disabled)', whiteSpace: 'nowrap' }}>
                 {formatSize(entry.size)}
               </span>
             )}

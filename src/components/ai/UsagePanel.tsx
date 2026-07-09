@@ -60,8 +60,8 @@ export default function UsagePanel() {
             onClick={() => setActiveTab(tab.id)}
             style={{
               fontSize: FONT_SIZE.sm, padding: '4px 10px', flex: 1, borderRadius: 0,
-              borderBottom: activeTab === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
-              color: activeTab === tab.id ? 'var(--accent)' : 'var(--text-dim)',
+              borderBottom: activeTab === tab.id ? '2px solid var(--primary)' : '2px solid transparent',
+              color: activeTab === tab.id ? 'var(--primary)' : 'var(--text-secondary)',
               transition: TRANSITION.normal,
             }}
           >
@@ -81,7 +81,7 @@ export default function UsagePanel() {
       {error && !loading && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: SPACING.sm,
-          fontSize: FONT_SIZE.sm, color: 'var(--vibe-error-color, #e74c3c)',
+          fontSize: FONT_SIZE.sm, color: 'var(--danger)',
           padding: SPACING.sm, marginBottom: SPACING.sm,
         }}>
           <CircleAlert size={14} />
@@ -94,7 +94,7 @@ export default function UsagePanel() {
         <div style={{
           display: 'flex', flexDirection: 'column', gap: 2,
           marginBottom: SPACING.sm, fontSize: FONT_SIZE.xs,
-          color: 'var(--text-faint)',
+          color: 'var(--text-disabled)',
         }}>
           {sourceBreadcrumbs.map((path, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -122,7 +122,7 @@ export default function UsagePanel() {
               {usageData.claude.totalCost != null && usageData.claude.totalCost > 0 && (
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: SPACING.sm,
-                  fontSize: FONT_SIZE.sm, color: 'var(--text-dim)',
+                  fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)',
                   marginBottom: SPACING.sm, padding: `${SPACING.xs}px 0`,
                 }}>
                   <DollarSign size={14} />
@@ -133,7 +133,7 @@ export default function UsagePanel() {
               {/* 活跃统计 */}
               <div style={{
                 display: 'flex', gap: SPACING.md, fontSize: FONT_SIZE.xs,
-                color: 'var(--text-faint)', marginBottom: SPACING.sm,
+                color: 'var(--text-disabled)', marginBottom: SPACING.sm,
               }}>
                 <span>{usageData.claude.activity?.totalSessions ?? 0} {t(locale, 'aiWorkbench.sessions')}</span>
                 <span>{usageData.claude.activity?.totalMessages ?? 0} {t(locale, 'aiWorkbench.messages')}</span>
@@ -178,7 +178,7 @@ export default function UsagePanel() {
                     label={modelId}
                     used={(modelUsage.inputTokens ?? 0) + (modelUsage.outputTokens ?? 0)}
                     limit={((modelUsage.inputTokens ?? 0) + (modelUsage.outputTokens ?? 0) + (modelUsage.cacheReadInputTokens ?? 0)) || 1}
-                    color="var(--vibe-active-color)"
+                    color="var(--primary)"
                   />
                 </div>
               ))}
@@ -187,7 +187,7 @@ export default function UsagePanel() {
             <div style={{
               display: 'flex', flexDirection: 'column', alignItems: 'center',
               gap: SPACING.sm, padding: SPACING.lg,
-              fontSize: FONT_SIZE.sm, color: 'var(--text-faint)',
+              fontSize: FONT_SIZE.sm, color: 'var(--text-disabled)',
             }}>
               <Database size={24} />
               {usageData?.error || t(locale, 'aiWorkbench.usage.noClaudeData')}
@@ -205,7 +205,7 @@ export default function UsagePanel() {
             style={{
               marginTop: 8, fontSize: FONT_SIZE.sm,
               display: 'flex', alignItems: 'center', gap: SPACING.xs,
-              color: 'var(--text-dim)',
+              color: 'var(--text-secondary)',
             }}
           >
             <RefreshCw size={12} style={{ animation: loading ? 'spin 0.8s linear infinite' : undefined }} />
@@ -221,16 +221,16 @@ export default function UsagePanel() {
             <>
               {/* 总览 */}
               <div style={{ display: 'flex', gap: SPACING.sm, marginBottom: SPACING.md, flexWrap: 'wrap' }}>
-                <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
+                <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)' }}>
                   {t(locale, 'dashboard.today')}: <span style={{ color: 'var(--text)', fontWeight: 600 }}>{usageData.codex.todayTokens}</span>
                 </div>
-                <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
+                <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)' }}>
                   {t(locale, 'dashboard.last7Days')}: <span style={{ color: 'var(--text)', fontWeight: 600 }}>{usageData.codex.weekTokens}</span>
                 </div>
-                <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
+                <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)' }}>
                   {t(locale, 'dashboard.total')}: <span style={{ color: 'var(--text)', fontWeight: 600 }}>{usageData.codex.totalTokens}</span>
                 </div>
-                <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
+                <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)' }}>
                   {t(locale, 'dashboard.requests')}: <span style={{ color: 'var(--text)', fontWeight: 600 }}>{usageData.codex.totalSessions}</span>
                 </div>
               </div>
@@ -239,7 +239,7 @@ export default function UsagePanel() {
               {usageData.codex.totalCost > 0 && (
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: SPACING.sm,
-                  fontSize: FONT_SIZE.sm, color: 'var(--text-dim)',
+                  fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)',
                   marginBottom: SPACING.sm,
                 }}>
                   <DollarSign size={14} />
@@ -270,7 +270,7 @@ export default function UsagePanel() {
             <div style={{
               display: 'flex', flexDirection: 'column', alignItems: 'center',
               gap: SPACING.sm, padding: SPACING.lg,
-              fontSize: FONT_SIZE.sm, color: 'var(--text-faint)',
+              fontSize: FONT_SIZE.sm, color: 'var(--text-disabled)',
             }}>
               <Database size={24} />
               {t(locale, 'aiWorkbench.usage.noCodexData')}
@@ -287,7 +287,7 @@ export default function UsagePanel() {
             style={{
               marginTop: 8, fontSize: FONT_SIZE.sm,
               display: 'flex', alignItems: 'center', gap: SPACING.xs,
-              color: 'var(--text-dim)',
+              color: 'var(--text-secondary)',
             }}
           >
             <RefreshCw size={12} style={{ animation: loading ? 'spin 0.8s linear infinite' : undefined }} />
@@ -302,10 +302,10 @@ export default function UsagePanel() {
           {usageData?.rtk && usageData.rtk.totalCommands > 0 ? (
             <>
               <div style={{ display: 'flex', gap: SPACING.md, marginBottom: SPACING.md }}>
-                <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
+                <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)' }}>
                   {t(locale, 'aiWorkbench.tokensSaved')}: <span style={{ color: 'var(--text)', fontWeight: 600 }}>{usageData.rtk.totalSaved}</span>
                 </div>
-                <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
+                <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)' }}>
                   {t(locale, 'aiWorkbench.commands')}: <span style={{ color: 'var(--text)', fontWeight: 600 }}>{usageData.rtk.totalCommands}</span>
                 </div>
               </div>
@@ -327,10 +327,10 @@ export default function UsagePanel() {
                           fontFamily: 'var(--font-mono)',
                         }}
                       >
-                        <span style={{ color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                        <span style={{ color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                           {cmd.command}
                         </span>
-                        <span style={{ color: 'var(--text-faint)', marginLeft: SPACING.sm }}>
+                        <span style={{ color: 'var(--text-disabled)', marginLeft: SPACING.sm }}>
                           {cmd.count}x / {cmd.totalSaved}{' '}
                           <span style={{ fontSize: FONT_SIZE.xs }}>
                             {t(locale, 'aiWorkbench.tokensSaved')?.toLowerCase()}
@@ -346,7 +346,7 @@ export default function UsagePanel() {
             <div style={{
               display: 'flex', flexDirection: 'column', alignItems: 'center',
               gap: SPACING.sm, padding: SPACING.lg,
-              fontSize: FONT_SIZE.sm, color: 'var(--text-faint)',
+              fontSize: FONT_SIZE.sm, color: 'var(--text-disabled)',
             }}>
               <Database size={24} />
               {t(locale, 'aiWorkbench.usage.noRtkData')}
@@ -363,7 +363,7 @@ export default function UsagePanel() {
             style={{
               marginTop: 8, fontSize: FONT_SIZE.sm,
               display: 'flex', alignItems: 'center', gap: SPACING.xs,
-              color: 'var(--text-dim)',
+              color: 'var(--text-secondary)',
             }}
           >
             <RefreshCw size={12} style={{ animation: loading ? 'spin 0.8s linear infinite' : undefined }} />

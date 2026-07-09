@@ -301,19 +301,19 @@ export default function TerminalPanel({
       <div className="terminal-header">
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1.5 pl-1">
-            <TerminalIcon size={12} className="text-[var(--vibe-active-color)]" />
+            <TerminalIcon size={12} className="text-[var(--primary)]" />
             <span style={{
               fontFamily: 'var(--font-display)',
               fontSize: '11px',
               fontWeight: 700,
-              color: 'var(--vibe-brand-text)',
+              color: 'var(--text)',
               letterSpacing: '0.05em',
               textTransform: 'uppercase'
             }}>
               {t(locale, 'terminal.title')}
             </span>
           </div>
-          <div style={{ width: '1px', height: '12px', background: 'var(--vibe-btn-border, var(--border))', margin: '0 4px' }} />
+          <div style={{ width: '1px', height: '12px', background: 'var(--border)', margin: '0 4px' }} />
           
           <div className="terminal-tabs">
             {sessions.map((session) => (
@@ -329,7 +329,7 @@ export default function TerminalPanel({
                       e.stopPropagation();
                       closeSession(session.id);
                     }}
-                    className="flex items-center justify-center p-0.5 rounded-full hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)] transition-colors opacity-60 hover:opacity-100"
+                    className="flex items-center justify-center p-0.5 rounded-full hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-colors opacity-60 hover:opacity-100"
                     style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer' }}
                     title={t(locale, 'terminal.closeTab')}
                     aria-label={t(locale, 'terminal.closeTab')}
@@ -398,7 +398,7 @@ export default function TerminalPanel({
             title={t(locale, 'terminal.launchClaude')}
             aria-label={t(locale, 'terminal.launchClaude')}
           >
-            <Sparkles size={12} className="text-[var(--vibe-active-color)]" />
+            <Sparkles size={12} className="text-[var(--primary)]" />
             <span>Claude</span>
           </button>
           <button
@@ -407,7 +407,7 @@ export default function TerminalPanel({
             title={t(locale, 'terminal.launchCodex')}
             aria-label={t(locale, 'terminal.launchCodex')}
           >
-            <Code2 size={12} className="text-[var(--vibe-active-color)]" />
+            <Code2 size={12} className="text-[var(--primary)]" />
             <span>Codex</span>
           </button>
           {/* Mute toggle — fanbox 风格 */}
@@ -505,11 +505,11 @@ export default function TerminalPanel({
         {isDragOver && (
           <div style={{
             position: 'absolute', inset: 0,
-            background: 'var(--accent-soft)',
-            border: '2px dashed var(--accent)',
+            background: 'var(--primary-soft)',
+            border: '2px dashed var(--primary)',
             borderRadius: BORDER_RADIUS.sm,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: 'var(--accent)', fontSize: FONT_SIZE.lg, fontWeight: 600,
+            color: 'var(--primary)', fontSize: FONT_SIZE.lg, fontWeight: 600,
             zIndex: 10, pointerEvents: 'none',
           }}>
             {t(locale, 'terminal.dropPrompt')}

@@ -1,6 +1,7 @@
 'use client';
 
 import { startTransition, Fragment, useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { motion } from 'framer-motion';
 import { t, type Locale } from '@/i18n';
 import {
   Grid3x3,
@@ -157,8 +158,8 @@ function BreadcrumbPath({
       key={`${keyPrefix}-${crumb.path}`}
       className={`group inline-flex h-8 max-w-[180px] items-center gap-1 rounded-md px-2 text-xs transition-colors shrink min-w-0 ${
         isLast
-          ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)] font-medium'
-          : 'text-[var(--vibe-btn-text)] hover:bg-[var(--vibe-btn-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+          ? 'bg-[var(--primary-soft)] text-[var(--primary)] font-medium'
+          : 'text-[var(--text-secondary)] hover:bg-[var(--surface)] hover:text-[var(--primary)]'
       }`}
       onClick={() => onNavigate(crumb.path)}
       title={crumb.path}
@@ -169,7 +170,7 @@ function BreadcrumbPath({
   );
 
   const separator = (
-    <ChevronRight size={12} className="mx-0.5 shrink-0 text-[var(--text-faint)]" aria-hidden />
+    <ChevronRight size={12} className="mx-0.5 shrink-0 text-[var(--text-disabled)]" aria-hidden />
   );
 
   // Single root crumb — no separators, no scroll container needed.
@@ -224,7 +225,7 @@ function BreadcrumbPath({
       ))}
       {separator}
       <button
-        className="inline-flex h-8 shrink-0 items-center rounded-md px-1.5 text-xs text-[var(--vibe-btn-text)] transition-colors hover:bg-[var(--vibe-btn-bg)] hover:text-[var(--vibe-btn-hover-color)]"
+        className="inline-flex h-8 shrink-0 items-center rounded-md px-1.5 text-xs text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--primary)]"
         onClick={() => setExpanded(true)}
         title={t(locale, 'header.showFull')}
         aria-label={t(locale, 'header.showFull')}
@@ -329,7 +330,7 @@ export default function Header({
     <header
       ref={headerRef}
       data-tauri-drag-region
-      className={`vibe-toolbar flex items-center gap-3 px-4 ${tbClass}`}
+      className="flex items-center gap-3 px-4 bg-[var(--surface)] border-b border-[var(--border)] min-h-[40px] tb-hide"
       style={{
         userSelect: 'none',
       }}
@@ -337,7 +338,7 @@ export default function Header({
       {/* Sidebar toggle — always visible */}
       {onToggleSidebar && (
         <button
-          className={`vibe-btn !h-8 !w-8 !p-0 flex items-center justify-center shrink-0 ${sidebarCollapsed ? '' : 'active'}`}
+          className={`btn-secondary-v1 !h-8 !w-8 !p-0 flex items-center justify-center shrink-0 ${sidebarCollapsed ? '' : 'active'}`}
           onClick={onToggleSidebar}
           title={t(locale, sidebarCollapsed ? 'sidebar.expand' : 'sidebar.collapse')}
         >
@@ -363,7 +364,7 @@ export default function Header({
 
           {/* New Folder */}
           <div className="flex items-center">
-            <button className="vibe-btn !h-8" onClick={() => dispatchAction('newFolder', fs?.breadcrumbPath ?? '/')} title={t(locale, 'fileBrowser.newFolder')}>
+            <button className="btn-secondary-v1 !h-8" onClick={() => dispatchAction('newFolder', fs?.breadcrumbPath ?? '/')} title={t(locale, 'fileBrowser.newFolder')}>
               <FolderPlus size={14} />
               <span className="text-xs">{t(locale, 'fileBrowser.newFolder')}</span>
             </button>
@@ -372,12 +373,12 @@ export default function Header({
           {/* View mode toggle + Sort + Filter + Search */}
           <div className="flex items-center gap-1.5">
             {/* View mode toggle */}
-            <div className="flex items-center gap-0.5 rounded-lg bg-[var(--vibe-btn-bg)] p-0.5 border border-[var(--vibe-btn-border)]">
+            <div className="flex items-center gap-0.5 rounded-lg bg-[var(--surface)] p-0.5 border border-[var(--border)]">
               <button
                 className={`flex h-7 w-7 items-center justify-center rounded-md transition-all ${
                   (fs?.viewMode ?? 'grid') === 'grid'
-                    ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)] shadow-sm'
-                    : 'text-[var(--vibe-btn-text)] hover:text-[var(--vibe-btn-hover-color)]'
+                    ? 'bg-[var(--primary-soft)] text-[var(--primary)] shadow-sm'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--primary)]'
                 }`}
                 onClick={() => dispatchAction('viewMode', 'grid')}
                 title={t(locale, 'fileBrowser.gridView')}
@@ -387,8 +388,8 @@ export default function Header({
               <button
                 className={`flex h-7 w-7 items-center justify-center rounded-md transition-all ${
                   (fs?.viewMode ?? 'grid') === 'list'
-                    ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)] shadow-sm'
-                    : 'text-[var(--vibe-btn-text)] hover:text-[var(--vibe-btn-hover-color)]'
+                    ? 'bg-[var(--primary-soft)] text-[var(--primary)] shadow-sm'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--primary)]'
                 }`}
                 onClick={() => dispatchAction('viewMode', 'list')}
                 title={t(locale, 'fileBrowser.listView')}
@@ -399,7 +400,7 @@ export default function Header({
 
             {/* Grid size toggle — only visible in grid mode */}
             {(fs?.viewMode ?? 'grid') === 'grid' && (
-              <div className="flex items-center gap-0.5 rounded-lg bg-[var(--vibe-btn-bg)] p-0.5 border border-[var(--vibe-btn-border)]">
+              <div className="flex items-center gap-0.5 rounded-lg bg-[var(--surface)] p-0.5 border border-[var(--border)]">
                 {([
                   { key: 'sm' as const, label: 'S' },
                   { key: 'md' as const, label: 'M' },
@@ -409,8 +410,8 @@ export default function Header({
                     key={opt.key}
                     className={`flex h-7 w-7 items-center justify-center rounded-md text-[10px] font-bold transition-all ${
                       (fs?.gridSize ?? 'md') === opt.key
-                        ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)] shadow-sm'
-                        : 'text-[var(--vibe-btn-text)] hover:text-[var(--vibe-btn-hover-color)]'
+                        ? 'bg-[var(--primary-soft)] text-[var(--primary)] shadow-sm'
+                        : 'text-[var(--text-secondary)] hover:text-[var(--primary)]'
                     }`}
                     onClick={() => dispatchAction('gridSize', opt.key)}
                     title={t(locale, `fileBrowser.gridSize${opt.key.toUpperCase()}` as any)}
@@ -424,7 +425,7 @@ export default function Header({
             {/* Sort — dropdown */}
             <div ref={sortRef} className="relative">
               <button
-                className="vibe-btn !h-8 text-xs"
+                className="btn-secondary-v1 !h-8 text-xs"
                 onClick={() => setSortOpen((v) => !v)}
                 title={t(locale, 'fileBrowser.sort')}
               >
@@ -433,7 +434,7 @@ export default function Header({
               </button>
               {sortOpen && (
                 <div
-                  className="absolute right-0 top-full mt-1 z-50 min-w-[160px] rounded-lg border border-[var(--vibe-btn-border)] bg-[var(--vibe-toolbar-bg)] backdrop-blur-xl p-1 shadow-xl"
+                  className="absolute right-0 top-full mt-1 z-50 min-w-[160px] rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-popup"
                   
                 >
                   {([
@@ -445,8 +446,8 @@ export default function Header({
                       key={opt.key}
                       className={`flex w-full items-center justify-between gap-3 rounded-md px-3 py-1.5 text-xs transition-all ${
                         fs?.sortBy === opt.key
-                          ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
-                          : 'text-[var(--vibe-btn-text)] hover:bg-[var(--vibe-btn-bg)]'
+                          ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
+                          : 'text-[var(--text-secondary)] hover:bg-[var(--surface)]'
                       }`}
                       onClick={() => {
                         dispatchAction('sortBy', opt.key);
@@ -461,9 +462,9 @@ export default function Header({
                       )}
                     </button>
                   ))}
-                  <div className="mx-2 my-1 border-t border-[var(--vibe-btn-border)]" />
+                  <div className="mx-2 my-1 border-t border-[var(--border)]" />
                   <button
-                    className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs text-[var(--vibe-btn-text)] hover:bg-[var(--vibe-btn-bg)] transition-all"
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface)] transition-all"
                     onClick={() => {
                       dispatchAction('sortDir');
                       setSortOpen(false);
@@ -482,7 +483,7 @@ export default function Header({
             {/* Filter — dropdown */}
             <div ref={filterRef} className="relative">
               <button
-                className={`vibe-btn !h-8 text-xs ${fs?.showHidden ? 'text-[var(--vibe-active-color)]' : ''}`}
+                className={`btn-secondary-v1 !h-8 text-xs ${fs?.showHidden ? 'active' : ''}`}
                 onClick={() => setFilterOpen((v) => !v)}
                 title={t(locale, 'fileBrowser.filter')}
               >
@@ -491,14 +492,14 @@ export default function Header({
               </button>
               {filterOpen && (
                 <div
-                  className="absolute right-0 top-full mt-1 z-50 min-w-[140px] rounded-lg border border-[var(--vibe-btn-border)] bg-[var(--vibe-toolbar-bg)] backdrop-blur-xl p-1 shadow-xl"
+                  className="absolute right-0 top-full mt-1 z-50 min-w-[140px] rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-popup"
                   
                 >
                   <button
                     className={`flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs transition-all ${
                       !fs?.showHidden
-                        ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
-                        : 'text-[var(--vibe-btn-text)] hover:bg-[var(--vibe-btn-bg)]'
+                        ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
+                        : 'text-[var(--text-secondary)] hover:bg-[var(--surface)]'
                     }`}
                     onClick={() => {
                       if (fs?.showHidden) dispatchAction('showHidden');
@@ -511,8 +512,8 @@ export default function Header({
                   <button
                     className={`flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs transition-all ${
                       fs?.showHidden
-                        ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
-                        : 'text-[var(--vibe-btn-text)] hover:bg-[var(--vibe-btn-bg)]'
+                        ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
+                        : 'text-[var(--text-secondary)] hover:bg-[var(--surface)]'
                     }`}
                     onClick={() => {
                       if (!fs?.showHidden) dispatchAction('showHidden');
@@ -529,18 +530,18 @@ export default function Header({
             {/* Search */}
             <div className="relative flex items-center" >
               {searchOpen ? (
-                <div className="flex items-center gap-1 rounded-lg bg-[var(--vibe-btn-bg)] border border-[var(--vibe-btn-border)] px-2 py-1">
-                  <Search size={12} className="text-[var(--text-faint)] shrink-0" />
+                <div className="flex items-center gap-1 rounded-lg bg-[var(--surface)] border border-[var(--border)] px-2 py-1">
+                  <Search size={12} className="text-[var(--text-disabled)] shrink-0" />
                   <input
                     ref={searchRef}
                     type="text"
-                    className="bg-transparent border-none outline-none focus-visible:outline-none text-xs text-[var(--text)] w-[120px] placeholder:text-[var(--text-faint)]"
+                    className="bg-transparent border-none outline-none focus-visible:outline-none text-xs text-[var(--text)] w-[120px] placeholder:text-[var(--text-disabled)]"
                     placeholder={t(locale, 'fileBrowser.searchPlaceholder')}
                     onChange={(e) => dispatchAction('search', e.target.value)}
                     onKeyDown={(e) => e.key === 'Escape' && setSearchOpen(false)}
                   />
                   <button
-                    className="flex items-center justify-center text-[var(--text-faint)] hover:text-[var(--text)] transition-colors"
+                    className="flex items-center justify-center text-[var(--text-disabled)] hover:text-[var(--text)] transition-colors"
                     onClick={() => { setSearchOpen(false); dispatchAction('search', ''); }}
                     title={t(locale, 'common.close')}
                   >
@@ -549,7 +550,7 @@ export default function Header({
                 </div>
               ) : (
                 <button
-                  className="vibe-btn !h-8 !w-8 !p-0 flex items-center justify-center"
+                  className="btn-secondary-v1 !h-8 !w-8 !p-0 flex items-center justify-center"
                   onClick={() => setSearchOpen(true)}
                   title={t(locale, 'fileBrowser.searchPlaceholder')}
                 >
@@ -562,9 +563,15 @@ export default function Header({
       ) : (
         /* ── 其他视图：显示路由标题 ── */
         <div className="flex items-center gap-2 flex-1 min-w-0" >
-          <span className="text-sm font-semibold text-[#2f3136]">
+          <motion.span
+            key={activeView}
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+            className="text-sm font-semibold text-[var(--text)]"
+          >
             {VIEW_LABELS[activeView] ? t(locale, VIEW_LABELS[activeView]) : activeView}
-          </span>
+          </motion.span>
         </div>
       )}
     </header>

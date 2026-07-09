@@ -57,7 +57,7 @@ export default function RightPanel({
 
   return (
     <aside
-      className={`vibe-right-panel ${!isOpen ? 'collapsed' : ''}`}
+      className={`right-panel ${!isOpen ? 'collapsed' : ''}`}
       role="region"
       aria-label={getTitle()}
       style={{ width: isOpen ? width : 0, position: 'relative' }}
@@ -65,16 +65,16 @@ export default function RightPanel({
 
       {/* Header with glass effect */}
       <div className="right-panel-header" style={{
-        background: 'var(--vibe-toolbar-bg)',
-        borderBottom: '1px solid var(--vibe-sidebar-border)',
+        background: 'var(--surface)',
+        borderBottom: '1px solid var(--border)',
       }}>
         <div className="flex items-center gap-1">
           {/* ── Always show 4 mode-tab icons: Preview / Info / Git / Notifications ── */}
           <button
             className={`flex items-center justify-center p-1.5 rounded-lg transition-all ${
               mode === 'file-preview' && previewSubMode === 'preview'
-                ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
-                : 'text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+                ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
+                : 'text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
             }`}
             onClick={() => {
               onModeChange('file-preview');
@@ -87,8 +87,8 @@ export default function RightPanel({
           <button
             className={`flex items-center justify-center p-1.5 rounded-lg transition-all ${
               mode === 'file-preview' && previewSubMode === 'info'
-                ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
-                : 'text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+                ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
+                : 'text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
             }`}
             onClick={() => {
               onModeChange('file-preview');
@@ -101,8 +101,8 @@ export default function RightPanel({
           <button
             className={`flex items-center justify-center p-1.5 rounded-lg transition-all ${
               mode === 'file-preview' && previewSubMode === 'git'
-                ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
-                : 'text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+                ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
+                : 'text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
             }`}
             onClick={() => {
               onModeChange('file-preview');
@@ -115,8 +115,8 @@ export default function RightPanel({
           <button
             className={`flex items-center justify-center p-1.5 rounded-lg transition-all ${
               mode === 'notifications'
-                ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
-                : 'text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+                ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
+                : 'text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
             }`}
             onClick={() => onModeChange('notifications')}
             title={t(locale, 'rightPanel.title.notifications')}
@@ -136,7 +136,7 @@ export default function RightPanel({
         )}
 
         <button
-          className="flex items-center justify-center p-1.5 rounded-lg text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)] transition-all"
+          className="flex items-center justify-center p-1.5 rounded-lg text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all"
           onClick={handleClose}
           title={t(locale, 'rightPanel.closePanel')}
           aria-label={t(locale, 'rightPanel.closePanel')}
@@ -150,9 +150,9 @@ export default function RightPanel({
       {/* Content area */}
       <div className="right-panel-content">
         {children || (
-          <div className="flex flex-col items-center justify-center h-[200px] text-[var(--text-faint)] text-[13px]">
+          <div className="flex flex-col items-center justify-center h-[200px] text-[var(--text-disabled)] text-[13px]">
             <div className="mb-3 flex justify-center">
-              <div className="w-10 h-10 rounded-full bg-[var(--vibe-btn-bg)] flex items-center justify-center">
+              <div className="w-10 h-10 rounded-full bg-[var(--surface)] flex items-center justify-center">
                 {mode === 'notifications' ? <Bell size={18} /> : <FileText size={18} />}
               </div>
             </div>

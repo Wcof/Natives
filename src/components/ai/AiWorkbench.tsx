@@ -40,7 +40,7 @@ export default function AiWorkbench() {
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--vibe-btn-border)', padding: '0 12px' }}>
+      <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border)', padding: '0 12px' }}>
         {tabs.map((t) => (
           <button
             key={t.id}
@@ -51,8 +51,8 @@ export default function AiWorkbench() {
               fontWeight: 500,
               background: 'none',
               border: 'none',
-              borderBottom: tab === t.id ? '2px solid var(--accent)' : '2px solid transparent',
-              color: tab === t.id ? 'var(--vibe-brand-text)' : 'var(--vibe-btn-text)',
+              borderBottom: tab === t.id ? '2px solid var(--primary)' : '2px solid transparent',
+              color: tab === t.id ? 'var(--text)' : 'var(--text-secondary)',
               cursor: 'pointer',
             }}
           >

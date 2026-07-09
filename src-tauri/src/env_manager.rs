@@ -12,13 +12,17 @@ const ENCRYPTION_KEY_SETTING: &str = "env_encryption_key";
 
 /// Ciphertext format prefix — identifies AES-256-GCM v2 payloads
 const V2_PREFIX: &str = "v2:";
-/// Old XOR format was just raw base64 (no prefix)
+// Old XOR format was just raw base64 (no prefix).
 
 lazy_static! {
-    /// In-memory cache of the env encryption key, loaded once from OS keychain.
-    /// Mirrors provider_key_manager::KEK_CACHE — avoids re-prompting Keychain
-    /// on every env command call.
+    /// In-memory cache of the env encryption key, loaded once from SQLite.
     static ref ENV_KEY_CACHE: Mutex<Option<String>> = Mutex::new(None);
+}
+
+#[cfg(test)]
+fn reset_env_key_cache_for_tests() {
+    let mut cache = ENV_KEY_CACHE.lock().unwrap();
+    *cache = None;
 }
 
 #[derive(Debug, Serialize)]
@@ -31,14 +35,8 @@ pub struct EnvProfile {
 
 /// Get or create the encryption key.
 ///
-/// Primary: macOS Keychain / Windows Credential Manager / Linux Secret Service
-/// via the `keyring` crate. Falls back to SQLite `settings` table if keyring
-/// is unavailable (e.g., headless CI), and migrates the key on first successful
-/// keyring access.
-///
-/// Result is cached in `ENV_KEY_CACHE` after first access — subsequent calls
-/// never touch the OS keychain. Call `init_env_encryption_key` at startup to
-/// populate the cache eagerly (single Keychain prompt).
+/// The key is stored in SQLite `settings`, following docs/standards/technical/02-security.md.
+/// Result is cached in `ENV_KEY_CACHE` after first access.
 pub fn get_encryption_key(conn: &Connection) -> Result<String> {
     let cache = ENV_KEY_CACHE.lock().unwrap();
     if let Some(key) = cache.as_ref() {
@@ -48,76 +46,37 @@ pub fn get_encryption_key(conn: &Connection) -> Result<String> {
     init_env_encryption_key(conn)
 }
 
-/// Initialize the env encryption key from the OS keychain and cache it.
+/// Initialize the env encryption key from SQLite and cache it.
 /// Called once at app startup (or lazily by `get_encryption_key` on first
 /// access). Generates and stores a new key if none exists.
 pub fn init_env_encryption_key(conn: &Connection) -> Result<String> {
-    const SERVICE: &str = "natives";
-    const USERNAME: &str = "env_encryption_key";
-
-    let key: String = {
-        // 1. Try OS keyring first
-        if let Ok(entry) = keyring::Entry::new(SERVICE, USERNAME) {
-            match entry.get_password() {
-                Ok(key) => {
-                    // Key found in keyring — if SQLite still has the old key, migrate & delete
-                    if let Ok(Some(db_key)) = db::get_setting(conn, ENCRYPTION_KEY_SETTING) {
-                        if db_key == key {
-                            // Same key — safe to remove from SQLite
-                            let _ = db::delete_setting(conn, ENCRYPTION_KEY_SETTING);
-                        }
-                        // If different, keyring takes precedence; don't delete SQLite key
-                        // (it may be needed for a rollback)
-                    }
-                    key
-                }
-                Err(keyring::Error::NoEntry) => {
-                    // Not in keyring yet — check SQLite for migration
-                    if let Ok(Some(db_key)) = db::get_setting(conn, ENCRYPTION_KEY_SETTING) {
-                        // Migrate existing SQLite key to keyring
-                        if entry.set_password(&db_key).is_ok() {
-                            let _ = db::delete_setting(conn, ENCRYPTION_KEY_SETTING);
-                        }
-                        db_key
-                    } else {
-                        // No key anywhere — generate new one, store in keyring
-                        let new_key = generate_random_hex(32);
-                        if entry.set_password(&new_key).is_err() {
-                            // Keyring write failed — fall back to SQLite
-                            let _ = db::set_setting(conn, ENCRYPTION_KEY_SETTING, &new_key);
-                        }
-                        new_key
-                    }
-                }
-                Err(_) => {
-                    // Keyring access error — fall through to SQLite fallback
-                    match db::get_setting(conn, ENCRYPTION_KEY_SETTING)? {
-                        Some(key) => key,
-                        None => {
-                            let new_key = generate_random_hex(32);
-                            db::set_setting(conn, ENCRYPTION_KEY_SETTING, &new_key)?;
-                            new_key
-                        }
-                    }
-                }
-            }
-        } else {
-            // keyring::Entry::new unavailable — SQLite fallback
-            match db::get_setting(conn, ENCRYPTION_KEY_SETTING)? {
-                Some(key) => key,
-                None => {
-                    let new_key = generate_random_hex(32);
-                    db::set_setting(conn, ENCRYPTION_KEY_SETTING, &new_key)?;
-                    new_key
-                }
-            }
+    let key = match db::get_setting(conn, ENCRYPTION_KEY_SETTING)? {
+        Some(key) => {
+            validate_hex_key(&key)?;
+            key
+        }
+        None => {
+            let new_key = generate_random_hex(32);
+            db::set_setting(conn, ENCRYPTION_KEY_SETTING, &new_key)?;
+            new_key
         }
     };
 
-    // Cache in memory — subsequent get_encryption_key calls never touch keychain
     let mut cache = ENV_KEY_CACHE.lock().unwrap();
     *cache = Some(key.clone());
     Ok(key)
+}
+
+fn validate_hex_key(key: &str) -> Result<()> {
+    let bytes =
+        hex::decode(key).map_err(|e| Error::Internal(format!("invalid encryption key hex: {e}")))?;
+    if bytes.len() != 32 {
+        return Err(Error::Internal(format!(
+            "invalid encryption key length: expected 32 bytes, got {}",
+            bytes.len()
+        )));
+    }
+    Ok(())
 }
 
 fn generate_random_hex(bytes: usize) -> String {
@@ -375,4 +334,65 @@ pub fn inject_env(
         env.entry(key).or_insert(value);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    lazy_static! {
+        static ref TEST_MUTEX: Mutex<()> = Mutex::new(());
+    }
+
+    fn setup_test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn test_init_env_encryption_key_stores_key_in_sqlite() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        reset_env_key_cache_for_tests();
+        let conn = setup_test_db();
+
+        let key = init_env_encryption_key(&conn).unwrap();
+        assert_eq!(hex::decode(&key).unwrap().len(), 32);
+
+        let stored = db::get_setting(&conn, ENCRYPTION_KEY_SETTING).unwrap().unwrap();
+        assert_eq!(stored, key);
+    }
+
+    #[test]
+    fn test_init_env_encryption_key_reuses_sqlite_key() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        reset_env_key_cache_for_tests();
+        let conn = setup_test_db();
+        let existing = "aa".repeat(32);
+        db::set_setting(&conn, ENCRYPTION_KEY_SETTING, &existing).unwrap();
+
+        let key = init_env_encryption_key(&conn).unwrap();
+
+        assert_eq!(key, existing);
+    }
+
+    #[test]
+    fn test_init_env_encryption_key_rejects_invalid_sqlite_key() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        reset_env_key_cache_for_tests();
+        let conn = setup_test_db();
+        db::set_setting(&conn, ENCRYPTION_KEY_SETTING, "not-hex").unwrap();
+
+        let err = init_env_encryption_key(&conn).unwrap_err();
+
+        assert!(err.to_string().contains("invalid encryption key hex"));
+    }
 }

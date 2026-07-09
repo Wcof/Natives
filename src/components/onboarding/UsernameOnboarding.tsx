@@ -23,15 +23,15 @@ export default function UsernameOnboarding({ locale, onComplete }: UsernameOnboa
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: 9999,
-      background: 'var(--vibe-content-bg)',
+      background: 'var(--surface)',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
     }}>
       <div style={{ width: 360, textAlign: 'center' }}>
         <div style={{ fontSize: 48, marginBottom: SPACING.lg }}>👋</div>
-        <h1 style={{ fontSize: FONT_SIZE.heading, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' }}>
+        <h1 style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)', margin: '0 0 8px' }}>
           {t(locale, 'common.welcome')}
         </h1>
-        <p style={{ fontSize: FONT_SIZE.lg, color: 'var(--text-dim)', marginBottom: SPACING.xl }}>
+        <p style={{ fontSize: FONT_SIZE.lg, color: 'var(--text-secondary)', marginBottom: SPACING.xl }}>
           What should we call you?
         </p>
         <input
@@ -42,7 +42,7 @@ export default function UsernameOnboarding({ locale, onComplete }: UsernameOnboa
           onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
           style={{
             width: '100%', padding: `px px`, fontSize: FONT_SIZE.xl, textAlign: 'center',
-            background: 'var(--vibe-toolbar-bg)', border: '1px solid var(--vibe-btn-border)',
+            background: 'var(--surface)', border: '1px solid var(--border)',
             borderRadius: BORDER_RADIUS.md, color: 'var(--text)', outline: 'none', marginBottom: SPACING.lg,
           }}
           autoFocus

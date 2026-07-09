@@ -7,7 +7,7 @@ import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 // Dynamic import — Monaco Editor is ~2MB, only load when actually editing code
 const Editor = dynamic(() => import('@monaco-editor/react').then((m) => m.default), {
   ssr: false,
-  loading: () => <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: FONT_SIZE.md }}>Loading editor…</div>,
+  loading: () => <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', fontSize: FONT_SIZE.md }}>Loading editor…</div>,
 });
 
 interface MonacoEditorProps {
@@ -42,7 +42,7 @@ export default function MonacoEditor({ content, language, onSave, readOnly }: Mo
   const getMonacoTheme = (): string => {
     if (typeof document !== 'undefined') {
       const htmlTheme = document.documentElement.getAttribute('data-theme');
-      if (htmlTheme === 'frosted-jasmine') return 'vs-light';
+      if (htmlTheme === 'light') return 'vs-light';
     }
     return 'vs-dark';
   };
@@ -83,7 +83,7 @@ export default function MonacoEditor({ content, language, onSave, readOnly }: Mo
       options={{
         readOnly: readOnly ?? false,
         minimap: { enabled: false },
-        fontSize: FONT_SIZE.lg,
+        fontSize: 14,
         lineHeight: 1.7,
         wordWrap,
         scrollBeyondLastLine: false,

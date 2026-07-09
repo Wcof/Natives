@@ -24,33 +24,32 @@ export const VISUAL_SOVEREIGNTY_SPEC = `
 
 生成 HTML 内部的 Tailwind / CSS 必须严格执行以下设计 Tokens：
 
-### 1.1 高级毛玻璃与透光 (Frosted Glass)
-- 主容器必须使用 \`backdrop-blur-md\` 或 \`backdrop-blur-xl\`。
-- 背景色必须带有半透明度，例如 \`bg-[#0d0f12]/75\` 或项目内置 \`var(--bg-2)\`。
-- 禁止使用不透明的实色背景作为顶层容器。
+### 1.1 纯色 Surface 与 1px 轻边框 (V1.0 Solid Surface)
+- 主容器使用纯色背景：\`var(--surface)\` 或 \`var(--background)\`。
+- **禁止** \`backdrop-blur\`、\`backdrop-saturate\`、半透明玻璃层效果。
+- 卡片和容器使用 \`1px solid var(--border)\` 边框区分层级。
+- **禁止**使用 \`border border-white/[0.08]\` 镜面反射边框。
 
-### 1.2 镜面斜边高光 border (Mirror Bevel)
-- 卡片和边缘禁止使用实色边框。
-- 必须使用 \`border border-white/[0.08]\` 或 \`border-t border-white/[0.15]\`，
-  精确模拟物理反光与磨砂斜边。
+### 1.2 圆角 (V1.0 Radius)
+- 统一使用 V1.0 圆角体系：\`var(--radius-xs)\`(8px), \`var(--radius-sm)\`(10px), \`var(--radius-md)\`(12px), \`var(--radius-lg)\`(14px)。
+- 不使用超过 20px 的圆角。
 
-### 1.3 折射与饱和度提升 (Refraction & Saturation)
-- 搭配 \`backdrop-saturate-[1.8]\`，使容器下方的色彩元素产生自然的物理折射感。
-- 顶层容器建议叠加多层：\`backdrop-blur-xl backdrop-saturate-[1.8]\`。
+### 1.3 字体与间距 (Typography & Spacing)
+- 使用项目字体栈：Inter, SF Pro Display, -apple-system, sans-serif。
+- 字号体系：Display 28px, Title 24px, Heading 18px, Body 14px, Label 13px, Caption 12px。
+- 间距体系：4px 基础单位（space-1=4px, space-2=8px, ... space-12=48px）。
 
-### 1.4 字体与间距 (Typography & Spacing)
-- 使用系统字体栈：\`-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif\`。
-- 字符间距收紧：标题 \`tracking-tight\`，正文 \`tracking-normal\`。
-- 圆角统一使用 \`rounded-xl\` 或 \`rounded-2xl\`，禁止直角矩形。
-
-### 1.5 色彩继承 (CSS Variable Inheritance — MUST)
+### 1.4 色彩继承 (CSS Variable Inheritance — MUST)
 所有涉及前端增量刷新或提示的组件，必须 100% 继承项目已有的 CSS 变量系统：
 
-- 背景：\`var(--bg-1)\`, \`var(--bg-2)\`, \`var(--bg-3)\`
-- 前景：\`var(--fg-1)\`, \`var(--fg-2)\`, \`var(--fg-3)\`
-- 强调：\`var(--accent)\`, \`var(--accent-soft)\`
-- 边框：\`var(--border-1)\`, \`var(--border-2)\`
-- 阴影：\`var(--shadow-glass)\`
+- 背景：\`var(--background)\`, \`var(--surface)\`, \`var(--surface-hover)\`
+- 文本：\`var(--text)\`, \`var(--text-body)\`, \`var(--text-secondary)\`, \`var(--text-disabled)\`
+- 强调：\`var(--primary)\`, \`var(--primary-soft)\`
+- 边框：\`var(--border)\`, \`var(--border-subtle)\`
+- 圆角：\`var(--radius-xs)\`, \`var(--radius-sm)\`, \`var(--radius-md)\`, \`var(--radius-lg)\`
+- 阴影（仅 Light）：\`var(--shadow-card)\`, \`var(--shadow-popup)\`, \`var(--shadow-modal)\`
+
+禁止硬编码十六进制色值，必须引用 \`var(--*)\` 变量。
 
 禁止硬编码十六进制色值，必须引用 \`var(--*)\` 变量。
 `.trim();
@@ -177,10 +176,10 @@ ${BRIDGE_PROTOCOL_SPEC}
 ## 关键检查清单 (生成前自检)
 - [ ] HTML 是否包含 \`<!DOCTYPE html>\` 声明？
 - [ ] 是否引入了 Tailwind CSS CDN (\`https://cdn.tailwindcss.com\`)？
-- [ ] 主容器是否使用了 \`backdrop-blur-md\` 或更强？
-- [ ] 边框是否使用了 \`border-white/[0.08]\` 模拟镜面反光？
-- [ ] 是否叠加了 \`backdrop-saturate-[1.8]\` 提升折射饱和度？
-- [ ] 是否引用了项目 CSS 变量 (\`var(--bg-2)\` 等) 而非硬编码颜色？
+- [ ] 主容器是否使用了纯色背景 (\`var(--surface)\` / \`var(--background)\`) 而非 backdrop-blur？
+- [ ] 卡片/面板是否使用了 \`1px solid var(--border)\` 边框而非镜面反光？
+- [ ] 是否**没有**使用 \`backdrop-blur\`、\`backdrop-saturate\`、玻璃层效果？
+- [ ] 是否引用了 V1.0 项目 CSS 变量 (\`var(--surface)\`, \`var(--text)\`, \`var(--border)\` 等)？
 - [ ] 是否**绝对没有**使用 \`fetch()\`、\`XMLHttpRequest\` 或试探全局变量？
 - [ ] 所有数据请求是否都通过 \`window.natives.db.*\` 网桥代理？
 - [ ] 是否监听了 \`token-granted\` 消息以获取会话 Token？

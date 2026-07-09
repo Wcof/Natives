@@ -82,9 +82,9 @@ export function TokenTrendChart({ usageHistory, isLoading, minimal }: TokenTrend
           minHeight: 150,
         } : {
           borderRadius: BORDER_RADIUS.lg,
-          border: '0.0625rem solid var(--vibe-content-border)',
-          background: 'var(--vibe-content-bg)',
-          backdropFilter: 'blur(var(--vibe-content-blur, 24px))',
+          border: '0.0625rem solid var(--border)',
+          background: 'var(--surface)',
+          // V1.0: backdrop-filter 已移除
           padding: `${SPACING.lg}px`,
           minHeight: 350,
           display: 'flex',
@@ -110,9 +110,9 @@ export function TokenTrendChart({ usageHistory, isLoading, minimal }: TokenTrend
           paddingTop: SPACING.md,
         } : {
           borderRadius: BORDER_RADIUS.lg,
-          border: '0.0625rem solid var(--vibe-content-border)',
-          background: 'var(--vibe-content-bg)',
-          backdropFilter: 'blur(var(--vibe-content-blur, 24px))',
+          border: '0.0625rem solid var(--border)',
+          background: 'var(--surface)',
+          // V1.0: backdrop-filter 已移除
           padding: `${SPACING.lg}px`,
           minHeight: 350,
           display: 'flex',
@@ -122,10 +122,10 @@ export function TokenTrendChart({ usageHistory, isLoading, minimal }: TokenTrend
           gap: SPACING.sm,
         }}
       >
-        <span style={{ fontSize: FONT_SIZE.md, color: 'var(--text-faint)' }}>
+        <span style={{ fontSize: FONT_SIZE.md, color: 'var(--text-disabled)' }}>
           {t(locale, 'dashboard.noData')}
         </span>
-        <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-faint)' }}>
+        <span style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-disabled)' }}>
           {t(locale, 'dashboard.trendTitle')}
         </span>
       </div>
@@ -140,9 +140,8 @@ export function TokenTrendChart({ usageHistory, isLoading, minimal }: TokenTrend
         overflow: 'visible',
       } : {
         borderRadius: BORDER_RADIUS.lg,
-        border: '0.0625rem solid var(--vibe-content-border)',
-        background: 'var(--vibe-content-bg)',
-        backdropFilter: 'blur(var(--vibe-content-blur, 24px)) saturate(var(--vibe-content-saturation, 145%))',
+        border: '0.0625rem solid var(--border)',
+        background: 'var(--surface)',
         padding: `${SPACING.lg}px`,
       }}
     >
@@ -155,7 +154,7 @@ export function TokenTrendChart({ usageHistory, isLoading, minimal }: TokenTrend
         paddingTop: minimal ? SPACING.md : 0,
       }}>
         {!minimal && (
-          <h3 style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--vibe-brand-text)' }}>
+          <h3 style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)' }}>
             {t(locale, 'dashboard.trendTitle')}
           </h3>
         )}
@@ -168,10 +167,10 @@ export function TokenTrendChart({ usageHistory, isLoading, minimal }: TokenTrend
               gap: SPACING.xs,
               padding: `${SPACING.xs}px ${SPACING.sm}px`,
               borderRadius: BORDER_RADIUS.md,
-              background: 'var(--vibe-btn-bg)',
-              border: '0.0625rem solid var(--vibe-btn-border)',
+              background: 'var(--surface)',
+              border: '0.0625rem solid var(--border)',
               fontSize: FONT_SIZE.sm,
-              color: 'var(--vibe-brand-text)',
+              color: 'var(--text)',
               cursor: 'pointer',
             }}
           >
@@ -186,9 +185,9 @@ export function TokenTrendChart({ usageHistory, isLoading, minimal }: TokenTrend
                 top: '100%',
                 marginTop: SPACING.xs,
                 borderRadius: BORDER_RADIUS.md,
-                background: 'var(--bg-3)',
+                background: 'var(--surface-hover)',
                 border: '0.0625rem solid var(--border)',
-                boxShadow: SHADOW.elevated,
+                boxShadow: SHADOW.popup,
                 zIndex: 100,
                 minWidth: 120,
               }}
@@ -206,8 +205,8 @@ export function TokenTrendChart({ usageHistory, isLoading, minimal }: TokenTrend
                     padding: `${SPACING.xs}px ${SPACING.sm}px`,
                     textAlign: 'left',
                     fontSize: FONT_SIZE.sm,
-                    color: range.value === selectedRange ? 'var(--vibe-active-color)' : 'var(--text)',
-                    background: range.value === selectedRange ? 'var(--vibe-active-bg)' : 'transparent',
+                    color: range.value === selectedRange ? 'var(--primary)' : 'var(--text)',
+                    background: range.value === selectedRange ? 'var(--primary-soft)' : 'transparent',
                     cursor: 'pointer',
                     border: 'none',
                     borderTop: TIME_RANGES[0] && range.value === TIME_RANGES[0].value ? 'none' : '0.0625rem solid var(--border)',
@@ -252,13 +251,13 @@ export function TokenTrendChart({ usageHistory, isLoading, minimal }: TokenTrend
               tickFormatter={(v) => formatXAxisLabel(v, selectedRange)}
               axisLine={false}
               tickLine={false}
-              tick={{ fill: 'var(--text-faint)', fontSize: FONT_SIZE.xs }}
+              tick={{ fill: 'var(--text-disabled)', fontSize: FONT_SIZE.xs }}
               dy={10}
             />
             <YAxis
               axisLine={false}
               tickLine={false}
-              tick={{ fill: 'var(--text-faint)', fontSize: FONT_SIZE.xs }}
+              tick={{ fill: 'var(--text-disabled)', fontSize: FONT_SIZE.xs }}
               tickFormatter={(v) => formatTokenShort(v)}
             />
             <YAxis
@@ -266,16 +265,16 @@ export function TokenTrendChart({ usageHistory, isLoading, minimal }: TokenTrend
               orientation="right"
               axisLine={false}
               tickLine={false}
-              tick={{ fill: 'var(--text-faint)', fontSize: FONT_SIZE.xs }}
+              tick={{ fill: 'var(--text-disabled)', fontSize: FONT_SIZE.xs }}
               tickFormatter={(v) => String(Math.round(v))}
               domain={[0, 'auto']}
             />
             <Tooltip
               contentStyle={{
-                background: 'var(--bg-3)',
+                background: 'var(--surface-hover)',
                 border: '0.0625rem solid var(--border)',
                 borderRadius: BORDER_RADIUS.md,
-                backdropFilter: 'blur(12px)',
+                // V1.0: backdrop-filter 已移除
                 color: 'var(--text)',
               }}
               labelStyle={{ color: 'var(--text)', fontWeight: 600, marginBottom: 4 }}

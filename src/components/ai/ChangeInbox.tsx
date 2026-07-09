@@ -86,23 +86,23 @@ export default function ChangeInbox() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Header */}
       <div style={{
-        padding: '8px 10px', borderBottom: '1px solid var(--vibe-btn-border)',
+        padding: '8px 10px', borderBottom: '1px solid var(--border)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       }}>
-        <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+        <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
           {t(locale, 'aiWorkbench.changeInbox')} ({items.length})
         </div>
         <div style={{ display: 'flex', gap: SPACING.xs, alignItems: 'center' }}>
           <button
             className="btn-ghost"
             onClick={() => setShowFiltered(!showFiltered)}
-            style={{ fontSize: FONT_SIZE.xs, padding: '2px 6px', color: showFiltered ? 'var(--accent)' : 'var(--text-faint)' }}
+            style={{ fontSize: FONT_SIZE.xs, padding: '2px 6px', color: showFiltered ? 'var(--primary)' : 'var(--text-disabled)' }}
             title={showFiltered ? 'Hide system files' : 'Show system files'}
           >
             {showFiltered ? '👁' : '👁‍🗨'}
           </button>
           {items.length > 0 && (
-            <button className="btn-ghost" onClick={handleClear} style={{ fontSize: FONT_SIZE.xs, padding: '2px 6px', color: 'var(--text-faint)' }}>
+            <button className="btn-ghost" onClick={handleClear} style={{ fontSize: FONT_SIZE.xs, padding: '2px 6px', color: 'var(--text-disabled)' }}>
               {t(locale, 'notifications.clear')}
             </button>
           )}
@@ -112,14 +112,14 @@ export default function ChangeInbox() {
       {/* Changes list */}
       <div style={{ flex: 1, overflow: 'auto', padding: 6 }}>
         {items.length === 0 ? (
-          <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' }}>
+          <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-disabled)', fontSize: 'var(--fs-sm)' }}>
             {t(locale, 'aiWorkbench.noChanges')}
           </div>
         ) : (
           Object.entries(groupedByProject).map(([project, changes]) => (
             <div key={project} style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: FONT_SIZE.xs, fontWeight: 600, color: 'var(--text-dim)', marginBottom: SPACING.xs, padding: '0 4px' }}>
-                <Folder size={12} style={{ marginRight: 4, color: 'var(--text-dim)' }} /> {project}
+              <div style={{ fontSize: FONT_SIZE.xs, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: SPACING.xs, padding: '0 4px' }}>
+                <Folder size={12} style={{ marginRight: 4, color: 'var(--text-secondary)' }} /> {project}
               </div>
               {changes.map((ch, i) => (
                 <div
@@ -128,7 +128,7 @@ export default function ChangeInbox() {
                   style={{
                     padding: '4px 8px', fontSize: FONT_SIZE.sm, color: 'var(--text)',
                     borderRadius: BORDER_RADIUS.sm, cursor: 'pointer', marginBottom: 2,
-                    background: 'var(--vibe-toolbar-bg)',
+                    background: 'var(--surface)',
                     borderLeft: `3px solid ${ch.type === 'create' ? 'var(--diff-add)' : ch.type === 'delete' ? 'var(--danger)' : 'var(--warning)'}`,
                     display: 'flex', alignItems: 'center', gap: SPACING.xs,
                   }}
@@ -141,8 +141,8 @@ export default function ChangeInbox() {
                   </span>
                   {ch.count > 1 && (
                     <span style={{
-                      fontSize: FONT_SIZE.xs, fontWeight: 600, color: 'var(--accent)',
-                      background: 'var(--accent-soft)', padding: '0 4px', borderRadius: BORDER_RADIUS.sm,
+                      fontSize: FONT_SIZE.xs, fontWeight: 600, color: 'var(--primary)',
+                      background: 'var(--primary-soft)', padding: '0 4px', borderRadius: BORDER_RADIUS.sm,
                       flexShrink: 0,
                     }}>
                       ×{ch.count}

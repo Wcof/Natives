@@ -62,19 +62,19 @@ export default class ErrorBoundary extends React.Component<Props, State> {
         <div style={{
           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
           height: '100%', padding: SPACING.xxl, gap: SPACING.md,
-          color: 'var(--vibe-brand-text)', background: 'var(--vibe-content-bg)',
+          color: 'var(--text)', background: 'var(--surface)',
         }}>
           <AlertTriangle size={32} style={{ color: 'var(--danger)' }} />
 <div style={{ fontSize: FONT_SIZE.xl, fontWeight: 600 }}>{msg.title}</div>
-<div style={{ fontSize: FONT_SIZE.md, color: 'var(--vibe-btn-text)', textAlign: 'center', maxWidth: 400 }}>
+<div style={{ fontSize: FONT_SIZE.md, color: 'var(--text-secondary)', textAlign: 'center', maxWidth: 400 }}>
             {this.state.error?.message || msg.fallback}
           </div>
           <button
             onClick={this.handleReset}
             style={{
               marginTop: SPACING.sm, padding: `${SPACING.xs}px ${SPACING.lg}px`, borderRadius: BORDER_RADIUS.lg,
-              background: 'var(--vibe-btn-bg)', color: 'var(--vibe-btn-text)',
-              border: '0.0625rem solid var(--vibe-btn-border)', fontSize: FONT_SIZE.md, fontWeight: 600, cursor: 'pointer',
+              background: 'var(--surface)', color: 'var(--text-secondary)',
+              border: '0.0625rem solid var(--border)', fontSize: FONT_SIZE.md, fontWeight: 600, cursor: 'pointer',
               display: 'inline-flex', alignItems: 'center', gap: SPACING.xs,
             }}
           >

@@ -1,6 +1,7 @@
 'use client';
 
 import { startTransition, useState, useEffect, useCallback, memo, lazy, Suspense } from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
 import { type Locale } from '@/i18n';
 import Sidebar from './Sidebar';
 import RightPanel from './RightPanel';
@@ -20,7 +21,7 @@ import ScreenshotCard from '@/components/screenshot/ScreenshotCard';
 import AnnotationEditor from '@/components/screenshot/AnnotationEditor';
 import ReleaseWizardDialog from '@/components/release/ReleaseWizardDialog';
 import UpdateNotification from '@/components/update/UpdateNotification';
-import LiquidGlass from '@/components/ui/LiquidGlass';
+// V1.0: LiquidGlass 已退役（纯色 Surface 体系）
 import { getHttpPort } from '@/lib/natives-http-port';
 import ModuleDetails from './ModuleDetails';
 import { useShellState } from './useShellState';
@@ -55,6 +56,7 @@ interface ShellState {
 }
 
 export default function ShellLayout({ children }: { children: React.ReactNode }) {
+  const prefersReducedMotion = useReducedMotion();
   const {
     state, setState, stateRef,
     activeView, setActiveView,
@@ -67,7 +69,6 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     contentRef,
     selectedFile, setSelectedFile,
     editMode, setEditMode,
-    visualConfig, setVisualConfig,
     followMode, cycleFollowMode,
     crashedModules, setCrashedModules,
     needsOnboarding, setNeedsOnboarding,
@@ -79,21 +80,12 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     setRightPanelMode,
   } = useShellState();
 
-  // ── Global Background Visual Config (shared with ControlHub & Settings) ──
-  const WALLPAPERS = [
-    'https://images.unsplash.com/photo-1579033461380-adb47c3eb938?q=80&w=800&auto=format&fit=crop',
-  ];
-
-  const CONFIG_DB_KEY = 'settings:controlHubVisuals';
-
   // ── Event hooks ──
   useLayoutEvents({
-    setVisualConfig,
     stateRef,
     toggleTerminal,
     setState,
     setLocale,
-    CONFIG_DB_KEY,
   });
   useModuleEvents({
     activeView,
@@ -143,7 +135,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         if (savedTheme) applyTheme(savedTheme);
       } catch (err) {
         console.error('[Shell] Failed to load saved theme:', err);
-        applyTheme('terminal-volt');
+        applyTheme('light');
       }
 
       try {
@@ -184,30 +176,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       } catch (err) {
         console.warn('[Shell] Failed to load sidebar state:', err);
       }
-
-      // Load visual config (cornerRadius, blur, etc.)
-      try {
-        const api = window.nativesAPI;
-        if (api?.db?.get) {
-          const savedVisuals = await api.db.get(CONFIG_DB_KEY);
-          if (savedVisuals) {
-            const saved = JSON.parse(savedVisuals as string);
-            if (saved) {
-              setVisualConfig((prev) => ({
-                ...prev,
-                ...(typeof saved.blurAmount === 'number' && { blurAmount: saved.blurAmount }),
-                ...(typeof saved.displacementScale === 'number' && { displacementScale: saved.displacementScale }),
-                ...(typeof saved.saturation === 'number' && { saturation: saved.saturation }),
-                ...(typeof saved.aberrationIntensity === 'number' && { aberrationIntensity: saved.aberrationIntensity }),
-                ...(typeof saved.elasticity === 'number' && { elasticity: saved.elasticity }),
-                ...(typeof saved.cornerRadius === 'number' && { cornerRadius: saved.cornerRadius }),
-                ...(typeof saved.showWallpaper === 'boolean' && { showWallpaper: saved.showWallpaper }),
-                ...(typeof saved.showBlobs === 'boolean' && { showBlobs: saved.showBlobs }),
-              }));
-            }
-          }
-        }
-      } catch { /* no-op */ }
+      // V1.0: 背景 wallpaper / blob / WebGL 视觉配置加载已废弃。
     }
     initSettings();
   }, []);
@@ -320,46 +289,18 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   }
 
   return (
-    <div className="vibe-canvas w-full h-full p-[1.125rem] flex gap-4 overflow-visible box-border relative isolate" style={{ opacity: themeReady ? 1 : 0 }}>
-      {/* ── 全宽透明拖拽条 — absolute 定位 + 负 margin 穿透父 padding ── */}
+    <>
+      {/* ── V1.0 纯色背景，无 grain / blob / WebGL Liquid Glass ── */}
+
+      <div className="w-full h-full" style={{ opacity: themeReady ? 1 : 0 }}>
+      <div className="w-full h-full bg-[var(--background)] p-3 flex gap-3 overflow-visible box-border relative isolate">
+      {/* ── 全宽透明拖拽条 ── */}
       <div
         data-tauri-drag-region
         className="absolute top-0 z-50"
-        style={{ left: '-1.125rem', right: '-1.125rem', height: '28px' }}
+        style={{ left: '-12px', right: '-12px', height: '28px' }}
       />
-      {/* ── Global Dynamic Background Layer ── */}
-      <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-[1.125rem] z-0" style={{ zIndex: 0 }}>
-        {visualConfig.showWallpaper && (
-          <div
-            className="absolute inset-0 bg-cover bg-center transition-all duration-[500ms] ease-in-out"
-            style={{
-              backgroundImage: `url(${WALLPAPERS[0]}), radial-gradient(at 10% 20%, rgba(0, 255, 156, 0.18) 0px, transparent 50%), radial-gradient(at 90% 10%, rgba(255, 121, 63, 0.22) 0px, transparent 50%), radial-gradient(at 50% 80%, rgba(0, 221, 255, 0.15) 0px, transparent 50%), linear-gradient(135deg, #0d0f12 0%, #1c2027 100%)`,
-            }}
-          />
-        )}
-
-        {visualConfig.showBlobs && (
-          <div className="liquid-blob-wrapper absolute inset-0 z-10">
-            <div className="liquid-blob liquid-blob-1" />
-            <div className="liquid-blob liquid-blob-2" />
-            <div className="liquid-blob liquid-blob-3" />
-          </div>
-        )}
-        {/* Global WebGL Liquid Glass Canvas Layer */}
-        <div className="absolute inset-0 opacity-[0.22] z-0 pointer-events-none">
-          <LiquidGlass
-            isActive={true}
-            className="w-full h-full border-none bg-transparent shadow-none animate-none"
-            blurAmount={visualConfig.blurAmount}
-            displacementScale={visualConfig.displacementScale}
-            saturation={visualConfig.saturation}
-            aberrationIntensity={visualConfig.aberrationIntensity}
-            elasticity={visualConfig.elasticity}
-          >
-            <div className="w-full h-full" />
-          </LiquidGlass>
-        </div>
-      </div>
+      {/* ── V1.0 已移除：wallpaper / liquid-blob / WebGL LiquidGlass 全局背景层 ── */}
 
       {/* Left: Sidebar */}
       <div
@@ -390,7 +331,12 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         </div>
 
         {/* Main Content — conditional bottom margin to preserve gap when terminal is visible */}
-        <div className={`flex-1 vibe-content-panel min-w-0 overflow-hidden relative${state.terminalCollapsed ? '' : ' mb-3'}`}>
+        <motion.div
+          className={`flex-1 surface-section min-w-0 overflow-hidden relative${state.terminalCollapsed ? '' : ' mb-3'}`}
+          initial={prefersReducedMotion ? undefined : { opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={prefersReducedMotion ? undefined : { type: 'spring', stiffness: 100, damping: 20, mass: 0.8 }}
+        >
           <div ref={contentRef} id="main-content" tabIndex={-1} style={{ width: '100%', height: '100%', outline: 'none' }}>
             <ErrorBoundary>
               <MainContent
@@ -412,7 +358,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           </div>
           {/* Portal target for content-area overlays — covers only the content panel */}
           <div id="content-overlay-root" style={{ position: 'absolute', inset: 0, zIndex: 50, pointerEvents: 'none' }} />
-        </div>
+        </motion.div>
 
         {/* Terminal — bottom of workspace column */}
         <TerminalPanel
@@ -445,7 +391,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
                   if (!isCode) return undefined;
                   return (
                     <button
-                      className="flex items-center justify-center p-1.5 rounded-lg text-[var(--text-faint)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)] transition-all"
+                      className="flex items-center justify-center p-1.5 rounded-lg text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all"
                       onClick={() => setEditMode(!editMode)}
                       title={editMode ? 'View mode' : 'Edit mode'}
                     >
@@ -577,5 +523,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       {/* Phase 3: Update Notification */}
       <UpdateNotification locale={locale} />
     </div>
+    </div>
+    </>
   );
 }

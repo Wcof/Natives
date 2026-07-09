@@ -3,43 +3,57 @@ import plugin from 'tailwindcss/plugin';
 
 const config: Config = {
   content: ['./src/**/*.{js,ts,jsx,tsx,mdx}'],
-  darkMode: ['class', '[data-theme="liquid-glass"]'],
+  darkMode: ['class', '[data-theme="dark"]'],
   theme: {
     extend: {
       colors: {
+        // ── AI Natives V1.0 Brand ──
         brand: {
-          olive: 'var(--border)',
-          'olive-sidebar': 'var(--panel)',
-          'olive-deep': 'var(--bg)',
-          'olive-modal': 'var(--bg-2)',
-          'jade-glow': 'var(--accent)',
+          DEFAULT: 'var(--primary)',
+          hover: 'var(--primary-hover)',
+          soft: 'var(--primary-soft)',
+          dark: 'var(--primary-dark)',
+          ink: '#FFFFFF',
         },
-        glass: {
-          active: 'color-mix(in srgb, var(--accent) 80%, transparent)',
-          edge: 'rgb(255 255 255 / <alpha-value>)',
-        },
+        // ── V1.0 Surfaces (Light/Dark 双主题) ──
         surface: {
-          bg: 'var(--bg)',
-          'bg-2': 'var(--bg-2)',
-          'bg-3': 'var(--bg-3)',
-          panel: 'var(--panel)',
+          background: 'var(--background)',
+          DEFAULT: 'var(--surface)',
+          hover: 'var(--surface-hover)',
+          sidebar: 'var(--sidebar)',
           border: 'var(--border)',
+          'border-subtle': 'var(--border-subtle)',
         },
+        // ── V1.0 Text ──
         content: {
-          text: 'var(--text)',
-          'text-dim': 'var(--text-dim)',
-          'text-faint': 'var(--text-faint)',
+          DEFAULT: 'var(--text)',
+          body: 'var(--text-body)',
+          secondary: 'var(--text-secondary)',
+          disabled: 'var(--text-disabled)',
         },
-        accent: {
-          DEFAULT: 'var(--accent)',
-          soft: 'var(--accent-soft)',
-          ink: 'var(--accent-ink)',
-        },
+        // ── V1.0 Semantic ──
         semantic: {
           danger: 'var(--danger)',
           warning: 'var(--warning)',
           info: 'var(--info)',
+          success: 'var(--success)',
         },
+        // ── Diff (代码变更) ──
+        diff: {
+          add: 'var(--diff-add)',
+          del: 'var(--diff-del)',
+          mod: 'var(--diff-mod)',
+        },
+        // ── 向下兼容别名 (旧 vibe-* 体系) ──
+        accent: {
+          DEFAULT: 'var(--primary)',
+          soft: 'var(--primary-soft)',
+          ink: '#FFFFFF',
+        },
+        panel: 'var(--surface)',
+        bg: 'var(--background)',
+        'bg-2': 'var(--surface)',
+        'bg-3': 'var(--surface-hover)',
       },
       fontFamily: {
         ui: ['var(--font-ui)'],
@@ -47,27 +61,24 @@ const config: Config = {
         display: ['var(--font-display)'],
       },
       borderRadius: {
+        xs: 'var(--radius-xs)',
+        sm: 'var(--radius-sm)',
+        md: 'var(--radius-md)',
+        lg: 'var(--radius-lg)',
+        xl: 'var(--radius-xl)',
         component: 'var(--radius)',
       },
       boxShadow: {
-        'liquid-edge':
-          'inset 0 1px 1px 0 rgba(255, 255, 255, 0.28), inset 0 -1px 1px 0 rgba(0, 0, 0, 0.35)',
-        'glass-ambient': '0 10px 30px -5px rgba(0, 0, 0, 0.25)',
-        card: '0 1px 3px rgba(0, 0, 0, 0.12)',
-        elevated: '0 4px 12px rgba(0, 0, 0, 0.15)',
-        modal: '0 8px 32px rgba(0, 0, 0, 0.2)',
+        card: 'var(--shadow-card)',
+        popup: 'var(--shadow-popup)',
+        modal: 'var(--shadow-modal)',
       },
-      textShadow: {
-        jade: '0 0 6px color-mix(in srgb, var(--accent) 25%, transparent)',
-      },
-      transitionTimingFunction: {
-        'ease-out-expo': 'cubic-bezier(0.16, 1, 0.3, 1)',
+      transitionDuration: {
+        DEFAULT: '150ms',
+        fast: '100ms',
+        slow: '200ms',
       },
       keyframes: {
-        'slide-up': {
-          from: { opacity: '0', transform: 'translateY(12px)' },
-          to: { opacity: '1', transform: 'translateY(0)' },
-        },
         'fade-in': {
           from: { opacity: '0', transform: 'translateY(4px)' },
           to: { opacity: '1', transform: 'translateY(0)' },
@@ -76,13 +87,9 @@ const config: Config = {
           from: { opacity: '0', transform: 'scale(0.96)' },
           to: { opacity: '1', transform: 'scale(1)' },
         },
-        'liquid-surface-in': {
-          from: { opacity: '0', transform: 'scale(0.985)' },
-          to: { opacity: '1', transform: 'scale(1)' },
-        },
-        'live-pulse': {
-          '0%, 100%': { opacity: '1' },
-          '50%': { opacity: '0.4' },
+        'slide-up': {
+          from: { opacity: '0', transform: 'translateY(12px)' },
+          to: { opacity: '1', transform: 'translateY(0)' },
         },
         'skeleton-pulse': {
           '0%, 100%': { opacity: '0.4' },
@@ -90,26 +97,20 @@ const config: Config = {
         },
       },
       animation: {
-        'slide-up': 'slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
-        'fade-in': 'fade-in 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
-        'drop-in': 'drop-in 0.16s cubic-bezier(0.16, 1, 0.3, 1)',
-        'liquid-surface-in':
-          'liquid-surface-in 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
-        'live-pulse': 'live-pulse 1.1s cubic-bezier(0.16, 1, 0.3, 1) infinite',
-        'skeleton-pulse':
-          'skeleton-pulse 1.5s cubic-bezier(0.16, 1, 0.3, 1) infinite',
+        'fade-in': 'fade-in 150ms ease forwards',
+        'drop-in': 'drop-in 150ms ease forwards',
+        'slide-up': 'slide-up 200ms ease forwards',
+        'skeleton-pulse': 'skeleton-pulse 1.5s ease infinite',
       },
     },
   },
   plugins: [
-    plugin(({ matchUtilities, theme }) => {
+    plugin(({ matchUtilities }) => {
       matchUtilities(
         {
-          'text-shadow': (value: string) => ({
-            textShadow: value,
-          }),
+          'text-shadow': (value: string) => ({ textShadow: value }),
         },
-        { values: theme('textShadow') },
+        { values: { none: 'none' } },
       );
     }),
   ],

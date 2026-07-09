@@ -23,18 +23,18 @@ export default function LoadingPage({ moduleName, locale, onBack }: LoadingPageP
     <div className="flex-1 flex flex-col items-center justify-center gap-4">
       {/* Loading spinner */}
       <div className="relative w-16 h-16">
-        <div className="absolute inset-0 rounded-full border-2 border-[var(--vibe-border-subtle)]" />
+        <div className="absolute inset-0 rounded-full border-2 border-[var(--border-subtle)]" />
         <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-purple-400 animate-spin" />
       </div>
 
       <div className="text-center">
-        <h3 className="text-sm font-medium text-[var(--vibe-brand-text)]">{t('generating')}</h3>
-        <p className="text-xs text-[var(--text-dim)] mt-1">{t('pleaseWait')}</p>
+        <h3 className="text-sm font-medium text-[var(--text)]">{t('generating')}</h3>
+        <p className="text-xs text-[var(--text-secondary)] mt-1">{t('pleaseWait')}</p>
       </div>
 
       <button
         onClick={onBack}
-        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm text-[var(--text-dim)] hover:bg-[var(--vibe-btn-hover-bg)] transition-all"
+        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-all"
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <line x1="19" y1="12" x2="5" y2="12" />

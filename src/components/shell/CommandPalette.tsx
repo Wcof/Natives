@@ -48,8 +48,8 @@ function getStaticCommands(locale: Locale): CommandItem[] {
     { id: 'ai', label: t(locale, 'nav.aiWorkbench'), category: 'navigation', icon: <Bot size={14} /> },
     { id: 'tools', label: t(locale, 'nav.tools'), category: 'navigation', icon: <Sliders size={14} /> },
     { id: 'terminal:toggle', label: t(locale, 'nav.terminalToggle'), category: 'action', icon: <Terminal size={14} /> },
-    { id: 'theme:terminal-volt', label: t(locale, 'nav.themeTerminalVolt'), category: 'setting', icon: <Terminal size={14} /> },
-    { id: 'theme:frosted-jasmine', label: t(locale, 'nav.themeFrostedJasmine'), category: 'setting', icon: <Sun size={14} /> },
+    { id: 'theme:dark', label: t(locale, 'nav.themeTerminalVolt'), category: 'setting', icon: <Terminal size={14} /> },
+    { id: 'theme:light', label: t(locale, 'nav.themeFrostedJasmine'), category: 'setting', icon: <Sun size={14} /> },
   ];
 }
 
@@ -279,7 +279,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
   };
 
   const categoryColors: Record<string, string> = {
-    module: 'var(--accent)',
+    module: 'var(--primary)',
     action: 'var(--diff-mod)',
     setting: 'var(--warning)',
     navigation: 'var(--info)',
@@ -293,15 +293,13 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
       style={{
         position: 'fixed', inset: 0, zIndex: 9999,
         display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: '20vh',
-        background: 'rgba(0,0,0,0.45)',
-        backdropFilter: 'blur(var(--glass-overlay-blur, 24px)) saturate(var(--glass-overlay-saturation, 150%))',
-        WebkitBackdropFilter: 'blur(var(--glass-overlay-blur, 24px)) saturate(var(--glass-overlay-saturation, 150%))',
-        animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
+        background: 'rgba(0, 0, 0, 0.4)',
+        animation: 'fadeIn 150ms ease',
       }}
       onClick={onClose}
       aria-hidden="true"
     >
-      {/* Command Palette — vibe-* glassmorphic style */}
+      {/* Command Palette — V1.0 纯色 Surface */}
       <div
         ref={dialogRef}
         role="dialog"
@@ -313,12 +311,10 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
         style={{
           position: 'relative', marginTop: 0,
           width: 520, maxWidth: '90vw',
-          background: 'var(--vibe-toolbar-bg)',
-          backdropFilter: 'blur(var(--vibe-toolbar-blur, 22px)) saturate(var(--vibe-toolbar-saturation, 145%))',
-          WebkitBackdropFilter: 'blur(var(--vibe-toolbar-blur, 22px)) saturate(var(--vibe-toolbar-saturation, 145%))',
-          border: '0.0625rem solid var(--vibe-toolbar-border)',
-          borderRadius: 'var(--radius)',
-          boxShadow: 'var(--vibe-toolbar-shadow)',
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-md)',
+          boxShadow: 'var(--shadow-modal)',
           overflow: 'hidden',
         }}
       >
@@ -326,12 +322,11 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
         <div style={{
           display: 'flex', alignItems: 'center', gap: SPACING.sm,
           padding: `${SPACING.md}px ${SPACING.lg}px`,
-          borderBottom: '0.0625rem solid var(--vibe-toolbar-border)',
-          boxShadow: '0 0 0 0px transparent',
-          transition: 'box-shadow 0.3s ease',
+          borderBottom: '1px solid var(--border)',
+          transition: 'box-shadow 150ms ease',
         }}
-          className="focus-within:shadow-[0_0_0_2px_var(--accent-border),0_0_12px_var(--accent-soft)]">
-          <Search size={14} className="shrink-0" style={{ color: 'var(--vibe-search-placeholder)' }} />
+          className="focus-within:shadow-[0_0_0_2px_var(--primary)]">
+          <Search size={16} className="shrink-0" style={{ color: 'var(--text-secondary)' }} />
           <input
             ref={inputRef}
             type="text"
@@ -344,8 +339,8 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
               background: 'transparent',
               border: 'none',
               outline: 'none',
-              color: 'var(--vibe-brand-text)',
-              fontSize: FONT_SIZE.heading,
+              color: 'var(--text)',
+              fontSize: FONT_SIZE.lg,
               fontFamily: 'inherit',
             }}
             aria-label={t(locale, 'commandPalette.placeholder')}
@@ -354,7 +349,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
 
         <div style={{ maxHeight: 360, overflowY: 'auto', overflowX: 'hidden', padding: `${SPACING.xs}px 0` }}>
           {results.length === 0 ? (
-            <div style={{ padding: `${SPACING.xl}px ${SPACING.lg}px`, textAlign: 'center', color: 'var(--vibe-btn-text)', fontSize: FONT_SIZE.lg }}>
+            <div style={{ padding: `${SPACING.xxl}px ${SPACING.lg}px`, textAlign: 'center', color: 'var(--text-secondary)', fontSize: FONT_SIZE.sm }}>
               {t(locale, 'commandPalette.noResults')}
             </div>
           ) : (
@@ -369,32 +364,31 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
                 style={{
                   display: 'flex', alignItems: 'center', gap: SPACING.sm,
                   padding: `${SPACING.sm}px ${SPACING.lg}px`, cursor: 'pointer',
-                  background: index === selectedIndex ? 'var(--vibe-active-bg)' : 'transparent',
-                  color: index === selectedIndex ? 'var(--vibe-active-color)' : 'var(--vibe-brand-text)',
-                  fontSize: FONT_SIZE.lg,
-                  transition: 'background 0.15s, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)',
-                  transform: selectedIndex === index ? 'translateX(4px)' : 'translateX(0)',
+                  background: index === selectedIndex ? 'var(--surface-hover)' : 'transparent',
+                  color: index === selectedIndex ? 'var(--text)' : 'var(--text-body)',
+                  fontSize: FONT_SIZE.sm,
+                  transition: 'background 150ms ease',
                 }}
               >
                 {/* Icon or category dot */}
                 <span style={{
-                  width: 20, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: FONT_SIZE.xl,
+                  width: 20, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: FONT_SIZE.md,
                 }}>
                   {cmd.icon || (
                     <span style={{
                       display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
-                      background: categoryColors[cmd.category] || 'var(--vibe-btn-text)',
+                      background: categoryColors[cmd.category] || 'var(--text-secondary)',
                     }} />
                   )}
                 </span>
                 <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cmd.label}</span>
                 {cmd.description && (
-                  <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--vibe-btn-text)', fontFamily: 'var(--font-mono)', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  <span style={{ fontSize: FONT_SIZE.micro, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0 }}>
                     {cmd.description}
                   </span>
                 )}
                 <span style={{
-                  fontSize: FONT_SIZE.xs, color: 'var(--vibe-btn-text)',
+                  fontSize: FONT_SIZE.micro, color: 'var(--text-disabled)',
                   textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0,
                 }}>
                   {cmd.category}
@@ -405,8 +399,8 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
         </div>
 
         <div style={{
-          padding: '8px 16px', borderTop: '0.0625rem solid var(--vibe-toolbar-border)',
-          display: 'flex', gap: SPACING.md, fontSize: FONT_SIZE.sm, color: 'var(--vibe-btn-text)',
+          padding: '8px 16px', borderTop: '1px solid var(--border)',
+          display: 'flex', gap: SPACING.md, fontSize: FONT_SIZE.micro, color: 'var(--text-secondary)',
           alignItems: 'center',
         }}>
           <span>{t(locale, 'commandPalette.navigate')}</span>
@@ -418,11 +412,11 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
           <button
             onClick={() => setSearchScope((s) => s === 'global' ? 'local' : 'global')}
             style={{
-              background: 'var(--vibe-btn-bg)',
-              border: '0.0625rem solid var(--vibe-btn-border)',
-              borderRadius: BORDER_RADIUS.lg,
-              padding: '2px 6px', fontSize: FONT_SIZE.xs, cursor: 'pointer',
-              color: searchScope === 'local' ? 'var(--vibe-active-color)' : 'var(--vibe-btn-text)',
+              background: 'var(--surface-hover)',
+              border: '1px solid var(--border)',
+              borderRadius: BORDER_RADIUS.xs,
+              padding: '2px 8px', fontSize: FONT_SIZE.micro, cursor: 'pointer',
+              color: searchScope === 'local' ? 'var(--primary)' : 'var(--text-secondary)',
               display: 'inline-flex', alignItems: 'center', gap: 4,
             }}
             title={searchScope === 'global' ? t(locale, 'commandPalette.searchScopeGlobal') : t(locale, 'commandPalette.searchScopeLocal')}

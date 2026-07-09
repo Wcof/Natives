@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Zap } from 'lucide-react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION, SHADOW } from '@/lib/design-tokens';
+import { useLocale, t as tr } from '@/i18n';
 
 interface FlingToTerminalProps {
   /** Ref to the terminal panel element for targeting the flight animation */
@@ -21,6 +22,7 @@ interface FlingToTerminalProps {
  * - Uses bracketed paste for multi-line content
  */
 export default function FlingToTerminal({ terminalRef, onFling }: FlingToTerminalProps) {
+  const locale = useLocale();
   const [selection, setSelection] = useState<{ text: string; x: number; y: number } | null>(null);
   const [flying, setFlying] = useState(false);
   const [flyTarget, setFlyTarget] = useState({ x: 0, y: 0 });
@@ -104,20 +106,23 @@ export default function FlingToTerminal({ terminalRef, onFling }: FlingToTermina
             top: selection.y,
             transform: 'translate(-50%, -100%)',
             zIndex: 9999,
-            background: 'var(--accent)',
-            color: 'var(--accent-ink)',
+            background: 'var(--primary)',
+            color: 'var(--primary-foreground, #FFFFFF)',
             border: 'none',
             borderRadius: BORDER_RADIUS.md,
             padding: '4px 10px',
             fontSize: FONT_SIZE.sm,
             fontWeight: 600,
             cursor: 'pointer',
-            boxShadow: SHADOW.elevated,
+            boxShadow: SHADOW.popup,
             animation: 'fadeIn 0.15s ease',
             whiteSpace: 'nowrap',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: SPACING.xs,
           }}
         >
-          <Zap size={14} /> Send to Terminal
+          <Zap size={14} /> {tr(locale, 'tools.sendToTerminal')}
         </button>
       )}
 
@@ -130,8 +135,8 @@ export default function FlingToTerminal({ terminalRef, onFling }: FlingToTermina
             top: selection.y,
             transform: 'translate(-50%, -100%)',
             zIndex: 10000,
-            background: 'var(--accent)',
-            color: 'var(--accent-ink)',
+            background: 'var(--primary)',
+            color: 'var(--primary-foreground, #FFFFFF)',
             borderRadius: BORDER_RADIUS.md,
             padding: '4px 10px',
             fontSize: FONT_SIZE.sm,
@@ -140,7 +145,7 @@ export default function FlingToTerminal({ terminalRef, onFling }: FlingToTermina
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
-            boxShadow: '0 4px 16px var(--accent-soft)',
+            boxShadow: '0 4px 16px var(--primary-soft)',
             pointerEvents: 'none',
             transition: 'transform 0.55s cubic-bezier(0.45, 0, 0.2, 1), opacity 0.55s ease',
             // Animate to terminal position

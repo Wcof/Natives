@@ -80,9 +80,7 @@ export default function ConfirmDialog({
       style={{
         position: 'fixed', inset: 0, zIndex: 9999,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: 'rgba(0,0,0,0.45)',
-        backdropFilter: 'blur(var(--glass-overlay-blur, 24px)) saturate(var(--glass-overlay-saturation, 150%))',
-        WebkitBackdropFilter: 'blur(var(--glass-overlay-blur, 24px)) saturate(var(--glass-overlay-saturation, 150%))',
+        background: 'rgba(0, 0, 0, 0.4)',
         animation: `fadeIn ${TRANSITION.normal}`,
       }}
       onClick={onCancel}
@@ -95,21 +93,19 @@ export default function ConfirmDialog({
         tabIndex={-1}
         className="anim-dropIn"
         style={{
-          background: 'var(--vibe-toolbar-bg)',
-          backdropFilter: 'blur(var(--vibe-toolbar-blur, 22px)) saturate(var(--vibe-toolbar-saturation, 145%))',
-          WebkitBackdropFilter: 'blur(var(--vibe-toolbar-blur, 22px)) saturate(var(--vibe-toolbar-saturation, 145%))',
-          border: '0.0625rem solid var(--vibe-toolbar-border)',
-          borderRadius: 'var(--radius)',
-          boxShadow: '0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent), var(--vibe-toolbar-shadow)',
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+          borderRadius: BORDER_RADIUS.lg,
+          boxShadow: 'var(--shadow-modal)',
           padding: SPACING.xl, maxWidth: 400, width: '90vw',
         }}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={handleKeyDown}
       >
-        <h3 style={{ fontSize: FONT_SIZE.xl, fontWeight: 600, color: 'var(--vibe-brand-text)', marginBottom: SPACING.sm }}>
+        <h3 style={{ fontSize: FONT_SIZE.xl, fontWeight: 600, color: 'var(--text)', marginBottom: SPACING.sm }}>
           {title}
         </h3>
-        <p style={{ fontSize: FONT_SIZE.lg, color: 'var(--vibe-brand-text)', marginBottom: SPACING.lg, lineHeight: 1.5, wordBreak: 'break-word', overflowWrap: 'break-word' }}>
+        <p style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-body)', marginBottom: SPACING.lg, lineHeight: 1.5, wordBreak: 'break-word', overflowWrap: 'break-word' }}>
           {message}
         </p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: SPACING.sm }}>
@@ -119,9 +115,9 @@ export default function ConfirmDialog({
             className="btn"
             onClick={onConfirm}
             style={{
-              background: danger ? 'var(--danger)' : 'var(--accent)',
-              color: danger ? 'var(--accent-ink)' : 'var(--accent-ink)',
-              border: 'none', padding: `${SPACING.xs}px ${SPACING.md}px`, borderRadius: BORDER_RADIUS.md, cursor: 'pointer',
+              background: danger ? 'var(--danger)' : 'var(--primary)',
+              color: '#FFFFFF',
+              border: 'none', padding: `${SPACING.xs}px ${SPACING.md}px`, borderRadius: BORDER_RADIUS.sm, cursor: 'pointer', fontWeight: 500,
             }}
           >
             {confirmLabel}

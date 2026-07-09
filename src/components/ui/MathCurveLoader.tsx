@@ -131,9 +131,9 @@ export function MathCurveLoader({
 
           {/* Holographic Gradient matching the AI Accent theme */}
           <linearGradient id="curve-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="var(--accent)" />
-            <stop offset="50%" stopColor="var(--accent-soft)" />
-            <stop offset="100%" stopColor="color-mix(in srgb, var(--accent) 30%, #4f46e5)" />
+            <stop offset="0%" stopColor="var(--primary)" />
+            <stop offset="50%" stopColor="var(--primary-soft)" />
+            <stop offset="100%" stopColor="color-mix(in srgb, var(--primary) 30%, #4f46e5)" />
           </linearGradient>
         </defs>
 

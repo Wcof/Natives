@@ -7,6 +7,8 @@ import MessageList from './MessageList';
 import MessageInput from './MessageInput';
 import SessionList from './SessionList';
 import ModelSelectorDropdown from './ModelSelectorDropdown';
+import { classifyError } from '@/lib/error-classifier';
+import { useToast } from '@/components/ui/Toast';
 
 interface Message {
   id: string;
@@ -37,7 +39,7 @@ interface ProviderInfo {
   name: string;
   presetName: string;
   baseUrl: string;
-  keys: Array<{ id: string; label: string; apiKey: string }>;
+  keys: Array<{ id: string; label: string; maskedKey: string }>;
 }
 
 interface AssistantWorkbenchProps {
@@ -45,6 +47,7 @@ interface AssistantWorkbenchProps {
 }
 
 export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) {
+  const { toast } = useToast();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -107,7 +110,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
         setSessions((prev) => [session, ...prev]);
         setInputDisabledReason(null);
       } catch (err) {
-        console.error('Failed to auto-create session:', err);
+        toast(classifyError(err).userMessage, 'error');
         setInputDisabledReason(null);
       } finally {
         if (!cancelled) setLoading(false);
@@ -141,7 +144,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
         setSessions(result as Session[]);
       }
     } catch (err) {
-      console.error('Failed to load sessions:', err);
+      toast(classifyError(err).userMessage, 'error');
     } finally {
       setLoading(false);
     }
@@ -155,7 +158,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
         setMessages(result as Message[]);
       }
     } catch (err) {
-      console.error('Failed to load messages:', err);
+      toast(classifyError(err).userMessage, 'error');
     }
   }, []);
 
@@ -189,7 +192,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
         resetStream();
       }
     } catch (err) {
-      console.error('Failed to create session:', err);
+      toast(classifyError(err).userMessage, 'error');
     }
   }, [activeProjectPath, selectedModel, selectedProviderId, resetStream]);
 
@@ -205,7 +208,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
         }
       }
     } catch (err) {
-      console.error('Failed to delete session:', err);
+      toast(classifyError(err).userMessage, 'error');
     }
   }, [activeSessionId]);
 
@@ -224,7 +227,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
           s.id === activeSessionId ? { ...s, model_id: model, provider_id: providerId } : s
         ));
       } catch (err) {
-        console.error('Failed to update session model:', err);
+        toast(classifyError(err).userMessage, 'error');
       }
     }
   }, [activeSessionId]);
@@ -245,7 +248,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
         });
       }
     } catch (err) {
-      console.error('Failed to save message:', err);
+      toast(classifyError(err).userMessage, 'error');
     }
 
     // Reload messages to show the new one
@@ -273,7 +276,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
         messages: chatMessages,
       });
     } catch (err) {
-      console.error('Failed to start stream:', err);
+      toast(classifyError(err).userMessage, 'error');
     }
   }, [activeSessionId, messages, loadMessages, selectedModel]);
 
@@ -305,7 +308,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
             toolCalls: streamState.toolCall || undefined,
           });
         } catch (err) {
-          console.error('Failed to save assistant message:', err);
+          toast(classifyError(err).userMessage, 'error');
         }
         await loadMessages(activeSessionId);
         // Reset stream state after persistence to prevent re-trigger
@@ -318,7 +321,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   return (
     <div className="flex h-full w-full" style={{ fontFamily: 'inherit' }}>
       {/* Session list sidebar */}
-      <div className="w-56 shrink-0 border-r border-[var(--vibe-border-subtle)] flex flex-col">
+      <div className="w-56 shrink-0 border-r border-[var(--border-subtle)] flex flex-col">
         <SessionList
           sessions={sessions}
           activeSessionId={activeSessionId}
@@ -333,13 +336,13 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
       {/* Main chat area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Chat Header Bar */}
-        <div className="shrink-0 border-b border-[var(--vibe-border-subtle)] px-4 py-2 flex items-center gap-3">
+        <div className="shrink-0 border-b border-[var(--border-subtle)] px-4 py-2 flex items-center gap-3">
           {activeSessionId && (
             <>
               <div className="flex-1 min-w-0">
                 <input
                   type="text"
-                  className="w-full bg-transparent text-sm font-medium text-[var(--vibe-brand-text)] border-none outline-none placeholder-[var(--text-faint)]"
+                  className="w-full bg-transparent text-sm font-medium text-[var(--text)] border-none outline-none placeholder-[var(--text-disabled)]"
                   value={sessions.find(s => s.id === activeSessionId)?.title || ''}
                   placeholder={t(locale, 'aiWorkbench.sessionTitlePlaceholder')}
                   onChange={(e) => {

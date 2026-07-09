@@ -18,7 +18,7 @@ export default function RootClient({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (isWidget) {
-      document.documentElement.classList.add('vibe-widget-mode');
+      document.documentElement.classList.add('widget-mode');
     }
 
     const handleContextMenu = (e: MouseEvent) => {
@@ -34,7 +34,7 @@ export default function RootClient({ children }: { children: ReactNode }) {
   return (
     <ThemeProvider>
       <ToastProvider>
-        <div className="h-full w-full overflow-hidden bg-transparent [&_div[data-sidebar]]:h-full [&_.vibe-canvas]:h-full">
+        <div className="h-full w-full overflow-hidden bg-transparent [&_div[data-sidebar]]:h-full [&_[data-shell-content]]:h-full">
           <ShellLayout>{children}</ShellLayout>
         </div>
       </ToastProvider>

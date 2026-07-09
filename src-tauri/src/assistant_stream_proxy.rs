@@ -48,8 +48,7 @@ pub struct ChatMessage {
 
 /// SSE 下行到前端的事件载荷。
 ///
-/// `tool_status` / `tool_result` / `self_heal_count` 是执行引擎新增字段，
-/// 供 US-4 三态气泡 + 3.4 自愈熔断 UI 联动。老字段保持兼容（Default 兜底）。
+/// 保持旧字段面稳定；执行引擎扩展事件走 `RuntimeEvent` 新通道。
 #[derive(Clone, serde::Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamPayload {
@@ -59,12 +58,6 @@ pub struct StreamPayload {
     pub reasoning: Option<String>,
     pub done: bool,
     pub error: Option<String>,
-    /// 执行引擎：工具执行状态 — pending / success / error / circuit_broken
-    pub tool_status: Option<String>,
-    /// 执行引擎：工具执行结果（success）或错误摘要（error）
-    pub tool_result: Option<serde_json::Value>,
-    /// 执行引擎：当前自愈失败计数（前端展示 "构建失败 (N/3)"）
-    pub self_heal_count: Option<u32>,
 }
 
 /// Start a streaming chat with the AI provider, with agentic tool-execution loop.
@@ -131,7 +124,7 @@ pub async fn stream_chat(
         model: input.model.clone(),
         provider_id,
         system_prompt: None,
-        working_directory: None,
+        working_directory: std::env::current_dir().ok(),
         abort_receiver: cancel_rx,
         runtime_options: serde_json::json!({}),
     }).await?;
@@ -278,19 +271,6 @@ mod tests {
         let json = serde_json::to_value(&payload).unwrap();
         assert_eq!(json["error"], "Network error");
         assert_eq!(json["done"], true);
-    }
-
-    #[test]
-    fn test_stream_payload_tool_status() {
-        let payload = StreamPayload {
-            session_id: "test".into(),
-            tool_status: Some("circuit_broken".into()),
-            self_heal_count: Some(4),
-            ..Default::default()
-        };
-        let json = serde_json::to_value(&payload).unwrap();
-        assert_eq!(json["toolStatus"], "circuit_broken");
-        assert_eq!(json["selfHealCount"], 4);
     }
 
     #[test]

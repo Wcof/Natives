@@ -3,6 +3,9 @@
 import { useState } from 'react';
 import { type ContentSearchResult } from '@/types/file';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
+import { useLocale, t as tr } from '@/i18n';
+import { useToast } from '@/components/ui/Toast';
+import { classifyError } from '@/lib/error-classifier';
 
 interface FileSearchProps {
   onClose: () => void;
@@ -10,6 +13,9 @@ interface FileSearchProps {
 }
 
 export default function FileSearch({ onClose, onNavigate }: FileSearchProps) {
+  const locale = useLocale();
+  const t = (key: string, params?: Record<string, string | number>) => tr(locale, key, params);
+  const { toast } = useToast();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<ContentSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -57,7 +63,8 @@ export default function FileSearch({ onClose, onNavigate }: FileSearchProps) {
         items.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
       }
       setResults(items);
-    } catch {
+    } catch (err) {
+      toast(classifyError(err).userMessage, 'error');
       setResults([]);
     } finally {
       setSearching(false);
@@ -76,18 +83,20 @@ export default function FileSearch({ onClose, onNavigate }: FileSearchProps) {
       <div style={{
         width: 560, maxHeight: '60vh', overflow: 'hidden',
         background: 'var(--panel, #0e0f0c)',
-        border: '1px solid var(--vibe-btn-border)',
+        border: '1px solid var(--border)',
         borderRadius: 'var(--radius, 4px)',
         display: 'flex', flexDirection: 'column',
         boxShadow: '0 16px 48px rgba(0,0,0,0.4)',
       }}>
         {/* Search input */}
-        <div style={{ padding: 12, borderBottom: '1px solid var(--vibe-btn-border)' }}>
+        <div style={{ padding: 12, borderBottom: '1px solid var(--border)' }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <input
               className="input"
               type="text"
-              placeholder={`Search by ${mode}... (prefix with "content:" for full-text)`}
+              placeholder={t('fileBrowser.searchByMode', {
+                mode: mode === 'content' ? t('fileBrowser.searchModeContent') : t('fileBrowser.searchModeName'),
+              })}
               value={query}
               onChange={(e) => {
                 const val = e.target.value;
@@ -104,10 +113,10 @@ export default function FileSearch({ onClose, onNavigate }: FileSearchProps) {
             />
             <span style={{
               fontSize: FONT_SIZE.xs, padding: '2px 6px', borderRadius: BORDER_RADIUS.sm,
-              background: mode === 'content' ? 'var(--accent)' : 'var(--vibe-btn-bg)',
-              color: mode === 'content' ? 'var(--accent-ink)' : 'var(--vibe-btn-text)',
+              background: mode === 'content' ? 'var(--primary)' : 'var(--surface)',
+              color: mode === 'content' ? '#FFFFFF' : 'var(--text-secondary)',
             }}>
-              {mode === 'content' ? 'content' : 'name'}
+              {mode === 'content' ? t('fileBrowser.searchModeContent') : t('fileBrowser.searchModeName')}
             </span>
           </div>
         </div>
@@ -115,12 +124,12 @@ export default function FileSearch({ onClose, onNavigate }: FileSearchProps) {
         {/* Results */}
         <div style={{ flex: 1, overflow: 'auto' }}>
           {searching ? (
-            <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--vibe-btn-text)' }}>
-              Searching...
+            <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-secondary)' }}>
+              {t('fileBrowser.searching')}
             </div>
           ) : results.length === 0 && query ? (
-            <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--vibe-btn-text)' }}>
-              No results for "{query}"
+            <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-secondary)' }}>
+              {t('fileBrowser.noResultsFor', { query })}
             </div>
           ) : (
             results.slice(0, 50).map((r, idx) => (
@@ -130,31 +139,31 @@ export default function FileSearch({ onClose, onNavigate }: FileSearchProps) {
                 style={{
                   padding: '8px 12px',
                   cursor: 'pointer',
-                  borderBottom: '1px solid var(--vibe-btn-border)',
+                  borderBottom: '1px solid var(--border)',
                   transition: 'background 0.08s',
                 }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--vibe-toolbar-bg)'; }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--surface)'; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
               >
-                <div style={{ fontSize: FONT_SIZE.md, color: 'var(--vibe-brand-text)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ fontSize: FONT_SIZE.md, color: 'var(--text)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 8 }}>
                   {r.name}
-                  {mode === 'content' && <span style={{ color: 'var(--vibe-btn-text)' }}>line {r.line}</span>}
+                  {mode === 'content' && <span style={{ color: 'var(--text-secondary)' }}>{t('fileBrowser.lineNumber', { line: r.line })}</span>}
                   {r.score != null && r.score > 0 && (
                     <span style={{
-                      fontSize: FONT_SIZE.xs, color: 'var(--vibe-btn-text)',
-                      background: 'var(--vibe-btn-bg)', padding: '1px 5px',
+                      fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)',
+                      background: 'var(--surface)', padding: '1px 5px',
                       borderRadius: BORDER_RADIUS.sm, marginLeft: 'auto',
                     }}>
                       {r.score.toFixed(1)}
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--vibe-btn-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {r.path}
                 </div>
                 {mode === 'content' && r.preview && (
                   <div style={{
-                    fontSize: FONT_SIZE.sm, color: 'var(--vibe-btn-text)',
+                    fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)',
                     marginTop: SPACING.xs, fontFamily: 'monospace',
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                   }}>
@@ -165,8 +174,8 @@ export default function FileSearch({ onClose, onNavigate }: FileSearchProps) {
             ))
           )}
           {results.length > 50 && (
-            <div style={{ padding: '6px 12px', fontSize: FONT_SIZE.sm, color: 'var(--vibe-btn-text)', textAlign: 'center' }}>
-              Showing 50 of {results.length} results
+            <div style={{ padding: '6px 12px', fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)', textAlign: 'center' }}>
+              {t('fileBrowser.showingResults', { count: results.length })}
             </div>
           )}
         </div>

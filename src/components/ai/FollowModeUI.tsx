@@ -62,21 +62,21 @@ export default function FollowModeUI({
         title={modeLabel[mode]}
         style={{
           padding: '2px 8px', fontSize: FONT_SIZE.sm,
-          color: mode !== 'off' ? 'var(--accent)' : 'var(--text-dim)',
-          border: mode !== 'off' ? '1px solid var(--accent)' : '1px solid var(--border)',
+          color: mode !== 'off' ? 'var(--primary)' : 'var(--text-secondary)',
+          border: mode !== 'off' ? '1px solid var(--primary)' : '1px solid var(--border)',
         }}
       >
         {modeIcon[mode]} {mode !== 'off' ? t(locale, 'common.on') : t(locale, 'common.off')}
       </button>
 
       {terminalFollows && (
-        <span style={{ color: 'var(--text-faint)', fontSize: FONT_SIZE.xs }}>
+        <span style={{ color: 'var(--text-disabled)', fontSize: FONT_SIZE.xs }}>
           {t(locale, 'aiWorkbench.follow.cdPrefix')}{currentDir || '/'}
         </span>
       )}
 
       {fileBrowserFollows && (
-        <span style={{ color: 'var(--text-faint)', fontSize: FONT_SIZE.xs }}>
+        <span style={{ color: 'var(--text-disabled)', fontSize: FONT_SIZE.xs }}>
           {t(locale, 'aiWorkbench.followMode.terminalCdSyncsBrowser')}
         </span>
       )}

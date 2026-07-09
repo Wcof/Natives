@@ -236,11 +236,11 @@ function PreviewContent({ entry, locale, isMarkdown, isCsv, isArchive, onImageCl
             <button
               onClick={() => setImageEditing(false)}
               className="text-xs px-2 py-1 rounded"
-              style={{ background: 'var(--vibe-btn-bg)', color: 'var(--text-dim)' }}
+              style={{ background: 'var(--surface)', color: 'var(--text-secondary)' }}
             >
               {t(locale, 'filePreview.backToPreview')}
             </button>
-            <span className="text-xs" style={{ color: 'var(--text-faint)' }}>{entry.name}</span>
+            <span className="text-xs" style={{ color: 'var(--text-disabled)' }}>{entry.name}</span>
           </div>
           <Suspense fallback={<MathCurveLoader />}>
             <ImageEditor
@@ -286,9 +286,8 @@ function PreviewContent({ entry, locale, isMarkdown, isCsv, isArchive, onImageCl
             position: 'absolute', top: 8, right: 8,
             display: 'flex', alignItems: 'center', gap: 4,
             padding: '4px 8px', borderRadius: 6, fontSize: 12,
-            background: 'var(--vibe-btn-bg)', color: 'var(--text-dim)',
+            background: 'var(--surface)', color: 'var(--text-secondary)',
             border: '1px solid var(--border)', cursor: 'pointer',
-            backdropFilter: 'blur(8px)',
           }}
         >
           <Pencil size={13} />
@@ -344,7 +343,7 @@ function PreviewContent({ entry, locale, isMarkdown, isCsv, isArchive, onImageCl
   }
 
   return (
-    <div style={{ color: 'var(--text-faint)', fontSize: 12, padding: 20, textAlign: 'center' }}>
+    <div style={{ color: 'var(--text-disabled)', fontSize: 12, padding: 20, textAlign: 'center' }}>
       {t(locale, 'filePreview.noPreview').replace('{kind}', entry.kind)}
     </div>
   );
@@ -355,7 +354,7 @@ function PreviewContent({ entry, locale, isMarkdown, isCsv, isArchive, onImageCl
 function CsvPreview({ path, locale, delimiter }: { path: string; locale: Locale; delimiter: string }) {
   const { content } = useFileContent(path);
   if (content === null) {
-    return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
+    return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-disabled)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
   }
   return <CsvTable content={content} delimiter={delimiter} />;
 }
@@ -365,14 +364,14 @@ function CsvPreview({ path, locale, delimiter }: { path: string; locale: Locale;
 function MdWysiwygPreview({ path, locale }: { path: string; locale: Locale }) {
   const { content } = useFileContent(path);
   if (content === null) {
-    return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
+    return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-disabled)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
   }
 
   return (
     <Suspense fallback={
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 40, gap: 12 }}>
         <MathCurveLoader size={40} />
-        <div style={{ color: 'var(--text-faint)', fontSize: 12 }}>Loading editor...</div>
+        <div style={{ color: 'var(--text-disabled)', fontSize: 12 }}>Loading editor...</div>
       </div>
     }>
       <MilkdownEditor
@@ -389,7 +388,7 @@ function MdWysiwygPreview({ path, locale }: { path: string; locale: Locale }) {
 function HtmlFilePreview({ path, locale }: { path: string; locale: Locale }) {
   const { content } = useFileContent(path);
   if (content === null) {
-    return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-faint)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
+    return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-disabled)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
   }
   return (
     <iframe
@@ -428,7 +427,7 @@ function CodePreview({ entry, locale, editMode, ext }: {
 
   if (loading || code === null) {
     return (
-      <div style={{ color: 'var(--text-faint)', fontSize: 12, padding: 20, textAlign: 'center' }}>
+      <div style={{ color: 'var(--text-disabled)', fontSize: 12, padding: 20, textAlign: 'center' }}>
         {t(locale, 'common.loading')}
       </div>
     );
@@ -443,7 +442,7 @@ function CodePreview({ entry, locale, editMode, ext }: {
         <pre style={{
           margin: 0, fontSize: 12, lineHeight: 1.6,
           fontFamily: 'var(--font-mono)',
-          color: 'var(--vibe-brand-text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+          color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
           background: 'transparent', padding: 12,
         }}>
           {pretty}
@@ -458,7 +457,7 @@ function CodePreview({ entry, locale, editMode, ext }: {
       <Suspense fallback={
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 40, gap: 12 }}>
           <MathCurveLoader size={40} />
-          <div style={{ color: 'var(--text-faint)', fontSize: 12 }}>Loading editor...</div>
+          <div style={{ color: 'var(--text-disabled)', fontSize: 12 }}>Loading editor...</div>
         </div>
       }>
         <MonacoEditor
@@ -494,7 +493,7 @@ function CodePreview({ entry, locale, editMode, ext }: {
     <pre style={{
       margin: 0, fontSize: 12, lineHeight: 1.6,
       fontFamily: 'var(--font-mono)',
-      color: 'var(--vibe-brand-text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+      color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
       background: 'transparent', padding: 12,
     }}>
       {code}
@@ -523,11 +522,11 @@ function FileInfo({ entry, locale }: { entry: FileEntry; locale: Locale }) {
     <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
       <tbody>
         {rows.map(([key, val]) => (
-          <tr key={key} style={{ borderBottom: '1px solid var(--vibe-border-subtle)' }}>
-            <td style={{ padding: '6px 8px', color: 'var(--text-dim)', fontWeight: 600, width: 80, verticalAlign: 'top' }}>
+          <tr key={key} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+            <td style={{ padding: '6px 8px', color: 'var(--text-secondary)', fontWeight: 600, width: 80, verticalAlign: 'top' }}>
               {key}
             </td>
-            <td style={{ padding: '6px 8px', color: 'var(--vibe-brand-text)', wordBreak: 'break-all' }}>
+            <td style={{ padding: '6px 8px', color: 'var(--text)', wordBreak: 'break-all' }}>
               {val}
             </td>
           </tr>
@@ -553,7 +552,7 @@ function GitDiffView({ diff, loading, status, fileName, locale }: {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        color: 'var(--text-faint)',
+        color: 'var(--text-disabled)',
         fontSize: 12,
         padding: 20,
       }}>
@@ -582,9 +581,9 @@ function GitDiffView({ diff, loading, status, fileName, locale }: {
           gap: 8,
           padding: '16px 24px',
           borderRadius: 8,
-          background: 'color-mix(in srgb, var(--text-faint) 6%, transparent)',
-          border: '1px solid color-mix(in srgb, var(--text-faint) 10%, transparent)',
-          color: 'var(--text-dim)',
+          background: 'color-mix(in srgb, var(--text-disabled) 6%, transparent)',
+          border: '1px solid color-mix(in srgb, var(--text-disabled) 10%, transparent)',
+          color: 'var(--text-secondary)',
           fontSize: 13,
           maxWidth: 260,
           textAlign: 'center',
@@ -609,26 +608,26 @@ function GitDiffView({ diff, loading, status, fileName, locale }: {
         {status && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10,
-            fontSize: 12, color: 'var(--text-dim)',
+            fontSize: 12, color: 'var(--text-secondary)',
           }}>
             <span style={{
               width: 8, height: 8, borderRadius: '50%',
-              background: status === t(locale, 'filePreview.gitUnchanged') ? 'var(--vibe-accent-color)' : 'var(--warning)',
+              background: status === t(locale, 'filePreview.gitUnchanged') ? 'var(--primary)' : 'var(--warning)',
             }} />
             <span>{status}</span>
           </div>
         )}
-        <pre style={{ margin: 0, fontSize: 11, lineHeight: 1.5, fontFamily: 'var(--font-mono)', color: 'var(--vibe-brand-text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+        <pre style={{ margin: 0, fontSize: 11, lineHeight: 1.5, fontFamily: 'var(--font-mono)', color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
           {lines.map((line, i) => {
-            let color = 'var(--vibe-brand-text)';
+            let color = 'var(--text)';
             const isChanged = line.startsWith('+') && !line.startsWith('+++');
             const isRemoved = line.startsWith('-') && !line.startsWith('---');
-            if (isChanged) color = 'var(--vibe-accent-color)';
+            if (isChanged) color = 'var(--primary)';
             else if (isRemoved) color = 'var(--danger)';
             else if (line.startsWith('@@')) color = 'var(--info)';
-            else if (line.startsWith('diff') || line.startsWith('index')) color = 'var(--text-faint)';
+            else if (line.startsWith('diff') || line.startsWith('index')) color = 'var(--text-disabled)';
             return (
-              <div key={i} className={isChanged || isRemoved ? 'anim-clFlash' : ''} style={{ color, background: isChanged ? 'var(--accent-soft)' : isRemoved ? 'color-mix(in srgb, var(--danger) 8%, transparent)' : undefined }}>
+              <div key={i} className={isChanged || isRemoved ? 'anim-clFlash' : ''} style={{ color, background: isChanged ? 'var(--primary-soft)' : isRemoved ? 'color-mix(in srgb, var(--danger) 8%, transparent)' : undefined }}>
                 {line || ' '}
               </div>
             );
@@ -643,11 +642,11 @@ function GitDiffView({ diff, loading, status, fileName, locale }: {
       {status && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, padding: '4px 8px',
-          fontSize: 11, color: 'var(--text-dim)',
+          fontSize: 11, color: 'var(--text-secondary)',
         }}>
           <span style={{
             width: 8, height: 8, borderRadius: '50%',
-            background: status === t(locale, 'filePreview.gitUnchanged') ? 'var(--vibe-accent-color)' : 'var(--warning)',
+            background: status === t(locale, 'filePreview.gitUnchanged') ? 'var(--primary)' : 'var(--warning)',
           }} />
           <span>{status}</span>
         </div>

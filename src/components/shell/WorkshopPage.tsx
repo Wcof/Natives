@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
 import { Layers, Pause, Play, RefreshCw, Trash2, Package, Rocket } from 'lucide-react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
 import { t, type Locale } from '@/i18n';
@@ -8,6 +9,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { EmptyState, LoadingState } from '@/components/ui/EmptyState';
 import { useAsyncData } from '@/hooks/useAsyncData';
 import Modal from '@/components/ui/Modal';
+import { classifyError } from '@/lib/error-classifier'; // classifyError for errors
 
 interface ModuleInfo {
   id: string;
@@ -24,6 +26,7 @@ interface WorkshopPageProps {
 }
 
 export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
+  const prefersReducedMotion = useReducedMotion();
   // onInstall (legacy direct-install callback) is intentionally unused: all
   // installs now flow through the permission dialog to avoid bypassing
   // authorization. Kept in the props type for ShellLayout compatibility.
@@ -144,8 +147,8 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
             );
           }
         } catch (err) {
-          const reason = (err as Error)?.message || String(err);
-          showToast(t(locale, 'errors.installFailed').replace('{reason}', reason));
+          const classified = classifyError(err);
+          showToast(t(locale, 'errors.installFailed').replace('{reason}', classified.userMessage));
         }
       }
     }
@@ -171,7 +174,6 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
         showToast(t(locale, 'workshop.installFailed'));
       }
     } catch (err) {
-      console.error('[Workshop] Install error:', err);
       showToast(t(locale, 'workshop.installFailed'));
     } finally {
       setInstalling(false);
@@ -189,8 +191,8 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
         await api?.module?.enable?.(mod.id);
       }
       await loadModules();
-    } catch (err) {
-      console.error('[Workshop] Toggle failed:', err);
+    } catch {
+      showToast(t(locale, 'workshop.installFailed'));
     }
   };
 
@@ -204,8 +206,8 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
       await window.nativesAPI?.module?.uninstall?.(uninstallTarget.id);
       await loadModules();
       showToast(t(locale, 'modules.uninstall'));
-    } catch (err) {
-      console.error('[Workshop] Uninstall failed:', err);
+    } catch {
+      showToast(t(locale, 'workshop.installFailed'));
     } finally {
       setUninstallTarget(null);
     }
@@ -216,8 +218,8 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
       await window.nativesAPI?.module?.scan?.();
       await loadModules();
       showToast(t(locale, 'workshop.modulesFound').replace('{count}', String((modules ?? []).length)));
-    } catch (err) {
-      console.error('[Workshop] Scan failed:', err);
+    } catch {
+      showToast(t(locale, 'workshop.scanFailed'));
     }
   };
 
@@ -311,10 +313,10 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
 
 ## Bridge API
 
-- \`window.natives.db.get(key)\` — Read data
-- \`window.natives.db.set(key, value)\` — Write data
-- \`window.natives.settings.getTheme()\` — Get current theme
-- \`window.natives.lifecycle.ready()\` — Signal ready state
+- \`window.natives.db.get(key)\` - Read data
+- \`window.natives.db.set(key, value)\` - Write data
+- \`window.natives.settings.getTheme()\` - Get current theme
+- \`window.natives.lifecycle.ready()\` - Signal ready state
 `;
       await api?.fs?.writeFileAtomic?.(`${modulePath}/README.md`, readme);
 
@@ -326,8 +328,8 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
       // Re-scan to pick up the new module
       await api?.module?.scan?.();
       await loadModules();
-    } catch (err) {
-      console.error('[Workshop] Create template failed:', err);
+    } catch {
+      showToast(t(locale, 'workshop.templateFailed'));
     } finally {
       setCreating(false);
     }
@@ -346,14 +348,14 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
       {/* Header */}
       <div style={{
         padding: `${SPACING.lg}px 20px`,
-        borderBottom: '0.0625rem solid var(--vibe-toolbar-border)',
+        borderBottom: '0.0625rem solid var(--border)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         flexShrink: 0,
       }}>
         <div>
-          <p style={{ fontSize: FONT_SIZE.md, color: 'var(--vibe-btn-text)', margin: 0 }}>
+          <p style={{ fontSize: FONT_SIZE.md, color: 'var(--text-secondary)', margin: 0 }}>
             {t(locale, 'workshop.subtitle')}
           </p>
         </div>
@@ -376,7 +378,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
         display: 'flex',
         gap: SPACING.lg,
         padding: '0 20px',
-        borderBottom: '0.0625rem solid var(--vibe-toolbar-border)',
+        borderBottom: '0.0625rem solid var(--border)',
         flexShrink: 0,
       }}>
         <button
@@ -385,8 +387,8 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
             padding: '10px 4px',
             border: 'none',
             background: 'none',
-            color: activeTab === 'installed' ? 'var(--accent)' : 'var(--vibe-btn-text)',
-            borderBottom: activeTab === 'installed' ? '2px solid var(--accent)' : '2px solid transparent',
+            color: activeTab === 'installed' ? 'var(--primary)' : 'var(--text-secondary)',
+            borderBottom: activeTab === 'installed' ? '2px solid var(--primary)' : '2px solid transparent',
             fontSize: FONT_SIZE.lg,
             fontWeight: 600,
             cursor: 'pointer',
@@ -401,8 +403,8 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
             padding: '10px 4px',
             border: 'none',
             background: 'none',
-            color: activeTab === 'browse' ? 'var(--accent)' : 'var(--vibe-btn-text)',
-            borderBottom: activeTab === 'browse' ? '2px solid var(--accent)' : '2px solid transparent',
+            color: activeTab === 'browse' ? 'var(--primary)' : 'var(--text-secondary)',
+            borderBottom: activeTab === 'browse' ? '2px solid var(--primary)' : '2px solid transparent',
             fontSize: FONT_SIZE.lg,
             fontWeight: 600,
             cursor: 'pointer',
@@ -424,13 +426,13 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
               onDrop={handleDrop}
               style={{
                 padding: dragOver ? 36 : 28,
-                border: `2px dashed ${dragOver ? 'var(--accent)' : 'var(--vibe-btn-border)'}`,
+                border: `2px dashed ${dragOver ? 'var(--primary)' : 'var(--border)'}`,
                 borderRadius: BORDER_RADIUS.lg,
                 textAlign: 'center',
-                color: 'var(--vibe-btn-text)',
+                color: 'var(--text-secondary)',
                 fontSize: FONT_SIZE.lg,
                 transition: 'all 0.16s cubic-bezier(0.2,0.7,0.3,1)',
-                background: dragOver ? 'var(--accent-soft)' : 'transparent',
+                background: dragOver ? 'var(--primary-soft)' : 'transparent',
                 marginBottom: SPACING.xl,
                 display: 'flex',
                 flexDirection: 'column',
@@ -439,12 +441,12 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
               }}
             >
               {dragOver ? (
-                <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
+                <span style={{ color: 'var(--primary)', fontWeight: 600 }}>
                   {t(locale, 'workshop.releaseToInstall')}
                 </span>
               ) : (
                 <>
-                  <div style={{ marginBottom: 6, display: 'flex', justifyContent: 'center', color: 'var(--text-faint)' }}>
+                  <div style={{ marginBottom: 6, display: 'flex', justifyContent: 'center', color: 'var(--text-disabled)' }}>
                     <Package size={24} />
                   </div>
                   <div>{t(locale, 'workshop.dragToInstall')}</div>
@@ -496,8 +498,8 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
                 style={{
                   width: '100%',
                   padding: `${SPACING.sm}px ${SPACING.md}px`,
-                  background: 'var(--vibe-content-bg)',
-                  border: '1px solid var(--vibe-btn-border)',
+                  background: 'var(--surface)',
+                  border: '1px solid var(--border)',
                   borderRadius: BORDER_RADIUS.md,
                   color: 'var(--text)',
                   fontSize: FONT_SIZE.lg,
@@ -509,8 +511,8 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
             {/* Coming soon banner */}
             <div style={{
               padding: `${SPACING.lg}px 20px`,
-              background: 'linear-gradient(135deg, var(--accent-soft), transparent)',
-              border: '1px solid var(--vibe-btn-border)',
+              background: 'linear-gradient(135deg, var(--primary-soft), transparent)',
+              border: '1px solid var(--border)',
               borderRadius: BORDER_RADIUS.lg,
               marginBottom: SPACING.xl,
               display: 'flex',
@@ -520,10 +522,10 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
             }}>
               <div>
                 <div style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Rocket size={14} style={{ color: 'var(--accent)' }} />
+                  <Rocket size={14} style={{ color: 'var(--primary)' }} />
                   <span>{t(locale, 'store.comingSoon')}</span>
                 </div>
-                <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-dim)' }}>
+                <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)' }}>
                   {t(locale, 'store.comingSoonDesc')}
                 </div>
               </div>
@@ -531,7 +533,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
 
             {/* Catalog Modules List */}
             {loading ? (
-              <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-faint)', fontSize: FONT_SIZE.lg }}>
+              <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-disabled)', fontSize: FONT_SIZE.lg }}>
                 {t(locale, 'common.loading')}
               </div>
             ) : filteredModules.length === 0 ? (
@@ -560,7 +562,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.md }}>
           <div>
-            <label style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: SPACING.xs, display: 'block' }}>
+            <label style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: SPACING.xs, display: 'block' }}>
               {t(locale, 'workshop.templateName')}
             </label>
             <input
@@ -574,7 +576,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
           </div>
 
           <div>
-            <label style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: SPACING.xs, display: 'block' }}>
+            <label style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: SPACING.xs, display: 'block' }}>
               {t(locale, 'workshop.templateId')}
             </label>
             <input
@@ -610,7 +612,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
       >
         {permDialog && (
           <>
-            <p style={{ fontSize: FONT_SIZE.md, color: 'var(--text-dim)', marginBottom: SPACING.lg }}>
+            <p style={{ fontSize: FONT_SIZE.md, color: 'var(--text-secondary)', marginBottom: SPACING.lg }}>
               {t(locale, 'workshop.permissionDesc').replace('{name}', permDialog.moduleName)}
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.sm, marginBottom: SPACING.xl }}>
@@ -618,7 +620,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
                 <label key={perm} style={{
                   display: 'flex', alignItems: 'center', gap: SPACING.sm, cursor: 'pointer',
                   padding: `${SPACING.sm}px 10px`,
-                  background: selectedPerms.has(perm) ? 'var(--accent-soft)' : 'var(--vibe-btn-bg)',
+                  background: selectedPerms.has(perm) ? 'var(--primary-soft)' : 'var(--surface)',
                   borderRadius: BORDER_RADIUS.md,
                   fontSize: FONT_SIZE.md,
                   transition: 'background 0.12s',
@@ -637,7 +639,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
                   <span style={{ color: 'var(--text)', fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.sm }}>
                     {perm}
                   </span>
-                  <span style={{ color: 'var(--text-faint)', marginLeft: 'auto', fontSize: FONT_SIZE.sm }}>
+                  <span style={{ color: 'var(--text-disabled)', marginLeft: 'auto', fontSize: FONT_SIZE.sm }}>
                     {PERMISSION_DESC[perm as keyof typeof PERMISSION_DESC] || perm}
                   </span>
                 </label>
@@ -678,7 +680,7 @@ Edit \`index.html\` to customize your module. The Bridge API is available via \`
       {toast && (
         <div style={{
           position: 'fixed', bottom: SPACING.xl, left: '50%', transform: 'translateX(-50%)',
-          background: 'var(--vibe-btn-bg)', border: '1px solid var(--vibe-btn-border)',
+          background: 'var(--surface)', border: '1px solid var(--border)',
           padding: '10px 18px', borderRadius: BORDER_RADIUS.xl, fontSize: FONT_SIZE.lg, color: 'var(--text)',
           zIndex: 200, animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
@@ -706,48 +708,41 @@ function ModuleCard({
   const [hovered, setHovered] = useState(false);
 
   return (
-    <div
+    <div className="doppelrand-outer"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      style={{
-        background: 'var(--vibe-toolbar-bg)',
-        border: '1px solid var(--vibe-btn-border)',
-        borderRadius: BORDER_RADIUS.lg,
-        padding: '14px 12px',
-        transition: 'all 0.12s',
-        borderColor: hovered ? 'var(--accent)' : undefined,
-      }}
+      style={{ transition: 'border-color 0.15s', borderColor: hovered ? 'var(--primary)' : undefined }}
     >
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: SPACING.sm }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{
-            fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)',
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      <div className="doppelrand-inner" style={{ padding: '14px 12px' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: SPACING.sm }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+              fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>
+              {mod.name}
+            </div>
+            <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
+              {mod.id} · v{mod.version}
+            </div>
+          </div>
+          <span style={{
+            fontSize: FONT_SIZE.xs, padding: '1px 5px', borderRadius: BORDER_RADIUS.sm,
+            background: mod.enabled ? 'var(--primary-soft)' : 'var(--surface)',
+            color: mod.enabled ? 'var(--primary)' : 'var(--text-disabled)',
+            fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0,
           }}>
-            {mod.name}
-          </div>
-          <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
-            {mod.id} · v{mod.version}
-          </div>
+            {mod.enabled ? t(locale, 'workshop.enabled') : t(locale, 'workshop.disabled')}
+          </span>
         </div>
-        <span style={{
-          fontSize: FONT_SIZE.xs, padding: '1px 5px', borderRadius: BORDER_RADIUS.sm,
-          background: mod.enabled ? 'var(--accent-soft)' : 'var(--vibe-btn-bg)',
-          color: mod.enabled ? 'var(--accent)' : 'var(--text-faint)',
-          fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0,
-        }}>
-          {mod.enabled ? t(locale, 'workshop.enabled') : t(locale, 'workshop.disabled')}
-        </span>
-      </div>
 
       {mod.description && (
-        <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.4 }}>
+        <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)', marginBottom: 10, lineHeight: 1.4 }}>
           {mod.description}
         </div>
       )}
 
-      <div style={{
-        display: 'flex', gap: 6,
+      <div style={{ display: 'flex', gap: 6, paddingTop: 10, borderTop: '1px solid var(--border)',
         opacity: hovered ? 1 : 0.3,
         transition: 'opacity 0.12s',
       }}>
@@ -767,6 +762,7 @@ function ModuleCard({
         >
           <Trash2 size={10} />
         </button>
+      </div>
       </div>
     </div>
   );
@@ -797,8 +793,8 @@ function generateId(name: string): string {
 const dialogInputStyle: React.CSSProperties = {
   width: '100%',
   padding: `${SPACING.sm}px 10px`,
-  background: 'var(--vibe-content-bg)',
-  border: '1px solid var(--vibe-btn-border)',
+  background: 'var(--surface)',
+  border: '1px solid var(--border)',
   borderRadius: BORDER_RADIUS.md,
   color: 'var(--text)',
   fontSize: FONT_SIZE.lg,
@@ -811,27 +807,20 @@ function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: 
   const [hovered, setHovered] = useState(false);
 
   return (
-    <div
+    <div className="doppelrand-outer"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      style={{
-        background: 'var(--vibe-toolbar-bg)',
-        border: '1px solid var(--vibe-btn-border)',
-        borderRadius: BORDER_RADIUS.lg,
-        padding: '14px 14px 12px',
-        transition: 'all 0.12s',
-        borderColor: hovered ? 'var(--accent)' : undefined,
-        cursor: 'default',
-      }}
+      style={{ transition: 'border-color 0.15s', borderColor: hovered ? 'var(--primary)' : undefined }}
     >
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: SPACING.sm }}>
-        {/* Module icon placeholder */}
+      <div className="doppelrand-inner" style={{ padding: '14px 14px 12px' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: SPACING.sm }}>
+        {/* Default module icon */}
         <div style={{
           width: 36, height: 36, borderRadius: BORDER_RADIUS.lg,
-          background: 'var(--vibe-btn-bg)',
-          border: '1px solid var(--vibe-btn-border)',
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: FONT_SIZE.heading, flexShrink: 0,
+          fontSize: FONT_SIZE.lg, flexShrink: 0,
         }}>
           {mod.name.charAt(0).toUpperCase()}
         </div>
@@ -842,14 +831,14 @@ function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: 
           }}>
             {mod.name}
           </div>
-          <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', marginTop: 1 }}>
+          <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)', fontFamily: 'var(--font-mono)', marginTop: 1 }}>
             v{mod.version}
           </div>
         </div>
         <span style={{
           fontSize: FONT_SIZE.xs, padding: '1px 5px', borderRadius: BORDER_RADIUS.sm,
-          background: mod.enabled ? 'var(--accent-soft)' : 'var(--vibe-btn-bg)',
-          color: mod.enabled ? 'var(--accent)' : 'var(--text-faint)',
+          background: mod.enabled ? 'var(--primary-soft)' : 'var(--surface)',
+          color: mod.enabled ? 'var(--primary)' : 'var(--text-disabled)',
           fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0,
         }}>
           {mod.enabled ? t(locale, 'workshop.enabled') : t(locale, 'workshop.disabled')}
@@ -857,26 +846,27 @@ function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: 
       </div>
 
       {mod.description && (
-        <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-dim)', lineHeight: 1.4, marginBottom: SPACING.sm }}>
+        <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)', lineHeight: 1.4, marginBottom: SPACING.sm }}>
           {mod.description}
         </div>
       )}
 
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        fontSize: FONT_SIZE.xs, color: 'var(--text-faint)',
+        fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)',
       }}>
         <span style={{ fontFamily: 'var(--font-mono)' }}>{mod.id}</span>
         <span style={{
           padding: '2px 6px',
           borderRadius: BORDER_RADIUS.sm,
-          background: 'var(--vibe-btn-bg)',
-          border: '1px solid var(--vibe-btn-border)',
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
           fontSize: FONT_SIZE.xs,
           textTransform: 'uppercase',
         }}>
           {t(locale, 'store.installed')}
         </span>
+      </div>
       </div>
     </div>
   );

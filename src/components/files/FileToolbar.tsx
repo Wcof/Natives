@@ -41,7 +41,7 @@ export default function FileToolbar({
       alignItems: 'center',
       gap: SPACING.sm,
       padding: '6px 12px',
-      borderBottom: '1px solid var(--vibe-btn-border)',
+      borderBottom: '1px solid var(--border)',
       flexWrap: 'wrap',
     }}>
       {/* Navigation: back / forward */}
@@ -75,7 +75,7 @@ export default function FileToolbar({
           onClick={onRecentModeToggle}
           style={{
             fontSize: FONT_SIZE.lg, padding: '2px 6px',
-            color: recentMode ? 'var(--accent)' : undefined,
+            color: recentMode ? 'var(--primary)' : undefined,
           }}
           title={t(locale, recentMode ? 'fileBrowser.recentModeTitle' : 'fileBrowser.recentMode')}
         >

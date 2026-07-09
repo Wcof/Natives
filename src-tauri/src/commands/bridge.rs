@@ -24,11 +24,6 @@ pub fn validate_token(token: String, module_id: String, state: State<'_, AppStat
 
 #[cfg(test)]
 mod tests {
-    // Bridge commands need AppState context — token validation logic is
-    // tested in token_manager.rs. This placeholder verifies the test
-    // harness is functional.
-    #[test]
-    fn test_harness_works() {
-        assert_eq!(2 + 2, 4);
-    }
+    // Bridge commands need AppState context — token validation logic
+    // is tested in token_manager.rs. No standalone unit tests needed here.
 }

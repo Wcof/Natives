@@ -4,34 +4,18 @@ import { useEffect } from 'react';
 import type { Locale } from '@/i18n';
 
 interface UseLayoutEventsOptions {
-  setVisualConfig: (fn: (prev: any) => any) => void;
   stateRef: React.RefObject<any>;
   toggleTerminal: () => void;
   setState: (fn: (prev: any) => any) => void;
   setLocale: (locale: Locale) => void;
-  CONFIG_DB_KEY: string;
 }
 
 export function useLayoutEvents({
-  setVisualConfig,
   stateRef,
   toggleTerminal,
   setState,
   setLocale,
-  CONFIG_DB_KEY,
 }: UseLayoutEventsOptions) {
-  // Visual config changes (instant drag updates in same window)
-  useEffect(() => {
-    const handleLocalConfigChange = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail) {
-        setVisualConfig((prev: any) => ({ ...prev, ...detail }));
-      }
-    };
-    window.addEventListener('visual-config-changed', handleLocalConfigChange);
-    return () => window.removeEventListener('visual-config-changed', handleLocalConfigChange);
-  }, [setVisualConfig]);
-
   // beforeunload persistence (reads stateRef for latest values, never re-binds)
   useEffect(() => {
     const handleBeforeUnload = () => {

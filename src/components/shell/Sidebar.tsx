@@ -143,8 +143,8 @@ function SidebarNavItem({
       title={title}
       className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-sm transition-all ${
         isActive
-          ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)] font-medium'
-          : 'text-[var(--text-dim)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+          ? 'bg-[var(--primary-soft)] text-[var(--primary)] font-medium'
+          : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
       }`}
     >
       <span className="shrink-0">{icon}</span>
@@ -337,7 +337,7 @@ export default function Sidebar({
   }, [zoomMenuOpen, handleTileWindow]);
 
   // ── 弹窗内 SVG 图标组件 ──
-  const iconWrap = (svg: React.ReactNode) => <svg width="22" height="14" viewBox="0 0 22 14" fill="none" className="text-[var(--text-dim)]">{svg}</svg>;
+  const iconWrap = (svg: React.ReactNode) => <svg width="22" height="14" viewBox="0 0 22 14" fill="none" className="text-[var(--text-secondary)]">{svg}</svg>;
 
   const leftHalfIcon = iconWrap(
     <><rect x="0.5" y="0.5" width="21" height="13" rx="1.5" stroke="currentColor" strokeOpacity="0.3"/><rect x="0.5" y="0.5" width="10" height="13" rx="1.5" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/></>
@@ -421,9 +421,15 @@ export default function Sidebar({
   }
 
   return (
+    <div className="doppelrand-outer h-full">
+    <div className="doppelrand-inner h-full">
     <aside
-      className="vibe-sidebar flex flex-col h-full overflow-hidden"
-      style={{ width }}
+      className="flex flex-col h-full overflow-hidden"
+      style={{
+        width,
+        background: 'var(--sidebar)',
+        borderRight: '1px solid var(--border)'
+      }}
       role="navigation"
       aria-label={t(locale, 'nav.modules')}
       data-sidebar
@@ -493,10 +499,10 @@ export default function Sidebar({
             {/* 长按弹出菜单 — macOS 窗口管理，跟随鼠标位置 */}
             {zoomMenuOpen && zoomMenuPos && (
               <div
-                className="fixed z-50 min-w-[180px] rounded-xl border border-[var(--vibe-btn-border)] bg-[var(--vibe-toolbar-bg)] backdrop-blur-2xl p-1.5 shadow-2xl"
+                className="fixed z-50 min-w-[180px] rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5 shadow-modal"
                 style={{ left: zoomMenuPos.x, top: zoomMenuPos.y }}
               >
-                <p className="px-2.5 pb-1 pt-0.5 text-[0.625rem] font-medium uppercase tracking-[0.06em] text-[var(--text-faint)]">
+                <p className="px-2.5 pb-1 pt-0.5 text-[0.625rem] font-medium uppercase tracking-[0.06em] text-[var(--text-disabled)]">
                   移动与调整大小
                 </p>
                 <div className="grid grid-cols-4 gap-1 px-1 pb-2">
@@ -509,7 +515,7 @@ export default function Sidebar({
                     <button
                       key={opt.id}
                       data-tile-action={opt.id}
-                      className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-[0.625rem] text-[var(--text-dim)] hover:bg-[var(--vibe-btn-bg)] hover:text-[var(--text)] transition-all"
+                      className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-[0.625rem] text-[var(--text-secondary)] hover:bg-[var(--surface)] hover:text-[var(--text)] transition-all"
                      
                       title={opt.label}
                     >
@@ -518,8 +524,8 @@ export default function Sidebar({
                     </button>
                   ))}
                 </div>
-                <div className="mx-2 my-1 border-t border-[var(--vibe-btn-border)]" />
-                <p className="px-2.5 pb-1 pt-1.5 text-[0.625rem] font-medium uppercase tracking-[0.06em] text-[var(--text-faint)]">
+                <div className="mx-2 my-1 border-t border-[var(--border)]" />
+                <p className="px-2.5 pb-1 pt-1.5 text-[0.625rem] font-medium uppercase tracking-[0.06em] text-[var(--text-disabled)]">
                   填充与排列
                 </p>
                 <div className="grid grid-cols-4 gap-1 px-1 pb-1">
@@ -532,7 +538,7 @@ export default function Sidebar({
                     <button
                       key={opt.id}
                       data-tile-action={opt.id}
-                      className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-[0.625rem] text-[var(--text-dim)] hover:bg-[var(--vibe-btn-bg)] hover:text-[var(--text)] transition-all"
+                      className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-[0.625rem] text-[var(--text-secondary)] hover:bg-[var(--surface)] hover:text-[var(--text)] transition-all"
                      
                       title={opt.label}
                     >
@@ -548,12 +554,12 @@ export default function Sidebar({
 
         {/* Brand Header */}
         <div className="flex items-center gap-3 px-4 pb-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--vibe-search-border)] bg-[var(--vibe-search-bg)]">
-            <Zap size={18} className="text-[var(--vibe-nav-icon)]" />
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface)]">
+            <Zap size={18} className="text-[var(--text-secondary)]" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-[var(--vibe-brand-text)] leading-tight">Natives</h1>
-            <p className="text-[0.6875rem] text-[var(--vibe-brand-sub)]">personal desktop</p>
+            <h1 className="text-lg font-bold text-[var(--text)] leading-tight">Natives</h1>
+            <p className="text-[0.6875rem] text-[var(--text-disabled)]">personal desktop</p>
           </div>
         </div>
       </div>
@@ -562,22 +568,22 @@ export default function Sidebar({
       <div className="flex-1 overflow-y-auto min-h-0">
         {/* Search Capsule */}
         <div className="px-4 pb-3">
-          <div className="flex h-10 items-center gap-2 rounded-xl border border-[var(--vibe-search-border)] bg-[var(--vibe-search-bg)] px-3">
-            <Search size={14} className="text-[var(--vibe-search-placeholder)] shrink-0" />
+          <div className="flex h-10 items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3">
+            <Search size={14} className="text-[var(--text-disabled)] shrink-0" />
             <input
               type="text"
               placeholder={t(locale, 'sidebar.searchPlaceholder')}
-              className="min-w-0 flex-1 bg-transparent text-sm text-[var(--vibe-brand-text)] outline-none focus-visible:outline-none placeholder:text-[var(--vibe-search-placeholder)]"
+              className="min-w-0 flex-1 bg-transparent text-sm text-[var(--text)] outline-none focus-visible:outline-none placeholder:text-[var(--text-disabled)]"
              
             />
-            <span className="shrink-0 rounded-md bg-[var(--vibe-btn-bg)] px-1.5 py-0.5 text-[0.6875rem] font-medium text-[var(--vibe-search-placeholder)]">
+            <span className="shrink-0 rounded-md bg-[var(--surface)] px-1.5 py-0.5 text-[0.6875rem] font-medium text-[var(--text-disabled)]">
               ⌘K
             </span>
           </div>
         </div>
 
         {/* Quick Access List */}
-        <div className="px-3 pb-1 pt-0 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--vibe-section-header)]">
+        <div className="px-3 pb-1 pt-0 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
           {t(locale, 'sidebar.quickAccess')}
         </div>
         <div className="mb-3 flex flex-col gap-0.5 px-3">
@@ -591,8 +597,8 @@ export default function Sidebar({
                 onClick={() => selectNavigation(item.target, item.target)}
                 className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-all ${
                   isActive
-                    ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)] font-medium'
-                    : 'text-[var(--text-dim)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+                    ? 'bg-[var(--primary-soft)] text-[var(--primary)] font-medium'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
                 }`}
                 title={item.id}
               >
@@ -606,7 +612,7 @@ export default function Sidebar({
         </div>
 
         {/* Assistant entry — fixed first-level menu item, same level as Quick Access */}
-        <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--vibe-section-header)]">
+        <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
           {t(locale, 'nav.assistant')}
         </div>
         <div className="mb-3 flex flex-col gap-0.5 px-3">
@@ -626,7 +632,7 @@ export default function Sidebar({
         </div>
 
         {/* Favorites section — same level as Quick Access */}
-        <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--vibe-section-header)]">
+        <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
           {t(locale, 'sidebar.favorites')}
         </div>
         <div className="mb-3 flex flex-col gap-0.5 px-3">
@@ -655,7 +661,7 @@ export default function Sidebar({
                   <button
                     type="button"
                     onClick={() => setFavoritesExpanded((prev) => !prev)}
-                    className="flex w-full items-center gap-2 rounded-lg px-3 py-1 text-[0.75rem] text-[var(--text-faint)] hover:text-[var(--text-dim)] hover:bg-[var(--vibe-btn-hover-bg)] transition-all"
+                    className="flex w-full items-center gap-2 rounded-lg px-3 py-1 text-[0.75rem] text-[var(--text-disabled)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-all"
                   >
                     <span>{favoritesExpanded ? t(locale, 'sidebar.showLess') : t(locale, 'sidebar.showMore', { count: String(favorites.length - 3) })}</span>
                   </button>
@@ -663,14 +669,14 @@ export default function Sidebar({
               </>
             );
           })() : (
-            <div className="px-3 py-2 text-xs text-[var(--text-faint)] italic">
+            <div className="px-3 py-2 text-xs text-[var(--text-disabled)] italic">
               {t(locale, 'sidebar.noFavorites')}
             </div>
           )}
         </div>
 
         {/* Modules section — same level as Quick Access */}
-        <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--vibe-section-header)]">
+        <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
           {t(locale, 'nav.modules')}
         </div>
         {modules.length > 0 ? (
@@ -713,7 +719,7 @@ export default function Sidebar({
               })}
             </div>
         ) : (
-          <div className="mb-3 px-3 py-2 text-xs text-[var(--text-faint)] italic">
+          <div className="mb-3 px-3 py-2 text-xs text-[var(--text-disabled)] italic">
             {t(locale, 'sidebar.noModules')}
           </div>
         )}
@@ -721,7 +727,7 @@ export default function Sidebar({
         {/* Builtin tools — dynamically rendered from registry */}
         {enabledTools.length > 0 && (
           <>
-            <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--vibe-section-header)]">
+            <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
               {t(locale, 'nav.builtinTools')}
             </div>
             <div className="mb-3 flex flex-col gap-0.5 px-3">
@@ -751,11 +757,11 @@ export default function Sidebar({
       </div>
 
       {/* 底部固定区域：通知、设置、创意工坊 */}
-      <div className="shrink-0 px-3 py-2 border-t border-[var(--vibe-border-subtle)]">
+      <div className="shrink-0 px-3 py-2 border-t border-[var(--border-subtle)]">
         <button
           type="button"
           onClick={onNotificationClick}
-          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm text-[var(--text-dim)] transition-all hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]"
+          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm text-[var(--text-secondary)] transition-all hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]"
         >
           <Bell size={16} />
           <span>{t(locale, 'notifications.title')}</span>
@@ -765,8 +771,8 @@ export default function Sidebar({
           onClick={() => selectNavigation('__settings__', '__settings__')}
           className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
             activeNavigationId === '__settings__'
-              ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)] font-medium'
-              : 'text-[var(--text-dim)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+              ? 'bg-[var(--primary-soft)] text-[var(--primary)] font-medium'
+              : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
           }`}
         >
           <Settings size={16} />
@@ -777,8 +783,8 @@ export default function Sidebar({
           onClick={() => selectNavigation('__workshop__', '__workshop__')}
           className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
             activeNavigationId === '__workshop__'
-              ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)] font-medium'
-              : 'text-[var(--text-dim)] hover:bg-[var(--vibe-btn-hover-bg)] hover:text-[var(--vibe-btn-hover-color)]'
+              ? 'bg-[var(--primary-soft)] text-[var(--primary)] font-medium'
+              : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
           }`}
         >
           <Layers size={16} />
@@ -787,5 +793,7 @@ export default function Sidebar({
       </div>
 
     </aside>
+    </div>
+    </div>
   );
 }

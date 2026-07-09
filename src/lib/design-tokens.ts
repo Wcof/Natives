@@ -1,110 +1,151 @@
-// ── Design Token System (TASK-019) ──
-//
-// Central source of truth for all visual tokens.
-// Components should reference these tokens rather than inline values
-// to ensure visual consistency across the application.
+// ── AI Natives Design System V1.0 Tokens ──
+// Modern Desktop Native UI · 纯色 Surface · 轻边框 · 双主题
+// 中央 token 源：组件应引用这些 token，而非内联硬编码值。
 
+// ── Spacing (4px base, V1.0 规范) ──
 export const SPACING = {
-  xs: 4,
-  sm: 8,
-  md: 12,
-  lg: 16,
-  xl: 24,
-  xxl: 32,
+  xxs: 2,
+  xs: 4,    // space-1
+  sm: 8,    // space-2
+  md: 12,   // space-3
+  lg: 16,   // space-4
+  xl: 20,   // space-5
+  xxl: 24,  // space-6
+  xxxl: 32, // space-8
+  huge: 40, // space-10
+  massive: 48, // space-12
 } as const;
 
+// ── Font size (V1.0 规范字号体系) ──
 export const FONT_SIZE = {
-  xs: 10,
-  sm: 11,
-  md: 12,
-  lg: 13,
-  xl: 14,
-  heading: 17,
-  title: 22,
+  micro: '0.75rem',    // 12px Caption
+  xs: '0.8125rem',     // 13px Label
+  sm: '0.875rem',      // 14px Body (默认)
+  md: '1rem',          // 16px Body Large
+  lg: '1.125rem',      // 18px Heading
+  xl: '1.5rem',        // 24px Title
+  hero: '1.75rem',     // 28px Display
 } as const;
 
+// ── Border radius (V1.0 规范) ──
 export const BORDER_RADIUS = {
-  sm: 4,
-  md: 6,
-  lg: 8,
-  xl: 10,
+  xs: 8,    // Small Button / Tag
+  sm: 10,   // Button / Input
+  md: 12,   // Card
+  lg: 14,   // Large Card
+  xl: 16,   // Window
   pill: 999,
 } as const;
 
+// ── Transition (V1.0 规范：150ms ease) ──
 export const TRANSITION = {
-  fast: '0.12s cubic-bezier(0.16, 1, 0.3, 1)',
-  normal: '0.2s cubic-bezier(0.16, 1, 0.3, 1)',
-  slow: '0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+  fast: '100ms ease',
+  normal: '150ms ease',
+  slow: '200ms ease',
 } as const;
 
+// ── Shadow (V1.0 三级，深色尽量不用) ──
 export const SHADOW = {
-  card: '0 1px 3px rgba(0,0,0,0.12)',
-  elevated: '0 4px 12px rgba(0,0,0,0.15)',
-  modal: '0 8px 32px rgba(0,0,0,0.2)',
+  card: '0 1px 3px rgba(0, 0, 0, 0.04)',
+  popup: '0 8px 24px rgba(0, 0, 0, 0.08)',
+  modal: '0 20px 40px rgba(0, 0, 0, 0.12)',
 } as const;
 
-// ── Theme Token (maps to CSS variables) ──
-// These are the semantic tokens that different themes can override.
-
+// ── Theme Token (映射 V1.0 CSS 变量) ──
 export const THEME_TOKENS = {
-  // Backgrounds (fallbacks match terminal-volt)
-  bg: 'var(--bg, #0d0f12)',
-  bg2: 'var(--bg-2, #15181d)',
-  bg3: 'var(--bg-3, #1c2027)',
+  // Backgrounds
+  background: 'var(--background)',
+  surface: 'var(--surface)',
+  surfaceHover: 'var(--surface-hover)',
+  sidebar: 'var(--sidebar)',
 
   // Text
-  text: 'var(--text, #d4d7de)',
-  textDim: 'var(--text-dim, #8b90a0)',
-  textFaint: 'var(--text-faint, #555a66)',
+  text: 'var(--text)',
+  textBody: 'var(--text-body)',
+  textSecondary: 'var(--text-secondary)',
+  textDisabled: 'var(--text-disabled)',
 
-  // Accent
-  accent: 'var(--accent, #00ff9c)',
-  accentSoft: 'var(--accent-soft, rgba(0,255,156,0.12))',
-  accentInk: 'var(--accent-ink, #0d0f12)',
+  // Brand
+  primary: 'var(--primary)',
+  primaryHover: 'var(--primary-hover)',
+  primarySoft: 'var(--primary-soft)',
+  primaryInk: '#FFFFFF',
 
-  // Borders
-  border: 'var(--vibe-btn-border)',
+  // Border
+  border: 'var(--border)',
+  borderSubtle: 'var(--border-subtle)',
 
-  // Surface
-  surface: 'var(--surface, #15181d)',
+  // Semantic
+  danger: 'var(--danger)',
+  warning: 'var(--warning)',
+  info: 'var(--info)',
+  success: 'var(--success)',
 } as const;
 
 // ── Component Token Presets ──
 
-export const CARD_STYLE = {
-  background: THEME_TOKENS.bg2,
+/** Standard Card (V1.0 规范 §7) */
+export const CARD_STYLE: React.CSSProperties = {
+  background: THEME_TOKENS.surface,
   border: `1px solid ${THEME_TOKENS.border}`,
   borderRadius: BORDER_RADIUS.lg,
-  padding: SPACING.lg,
-  transition: TRANSITION.fast,
-} as const;
+  padding: SPACING.xl,
+  transition: `all ${TRANSITION.normal}`,
+};
 
+/** Standard Input (V1.0 规范 §6) */
 export const INPUT_STYLE: React.CSSProperties = {
   width: '100%',
-  padding: '8px 10px',
-  background: 'var(--bg,#0d0f12)',
-  border: '1px solid var(--vibe-btn-border)',
-  borderRadius: BORDER_RADIUS.md,
-  color: 'var(--text)',
-  fontSize: FONT_SIZE.md,
+  height: 40,
+  padding: '0 12px',
+  background: THEME_TOKENS.surface,
+  border: `1px solid ${THEME_TOKENS.border}`,
+  borderRadius: BORDER_RADIUS.sm,
+  color: THEME_TOKENS.text,
+  fontSize: '14px',
   outline: 'none',
+  transition: `border-color ${TRANSITION.normal}, box-shadow ${TRANSITION.normal}`,
 };
 
+/** Section title (侧边栏分组、设置区块标题) */
 export const SECTION_TITLE_STYLE: React.CSSProperties = {
-  fontSize: FONT_SIZE.xs,
-  fontWeight: 600,
-  color: 'var(--text-dim)',
+  fontSize: '11px',
+  fontWeight: 500,
+  color: THEME_TOKENS.textDisabled,
   textTransform: 'uppercase',
-  letterSpacing: 1,
-  marginBottom: SPACING.md,
+  letterSpacing: '0.06em',
+  marginBottom: '12px',
 };
 
+/** Section header with optional badge */
+export const SECTION_HEADER_STYLE: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  padding: '8px 20px',
+  borderBottom: `1px solid ${THEME_TOKENS.border}`,
+};
+
+/** Modal/dialog overlay (纯色半透明，无 backdrop-filter) */
 export const OVERLAY_STYLE: React.CSSProperties = {
   position: 'fixed',
   inset: 0,
-  background: 'rgba(0,0,0,0.5)',
+  background: 'rgba(0, 0, 0, 0.4)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   zIndex: 60,
 };
+
+/** Dialog surface (V1.0 Modal: surface + 1px border + modal shadow) */
+export const DIALOG_SURFACE_STYLE: React.CSSProperties = {
+  background: THEME_TOKENS.surface,
+  border: `1px solid ${THEME_TOKENS.border}`,
+  borderRadius: BORDER_RADIUS.lg,
+  boxShadow: SHADOW.modal,
+};
+
+// ── Utility: merge inline styles ──
+export function mergeStyles(base: React.CSSProperties, overrides: React.CSSProperties): React.CSSProperties {
+  return { ...base, ...overrides };
+}

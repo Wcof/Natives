@@ -103,11 +103,11 @@ export default function SlashCommandPopover({
   return (
     <div
       ref={popoverRef}
-      className="absolute z-50 min-w-[280px] max-w-[400px] rounded-xl border border-[var(--vibe-btn-border)] bg-[var(--vibe-toolbar-bg)] backdrop-blur-2xl p-1.5 shadow-2xl"
+      className="absolute z-50 min-w-[280px] max-w-[400px] rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5 shadow-popup"
       style={{ top, left }}
     >
       {/* Category header */}
-      <div className="px-2.5 pb-1 pt-1 text-[0.625rem] font-semibold uppercase tracking-[0.06em] text-[var(--text-faint)]">
+      <div className="px-2.5 pb-1 pt-1 text-[0.625rem] font-semibold uppercase tracking-[0.06em] text-[var(--text-disabled)]">
         System Commands
       </div>
 
@@ -120,18 +120,18 @@ export default function SlashCommandPopover({
             onMouseEnter={() => setSelectedIndex(index)}
             className={`flex items-center gap-2.5 w-full rounded-lg px-2.5 py-2 text-left transition-all ${
               index === selectedIndex
-                ? 'bg-[var(--vibe-active-bg)] text-[var(--vibe-active-color)]'
-                : 'text-[var(--text-dim)] hover:bg-[var(--vibe-btn-hover-bg)]'
+                ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
+                : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]'
             }`}
           >
             <span className="text-sm font-mono font-medium">{cmd.label}</span>
-            <span className="text-[0.6875rem] text-[var(--text-faint)] truncate">{cmd.description}</span>
+            <span className="text-[0.6875rem] text-[var(--text-disabled)] truncate">{cmd.description}</span>
           </button>
         ))}
       </div>
 
       {disabled && (
-        <div className="px-2.5 py-2 text-[0.6875rem] text-amber-400 border-t border-[var(--vibe-border-subtle)] mt-1">
+        <div className="px-2.5 py-2 text-[0.6875rem] text-amber-400 border-t border-[var(--border-subtle)] mt-1">
           Open a project to use these commands
         </div>
       )}

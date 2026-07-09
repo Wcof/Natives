@@ -19,17 +19,6 @@ export interface ShellState {
   cmdkOpen: boolean;
 }
 
-export interface VisualConfig {
-  blurAmount: number;
-  displacementScale: number;
-  saturation: number;
-  aberrationIntensity: number;
-  elasticity: number;
-  cornerRadius: number;
-  showWallpaper: boolean;
-  showBlobs: boolean;
-}
-
 export interface ShellStateReturn {
   // Layout
   state: ShellState;
@@ -54,9 +43,6 @@ export interface ShellStateReturn {
   setSelectedFile: React.Dispatch<React.SetStateAction<FileEntry | null>>;
   editMode: boolean;
   setEditMode: React.Dispatch<React.SetStateAction<boolean>>;
-  // Visual
-  visualConfig: VisualConfig;
-  setVisualConfig: React.Dispatch<React.SetStateAction<VisualConfig>>;
   // Follow
   followMode: string;
   cycleFollowMode: () => void;
@@ -125,13 +111,6 @@ export function useShellState(): ShellStateReturn {
   // ── File preview state ──
   const [selectedFile, setSelectedFile] = useState<FileEntry | null>(null);
   const [editMode, setEditMode] = useState(false);
-
-  // ── Visual Config ──
-  const [visualConfig, setVisualConfig] = useState<VisualConfig>({
-    blurAmount: 0.40, displacementScale: 64, saturation: 135,
-    aberrationIntensity: 2, elasticity: 0, cornerRadius: 28,
-    showWallpaper: true, showBlobs: true,
-  });
 
   // ── Follow mode ──
   const { mode: followMode, cycleMode: cycleFollowMode } = useFollowMode();
@@ -214,7 +193,6 @@ export function useShellState(): ShellStateReturn {
     contentRef,
     selectedFile, setSelectedFile,
     editMode, setEditMode,
-    visualConfig, setVisualConfig,
     followMode, cycleFollowMode,
     crashedModules, setCrashedModules,
     iframeReloadKey, setIframeReloadKey,

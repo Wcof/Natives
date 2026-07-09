@@ -625,7 +625,7 @@ fi
             Ok(s) => s,
             Err(_) => return,
         };
-        let _writers = match self.writers.lock() {
+        let mut writers = match self.writers.lock() {
             Ok(w) => w,
             Err(_) => return,
         };
@@ -642,6 +642,7 @@ fi
             }
         }
         sessions.clear();
+        writers.clear();
     }
 
     /// Get session info (used by ghostty-vt render state query).

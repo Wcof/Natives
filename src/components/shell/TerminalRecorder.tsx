@@ -95,14 +95,14 @@ export default function TerminalRecorder({ isCollapsed, onClose }: Props) {
     ]);
 
     const activeTheme = typeof document !== 'undefined'
-      ? (document.documentElement.getAttribute('data-theme') || 'terminal-volt')
-      : 'terminal-volt';
-    const initialTerminalTheme = TERMINAL_THEMES[activeTheme] || TERMINAL_THEMES['terminal-volt']!;
+      ? (document.documentElement.getAttribute('data-theme') || 'dark')
+      : 'dark';
+    const initialTerminalTheme = TERMINAL_THEMES[activeTheme] || TERMINAL_THEMES.dark!;
 
     const term = new Terminal({
       cols: Math.max(width, 40),
       rows: Math.min(Math.max(height, 10), 40),
-      fontSize: FONT_SIZE.sm,
+      fontSize: 12,
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
       theme: {
         background: 'rgba(0, 0, 0, 0)',
@@ -241,26 +241,24 @@ export default function TerminalRecorder({ isCollapsed, onClose }: Props) {
   return (
     <div style={{
       position: 'absolute', right: 0, top: 0, bottom: 0, width: 360,
-      background: 'var(--vibe-sidebar-bg, var(--bg-2))',
-      backdropFilter: 'blur(var(--vibe-right-panel-blur, 28px)) saturate(var(--vibe-right-panel-saturation, 145%))',
-      WebkitBackdropFilter: 'blur(var(--vibe-right-panel-blur, 28px)) saturate(var(--vibe-right-panel-saturation, 145%))',
-      borderLeft: '1px solid var(--vibe-sidebar-border, var(--border))',
-      boxShadow: 'var(--vibe-sidebar-shadow)',
+      background: 'var(--surface)',
+      borderLeft: '1px solid var(--border)',
+      boxShadow: 'none',
       display: 'flex', flexDirection: 'column', zIndex: 10,
     }}>
       {/* Header */}
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: `${SPACING.sm}px ${SPACING.md}px`,
-        borderBottom: '1px solid var(--vibe-sidebar-border, var(--border))',
+        borderBottom: '1px solid var(--border)',
         fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text)',
       }}>
         <span>{t(locale, 'terminal.recordings')}</span>
         <div style={{ display: 'flex', gap: 4 }}>
-          <button onClick={loadRecordings} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: 2 }} title={t(locale, 'common.refresh')} aria-label={t(locale, 'common.refresh')}>
+          <button onClick={loadRecordings} style={{ background: 'none', border: 'none', color: 'var(--text-disabled)', cursor: 'pointer', padding: 2 }} title={t(locale, 'common.refresh')} aria-label={t(locale, 'common.refresh')}>
             <RefreshCw size={12} />
           </button>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', padding: 2 }} title={t(locale, 'common.close')} aria-label={t(locale, 'common.close')}>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-disabled)', cursor: 'pointer', padding: 2 }} title={t(locale, 'common.close')} aria-label={t(locale, 'common.close')}>
             <X size={14} />
           </button>
         </div>
@@ -269,13 +267,13 @@ export default function TerminalRecorder({ isCollapsed, onClose }: Props) {
       {/* Recording list */}
       <div style={{ flex: 1, overflow: 'auto', padding: SPACING.xs }}>
         {recordings.length === 0 && !isLoading && (
-          <div style={{ textAlign: 'center', padding: SPACING.lg, color: 'var(--text-faint)', fontSize: FONT_SIZE.sm }}>
+          <div style={{ textAlign: 'center', padding: SPACING.lg, color: 'var(--text-disabled)', fontSize: FONT_SIZE.sm }}>
             No recordings yet
           </div>
         )}
 
         {isLoading && (
-          <div style={{ textAlign: 'center', padding: SPACING.lg, color: 'var(--text-faint)', fontSize: FONT_SIZE.sm }}>
+          <div style={{ textAlign: 'center', padding: SPACING.lg, color: 'var(--text-disabled)', fontSize: FONT_SIZE.sm }}>
             Loading...
           </div>
         )}
@@ -286,13 +284,13 @@ export default function TerminalRecorder({ isCollapsed, onClose }: Props) {
             padding: `${SPACING.xs}px ${SPACING.sm}px`,
             borderRadius: BORDER_RADIUS.sm,
             cursor: 'pointer', fontSize: FONT_SIZE.xs,
-            color: 'var(--text-dim)',
-            background: playing === rec.id ? 'var(--vibe-active-bg)' : 'transparent',
+            color: 'var(--text-secondary)',
+            background: playing === rec.id ? 'var(--primary-soft)' : 'transparent',
             transition: 'background 0.2s',
           }}>
             <button
               onClick={() => playing === rec.id ? stopPlayback() : playRecording(rec.id)}
-              style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', padding: 2 }}
+              style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 2 }}
               title={playing === rec.id ? 'Stop' : 'Play'}
             >
               {playing === rec.id ? <Square size={12} /> : <Play size={12} />}
@@ -301,11 +299,11 @@ export default function TerminalRecorder({ isCollapsed, onClose }: Props) {
               <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {rec.session_id}
               </div>
-              <div style={{ color: 'var(--text-faint)', fontSize: '10px' }}>
+              <div style={{ color: 'var(--text-disabled)', fontSize: '10px' }}>
                 {formatDuration(rec.duration_secs)} · {formatBytes(rec.size_bytes)} · {rec.width}×{rec.height}
               </div>
             </div>
-            <span style={{ color: 'var(--text-faint)', fontSize: '10px' }}>
+            <span style={{ color: 'var(--text-disabled)', fontSize: '10px' }}>
               {formatDate(rec.created_at)}
             </span>
           </div>
@@ -316,8 +314,8 @@ export default function TerminalRecorder({ isCollapsed, onClose }: Props) {
       {playing && (
         <div style={{
           height: 200, overflow: 'hidden',
-          borderTop: '1px solid var(--vibe-sidebar-border, var(--border))',
-          background: 'var(--vibe-terminal-bg, var(--bg))',
+          borderTop: '1px solid var(--border)',
+          background: 'var(--surface)',
           padding: '8px 12px 12px',
         }}>
           <div ref={terminalContainerRef} style={{ width: '100%', height: '100%' }} />
