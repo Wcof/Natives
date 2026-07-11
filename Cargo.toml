@@ -4,6 +4,7 @@ members = [
     "src-tauri/natives-protocol",
     "crates/assistant-protocol",
     "crates/agent-core",
+    "crates/provider-adapters",
     "src-agent-daemon",
 ]
 resolver = "2"
