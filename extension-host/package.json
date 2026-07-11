@@ -1,0 +1,16 @@
+{
+  "name": "natives-extension-host",
+  "version": "0.1.0",
+  "description": "Isolated TypeScript extension host for MCP, Skills, Hooks, and Plugins",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "test": "tsx --test src/**/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "tsx": "^4.0.0"
+  }
+}

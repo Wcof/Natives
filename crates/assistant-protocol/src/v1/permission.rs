@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// A permission request awaiting user response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,4 +47,15 @@ pub enum PermissionScope {
     Project,
     /// Always allow.
     Forever,
+}
+
+impl fmt::Display for PermissionScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PermissionScope::Once => write!(f, "once"),
+            PermissionScope::ThisRun => write!(f, "this_run"),
+            PermissionScope::Project => write!(f, "project"),
+            PermissionScope::Forever => write!(f, "forever"),
+        }
+    }
 }
