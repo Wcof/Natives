@@ -66,7 +66,7 @@ describe('HooksExtension', () => {
     });
     const results = hooks.run('before_tool_call', { tool: 'read_file' });
     assert.equal(results.length, 1);
-    assert.equal(results[0].action, 'allow');
+    assert.equal(results[0]!.action, 'allow');
   });
 
   it('should stop on block action', () => {
@@ -83,6 +83,6 @@ describe('HooksExtension', () => {
     });
     const results = hooks.run('before_tool_call', {});
     assert.equal(results.length, 1, 'Should stop after block');
-    assert.equal(results[0].id, 'hook-block');
+    assert.equal(results[0]!.id, 'hook-block');
   });
 });

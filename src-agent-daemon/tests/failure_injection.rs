@@ -7,6 +7,17 @@ use std::sync::Arc;
 use std::path::PathBuf;
 use natives_agent_daemon::storage::DataStore;
 use natives_agent_daemon::event_log::EventLog;
+use assistant_protocol::v1::run_event::{RunEvent, RunEventPayload};
+
+/// Helper to create a typed event for testing.
+fn make_event(run_id: &str, payload: RunEventPayload) -> RunEvent {
+    RunEvent {
+        run_id: run_id.to_string(),
+        sequence: 0,
+        timestamp: chrono::Utc::now(),
+        payload,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Daemon crash recovery
@@ -29,8 +40,8 @@ fn test_daemon_crash_recovery() {
         conn.execute("INSERT OR IGNORE INTO run (id, conversation_id, status, provider_id, model_id) VALUES (?1, 'crash-conv', 'running', 'prov-1', 'model-1')", rusqlite::params![run_id]).unwrap();
         drop(conn);
         let log = EventLog::new(store);
-        log.append(&run_id, "started", "{}").unwrap();
-        log.append(&run_id, "text_delta", r#"{"text":"before crash"}"#).unwrap();
+        log.append_event(&make_event(&run_id, RunEventPayload::Started)).unwrap();
+        log.append_event(&make_event(&run_id, RunEventPayload::TextDelta { text: "before crash".to_string() })).unwrap();
     } // Simulate crash: drop without cleanup
 
     // Recovery: reopen database
@@ -64,7 +75,7 @@ fn test_corrupted_event_does_not_block_replay() {
     }
 
     let log = EventLog::new(store.clone());
-    log.append(&run_id, "started", "{}").unwrap();
+    log.append_event(&make_event(&run_id, RunEventPayload::Started)).unwrap();
     // Insert a corrupted event directly into the database
     {
         let conn = store.conn().unwrap();
@@ -73,7 +84,7 @@ fn test_corrupted_event_does_not_block_replay() {
             rusqlite::params![run_id],
         ).unwrap();
     }
-    log.append(&run_id, "completed", r#"{"reason":"done"}"#).unwrap();
+    log.append_event(&make_event(&run_id, RunEventPayload::Completed { reason: "done".to_string() })).unwrap();
 
     // Replay should skip corrupted events, not fail
     let events = log.replay_all(&run_id).unwrap();

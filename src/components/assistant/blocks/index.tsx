@@ -23,7 +23,7 @@ export interface ContentBlock {
   fileSize?: number;
   toolCallId?: string;
   toolName?: string;
-  toolInput?: unknown;
+  toolInput?: Record<string, unknown>;
   toolStatus?: 'pending' | 'running' | 'completed' | 'failed' | 'rejected';
   toolOutput?: unknown;
   isError?: boolean;
@@ -118,9 +118,9 @@ function ToolCallBlock({ block }: { block: ContentBlock }) {
           <pre className="whitespace-pre-wrap">{JSON.stringify(block.toolInput, null, 2)}</pre>
         </div>
       )}
-      {block.toolOutput && (
-        <div className={`px-3 py-2 text-xs border-t ${block.isError ? 'bg-red-50 dark:bg-red-950/20' : ''}`}>
-          <pre className="whitespace-pre-wrap font-mono">{JSON.stringify(block.toolOutput, null, 2)}</pre>
+      {block.toolOutput !== undefined && (
+        <div className={`px-3 py-2 text-xs font-mono border-t ${block.isError ? 'border-red-400/30 bg-red-50 dark:bg-red-950/20' : ''}`}>
+          <pre className="whitespace-pre-wrap">{typeof block.toolOutput === 'string' ? block.toolOutput : JSON.stringify(block.toolOutput, null, 2)}</pre>
         </div>
       )}
     </div>

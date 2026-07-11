@@ -7,7 +7,7 @@ interface PermissionRequest {
   id: string;
   toolName: string;
   reason: string;
-  input: unknown;
+  input: Record<string, unknown>;
   status: 'pending' | 'approved' | 'rejected' | 'expired';
   createdAt: string;
 }

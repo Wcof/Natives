@@ -85,7 +85,7 @@ describe('ContentBlockRenderers', () => {
   });
 
   it('should render unknown block as fallback', () => {
-    const block = { type: 'unknown' } as ContentBlock;
+    const block = { type: 'unknown' as ContentBlock['type'] } as ContentBlock;
     const result = renderBlock(block, 0);
     assert.ok(result !== null, 'Unknown block should render fallback');
   });

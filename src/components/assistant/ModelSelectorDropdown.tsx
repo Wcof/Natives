@@ -45,7 +45,7 @@ export default function ModelSelectorDropdown({
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const selectedProvider = providers.find((p) => p.id === selectedProviderId);
-  const models = selectedProvider?.models?.map(m => m.id) || ['gpt-4o'];
+  const models = selectedProvider?.models?.map((m: ModelInfo) => m.id) || ['gpt-4o'];
 
   // Click outside to close
   useEffect(() => {
@@ -88,7 +88,7 @@ export default function ModelSelectorDropdown({
             </div>
           ) : (
             providers.map((provider) => {
-              const providerModels = PRESET_MODELS[provider.presetName] || ['gpt-4o'];
+              const providerModels = provider.models?.map((m: ModelInfo) => m.id) || ['gpt-4o'];
               return (
                 <div key={provider.id}>
                   <div className="px-2.5 pb-1 pt-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.06em] text-[var(--text-disabled)]">

@@ -31,9 +31,9 @@ describe('ExtensionHost', () => {
     try {
       await host.loadExtension(manifest);
       assert.fail('Should have thrown');
-    } catch (e) {
+    } catch (e: unknown) {
       assert.ok(e instanceof Error);
-      assert.ok(e.message.includes('Invalid manifest'));
+      assert.ok((e as Error).message.includes('Invalid manifest'));
     }
   });
 
@@ -52,9 +52,9 @@ describe('ExtensionHost', () => {
     try {
       await host.loadExtension(manifest);
       assert.fail('Should have denied the extension');
-    } catch (e) {
+    } catch (e: unknown) {
       assert.ok(e instanceof Error);
-      assert.ok(e.message.includes('not allowed'));
+      assert.ok((e as Error).message.includes('not allowed'));
     }
   });
 
@@ -106,7 +106,7 @@ describe('ExtensionHost', () => {
     await host.loadExtension(manifest);
     const extensions = host.listExtensions();
     assert.equal(extensions.length, 1);
-    assert.equal(extensions[0].id, 'list-ext');
+    assert.equal(extensions[0]!.id, 'list-ext');
   });
 
   it('should unload extensions', async () => {
