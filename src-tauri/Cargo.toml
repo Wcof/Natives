@@ -17,6 +17,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+natives-protocol = { path = "natives-protocol" }
 tauri = { version = "2", features = ["macos-private-api", "protocol-asset"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
@@ -60,3 +61,4 @@ lazy_static = "1"
 futures-util = "0.3"
 async-trait = "0.1"
 tokio-stream = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }

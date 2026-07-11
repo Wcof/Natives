@@ -1,0 +1,25 @@
+//! # assistant-protocol
+//!
+//! Shared versioned wire and domain types for the Natives Agent Daemon.
+//!
+//! This crate defines the protocol between the Tauri client and the Agent Daemon,
+//! covering conversation, run, message, content block, event, artifact, provider,
+//! model, permission, extension, and daemon RPC types.
+//!
+//! ## Versioning
+//!
+//! Protocol compatibility is checked by major version number. The current version
+//! is `0.1.0`. Breaking changes increment the major version.
+//!
+//! ## Wire format
+//!
+//! All types serialise to JSON. The `ProtocolEnvelope` wraps every RPC message
+//! with the protocol version, request ID, client ID, and session token.
+
+pub mod v1;
+pub mod error;
+pub mod version;
+
+pub use v1::*;
+pub use error::*;
+pub use version::*;
