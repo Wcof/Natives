@@ -5,6 +5,7 @@ members = [
     "crates/assistant-protocol",
     "crates/agent-core",
     "crates/provider-adapters",
+    "crates/capability-gateway",
     "src-agent-daemon",
 ]
 resolver = "2"
