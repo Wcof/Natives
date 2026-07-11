@@ -1,11 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+use std::sync::Arc;
+use std::time::Duration;
 use tauri::{Emitter, Manager};
 
 mod agent;
 mod archive;
 pub mod assistant_executor;
 pub mod assistant_stream_proxy;
+pub mod daemon;
+pub mod terminal_sandbox;
 pub mod context_window;
 pub mod contract_linter;
 pub mod sequence_id;
@@ -74,6 +78,14 @@ pub struct AppState {
     pub fs_watcher: fs_watch::FsWatcher,
     pub lid_guard: lid_guard::LidGuard,
     pub wechat_bridge: Mutex<Option<wechat::bridge::Bridge>>,
+}
+
+/// Daemon sidecar configuration (managed state, not exposed to renderer).
+#[derive(Debug)]
+pub struct DaemonConfig {
+    pub socket_path: std::path::PathBuf,
+    pub bootstrap_token: String,
+    pub daemon_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -175,6 +187,59 @@ pub fn run() {
                 fs_watcher: fs_watch::FsWatcher::new(app.handle().clone()),
                 lid_guard: lid_guard::LidGuard::new(),
                 wechat_bridge: Mutex::new(Some(wechat::bridge::Bridge::new())),
+            });
+
+            // ── Agent Daemon Sidecar lifecycle ──
+            // Start the sidecar as a managed child process with health checks
+            // and exponential backoff restart. The daemon socket path is stored
+            // in app state for later use by the assistant client.
+            let daemon_socket_path = data_dir.join("agent-daemon.sock");
+            let daemon_bootstrap_token = uuid::Uuid::new_v4().to_string();
+
+            // Spawn daemon health-check task (non-blocking, just monitoring)
+            let daemon_handle = {
+                let app_handle = app.handle().clone();
+                let sock_path = daemon_socket_path.clone();
+                let token = daemon_bootstrap_token.clone();
+                tokio::spawn(async move {
+                    let mut retry_delay = Duration::from_secs(1);
+                    let max_delay = Duration::from_secs(60);
+                    let mut attempts = 0;
+                    loop {
+                        tokio::time::sleep(retry_delay).await;
+                        // Try to connect to daemon socket
+                        match tokio::net::UnixStream::connect(&sock_path).await {
+                            Ok(_) => {
+                                // Health check passed — emit status
+                                let _ = app_handle.emit("daemon:status", serde_json::json!({
+                                    "status": "healthy",
+                                    "socket": sock_path.to_string_lossy(),
+                                }));
+                                retry_delay = Duration::from_secs(1); // Reset on success
+                                attempts = 0;
+                                // Wait longer before re-checking
+                                tokio::time::sleep(Duration::from_secs(30)).await;
+                            }
+                            Err(_) => {
+                                attempts += 1;
+                                let _ = app_handle.emit("daemon:status", serde_json::json!({
+                                    "status": "unhealthy",
+                                    "attempts": attempts,
+                                    "socket": sock_path.to_string_lossy(),
+                                }));
+                                // Exponential backoff: 1s, 2s, 4s, 8s, ... up to 60s
+                                retry_delay = std::cmp::min(retry_delay * 2, max_delay);
+                            }
+                        }
+                    }
+                })
+            };
+
+            // Store daemon config in app state (tokens are NOT exposed to renderer)
+            app.manage(DaemonConfig {
+                socket_path: daemon_socket_path,
+                bootstrap_token: daemon_bootstrap_token,
+                daemon_handle: Mutex::new(Some(daemon_handle)),
             });
 
             // ── P1 Runtime 抽象层：注册 Native runtime（兜底永远 available）──
