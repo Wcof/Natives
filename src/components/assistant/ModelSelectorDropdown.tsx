@@ -2,25 +2,37 @@
 
 import { useState, useRef, useEffect } from 'react';
 
+interface ModelInfo {
+  id: string;
+  displayName?: string;
+  contextWindow?: number;
+  maxOutput?: number;
+  capabilities?: {
+    streaming?: boolean;
+    toolCalling?: boolean;
+    imageInput?: boolean;
+    reasoning?: boolean;
+  };
+  source?: 'api_discovery' | 'cache' | 'preset' | 'manual';
+  discoveredAt?: string;
+}
+
+interface ProviderWithModels {
+  id: string;
+  name: string;
+  presetName: string;
+  baseUrl: string;
+  keys: Array<{ id: string; label: string; maskedKey: string }>;
+  models?: ModelInfo[];
+}
+
 interface ModelSelectorDropdownProps {
-  providers: Array<{
-    id: string;
-    name: string;
-    presetName: string;
-    baseUrl: string;
-    keys: Array<{ id: string; label: string; maskedKey: string }>;
-  }>;
+  providers: ProviderWithModels[];
   selectedProviderId: string;
   selectedModel?: string;
   onSelect: (providerId: string, model: string) => void;
   locale: string;
 }
-
-const PRESET_MODELS: Record<string, string[]> = {
-  'openai': ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
-  'anthropic': ['claude-sonnet-4-20250514', 'claude-3-5-sonnet-latest', 'claude-3-opus-latest'],
-  'ollama': ['llama3', 'mistral', 'codellama', 'qwen2'],
-};
 
 export default function ModelSelectorDropdown({
   providers,
@@ -33,7 +45,7 @@ export default function ModelSelectorDropdown({
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const selectedProvider = providers.find((p) => p.id === selectedProviderId);
-  const models = selectedProvider ? PRESET_MODELS[selectedProvider.presetName] || ['gpt-4o'] : [];
+  const models = selectedProvider?.models?.map(m => m.id) || ['gpt-4o'];
 
   // Click outside to close
   useEffect(() => {
