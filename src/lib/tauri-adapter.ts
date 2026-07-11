@@ -280,6 +280,16 @@ export interface NativesAPI {
     get: () => Promise<{ enabledTools: Record<string, boolean>; maxSelfHeal: number; maxSteps?: number }>;
     save: (settings: { enabledTools: Record<string, boolean>; maxSelfHeal: number; maxSteps?: number }) => Promise<void>;
   };
+  /** Assistant Daemon v2 client (typed daemon RPC) */
+  assistantV2: {
+    connect: () => Promise<void>;
+    disconnect: () => void;
+    call: (method: string, params?: unknown) => Promise<unknown>;
+    getStatus: () => Promise<unknown>;
+    ping: () => Promise<boolean>;
+    getState: () => string;
+    onEvent: (callback: (event: unknown) => void) => () => void;
+  };
   /** Runtime 抽象层（Slice B） */
   runtime: {
     listAvailable: () => Promise<Array<{ id: string; displayName: string; available: boolean }>>;
@@ -861,6 +871,64 @@ const nativesAPI: NativesAPI = {
     resolveBinding: (subagentId: string) =>
       cmd('subagent_resolve_binding', { subagentId }),
   },
+
+  // Assistant Daemon v2 client
+  assistantV2: (() => {
+    // Lazy import to avoid circular dependencies
+    let client: import('./assistant-client/client').DaemonClient | null = null;
+    let config: import('./assistant-client/types').DaemonClientConfig | null = null;
+
+    // Initialize the client with config from the backend
+    async function getClient(): Promise<import('./assistant-client/client').DaemonClient> {
+      if (!client) {
+        const { DaemonClient } = await import('./assistant-client/client');
+        const daemonConfig = await cmd('get_daemon_config') as {
+          socketPath: string;
+          bootstrapToken: string;
+          protocolVersion: string;
+        };
+        config = {
+          socketPath: daemonConfig.socketPath,
+          bootstrapToken: daemonConfig.bootstrapToken,
+          clientId: `natives-ui-${Date.now()}`,
+          protocolVersion: daemonConfig.protocolVersion || '0.1.0',
+        };
+        client = new DaemonClient(config);
+      }
+      return client;
+    }
+
+    return {
+      connect: async () => {
+        const c = await getClient();
+        await c.connect();
+      },
+      disconnect: () => {
+        client?.disconnect();
+      },
+      call: async (method: string, params?: unknown) => {
+        const c = await getClient();
+        return c.call(method, params);
+      },
+      getStatus: async () => {
+        const c = await getClient();
+        return c.getStatus();
+      },
+      ping: async () => {
+        const c = await getClient();
+        return c.ping();
+      },
+      getState: () => {
+        return client?.getState() ?? 'disconnected';
+      },
+      onEvent: (callback: (event: unknown) => void) => {
+        if (!client) {
+          return () => {};
+        }
+        return client.onEvent(callback as (event: import('./assistant-client/types').DaemonClientEvent) => void);
+      },
+    };
+  })(),
 };
 
 // Expose to window (replaces contextBridge.exposeInMainWorld)
