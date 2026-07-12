@@ -26,7 +26,7 @@ pub struct GitStatus {
 }
 
 pub fn validate_branch_name(name: &str) -> Result<()> {
-    let invalid = name.is_empty()
+    let deterministically_invalid = name.is_empty()
         || name.trim() != name
         || name.starts_with('-')
         || name.starts_with("refs/")
@@ -42,7 +42,17 @@ pub fn validate_branch_name(name: &str) -> Result<()> {
         || name.ends_with('.')
         || name.ends_with(".lock");
 
-    if invalid {
+    if deterministically_invalid {
+        return Err(Error::InvalidInput(format!(
+            "invalid Git branch name: {name}"
+        )));
+    }
+
+    let output = Command::new("git")
+        .args(["check-ref-format", "--branch", name])
+        .output()
+        .map_err(|error| Error::Internal(format!("git check-ref-format failed: {error}")))?;
+    if !output.status.success() {
         return Err(Error::InvalidInput(format!(
             "invalid Git branch name: {name}"
         )));
@@ -60,7 +70,7 @@ pub fn git_branches(dir_path: &str) -> Result<Vec<GitBranch>> {
     let refs_output = Command::new("git")
         .args([
             "for-each-ref",
-            "--format=%(refname)%00%(HEAD)",
+            "--format=%(refname)%00%(HEAD)%00%(symref)",
             "refs/heads",
             "refs/remotes",
         ])
@@ -86,9 +96,15 @@ pub fn git_branches(dir_path: &str) -> Result<Vec<GitBranch>> {
     let worktree_paths = parse_worktree_paths(&String::from_utf8_lossy(&worktree_output.stdout));
     let mut branches = Vec::new();
     for line in String::from_utf8_lossy(&refs_output.stdout).lines() {
-        let Some((ref_name, head_marker)) = line.split_once('\0') else {
+        let mut fields = line.splitn(3, '\0');
+        let (Some(ref_name), Some(head_marker), Some(symref)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
             continue;
         };
+        if !symref.is_empty() {
+            continue;
+        }
         let (name, remote) = if let Some(name) = ref_name.strip_prefix("refs/heads/") {
             (name, false)
         } else if let Some(name) = ref_name.strip_prefix("refs/remotes/") {
@@ -234,10 +250,16 @@ mod git_branch_tests {
         fs,
         path::{Path, PathBuf},
         process::Command,
+        sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    struct TestRepo(PathBuf);
+    static REPO_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    struct TestRepo {
+        root: PathBuf,
+        path: PathBuf,
+    }
 
     impl TestRepo {
         fn new() -> Self {
@@ -245,11 +267,13 @@ mod git_branch_tests {
                 .duration_since(UNIX_EPOCH)
                 .expect("system clock should be after Unix epoch")
                 .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "natives-git-branch-test-{}-{unique}",
+            let sequence = REPO_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let root = std::env::temp_dir().join(format!(
+                "natives-git-branch-test-{}-{unique}-{sequence}",
                 std::process::id()
             ));
-            fs::create_dir(&path).expect("temporary repository should be created");
+            let path = root.join("repo");
+            fs::create_dir_all(&path).expect("temporary repository should be created");
 
             run_git(&path, &["init"]);
             run_git(&path, &["config", "user.name", "Natives Test"]);
@@ -260,13 +284,13 @@ mod git_branch_tests {
             run_git(&path, &["commit", "-m", "initial commit"]);
             run_git(&path, &["branch", "feature/existing"]);
 
-            Self(path)
+            Self { root, path }
         }
     }
 
     impl Drop for TestRepo {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            let _ = fs::remove_dir_all(&self.root);
         }
     }
 
@@ -308,6 +332,11 @@ mod git_branch_tests {
             "bad/",
             "bad.",
             "bad.lock",
+            "foo//bar",
+            ".hidden",
+            "foo/.hidden",
+            "foo.lock/bar",
+            "foo/./bar",
         ] {
             assert!(
                 validate_branch_name(invalid).is_err(),
@@ -319,7 +348,7 @@ mod git_branch_tests {
     #[test]
     fn git_branch_listing_includes_local_branches_and_one_current_branch() {
         let repo = TestRepo::new();
-        let branches = git_branches(repo.0.to_str().expect("temporary path should be UTF-8"))
+        let branches = git_branches(repo.path.to_str().expect("temporary path should be UTF-8"))
             .expect("branches should be listed");
 
         assert!(branches
@@ -331,5 +360,70 @@ mod git_branch_tests {
             .find(|branch| branch.current)
             .and_then(|branch| branch.worktree_path.as_ref())
             .is_some());
+    }
+
+    #[test]
+    fn git_branch_listing_excludes_symbolic_remote_refs() {
+        let repo = TestRepo::new();
+        let remote = repo.root.join("remote.git");
+        run_git(&repo.root, &["init", "--bare", path_str(&remote)]);
+        run_git(&repo.path, &["remote", "add", "origin", path_str(&remote)]);
+        run_git(&repo.path, &["push", "origin", "HEAD"]);
+        run_git(&repo.path, &["remote", "set-head", "origin", "--auto"]);
+
+        let branches = git_branches(path_str(&repo.path)).expect("branches should be listed");
+
+        assert!(!branches.iter().any(|branch| branch.name == "origin/HEAD"));
+    }
+
+    #[test]
+    fn git_branch_listing_marks_fetched_remote_branches() {
+        let repo = TestRepo::new();
+        let remote = repo.root.join("remote.git");
+        run_git(&repo.root, &["init", "--bare", path_str(&remote)]);
+        run_git(&repo.path, &["remote", "add", "origin", path_str(&remote)]);
+        run_git(&repo.path, &["push", "origin", "feature/existing"]);
+        run_git(&repo.path, &["fetch", "origin"]);
+
+        let branches = git_branches(path_str(&repo.path)).expect("branches should be listed");
+        let branch = branches
+            .iter()
+            .find(|branch| branch.name == "origin/feature/existing")
+            .expect("fetched remote branch should be listed");
+
+        assert!(branch.remote);
+        assert_eq!(branch.name, "origin/feature/existing");
+        assert_eq!(branch.worktree_path, None);
+    }
+
+    #[test]
+    fn git_branch_listing_reports_linked_worktree_path() {
+        let repo = TestRepo::new();
+        let linked_path = repo.root.join("linked-worktree");
+        run_git(&repo.path, &["branch", "feature/linked"]);
+        run_git(
+            &repo.path,
+            &["worktree", "add", path_str(&linked_path), "feature/linked"],
+        );
+        let linked_path = linked_path
+            .canonicalize()
+            .expect("linked worktree path should be canonicalized");
+
+        let branches = git_branches(path_str(&repo.path)).expect("branches should be listed");
+        let branch = branches
+            .iter()
+            .find(|branch| branch.name == "feature/linked")
+            .expect("linked branch should be listed");
+
+        assert!(!branch.remote);
+        assert_eq!(branch.name, "feature/linked");
+        assert_eq!(
+            branch.worktree_path.as_deref(),
+            Some(path_str(&linked_path))
+        );
+    }
+
+    fn path_str(path: &Path) -> &str {
+        path.to_str().expect("temporary path should be UTF-8")
     }
 }
