@@ -148,6 +148,138 @@ fn git_command_error(command: &str, stderr: &[u8]) -> Error {
     Error::Internal(format!("{command} failed: {}", detail.trim()))
 }
 
+pub fn git_checkout_branch(dir_path: &str, branch: &str) -> Result<GitStatus> {
+    validate_mutation_target(dir_path, branch)?;
+    let path = Path::new(dir_path);
+    reject_dirty_worktree(path)?;
+
+    if !local_branch_exists(path, branch)? {
+        return Err(Error::InvalidInput(
+            "branch_not_found: local branch does not exist".into(),
+        ));
+    }
+
+    if branch_in_other_worktree(path, branch)? {
+        return Err(Error::InvalidInput(
+            "branch_in_use: branch is checked out in another worktree".into(),
+        ));
+    }
+
+    run_branch_mutation(path, &["switch", branch])?;
+    git_status(dir_path)
+}
+
+pub fn git_create_branch(dir_path: &str, branch: &str) -> Result<GitStatus> {
+    validate_mutation_target(dir_path, branch)?;
+    let path = Path::new(dir_path);
+    reject_dirty_worktree(path)?;
+
+    if local_branch_exists(path, branch)? {
+        return Err(Error::InvalidInput(
+            "branch_exists: local branch already exists".into(),
+        ));
+    }
+
+    run_branch_mutation(path, &["switch", "-c", branch])?;
+    git_status(dir_path)
+}
+
+fn validate_mutation_target(dir_path: &str, branch: &str) -> Result<()> {
+    validate_branch_name(branch).map_err(|_| {
+        Error::InvalidInput("branch_invalid: enter a valid local branch name".into())
+    })?;
+
+    let path = Path::new(dir_path);
+    if !path.is_dir() {
+        return Err(Error::InvalidInput(
+            "not_repository: directory is not a Git repository".into(),
+        ));
+    }
+
+    let output = Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(path)
+        .output()
+        .map_err(|_| Error::Internal("git_unavailable: could not run Git".into()))?;
+    if !output.status.success() || String::from_utf8_lossy(&output.stdout).trim() != "true" {
+        return Err(Error::InvalidInput(
+            "not_repository: directory is not a Git repository".into(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn reject_dirty_worktree(path: &Path) -> Result<()> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain=v1", "-u"])
+        .current_dir(path)
+        .output()
+        .map_err(|_| Error::Internal("git_unavailable: could not run Git".into()))?;
+    if !output.status.success() {
+        return Err(Error::Internal(
+            "git_status_failed: could not inspect the worktree".into(),
+        ));
+    }
+    if !output.stdout.is_empty() {
+        return Err(Error::InvalidInput(
+            "dirty_worktree: commit or discard changes before switching branches".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn local_branch_exists(path: &Path, branch: &str) -> Result<bool> {
+    let ref_name = format!("refs/heads/{branch}");
+    let output = Command::new("git")
+        .args(["show-ref", "--verify", "--quiet", &ref_name])
+        .current_dir(path)
+        .output()
+        .map_err(|_| Error::Internal("git_unavailable: could not run Git".into()))?;
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(Error::Internal(
+            "git_ref_check_failed: could not inspect local branches".into(),
+        )),
+    }
+}
+
+fn branch_in_other_worktree(path: &Path, branch: &str) -> Result<bool> {
+    let output = Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(path)
+        .output()
+        .map_err(|_| Error::Internal("git_unavailable: could not run Git".into()))?;
+    if !output.status.success() {
+        return Err(Error::Internal(
+            "git_worktree_check_failed: could not inspect linked worktrees".into(),
+        ));
+    }
+
+    let ref_name = format!("refs/heads/{branch}");
+    let current_branch = git_status(path.to_str().ok_or_else(|| {
+        Error::InvalidInput("not_repository: repository path is not valid UTF-8".into())
+    })?)?
+    .branch;
+    Ok(current_branch != branch
+        && parse_worktree_paths(&String::from_utf8_lossy(&output.stdout)).contains_key(&ref_name))
+}
+
+fn run_branch_mutation(path: &Path, args: &[&str]) -> Result<()> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(path)
+        .output()
+        .map_err(|_| Error::Internal("git_unavailable: could not run Git".into()))?;
+    if !output.status.success() {
+        return Err(Error::Internal(
+            "branch_mutation_failed: Git could not change branches".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Get git status for a directory
 pub fn git_status(dir_path: &str) -> Result<GitStatus> {
     let path = Path::new(dir_path);
@@ -245,7 +377,9 @@ pub fn git_diff(file_path: &str) -> Result<String> {
 
 #[cfg(test)]
 mod git_branch_tests {
-    use super::{git_branches, validate_branch_name};
+    use super::{
+        git_branches, git_checkout_branch, git_create_branch, git_status, validate_branch_name,
+    };
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -282,6 +416,7 @@ mod git_branch_tests {
                 .expect("fixture file should be written");
             run_git(&path, &["add", "README.md"]);
             run_git(&path, &["commit", "-m", "initial commit"]);
+            run_git(&path, &["branch", "-M", "main"]);
             run_git(&path, &["branch", "feature/existing"]);
 
             Self { root, path }
@@ -421,6 +556,107 @@ mod git_branch_tests {
             branch.worktree_path.as_deref(),
             Some(path_str(&linked_path))
         );
+    }
+
+    #[test]
+    fn git_branch_mutation_creates_and_checks_out_branch() {
+        let repo = TestRepo::new();
+
+        let status = git_create_branch(path_str(&repo.path), "feature/new-ui")
+            .expect("branch should be created");
+
+        assert_eq!(status.branch, "feature/new-ui");
+        assert_eq!(
+            git_status(path_str(&repo.path)).unwrap().branch,
+            "feature/new-ui"
+        );
+    }
+
+    #[test]
+    fn git_branch_mutation_checks_out_existing_local_branch() {
+        let repo = TestRepo::new();
+        git_create_branch(path_str(&repo.path), "feature/new-ui").unwrap();
+
+        let status =
+            git_checkout_branch(path_str(&repo.path), "main").expect("main should be checked out");
+
+        assert_eq!(status.branch, "main");
+        assert_eq!(git_status(path_str(&repo.path)).unwrap().branch, "main");
+    }
+
+    #[test]
+    fn git_branch_mutation_rejects_dirty_worktree_without_changing_head() {
+        let repo = TestRepo::new();
+        fs::write(repo.path.join("README.md"), "modified\n").unwrap();
+        let head = current_branch(&repo.path);
+
+        let error = git_checkout_branch(path_str(&repo.path), "feature/existing").unwrap_err();
+
+        assert!(error.to_string().contains("dirty_worktree"));
+        assert_eq!(current_branch(&repo.path), head);
+    }
+
+    #[test]
+    fn git_branch_mutation_rejects_invalid_and_missing_branches_without_changing_head() {
+        let repo = TestRepo::new();
+        let head = current_branch(&repo.path);
+
+        for error in [
+            git_create_branch(path_str(&repo.path), "feature/existing").unwrap_err(),
+            git_checkout_branch(path_str(&repo.path), "feature/missing").unwrap_err(),
+            git_create_branch(path_str(&repo.path), "bad name").unwrap_err(),
+            git_checkout_branch(path_str(&repo.path), "bad name").unwrap_err(),
+        ] {
+            assert!(error.to_string().contains("branch_"));
+            assert_eq!(current_branch(&repo.path), head);
+        }
+    }
+
+    #[test]
+    fn git_branch_mutation_rejects_non_repository_without_changing_head() {
+        let repo = TestRepo::new();
+        let non_repo = repo.root.join("not-a-repository");
+        fs::create_dir(&non_repo).unwrap();
+        let head = current_branch(&repo.path);
+
+        for error in [
+            git_create_branch(path_str(&non_repo), "feature/new-ui").unwrap_err(),
+            git_checkout_branch(path_str(&non_repo), "main").unwrap_err(),
+        ] {
+            assert!(error.to_string().contains("not_repository"));
+            assert_eq!(current_branch(&repo.path), head);
+        }
+    }
+
+    #[test]
+    fn git_branch_mutation_rejects_branch_checked_out_in_linked_worktree() {
+        let repo = TestRepo::new();
+        let linked_path = repo.root.join("linked-worktree");
+        run_git(
+            &repo.path,
+            &[
+                "worktree",
+                "add",
+                path_str(&linked_path),
+                "feature/existing",
+            ],
+        );
+        let head = current_branch(&repo.path);
+
+        let error = git_checkout_branch(path_str(&repo.path), "feature/existing").unwrap_err();
+
+        assert!(error.to_string().contains("branch_in_use"));
+        assert_eq!(current_branch(&repo.path), head);
+    }
+
+    fn current_branch(repo: &Path) -> String {
+        let output = Command::new("git")
+            .args(["symbolic-ref", "--short", "HEAD"])
+            .current_dir(repo)
+            .output()
+            .expect("git should be available");
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
     }
 
     fn path_str(path: &Path) -> &str {
