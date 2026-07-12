@@ -1,6 +1,14 @@
 use crate::{Error, Result};
 use serde::Serialize;
-use std::{collections::HashMap, path::Path, process::Command};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::{Arc, Mutex, OnceLock, Weak},
+};
+
+type RepositoryLock = Arc<Mutex<()>>;
+static REPOSITORY_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -149,39 +157,102 @@ fn git_command_error(command: &str, stderr: &[u8]) -> Error {
 }
 
 pub fn git_checkout_branch(dir_path: &str, branch: &str) -> Result<GitStatus> {
-    validate_mutation_target(dir_path, branch)?;
     let path = Path::new(dir_path);
-    reject_dirty_worktree(path)?;
+    with_repository_mutation_lock(path, || {
+        validate_mutation_target(dir_path, branch)?;
+        reject_dirty_worktree(path)?;
 
-    if !local_branch_exists(path, branch)? {
-        return Err(Error::InvalidInput(
-            "branch_not_found: local branch does not exist".into(),
-        ));
-    }
+        if !local_branch_exists(path, branch)? {
+            return Err(Error::InvalidInput(
+                "branch_not_found: local branch does not exist".into(),
+            ));
+        }
 
-    if branch_in_other_worktree(path, branch)? {
-        return Err(Error::InvalidInput(
-            "branch_in_use: branch is checked out in another worktree".into(),
-        ));
-    }
+        if branch_in_other_worktree(path, branch)? {
+            return Err(Error::InvalidInput(
+                "branch_in_use: branch is checked out in another worktree".into(),
+            ));
+        }
 
-    run_branch_mutation(path, &["switch", branch])?;
-    git_status(dir_path)
+        run_branch_mutation(path, &["switch", branch])?;
+        mutation_status_result(git_status(dir_path))
+    })
 }
 
 pub fn git_create_branch(dir_path: &str, branch: &str) -> Result<GitStatus> {
-    validate_mutation_target(dir_path, branch)?;
     let path = Path::new(dir_path);
-    reject_dirty_worktree(path)?;
+    with_repository_mutation_lock(path, || {
+        validate_mutation_target(dir_path, branch)?;
+        reject_dirty_worktree(path)?;
 
-    if local_branch_exists(path, branch)? {
+        if local_branch_exists(path, branch)? {
+            return Err(Error::InvalidInput(
+                "branch_exists: local branch already exists".into(),
+            ));
+        }
+
+        run_branch_mutation(path, &["switch", "-c", branch])?;
+        mutation_status_result(git_status(dir_path))
+    })
+}
+
+fn with_repository_mutation_lock<T>(
+    path: &Path,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let identity = repository_identity(path)?;
+    let lock = repository_lock(identity)?;
+    let _guard = lock.lock().map_err(|_| {
+        Error::Internal("repository_lock_failed: branch mutation lock is unavailable".into())
+    })?;
+    operation()
+}
+
+fn repository_identity(path: &Path) -> Result<PathBuf> {
+    if !path.is_dir() {
         return Err(Error::InvalidInput(
-            "branch_exists: local branch already exists".into(),
+            "not_repository: directory is not a Git repository".into(),
         ));
     }
+    let output = Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(path)
+        .output()
+        .map_err(|_| Error::Internal("git_unavailable: could not run Git".into()))?;
+    if !output.status.success() {
+        return Err(Error::InvalidInput(
+            "not_repository: directory is not a Git repository".into(),
+        ));
+    }
+    let common_dir = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    common_dir.canonicalize().map_err(|_| {
+        Error::Internal("repository_identity_failed: could not resolve Git repository".into())
+    })
+}
 
-    run_branch_mutation(path, &["switch", "-c", branch])?;
-    git_status(dir_path)
+fn repository_lock(identity: PathBuf) -> Result<RepositoryLock> {
+    let locks = REPOSITORY_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut locks = locks.lock().map_err(|_| {
+        Error::Internal(
+            "repository_lock_failed: branch mutation lock registry is unavailable".into(),
+        )
+    })?;
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(&identity).and_then(Weak::upgrade) {
+        return Ok(lock);
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(identity, Arc::downgrade(&lock));
+    Ok(lock)
+}
+
+fn mutation_status_result(status: Result<GitStatus>) -> Result<GitStatus> {
+    status.map_err(|_| {
+        Error::Internal(
+            "mutation_succeeded_status_refresh_failed: branch changed; refresh repository status"
+                .into(),
+        )
+    })
 }
 
 fn validate_mutation_target(dir_path: &str, branch: &str) -> Result<()> {
@@ -273,11 +344,27 @@ fn run_branch_mutation(path: &Path, args: &[&str]) -> Result<()> {
         .output()
         .map_err(|_| Error::Internal("git_unavailable: could not run Git".into()))?;
     if !output.status.success() {
-        return Err(Error::Internal(
-            "branch_mutation_failed: Git could not change branches".into(),
-        ));
+        let detail = sanitized_git_stderr(&output.stderr);
+        let message = if detail.is_empty() {
+            "branch_mutation_failed: Git could not change branches".into()
+        } else {
+            format!("branch_mutation_failed: Git could not change branches: {detail}")
+        };
+        return Err(Error::Internal(message));
     }
     Ok(())
+}
+
+fn sanitized_git_stderr(stderr: &[u8]) -> String {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("")
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(240)
+        .collect()
 }
 
 /// Get git status for a directory
@@ -378,13 +465,18 @@ pub fn git_diff(file_path: &str) -> Result<String> {
 #[cfg(test)]
 mod git_branch_tests {
     use super::{
-        git_branches, git_checkout_branch, git_create_branch, git_status, validate_branch_name,
+        git_branches, git_checkout_branch, git_create_branch, git_status, mutation_status_result,
+        sanitized_git_stderr, validate_branch_name, with_repository_mutation_lock,
     };
     use std::{
         fs,
         path::{Path, PathBuf},
         process::Command,
-        sync::atomic::{AtomicU64, Ordering},
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            mpsc, Arc, Barrier,
+        },
+        thread,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -412,6 +504,10 @@ mod git_branch_tests {
             run_git(&path, &["init"]);
             run_git(&path, &["config", "user.name", "Natives Test"]);
             run_git(&path, &["config", "user.email", "natives-test@example.com"]);
+            run_git(&path, &["config", "commit.gpgSign", "false"]);
+            let hooks = root.join("disabled-hooks");
+            fs::create_dir(&hooks).expect("empty hooks directory should be created");
+            run_git(&path, &["config", "core.hooksPath", path_str(&hooks)]);
             fs::write(path.join("README.md"), "test repository\n")
                 .expect("fixture file should be written");
             run_git(&path, &["add", "README.md"]);
@@ -594,6 +690,100 @@ mod git_branch_tests {
 
         assert!(error.to_string().contains("dirty_worktree"));
         assert_eq!(current_branch(&repo.path), head);
+    }
+
+    #[test]
+    fn git_branch_mutation_rejects_staged_changes_without_changing_head() {
+        let repo = TestRepo::new();
+        fs::write(repo.path.join("README.md"), "staged\n").unwrap();
+        run_git(&repo.path, &["add", "README.md"]);
+        let head = current_branch(&repo.path);
+
+        let error = git_checkout_branch(path_str(&repo.path), "feature/existing").unwrap_err();
+
+        assert!(error.to_string().contains("dirty_worktree"));
+        assert_eq!(current_branch(&repo.path), head);
+    }
+
+    #[test]
+    fn git_branch_mutation_rejects_untracked_files_without_changing_head() {
+        let repo = TestRepo::new();
+        fs::write(repo.path.join("untracked.txt"), "untracked\n").unwrap();
+        let head = current_branch(&repo.path);
+
+        let error = git_checkout_branch(path_str(&repo.path), "feature/existing").unwrap_err();
+
+        assert!(error.to_string().contains("dirty_worktree"));
+        assert_eq!(current_branch(&repo.path), head);
+    }
+
+    #[test]
+    fn git_branch_mutation_serializes_linked_worktrees_for_same_repository() {
+        let repo = TestRepo::new();
+        let linked_path = repo.root.join("linked-worktree");
+        run_git(
+            &repo.path,
+            &[
+                "worktree",
+                "add",
+                path_str(&linked_path),
+                "feature/existing",
+            ],
+        );
+        let barrier = Arc::new(Barrier::new(2));
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let repo_path = repo.path.clone();
+        let first_barrier = Arc::clone(&barrier);
+        let first = thread::spawn(move || {
+            with_repository_mutation_lock(&repo_path, || {
+                entered_tx.send(()).unwrap();
+                first_barrier.wait();
+                Ok(())
+            })
+            .unwrap();
+        });
+        entered_rx.recv().unwrap();
+
+        let (started_tx, started_rx) = mpsc::channel();
+        let (second_tx, second_rx) = mpsc::channel();
+        let second = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            with_repository_mutation_lock(&linked_path, || {
+                second_tx.send(()).unwrap();
+                Ok(())
+            })
+            .unwrap();
+        });
+        started_rx.recv().unwrap();
+        assert!(second_rx.try_recv().is_err());
+        barrier.wait();
+        first.join().unwrap();
+        second_rx.recv().unwrap();
+        second.join().unwrap();
+    }
+
+    #[test]
+    fn git_branch_mutation_reports_when_status_refresh_fails_after_success() {
+        let error = mutation_status_result(Err(crate::Error::Internal("status failed".into())))
+            .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("mutation_succeeded_status_refresh_failed"));
+        assert!(!error.to_string().contains("status failed"));
+    }
+
+    #[test]
+    fn git_branch_mutation_sanitizes_and_bounds_git_error_detail() {
+        let detail = format!(
+            "\n fatal: useful detail\r\nsecret second line\n{}",
+            "x".repeat(300)
+        );
+
+        let sanitized = sanitized_git_stderr(detail.as_bytes());
+
+        assert_eq!(sanitized, "fatal: useful detail");
+        assert!(sanitized.len() <= 240);
     }
 
     #[test]
