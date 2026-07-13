@@ -616,14 +616,25 @@ export default function Sidebar({
 
         {/* Assistant section — clickable header with inline [+] */}
         <div className="mb-1 px-3">
-          <button
-            type="button"
-            onClick={() => selectNavigation('__assistant__', '__assistant__')}
-            className="drag-none flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors duration-150"
-          >
-            <Bot size={14} className="shrink-0 text-[var(--text-disabled)]" />
-            <span className="truncate">{t(locale, 'nav.assistant')}</span>
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => selectNavigation('__assistant__', '__assistant__')}
+              className="drag-none flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors duration-150"
+            >
+              <Bot size={14} className="shrink-0 text-[var(--text-disabled)]" />
+              <span className="truncate">{t(locale, 'nav.assistant')}</span>
+            </button>
+            <button
+              type="button"
+              data-assistant-create
+              onClick={() => selectNavigation('__assistant__', '__assistant__')}
+              className="drag-none rounded-md p-1 text-[var(--text-disabled)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors duration-150"
+              aria-label={t(locale, 'assistant.newConversation')}
+            >
+              <Plus size={13} />
+            </button>
+          </div>
           {activeNavigationId === '__assistant__' && (
             <AssistantSidebarSection locale={locale} onNavigateAssistant={() => selectNavigation('__assistant__', '__assistant__')} />
           )}
