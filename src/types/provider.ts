@@ -24,6 +24,9 @@ export interface ProviderKey {
   label: string;
   /** 脱敏后的 Key（如 "sk-a…1b2c"），绝不含完整 Key */
   maskedKey: string;
+  status: 'unknown' | 'valid' | 'invalid' | 'rate_limited';
+  lastTestedAt: string | null;
+  lastError: string | null;
   createdAt: string;
 }
 
@@ -39,3 +42,30 @@ export interface UserProvider {
   createdAt: string;
   updatedAt: string;
 }
+
+// ── Unified types ──
+
+export type ProviderKeyStatus = 'untested' | 'valid' | 'invalid' | 'rate_limited' | 'unavailable';
+
+export interface ProviderKeySummary {
+  id: string; providerId: string; label: string; maskedKey: string;
+  isActive: boolean; isPrimary: boolean; status: ProviderKeyStatus;
+  lastTestedAt: string | null; lastError: string | null; createdAt: string;
+}
+
+export interface ProviderSummary {
+  id: string; providerType: string; displayName: string; websiteUrl: string; baseUrl: string;
+  defaultModel: string | null; primaryKeyId: string | null; keys: ProviderKeySummary[];
+}
+
+export interface CreateProviderInput {
+  providerType: string; displayName: string; websiteUrl: string; baseUrl: string;
+  defaultModel: string | null; initialKey?: { label: string; apiKey: string } | null;
+}
+
+export interface UpdateDefaultsInput { providerId: string; defaultModel: string | null; }
+export interface AddKeyInput { providerId: string; label: string; apiKey: string; }
+export interface TestKeyInput { providerId: string; keyId: string; }
+export interface TestKeyResult { success: boolean; status: ProviderKeyStatus; testedAt: string; errorCode: string | null; userMessage: string | null; }
+export interface SetPrimaryKeyInput { providerId: string; keyId: string; }
+export interface DeleteKeyInput { providerId: string; keyId: string; }
