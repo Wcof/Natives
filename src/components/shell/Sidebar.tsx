@@ -614,23 +614,20 @@ export default function Sidebar({
           })}
         </div>
 
-        {/* Assistant section — fixed first-level section, same level as Quick Access */}
-        <div className="px-3 pb-1 pt-0 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
-          {t(locale, 'nav.assistant')}
+        {/* Assistant section — clickable header with inline [+] */}
+        <div className="mb-1 px-3">
+          <button
+            type="button"
+            onClick={() => selectNavigation('__assistant__', '__assistant__')}
+            className="drag-none flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors duration-150"
+          >
+            <Bot size={14} className="shrink-0 text-[var(--text-disabled)]" />
+            <span className="truncate">{t(locale, 'nav.assistant')}</span>
+          </button>
+          {activeNavigationId === '__assistant__' && (
+            <AssistantSidebarSection locale={locale} onNavigateAssistant={() => selectNavigation('__assistant__', '__assistant__')} />
+          )}
         </div>
-        {activeNavigationId === '__assistant__' ? (
-          <AssistantSidebarSection locale={locale} onNavigateAssistant={() => selectNavigation('__assistant__', '__assistant__')} />
-        ) : (
-          <div className="mb-3 flex flex-col gap-0.5 px-3">
-            <SidebarNavItem
-              isActive={false}
-              icon={<Bot size={15} />}
-              label={t(locale, 'nav.assistant')}
-              onClick={() => selectNavigation('__assistant__', '__assistant__')}
-              title={t(locale, 'nav.assistant')}
-            />
-          </div>
-        )}
 
         {/* Favorites section — same level as Quick Access */}
         <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
