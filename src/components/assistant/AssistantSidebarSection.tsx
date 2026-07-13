@@ -63,13 +63,13 @@ export default function AssistantSidebarSection({ locale, onNavigateAssistant }:
 
   // Build flat list of all conversation items for keyboard navigation
   const flatItems = useMemo(() => {
-    const items: Array<{ type: 'conversation'; id: string; groupId: string; ref: React.RefObject<HTMLButtonElement | null> }> = [];
+    const items: Array<{ type: 'conversation'; id: string; groupId: string }> = [];
     for (const group of navigation.groups) {
       if (collapsed.has(group.id)) continue;
       for (const conv of group.conversations) {
         const query = searchQuery.toLowerCase();
         if (query && !conv.title.toLowerCase().includes(query)) continue;
-        items.push({ type: 'conversation', id: conv.id, groupId: group.id, ref: React.createRef() });
+        items.push({ type: 'conversation', id: conv.id, groupId: group.id });
       }
     }
     return items;
@@ -100,8 +100,9 @@ export default function AssistantSidebarSection({ locale, onNavigateAssistant }:
   // Focus the searchable item when focusedIndex changes
   useEffect(() => {
     if (focusedIndex !== null && flatItems[focusedIndex]) {
-      const btn = flatItems[focusedIndex].ref.current;
-      (btn as HTMLElement | null)?.focus();
+      const item = flatItems[focusedIndex];
+      const btn = document.querySelector<HTMLButtonElement>(`[data-conv-id="${item.id}"]`);
+      btn?.focus();
     }
   }, [focusedIndex, flatItems]);
 
@@ -270,11 +271,7 @@ export default function AssistantSidebarSection({ locale, onNavigateAssistant }:
                   >
                     <button
                       type="button"
-                      ref={(el) => {
-                        if (idx !== undefined && flatItems[idx]) {
-                          (flatItems[idx].ref as React.MutableRefObject<HTMLButtonElement | null>).current = el;
-                        }
-                      }}
+                      data-conv-id={conversation.id}
                       onClick={() => { onNavigateAssistant(); actions?.selectConversation(conversation.id); }}
                       className="drag-none flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1 text-left text-[0.6875rem] leading-tight"
                     >
