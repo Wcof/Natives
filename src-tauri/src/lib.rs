@@ -422,6 +422,11 @@ pub fn run() {
             commands::provider::delete_provider,
             commands::provider::add_provider_key,
             commands::provider::delete_provider_key,
+            // Project （统一项目目录 API）
+            commands::project::project_list,
+            commands::project::project_register,
+            commands::project::project_open,
+            commands::project::project_remove,
             // Widget
             commands::widget::open_widget_window,
             commands::widget::theme_ready_signal,

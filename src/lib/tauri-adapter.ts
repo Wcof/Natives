@@ -682,6 +682,27 @@ const nativesAPI: NativesAPI = {
     rtkGain: () => cmd('rtk_gain'),
   },
 
+  // Project （统一项目目录 API）
+  project: {
+    list: () => cmd<Array<{ id: string; path: string; label: string; conversationCount: number }>>('project_list'),
+    register: (path: string) => cmd<{ id: string; path: string; label: string }>('project_register', { path }),
+    open: (id: string) => cmd<void>('project_open', { id }),
+    remove: (id: string) => cmd<void>('project_remove', { id }),
+  },
+
+  // Dialog （文件/目录选择，经 Tauri dialog plugin）
+  dialog: {
+    pickDirectory: async () => {
+      try {
+        const { open } = await import('@tauri-apps/plugin-dialog');
+        const selected = await open({ directory: true, multiple: false });
+        return selected as string | null;
+      } catch {
+        return null;
+      }
+    },
+  },
+
   // Provider
   provider: {
     list: () => cmd('list_providers'),
@@ -695,6 +716,22 @@ const nativesAPI: NativesAPI = {
       cmd('provider_test', { input: data }),
     testRaw: (data: { baseUrl: string; apiKey: string; model?: string }) =>
       cmd('test_provider_raw', { input: data }),
+    discoverModels: (data: { providerType: string; baseUrl: string; apiKey: string }) =>
+      cmd('provider_discover_models', { input: data }),
+    // Unified Provider Adapter API
+    unifiedList: () => cmd('assistant_provider_list'),
+    create: (input: { providerType: string; displayName: string; websiteUrl: string; baseUrl: string; defaultModel?: string | null; initialKey?: { label: string; apiKey: string } | null }) =>
+      cmd('assistant_provider_create', { input }),
+    updateDefaults: (input: { providerId: string; defaultModel?: string | null }) =>
+      cmd('assistant_provider_update_defaults', { input }),
+    addKeyUnified: (input: { providerId: string; label: string; apiKey: string }) =>
+      cmd('assistant_provider_add_key', { input }),
+    testKey: (input: { providerId: string; keyId: string }) =>
+      cmd<{ success: boolean; status: string; testedAt: string; errorCode: string | null; userMessage: string | null }>('assistant_provider_test_key', { input }),
+    setPrimaryKey: (input: { providerId: string; keyId: string }) =>
+      cmd('assistant_provider_set_primary_key', { input }),
+    deleteKeyUnified: (input: { providerId: string; keyId: string }) =>
+      cmd('assistant_provider_delete_key', { input }),
   },
 
   // Assistant
@@ -893,7 +930,9 @@ const nativesAPI: NativesAPI = {
           clientId: `natives-ui-${Date.now()}`,
           protocolVersion: daemonConfig.protocolVersion || '0.1.0',
         };
-        client = new DaemonClient(config);
+        // Pass cmd as invokeFn so DaemonClient goes through nativesAPI,
+        // not a direct import of @tauri-apps/api/core.
+        client = new DaemonClient(config, cmd);
       }
       return client;
     }
@@ -934,6 +973,9 @@ const nativesAPI: NativesAPI = {
 // Expose to window (replaces contextBridge.exposeInMainWorld)
 if (typeof window !== 'undefined') {
   (window as unknown as { nativesAPI: NativesAPI }).nativesAPI = nativesAPI;
+  // Expose cmd helper so DaemonClient and other modules can invoke
+  // Tauri commands without importing @tauri-apps/api/core directly.
+  (window as any).__nativesCmd = cmd;
 }
 
 export default nativesAPI;
