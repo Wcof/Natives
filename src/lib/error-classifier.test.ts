@@ -63,6 +63,41 @@ describe('ErrorClassifier', () => {
     assert.equal(err.category, 'PLUGIN_TIMEOUT');
   });
 
+  // ── New structured error object tests ──
+
+  it('should parse structured { code, message } objects for project errors', () => {
+    const err = classifyError({ code: 'PROJECT_NOT_FOUND', message: 'Project directory not found: /tmp/missing' });
+    assert.equal(err.category, 'PROJECT_NOT_FOUND');
+    assert.equal(err.retryable, false);
+    assert.ok(err.userMessage);
+  });
+
+  it('should parse PROJECT_PATH_REQUIRED from structured error', () => {
+    const err = classifyError({ code: 'PROJECT_PATH_REQUIRED', message: 'Project path is required' });
+    assert.equal(err.category, 'PROJECT_PATH_REQUIRED');
+  });
+
+  it('should parse PROJECT_NOT_DIRECTORY from structured error', () => {
+    const err = classifyError({ code: 'PROJECT_NOT_DIRECTORY', message: 'Not a directory: /tmp/file' });
+    assert.equal(err.category, 'PROJECT_NOT_DIRECTORY');
+  });
+
+  it('should parse PROJECT_REGISTER_FAILED from structured error', () => {
+    const err = classifyError({ code: 'PROJECT_REGISTER_FAILED', message: 'Failed to register project' });
+    assert.equal(err.category, 'PROJECT_REGISTER_FAILED');
+    assert.equal(err.retryable, true);
+  });
+
+  it('should handle DaemonError shape with technical_message', () => {
+    const err = classifyError({
+      code: 'PROJECT_NOT_FOUND',
+      category: 'Validation',
+      retryable: false,
+      technical_message: 'Project directory not found: /tmp/missing',
+    });
+    assert.equal(err.category, 'PROJECT_NOT_FOUND');
+  });
+
   // ── New pattern-matching tests ──
 
   it('should classify auth rejected (401)', () => {
@@ -115,5 +150,11 @@ describe('ErrorClassifier', () => {
     const err = classifyError('Terminal session exited');
     assert.ok(err.recoveryActions);
     assert.ok(err.recoveryActions!.some(a => a.action === 'new_session'));
+  });
+
+  it('should include diagnostic ID in unknown error fallback', () => {
+    const err = classifyError('Some truly random error message');
+    assert.equal(err.category, 'UNKNOWN');
+    assert.ok(err.userMessage.includes('Diagnostic ID'));
   });
 });

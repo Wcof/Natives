@@ -1,406 +1,984 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+// ─── New Assistant Workbench ─────────────────────────────
+//
+// Center conversation surface. Shell-level navigation and context panels consume
+// the same workspace snapshot through AssistantWorkspaceContext.
+
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { t, type Locale } from '@/i18n';
-import { useAssistantStream } from './hooks/useAssistantStream';
-import MessageList from './MessageList';
+import ConversationTimeline from './ConversationTimeline';
 import MessageInput from './MessageInput';
-import SessionList from './SessionList';
-import ModelSelectorDropdown from './ModelSelectorDropdown';
-import { classifyError } from '@/lib/error-classifier';
 import { useToast } from '@/components/ui/Toast';
+import { classifyError } from '@/lib/error-classifier';
+import { Loader2, WifiOff } from 'lucide-react';
+import {
+  classifyProviderReadiness,
+  selectAssistantModel,
+  type ProviderReadiness,
+} from '@/lib/provider-model-selection';
+import { readActiveProject, writeActiveProject } from '@/lib/active-project';
+import {
+  classifyAssistantSurface,
+  groupAssistantConversations,
+  projectCreationState,
+} from '@/lib/assistant-project-groups';
+import {
+  createAssistantStreamState,
+  reduceAssistantStreamEvent,
+  type AssistantStreamState,
+} from '@/lib/assistant-stream-state';
+import type { AssistantRunEvent } from '@/lib/assistant-types';
+import { useAssistantWorkspace, type AssistantWorkspaceActions } from './AssistantWorkspaceContext';
+import ModelSelectorDropdown from './ModelSelectorDropdown';
+
+// ─── Types ───────────────────────────────────────────────
+
+interface Conversation {
+  id: string;
+  mode: 'chat' | 'agent';
+  project_id?: string | null;
+  title: string;
+  provider_id: string;
+  model_id: string;
+  created_at: string;
+  updated_at: string;
+  archived_at?: string | null;
+}
+
+interface MessageBlock {
+  type: string;
+  index: number;
+  content: unknown;
+}
 
 interface Message {
   id: string;
-  session_id: string;
-  role: string;
-  content: string;
-  tool_calls?: string | null;
-  tool_result?: string | null;
+  conversation_id: string;
+  parent_message_id?: string | null;
+  role: 'system' | 'user' | 'assistant';
   status: string;
-  token_count: number;
+  input_tokens?: number;
+  output_tokens?: number;
   created_at: string;
-  sequence: number;
+  content_blocks: MessageBlock[];
 }
 
-interface Session {
+interface RunEvent {
+  sequence: number;
+  timestamp: string;
+  type: string;
+  payload: unknown;
+}
+
+interface Run {
   id: string;
-  project_id?: string | null;
-  title: string;
-  model_id: string;
+  conversation_id: string;
+  status: string;
   provider_id: string;
-  created_at: string;
-  updated_at: string;
-  message_count: number;
+  model_id: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  error_code?: string | null;
+  step_count?: number;
+}
+
+interface Artifact {
+  id: string;
+  label?: string;
+  path: string;
+  kind: string;
+  size: number;
 }
 
 interface ProviderInfo {
   id: string;
-  name: string;
-  presetName: string;
-  baseUrl: string;
-  keys: Array<{ id: string; label: string; maskedKey: string }>;
+  provider_type: string;
+  display_name: string;
+  api_base_url: string;
+  health_status: string;
+  default_model?: string | null;
+  has_active_key?: boolean;
+  models?: ModelInfo[];
 }
+
+interface ModelInfo {
+  id: string;
+  display_name?: string;
+  context_window?: number;
+  capabilities?: {
+    streaming?: boolean;
+    tool_calling?: boolean;
+    image_input?: boolean;
+    reasoning?: boolean;
+  };
+}
+
+// ─── Props ───────────────────────────────────────────────
 
 interface AssistantWorkbenchProps {
   locale: Locale;
 }
 
+// ─── Helpers ─────────────────────────────────────────────
+
+function v2call<T = unknown>(method: string, params?: unknown): Promise<T> {
+  if (!window.nativesAPI?.assistantV2) {
+    return Promise.reject(new Error('assistantV2 not available'));
+  }
+  return window.nativesAPI.assistantV2.request(method, params) as Promise<T>;
+}
+
+function mapBlockToContentBlock(block: MessageBlock): import('./blocks').ContentBlock {
+  const content = (block.content ?? {}) as Record<string, unknown>;
+
+  switch (block.type) {
+    case 'text':
+      return { type: 'text', text: String(content.text ?? content.content ?? '') };
+    case 'reasoning':
+      return { type: 'reasoning', text: String(content.text ?? content.reasoning ?? content.content ?? ''), signature: content.signature ? String(content.signature) : undefined };
+    case 'image':
+      return { type: 'image', mimeType: String(content.mime_type ?? 'image/png'), data: String(content.data ?? ''), altText: String(content.alt_text ?? '') };
+    case 'file_reference':
+      return { type: 'file_reference', path: String(content.path ?? content.file_path ?? ''), mimeType: String(content.mime_type ?? 'application/octet-stream'), size: Number(content.size ?? content.file_size ?? 0), sha256: content.sha256 ? String(content.sha256) : undefined };
+    case 'tool_call':
+      return {
+        type: 'tool_call',
+        id: String(content.tool_call_id ?? content.id ?? ''),
+        name: String(content.tool_name ?? content.name ?? ''),
+        input: content.input ?? content.arguments ?? {},
+        status: (content.status ?? 'pending') as 'pending' | 'running' | 'completed' | 'failed' | 'rejected',
+      };
+    case 'tool_result':
+      return {
+        type: 'tool_result',
+        toolCallId: String(content.tool_call_id ?? ''),
+        output: content.output ?? content.result,
+        isError: Boolean(content.is_error ?? false),
+        durationMs: content.duration_ms == null ? undefined : Number(content.duration_ms),
+      };
+    case 'citation':
+      return {
+        type: 'citation',
+        uri: String(content.uri ?? content.url ?? ''),
+        title: content.title ? String(content.title) : undefined,
+        text: content.text ? String(content.text) : undefined,
+      };
+    case 'error':
+      return {
+        type: 'error',
+        code: String(content.code ?? content.error_code ?? ''),
+        message: String(content.message ?? content.error_message ?? ''),
+        retryable: Boolean(content.retryable ?? false),
+      };
+    default:
+      return {
+        type: 'legacy',
+        raw: JSON.stringify(content, null, 2),
+        originalType: block.type,
+      };
+  }
+}
+
+function mapMessageToTimeline(msg: Message): import('./ConversationTimeline').Message {
+  return {
+    id: msg.id,
+    role: msg.role,
+    contentBlocks: (msg.content_blocks ?? []).map(mapBlockToContentBlock),
+    status: msg.status,
+    createdAt: msg.created_at,
+  };
+}
+
+// ─── Component ───────────────────────────────────────────
+
 export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) {
   const { toast } = useToast();
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const { publishNavigation, publishRuntime, registerActions } = useAssistantWorkspace();
+
+  // ── Connection state ──
+  const [daemonConnected, setDaemonConnected] = useState(false);
+  const [daemonError, setDaemonError] = useState<string | null>(null);
+  const [rendererOnly, setRendererOnly] = useState(false);
+
+  // ── Data state ──
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [noProject, setNoProject] = useState(false);
-  const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const persistedRef = useRef(false);
-  const [selectedModel, setSelectedModel] = useState('gpt-4o');
-  const [selectedProviderId, setSelectedProviderId] = useState('');
-  // Q3-B-1: 'no_provider' = 无 provider 禁用；'creating' = 会话创建中；null = 可用
-  const [inputDisabledReason, setInputDisabledReason] = useState<'no_provider' | 'creating' | null>('creating');
+  const [providerLoadError, setProviderLoadError] = useState<string | null>(null);
+  const [providerReadiness, setProviderReadiness] = useState<ProviderReadiness>('no_provider');
+  const [loadingConversations, setLoadingConversations] = useState(true);
+  const [loadingMessages, setLoadingMessages] = useState(false);
+  const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
 
-  const { streamState, resetStream } = useAssistantStream({
-    sessionId: activeSessionId,
-    locale,
-  });
+  // ── Run state (unified via AssistantStreamState) ──
+  const [streamState, setStreamState] = useState<AssistantStreamState | null>(null);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  // Derived from streamState, kept for backward compat with RunInspector & publishRuntime
+  const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
+  const [activeRunStartedAt, setActiveRunStartedAt] = useState<string | null>(null);
+  const [activeRunFinishedAt, setActiveRunFinishedAt] = useState<string | null>(null);
 
-  // Q2-A + Q3-B + Q3-B-1 + Q4-A: mount 时自动建草稿会话；无 provider 禁用输入并提示
+  // ── UI state ──
+  const [inputDisabledReason, setInputDisabledReason] = useState<'no_provider' | 'no_model' | 'creating' | null>(null);
+  const [isCreatingConversation, setIsCreatingConversation] = useState(false);
+
+  // Refs
+  const streamStateRef = useRef<AssistantStreamState | null>(null);
+  const latestRunIdRef = useRef<string | null>(null);
+  const activeRunIdRef = useRef<string | null>(null);
+  const eventsRef = useRef<RunEvent[]>([]);
+  const batchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const checkDaemonStatus = useCallback(async (): Promise<boolean> => {
+    try {
+      const assistantApi = window.nativesAPI?.assistantV2;
+      if (!assistantApi) {
+        setRendererOnly(true);
+        setDaemonConnected(false);
+        setDaemonError(t(locale, 'assistant.desktopEngineRequired'));
+        return false;
+      }
+      setRendererOnly(false);
+      const status = await assistantApi.getStatus();
+      const connected = status?.connected === true;
+      setDaemonConnected(connected);
+      setDaemonError(connected ? null : (status?.error ?? t(locale, 'assistant.daemonNotConnected')));
+      return connected;
+    } catch (error) {
+      setDaemonConnected(false);
+      setDaemonError(classifyError(error).userMessage);
+      return false;
+    }
+  }, [locale]);
+
+  // ── Check daemon status on mount ──
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      // 1. 加载项目路径 + 既有 sessions
-      const projPath = localStorage.getItem('natives:active_project_path') || null;
-      if (cancelled) return;
-      setActiveProjectPath(projPath);
-      setNoProject(!projPath);
-      loadSessions(projPath);
+    let retryTimer: number | undefined;
+    const startupTimer = window.setTimeout(() => {
+      void checkDaemonStatus().then(connected => {
+        if (cancelled || connected) return;
+        // The supervisor may still be completing its startup handshake.
+        retryTimer = window.setTimeout(() => {
+          if (!cancelled) void checkDaemonStatus();
+        }, 750);
+      });
+    }, 0);
 
-      // 2. Q3-B: 等 providers 就绪
-      const providersList = (await window.nativesAPI?.provider?.list?.() as ProviderInfo[] | undefined) ?? [];
-      if (cancelled) return;
-      setProviders(providersList);
-
-      // 3. Q3-B-1: 无 provider → 禁用输入 + 提示配置
-      if (providersList.length === 0) {
-        setInputDisabledReason('no_provider');
-        setLoading(false);
-        return;
-      }
-
-      // 4. 初始化默认模型/provider
-      if (!selectedProviderId) {
-        setSelectedProviderId(providersList[0]!.id);
-        const models = getPresetModels(providersList[0]!.presetName);
-        if (models.length > 0) setSelectedModel(models[0]!);
-      }
-
-      // 5. Q2-A: 自动建草稿会话（project_id = null = 全局草稿）
-      try {
-        const session = await window.nativesAPI?.assistant?.createSession({
-          projectId: null,
-          title: '',
-          modelId: selectedModel,
-          providerId: providersList[0]!.id,
-        }) as Session | undefined;
-        if (cancelled || !session) return;
-        setActiveSessionId(session.id);
-        setSessions((prev) => [session, ...prev]);
-        setInputDisabledReason(null);
-      } catch (err) {
-        toast(classifyError(err).userMessage, 'error');
-        setInputDisabledReason(null);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-    // Q4-A: 仅 mount 触发，不依赖 currentProjectId
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Scroll to bottom when messages or stream content changes
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamState.content]);
-
-  const getPresetModels = (presetName: string): string[] => {
-    const map: Record<string, string[]> = {
-      'openai': ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
-      'anthropic': ['claude-sonnet-4-20250514', 'claude-3-5-sonnet-latest', 'claude-3-opus-latest'],
-      'ollama': ['llama3', 'mistral', 'codellama', 'qwen2'],
+    return () => {
+      cancelled = true;
+      window.clearTimeout(startupTimer);
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-    return map[presetName] || ['gpt-4o'];
+  }, [checkDaemonStatus]);
+
+  // ── Load providers ──
+  const loadProviders = async () => {
+    try {
+      const result = await v2call<{ providers: ProviderInfo[] }>('provider.list');
+      const nextProviders = result.providers ?? [];
+      const readiness = classifyProviderReadiness(nextProviders);
+      setProviders(nextProviders);
+      setProviderReadiness(readiness);
+      setProviderLoadError(null);
+      setInputDisabledReason(readiness === 'ready' ? null : readiness);
+    } catch (error) {
+      const message = classifyError(error).userMessage;
+      setProviderLoadError(message);
+      toast(message, 'error');
+    }
   };
 
-  const loadSessions = async (projPath: string | null) => {
-    setLoading(true);
+  // ── Load conversations ──
+  const loadConversations = async () => {
+    setLoadingConversations(true);
     try {
-      const api = window.nativesAPI;
-      if (api?.assistant) {
-        const result = await api.assistant.listSessions({ projectId: projPath });
-        setSessions(result as Session[]);
-      }
+      const result = await v2call<{ conversations: Conversation[] }>('conversation.list', { include_archived: false });
+      setConversations(result.conversations ?? []);
     } catch (err) {
       toast(classifyError(err).userMessage, 'error');
     } finally {
-      setLoading(false);
+      setLoadingConversations(false);
     }
   };
 
-  const loadMessages = useCallback(async (sessionId: string) => {
+  // ── Load data when connected ──
+  useEffect(() => {
+    if (!daemonConnected) return;
+    let cancelled = false;
+
+    (async () => {
+      const projPath = await readActiveProject(window.nativesAPI);
+      if (cancelled) return;
+      setActiveProjectPath(projPath);
+      await loadProviders();
+      await loadConversations();
+    })();
+
+    return () => { cancelled = true; };
+    // These loaders intentionally run once for each daemon connection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [daemonConnected]);
+
+  // ── Load messages ──
+  const loadMessages = useCallback(async (conversationId: string) => {
+    setLoadingMessages(true);
     try {
-      const api = window.nativesAPI;
-      if (api?.assistant) {
-        const result = await api.assistant.getMessages(sessionId);
-        setMessages(result as Message[]);
-      }
+      const result = await v2call<{ messages: Message[] }>('conversation.getMessages', {
+        conversation_id: conversationId,
+      });
+      setMessages(result.messages ?? []);
     } catch (err) {
       toast(classifyError(err).userMessage, 'error');
+    } finally {
+      setLoadingMessages(false);
+    }
+  }, [toast]);
+
+  // ── Load artifacts ──
+  const loadArtifacts = useCallback(async (runId: string) => {
+    try {
+      const result = await v2call<{ artifacts: Artifact[] }>('artifact.list', { run_id: runId });
+      setArtifacts(result.artifacts ?? []);
+    } catch {
+      setArtifacts([]);
     }
   }, []);
 
-  const handleSessionSelect = useCallback(async (sessionId: string) => {
-    setActiveSessionId(sessionId);
-    persistedRef.current = false;
-    resetStream();
-    await loadMessages(sessionId);
-    // Restore session model settings
-    const session = sessions.find(s => s.id === sessionId);
-    if (session) {
-      setSelectedModel(session.model_id);
-      setSelectedProviderId(session.provider_id);
-    }
-  }, [loadMessages, resetStream, sessions]);
-
-  const handleNewSession = useCallback(async () => {
+  const loadConversationRun = useCallback(async (conversationId: string) => {
     try {
-      const api = window.nativesAPI;
-      if (api?.assistant) {
-        const session = await api.assistant.createSession({
-          projectId: activeProjectPath,
-          title: '',
-          modelId: selectedModel,
-          providerId: selectedProviderId,
+      const result = await v2call<{ runs: Run[] }>('run.list', { conversation_id: conversationId, limit: 1 });
+      const run = result.runs?.[0];
+      if (!run) return;
+      latestRunIdRef.current = run.id;
+      activeRunIdRef.current = run.id;
+      setActiveRunStartedAt(run.started_at ?? null);
+      setActiveRunFinishedAt(run.finished_at ?? null);
+      const [eventResult] = await Promise.all([
+        v2call<{ events: RunEvent[] }>('run.getEvents', { run_id: run.id, after_sequence: 0 }),
+        loadArtifacts(run.id),
+      ]);
+      const restoredEvents = eventResult.events ?? [];
+      let restored = createAssistantStreamState(run.id);
+      for (const event of restoredEvents) {
+        restored = reduceAssistantStreamEvent(restored, {
+          runId: run.id,
+          sequence: event.sequence,
+          timestamp: event.timestamp,
+          type: event.type as AssistantRunEvent['type'],
+          payload: (event.payload ?? {}) as Record<string, unknown>,
         });
-        setSessions((prev) => [session as Session, ...prev]);
-        setActiveSessionId((session as Session).id);
-        setMessages([]);
-        persistedRef.current = false;
-        resetStream();
       }
-    } catch (err) {
-      toast(classifyError(err).userMessage, 'error');
+      // Apply the persisted run status as the final state override
+      if (run.status === 'completed' || run.status === 'failed' || run.status === 'interrupted') {
+        restored = { ...restored, status: run.status };
+      }
+      streamStateRef.current = restored;
+      setStreamState(restored);
+      // Rebuild events from the restored state for the RunInspector
+      eventsRef.current = restoredEvents;
+      setRunEvents(restoredEvents);
+    } catch {
+      // No run for this conversation — that's fine
     }
-  }, [activeProjectPath, selectedModel, selectedProviderId, resetStream]);
+  }, [loadArtifacts]);
 
-  const handleDeleteSession = useCallback(async (sessionId: string) => {
-    try {
-      const api = window.nativesAPI;
-      if (api?.assistant) {
-        await api.assistant.deleteSession(sessionId);
-        setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-        if (activeSessionId === sessionId) {
-          setActiveSessionId(null);
-          setMessages([]);
+  // ── Handle stream event ──
+  const handleStreamEvent = useCallback((event: { runId: string; sequence: number; timestamp?: string; type: string; payload: unknown }) => {
+    const previous = streamStateRef.current?.runId === event.runId
+      ? streamStateRef.current
+      : createAssistantStreamState(event.runId);
+    const next = reduceAssistantStreamEvent(previous, {
+      runId: event.runId,
+      sequence: event.sequence,
+      timestamp: event.timestamp ?? new Date().toISOString(),
+      type: event.type as AssistantRunEvent['type'],
+      payload: (event.payload ?? {}) as Record<string, unknown>,
+    });
+    if (next === previous) return;
+    streamStateRef.current = next;
+
+    const runEvent: RunEvent = {
+      sequence: event.sequence,
+      timestamp: event.timestamp ?? new Date().toISOString(),
+      type: event.type,
+      payload: event.payload,
+    };
+
+    // Accumulate events for RunInspector
+    eventsRef.current = [...eventsRef.current, runEvent];
+
+    // Batch update with debounce to avoid thrashing
+    if (batchTimerRef.current) {
+      clearTimeout(batchTimerRef.current);
+    }
+    batchTimerRef.current = setTimeout(() => {
+      setStreamState({ ...streamStateRef.current! });
+      setRunEvents([...eventsRef.current]);
+    }, 30);
+
+    // Check if this is for the active run
+    if (event.runId === latestRunIdRef.current) {
+      const terminalEvent = event.type === 'completed' || event.type === 'failed' || event.type === 'interrupted';
+      if (!terminalEvent && event.type !== 'usage_updated') setIsStreaming(true);
+
+      if (terminalEvent) {
+        setIsStreaming(false);
+        setActiveRunFinishedAt(event.timestamp ?? new Date().toISOString());
+        // Reload messages to get the final persisted state
+        if (activeConversationId) {
+          void loadMessages(activeConversationId).finally(() => {
+            // Stream state remains as the live rendering until persisted messages arrive
+          });
         }
       }
-    } catch (err) {
-      toast(classifyError(err).userMessage, 'error');
     }
-  }, [activeSessionId]);
+  }, [activeConversationId, loadMessages]);
 
-  const handleModelSelect = useCallback(async (providerId: string, model: string) => {
-    setSelectedProviderId(providerId);
-    setSelectedModel(model);
-    if (activeSessionId) {
+  // The Tauri boundary intentionally owns the daemon socket. Until it exposes a
+  // push bridge, replay new persisted events with a cursor so no event is lost.
+  useEffect(() => {
+    const runId = activeRunIdRef.current;
+    if (!runId || !isStreaming) return;
+    let cancelled = false;
+    let cursor = eventsRef.current.at(-1)?.sequence ?? 0;
+
+    const poll = async () => {
       try {
-        await window.nativesAPI?.assistant?.updateSessionModel({
-          sessionId: activeSessionId,
-          modelId: model,
-          providerId,
+        const result = await v2call<{ events: RunEvent[] }>('run.getEvents', {
+          run_id: runId,
+          after_sequence: cursor,
         });
-        // Update local session cache
-        setSessions((prev) => prev.map(s =>
-          s.id === activeSessionId ? { ...s, model_id: model, provider_id: providerId } : s
-        ));
-      } catch (err) {
-        toast(classifyError(err).userMessage, 'error');
+        for (const event of result.events ?? []) {
+          if (cancelled || event.sequence <= cursor) continue;
+          cursor = event.sequence;
+          handleStreamEvent({ ...event, runId });
+        }
+      } catch {
+        // A transient daemon reconnect is recovered by the next replay poll.
       }
-    }
-  }, [activeSessionId]);
+    };
 
-  const handleSend = useCallback(async (content: string) => {
-    if (!activeSessionId) return;
+    void poll();
+    const timer = window.setInterval(poll, 300);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [isStreaming, handleStreamEvent]);
 
-    // Save user message
+  // ── Select conversation ──
+  const handleSelectConversation = useCallback(async (id: string) => {
+    setActiveConversationId(id);
+    streamStateRef.current = null;
+    setStreamState(null);
+    setIsStreaming(false);
+    setRunEvents([]);
+    setArtifacts([]);
+    eventsRef.current = [];
+    latestRunIdRef.current = null;
+    activeRunIdRef.current = null;
+    await Promise.all([loadMessages(id), loadConversationRun(id)]);
+  }, [loadConversationRun, loadMessages]);
+
+  // ── Create conversation ──
+  const handleCreateConversation = useCallback(async () => {
+    if (isCreatingConversation) return;
+    setIsCreatingConversation(true);
+    setInputDisabledReason('creating');
+
     try {
-      const api = window.nativesAPI;
-      if (api?.assistant) {
-        await api.assistant.saveMessage({
-          sessionId: activeSessionId,
-          role: 'user',
-          content,
-          status: 'done',
-          tokenCount: 0,
-        });
+      // Find default provider/model
+      const selection = selectAssistantModel(providers);
+      if (!selection) {
+        setInputDisabledReason(providerReadiness === 'no_model' ? 'no_model' : 'no_provider');
+        return;
+      }
+
+      const result = await v2call<Conversation>('conversation.create', {
+        mode: 'agent',
+        title: t(locale, 'assistant.newConversation'),
+        provider_id: selection.providerId,
+        model_id: selection.modelId,
+        project_id: activeProjectPath,
+      });
+
+      setConversations(prev => [{ ...result, project_id: activeProjectPath }, ...prev]);
+      setActiveConversationId(result.id);
+      setMessages([]);
+      setStreamState(null);
+      streamStateRef.current = null;
+      setIsStreaming(false);
+      setInputDisabledReason(null);
+    } catch (err) {
+      toast(classifyError(err).userMessage, 'error');
+      setInputDisabledReason(providerReadiness === 'ready' ? null : providerReadiness);
+    } finally {
+      setIsCreatingConversation(false);
+    }
+  }, [isCreatingConversation, providers, providerReadiness, activeProjectPath, locale, toast]);
+
+  const handleSelectModel = useCallback(async (providerId: string, modelId: string) => {
+    if (!activeConversationId) return;
+    try {
+      const result = await v2call<{ updated_at?: string }>('conversation.update_model', {
+        id: activeConversationId,
+        provider_id: providerId,
+        model_id: modelId,
+      });
+      setConversations(previous => previous.map(conversation =>
+        conversation.id === activeConversationId
+          ? {
+              ...conversation,
+              provider_id: providerId,
+              model_id: modelId,
+              updated_at: result.updated_at ?? conversation.updated_at,
+            }
+          : conversation,
+      ));
+    } catch (error) {
+      toast(classifyError(error).userMessage, 'error');
+    }
+  }, [activeConversationId, toast]);
+
+  // ── Archive conversation ──
+  const handleArchiveConversation = useCallback(async (id: string) => {
+    try {
+      await v2call('conversation.archive', { id });
+      setConversations(prev => prev.filter(c => c.id !== id));
+      if (activeConversationId === id) {
+        setActiveConversationId(null);
+        setMessages([]);
+        setStreamState(null);
+        streamStateRef.current = null;
       }
     } catch (err) {
       toast(classifyError(err).userMessage, 'error');
     }
+  }, [activeConversationId, toast]);
 
-    // Reload messages to show the new one
-    await loadMessages(activeSessionId);
-    persistedRef.current = false;
-
-    const model = selectedModel;
-
-    // Map messages to chat format
-    const chatMessages = [
-      ...messages.map((m) => ({
-        role: m.role === 'assistant' ? 'assistant' : m.role === 'user' ? 'user' : 'system',
-        content: m.content,
-      })),
-      { role: 'user' as const, content },
-    ];
-
-    // Start streaming via Rust proxy.
-    // P1 security: API key + base URL are resolved server-side from the session's
-    // provider_id — never passed from the frontend (CONTEXT.md L37/L40).
+  // ── Delete conversation ──
+  const handleDeleteConversation = useCallback(async (id: string) => {
     try {
-      await window.nativesAPI?.assistant?.streamChat?.({
-        sessionId: activeSessionId,
-        model,
-        messages: chatMessages,
+      await v2call('conversation.delete', { id });
+      setConversations(prev => prev.filter(c => c.id !== id));
+      if (activeConversationId === id) {
+        setActiveConversationId(null);
+        setMessages([]);
+        setStreamState(null);
+        streamStateRef.current = null;
+      }
+    } catch (err) {
+      toast(classifyError(err).userMessage, 'error');
+    }
+  }, [activeConversationId, toast]);
+
+  // ── Send message / Start run ──
+  const handleSend = useCallback(async (content: string) => {
+    if (!activeConversationId) return;
+
+    const conversation = conversations.find(c => c.id === activeConversationId);
+    if (!conversation) return;
+
+    const selection = selectAssistantModel(providers);
+    const providerId = conversation.provider_id || selection?.providerId || '';
+    const modelId = conversation.model_id || selection?.modelId || '';
+    if (!providerId || !modelId) {
+      setInputDisabledReason(providerReadiness === 'no_model' ? 'no_model' : 'no_provider');
+      return;
+    }
+
+    setIsStreaming(true);
+    streamStateRef.current = null;
+    setStreamState(null);
+    setRunEvents([]);
+    setArtifacts([]);
+    setActiveRunStartedAt(null);
+    setActiveRunFinishedAt(null);
+    eventsRef.current = [];
+
+    try {
+      // Start a new run
+      const run = await v2call<Run>('run.start', {
+        conversation_id: activeConversationId,
+        provider_id: providerId,
+        model_id: modelId,
+        content,
+      });
+
+      latestRunIdRef.current = run.id;
+      activeRunIdRef.current = run.id;
+      setActiveRunStartedAt(run.started_at ?? new Date().toISOString());
+      setActiveRunFinishedAt(null);
+      const newState = createAssistantStreamState(run.id);
+      streamStateRef.current = newState;
+      setStreamState(newState);
+
+      // Reload messages to show the user message
+      await loadMessages(activeConversationId);
+
+    } catch (err) {
+      setIsStreaming(false);
+      toast(classifyError(err).userMessage, 'error');
+    }
+  }, [activeConversationId, conversations, providers, providerReadiness, loadMessages, toast]);
+
+  // ── Stop / Cancel run ──
+  const handleStop = useCallback(async () => {
+    const runId = latestRunIdRef.current;
+    if (!runId) return;
+    const previousState = streamStateRef.current;
+    try {
+      setStreamState(previous => {
+        if (!previous) return previous;
+        const next = { ...previous, status: 'cancelling' as const };
+        streamStateRef.current = next;
+        return next;
+      });
+      await v2call('run.cancel', { id: runId });
+      // Keep event replay active until the daemon publishes `interrupted`.
+    } catch (error) {
+      if (previousState) {
+        streamStateRef.current = previousState;
+        setStreamState(previousState);
+      }
+      toast(classifyError(error).userMessage, 'error');
+    }
+  }, [toast]);
+
+  // ── Retry run ──
+  const handleRetry = useCallback(async () => {
+    const runId = latestRunIdRef.current;
+    if (!runId) return;
+    const conversation = conversations.find(item => item.id === activeConversationId);
+    if (!conversation?.provider_id || !conversation.model_id) return;
+    const lastUserMessage = [...messages].reverse().find(message => message.role === 'user');
+    if (!lastUserMessage) return;
+    try {
+      const run = await v2call<Run>('run.start', {
+        conversation_id: activeConversationId,
+        provider_id: conversation.provider_id,
+        model_id: conversation.model_id,
+        trigger_message_id: lastUserMessage.id,
+      });
+      latestRunIdRef.current = run.id;
+      activeRunIdRef.current = run.id;
+      setActiveRunStartedAt(run.started_at ?? new Date().toISOString());
+      setActiveRunFinishedAt(null);
+      setIsStreaming(true);
+      eventsRef.current = [];
+      setRunEvents([]);
+      setArtifacts([]);
+      const newState = createAssistantStreamState(run.id);
+      streamStateRef.current = newState;
+      setStreamState(newState);
+    } catch (err) {
+      toast(classifyError(err).userMessage, 'error');
+    }
+  }, [activeConversationId, conversations, messages, toast]);
+
+  // ── Permission response ──
+  const handlePermissionResponse = useCallback(async (requestId: string, approved: boolean, scope?: string) => {
+    try {
+      await v2call('permission.respond', {
+        request_id: requestId,
+        approved,
+        scope: scope ?? 'once',
       });
     } catch (err) {
       toast(classifyError(err).userMessage, 'error');
     }
-  }, [activeSessionId, messages, loadMessages, selectedModel]);
+  }, [toast]);
 
-  const handleStop = useCallback(async () => {
-    if (activeSessionId) {
-      try {
-        await window.nativesAPI?.assistant?.cancelStream?.(activeSessionId);
-      } catch { /* ignore */ }
+  // ── Update conversation title ──
+  const handleUpdateTitle = useCallback(async (id: string, title: string) => {
+    try {
+      await v2call('conversation.update', { id, title });
+      setConversations(prev => prev.map(c =>
+        c.id === id ? { ...c, title } : c
+      ));
+    } catch {
+      // Silently fail
     }
-  }, [activeSessionId]);
+  }, []);
 
-  // ── Message persistence: save assistant message when stream is done ──
+  // ── Refresh ──
+  const handleRefresh = useCallback(async () => {
+    const connected = await checkDaemonStatus();
+    if (!connected) return;
+    await loadConversations();
+    await loadProviders();
+    if (activeConversationId) {
+      await loadMessages(activeConversationId);
+    }
+  }, [activeConversationId, checkDaemonStatus, loadMessages]);
+
+  const handleSelectProject = useCallback((projectPath: string | null) => {
+    setActiveProjectPath(projectPath);
+    if (projectPath) {
+      void writeActiveProject(window.nativesAPI, projectPath).catch(error => {
+        toast(classifyError(error).userMessage, 'error');
+      });
+    } else {
+      // Clear active project selection (unclassified context)
+      void writeActiveProject(window.nativesAPI, null).catch(error => {
+        toast(classifyError(error).userMessage, 'error');
+      });
+    }
+  }, [toast]);
+
+  const handlePickProject = useCallback(async () => {
+    try {
+      const projectPath = await window.nativesAPI?.dialog?.pickDirectory();
+      // User cancelled directory selection — no error
+      if (!projectPath) return;
+
+      // Register project with daemon
+      const result = await v2call<{ canonical_path: string }>('project.register', { path: projectPath });
+      handleSelectProject(result.canonical_path);
+      await loadConversations();
+    } catch (error) {
+      const classified = classifyError(error);
+      // Do not show toast for cancellation — it's not an error
+      if (classified.category === 'PROJECT_PATH_REQUIRED') return;
+      toast(classified.userMessage, 'error');
+    }
+  }, [handleSelectProject, loadConversations, toast]);
+
+  // ── Determine active conversation ──
+  const activeConversation = conversations.find(c => c.id === activeConversationId);
+  const projectGroups = useMemo(() => {
+    const registeredProjects = activeProjectPath ? [activeProjectPath] : [];
+    const groups = groupAssistantConversations(
+      conversations.map(conversation => ({
+        id: conversation.id,
+        title: conversation.title,
+        mode: conversation.mode,
+        projectId: conversation.project_id ?? '',
+        updatedAt: conversation.updated_at,
+      })),
+      registeredProjects,
+      t(locale, 'assistant.unassignedProject'),
+    );
+    return groups;
+  }, [activeProjectPath, conversations, locale]);
+  const creationState = projectCreationState({
+    engine: daemonConnected ? 'ready' : (daemonError ? 'unavailable' : 'connecting'),
+    providerReadiness,
+  });
+  const surfaceState = classifyAssistantSurface({
+    bridge: !rendererOnly,
+    engine: daemonConnected ? 'ready' : (daemonError ? 'failed' : 'connecting'),
+    provider: providerReadiness,
+  });
+  const assistantEvents = useMemo<AssistantRunEvent[]>(() => {
+    const runId = streamState?.runId ?? activeRunIdRef.current ?? '';
+    return runEvents.map(event => ({
+      runId,
+      sequence: event.sequence,
+      timestamp: event.timestamp,
+      type: event.type as AssistantRunEvent['type'],
+      payload: (event.payload ?? {}) as Record<string, unknown>,
+    }));
+  }, [streamState?.runId, runEvents]);
+  const fileChanges = useMemo(() => streamState?.fileChanges ?? [], [streamState?.fileChanges]);
+  const workspaceActions = useMemo<AssistantWorkspaceActions>(() => ({
+    selectConversation: id => { void handleSelectConversation(id); },
+    selectProject: handleSelectProject,
+    addProjectFolder: () => { void handlePickProject(); },
+    pickProject: () => { void handlePickProject(); },
+    createConversation: (_mode?: 'chat' | 'agent') => { void handleCreateConversation(); },
+    renameConversation: (id, title) => { void handleUpdateTitle(id, title); },
+    archiveConversation: id => { void handleArchiveConversation(id); },
+    deleteConversation: id => { void handleDeleteConversation(id); },
+    retryRun: () => { void handleRetry(); },
+    respondPermission: (requestId, approved) => { void handlePermissionResponse(requestId, approved); },
+  }), [handleArchiveConversation, handleCreateConversation, handleDeleteConversation, handlePermissionResponse, handlePickProject, handleRetry, handleSelectConversation, handleSelectProject, handleUpdateTitle]);
+
   useEffect(() => {
-    if (streamState.done && !persistedRef.current && activeSessionId && (streamState.content || streamState.toolCall)) {
-      persistedRef.current = true;
-      const saveAndReload = async () => {
-        try {
-          // Wrap content with <think> tags if reasoning exists
-          const contentToSave = streamState.reasoning
-            ? `<think>${streamState.reasoning}</think>\n${streamState.content}`
-            : streamState.content;
+    registerActions(workspaceActions);
+    return () => registerActions(null);
+  }, [registerActions, workspaceActions]);
 
-          await window.nativesAPI?.assistant?.saveMessage({
-            sessionId: activeSessionId,
-            role: 'assistant',
-            content: contentToSave,
-            status: 'done',
-            tokenCount: 0,
-            toolCalls: streamState.toolCall || undefined,
-          });
-        } catch (err) {
-          toast(classifyError(err).userMessage, 'error');
-        }
-        await loadMessages(activeSessionId);
-        // Reset stream state after persistence to prevent re-trigger
-        resetStream();
-      };
-      saveAndReload();
-    }
-  }, [streamState.done, streamState.content, streamState.toolCall, streamState.reasoning, activeSessionId, loadMessages]);
+  useEffect(() => {
+    publishNavigation({
+      groups: projectGroups,
+      selectedId: activeConversationId,
+      activeProjectPath,
+      loading: loadingConversations,
+      creationState,
+      isCreatingConversation,
+      creatingMode: isCreatingConversation ? 'agent' : null,
+    });
+  }, [activeConversationId, activeProjectPath, isCreatingConversation, creationState, loadingConversations, projectGroups, publishNavigation]);
 
+  useEffect(() => {
+    publishRuntime({
+      conversationId: activeConversationId,
+      conversationTitle: activeConversation?.title ?? null,
+      conversationMode: activeConversation?.mode ?? 'chat',
+      providerId: activeConversation?.provider_id ?? '',
+      modelId: activeConversation?.model_id ?? '',
+      runId: streamState?.runId ?? null,
+      runStatus: streamState?.status ?? 'idle',
+      runStartedAt: activeRunStartedAt,
+      runFinishedAt: activeRunFinishedAt,
+      events: assistantEvents,
+      fileChanges,
+      artifacts,
+      usage: streamState?.usage ?? { inputTokens: null, outputTokens: null, reasoningTokens: null },
+    });
+  }, [activeConversation, activeConversationId, activeRunFinishedAt, activeRunStartedAt, streamState, artifacts, assistantEvents, fileChanges, publishRuntime]);
+
+  // ── Map messages to timeline format ──
+  const timelineMessages = messages.map(mapMessageToTimeline);
+
+  // Add streaming blocks as a pending message if streaming
+  const streamingBlocks = streamState?.blocks ?? [];
+  const activeRunStatus = streamState?.status ?? 'idle';
+  const timelineWithStreaming = streamingBlocks.length > 0 && activeRunStatus !== 'completed'
+    ? [
+        ...timelineMessages,
+        {
+          id: 'streaming',
+          role: 'assistant' as const,
+          contentBlocks: streamingBlocks,
+          status: isStreaming ? 'streaming' : activeRunStatus,
+          createdAt: new Date().toISOString(),
+        },
+      ]
+    : timelineMessages;
+
+  // ── Render: daemon offline ──
+  if (!daemonConnected && !daemonError) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="flex flex-col items-center gap-3 text-[var(--text-disabled)]">
+          <Loader2 size={24} className="animate-spin" />
+          <span className="text-sm">{t(locale, 'assistant.connecting')}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (daemonError) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="flex flex-col items-center gap-3 max-w-sm text-center">
+          <WifiOff size={32} className="text-[var(--text-disabled)]" />
+          <div className="text-sm font-medium text-[var(--text-secondary)]">
+            {surfaceState === 'renderer_only'
+              ? t(locale, 'assistant.desktopEngineRequiredTitle')
+              : t(locale, 'assistant.assistantUnavailable')}
+          </div>
+          <div className="text-xs text-[var(--text-disabled)]">{daemonError}</div>
+          <button
+            onClick={handleRefresh}
+            className="px-4 py-1.5 rounded-lg bg-[var(--primary-soft)] text-[var(--primary)] text-sm font-medium hover:opacity-80 transition-opacity"
+          >
+            {surfaceState === 'renderer_only' ? t(locale, 'assistant.openDesktopApp') : t(locale, 'assistant.retry')}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Render: main layout ──
   return (
     <div className="flex h-full w-full" style={{ fontFamily: 'inherit' }}>
-      {/* Session list sidebar */}
-      <div className="w-56 shrink-0 border-r border-[var(--border-subtle)] flex flex-col">
-        <SessionList
-          sessions={sessions}
-          activeSessionId={activeSessionId}
-          onSessionSelect={handleSessionSelect}
-          onSessionDelete={handleDeleteSession}
-          onNewSession={handleNewSession}
-          locale={locale}
-          loading={loading}
-        />
-      </div>
-
-      {/* Main chat area */}
+      {/* ── Center Panel: Conversation Timeline ── */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Chat Header Bar */}
-        <div className="shrink-0 border-b border-[var(--border-subtle)] px-4 py-2 flex items-center gap-3">
-          {activeSessionId && (
-            <>
-              <div className="flex-1 min-w-0">
-                <input
-                  type="text"
-                  className="w-full bg-transparent text-sm font-medium text-[var(--text)] border-none outline-none placeholder-[var(--text-disabled)]"
-                  value={sessions.find(s => s.id === activeSessionId)?.title || ''}
-                  placeholder={t(locale, 'aiWorkbench.sessionTitlePlaceholder')}
-                  onChange={(e) => {
-                    const newTitle = e.target.value;
-                    setSessions((prev) => prev.map(s =>
-                      s.id === activeSessionId ? { ...s, title: newTitle } : s
-                    ));
-                  }}
-                  onBlur={(e) => {
-                    const title = e.target.value.trim();
-                    if (title && activeSessionId) {
-                      window.nativesAPI?.assistant?.updateSessionTitle({
-                        sessionId: activeSessionId,
-                        title,
-                      }).catch(() => {});
-                    }
-                  }}
-                />
-              </div>
-              <div className="shrink-0">
-                <ModelSelectorDropdown
-                  providers={providers}
-                  selectedProviderId={selectedProviderId}
-                  selectedModel={selectedModel}
-                  onSelect={handleModelSelect}
-                  locale={locale}
-                />
-              </div>
-            </>
-          )}
-          {noProject && activeSessionId && (
-            <span className="text-[0.625rem] text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded whitespace-nowrap">
-              {locale.startsWith('zh') ? '无项目上下文' : 'No Project Context'}
-            </span>
-          )}
-        </div>
+        {/* Header */}
+        {activeConversation && (
+          <div className="shrink-0 border-b border-[var(--border-subtle)] px-4 py-2 flex items-center gap-3">
+            <div className="flex-1 min-w-0">
+              <input
+                type="text"
+                className="w-full bg-transparent text-sm font-medium text-[var(--text-primary)] border-none outline-none placeholder-[var(--text-disabled)]"
+                value={activeConversation.title}
+                placeholder={t(locale, 'assistant.conversationTitle')}
+                onChange={(e) => {
+                  setConversations(prev => prev.map(c =>
+                    c.id === activeConversationId ? { ...c, title: e.target.value } : c
+                  ));
+                }}
+                onBlur={(e) => {
+                  const title = e.target.value.trim();
+                  if (title && activeConversationId) {
+                    handleUpdateTitle(activeConversationId, title);
+                  }
+                }}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <ModelSelectorDropdown
+                providers={providers}
+                selectedProviderId={activeConversation.provider_id}
+                selectedModel={activeConversation.model_id}
+                onSelect={handleSelectModel}
+                locale={locale}
+              />
+            </div>
+          </div>
+        )}
 
-        <MessageList
-          messages={messages}
-          locale={locale}
-          streamingContent={streamState.content}
-          streamingToolCall={streamState.toolCall}
-          streamingReasoning={streamState.reasoning}
-          isStreaming={streamState.isStreaming}
-        />
-        <div ref={messagesEndRef} />
-        <div className="shrink-0">
-          <MessageInput
-            locale={locale}
-            onSend={handleSend}
-            onStop={handleStop}
-            isStreaming={streamState.isStreaming}
-            disabled={!activeSessionId}
-            noProject={noProject}
-            inputDisabledReason={inputDisabledReason}
-          />
-        </div>
+        {/* Empty state when no conversation selected */}
+        {!activeConversationId && (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center">
+              <div className="text-sm text-[var(--text-disabled)] mb-2">
+                {t(locale, 'assistant.selectConversation')}
+              </div>
+              <div className="flex gap-2 justify-center">
+                <button
+                  onClick={handleCreateConversation}
+                  disabled={creationState !== 'ready' || isCreatingConversation}
+                  className="px-4 py-2 rounded-lg bg-[var(--primary-soft)] text-[var(--primary)] text-sm font-medium hover:opacity-80 transition-opacity disabled:opacity-40"
+                >
+                  {t(locale, 'assistant.newConversation')}
+                </button>
+              </div>
+              {creationState !== 'ready' && (
+                <div className="mt-3 text-xs text-[var(--text-disabled)]">
+                  {providerLoadError ?? (providerReadiness === 'no_model'
+                  ? t(locale, 'assistant.noModelHint')
+                  : t(locale, 'assistant.configureProvider'))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Timeline */}
+        {activeConversationId && (
+          <>
+            <div className="flex-1 overflow-y-auto">
+              <ConversationTimeline
+                messages={timelineWithStreaming}
+                loading={loadingMessages}
+                locale={locale}
+                streaming={isStreaming}
+              />
+            </div>
+
+            {/* Input area */}
+            <div className="shrink-0">
+              <MessageInput
+                locale={locale}
+                onSend={handleSend}
+                onStop={handleStop}
+                isStreaming={isStreaming}
+                disabled={!activeConversationId}
+                inputDisabledReason={inputDisabledReason}
+              />
+            </div>
+          </>
+        )}
       </div>
+
     </div>
   );
 }

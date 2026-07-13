@@ -26,6 +26,11 @@ export type ErrorCategory =
   | 'IPC_HANDLER_MISSING'
   | 'FILE_WRITE_FAILED'
   | 'FILE_READ_FAILED'
+  | 'MUTATION_APPLIED_REFRESH_FAILED'
+  | 'PROJECT_PATH_REQUIRED'
+  | 'PROJECT_NOT_FOUND'
+  | 'PROJECT_NOT_DIRECTORY'
+  | 'PROJECT_REGISTER_FAILED'
   | 'UNKNOWN';
 
 /** A concrete action the user can take to recover from an error */
@@ -66,6 +71,47 @@ interface ErrorPattern {
 }
 
 const ERROR_PATTERNS: ErrorPattern[] = [
+  {
+    category: 'MUTATION_APPLIED_REFRESH_FAILED',
+    patterns: ['mutation applied on branch', 'mutation_succeeded_status_refresh_failed'],
+    userMessage: () => 'The branch changed, but its latest status could not be loaded',
+    actionHint: () => 'Refresh the Git status. Do not repeat the branch switch.',
+    retryable: true,
+  },
+  // ── Project errors (must be before TERMINAL_SPAWN_FAILED to avoid 'not found' clash) ──
+  {
+    category: 'PROJECT_PATH_REQUIRED',
+    patterns: ['PROJECT_PATH_REQUIRED', 'project path is required'],
+    codes: ['PROJECT_PATH_REQUIRED'],
+    userMessage: () => 'Project path is required',
+    actionHint: () => 'Please provide a valid project folder path.',
+    retryable: false,
+  },
+  {
+    category: 'PROJECT_NOT_FOUND',
+    patterns: ['PROJECT_NOT_FOUND', 'project directory not found', 'project path must exist'],
+    codes: ['PROJECT_NOT_FOUND'],
+    userMessage: () => 'Project directory not found',
+    actionHint: () => 'The project folder may have been moved or deleted. Please select a valid folder.',
+    retryable: false,
+  },
+  {
+    category: 'PROJECT_NOT_DIRECTORY',
+    patterns: ['PROJECT_NOT_DIRECTORY', 'project path must be a directory'],
+    codes: ['PROJECT_NOT_DIRECTORY'],
+    userMessage: () => 'Selected path is not a directory',
+    actionHint: () => 'Please select a folder, not a file.',
+    retryable: false,
+  },
+  {
+    category: 'PROJECT_REGISTER_FAILED',
+    patterns: ['PROJECT_REGISTER_FAILED', 'project register', 'failed to register project'],
+    codes: ['PROJECT_REGISTER_FAILED'],
+    userMessage: () => 'Failed to register project',
+    actionHint: () => 'The project could not be registered. Check permissions and try again.',
+    retryable: true,
+  },
+
   // ── Terminal spawn failed ──
   {
     category: 'TERMINAL_SPAWN_FAILED',
@@ -101,6 +147,15 @@ const ERROR_PATTERNS: ErrorPattern[] = [
     patterns: [/install.*fail/i, /manifest.*invalid/i, /module.*corrupt/i],
     userMessage: () => 'Module installation failed',
     actionHint: () => 'Check that the module has a valid manifest.json and try again.',
+    retryable: true,
+  },
+
+  // ── Assistant daemon unavailable ──
+  {
+    category: 'NETWORK_ERROR',
+    patterns: [/daemon.*not connected/i, /not connected to daemon/i, /failed to connect to daemon/i, /assistant rpc failed/i],
+    userMessage: () => 'Assistant service is unavailable',
+    actionHint: () => 'Restart the application and try again.',
     retryable: true,
   },
 
@@ -282,20 +337,44 @@ function buildRecoveryActions(category: ErrorCategory): RecoveryAction[] {
  * Classify an error into a structured error with user-facing message,
  * actionable hints, and recovery action buttons.
  */
+/**
+ * Extract an error code from a structured daemon error or an Error instance.
+ */
+function extractErrorCode(error: unknown): string | undefined {
+  if (error instanceof Error) return (error as NodeJS.ErrnoException).code;
+  if (typeof error === 'object' && error !== null) {
+    const obj = error as Record<string, unknown>;
+    if (typeof obj.code === 'string') return obj.code;
+  }
+  return undefined;
+}
+
+/**
+ * Extract a user-facing message from a structured daemon error.
+ */
+function extractErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null) {
+    const obj = error as Record<string, unknown>;
+    if (typeof obj.message === 'string' && obj.message) return obj.message;
+    if (typeof obj.technical_message === 'string' && obj.technical_message) return obj.technical_message;
+  }
+  return String(error);
+}
+
 export function classifyError(error: unknown, moduleIdOrCtx?: string | ErrorContext): ClassifiedError {
   const ctx: ErrorContext = typeof moduleIdOrCtx === 'string'
     ? { error, moduleId: moduleIdOrCtx }
     : moduleIdOrCtx || { error };
 
-  const rawMessage = ctx.error instanceof Error
-    ? ctx.error.message
-    : typeof ctx.error === 'object' && ctx.error !== null
-      ? JSON.stringify(ctx.error)
-      : String(ctx.error);
-
-  const errorCode = ctx.error instanceof Error ? (ctx.error as NodeJS.ErrnoException).code : undefined;
+  // Support structured errors: `{ code, message }`, `{ code, technical_message }`
+  const errorCode = extractErrorCode(ctx.error);
+  const rawMessage = extractErrorMessage(ctx.error);
   const stderrContent = ctx.stderr || '';
   const searchText = `${rawMessage}\n${stderrContent}`.toLowerCase();
+
+  // Add the error code to the search text for pattern matching
+  const searchTextWithCode = errorCode ? `${searchText}\n${errorCode.toLowerCase()}` : searchText;
 
   for (const pattern of ERROR_PATTERNS) {
     // Check error code first (most specific)
@@ -305,8 +384,8 @@ export function classifyError(error: unknown, moduleIdOrCtx?: string | ErrorCont
 
     // Check patterns against combined text
     const matched = pattern.patterns.some(p => {
-      if (typeof p === 'string') return searchText.includes(p.toLowerCase());
-      return p.test(searchText);
+      if (typeof p === 'string') return searchTextWithCode.includes(p.toLowerCase());
+      return p.test(searchTextWithCode);
     });
 
     if (matched) {
@@ -314,11 +393,14 @@ export function classifyError(error: unknown, moduleIdOrCtx?: string | ErrorCont
     }
   }
 
-  // Fallback
+  // Fallback with diagnostic code for unknown errors
+  const diagnosticId = typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID().slice(0, 8)
+    : Math.random().toString(36).slice(2, 10);
   return {
     category: 'UNKNOWN',
-    userMessage: 'An unexpected error occurred',
-    actionHint: 'Try restarting the application. If the problem persists, report the issue.',
+    userMessage: `An unexpected error occurred. Diagnostic ID: ${diagnosticId}. Please try again or contact support.`,
+    actionHint: 'Try restarting the application. If the problem persists, report the issue with the diagnostic ID.',
     retryable: false,
     rawMessage,
     moduleId: ctx.moduleId,
