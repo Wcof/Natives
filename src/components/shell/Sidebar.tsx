@@ -17,6 +17,7 @@ import {
   LayoutDashboard,
   Minus,
   Monitor,
+  Plus,
   Search,
   Settings,
   Square,
