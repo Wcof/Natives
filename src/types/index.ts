@@ -218,6 +218,15 @@ declare global {
         deleteKey: (id: string) => Promise<void>;
         test: (data: { providerId: string; keyId: string; model?: string }) => Promise<{ success: boolean; error?: string }>;
         testRaw: (data: { baseUrl: string; apiKey: string; model?: string }) => Promise<{ success: boolean; error?: string }>;
+        discoverModels: (data: { providerType: string; baseUrl: string; apiKey: string }) => Promise<Array<{ id: string; displayName?: string }>>;
+        // Unified methods
+        unifiedList: () => Promise<unknown>;
+        create: (input: { providerType: string; displayName: string; websiteUrl: string; baseUrl: string; defaultModel?: string | null; initialKey?: { label: string; apiKey: string } | null }) => Promise<unknown>;
+        updateDefaults: (input: { providerId: string; defaultModel?: string | null }) => Promise<unknown>;
+        addKeyUnified: (input: { providerId: string; label: string; apiKey: string }) => Promise<unknown>;
+        testKey: (input: { providerId: string; keyId: string }) => Promise<{ success: boolean; status: string; testedAt: string; errorCode: string | null; userMessage: string | null }>;
+        setPrimaryKey: (input: { providerId: string; keyId: string }) => Promise<unknown>;
+        deleteKeyUnified: (input: { providerId: string; keyId: string }) => Promise<void>;
       };
       assistant: {
         listSessions: (params: { projectId: string | null }) => Promise<unknown>;
