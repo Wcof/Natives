@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "src-tauri",
-    "src-tauri/natives-protocol",
     "crates/assistant-protocol",
     "crates/agent-core",
     "crates/provider-adapters",
