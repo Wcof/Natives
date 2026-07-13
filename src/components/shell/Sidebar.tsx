@@ -10,6 +10,7 @@ import type {
 import type { LucideIcon } from 'lucide-react';
 import {
   Bell,
+  Bot,
   Download,
   FileText,
   Layers,
@@ -26,6 +27,7 @@ import {
 import * as LucideIcons from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import { BUILTIN_TOOLS, seedAllBuiltinTools } from '@/lib/builtin-tools';
+import AssistantSidebarSection from '@/components/assistant/AssistantSidebarSection';
 
 interface ModuleManifest {
   id: string;
@@ -100,6 +102,7 @@ function getNavigationId(activeModuleId?: string): string | null {
   if (activeModuleId === 'dashboard' || activeModuleId === '__dashboard__') return '__dashboard__';
   if (activeModuleId === 'settings' || activeModuleId === '__settings__') return '__settings__';
   if (activeModuleId === 'workshop' || activeModuleId === '__workshop__') return '__workshop__';
+  if (activeModuleId === 'assistant' || activeModuleId === '__assistant__') return '__assistant__';
   if (activeModuleId.startsWith('module:')) return activeModuleId;
   if (activeModuleId.startsWith('__files__:')) return activeModuleId;
   if (activeModuleId.startsWith('builtin:')) return activeModuleId;
@@ -611,25 +614,23 @@ export default function Sidebar({
           })}
         </div>
 
-        {/* Assistant entry — fixed first-level menu item, same level as Quick Access */}
-        <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
+        {/* Assistant section — fixed first-level section, same level as Quick Access */}
+        <div className="px-3 pb-1 pt-0 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
           {t(locale, 'nav.assistant')}
         </div>
-        <div className="mb-3 flex flex-col gap-0.5 px-3">
-          <SidebarNavItem
-            isActive={activeNavigationId === '__assistant__'}
-            icon={
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
-                <path d="M12 2L2 7l10 5 10-5-10-5z" />
-                <path d="M2 17l10 5 10-5" />
-                <path d="M2 12l10 5 10-5" />
-              </svg>
-            }
-            label={t(locale, 'nav.assistant')}
-            onClick={() => selectNavigation('__assistant__', '__assistant__')}
-            title={t(locale, 'nav.assistant')}
-          />
-        </div>
+        {activeNavigationId === '__assistant__' ? (
+          <AssistantSidebarSection locale={locale} onNavigateAssistant={() => selectNavigation('__assistant__', '__assistant__')} />
+        ) : (
+          <div className="mb-3 flex flex-col gap-0.5 px-3">
+            <SidebarNavItem
+              isActive={false}
+              icon={<Bot size={15} />}
+              label={t(locale, 'nav.assistant')}
+              onClick={() => selectNavigation('__assistant__', '__assistant__')}
+              title={t(locale, 'nav.assistant')}
+            />
+          </div>
+        )}
 
         {/* Favorites section — same level as Quick Access */}
         <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
