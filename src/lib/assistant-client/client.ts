@@ -54,6 +54,13 @@ export class DaemonClient {
   }
 
   private async defaultInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
+    // Go through window.nativesAPI instead of importing @tauri-apps/api/core directly.
+    // The cmd helper in tauri-adapter.ts wraps invoke with error mapping — but to
+    // avoid circular imports we access it via the global adapter.
+    if (typeof window !== 'undefined' && (window as any).__nativesCmd) {
+      return (window as any).__nativesCmd(cmd, args);
+    }
+    // Fallback for tests: import directly
     const { invoke } = await import('@tauri-apps/api/core');
     return invoke(cmd, args);
   }

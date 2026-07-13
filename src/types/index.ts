@@ -210,6 +210,15 @@ declare global {
         ghosttyLaunch: () => Promise<void>;
         ghosttyVtAvailable: () => Promise<boolean>;
       };
+      project: {
+        list: () => Promise<Array<{ id: string; path: string; label: string; conversationCount: number }>>;
+        register: (path: string) => Promise<{ id: string; path: string; label: string }>;
+        open: (id: string) => Promise<void>;
+        remove: (id: string) => Promise<void>;
+      };
+      dialog: {
+        pickDirectory: () => Promise<string | null>;
+      };
       provider: {
         list: () => Promise<unknown>;
         add: (data: { presetName: string; name: string; websiteUrl: string; baseUrl: string; keys: { label: string; apiKey: string }[] }) => Promise<unknown>;
@@ -219,7 +228,7 @@ declare global {
         test: (data: { providerId: string; keyId: string; model?: string }) => Promise<{ success: boolean; error?: string }>;
         testRaw: (data: { baseUrl: string; apiKey: string; model?: string }) => Promise<{ success: boolean; error?: string }>;
         discoverModels: (data: { providerType: string; baseUrl: string; apiKey: string }) => Promise<Array<{ id: string; displayName?: string }>>;
-        // Unified methods
+        // Unified Provider Adapter API
         unifiedList: () => Promise<unknown>;
         create: (input: { providerType: string; displayName: string; websiteUrl: string; baseUrl: string; defaultModel?: string | null; initialKey?: { label: string; apiKey: string } | null }) => Promise<unknown>;
         updateDefaults: (input: { providerId: string; defaultModel?: string | null }) => Promise<unknown>;
