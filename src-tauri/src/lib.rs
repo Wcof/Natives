@@ -198,16 +198,21 @@ pub fn run() {
 
             // ── P1 Runtime 抽象层：注册 Native runtime（兜底永远 available）──
             // CLI runtime 在各自 Slice 注册；此处先注册 Native 保证降级路径可用
-            tauri::async_runtime::block_on(runtime::registry::register(std::sync::Arc::new(
-                runtime::native_runtime::NativeRuntime::new(app.handle().clone()),
-            )));
-            // 注册 Claude CLI + Codex CLI runtime（自动检测二进制可用性）
-            tauri::async_runtime::block_on(runtime::registry::register(std::sync::Arc::new(
-                runtime::claude_cli::ClaudeCliRuntime::new(),
-            )));
-            tauri::async_runtime::block_on(runtime::registry::register(std::sync::Arc::new(
-                runtime::codex_cli::CodexCliRuntime::new(),
-            )));
+            // 使用独立 Tokio 运行时，因为 setup 闭包中 tauri::async_runtime::block_on 不可用
+            {
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| format!("failed to create tokio runtime: {e}"))?;
+                rt.block_on(runtime::registry::register(std::sync::Arc::new(
+                    runtime::native_runtime::NativeRuntime::new(app.handle().clone()),
+                )));
+                // 注册 Claude CLI + Codex CLI runtime（自动检测二进制可用性）
+                let _ = rt.block_on(runtime::registry::register(std::sync::Arc::new(
+                    runtime::claude_cli::ClaudeCliRuntime::new(),
+                )));
+                let _ = rt.block_on(runtime::registry::register(std::sync::Arc::new(
+                    runtime::codex_cli::CodexCliRuntime::new(),
+                )));
+            }
 
             // FOUC guard: window starts hidden (tauri.conf.json has visible: false)
             // It will be shown by theme_ready_signal command from frontend

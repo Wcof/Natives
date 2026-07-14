@@ -245,9 +245,22 @@ impl DataStore {
             return Ok(());
         }
 
-        conn.execute_batch(
-            "ALTER TABLE assistant_messages RENAME TO legacy_assistant_messages;"
-        ).map_err(|e| crate::Error::Internal(format!("Legacy messages rename failed: {e}")))?;
+        // Check if legacy_assistant_messages already exists (from a previous run)
+        let legacy_exists: bool = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='legacy_assistant_messages'")
+            .and_then(|mut stmt| stmt.exists([]))
+            .unwrap_or(false);
+
+        if legacy_exists {
+            // Target already exists — drop the old assistant_messages table
+            // since its content is already in legacy_assistant_messages
+            conn.execute_batch("DROP TABLE IF EXISTS assistant_messages;")
+                .map_err(|e| crate::Error::Internal(format!("Drop old messages failed: {e}")))?;
+        } else {
+            conn.execute_batch(
+                "ALTER TABLE assistant_messages RENAME TO legacy_assistant_messages;"
+            ).map_err(|e| crate::Error::Internal(format!("Legacy messages rename failed: {e}")))?;
+        }
 
         // Migrate text content from legacy messages into new message blocks
         let _ = conn.execute_batch(
