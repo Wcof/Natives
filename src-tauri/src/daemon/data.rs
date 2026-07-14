@@ -64,7 +64,6 @@ impl DataStore {
                 (6, MIGRATION_006),
                 (7, MIGRATION_007),
                 (8, MIGRATION_008),
-                (9, MIGRATION_009),
             ];
 
             for (version, sql) in migrations {
@@ -169,9 +168,30 @@ impl DataStore {
     /// Detect and migrate legacy assistant_messages table.
     /// If the old table has a `session_id` column (old schema), rename it
     /// to `legacy_assistant_messages` so the new schema tables can be used.
+    /// Also migrates data from old `assistant_sessions` if it exists.
     /// This is idempotent: skips if already renamed or never existed.
     fn migrate_legacy_assistant_messages(&self) -> Result<()> {
         let conn = self.conn();
+
+        // Check if assistant_sessions exists and migrate data
+        let has_sessions: bool = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='assistant_sessions'")
+            .and_then(|mut stmt| stmt.exists([]))
+            .unwrap_or(false);
+        if has_sessions {
+            conn.execute_batch(
+                "INSERT OR IGNORE INTO assistant_conversations
+                    (id, project_id, title, provider_id, model_id, created_at, updated_at)
+                 SELECT
+                     id, project_id,
+                     COALESCE(title, ''),
+                     COALESCE(provider_id, 'unknown'),
+                     COALESCE(model_id, 'unknown'),
+                     created_at, updated_at
+                 FROM assistant_sessions;"
+            ).map_err(|e| crate::Error::Internal(format!("Legacy sessions migration failed: {e}")))?;
+        }
+
         // Check if assistant_messages has session_id column (old structure)
         let has_session_id: bool = conn
             .prepare("PRAGMA table_info(assistant_messages)")
@@ -189,10 +209,24 @@ impl DataStore {
             return Ok(());
         }
 
-        // PRAGMA cannot run inside multi-statement, so we execute alone
         conn.execute_batch(
             "ALTER TABLE assistant_messages RENAME TO legacy_assistant_messages;"
         ).map_err(|e| crate::Error::Internal(format!("Legacy messages rename failed: {e}")))?;
+
+        // Migrate text content from legacy messages into new message blocks
+        let _ = conn.execute_batch(
+            "INSERT OR IGNORE INTO assistant_message_blocks
+                (id, message_id, block_type, block_index, content, metadata)
+             SELECT
+                 hex(randomblob(16)),
+                 m.id,
+                 'text',
+                 0,
+                 m.content,
+                 json_object('legacy', 1, 'role', m.role)
+             FROM legacy_assistant_messages m
+             WHERE m.content IS NOT NULL AND m.content != '';"
+        );
 
         Ok(())
     }
@@ -466,10 +500,9 @@ WHERE id IN (
 ";
 
 /// v8: Legacy assistant session migration.
-/// Detects old `assistant_sessions` and migrates them into new schema.
-/// Also detects `assistant_messages` with `session_id` column (old structure)
-/// and renames to `legacy_assistant_messages`, then migrates text content.
-/// All operations are idempotent (INSERT OR IGNORE, IF NOT EXISTS).
+/// Creates assistant_projects table and migrates old data.
+/// Table-level operations only — data migration is handled in Rust code
+/// to safely check for source table existence.
 const MIGRATION_008: &str = "
 CREATE TABLE IF NOT EXISTS assistant_projects (
     id TEXT PRIMARY KEY,
@@ -478,19 +511,6 @@ CREATE TABLE IF NOT EXISTS assistant_projects (
     created_at TEXT NOT NULL,
     last_opened_at TEXT NOT NULL
 );
-
-INSERT OR IGNORE INTO assistant_conversations
-    (id, project_id, title, provider_id, model_id, created_at, updated_at, archived)
-SELECT
-    id,
-    project_id,
-    COALESCE(title, ''),
-    COALESCE(provider_id, 'unknown'),
-    COALESCE(model_id, 'unknown'),
-    created_at,
-    updated_at,
-    0
-FROM assistant_sessions;
 ";
 
 /// v9: Migrate legacy message content into new message_blocks.
@@ -561,7 +581,7 @@ mod tests {
             .conn()
             .query_row("SELECT COALESCE(MAX(version), 0) FROM _schema_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
     }
 
     #[test]
