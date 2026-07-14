@@ -96,12 +96,12 @@ export function UsageDashboard() {
         includeComparison: true,
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
       };
-      const response = await api.usage.refresh(request);
+      const response = (await api.usage.refresh(request)) as UsageDashboardResponse;
       setData(response);
       setLastRefresh(Date.now());
       if (response.daily.length === 0 && response.sessions.length === 0) {
         setLoadState('empty');
-      } else if (response.warnings.some((w) => w.sourceId !== null && !w.code.startsWith('CLI'))) {
+      } else if (response.warnings.some((w: any) => w.sourceId !== null && !w.code.startsWith('CLI'))) {
         setLoadState('partial');
       } else {
         setLoadState('loaded');

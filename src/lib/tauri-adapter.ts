@@ -238,7 +238,7 @@ export interface NativesAPI {
     read: () => Promise<string>;
   };
   usage: {
-    refresh: () => Promise<unknown>;
+    refresh: (params: { startMs: number; endMs: number; force: boolean; includeComparison: boolean; timeZone: string }) => Promise<unknown>;
   };
   codegraph: {
     read: () => Promise<unknown>;
@@ -723,7 +723,8 @@ const nativesAPI: NativesAPI = {
 
   // Usage
   usage: {
-    refresh: () => cmd('usage_refresh'),
+    refresh: (params: { startMs: number; endMs: number; force: boolean; includeComparison: boolean; timeZone: string }) =>
+      cmd('usage_refresh', { request: params }),
   },
 
   // CodeGraph

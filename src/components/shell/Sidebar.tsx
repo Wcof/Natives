@@ -694,7 +694,7 @@ export default function Sidebar({
                     if (!api?.assistant?.createSession) return;
                     try {
                       const title = `Session ${new Date().toLocaleTimeString(locale === 'zh' ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`;
-                      const presets = (await api.provider.unifiedList()) as any[];
+                      const presets = (await api.provider.list()) as any[];
                       const firstPreset = presets?.[0];
                       const firstKey = firstPreset?.keys?.[0];
                       if (!firstPreset || !firstKey) {

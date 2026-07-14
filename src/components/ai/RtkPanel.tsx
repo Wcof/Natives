@@ -14,7 +14,7 @@ export default function RtkPanel() {
     if (!api?.usage?.refresh) return null;
     const end = Date.now();
     const start = end - 30 * 86400000;
-    const result = await api.usage.refresh({ startMs: start, endMs: end, force: false, includeComparison: false, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' });
+    const result = (await api.usage.refresh({ startMs: start, endMs: end, force: false, includeComparison: false, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' })) as any;
     return (result?.rtk ?? null) as RtkUsage | null;
   }, []);
   const [paused, setPaused] = useState(false);

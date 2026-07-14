@@ -31,7 +31,7 @@ export default function UsagePanel() {
         includeComparison: false,
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
       };
-      const result = await api.usage.refresh(request);
+      const result = (await api.usage.refresh(request)) as any;
       setUsageData(result);
     } catch (err: any) {
       const classified = classifyError(err);

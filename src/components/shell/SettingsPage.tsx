@@ -20,10 +20,9 @@ const THEMES = [
   { id: 'editorial', labelKey: 'settings.themeEditorial', icon: '📝' },
 ];
 
-export default function SettingsPage() {
+export default function SettingsPage({ activeTab = 'theme' }: { activeTab?: 'theme' | 'env' | 'plugins' | 'executor' | 'providers' }) {
   const { toast: globalToast } = useToast();
   const [locale, setLocaleState] = useState<Locale>('zh');
-  const [activeTab, setActiveTab] = useState<'theme' | 'env' | 'plugins' | 'executor' | 'providers'>('theme');
   const TABS = [
     { id: 'theme' as const, label: t(locale, 'settings.tabTheme') },
     { id: 'env' as const, label: t(locale, 'settings.tabEnv') },
@@ -195,15 +194,7 @@ export default function SettingsPage() {
   return (
     <div style={{height:'100%',overflow:'auto'}}>
       <div style={{padding:`${SPACING.lg}px 20px`,display:'flex',flexDirection:'column',gap:28}}>
-        <div style={{display:'flex',gap:4,background:'var(--surface-hover)',border:'1px solid var(--border)',borderRadius:'var(--radius-sm)',padding:3}}>
-          {TABS.map(tab => {
-            const isActive = activeTab === tab.id;
-            return <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-              style={{...btnStyle, background: isActive ? 'var(--primary-soft)' : 'transparent', color: isActive ? 'var(--primary)' : 'var(--text-secondary)', border: isActive ? '1px solid var(--primary)' : '1px solid transparent', fontWeight: isActive ? 600 : 400 }}>
-              {tab.label}
-            </button>;
-          })}
-        </div>
+
 
         {/* ─── Theme Tab ─── */}
         <div style={{ display: activeTab === 'theme' ? 'flex' : 'none', flexDirection: 'column', gap: SPACING.lg }}>
