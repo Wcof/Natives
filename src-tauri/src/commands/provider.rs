@@ -576,6 +576,9 @@ pub async fn test_provider_raw(
 // ── Helpers ──
 
 fn ensure_tables(conn: &rusqlite::Connection) -> Result<()> {
+    // Create lease table first
+    crate::key_lease::ensure_lease_table(conn)?;
+
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS user_providers (
             id TEXT PRIMARY KEY,
