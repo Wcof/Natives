@@ -74,7 +74,7 @@ export default function SessionList({
               key={session.id}
               className={`group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer text-sm transition-all ${
                 activeSessionId === session.id
-                  ? 'bg-[var(--primary-soft)] text-[var(--primary)] font-medium'
+                  ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
               }`}
               onClick={() => onSessionSelect(session.id)}

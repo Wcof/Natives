@@ -321,23 +321,26 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
       {/* Right: Workspace */}
       <div className="flex-1 flex flex-col min-w-0 h-full box-border relative z-10">
-        {/* ↓ relative z-20 确保 header 的下拉菜单不被 content panel 遮住 */}
-        <div className="mb-3 relative z-20">
-          <MemoizedHeader
-            activeView={activeView}
-            sidebarCollapsed={state.sidebarCollapsed}
-            onToggleSidebar={toggleSidebar}
-          />
-        </div>
-
         {/* Main Content — conditional bottom margin to preserve gap when terminal is visible */}
         <motion.div
-          className={`flex-1 surface-section min-w-0 overflow-hidden relative${state.terminalCollapsed ? '' : ' mb-3'}`}
+          className={`flex-1 surface-section min-w-0 overflow-hidden relative flex flex-col${state.terminalCollapsed ? '' : ' mb-3'}`}
+          style={{ paddingTop: '28px' }}
           initial={prefersReducedMotion ? undefined : { opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={prefersReducedMotion ? undefined : { type: 'spring', stiffness: 100, damping: 20, mass: 0.8 }}
         >
-          <div ref={contentRef} id="main-content" tabIndex={-1} style={{ width: '100%', height: '100%', outline: 'none' }}>
+          {/* ↓ relative z-20 确保 header 的下拉菜单不被 content panel 遮住 */}
+          {activeView !== 'dashboard' && (
+            <div className="relative z-20 shrink-0">
+              <MemoizedHeader
+                activeView={activeView}
+                sidebarCollapsed={state.sidebarCollapsed}
+                onToggleSidebar={toggleSidebar}
+              />
+            </div>
+          )}
+
+          <div ref={contentRef} id="main-content" tabIndex={-1} style={{ width: '100%', height: '100%', outline: 'none' }} className="flex-1 min-h-0">
             <ErrorBoundary>
               <MainContent
                 activeView={activeView}

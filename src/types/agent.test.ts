@@ -7,8 +7,6 @@ import {
   type SkillInfo,
   type SkillSource,
   type SkillHealth,
-  type ClaudeUsage,
-  type CodexUsage,
   type RtkUsage,
   type FileChangeEvent,
   SKILL_SOURCES,
@@ -84,43 +82,6 @@ describe('AgentTypes', () => {
     };
     assert.equal(skill.health.ok, false);
     assert.ok(skill.health.issues.includes('missing-frontmatter'));
-  });
-
-  it('should construct ClaudeUsage', () => {
-    const usage: ClaudeUsage = {
-      models: {
-        'claude-sonnet': {
-          inputTokens: 10000,
-          outputTokens: 2000,
-          cacheReadInputTokens: 50000,
-          cacheCreationInputTokens: 0,
-          costUSD: 0.05,
-        },
-      },
-      localTokens: { today: 45000, thisWeek: 200000, total: 1000000 },
-      activity: { totalSessions: 64, totalMessages: 23074, firstSessionDate: '2026-03-23' },
-    };
-    assert.equal(usage.models['claude-sonnet']?.inputTokens, 10000);
-    assert.equal(usage.localTokens.total, 1000000);
-    assert.equal(usage.activity.totalSessions, 64);
-  });
-
-  it('should construct CodexUsage', () => {
-    const usage: CodexUsage = {
-      totalTokens: 100000,
-      inputTokens: 50000,
-      outputTokens: 50000,
-      cacheReadTokens: 0,
-      cacheCreationTokens: 0,
-      todayTokens: 45000,
-      weekTokens: 200000,
-      totalSessions: 10,
-      totalCost: 1.5,
-      models: {},
-      history: [],
-    };
-    assert.equal(usage.totalTokens, 100000);
-    assert.equal(usage.totalSessions, 10);
   });
 
   it('should construct FileChangeEvent', () => {

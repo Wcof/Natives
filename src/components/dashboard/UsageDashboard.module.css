@@ -1,0 +1,147 @@
+/* UsageDashboard.module.css
+ * 用量 Dashboard 布局样式
+ * 黑白灰主题，无滚动触发动画
+ */
+
+.container {
+  width: 100%;
+  padding: 0 24px 16px 24px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.title {
+  font-family: var(--font-display, 'Inter', system-ui, sans-serif);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.chartsGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 900px) {
+  .chartsGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.chartCard {
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--bg-2);
+  border: 0.0625rem solid var(--border);
+}
+
+.chartTitle {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+
+.partialBanner {
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--warning-soft);
+  border: 0.0625rem solid var(--warning);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: var(--text);
+}
+
+.loadingContainer {
+  padding: 20px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 200px;
+}
+
+.loadingInner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.loadingText {
+  font-size: 0.8125rem;
+  color: var(--text-dim);
+}
+
+.errorContainer {
+  padding: 20px;
+}
+
+.errorCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  text-align: center;
+  border-radius: 12px;
+  background: var(--danger-soft);
+  border: 0.0625rem solid var(--danger);
+}
+
+.errorText {
+  font-size: 0.8125rem;
+  color: var(--text);
+  max-width: 400px;
+}
+
+.retryButton {
+  padding: 6px 16px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: none;
+  cursor: pointer;
+  font-size: 0.8125rem;
+}
+
+.emptyContainer {
+  padding: 20px;
+}
+
+.toolbarSection {
+  margin-bottom: 12px;
+}
+
+.sourcesSection {
+  margin-top: 12px;
+}
+
+/* 数字使用等宽字体 */
+.mono {
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
+  font-variant-numeric: tabular-nums;
+}

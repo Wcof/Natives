@@ -104,7 +104,7 @@ export default function ModelSelectorDropdown({
                       }}
                       className={`flex items-center gap-2 w-full rounded-lg px-2.5 py-1.5 text-left text-sm transition-all ${
                         selectedProviderId === provider.id && selectedModel === model
-                          ? 'bg-[var(--primary-soft)] text-[var(--primary)] font-medium'
+                          ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
                           : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]'
                       }`}
                     >

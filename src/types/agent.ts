@@ -113,61 +113,6 @@ export interface ModelTokenUsage {
   costUSD: number;
 }
 
-/** Claude Code 用量（来源：~/.claude/stats-cache.json，无伪造数据） */
-export interface ClaudeUsage {
-  /** 各模型 token 用量明细 */
-  models: Record<string, ModelTokenUsage>;
-  /** 本地统计 token（从 stats-cache.json dailyModelTokens 聚合） */
-  localTokens: {
-    today: number;
-    thisWeek: number;
-    total: number;
-    /** 输入 Token */
-    input?: number;
-    /** 输出 Token */
-    output?: number;
-    /** 缓存创建 Token */
-    cacheCreation?: number;
-    /** 缓存命中 Token */
-    cacheRead?: number;
-  };
-  /** 活跃统计 */
-  activity: {
-    totalSessions: number;
-    totalMessages: number;
-    firstSessionDate: string;
-  };
-  /** 总请求数 */
-  totalRequests?: number;
-  /** 总成本（美元） */
-  totalCost?: number | null;
-}
-
-/** Token 使用历史数据点（用于趋势图） */
-export interface UsageHistoryPoint {
-  timestamp: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheCreationTokens: number;
-  cacheReadTokens: number;
-  skills?: number;
-}
-
-/** Codex 用量（来源：~/.codex/account.json + sessions） */
-export interface CodexUsage {
-  totalTokens: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheCreationTokens: number;
-  todayTokens: number;
-  weekTokens: number;
-  totalSessions: number;
-  totalCost: number;
-  models: Record<string, ModelTokenUsage>;
-  history: UsageHistoryPoint[];
-}
-
 /** RTK CLI 代理命令统计 */
 export interface RtkCommandHistory {
   command: string;
@@ -187,30 +132,6 @@ export interface RtkUsage {
   totalCommands: number;
   history: RtkCommandHistory[];
   topCommands: RtkCommandStat[];
-}
-
-/** 用量响应（匹配后端 UsageResponse） */
-export interface UsageResponse {
-  claude: ClaudeUsage | null;
-  codex: CodexUsage | null;
-  rtk: RtkUsage | null;
-  history: UsageHistoryPoint[];
-  modelStats: ModelStat[];
-  /** 是否有真实数据源（Claude/Codex/RTK） */
-  sourceConfigured: boolean;
-  /** 源面包屑：每个数据来源的文件路径 */
-  sourceBreadcrumbs: string[];
-  /** 错误信息 */
-  error?: string | null;
-}
-
-/** 模型统计（待后端返回后渲染） */
-export interface ModelStat {
-  model: string;
-  requestCount: number;
-  totalTokens: number;
-  totalCost: number;
-  avgCostPerRequest: number;
 }
 
 // ── Constants ──

@@ -65,7 +65,7 @@ export default function PermissionRequestCard({
               onClick={() => setScope(s)}
               className={`px-2 py-0.5 rounded text-xs transition-colors ${
                 scope === s
-                  ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
+                  ? 'bg-[var(--accent)] text-[var(--accent-ink)]'
                   : 'text-[var(--text-disabled)] hover:text-[var(--text-secondary)]'
               }`}
             >

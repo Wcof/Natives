@@ -11,6 +11,9 @@ build/
 *.tsbuildinfo
 next-env.d.ts
 
+# Rust / Cargo build artifacts
+target/
+
 # Tauri
 src-tauri/target/
 src-tauri/gen/
@@ -35,3 +38,29 @@ Thumbs.db
 
 # Natives runtime
 ~/.natives/
+
+# Agent / AI 工具配置 (个人配置，非项目代码)
+.agents/
+.atomcode-plugin/
+.claude/
+.rtk/
+
+# AI 指令文件 (Agent 提示词/术语表/上下文)
+AGENTS.md
+CLAUDE.md
+CONTEXT.md
+PROMPT.md
+
+# 生成的清单/锁文件
+skills-lock.json
+COVERAGE_MANIFEST.md
+
+# 归档废弃代码 (保留在 Git 历史中即可)
+archive/
+
+# 插件模板/示例 (非项目核心代码)
+plugin-template/
+plugins/
+
+# 外部引用目录
+References/

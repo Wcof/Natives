@@ -20,7 +20,7 @@ interface MessageInputProps {
   placeholder?: string;
   noProject?: boolean;
   /** 优先于 disabled：'no_provider' = 无 provider；'creating' = 会话创建中 */
-  inputDisabledReason?: 'no_provider' | 'creating' | null;
+  inputDisabledReason?: 'no_provider' | 'no_model' | 'creating' | null;
 }
 
 export default function MessageInput({

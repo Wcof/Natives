@@ -93,7 +93,7 @@ export default function MainContent({
 
   switch (activeView) {
     case 'settings':
-      return <SettingsPage />;
+      return <SettingsPage activeTab="theme" />;
     case 'workshop':
       return <Suspense fallback={<LazyFallback />}><LazyWorkshopPage onInstall={() => {}} /></Suspense>;
     case 'files':
@@ -113,6 +113,10 @@ export default function MainContent({
     case 'dashboard':
       return children;
     default:
+      if (activeView.startsWith('settings:')) {
+        const tab = activeView.split(':')[1] || 'theme';
+        return <SettingsPage activeTab={tab as any} />;
+      }
       if (activeView.startsWith('module:')) {
         return <div ref={iframeContainerRef} style={{ width: '100%', height: '100%' }} />;
       }
