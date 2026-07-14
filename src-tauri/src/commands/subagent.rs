@@ -334,8 +334,11 @@ pub fn subagent_run(state: State<'_, AppState>, input: RunSubagentInput) -> Resu
         params![run_id, input.subagent_id, input.input_text, now, provider_used, key_label],
     ).map_err(|e| Error::Internal(e.to_string()))?;
 
-    let outcome = run_subagent_request(&conn, &provider_id, agent.5.as_deref(), agent.7, &model_id, &agent.0, &agent.1, &agent.2, &agent.3, &input.input_text);
+    let outcome = run_subagent_request(&conn, &run_id, &provider_id, agent.5.as_deref(), agent.7, &model_id, &agent.0, &agent.1, &agent.2, &agent.3, &input.input_text);
     let finished_at = chrono_now();
+
+    // Release key lease if one was acquired
+    let _ = crate::key_lease::release_key_lease(&conn, &run_id);
 
     let (status, output_text, error_text, final_provider, final_key_label) = match outcome {
         Ok(result) => ("completed".to_string(), result.output, String::new(), result.provider_name, result.key_label),
@@ -369,6 +372,7 @@ struct SubagentExecutionResult {
 
 fn run_subagent_request(
     conn: &rusqlite::Connection,
+    run_id: &str,
     provider_id: &str,
     preferred_key_id: Option<&str>,
     fallback_enabled: bool,
@@ -385,49 +389,63 @@ fn run_subagent_request(
         |row| Ok((row.get(0)?, row.get(1)?)),
     ).map_err(|e| Error::Internal(format!("Provider not found: {e}")))?;
 
-    let mut candidates = Vec::new();
-    if let Some(key_id) = preferred_key_id {
-        if let Some(candidate) = load_key_candidate(conn, provider_id, key_id)? {
-            candidates.push(candidate);
+    // Determine the key to use: lease a secondary key or use preferred key
+    let (actual_key_id, candidate) = if let Some(key_id) = preferred_key_id {
+        // Use the explicitly assigned key directly
+        match load_key_candidate(conn, provider_id, key_id)? {
+            Some(c) => (key_id.to_string(), c),
+            None => return Err(Error::Internal("Assigned provider key not found".to_string())),
         }
-    }
-    if fallback_enabled {
-        let mut stmt = conn.prepare(
-            "SELECT id FROM provider_api_keys WHERE provider_id = ?1 ORDER BY created_at ASC"
-        ).map_err(|e| Error::Internal(e.to_string()))?;
-        let key_ids = stmt
-            .query_map(params![provider_id], |row| row.get::<_, String>(0))
-            .map_err(|e| Error::Internal(e.to_string()))?
-            .filter_map(|r| r.ok())
-            .collect::<Vec<_>>();
-        for key_id in key_ids {
-            if preferred_key_id == Some(key_id.as_str()) {
-                continue;
-            }
-            if let Some(candidate) = load_key_candidate(conn, provider_id, &key_id)? {
-                candidates.push(candidate);
-            }
-        }
-    }
-    if candidates.is_empty() {
-        return Err(Error::Internal("Select a provider key before running this subagent".to_string()));
-    }
+    } else {
+        // No preferred key — lease a non-primary secondary key
+        let (leased_key_id, _) = crate::key_lease::acquire_secondary_key(conn, provider_id, run_id)?;
+        let label = conn.query_row(
+            "SELECT label FROM provider_api_keys WHERE id = ?1",
+            params![leased_key_id],
+            |row| row.get::<_, String>(0),
+        ).unwrap_or_else(|_| "leased".to_string());
+        let candidate = load_key_candidate(conn, provider_id, &leased_key_id)?
+            .ok_or_else(|| Error::Internal("Leased key not found".to_string()))?;
+        (leased_key_id, candidate)
+    };
 
-    let mut last_error = "No provider key was attempted".to_string();
-    for candidate in candidates {
-        match execute_chat_completion(&base_url, &candidate.api_key, model_id, name, role, instructions, tools, input_text) {
-            Ok(output) => return Ok(SubagentExecutionResult {
-                output,
-                provider_name: provider_name.clone(),
-                key_label: candidate.label,
-            }),
-            Err(err) => {
-                last_error = log_sanitizer::sanitize(&err.to_string());
+    // First attempt with the selected key
+    match execute_chat_completion(&base_url, &candidate.api_key, model_id, name, role, instructions, tools, input_text) {
+        Ok(output) => Ok(SubagentExecutionResult {
+            output,
+            provider_name: provider_name.clone(),
+            key_label: candidate.label,
+        }),
+        Err(err) => {
+            let err_str = err.to_string();
+            // Check if fallback is allowed and this is the first failure
+            if fallback_enabled && !crate::key_lease::has_fallback_used(conn, run_id).unwrap_or(false) {
+                // Mark the key as failed
+                let _ = crate::key_lease::mark_key_failed(conn, &actual_key_id, "subagent_error", &log_sanitizer::sanitize(&err_str));
+                // Mark fallback as used
+                let _ = crate::key_lease::mark_fallback_used(conn, run_id);
+                // Try with primary key
+                if let Ok((primary_key_id, _)) = crate::key_lease::get_primary_key(conn, provider_id) {
+                    if let Ok(Some(fallback_candidate)) = load_key_candidate(conn, provider_id, &primary_key_id) {
+                        match execute_chat_completion(&base_url, &fallback_candidate.api_key, model_id, name, role, instructions, tools, input_text) {
+                            Ok(output) => return Ok(SubagentExecutionResult {
+                                output,
+                                provider_name: provider_name.clone(),
+                                key_label: format!("{} (fallback)", fallback_candidate.label),
+                            }),
+                            Err(fb_err) => {
+                                return Err(Error::Internal(format!(
+                                    "Primary key fallback also failed: {}",
+                                    log_sanitizer::sanitize(&fb_err.to_string())
+                                )));
+                            }
+                        }
+                    }
+                }
             }
+            Err(Error::Internal(log_sanitizer::sanitize(&err_str)))
         }
     }
-
-    Err(Error::Internal(last_error))
 }
 
 struct KeyCandidate {
