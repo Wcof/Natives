@@ -20,19 +20,21 @@ function browserLegacyValue(): string | null {
 
 /**
  * Validate that a path exists and is a directory.
- * In browser/debug mode where fs is unavailable, trust the stored value.
+ * Uses the filesystem API when available inside Tauri.
+ * Falls back to trusting the stored value in browser/SSR context.
  */
-function pathExists(path: string): boolean {
+async function pathExists(path: string): Promise<boolean> {
   if (typeof window === 'undefined') return true;
-  // Only validate when run inside Tauri (where fs operations are available)
-  // For SSR / pure-browser dev, trust the stored path.
   try {
-    // In a real Tauri context we can't use node:fs; the adapter provides this check.
-    // If nativesAPI provides a path check, use it. Otherwise, trust the stored value.
-    return true;
+    const api = (window as any).nativesAPI;
+    if (api?.fs?.listDir) {
+      await api.fs.listDir(path);
+      return true;
+    }
   } catch {
-    return true;
+    return false; // listDir threw -> path does not exist
   }
+  return true; // no fs API available, trust the value
 }
 
 /** SQLite is authoritative; the second argument exists only for one-time migration/testing. */
@@ -44,7 +46,7 @@ export async function readActiveProject(
     const stored = await api?.db?.get?.(ACTIVE_PROJECT_KEY);
     if (typeof stored === 'string' && stored.trim()) {
       // Clean up stale entries (directory no longer exists)
-      if (!pathExists(stored.trim())) {
+      if (!(await pathExists(stored.trim()))) {
         await writeActiveProject(api, null);
         return null;
       }
