@@ -1,7 +1,7 @@
 # Assistant Remediation Delivery
 
 ## Commit
-**Final SHA**: `02f584ea`
+**Final SHA**: `f4cc2b21`
 
 Branch: `codex/assistant-remediation` (worktree at `../Natives-assistant-remediation/`)
 
@@ -18,6 +18,7 @@ Branch: `codex/assistant-remediation` (worktree at `../Natives-assistant-remedia
 | `16c7bca` | fix: replace fake pathExists() with real filesystem check |
 | `a6c6283` | fix: persist assistant projects and unified conversations |
 | `02f584e` | test: add key lease coverage and fix compilation |
+| `f4cc2b2` | fix: migrate legacy sessions in Rust code not SQL |
 
 ## Automated Verification
 | Check | Result | Details |
@@ -27,8 +28,9 @@ Branch: `codex/assistant-remediation` (worktree at `../Natives-assistant-remedia
 | i18n (`npm run i18n:check`) | ✅ **PASS** | 943 keys in sync |
 | Frontend tests (`npm run test`) | ✅ **PASS** | 209/209 pass |
 | Rust Key Lease test (`cargo test test_key_lease`) | ✅ **PASS** | 1/1 pass — concurrent key assignment, release, re-acquisition confirmed |
-| Cargo check (`cargo check --workspace`) | ✅ **PASS** | 0 errors, 69 warnings |
-| Rust tests (`cargo test --workspace`) | ✅ **PASS** | Builds with warnings (sidecar crates pre-existing) |
+| Cargo check (`cargo check --workspace`) | ✅ **PASS** | 0 errors, 68 warnings |
+| Rust tests (`cargo test --lib`) | ✅ **PASS** | 223/223 — includes DataStore migrations (4/4) + key lease (1/1) |
+| Tauri app build (`cargo build`) | ✅ **PASS** | Desktop app compiles successfully |
 | Diff check (`git diff --check`) | ✅ **PASS** | No whitespace errors |
 | **ErrorBoundary "An unexpected error occurred"** | ✅ **FIXED** | Now shows localized diagnostic ID message |
 
