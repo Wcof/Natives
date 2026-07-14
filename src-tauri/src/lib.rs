@@ -44,6 +44,7 @@ mod thumbnail;
 mod token_manager;
 pub mod update_checker;
 mod wechat;
+pub mod usage;
 
 pub use error::{Error, Result};
 
@@ -75,7 +76,7 @@ pub struct AppState {
     pub ghostty_manager: terminal::GhosttyManager,
     pub terminal_recorder: std::sync::Arc<terminal_recorder::Recorder>,
     pub screenshot_stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    pub usage_cache: Mutex<Option<(serde_json::Value, u64)>>,
+    pub usage_cache: usage::UsageCache,
     pub fs_watcher: fs_watch::FsWatcher,
     pub lid_guard: lid_guard::LidGuard,
     pub wechat_bridge: Mutex<Option<wechat::bridge::Bridge>>,
@@ -176,7 +177,7 @@ pub fn run() {
                 ghostty_manager: terminal::GhosttyManager::new(),
                 terminal_recorder,
                 screenshot_stop_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                usage_cache: Mutex::new(None),
+                usage_cache: usage::UsageCache::new(),
                 fs_watcher: fs_watch::FsWatcher::new(app.handle().clone()),
                 lid_guard: lid_guard::LidGuard::new(),
                 wechat_bridge: Mutex::new(Some(wechat::bridge::Bridge::new())),
