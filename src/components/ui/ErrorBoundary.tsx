@@ -6,8 +6,8 @@ import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-toke
 
 // i18n messages for ErrorBoundary (class component can't use hooks)
 const MESSAGES = {
-  en: { title: 'Something went wrong', fallback: 'An unexpected error occurred', retry: 'Try Again' },
-  zh: { title: '出了点问题', fallback: '发生了意外错误', retry: '重试' },
+  en: { title: 'Something went wrong', fallback: 'Operation could not be completed. Diagnostic ID: {id}. Please try again.', retry: 'Try Again' },
+  zh: { title: '出了点问题', fallback: '操作未完成，请重试。诊断编号：{id}。', retry: '重试' },
 };
 
 function getLocale(): 'en' | 'zh' {

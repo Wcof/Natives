@@ -399,8 +399,8 @@ export function classifyError(error: unknown, moduleIdOrCtx?: string | ErrorCont
     : Math.random().toString(36).slice(2, 10);
   return {
     category: 'UNKNOWN',
-    userMessage: `An unexpected error occurred. Diagnostic ID: ${diagnosticId}. Please try again or contact support.`,
-    actionHint: 'Try restarting the application. If the problem persists, report the issue with the diagnostic ID.',
+    userMessage: `操作未完成，请重试。诊断编号：${diagnosticId}。`,
+    actionHint: `Operation could not be completed. Diagnostic ID: ${diagnosticId}. Please try again.`,
     retryable: false,
     rawMessage,
     moduleId: ctx.moduleId,

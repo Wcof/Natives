@@ -155,6 +155,6 @@ describe('ErrorClassifier', () => {
   it('should include diagnostic ID in unknown error fallback', () => {
     const err = classifyError('Some truly random error message');
     assert.equal(err.category, 'UNKNOWN');
-    assert.ok(err.userMessage.includes('Diagnostic ID'));
+    assert.ok(err.userMessage.includes('诊断编号') || err.userMessage.includes('Diagnostic ID'));
   });
 });
