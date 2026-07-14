@@ -27,6 +27,12 @@ pub struct ProviderKey {
     pub label: String,
     /// Masked key shown to the user (e.g. "sk-a…1b2c"). Never the original key.
     pub masked_key: String,
+    pub is_primary: bool,
+    pub is_active: bool,
+    pub status: String,
+    pub last_tested_at: Option<String>,
+    pub last_error_code: Option<String>,
+    pub last_error_message: Option<String>,
     pub created_at: String,
 }
 
@@ -38,6 +44,8 @@ pub struct UserProvider {
     pub name: String,
     pub website_url: String,
     pub base_url: String,
+    pub default_model: Option<String>,
+    pub primary_key_id: Option<String>,
     pub keys: Vec<ProviderKey>,
     pub created_at: String,
     pub updated_at: String,
@@ -46,11 +54,12 @@ pub struct UserProvider {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddProviderInput {
-    pub preset_name: String,
-    pub name: String,
+    pub provider_type: String,
+    pub display_name: String,
     pub website_url: String,
     pub base_url: String,
-    pub keys: Vec<AddKeyInput>,
+    pub default_model: String,
+    pub initial_key: AddKeyInput,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -58,6 +67,13 @@ pub struct AddProviderInput {
 pub struct AddKeyInput {
     pub label: String,
     pub api_key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteProviderKeyInput {
+    pub provider_id: String,
+    pub key_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -111,10 +127,10 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
 
     // Fetch providers
     let mut pstmt = conn.prepare(
-        "SELECT id, preset_name, name, website_url, base_url, created_at, updated_at FROM user_providers ORDER BY created_at DESC"
+        "SELECT id, preset_name, name, website_url, base_url, default_model, created_at, updated_at FROM user_providers ORDER BY created_at DESC"
     ).map_err(|e| Error::Internal(e.to_string()))?;
 
-    let providers: Vec<(String, String, String, String, String, String, String)> = pstmt
+    let providers: Vec<(String, String, String, String, String, Option<String>, String, String)> = pstmt
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -122,8 +138,9 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(5)?,
                 row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
             ))
         })
         .map_err(|e| Error::Internal(e.to_string()))?
@@ -132,52 +149,69 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
 
     // Fetch all keys
     let mut kstmt = conn.prepare(
-        "SELECT id, provider_id, label, api_key_encrypted, dek_encrypted, created_at FROM provider_api_keys ORDER BY created_at ASC"
+        "SELECT id, provider_id, label, masked_key, is_primary, is_active, test_status, last_test_at, last_error_code, last_error_message, created_at FROM provider_api_keys ORDER BY created_at ASC"
     ).map_err(|e| Error::Internal(e.to_string()))?;
 
-    let all_keys: Vec<(String, String, String, String, String, String)> = kstmt
+    let all_keys: Vec<(String, String, String, String, bool, bool, String, Option<String>, Option<String>, Option<String>, String)> = kstmt
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
+                row.get::<_, bool>(4)?,
+                row.get::<_, bool>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, String>(10)?,
             ))
         })
         .map_err(|e| Error::Internal(e.to_string()))?
         .filter_map(|r| r.ok())
         .collect();
 
+    // Compute primary_key_id for each provider
+    let primary_key_ids: std::collections::HashMap<String, String> = all_keys
+        .iter()
+        .filter(|(_, _, _, _, is_primary, _, _, _, _, _, _)| *is_primary)
+        .map(|(kid, pid, _, _, _, _, _, _, _, _, _)| (pid.clone(), kid.clone()))
+        .collect();
+
     // Assemble — keys are masked, NEVER return full key to frontend
     let result = providers
         .into_iter()
-        .map(|(id, preset_name, name, website_url, base_url, created_at, updated_at)| {
+        .map(|(id, preset_name, name, website_url, base_url, default_model, created_at, updated_at)| {
+            let primary_key_id = primary_key_ids.get(&id).cloned();
             let keys: Vec<ProviderKey> = all_keys
                 .iter()
-                .filter(|(_, pid, _, _, _, _)| pid == &id)
-                .map(|(kid, _, label, _encrypted, _dek, kcreated)| {
-                    // Do NOT decrypt here — frontend gets masked key only.
-                    // Full key is decrypted only in provider_test() and runtime engine.
+                .filter(|(_, pid, _, _, _, _, _, _, _, _, _)| pid == &id)
+                .map(|(kid, _, label, masked_key, is_primary, is_active, test_status, last_test_at, last_error_code, last_error_message, kcreated)| {
                     ProviderKey {
                         id: kid.clone(),
                         provider_id: id.clone(),
                         label: label.clone(),
-                        masked_key: "••••••••".to_string(),
+                        masked_key: if masked_key.is_empty() { "••••••••".to_string() } else { masked_key.clone() },
+                        is_primary: *is_primary,
+                        is_active: *is_active,
+                        status: test_status.clone(),
+                        last_tested_at: last_test_at.clone(),
+                        last_error_code: last_error_code.clone(),
+                        last_error_message: last_error_message.clone(),
                         created_at: kcreated.clone(),
                     }
                 })
                 .collect();
 
-            UserProvider { id, preset_name, name, website_url, base_url, keys, created_at, updated_at }
+            UserProvider { id, preset_name, name, website_url, base_url, default_model, primary_key_id, keys, created_at, updated_at }
         })
         .collect();
 
     Ok(result)
 }
 
-/// Add a new provider with optional initial keys.
+/// Add a new provider with initial key and default model.
 #[tauri::command]
 pub fn add_provider(state: State<'_, AppState>, input: AddProviderInput) -> Result<UserProvider> {
     let pool_conn = state.db.get()
@@ -190,26 +224,40 @@ pub fn add_provider(state: State<'_, AppState>, input: AddProviderInput) -> Resu
     let now = chrono_now();
 
     conn.execute(
-        "INSERT INTO user_providers (id, preset_name, name, website_url, base_url, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![id, input.preset_name, input.name, input.website_url, input.base_url, now, now],
+        "INSERT INTO user_providers (id, preset_name, name, website_url, base_url, default_model, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![id, input.provider_type, input.display_name, input.website_url, input.base_url, input.default_model, now, now],
     ).map_err(|e| Error::Internal(e.to_string()))?;
 
-    let mut keys = Vec::new();
-    for kin in input.keys {
-        let kid = uuid_v4();
-        let (encrypted, dek_encrypted) = if kin.api_key.is_empty() {
-            (String::new(), String::new())
-        } else {
-            provider_key_manager::envelope_encrypt(&kin.api_key, conn)?
-        };
-        conn.execute(
-            "INSERT INTO provider_api_keys (id, provider_id, label, api_key_encrypted, dek_encrypted, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![kid, id, kin.label, encrypted, dek_encrypted, now],
-        ).map_err(|e| Error::Internal(e.to_string()))?;
-        keys.push(ProviderKey { id: kid, provider_id: id.clone(), label: kin.label, masked_key: mask_api_key(&kin.api_key), created_at: now.clone() });
-    }
+    let kid = uuid_v4();
+    let masked_key = mask_api_key(&input.initial_key.api_key);
+    let (encrypted, dek_encrypted) = if input.initial_key.api_key.is_empty() {
+        (String::new(), String::new())
+    } else {
+        provider_key_manager::envelope_encrypt(&input.initial_key.api_key, conn)?
+    };
+    conn.execute(
+        "INSERT INTO provider_api_keys (id, provider_id, label, api_key_encrypted, dek_encrypted, masked_key, is_primary, is_active, test_status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, 1, 'untested', ?7)",
+        params![kid, id, input.initial_key.label, encrypted, dek_encrypted, masked_key, now],
+    ).map_err(|e| Error::Internal(e.to_string()))?;
 
-    Ok(UserProvider { id, preset_name: input.preset_name, name: input.name, website_url: input.website_url, base_url: input.base_url, keys, created_at: now.clone(), updated_at: now })
+    let key = ProviderKey {
+        id: kid, provider_id: id.clone(),
+        label: input.initial_key.label, masked_key,
+        is_primary: true, is_active: true,
+        status: "untested".to_string(),
+        last_tested_at: None, last_error_code: None, last_error_message: None,
+        created_at: now.clone(),
+    };
+
+    Ok(UserProvider {
+        id, preset_name: input.provider_type, name: input.display_name,
+        website_url: input.website_url, base_url: input.base_url,
+        default_model: Some(input.default_model),
+        primary_key_id: Some(key.id.clone()),
+        keys: vec![key],
+        created_at: now.clone(), updated_at: now,
+    })
 }
 
 /// Add an API key to an existing provider.
@@ -223,6 +271,7 @@ pub fn add_provider_key(state: State<'_, AppState>, input: AddProviderKeyInput) 
 
     let kid = uuid_v4();
     let now = chrono_now();
+    let masked_key = mask_api_key(&input.api_key);
     let (encrypted, dek_encrypted) = if input.api_key.is_empty() {
         (String::new(), String::new())
     } else {
@@ -230,36 +279,62 @@ pub fn add_provider_key(state: State<'_, AppState>, input: AddProviderKeyInput) 
     };
 
     conn.execute(
-        "INSERT INTO provider_api_keys (id, provider_id, label, api_key_encrypted, dek_encrypted, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![kid, input.provider_id, input.label, encrypted, dek_encrypted, now],
+        "INSERT INTO provider_api_keys (id, provider_id, label, api_key_encrypted, dek_encrypted, masked_key, is_primary, is_active, test_status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, 1, 'untested', ?7)",
+        params![kid, input.provider_id, input.label, encrypted, dek_encrypted, masked_key, now],
     ).map_err(|e| Error::Internal(e.to_string()))?;
 
     // Return masked key — never expose full key to frontend
-    Ok(ProviderKey { id: kid, provider_id: input.provider_id, label: input.label, masked_key: mask_api_key(&input.api_key), created_at: now })
+    Ok(ProviderKey {
+        id: kid, provider_id: input.provider_id, label: input.label,
+        masked_key, is_primary: false, is_active: true,
+        status: "untested".to_string(),
+        last_tested_at: None, last_error_code: None, last_error_message: None,
+        created_at: now,
+    })
 }
 
-/// Delete a provider key by ID.
+/// Delete a provider API key.
 #[tauri::command]
-pub fn delete_provider_key(state: State<'_, AppState>, id: String) -> Result<()> {
+pub fn delete_provider_key(state: State<'_, AppState>, input: DeleteProviderKeyInput) -> Result<()> {
     let pool_conn = state.db.get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
 
-    conn.execute("DELETE FROM provider_api_keys WHERE id = ?1", params![id])
-        .map_err(|e| Error::Internal(e.to_string()))?;
+    ensure_tables(conn)?;
+
+    // Check if this is a primary key
+    let is_primary: bool = conn
+        .query_row(
+            "SELECT is_primary FROM provider_api_keys WHERE id = ?1",
+            params![input.key_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+
+    if is_primary {
+        // Cannot delete primary key — must switch to another key first
+        return Err(Error::InvalidInput("Cannot delete primary key. Set another key as primary first.".to_string()));
+    }
+
+    conn.execute(
+        "DELETE FROM provider_api_keys WHERE id = ?1 AND provider_id = ?2",
+        params![input.key_id, input.provider_id],
+    ).map_err(|e| Error::Internal(e.to_string()))?;
+
     Ok(())
 }
 
 /// Delete a provider and all its keys.
 #[tauri::command]
-pub fn delete_provider(state: State<'_, AppState>, id: String) -> Result<()> {
+pub fn delete_provider(state: State<'_, AppState>, provider_id: String) -> Result<()> {
     let pool_conn = state.db.get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
 
-    conn.execute("DELETE FROM provider_api_keys WHERE provider_id = ?1", params![id])
+    conn.execute("DELETE FROM provider_api_keys WHERE provider_id = ?1", params![provider_id])
         .map_err(|e| Error::Internal(e.to_string()))?;
-    conn.execute("DELETE FROM user_providers WHERE id = ?1", params![id])
+    conn.execute("DELETE FROM user_providers WHERE id = ?1", params![provider_id])
         .map_err(|e| Error::Internal(e.to_string()))?;
     Ok(())
 }
@@ -508,6 +583,7 @@ fn ensure_tables(conn: &rusqlite::Connection) -> Result<()> {
             name TEXT NOT NULL,
             website_url TEXT NOT NULL DEFAULT '',
             base_url TEXT NOT NULL DEFAULT '',
+            default_model TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -517,9 +593,71 @@ fn ensure_tables(conn: &rusqlite::Connection) -> Result<()> {
             label TEXT NOT NULL DEFAULT '',
             api_key_encrypted TEXT NOT NULL DEFAULT '',
             dek_encrypted TEXT NOT NULL DEFAULT '',
+            masked_key TEXT NOT NULL DEFAULT '',
+            is_primary INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            test_status TEXT NOT NULL DEFAULT 'untested',
+            last_test_at TEXT,
+            last_error_code TEXT,
+            last_error_message TEXT,
+            updated_at TEXT,
+            last_leased_at TEXT,
             created_at TEXT NOT NULL
         );"
-    ).map_err(|e| Error::Internal(e.to_string()))
+    ).map_err(|e| Error::Internal(e.to_string()))?;
+
+    // Incremental migration: add missing columns for existing tables
+    let add_column_if_missing = |table: &str, col: &str, def: &str| -> Result<()> {
+        let exists: bool = conn
+            .prepare(&format!("PRAGMA table_info({})", table))
+            .map_err(|e| Error::Internal(e.to_string()))?
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| Error::Internal(e.to_string()))?
+            .filter_map(|r| r.ok())
+            .any(|name| name == col);
+        if !exists {
+            let sql = format!("ALTER TABLE {} ADD COLUMN {} {}", table, col, def);
+            conn.execute_batch(&sql)
+                .map_err(|e| Error::Internal(format!("migration failed: {e}")))?;
+        }
+        Ok(())
+    };
+
+    add_column_if_missing("user_providers", "default_model", "TEXT")?;
+    add_column_if_missing("provider_api_keys", "masked_key", "TEXT NOT NULL DEFAULT ''")?;
+    add_column_if_missing("provider_api_keys", "is_primary", "INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing("provider_api_keys", "is_active", "INTEGER NOT NULL DEFAULT 1")?;
+    add_column_if_missing("provider_api_keys", "test_status", "TEXT NOT NULL DEFAULT 'untested'")?;
+    add_column_if_missing("provider_api_keys", "last_test_at", "TEXT")?;
+    add_column_if_missing("provider_api_keys", "last_error_code", "TEXT")?;
+    add_column_if_missing("provider_api_keys", "last_error_message", "TEXT")?;
+    add_column_if_missing("provider_api_keys", "updated_at", "TEXT")?;
+    add_column_if_missing("provider_api_keys", "last_leased_at", "TEXT")?;
+
+    // Ensure unique index: only one primary key per provider
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_primary_key
+         ON provider_api_keys(provider_id)
+         WHERE is_primary = 1;"
+    ).map_err(|e| Error::Internal(e.to_string()))?;
+
+    // Auto-promote oldest key to primary if no primary key exists yet
+    let primary_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM provider_api_keys WHERE is_primary = 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if primary_count == 0 {
+        conn.execute(
+            "UPDATE provider_api_keys SET is_primary = 1
+             WHERE id = (SELECT id FROM provider_api_keys ORDER BY created_at ASC LIMIT 1)",
+            [],
+        ).map_err(|e| Error::Internal(e.to_string()))?;
+    }
+
+    Ok(())
 }
 
 fn uuid_v4() -> String {
