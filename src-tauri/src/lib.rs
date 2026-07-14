@@ -27,7 +27,7 @@ mod ghostty_config;
 mod git;
 mod html_preview;
 mod http_server;
-mod key_lease;
+pub mod key_lease;
 mod lid_guard;
 pub mod log_sanitizer;
 mod module_manager;

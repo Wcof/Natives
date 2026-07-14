@@ -881,6 +881,12 @@ mod tests {
             provider_id: "test-provider".to_string(),
             label: "Test Key".to_string(),
             masked_key: "sk-a…1b2c".to_string(),
+            is_primary: true,
+            is_active: true,
+            status: "valid".to_string(),
+            last_tested_at: Some("2026-01-01T00:00:00Z".to_string()),
+            last_error_code: None,
+            last_error_message: None,
             created_at: "2026-01-01T00:00:00Z".to_string(),
         };
         

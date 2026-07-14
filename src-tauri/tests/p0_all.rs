@@ -124,3 +124,56 @@
     for c in &cmds { assert!(c.starts_with('/')); }
 }
 #[test] fn i113_disabled_no_project() { assert!(true); }
+
+// ── Key Lease System Tests ──
+use natives_lib::key_lease::{ensure_lease_table, acquire_secondary_key, release_key_lease, get_primary_key, has_fallback_used, mark_fallback_used};
+
+#[test]
+fn test_key_lease_acquire_release_cycle() {
+    use rusqlite::Connection;
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_lease_table(&conn).unwrap();
+
+    // Create a provider with two non-primary keys
+    conn.execute_batch(
+        "CREATE TABLE provider_api_keys (
+            id TEXT PRIMARY KEY, provider_id TEXT, label TEXT, api_key_encrypted TEXT DEFAULT '',
+            dek_encrypted TEXT DEFAULT '', masked_key TEXT DEFAULT '', is_primary INTEGER DEFAULT 0,
+            is_active INTEGER DEFAULT 1, test_status TEXT DEFAULT 'untested',
+            last_test_at TEXT, last_error_code TEXT, last_error_message TEXT,
+            updated_at TEXT, last_leased_at TEXT, created_at TEXT DEFAULT ''
+        );
+        INSERT INTO provider_api_keys (id, provider_id, label, is_primary, is_active, test_status)
+        VALUES ('k1', 'prov1', 'Key 1', 0, 1, 'valid');
+        INSERT INTO provider_api_keys (id, provider_id, label, is_primary, is_active, test_status)
+        VALUES ('k2', 'prov1', 'Key 2', 0, 1, 'valid');
+        INSERT INTO provider_api_keys (id, provider_id, label, is_primary, is_active, test_status)
+        VALUES ('primary', 'prov1', 'Primary', 1, 1, 'valid');"
+    ).unwrap();
+
+    // Acquire lease — should get a non-primary key
+    let (key_id, _) = acquire_secondary_key(&conn, "prov1", "run1").unwrap();
+    assert!(key_id == "k1" || key_id == "k2", "Should get k1 or k2, got {}", key_id);
+
+    // Second concurrent run — should get the OTHER non-primary key
+    let (key_id2, _) = acquire_secondary_key(&conn, "prov1", "run2").unwrap();
+    assert_ne!(key_id, key_id2, "Two concurrent runs should get different keys");
+
+    // Third concurrent run — should fail (no more available secondary keys)
+    let result = acquire_secondary_key(&conn, "prov1", "run3");
+    assert!(result.is_err(), "Third concurrent run should have no available key");
+
+    // Release first run's lease — key should be available again
+    release_key_lease(&conn, "run1").unwrap();
+    let (key_id3, _) = acquire_secondary_key(&conn, "prov1", "run3").unwrap();
+    assert_eq!(key_id3, key_id, "Released key should be re-acquired");
+
+    // Get primary key — should return the primary key only
+    let (pk_id, _) = get_primary_key(&conn, "prov1").unwrap();
+    assert_eq!(pk_id, "primary", "Should get the primary key");
+
+    // Fallback tracking
+    assert!(!has_fallback_used(&conn, "run2").unwrap(), "Should not have fallback yet");
+    mark_fallback_used(&conn, "run2").unwrap();
+    assert!(has_fallback_used(&conn, "run2").unwrap(), "Should now have fallback");
+}
