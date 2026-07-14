@@ -27,6 +27,21 @@ pub enum Error {
 
     #[error("Internal error: {0}")]
     Internal(String),
+
+    #[error("{0}")]
+    Message(String),
+}
+
+impl From<&str> for Error {
+    fn from(s: &str) -> Self {
+        Error::Message(s.to_string())
+    }
+}
+
+impl From<String> for Error {
+    fn from(s: String) -> Self {
+        Error::Message(s)
+    }
 }
 
 impl Serialize for Error {

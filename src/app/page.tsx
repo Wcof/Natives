@@ -219,25 +219,25 @@ export default function DashboardPage() {
       if (!stale('usage')) return;
       setIsUsageLoading(true);
       try {
-        const r = await window.nativesAPI?.usage.refresh();
+        const raw = await window.nativesAPI?.usage.refresh() as Record<string, unknown> | undefined;
         if (gen !== loadGenRef.current) return;
         const result: UsageResult = {
-          claude: r?.claude ?? null,
-          codex: r?.codex ?? null,
-          rtk: r?.rtk ?? null,
-          modelStats: Array.isArray(r?.modelStats) ? r.modelStats.map((m: any) => ({
+          claude: (raw?.claude ?? null) as ClaudeUsage | null,
+          codex: (raw?.codex ?? null) as CodexUsage | null,
+          rtk: (raw?.rtk ?? null) as RtkUsage | null,
+          modelStats: Array.isArray(raw?.modelStats) ? (raw.modelStats as any[]).map((m: any) => ({
             model: m.model ?? 'unknown', requestCount: m.requestCount ?? 0,
             totalTokens: m.totalTokens ?? 0, totalCost: m.totalCost ?? 0,
             avgCostPerRequest: m.avgCostPerRequest ?? 0,
           })) : [],
-          history: Array.isArray(r?.history) ? r.history.map((h: any) => ({
+          history: Array.isArray(raw?.history) ? (raw.history as any[]).map((h: any) => ({
             date: (() => { try { return new Date(h.timestamp).toISOString(); } catch { return new Date().toISOString(); } })(),
             input: h.inputTokens ?? 0, output: h.outputTokens ?? 0,
             cacheWrite: h.cacheCreationTokens ?? 0, cacheRead: h.cacheReadTokens ?? 0,
             skills: h.skills ?? 0,
           })) : [],
-          sourceConfigured: r?.sourceConfigured === true,
-          sourceBreadcrumbs: Array.isArray(r?.sourceBreadcrumbs) ? r.sourceBreadcrumbs : [],
+          sourceConfigured: raw?.sourceConfigured === true,
+          sourceBreadcrumbs: Array.isArray(raw?.sourceBreadcrumbs) ? raw.sourceBreadcrumbs as string[] : [],
         };
         setUsageResult(result);
         setCodexUsage(result.codex);

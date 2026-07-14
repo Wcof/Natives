@@ -17,6 +17,7 @@ import {
   selectAssistantModel,
   type ProviderReadiness,
 } from '@/lib/provider-model-selection';
+import type { ProviderWithModels } from './ModelSelectorDropdown';
 import { readActiveProject, writeActiveProject } from '@/lib/active-project';
 import {
   classifyAssistantSurface,
@@ -131,16 +132,17 @@ function v2call<T = unknown>(method: string, params?: unknown): Promise<T> {
 
 function mapBlockToContentBlock(block: MessageBlock): import('./blocks').ContentBlock {
   const content = (block.content ?? {}) as Record<string, unknown>;
+  const CB = undefined as unknown as import('./blocks').ContentBlock;
 
   switch (block.type) {
     case 'text':
-      return { type: 'text', text: String(content.text ?? content.content ?? '') };
+      return { type: 'text', text: String(content.text ?? content.content ?? '') } as typeof CB;
     case 'reasoning':
-      return { type: 'reasoning', text: String(content.text ?? content.reasoning ?? content.content ?? ''), signature: content.signature ? String(content.signature) : undefined };
+      return { type: 'reasoning', text: String(content.text ?? content.reasoning ?? content.content ?? ''), signature: content.signature ? String(content.signature) : undefined } as typeof CB;
     case 'image':
-      return { type: 'image', mimeType: String(content.mime_type ?? 'image/png'), data: String(content.data ?? ''), altText: String(content.alt_text ?? '') };
+      return { type: 'image', mimeType: String(content.mime_type ?? 'image/png'), data: String(content.data ?? ''), altText: String(content.alt_text ?? '') } as typeof CB;
     case 'file_reference':
-      return { type: 'file_reference', path: String(content.path ?? content.file_path ?? ''), mimeType: String(content.mime_type ?? 'application/octet-stream'), size: Number(content.size ?? content.file_size ?? 0), sha256: content.sha256 ? String(content.sha256) : undefined };
+      return { type: 'file_reference', path: String(content.path ?? content.file_path ?? ''), mimeType: String(content.mime_type ?? 'application/octet-stream'), size: Number(content.size ?? content.file_size ?? 0), sha256: content.sha256 ? String(content.sha256) : undefined } as typeof CB;
     case 'tool_call':
       return {
         type: 'tool_call',
@@ -148,7 +150,7 @@ function mapBlockToContentBlock(block: MessageBlock): import('./blocks').Content
         name: String(content.tool_name ?? content.name ?? ''),
         input: content.input ?? content.arguments ?? {},
         status: (content.status ?? 'pending') as 'pending' | 'running' | 'completed' | 'failed' | 'rejected',
-      };
+      } as typeof CB;
     case 'tool_result':
       return {
         type: 'tool_result',
@@ -156,27 +158,27 @@ function mapBlockToContentBlock(block: MessageBlock): import('./blocks').Content
         output: content.output ?? content.result,
         isError: Boolean(content.is_error ?? false),
         durationMs: content.duration_ms == null ? undefined : Number(content.duration_ms),
-      };
+      } as typeof CB;
     case 'citation':
       return {
         type: 'citation',
         uri: String(content.uri ?? content.url ?? ''),
         title: content.title ? String(content.title) : undefined,
         text: content.text ? String(content.text) : undefined,
-      };
+      } as typeof CB;
     case 'error':
       return {
         type: 'error',
         code: String(content.code ?? content.error_code ?? ''),
         message: String(content.message ?? content.error_message ?? ''),
         retryable: Boolean(content.retryable ?? false),
-      };
+      } as typeof CB;
     default:
       return {
         type: 'legacy',
         raw: JSON.stringify(content, null, 2),
         originalType: block.type,
-      };
+      } as typeof CB;
   }
 }
 
@@ -915,7 +917,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
             </div>
             <div className="flex items-center gap-2">
               <ModelSelectorDropdown
-                providers={providers}
+                providers={providers as unknown as ProviderWithModels[]}
                 selectedProviderId={activeConversation.provider_id}
                 selectedModel={activeConversation.model_id}
                 onSelect={handleSelectModel}
@@ -960,7 +962,6 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
                 messages={timelineWithStreaming}
                 loading={loadingMessages}
                 locale={locale}
-                streaming={isStreaming}
               />
             </div>
 
@@ -972,7 +973,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
                 onStop={handleStop}
                 isStreaming={isStreaming}
                 disabled={!activeConversationId}
-                inputDisabledReason={inputDisabledReason}
+                inputDisabledReason={inputDisabledReason as 'no_provider' | 'creating' | null | undefined}
               />
             </div>
           </>

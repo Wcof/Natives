@@ -17,7 +17,7 @@ interface ModelInfo {
   discoveredAt?: string;
 }
 
-interface ProviderWithModels {
+export interface ProviderWithModels {
   id: string;
   name: string;
   presetName: string;

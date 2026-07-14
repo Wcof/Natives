@@ -13,7 +13,7 @@ export default function RtkPanel() {
     const api = window.nativesAPI;
     if (!api?.usage?.refresh) return null;
     const result = await api.usage.refresh();
-    return (result?.rtk ?? null) as RtkUsage | null;
+    return ((result as Record<string, unknown>)?.rtk ?? null) as RtkUsage | null;
   }, []);
   const [paused, setPaused] = useState(false);
   const [locale, setLocale] = useState<Locale>('zh');

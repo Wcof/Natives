@@ -23,10 +23,15 @@ impl DataStore {
              PRAGMA busy_timeout=5000;"
         ).map_err(|e| crate::Error::Internal(format!("Failed to set pragmas: {e}")))?;
 
-        Ok(DataStore {
+        let store = DataStore {
             conn: Mutex::new(conn),
             db_path: db_path.to_string(),
-        })
+        };
+
+        // Run schema migrations automatically
+        store.run_migrations()?;
+
+        Ok(store)
     }
 
     /// Run all pending migrations.

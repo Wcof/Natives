@@ -47,8 +47,7 @@ export default function SettingsPage() {
     setProvidersLoading(true);
     try {
       const api = window.nativesAPI;
-      if (api?.provider?.unifiedList) setProviders(Array.isArray(await api.provider.unifiedList()) ? await api.provider.unifiedList() as ProviderSummary[] : []);
-      else if (api?.provider?.list) setProviders(Array.isArray(await api.provider.list()) ? await api.provider.list() as ProviderSummary[] : []);
+      if (api?.provider?.list) setProviders(Array.isArray(await api.provider.list()) ? await api.provider.list() as unknown as ProviderSummary[] : []);
     } catch (e) { globalToast(classifyError(e).userMessage, 'error'); }
     finally { setProvidersLoading(false); }
   }
@@ -56,19 +55,19 @@ export default function SettingsPage() {
   async function handleSaveProvider(data: { presetName: string; name: string; websiteUrl: string; baseUrl: string; keys: { label: string; apiKey: string }[] }) {
     const api = window.nativesAPI;
     if (api?.provider?.create) {
-      await api.provider.create({ providerType: data.presetName, displayName: data.name, websiteUrl: data.websiteUrl, baseUrl: data.baseUrl, initialKey: data.keys[0] ? { label: data.keys[0].label, apiKey: data.keys[0].apiKey } : null });
-    } else if (api?.provider?.add) { await api.provider.add(data); }
-    else throw new Error('Provider API not available');
+      const initialKey = data.keys[0] ? { label: data.keys[0].label, apiKey: data.keys[0].apiKey } : { label: 'default', apiKey: '' };
+      await api.provider.create({ providerType: data.presetName, displayName: data.name, websiteUrl: data.websiteUrl, baseUrl: data.baseUrl, defaultModel: '', initialKey });
+    } else throw new Error('Provider API not available');
     globalToast(t(locale, 'settings.providerAdded'), 'success');
     await loadProviders();
   }
 
-  async function handleDeleteProvider(id: string) { if (!window.nativesAPI?.provider?.delete) return; await window.nativesAPI.provider.delete(id); globalToast(t(locale, 'settings.providerDeleted'), 'success'); await loadProviders(); }
-  async function handleSaveDefaults(pid: string, m: string | null) { const a = window.nativesAPI; if (a?.provider?.updateDefaults) { await a.provider.updateDefaults({ providerId: pid, defaultModel: m }); await loadProviders(); } else throw new Error('updateDefaults'); }
-  async function handleAddKey(pid: string, l: string, k: string) { const a = window.nativesAPI; if (a?.provider?.addKeyUnified) await a.provider.addKeyUnified({ providerId: pid, label: l, apiKey: k }); else if (a?.provider?.addKey) await a.provider.addKey({ providerId: pid, label: l, apiKey: k }); else throw new Error('addKey'); await loadProviders(); }
-  async function handleTestKey(pid: string, kid: string): Promise<TestKeyResult> { const a = window.nativesAPI; if (a?.provider?.testKey) { const r = await a.provider.testKey({ providerId: pid, keyId: kid }); await loadProviders(); return r as unknown as TestKeyResult; } if (a?.provider?.test) { const r = await a.provider.test({ providerId: pid, keyId: kid }); await loadProviders(); return { success: r.success, status: r.success ? 'valid' as const : 'invalid' as const, testedAt: new Date().toISOString(), errorCode: r.success ? null : 'unknown', userMessage: r.error || null }; } throw new Error('testKey'); }
+  async function handleDeleteProvider(id: string) { const a = window.nativesAPI; if (!a?.provider?.delete) return; await a.provider.delete(id); globalToast(t(locale, 'settings.providerDeleted'), 'success'); await loadProviders(); }
+  async function handleSaveDefaults(pid: string, m: string | null) { const a = window.nativesAPI; if (a?.provider?.updateDefaults) { await a.provider.updateDefaults({ providerId: pid, defaultModel: m ?? '' }); await loadProviders(); } else throw new Error('updateDefaults'); }
+  async function handleAddKey(pid: string, l: string, k: string) { const a = window.nativesAPI; if (a?.provider?.addKey) await a.provider.addKey({ providerId: pid, label: l, apiKey: k }); else throw new Error('addKey'); await loadProviders(); }
+  async function handleTestKey(pid: string, kid: string): Promise<TestKeyResult> { const a = window.nativesAPI; if (a?.provider?.testKey) { const r = await a.provider.testKey({ providerId: pid, keyId: kid }); await loadProviders(); return r as unknown as TestKeyResult; } throw new Error('testKey'); }
   async function handleSetPrimaryKey(pid: string, kid: string) { const a = window.nativesAPI; if (a?.provider?.setPrimaryKey) { await a.provider.setPrimaryKey({ providerId: pid, keyId: kid }); await loadProviders(); } else throw new Error('setPrimaryKey'); }
-  async function handleDeleteKey(pid: string, kid: string) { const a = window.nativesAPI; if (a?.provider?.deleteKeyUnified) await a.provider.deleteKeyUnified({ providerId: pid, keyId: kid }); else if (a?.provider?.deleteKey) await a.provider.deleteKey(kid); else throw new Error('deleteKey'); await loadProviders(); }
+  async function handleDeleteKey(pid: string, kid: string) { const a = window.nativesAPI; if (a?.provider?.deleteKey) await a.provider.deleteKey({ providerId: pid, keyId: kid }); else throw new Error('deleteKey'); await loadProviders(); }
 
   const btnStyle: React.CSSProperties = { flex: 1, textAlign: 'center', padding: '7px 4px', borderRadius: 'calc(var(--radius-sm) - 2px)', cursor: 'pointer', border: '1px solid transparent', fontSize: FONT_SIZE.md, transition: 'all 0.12s' };
 

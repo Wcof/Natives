@@ -24,6 +24,47 @@ export interface RenderStatePayload {
 
 // --- Types matching the Electron preload contract ---
 
+// Provider domain types
+export interface ProviderKeySummary {
+  id: string;
+  providerId: string;
+  label: string;
+  maskedKey: string;
+  isPrimary: boolean;
+  isActive: boolean;
+  status: 'untested' | 'valid' | 'invalid' | 'rate_limited' | 'unavailable';
+  lastTestedAt: string | null;
+  lastErrorCode: string | null;
+  lastErrorMessage: string | null;
+}
+
+export interface ProviderSummary {
+  id: string;
+  providerType: string;
+  displayName: string;
+  websiteUrl: string;
+  baseUrl: string;
+  defaultModel: string | null;
+  primaryKeyId: string | null;
+  keys: ProviderKeySummary[];
+}
+
+export interface ProviderTestResult {
+  success: boolean;
+  status: ProviderKeySummary['status'];
+  testedAt: string;
+  errorCode: string | null;
+  userMessage: string | null;
+}
+
+export interface ProjectSummary {
+  id: string;
+  path: string;
+  label: string;
+  conversationCount: number;
+  exists: boolean;
+}
+
 export interface NativesAPI {
   themeReady: () => void;
   app: { version: () => Promise<string> };
@@ -203,20 +244,25 @@ export interface NativesAPI {
     read: () => Promise<unknown>;
     rtkGain: () => Promise<unknown>;
   };
+  // Provider (unified API)
   provider: {
-    list: () => Promise<unknown>;
-    add: (data: {
-      presetName: string;
-      name: string;
+    list: () => Promise<ProviderSummary[]>;
+    create: (input: {
+      providerType: string;
+      displayName: string;
       websiteUrl: string;
       baseUrl: string;
-      keys: { label: string; apiKey: string }[];
-    }) => Promise<unknown>;
-    delete: (id: string) => Promise<void>;
-    addKey: (data: { providerId: string; label: string; apiKey: string }) => Promise<unknown>;
-    deleteKey: (id: string) => Promise<void>;
-    test: (data: { providerId: string; keyId: string; model?: string }) => Promise<{ success: boolean; error?: string }>;
-    testRaw: (data: { baseUrl: string; apiKey: string; model?: string }) => Promise<{ success: boolean; error?: string }>;
+      defaultModel: string;
+      initialKey: { label: string; apiKey: string };
+    }) => Promise<ProviderSummary>;
+    delete: (providerId: string) => Promise<void>;
+    updateDefaults: (input: { providerId: string; defaultModel: string }) => Promise<void>;
+    addKey: (input: { providerId: string; label: string; apiKey: string }) => Promise<ProviderKeySummary>;
+    testCandidate: (input: { providerType: string; baseUrl: string; apiKey: string; model: string }) => Promise<ProviderTestResult>;
+    testKey: (input: { providerId: string; keyId: string }) => Promise<ProviderTestResult>;
+    discoverModels: (input: { providerType: string; baseUrl: string; apiKey: string }) => Promise<Array<{ id: string; displayName?: string }>>;
+    setPrimaryKey: (input: { providerId: string; keyId: string }) => Promise<void>;
+    deleteKey: (input: { providerId: string; keyId: string }) => Promise<void>;
   };
   windowControls: {
     minimize: () => Promise<void>;
@@ -280,15 +326,19 @@ export interface NativesAPI {
     get: () => Promise<{ enabledTools: Record<string, boolean>; maxSelfHeal: number; maxSteps?: number }>;
     save: (settings: { enabledTools: Record<string, boolean>; maxSelfHeal: number; maxSteps?: number }) => Promise<void>;
   };
-  /** Assistant Daemon v2 client (typed daemon RPC) */
+  /** Assistant in-process RPC (no daemon sidecar) */
   assistantV2: {
-    connect: () => Promise<void>;
-    disconnect: () => void;
-    call: (method: string, params?: unknown) => Promise<unknown>;
-    getStatus: () => Promise<unknown>;
-    ping: () => Promise<boolean>;
-    getState: () => string;
-    onEvent: (callback: (event: unknown) => void) => () => void;
+    request<T>(method: string, params?: unknown): Promise<T>;
+    getStatus(): Promise<{ connected: boolean; error: string | null }>;
+  };
+  /** Project directory management */
+  project: {
+    list(): Promise<ProjectSummary[]>;
+    register(path: string): Promise<ProjectSummary>;
+  };
+  /** Dialog (file/directory picker) */
+  dialog: {
+    pickDirectory(): Promise<string | null>;
   };
   /** Runtime 抽象层（Slice B） */
   runtime: {
@@ -682,14 +732,6 @@ const nativesAPI: NativesAPI = {
     rtkGain: () => cmd('rtk_gain'),
   },
 
-  // Project （统一项目目录 API）
-  project: {
-    list: () => cmd<Array<{ id: string; path: string; label: string; conversationCount: number }>>('project_list'),
-    register: (path: string) => cmd<{ id: string; path: string; label: string }>('project_register', { path }),
-    open: (id: string) => cmd<void>('project_open', { id }),
-    remove: (id: string) => cmd<void>('project_remove', { id }),
-  },
-
   // Dialog （文件/目录选择，经 Tauri dialog plugin）
   dialog: {
     pickDirectory: async () => {
@@ -703,34 +745,25 @@ const nativesAPI: NativesAPI = {
     },
   },
 
-  // Provider
+  // Provider (unified API — single source of truth)
   provider: {
-    list: () => cmd('list_providers'),
-    add: (data: { presetName: string; name: string; websiteUrl: string; baseUrl: string; keys: { label: string; apiKey: string }[] }) =>
-      cmd('add_provider', data),
-    delete: (id: string) => cmd('delete_provider', { id }),
-    addKey: (data: { providerId: string; label: string; apiKey: string }) =>
-      cmd('add_provider_key', data),
-    deleteKey: (id: string) => cmd('delete_provider_key', { id }),
-    test: (data: { providerId: string; keyId: string; model?: string }) =>
-      cmd('provider_test', { input: data }),
-    testRaw: (data: { baseUrl: string; apiKey: string; model?: string }) =>
-      cmd('test_provider_raw', { input: data }),
-    discoverModels: (data: { providerType: string; baseUrl: string; apiKey: string }) =>
-      cmd('provider_discover_models', { input: data }),
-    // Unified Provider Adapter API
-    unifiedList: () => cmd('assistant_provider_list'),
-    create: (input: { providerType: string; displayName: string; websiteUrl: string; baseUrl: string; defaultModel?: string | null; initialKey?: { label: string; apiKey: string } | null }) =>
-      cmd('assistant_provider_create', { input }),
-    updateDefaults: (input: { providerId: string; defaultModel?: string | null }) =>
+    list: () => cmd<ProviderSummary[]>('list_providers'),
+    create: (input: { providerType: string; displayName: string; websiteUrl: string; baseUrl: string; defaultModel: string; initialKey: { label: string; apiKey: string } }) =>
+      cmd<ProviderSummary>('add_provider', input),
+    delete: (providerId: string) => cmd('delete_provider', { id: providerId }),
+    updateDefaults: (input: { providerId: string; defaultModel: string }) =>
       cmd('assistant_provider_update_defaults', { input }),
-    addKeyUnified: (input: { providerId: string; label: string; apiKey: string }) =>
-      cmd('assistant_provider_add_key', { input }),
+    addKey: (input: { providerId: string; label: string; apiKey: string }) =>
+      cmd<ProviderKeySummary>('add_provider_key', input),
+    testCandidate: (input: { providerType: string; baseUrl: string; apiKey: string; model: string }) =>
+      cmd<ProviderTestResult>('test_provider_raw', { input }),
     testKey: (input: { providerId: string; keyId: string }) =>
-      cmd<{ success: boolean; status: string; testedAt: string; errorCode: string | null; userMessage: string | null }>('assistant_provider_test_key', { input }),
+      cmd<ProviderTestResult>('assistant_provider_test_key', { input }),
+    discoverModels: (input: { providerType: string; baseUrl: string; apiKey: string }) =>
+      cmd<Array<{ id: string; displayName?: string }>>('provider_discover_models', { input }),
     setPrimaryKey: (input: { providerId: string; keyId: string }) =>
       cmd('assistant_provider_set_primary_key', { input }),
-    deleteKeyUnified: (input: { providerId: string; keyId: string }) =>
+    deleteKey: (input: { providerId: string; keyId: string }) =>
       cmd('assistant_provider_delete_key', { input }),
   },
 
@@ -909,65 +942,19 @@ const nativesAPI: NativesAPI = {
       cmd('subagent_resolve_binding', { subagentId }),
   },
 
-  // Assistant Daemon v2 client
-  assistantV2: (() => {
-    // Lazy import to avoid circular dependencies
-    let client: import('./assistant-client/client').DaemonClient | null = null;
-    let config: import('./assistant-client/types').DaemonClientConfig | null = null;
+  // Assistant in-process RPC (no daemon sidecar)
+  assistantV2: {
+    request: <T>(method: string, params?: unknown): Promise<T> =>
+      cmd<T>('assistant_rpc_request', { method, params: params ?? null }),
+    getStatus: (): Promise<{ connected: boolean; error: string | null }> =>
+      cmd<{ connected: boolean; error: string | null }>('assistant_status'),
+  },
 
-    // Initialize the client with config from the backend
-    async function getClient(): Promise<import('./assistant-client/client').DaemonClient> {
-      if (!client) {
-        const { DaemonClient } = await import('./assistant-client/client');
-        const daemonConfig = await cmd('get_daemon_config') as {
-          socketPath: string;
-          bootstrapToken: string;
-          protocolVersion: string;
-        };
-        config = {
-          socketPath: daemonConfig.socketPath,
-          bootstrapToken: daemonConfig.bootstrapToken,
-          clientId: `natives-ui-${Date.now()}`,
-          protocolVersion: daemonConfig.protocolVersion || '0.1.0',
-        };
-        // Pass cmd as invokeFn so DaemonClient goes through nativesAPI,
-        // not a direct import of @tauri-apps/api/core.
-        client = new DaemonClient(config, cmd);
-      }
-      return client;
-    }
-
-    return {
-      connect: async () => {
-        const c = await getClient();
-        await c.connect();
-      },
-      disconnect: () => {
-        client?.disconnect();
-      },
-      call: async (method: string, params?: unknown) => {
-        const c = await getClient();
-        return c.call(method, params);
-      },
-      getStatus: async () => {
-        const c = await getClient();
-        return c.getStatus();
-      },
-      ping: async () => {
-        const c = await getClient();
-        return c.ping();
-      },
-      getState: () => {
-        return client?.getState() ?? 'disconnected';
-      },
-      onEvent: (callback: (event: unknown) => void) => {
-        if (!client) {
-          return () => {};
-        }
-        return client.onEvent(callback as (event: import('./assistant-client/types').DaemonClientEvent) => void);
-      },
-    };
-  })(),
+  // Project directory management
+  project: {
+    list: (): Promise<ProjectSummary[]> => cmd<ProjectSummary[]>('project_list'),
+    register: (path: string): Promise<ProjectSummary> => cmd<ProjectSummary>('project_register', { path }),
+  },
 };
 
 // Expose to window (replaces contextBridge.exposeInMainWorld)

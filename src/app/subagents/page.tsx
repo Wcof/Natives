@@ -69,7 +69,7 @@ export default function SubagentsPage() {
         api.subagent.list(),
         api.provider?.list?.() ?? Promise.resolve([]),
       ]);
-      const providerList = Array.isArray(providerRes) ? providerRes as UserProvider[] : [];
+      const providerList = Array.isArray(providerRes) ? providerRes as unknown as UserProvider[] : [];
       setProviders(providerList);
       setAgents(subagentRes as Subagent[]);
     } catch (e) {

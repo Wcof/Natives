@@ -45,7 +45,7 @@ export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
   const cum = dc && canTestDiscoveredModel(mos);
   const cs = !sv && name.trim().length > 0 && hk && cum && trr?.success === true;
   const inv = () => { setMos([]); setDm(''); setFme(null); setDfp(null); setTrr(null); };
-  const htt = async () => { if (!sel || !hk || !cum) return; setTe(true); setTrr(null); try { const a = window.nativesAPI; if (a?.provider?.testRaw) setTrr(await a.provider.testRaw({ baseUrl: bu.trim() || sel.baseUrl, apiKey: kv.trim(), model: dm })); else setTrr({ success: false, error: t('settings.providerTestUnavailable') }); } catch (e) { setTrr({ success: false, error: classifyError(e).userMessage }); } finally { setTe(false); } };
+  const htt = async () => { if (!sel || !hk || !cum) return; setTe(true); setTrr(null); try { const a = window.nativesAPI; if (a?.provider?.testCandidate) { const r = await a.provider.testCandidate({ providerType: 'openai', baseUrl: bu.trim() || sel.baseUrl, apiKey: kv.trim(), model: dm }); setTrr({ success: r.success, error: r.userMessage ?? undefined }); } else setTrr({ success: false, error: t('settings.providerTestUnavailable') }); } catch (e) { setTrr({ success: false, error: classifyError(e).userMessage }); } finally { setTe(false); } };
   const hd = async () => {
     if (!sel || !hk || fm) return; setFm(true); setFme(null);
     try {
