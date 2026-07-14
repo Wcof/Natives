@@ -36,6 +36,42 @@ impl DataStore {
 
     /// Run all pending migrations.
     pub fn run_migrations(&self) -> Result<()> {
+        // Step 0: Pre-migration — ensure assistant_messages has all V1 columns
+        // if the table already exists from old db.rs init_assistant_db
+        {
+            let conn = self.conn();
+            let has_table: bool = conn
+                .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='assistant_messages'")
+                .and_then(|mut stmt| stmt.exists([]))
+                .unwrap_or(false);
+            if has_table {
+                let existing_cols: Vec<String> = conn
+                    .prepare("PRAGMA table_info(assistant_messages)")
+                    .and_then(|mut stmt| {
+                        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+                        let cols: Vec<String> = rows.filter_map(|r| r.ok()).collect();
+                        Ok(cols)
+                    })
+                    .unwrap_or_default();
+                let v1_cols: Vec<(&str, &str)> = vec![
+                    ("conversation_id", "TEXT REFERENCES assistant_conversations(id) ON DELETE CASCADE"),
+                    ("parent_message_id", "TEXT"),
+                    ("role", "TEXT NOT NULL DEFAULT 'user'"),
+                    ("status", "TEXT NOT NULL DEFAULT 'complete'"),
+                    ("input_tokens", "INTEGER DEFAULT 0"),
+                    ("output_tokens", "INTEGER DEFAULT 0"),
+                    ("reasoning_tokens", "INTEGER"),
+                    ("cost_usd", "REAL"),
+                ];
+                for (col, def) in v1_cols {
+                    if !existing_cols.contains(&col.to_string()) {
+                        let sql = format!("ALTER TABLE assistant_messages ADD COLUMN {} {}", col, def);
+                        let _ = conn.execute_batch(&sql);
+                    }
+                }
+            }
+        }
+
         // Step 1: Run schema migrations within a transaction
         {
             let mut conn = self.conn.lock().map_err(|e| crate::Error::Internal(e.to_string()))?;
