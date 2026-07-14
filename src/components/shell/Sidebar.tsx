@@ -24,6 +24,13 @@ import {
   Star,
   X,
   Zap,
+  ArrowLeft,
+  ChevronLeft,
+  Palette,
+  Key,
+  Plug,
+  SlidersHorizontal,
+  Cpu,
 } from 'lucide-react';
 import * as LucideIcons from 'lucide-react';
 import { t, type Locale } from '@/i18n';
@@ -216,6 +223,9 @@ export default function Sidebar({
     },
     [onModuleSelect],
   );
+
+  const isSettingsMode = activeModuleId?.startsWith('settings') || activeModuleId === 'settings';
+  const activeSettingsTab = activeModuleId?.startsWith('settings:') ? activeModuleId.split(':')[1] : 'theme';
 
   const loadFavorites = useCallback(async () => {
     try {
@@ -557,146 +567,179 @@ export default function Sidebar({
         </div>
 
         {/* Brand Header */}
-        <div className="flex items-center gap-3 px-4 pb-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface)]">
-            <Zap size={18} className="text-[var(--text-secondary)]" />
+        {!isSettingsMode && (
+          <div className="flex items-center gap-3 px-4 pb-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface)]">
+              <Zap size={18} className="text-[var(--text-secondary)]" />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold text-[var(--text)] leading-tight">Natives</h1>
+              <p className="text-[0.6875rem] text-[var(--text-disabled)]">personal desktop</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-lg font-bold text-[var(--text)] leading-tight">Natives</h1>
-            <p className="text-[0.6875rem] text-[var(--text-disabled)]">personal desktop</p>
-          </div>
-        </div>
+        )}
       </div>
 
-      {/* 中间可滚动区域 */}
-      <div className="flex-1 overflow-y-auto min-h-0">
-        {/* Search Capsule */}
-        <div className="px-4 pb-3">
-          <div className="flex h-10 items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3">
-            <Search size={14} className="text-[var(--text-disabled)] shrink-0" />
-            <input
-              type="text"
-              placeholder={t(locale, 'sidebar.searchPlaceholder')}
-              className="min-w-0 flex-1 bg-transparent text-sm text-[var(--text)] outline-none focus-visible:outline-none placeholder:text-[var(--text-disabled)]"
-             
-            />
-            <span className="shrink-0 rounded-md bg-[var(--surface)] px-1.5 py-0.5 text-[0.6875rem] font-medium text-[var(--text-disabled)]">
-              ⌘K
-            </span>
+      {isSettingsMode ? (
+        /* ── Settings Sidebar Layout ── */
+        <div className="flex-1 flex flex-col min-h-0">
+          {/* Back button */}
+          <div className="px-4 pb-3 pt-2">
+            <button
+              onClick={() => selectNavigation('dashboard', '__dashboard__')}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all w-full font-medium"
+            >
+              <ArrowLeft size={13} />
+              <span>{locale === 'zh' ? '返回个人主页' : 'Back to Homepage'}</span>
+            </button>
+          </div>
+
+          {/* Section title */}
+          <div className="px-5 pb-2 pt-1 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
+            {locale === 'zh' ? '系统设置' : 'System Settings'}
+          </div>
+
+          {/* Settings items */}
+          <div className="flex flex-col gap-0.5 px-3 flex-1 overflow-y-auto">
+            {[
+              { id: 'theme', label: t(locale, 'settings.tabTheme'), icon: Palette },
+              { id: 'env', label: t(locale, 'settings.tabEnv'), icon: Key },
+              { id: 'plugins', label: t(locale, 'settings.tabPlugins'), icon: Plug },
+              { id: 'executor', label: t(locale, 'settings.tabExecutor'), icon: SlidersHorizontal },
+              { id: 'providers', label: t(locale, 'settings.tabProviders'), icon: Cpu },
+            ].map((item) => {
+              const Icon = item.icon;
+              const isActive = activeSettingsTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => selectNavigation(`settings:${item.id}`, `settings:${item.id}`)}
+                  className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all ${
+                    isActive
+                      ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+                      : 'bg-[var(--surface-hover)] text-[var(--text-secondary)] hover:text-[var(--primary)] hover:bg-[var(--border-subtle)]'
+                  }`}
+                >
+                  <Icon size={15} className="shrink-0" />
+                  <span className="truncate text-sm">{item.label}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
-
-        {/* Quick Access List */}
-        <div className="px-3 pb-1 pt-0 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
-          {t(locale, 'sidebar.quickAccess')}
-        </div>
-        <div className="mb-3 flex flex-col gap-0.5 px-3">
-          {QUICK_ACCESS_ITEMS.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeNavigationId === item.target;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => selectNavigation(item.target, item.target)}
-                className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-all ${
-                  isActive
-                    ? 'bg-[var(--primary-soft)] text-[var(--primary)] font-medium'
-                    : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
-                }`}
-                title={item.id}
-              >
-                <Icon size={15} className="shrink-0" />
-                <span className="truncate text-sm">
-                  {t(locale, 'sidebar.quickAccessDirs.' + item.id)}
+      ) : (
+        /* ── Normal Sidebar Layout ── */
+        <>
+          {/* 中间可滚动区域 */}
+          <div className="flex-1 overflow-y-auto min-h-0">
+            {/* Search Capsule */}
+            <div className="px-4 pb-3">
+              <div className="flex h-10 items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3">
+                <Search size={14} className="text-[var(--text-disabled)] shrink-0" />
+                <input
+                  type="text"
+                  placeholder={t(locale, 'sidebar.searchPlaceholder')}
+                  className="min-w-0 flex-1 bg-transparent text-sm text-[var(--text)] outline-none focus-visible:outline-none placeholder:text-[var(--text-disabled)]"
+                />
+                <span className="shrink-0 rounded-md bg-[var(--surface)] px-1.5 py-0.5 text-[0.6875rem] font-medium text-[var(--text-disabled)]">
+                  ⌘K
                 </span>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Assistant section — clickable header with inline [+] */}
-        <div className="mb-1 px-3">
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => selectNavigation('__assistant__', '__assistant__')}
-              className="drag-none flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors duration-150"
-            >
-              <Bot size={14} className="shrink-0 text-[var(--text-disabled)]" />
-              <span className="truncate">{t(locale, 'nav.assistant')}</span>
-            </button>
-            <button
-              type="button"
-              data-assistant-create
-              onClick={() => selectNavigation('__assistant__', '__assistant__')}
-              className="drag-none rounded-md p-1 text-[var(--text-disabled)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors duration-150"
-              aria-label={t(locale, 'assistant.newConversation')}
-            >
-              <Plus size={13} />
-            </button>
-          </div>
-          {activeNavigationId === '__assistant__' && (
-            <AssistantSidebarSection locale={locale} onNavigateAssistant={() => selectNavigation('__assistant__', '__assistant__')} />
-          )}
-        </div>
-
-        {/* Favorites section — same level as Quick Access */}
-        <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
-          {t(locale, 'sidebar.favorites')}
-        </div>
-        <div className="mb-3 flex flex-col gap-0.5 px-3">
-          {favorites.length > 0 ? (() => {
-            const sorted = [...favorites].sort((a, b) => b.addedAt - a.addedAt);
-            const visible = favoritesExpanded ? sorted : sorted.slice(0, 3);
-            return (
-              <>
-                <div className={favoritesExpanded ? 'max-h-48 overflow-y-auto flex flex-col gap-0.5' : 'flex flex-col gap-0.5'}>
-                  {visible.map((fav) => {
-                    const navigationId = `__files__:${fav.path}`;
-                    const label = fav.path.split('/').pop() || fav.path;
-                    return (
-                      <SidebarNavItem
-                        key={fav.path}
-                        isActive={activeNavigationId === navigationId}
-                        icon={<Star size={15} />}
-                        label={label}
-                        onClick={() => selectNavigation(navigationId, navigationId)}
-                        title={fav.path}
-                      />
-                    );
-                  })}
-                </div>
-                {favorites.length > 3 && (
-                  <button
-                    type="button"
-                    onClick={() => setFavoritesExpanded((prev) => !prev)}
-                    className="flex w-full items-center gap-2 rounded-lg px-3 py-1 text-[0.75rem] text-[var(--text-disabled)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-all"
-                  >
-                    <span>{favoritesExpanded ? t(locale, 'sidebar.showLess') : t(locale, 'sidebar.showMore', { count: String(favorites.length - 3) })}</span>
-                  </button>
-                )}
-              </>
-            );
-          })() : (
-            <div className="px-3 py-2 text-xs text-[var(--text-disabled)] italic">
-              {t(locale, 'sidebar.noFavorites')}
+              </div>
             </div>
-          )}
-        </div>
 
-        {/* Modules section — same level as Quick Access */}
-        <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
-          {t(locale, 'nav.modules')}
-        </div>
-        {modules.length > 0 ? (
-          <div
-            className="mb-3 flex flex-col gap-0.5 px-3"
-            role="listbox"
-            aria-label={t(locale, 'nav.modules')}
-            aria-live="polite"
-            onDragEnd={() => void handleDragEnd()}
-          >
+            {/* Quick Access List */}
+            <div className="px-3 pb-1 pt-0 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
+              {t(locale, 'sidebar.quickAccess')}
+            </div>
+            <div className="mb-3 flex flex-col gap-0.5 px-3">
+              {QUICK_ACCESS_ITEMS.map((item) => {
+                const Icon = item.icon;
+                const isActive = activeNavigationId === item.target;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => selectNavigation(item.target, item.target)}
+                    className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-all ${
+                      isActive
+                        ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+                        : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
+                    }`}
+                    title={item.id}
+                  >
+                    <Icon size={15} className="shrink-0" />
+                    <span className="truncate text-sm">
+                      {t(locale, 'sidebar.quickAccessDirs.' + item.id)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Assistant section — clickable header with inline [+] */}
+            <div className="mb-1 px-3">
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => selectNavigation('assistant', '__assistant__')}
+                  className="drag-none flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors duration-150"
+                >
+                  <Bot size={14} className="shrink-0 text-[var(--text-disabled)]" />
+                  <span className="truncate">{t(locale, 'nav.assistant')}</span>
+                </button>
+                <button
+                  onClick={async () => {
+                    const api = window.nativesAPI;
+                    if (!api?.assistant?.createSession) return;
+                    try {
+                      const title = `Session ${new Date().toLocaleTimeString(locale === 'zh' ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`;
+                      const presets = (await api.provider.unifiedList()) as any[];
+                      const firstPreset = presets?.[0];
+                      const firstKey = firstPreset?.keys?.[0];
+                      if (!firstPreset || !firstKey) {
+                        alert(locale === 'zh' ? '请先配置 AI 服务商和 API Key' : 'Please configure AI Provider and API Key first');
+                        selectNavigation('settings:providers', 'settings:providers');
+                        return;
+                      }
+                      const defaultModel = firstPreset.defaultModel || 'gpt-4o';
+                      const sess = (await api.assistant.createSession({
+                        projectId: null,
+                        title,
+                        modelId: defaultModel,
+                        providerId: firstPreset.id,
+                      })) as any;
+                      selectNavigation('assistant', '__assistant__');
+                      setTimeout(() => {
+                        window.dispatchEvent(new CustomEvent('assistant-session-created', { detail: sess }));
+                      }, 50);
+                    } catch (e: any) {
+                      alert(e.message || e);
+                    }
+                  }}
+                  className="rounded px-1.5 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all"
+                  title={locale === 'zh' ? '新建对话' : 'New Chat'}
+                >
+                  <Plus size={13} />
+                </button>
+              </div>
+              {activeNavigationId === '__assistant__' && (
+                <AssistantSidebarSection locale={locale} onNavigateAssistant={() => selectNavigation('__assistant__', '__assistant__')} />
+              )}
+            </div>
+
+          {/* Modules section — same level as Quick Access */}
+          <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
+            {t(locale, 'nav.modules')}
+          </div>
+          {modules.length > 0 ? (
+            <div
+              className="mb-3 flex flex-col gap-0.5 px-3"
+              role="listbox"
+              aria-label={t(locale, 'nav.modules')}
+              aria-live="polite"
+              onDragEnd={() => void handleDragEnd()}
+            >
               {modules.map((module, index) => {
                 const moduleId = getModuleId(module);
                 const moduleName =
@@ -728,79 +771,79 @@ export default function Sidebar({
                 );
               })}
             </div>
-        ) : (
-          <div className="mb-3 px-3 py-2 text-xs text-[var(--text-disabled)] italic">
-            {t(locale, 'sidebar.noModules')}
+          ) : (
+            <div className="mb-3 px-3 py-2 text-xs text-[var(--text-disabled)] italic">
+              {t(locale, 'sidebar.noModules')}
+            </div>
+          )}
+
+            {/* Builtin Tools section */}
+            {enabledTools.length > 0 && (
+              <>
+                <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
+                  {t(locale, 'nav.builtinTools')}
+                </div>
+                <div className="mb-3 flex flex-col gap-0.5 px-3">
+                  {enabledTools.map((et) => {
+                    const toolDef = BUILTIN_TOOLS.find((t) => t.id === et.id);
+                    if (!toolDef) return null;
+                    const navigationId = `builtin:${et.id}`;
+                    const toolLabel = locale.startsWith('zh') ? toolDef.label.zh : toolDef.label.en;
+                    // Dynamic icon lookup from lucide
+                    const IconComp = (LucideIcons as unknown as Record<string, React.ComponentType<{ size?: number; className?: string }>>)[toolDef.icon];
+                    return (
+                      <SidebarNavItem
+                        key={et.id}
+                        isActive={activeNavigationId === navigationId}
+                        icon={IconComp ? <IconComp size={15} /> : <Square size={15} />}
+                        label={toolLabel}
+                        onClick={() => selectNavigation(navigationId, navigationId)}
+                        title={toolLabel}
+                      />
+                    );
+                  })}
+                </div>
+              </>
+            )}
           </div>
-        )}
 
-        {/* Builtin tools — dynamically rendered from registry */}
-        {enabledTools.length > 0 && (
-          <>
-            <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
-              {t(locale, 'nav.builtinTools')}
-            </div>
-            <div className="mb-3 flex flex-col gap-0.5 px-3">
-              {enabledTools.map((et) => {
-                const toolDef = BUILTIN_TOOLS.find((t) => t.id === et.id);
-                if (!toolDef) return null;
-                const navigationId = `builtin:${et.id}`;
-                const toolLabel = locale.startsWith('zh') ? toolDef.label.zh : toolDef.label.en;
-                // Dynamic icon lookup from lucide
-                const IconComp = (LucideIcons as unknown as Record<string, React.ComponentType<{ size?: number; className?: string }>>)[toolDef.icon];
-                return (
-                  <SidebarNavItem
-                    key={et.id}
-                    isActive={activeNavigationId === navigationId}
-                    icon={IconComp ? <IconComp size={15} /> : <Square size={15} />}
-                    label={toolLabel}
-                    onClick={() => selectNavigation(navigationId, navigationId)}
-                    title={toolLabel}
-                  />
-                );
-              })}
-            </div>
-          </>
-        )}
-
-        {/* Bottom spacer */}
-      </div>
-
-      {/* 底部固定区域：通知、设置、创意工坊 */}
-      <div className="shrink-0 px-3 py-2 border-t border-[var(--border-subtle)]">
-        <button
-          type="button"
-          onClick={onNotificationClick}
-          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm text-[var(--text-secondary)] transition-all hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]"
-        >
-          <Bell size={16} />
-          <span>{t(locale, 'notifications.title')}</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => selectNavigation('__settings__', '__settings__')}
-          className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
-            activeNavigationId === '__settings__'
-              ? 'bg-[var(--primary-soft)] text-[var(--primary)] font-medium'
-              : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
-          }`}
-        >
-          <Settings size={16} />
-          <span>{t(locale, 'nav.settings')}</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => selectNavigation('__workshop__', '__workshop__')}
-          className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
-            activeNavigationId === '__workshop__'
-              ? 'bg-[var(--primary-soft)] text-[var(--primary)] font-medium'
-              : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
-          }`}
-        >
-          <Layers size={16} />
-          <span>{t(locale, 'nav.workshop')}</span>
-        </button>
-      </div>
+          {/* 底部固定区域：通知、设置、创意工坊 */}
+          <div className="shrink-0 px-3 py-2 border-t border-[var(--border-subtle)]">
+            <button
+              type="button"
+              onClick={onNotificationClick}
+              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm text-[var(--text-secondary)] transition-all hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]"
+            >
+              <Bell size={16} />
+              <span>{t(locale, 'notifications.title')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => selectNavigation('settings:theme', 'settings:theme')}
+              className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
+                activeNavigationId === '__settings__'
+                  ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
+              }`}
+            >
+              <Settings size={16} />
+              <span>{t(locale, 'nav.settings')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => selectNavigation('__workshop__', '__workshop__')}
+              className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
+                activeNavigationId === '__workshop__'
+                  ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
+              }`}
+            >
+              <Layers size={16} />
+              <span>{t(locale, 'nav.workshop')}</span>
+            </button>
+          </div>
+        </>
+      )}
 
     </aside>
     </div>

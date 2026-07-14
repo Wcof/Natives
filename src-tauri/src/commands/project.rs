@@ -1,5 +1,5 @@
 use crate::db;
-use crate::Result;
+use crate::{Error, Result};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -14,7 +14,8 @@ pub struct ProjectInfo {
 /// List all registered projects with conversation counts.
 #[tauri::command]
 pub fn project_list() -> Result<Vec<ProjectInfo>> {
-    let conn = db::get_assistant_db_conn().map_err(|e| e.to_string())?;
+    let conn = db::get_assistant_db_conn()
+        .map_err(|e| Error::Internal(format!("DB connection: {e}")))?;
 
     let mut stmt = conn
         .prepare(
@@ -29,7 +30,7 @@ pub fn project_list() -> Result<Vec<ProjectInfo>> {
              WHERE s.project_id IS NOT NULL AND s.project_id != ''
              ORDER BY s.project_id",
         )
-        .map_err(|e| format!("Failed to prepare project list query: {e}"))?;
+        .map_err(|e| Error::Internal(format!("Failed to prepare project list query: {e}")))?;
 
     let projects = stmt
         .query_map([], |row| {
@@ -48,9 +49,9 @@ pub fn project_list() -> Result<Vec<ProjectInfo>> {
                 conversation_count: conv_count,
             })
         })
-        .map_err(|e| format!("Failed to query projects: {e}"))?
+        .map_err(|e| Error::Internal(format!("Failed to query projects: {e}")))?
         .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| format!("Failed to collect projects: {e}"))?;
+        .map_err(|e| Error::Internal(format!("Failed to collect projects: {e}")))?;
 
     Ok(projects)
 }
@@ -60,7 +61,7 @@ pub fn project_list() -> Result<Vec<ProjectInfo>> {
 pub fn project_register(path: String) -> Result<ProjectInfo> {
     let path = path.trim().to_string();
     if path.is_empty() {
-        return Err("Project path cannot be empty".into());
+        return Err(Error::InvalidInput("Project path cannot be empty".into()));
     }
 
     let label = path

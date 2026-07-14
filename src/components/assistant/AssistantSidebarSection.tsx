@@ -232,7 +232,7 @@ export default function AssistantSidebarSection({ locale, onNavigateAssistant }:
                 title={group.path ?? undefined}
                 className={`drag-none flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[0.6875rem] ${
                   group.path === navigation.activeProjectPath
-                    ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
+                    ? 'bg-[var(--accent)] text-[var(--accent-ink)]'
                     : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]'
                 }`}
               >
@@ -263,7 +263,7 @@ export default function AssistantSidebarSection({ locale, onNavigateAssistant }:
                     aria-selected={isSelected}
                     className={`group relative ml-4 mt-0.5 flex items-center rounded-md ${
                       isSelected
-                        ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
+                        ? 'bg-[var(--accent)] text-[var(--accent-ink)]'
                         : isFocused
                           ? 'bg-[var(--surface-hover)] text-[var(--text)]'
                           : 'text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]'

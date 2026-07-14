@@ -138,37 +138,36 @@ function mapBlockToContentBlock(block: MessageBlock): import('./blocks').Content
     case 'reasoning':
       return { type: 'reasoning', text: String(content.text ?? content.reasoning ?? content.content ?? ''), signature: content.signature ? String(content.signature) : undefined };
     case 'image':
-      return { type: 'image', mimeType: String(content.mime_type ?? 'image/png'), data: String(content.data ?? ''), altText: String(content.alt_text ?? '') };
+      return { type: 'image', mimeType: String(content.mime_type ?? 'image/png'), imageUrl: String(content.data ?? ''), altText: String(content.alt_text ?? '') };
     case 'file_reference':
-      return { type: 'file_reference', path: String(content.path ?? content.file_path ?? ''), mimeType: String(content.mime_type ?? 'application/octet-stream'), size: Number(content.size ?? content.file_size ?? 0), sha256: content.sha256 ? String(content.sha256) : undefined };
+      return { type: 'file_reference', filePath: String(content.path ?? content.file_path ?? ''), mimeType: String(content.mime_type ?? 'application/octet-stream'), fileSize: Number(content.size ?? content.file_size ?? 0) };
     case 'tool_call':
       return {
         type: 'tool_call',
-        id: String(content.tool_call_id ?? content.id ?? ''),
-        name: String(content.tool_name ?? content.name ?? ''),
-        input: content.input ?? content.arguments ?? {},
-        status: (content.status ?? 'pending') as 'pending' | 'running' | 'completed' | 'failed' | 'rejected',
+        toolCallId: String(content.tool_call_id ?? content.id ?? ''),
+        toolName: String(content.tool_name ?? content.name ?? ''),
+        toolInput: (content.input ?? content.arguments ?? {}) as Record<string, unknown>,
+        toolStatus: (content.status ?? 'pending') as 'pending' | 'running' | 'completed' | 'failed' | 'rejected',
       };
     case 'tool_result':
       return {
         type: 'tool_result',
-        toolCallId: String(content.tool_call_id ?? ''),
-        output: content.output ?? content.result,
+        toolOutput: content.output ?? content.result,
         isError: Boolean(content.is_error ?? false),
         durationMs: content.duration_ms == null ? undefined : Number(content.duration_ms),
       };
     case 'citation':
       return {
         type: 'citation',
-        uri: String(content.uri ?? content.url ?? ''),
-        title: content.title ? String(content.title) : undefined,
+        citationUri: String(content.uri ?? content.url ?? ''),
+        citationTitle: content.title ? String(content.title) : undefined,
         text: content.text ? String(content.text) : undefined,
       };
     case 'error':
       return {
         type: 'error',
-        code: String(content.code ?? content.error_code ?? ''),
-        message: String(content.message ?? content.error_message ?? ''),
+        errorCode: String(content.code ?? content.error_code ?? ''),
+        errorMessage: String(content.message ?? content.error_message ?? ''),
         retryable: Boolean(content.retryable ?? false),
       };
     default:
@@ -915,7 +914,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
             </div>
             <div className="flex items-center gap-2">
               <ModelSelectorDropdown
-                providers={providers}
+                providers={providers as any}
                 selectedProviderId={activeConversation.provider_id}
                 selectedModel={activeConversation.model_id}
                 onSelect={handleSelectModel}
@@ -960,7 +959,6 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
                 messages={timelineWithStreaming}
                 loading={loadingMessages}
                 locale={locale}
-                streaming={isStreaming}
               />
             </div>
 

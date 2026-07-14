@@ -59,6 +59,18 @@ export const THEME_TOKENS = {
   surfaceHover: 'var(--surface-hover)',
   sidebar: 'var(--sidebar)',
 
+  // Grayscale steps
+  gray50: 'var(--gray-50)',
+  gray100: 'var(--gray-100)',
+  gray200: 'var(--gray-200)',
+  gray300: 'var(--gray-300)',
+  gray400: 'var(--gray-400)',
+  gray500: 'var(--gray-500)',
+  gray600: 'var(--gray-600)',
+  gray700: 'var(--gray-700)',
+  gray800: 'var(--gray-800)',
+  gray900: 'var(--gray-900)',
+
   // Text
   text: 'var(--text)',
   textBody: 'var(--text-body)',
@@ -80,6 +92,12 @@ export const THEME_TOKENS = {
   warning: 'var(--warning)',
   info: 'var(--info)',
   success: 'var(--success)',
+
+  // Chart (grayscale)
+  chartStrong: 'var(--chart-strong)',
+  chartMedium: 'var(--chart-medium)',
+  chartSoft: 'var(--chart-soft)',
+  chartEmpty: 'var(--chart-empty)',
 } as const;
 
 // ── Component Token Presets ──

@@ -16,6 +16,7 @@ pub mod sequence_id;
 pub mod vendor_whitelist;
 pub mod commands;
 mod db;
+mod usage;
 mod disk_usage;
 mod env_manager;
 mod error;
@@ -74,7 +75,7 @@ pub struct AppState {
     pub ghostty_manager: terminal::GhosttyManager,
     pub terminal_recorder: std::sync::Arc<terminal_recorder::Recorder>,
     pub screenshot_stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    pub usage_cache: Mutex<Option<(serde_json::Value, u64)>>,
+    pub usage_cache: usage::UsageCache,
     pub fs_watcher: fs_watch::FsWatcher,
     pub lid_guard: lid_guard::LidGuard,
     pub wechat_bridge: Mutex<Option<wechat::bridge::Bridge>>,
@@ -85,7 +86,49 @@ pub struct AppState {
 pub struct DaemonConfig {
     pub socket_path: std::path::PathBuf,
     pub bootstrap_token: String,
-    pub daemon_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    pub daemon_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+/// Spawn daemon health-check in a background thread with its own Tokio runtime.
+/// This runs outside the Tauri runtime to avoid "no reactor running" panics.
+fn spawn_daemon_health_check(app_handle: tauri::AppHandle, sock_path: std::path::PathBuf, _token: String) {
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("[daemon] failed to create runtime: {e}");
+                return;
+            }
+        };
+        rt.block_on(async move {
+            let mut retry_delay = Duration::from_secs(1);
+            let max_delay = Duration::from_secs(60);
+            let mut attempts = 0;
+            loop {
+                tokio::time::sleep(retry_delay).await;
+                match tokio::net::UnixStream::connect(&sock_path).await {
+                    Ok(_) => {
+                        let _ = app_handle.emit("daemon:status", serde_json::json!({
+                            "status": "healthy",
+                            "socket": sock_path.to_string_lossy(),
+                        }));
+                        retry_delay = Duration::from_secs(1);
+                        attempts = 0;
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                    }
+                    Err(_) => {
+                        attempts += 1;
+                        let _ = app_handle.emit("daemon:status", serde_json::json!({
+                            "status": "unhealthy",
+                            "attempts": attempts,
+                            "socket": sock_path.to_string_lossy(),
+                        }));
+                        retry_delay = std::cmp::min(retry_delay * 2, max_delay);
+                    }
+                }
+            }
+        });
+    });
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -183,7 +226,7 @@ pub fn run() {
                 ghostty_manager: terminal::GhosttyManager::new(),
                 terminal_recorder,
                 screenshot_stop_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                usage_cache: Mutex::new(None),
+                usage_cache: usage::UsageCache::new(),
                 fs_watcher: fs_watch::FsWatcher::new(app.handle().clone()),
                 lid_guard: lid_guard::LidGuard::new(),
                 wechat_bridge: Mutex::new(Some(wechat::bridge::Bridge::new())),
@@ -196,64 +239,37 @@ pub fn run() {
             let daemon_socket_path = data_dir.join("agent-daemon.sock");
             let daemon_bootstrap_token = uuid::Uuid::new_v4().to_string();
 
-            // Spawn daemon health-check task (non-blocking, just monitoring)
-            let daemon_handle = {
-                let app_handle = app.handle().clone();
-                let sock_path = daemon_socket_path.clone();
-                let token = daemon_bootstrap_token.clone();
-                tokio::spawn(async move {
-                    let mut retry_delay = Duration::from_secs(1);
-                    let max_delay = Duration::from_secs(60);
-                    let mut attempts = 0;
-                    loop {
-                        tokio::time::sleep(retry_delay).await;
-                        // Try to connect to daemon socket
-                        match tokio::net::UnixStream::connect(&sock_path).await {
-                            Ok(_) => {
-                                // Health check passed — emit status
-                                let _ = app_handle.emit("daemon:status", serde_json::json!({
-                                    "status": "healthy",
-                                    "socket": sock_path.to_string_lossy(),
-                                }));
-                                retry_delay = Duration::from_secs(1); // Reset on success
-                                attempts = 0;
-                                // Wait longer before re-checking
-                                tokio::time::sleep(Duration::from_secs(30)).await;
-                            }
-                            Err(_) => {
-                                attempts += 1;
-                                let _ = app_handle.emit("daemon:status", serde_json::json!({
-                                    "status": "unhealthy",
-                                    "attempts": attempts,
-                                    "socket": sock_path.to_string_lossy(),
-                                }));
-                                // Exponential backoff: 1s, 2s, 4s, 8s, ... up to 60s
-                                retry_delay = std::cmp::min(retry_delay * 2, max_delay);
-                            }
-                        }
-                    }
-                })
-            };
+            // Spawn daemon health-check in a background thread with its own Tokio runtime
+            spawn_daemon_health_check(
+                app.handle().clone(),
+                daemon_socket_path.clone(),
+                daemon_bootstrap_token.clone(),
+            );
 
             // Store daemon config in app state (tokens are NOT exposed to renderer)
             app.manage(DaemonConfig {
                 socket_path: daemon_socket_path,
                 bootstrap_token: daemon_bootstrap_token,
-                daemon_handle: Mutex::new(Some(daemon_handle)),
+                daemon_handle: Mutex::new(None),
             });
 
             // ── P1 Runtime 抽象层：注册 Native runtime（兜底永远 available）──
             // CLI runtime 在各自 Slice 注册；此处先注册 Native 保证降级路径可用
-            tauri::async_runtime::block_on(runtime::registry::register(std::sync::Arc::new(
-                runtime::native_runtime::NativeRuntime::new(app.handle().clone()),
-            )));
-            // 注册 Claude CLI + Codex CLI runtime（自动检测二进制可用性）
-            tauri::async_runtime::block_on(runtime::registry::register(std::sync::Arc::new(
-                runtime::claude_cli::ClaudeCliRuntime::new(),
-            )));
-            tauri::async_runtime::block_on(runtime::registry::register(std::sync::Arc::new(
-                runtime::codex_cli::CodexCliRuntime::new(),
-            )));
+            // 使用独立 Tokio 运行时，因为 setup 闭包中 tauri::async_runtime::block_on 不可用
+            {
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| format!("failed to create tokio runtime for setup: {e}"))?;
+                rt.block_on(runtime::registry::register(std::sync::Arc::new(
+                    runtime::native_runtime::NativeRuntime::new(app.handle().clone()),
+                )));
+                // 注册 Claude CLI + Codex CLI runtime（自动检测二进制可用性）
+                let _ = rt.block_on(runtime::registry::register(std::sync::Arc::new(
+                    runtime::claude_cli::ClaudeCliRuntime::new(),
+                )));
+                let _ = rt.block_on(runtime::registry::register(std::sync::Arc::new(
+                    runtime::codex_cli::CodexCliRuntime::new(),
+                )));
+            }
 
             // FOUC guard: window starts hidden (tauri.conf.json has visible: false)
             // It will be shown by theme_ready_signal command from frontend

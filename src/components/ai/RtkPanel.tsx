@@ -12,7 +12,9 @@ export default function RtkPanel() {
   const { data: usage, loading, error, reload: fetchUsage } = useAsyncData(async () => {
     const api = window.nativesAPI;
     if (!api?.usage?.refresh) return null;
-    const result = await api.usage.refresh();
+    const end = Date.now();
+    const start = end - 30 * 86400000;
+    const result = await api.usage.refresh({ startMs: start, endMs: end, force: false, includeComparison: false, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' });
     return (result?.rtk ?? null) as RtkUsage | null;
   }, []);
   const [paused, setPaused] = useState(false);

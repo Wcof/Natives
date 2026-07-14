@@ -8,6 +8,7 @@
 
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import type { UsageDashboardRequest, UsageDashboardResponse } from '@/types/usage';
 
 // ── Ghostty render state payload (feature gate ghostty-vt) ──
 
@@ -197,7 +198,7 @@ export interface NativesAPI {
     read: () => Promise<string>;
   };
   usage: {
-    refresh: () => Promise<unknown>;
+    refresh: (request: UsageDashboardRequest) => Promise<UsageDashboardResponse>;
   };
   codegraph: {
     read: () => Promise<unknown>;
@@ -217,6 +218,14 @@ export interface NativesAPI {
     deleteKey: (id: string) => Promise<void>;
     test: (data: { providerId: string; keyId: string; model?: string }) => Promise<{ success: boolean; error?: string }>;
     testRaw: (data: { baseUrl: string; apiKey: string; model?: string }) => Promise<{ success: boolean; error?: string }>;
+    discoverModels: (data: { providerType: string; baseUrl: string; apiKey: string }) => Promise<Array<{ id: string; displayName?: string }>>;
+    unifiedList: () => Promise<unknown>;
+    create: (input: { providerType: string; displayName: string; websiteUrl: string; baseUrl: string; defaultModel?: string | null; initialKey?: { label: string; apiKey: string } | null }) => Promise<unknown>;
+    updateDefaults: (input: { providerId: string; defaultModel?: string | null }) => Promise<unknown>;
+    addKeyUnified: (input: { providerId: string; label: string; apiKey: string }) => Promise<unknown>;
+    testKey: (input: { providerId: string; keyId: string }) => Promise<{ success: boolean; status: string; testedAt: string; errorCode: string | null; userMessage: string | null }>;
+    setPrimaryKey: (input: { providerId: string; keyId: string }) => Promise<unknown>;
+    deleteKeyUnified: (input: { providerId: string; keyId: string }) => Promise<void>;
   };
   windowControls: {
     minimize: () => Promise<void>;
@@ -262,6 +271,9 @@ export interface NativesAPI {
     detect: (name: string) => Promise<string | null>;
     install: (name: string) => Promise<void>;
     uninstall: (name: string) => Promise<void>;
+    onInstallLog: (callback: (data: string) => void) => () => void;
+    onInstallComplete: (callback: (data: { success: boolean; error?: string }) => void) => () => void;
+    onUninstallComplete: (callback: (data: { success: boolean; error?: string }) => void) => () => void;
   };
   assistant: {
     listSessions: (params: { projectId: string | null }) => Promise<unknown>;
@@ -334,6 +346,16 @@ export interface NativesAPI {
     run: (data: { subagentId: string; inputText: string }) => Promise<unknown>;
     listRuns: (subagentId: string) => Promise<unknown>;
     resolveBinding: (subagentId: string) => Promise<unknown>;
+  };
+  /** Project registry API */
+  project: {
+    list: () => Promise<Array<{ id: string; path: string; label: string; conversationCount: number }>>;
+    register: (path: string) => Promise<{ id: string; path: string; label: string }>;
+    open: (id: string) => Promise<void>;
+    remove: (id: string) => Promise<void>;
+  };
+  dialog: {
+    pickDirectory: () => Promise<string | null>;
   };
 }
 
@@ -673,7 +695,7 @@ const nativesAPI: NativesAPI = {
 
   // Usage
   usage: {
-    refresh: () => cmd('usage_refresh'),
+    refresh: (request: UsageDashboardRequest) => cmd<UsageDashboardResponse>('usage_refresh', { request }),
   },
 
   // CodeGraph
@@ -845,6 +867,24 @@ const nativesAPI: NativesAPI = {
     detect: (name: string) => cmd<string | null>('plugin_detect', { name }),
     install: (name: string) => cmd<void>('plugin_install', { name }),
     uninstall: (name: string) => cmd<void>('plugin_uninstall', { name }),
+    onInstallLog: (callback: (data: string) => void) => {
+      let unlisten: (() => void) | null = null;
+      listen<string>('plugin:install-log', (e) => callback(e.payload))
+        .then((fn) => { unlisten = fn; });
+      return () => { unlisten?.(); };
+    },
+    onInstallComplete: (callback: (data: { success: boolean; error?: string }) => void) => {
+      let unlisten: (() => void) | null = null;
+      listen<{ success: boolean; error?: string }>('plugin:install-complete', (e) => callback(e.payload))
+        .then((fn) => { unlisten = fn; });
+      return () => { unlisten?.(); };
+    },
+    onUninstallComplete: (callback: (data: { success: boolean; error?: string }) => void) => {
+      let unlisten: (() => void) | null = null;
+      listen<{ success: boolean; error?: string }>('plugin:uninstall-complete', (e) => callback(e.payload))
+        .then((fn) => { unlisten = fn; });
+      return () => { unlisten?.(); };
+    },
   },
 
   // ── Library (fanbox clone — G4) ──

@@ -5,7 +5,6 @@ import { Activity, ArrowDownToLine, ArrowUpFromLine, Database, Sparkles, Info } 
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
 import { fmtCount } from '@/lib/format';
-import type { ClaudeUsage } from '@/types/agent';
 import { useLocale, t } from '@/i18n';
 
 /**
@@ -24,7 +23,12 @@ import { useLocale, t } from '@/i18n';
  */
 
 interface TokenHeroProps {
-  usage?: ClaudeUsage | null;
+  usage?: {
+    localTokens: { today: number; thisWeek: number; total: number; input?: number; output?: number; cacheCreation?: number; cacheRead?: number };
+    totalRequests?: number;
+    totalCost?: number | null;
+    models?: Record<string, { inputTokens: number; outputTokens: number }>;
+  } | null;
   isLoading?: boolean;
   sourceConfigured?: boolean;
   minimal?: boolean;
@@ -41,7 +45,7 @@ interface TokenBreakdown {
   cost: number | null;
 }
 
-function computeBreakdown(usage: ClaudeUsage | null): TokenBreakdown {
+function computeBreakdown(usage: TokenHeroProps['usage']): TokenBreakdown {
   if (!usage) {
     return {
       realTotal: 0,
@@ -273,7 +277,7 @@ export function TokenHero({ usage, isLoading, sourceConfigured, minimal }: Token
                 style={{
                   height: '100%',
                   borderRadius: '999px',
-                  background: 'linear-gradient(to right, #10b981, #3b82f6)',
+                  background: 'linear-gradient(to right, var(--chart-medium), var(--chart-strong))',
                   width: `${hitPercent}%`,
                 }}
               />

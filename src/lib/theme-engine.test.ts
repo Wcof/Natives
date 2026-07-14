@@ -14,8 +14,8 @@ test('should have exactly two themes (light / dark)', () => {
 
 test('should validate a valid theme', () => {
   const theme = validateTheme(THEMES.light!);
-  assert.equal(theme.primary, '#FF6B2C');
-  assert.equal(theme.background, '#F7F7F5');
+  assert.equal(theme.primary, '#111111');
+  assert.equal(theme.background, '#F4F4F2');
 });
 
 test('should reject invalid hex color', () => {
@@ -24,18 +24,19 @@ test('should reject invalid hex color', () => {
   });
 });
 
-test('light and dark share the same brand primary', () => {
-  assert.equal(THEMES.light!.primary, THEMES.dark!.primary);
-  assert.equal(THEMES.light!.primary, '#FF6B2C');
+test('light and dark use distinct grayscale brand colors', () => {
+  assert.notEqual(THEMES.light!.primary, THEMES.dark!.primary);
+  assert.equal(THEMES.light!.primary, '#111111');
+  assert.equal(THEMES.dark!.primary, '#F5F5F5');
 });
 
 test('dark theme uses dark surfaces', () => {
-  assert.equal(THEMES.dark!.background, '#0F1115');
-  assert.equal(THEMES.dark!.surface, '#171A21');
+  assert.equal(THEMES.dark!.background, '#080808');
+  assert.equal(THEMES.dark!.surface, '#151515');
 });
 
 test('light theme uses light surfaces', () => {
-  assert.equal(THEMES.light!.background, '#F7F7F5');
+  assert.equal(THEMES.light!.background, '#F4F4F2');
   assert.equal(THEMES.light!.surface, '#FFFFFF');
 });
 

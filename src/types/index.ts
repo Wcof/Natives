@@ -78,6 +78,9 @@ declare global {
         detect: (name: string) => Promise<string | null>;
         install: (name: string) => Promise<void>;
         uninstall: (name: string) => Promise<void>;
+        onInstallLog: (callback: (data: string) => void) => () => void;
+        onInstallComplete: (callback: (data: { success: boolean; error?: string }) => void) => () => void;
+        onUninstallComplete: (callback: (data: { success: boolean; error?: string }) => void) => () => void;
       };
       getTheme: () => Promise<string>;
       setTheme: (theme: string) => Promise<void>;
@@ -167,16 +170,7 @@ declare global {
         read: () => Promise<string>;
       };
       usage: {
-        refresh: () => Promise<{
-          claude: import('./agent').ClaudeUsage | null;
-          codex: import('./agent').CodexUsage | null;
-          rtk: import('./agent').RtkUsage | null;
-          history: import('./agent').UsageHistoryPoint[];
-          modelStats: import('./agent').ModelStat[];
-          sourceConfigured: boolean;
-          sourceBreadcrumbs: string[];
-          error?: string | null;
-        }>;
+        refresh: (request: import('./usage').UsageDashboardRequest) => Promise<import('./usage').UsageDashboardResponse>;
       };
       windowControls: {
         minimize: () => Promise<void>;
@@ -236,6 +230,10 @@ declare global {
         testKey: (input: { providerId: string; keyId: string }) => Promise<{ success: boolean; status: string; testedAt: string; errorCode: string | null; userMessage: string | null }>;
         setPrimaryKey: (input: { providerId: string; keyId: string }) => Promise<unknown>;
         deleteKeyUnified: (input: { providerId: string; keyId: string }) => Promise<void>;
+      };
+      assistantV2: {
+        request: <T = unknown>(method: string, params?: unknown) => Promise<T>;
+        getStatus: () => Promise<{ connected: boolean; error: string | null }>;
       };
       assistant: {
         listSessions: (params: { projectId: string | null }) => Promise<unknown>;

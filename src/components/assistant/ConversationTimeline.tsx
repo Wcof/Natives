@@ -4,7 +4,7 @@
 
 import { renderBlocks, type ContentBlock } from './blocks';
 
-interface Message {
+export interface Message {
   id: string;
   role: 'system' | 'user' | 'assistant';
   contentBlocks: ContentBlock[];

@@ -21,55 +21,55 @@ pub struct GhosttyConfigColors {
 /// 根据主题 ID 返回对应的 Ghostty 色彩配置
 pub fn theme_to_ghostty(theme_id: &str) -> GhosttyConfigColors {
     match theme_id {
-        "frosted-jasmine" => GhosttyConfigColors {
-            // 暖白浆果色系 — 16 色调色板
+        "frosted-jasmine" | "light" => GhosttyConfigColors {
+            // Light theme (Monochrome 黑白灰)
             palette: [
-                [0x2d, 0x1f, 0x14], // 0  black      -> text
-                [0xf0, 0x5b, 0x3f], // 1  red        -> danger
-                [0xff, 0x98, 0x56], // 2  green      -> diff-add
-                [0xff, 0xa4, 0x66], // 3  yellow     -> warning
-                [0xbe, 0x88, 0xed], // 4  blue       -> info
-                [0xff, 0x79, 0x3f], // 5  magenta    -> accent
-                [0xbe, 0x88, 0xed], // 6  cyan       -> info
-                [0xdc, 0xdf, 0xe6], // 7  white      -> text
-                [0x7a, 0x6b, 0x5a], // 8  br_black   -> text-dim
-                [0xf0, 0x5b, 0x3f], // 9  br_red     -> danger
-                [0xff, 0x98, 0x56], // 10 br_green   -> diff-add
-                [0xff, 0xa4, 0x66], // 11 br_yellow  -> warning
-                [0xbe, 0x88, 0xed], // 12 br_blue    -> info
-                [0xff, 0x79, 0x3f], // 13 br_magenta -> accent
-                [0xbe, 0x88, 0xed], // 14 br_cyan    -> info
-                [0xff, 0xfd, 0xfa], // 15 br_white   -> bg
-            ],
-            foreground: [0x2d, 0x1f, 0x14], // text
-            background: [0xfd, 0xf6, 0xf0], // terminal-bg
-            cursor: [0xff, 0x79, 0x3f],     // accent
-        },
-        // 默认：terminal-volt（赛博绿）
-        _ => GhosttyConfigColors {
-            // 暗色赛博绿系
-            palette: [
-                [0x0d, 0x0f, 0x12], // 0  black      -> bg
-                [0xff, 0x3a, 0x4d], // 1  red        -> danger
-                [0x00, 0xff, 0x9c], // 2  green      -> accent/diff-add
-                [0xff, 0xb5, 0x45], // 3  yellow     -> warning
-                [0x45, 0xb5, 0xff], // 4  blue       -> info
-                [0x00, 0xff, 0x9c], // 5  magenta    -> accent
-                [0x45, 0xb5, 0xff], // 6  cyan       -> info
-                [0xdc, 0xdf, 0xe6], // 7  white      -> text
-                [0x55, 0x5a, 0x66], // 8  br_black   -> text-faint
-                [0xff, 0x3a, 0x4d], // 9  br_red     -> danger
-                [0x00, 0xff, 0x9c], // 10 br_green   -> accent/diff-add
-                [0xff, 0xb5, 0x45], // 11 br_yellow  -> warning
-                [0x45, 0xb5, 0xff], // 12 br_blue    -> info
-                [0x00, 0xff, 0x9c], // 13 br_magenta -> accent
-                [0x45, 0xb5, 0xff], // 14 br_cyan    -> info
+                [0x11, 0x18, 0x27], // 0  black      -> text
+                [0xef, 0x44, 0x44], // 1  red        -> danger
+                [0x10, 0xb9, 0x81], // 2  green      -> diff-add
+                [0xea, 0xb3, 0x08], // 3  yellow     -> warning
+                [0x3b, 0x82, 0xf6], // 4  blue       -> info
+                [0x00, 0x00, 0x00], // 5  magenta    -> accent (black)
+                [0x6b, 0x72, 0x80], // 6  cyan       -> info/gray
+                [0xe5, 0xe7, 0xeb], // 7  white      -> border
+                [0x9c, 0xa3, 0xaf], // 8  br_black   -> text-disabled
+                [0xef, 0x44, 0x44], // 9  br_red     -> danger
+                [0x10, 0xb9, 0x81], // 10 br_green   -> diff-add
+                [0xea, 0xb3, 0x08], // 11 br_yellow  -> warning
+                [0x3b, 0x82, 0xf6], // 12 br_blue    -> info
+                [0x00, 0x00, 0x00], // 13 br_magenta -> accent (black)
+                [0x6b, 0x72, 0x80], // 14 br_cyan    -> info/gray
                 [0xff, 0xff, 0xff], // 15 br_white   -> pure white
             ],
-            foreground: [0xd4, 0xd7, 0xde], // terminal-fg
-            background: [0x0d, 0x0f, 0x12], // terminal-bg
-            cursor: [0x00, 0xff, 0x9c],     // accent
+            foreground: [0x11, 0x18, 0x27], // text (#111827)
+            background: [0xff, 0xff, 0xff], // terminal-bg (#ffffff)
+            cursor: [0x00, 0x00, 0x00],     // accent (black, #000000)
         },
+        "terminal-volt" | "dark" => GhosttyConfigColors {
+            // Dark theme (Monochrome 黑白灰翻转)
+            palette: [
+                [0x17, 0x1a, 0x21], // 0  black      -> bg (#171a21)
+                [0xf8, 0x71, 0x71], // 1  red        -> danger
+                [0x34, 0xd3, 0x99], // 2  green      -> diff-add
+                [0xfb, 0xbf, 0x24], // 3  yellow     -> warning
+                [0x60, 0xa5, 0xfa], // 4  blue       -> info
+                [0xff, 0xff, 0xff], // 5  magenta    -> accent (white)
+                [0x9c, 0xa3, 0xaf], // 6  cyan       -> info/gray
+                [0xe5, 0xe7, 0xeb], // 7  white      -> border
+                [0x66, 0x70, 0x85], // 8  br_black   -> text-disabled
+                [0xf8, 0x71, 0x71], // 9  br_red     -> danger
+                [0x34, 0xd3, 0x99], // 10 br_green   -> diff-add
+                [0xfb, 0xbf, 0x24], // 11 br_yellow  -> warning
+                [0x60, 0xa5, 0xfa], // 12 br_blue    -> info
+                [0xff, 0xff, 0xff], // 13 br_magenta -> accent (white)
+                [0x9c, 0xa3, 0xaf], // 14 br_cyan    -> info/gray
+                [0xff, 0xff, 0xff], // 15 br_white   -> pure white
+            ],
+            foreground: [0xf9, 0xfa, 0xfb], // text (#f9fafb)
+            background: [0x17, 0x1a, 0x21], // terminal-bg (#171a21)
+            cursor: [0xff, 0xff, 0xff],     // accent (white, #ffffff)
+        },
+        _ => theme_to_ghostty("dark"),
     }
 }
 
@@ -139,23 +139,22 @@ mod tests {
     #[test]
     fn test_generate_config_contains_frosted_jasmine() {
         let config = generate_config("frosted-jasmine");
-        assert!(config.contains("palette = 0=#2d1f14"), "frosted-jasmine black should match text color");
-        assert!(config.contains("background = #fdf6f0"), "frosted-jasmine bg should match terminal-bg");
+        assert!(config.contains("palette = 0=#111827"), "frosted-jasmine black should match text color");
+        assert!(config.contains("background = #ffffff"), "frosted-jasmine bg should match terminal-bg");
     }
 
     #[test]
     fn test_theme_mapping_terminal_volt() {
         let colors = theme_to_ghostty("terminal-volt");
-        // Palette[0] should be bg color for dark theme
-        assert_eq!(colors.palette[0], [0x0d, 0x0f, 0x12]);
-        assert_eq!(colors.foreground, [0xd4, 0xd7, 0xde]);
+        assert_eq!(colors.palette[0], [0x17, 0x1a, 0x21]);
+        assert_eq!(colors.foreground, [0xf9, 0xfa, 0xfb]);
     }
 
     #[test]
     fn test_theme_mapping_frosted_jasmine() {
         let colors = theme_to_ghostty("frosted-jasmine");
-        assert_eq!(colors.background, [0xfd, 0xf6, 0xf0]);
-        assert_eq!(colors.cursor, [0xff, 0x79, 0x3f]);
+        assert_eq!(colors.background, [0xff, 0xff, 0xff]);
+        assert_eq!(colors.cursor, [0x00, 0x00, 0x00]);
     }
 
     #[test]
