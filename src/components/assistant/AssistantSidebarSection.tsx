@@ -53,14 +53,6 @@ export default function AssistantSidebarSection({ locale, onNavigateAssistant }:
     persistCollapsed(next);
   }, [collapsed, persistCollapsed]);
 
-  const canCreate = navigation.creationState === 'ready' && !navigation.isCreatingConversation && Boolean(actions);
-  const creationHint = {
-    engine_unavailable: t(locale, 'assistant.engineNotReady'),
-    provider_needed: t(locale, 'assistant.noProviderHint'),
-    model_needed: t(locale, 'assistant.noModelHint'),
-    ready: t(locale, 'assistant.newConversation'),
-  }[navigation.creationState];
-
   // Build flat list of all conversation items for keyboard navigation
   const flatItems = useMemo(() => {
     const items: Array<{ type: 'conversation'; id: string; groupId: string }> = [];
@@ -106,21 +98,6 @@ export default function AssistantSidebarSection({ locale, onNavigateAssistant }:
     }
   }, [focusedIndex, flatItems]);
 
-  // ── Keyboard shortcuts: ⌘N/Ctrl+N for new conversation ──
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
-        e.preventDefault();
-        if (canCreate) {
-          onNavigateAssistant();
-          actions?.createConversation();
-        }
-      }
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [canCreate, onNavigateAssistant, actions]);
-
   // Close menus on click outside
   useEffect(() => {
     if (!menuId) return;
@@ -161,36 +138,8 @@ export default function AssistantSidebarSection({ locale, onNavigateAssistant }:
 
   return (
     <div className="mb-3 px-3">
-      {/* ── Tree Area (search + projects/conversations) ── */}
+      {/* ── Project and conversation tree ── */}
       <div className="max-h-72 overflow-y-auto" onKeyDown={handleKeyDown} role="listbox" aria-label={t(locale, 'nav.assistant')} aria-activedescendant={focusedIndex !== null ? `conv-${flatItems[focusedIndex]?.id}` : undefined}>
-        {/* ── Create button row ── */}
-        <div className="mb-1 flex items-center gap-1 pr-1">
-          <button
-            type="button"
-            disabled={!canCreate}
-            onClick={() => { onNavigateAssistant(); actions?.createConversation(); }}
-            title={creationHint}
-            aria-label={t(locale, 'assistant.newConversation')}
-            data-assistant-create
-            className="drag-none flex flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-[0.6875rem] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-35 transition-colors duration-150"
-          >
-            {navigation.isCreatingConversation ? (
-              <Loader2 size={11} className="animate-spin" />
-            ) : (
-              <Plus size={11} />
-            )}
-            <span>{t(locale, 'assistant.newConversation')}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => { onNavigateAssistant(); actions?.addProjectFolder(); }}
-            title={t(locale, 'assistant.chooseProjectDirectory')}
-            aria-label={t(locale, 'assistant.chooseProjectDirectory')}
-            className="drag-none rounded-md p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)] transition-colors duration-150"
-          >
-            <FolderOpen size={11} />
-          </button>
-        </div>
         {/* ── Search Input ── */}
         <div className="relative mb-1.5 pr-1">
           <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-[var(--text-disabled)] pointer-events-none" />
@@ -218,37 +167,41 @@ export default function AssistantSidebarSection({ locale, onNavigateAssistant }:
           return (
             <section key={group.id} className="mt-1">
               {/* ── Project Header ── */}
-              <button
-                type="button"
-                onClick={() => {
-                  if (isUnassigned) {
-                    actions?.selectProject(null);
-                  } else {
-                    toggleProject(group.id);
-                    actions?.selectProject(group.path ?? null);
-                  }
-                  onNavigateAssistant();
-                }}
-                title={group.path ?? undefined}
-                className={`drag-none flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-[0.6875rem] ${
-                  group.path === navigation.activeProjectPath
-                    ? 'bg-[var(--accent)] text-[var(--accent-ink)]'
-                    : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]'
-                }`}
-              >
-                {isUnassigned ? (
-                  <MessageSquare size={12} className="shrink-0 text-[var(--text-disabled)]" />
-                ) : (
-                  <>
-                    {isCollapsed ? <ChevronRight size={11} className="shrink-0" /> : <ChevronDown size={11} className="shrink-0" />}
-                    {isCollapsed ? <Folder size={12} className="shrink-0 text-[var(--text-disabled)]" /> : <FolderOpen size={12} className="shrink-0 text-[var(--text-disabled)]" />}
-                  </>
-                )}
-                <span className="min-w-0 flex-1 truncate font-medium">{group.label}</span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isUnassigned) actions?.selectProject(null);
+                    else {
+                      toggleProject(group.id);
+                      actions?.selectProject(group.path ?? null);
+                    }
+                    onNavigateAssistant();
+                  }}
+                  title={group.path ?? undefined}
+                  className={`drag-none flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm ${
+                    group.path === navigation.activeProjectPath
+                      ? 'bg-[var(--accent)] text-[var(--accent-ink)]'
+                      : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]'
+                  }`}
+                >
+                  {isUnassigned ? <MessageSquare size={12} className="shrink-0 text-[var(--text-disabled)]" /> : <>{isCollapsed ? <ChevronRight size={11} className="shrink-0" /> : <ChevronDown size={11} className="shrink-0" />}{isCollapsed ? <Folder size={12} className="shrink-0 text-[var(--text-disabled)]" /> : <FolderOpen size={12} className="shrink-0 text-[var(--text-disabled)]" />}</>}
+                  <span className="min-w-0 flex-1 truncate font-medium">{group.label}</span>
+                  {!isUnassigned && <span className="tabular-nums text-[0.625rem] text-[var(--text-disabled)]">{group.conversations.length}</span>}
+                </button>
                 {!isUnassigned && (
-                  <span className="tabular-nums text-[0.625rem] text-[var(--text-disabled)]">{group.conversations.length}</span>
+                  <button
+                    type="button"
+                    onClick={() => { onNavigateAssistant(); if (group.path) actions?.createConversationInProject(group.path); }}
+                    disabled={navigation.creationState !== 'ready' || navigation.isCreatingConversation}
+                    aria-label={t(locale, 'assistant.newConversation')}
+                    title={t(locale, 'assistant.newConversation')}
+                    className="drag-none rounded-md p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] disabled:opacity-35"
+                  >
+                    {navigation.isCreatingConversation ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+                  </button>
                 )}
-              </button>
+              </div>
 
               {/* ── Conversation Items ── */}
               {!isCollapsed && group.conversations.map(conversation => {

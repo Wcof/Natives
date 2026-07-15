@@ -77,13 +77,13 @@ pub async fn stream_chat(
     // ── P1 Runtime 抽象：分流到 Claude CLI / Codex CLI / Native ──
     let _state_unused = state; // 持有 state 避免 DB 连接释放（兼容既有签名）
 
-    // 从 session 表取 provider_id（Native runtime 内部会再解密 key）
+    // 从现行会话表取 provider_id（Native runtime 内部会再解密 key）
     let provider_id: String = {
         let asst_conn = crate::db::get_assistant_db_conn()
             .map_err(|e| Error::Internal(format!("failed to get assistant DB: {e}")))?;
         asst_conn
             .query_row(
-                "SELECT provider_id FROM assistant_sessions WHERE id = ?1",
+                "SELECT provider_id FROM assistant_conversations WHERE id = ?1",
                 rusqlite::params![input.session_id],
                 |row| row.get(0),
             )
@@ -141,6 +141,24 @@ pub async fn stream_chat(
             let is_terminal = matches!(ev, crate::runtime::RuntimeEvent::RunCompleted { .. }
                 | crate::runtime::RuntimeEvent::RunFailed { .. });
             let _ = app2.emit(&format!("assistant://stream/{}", sid), &ev);
+            match &ev {
+                crate::runtime::RuntimeEvent::AssistantDelta { text } => {
+                    let _ = app2.emit("assistant:stream_update", StreamPayload {
+                        session_id: sid.clone(), delta: Some(text.clone()), ..Default::default()
+                    });
+                }
+                crate::runtime::RuntimeEvent::RunCompleted { .. } => {
+                    let _ = app2.emit("assistant:stream_update", StreamPayload {
+                        session_id: sid.clone(), done: true, ..Default::default()
+                    });
+                }
+                crate::runtime::RuntimeEvent::RunFailed { error } => {
+                    let _ = app2.emit("assistant:stream_update", StreamPayload {
+                        session_id: sid.clone(), done: true, error: Some(error.clone()), ..Default::default()
+                    });
+                }
+                _ => {}
+            }
             if is_terminal { break; }
         }
         cleanup_registry(&sid);

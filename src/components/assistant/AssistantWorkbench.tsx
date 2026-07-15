@@ -32,6 +32,11 @@ import {
 import type { AssistantRunEvent } from '@/lib/assistant-types';
 import { useAssistantWorkspace, type AssistantWorkspaceActions } from './AssistantWorkspaceContext';
 import ModelSelectorDropdown from './ModelSelectorDropdown';
+import RunInspector from './RunInspector';
+import AssistantSidebarSection from './AssistantSidebarSection';
+import { useAssistantStream } from './hooks/useAssistantStream';
+import type { ProjectSummary, ProviderSummary } from '@/lib/tauri-adapter';
+import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────
 
@@ -213,6 +218,9 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   const [loadingConversations, setLoadingConversations] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
+  const [registeredProjects, setRegisteredProjects] = useState<ProjectSummary[]>([]);
+  const [leftPanelOpen, setLeftPanelOpen] = useState(true);
+  const [rightPanelOpen, setRightPanelOpen] = useState(true);
 
   // ── Run state (unified via AssistantStreamState) ──
   const [streamState, setStreamState] = useState<AssistantStreamState | null>(null);
@@ -233,6 +241,8 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   const activeRunIdRef = useRef<string | null>(null);
   const eventsRef = useRef<RunEvent[]>([]);
   const batchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const persistedStreamRunRef = useRef<string | null>(null);
+  const { streamState: nativeStream, resetStream } = useAssistantStream({ sessionId: activeConversationId, locale });
 
   const checkDaemonStatus = useCallback(async (): Promise<boolean> => {
     try {
@@ -280,8 +290,18 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   // ── Load providers ──
   const loadProviders = async () => {
     try {
-      const result = await v2call<{ providers: ProviderInfo[] }>('provider.list');
-      const nextProviders = result.providers ?? [];
+      const result = await window.nativesAPI?.provider.list();
+      if (!result) throw new Error('Provider API unavailable');
+      const nextProviders = result.map((provider: ProviderSummary): ProviderInfo => ({
+        id: provider.id,
+        provider_type: provider.providerType,
+        display_name: provider.displayName,
+        api_base_url: provider.baseUrl,
+        health_status: 'unknown',
+        default_model: provider.defaultModel,
+        has_active_key: provider.keys.some(key => key.isActive && key.status === 'valid'),
+        models: provider.defaultModel ? [{ id: provider.defaultModel }] : [],
+      }));
       const readiness = classifyProviderReadiness(nextProviders);
       setProviders(nextProviders);
       setProviderReadiness(readiness);
@@ -298,14 +318,19 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   const loadConversations = async () => {
     setLoadingConversations(true);
     try {
-      const result = await v2call<{ conversations: Conversation[] }>('conversation.list', { include_archived: false });
-      setConversations(result.conversations ?? []);
+      const result = await v2call<Conversation[]>('conversation.list', { include_archived: false });
+      setConversations(result.filter(conversation => !conversation.archived_at));
     } catch (err) {
       toast(classifyError(err).userMessage, 'error');
     } finally {
       setLoadingConversations(false);
     }
   };
+
+  const loadProjects = useCallback(async () => {
+    const projects = await window.nativesAPI?.project.list();
+    setRegisteredProjects(projects ?? []);
+  }, []);
 
   // ── Load data when connected ──
   useEffect(() => {
@@ -316,23 +341,22 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
       const projPath = await readActiveProject(window.nativesAPI);
       if (cancelled) return;
       setActiveProjectPath(projPath);
-      await loadProviders();
-      await loadConversations();
+      await Promise.all([loadProviders(), loadConversations(), loadProjects()]);
     })();
 
     return () => { cancelled = true; };
     // These loaders intentionally run once for each daemon connection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [daemonConnected]);
+  }, [daemonConnected, loadProjects]);
 
   // ── Load messages ──
   const loadMessages = useCallback(async (conversationId: string) => {
     setLoadingMessages(true);
     try {
-      const result = await v2call<{ messages: Message[] }>('conversation.getMessages', {
+      const result = await v2call<Message[]>('conversation.getMessages', {
         conversation_id: conversationId,
       });
-      setMessages(result.messages ?? []);
+      setMessages(result);
     } catch (err) {
       toast(classifyError(err).userMessage, 'error');
     } finally {
@@ -343,8 +367,8 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   // ── Load artifacts ──
   const loadArtifacts = useCallback(async (runId: string) => {
     try {
-      const result = await v2call<{ artifacts: Artifact[] }>('artifact.list', { run_id: runId });
-      setArtifacts(result.artifacts ?? []);
+      const result = await v2call<Artifact[]>('artifact.list', { run_id: runId });
+      setArtifacts(result);
     } catch {
       setArtifacts([]);
     }
@@ -352,18 +376,18 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
 
   const loadConversationRun = useCallback(async (conversationId: string) => {
     try {
-      const result = await v2call<{ runs: Run[] }>('run.list', { conversation_id: conversationId, limit: 1 });
-      const run = result.runs?.[0];
+      const result = await v2call<Run[]>('run.list', { conversation_id: conversationId, limit: 1 });
+      const run = result[0];
       if (!run) return;
       latestRunIdRef.current = run.id;
       activeRunIdRef.current = run.id;
       setActiveRunStartedAt(run.started_at ?? null);
       setActiveRunFinishedAt(run.finished_at ?? null);
       const [eventResult] = await Promise.all([
-        v2call<{ events: RunEvent[] }>('run.getEvents', { run_id: run.id, after_sequence: 0 }),
+        v2call<RunEvent[]>('run.getEvents', { run_id: run.id, after_sequence: 0 }),
         loadArtifacts(run.id),
       ]);
-      const restoredEvents = eventResult.events ?? [];
+      const restoredEvents = eventResult;
       let restored = createAssistantStreamState(run.id);
       for (const event of restoredEvents) {
         restored = reduceAssistantStreamEvent(restored, {
@@ -440,6 +464,43 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
     }
   }, [activeConversationId, loadMessages]);
 
+  // The runtime streams over Tauri events. Mirror it into the workbench while it
+  // runs, then persist the completed answer so reopening the session is stable.
+  useEffect(() => {
+    const runId = activeRunIdRef.current;
+    if (!runId || !activeConversationId || !isStreaming) return;
+
+    if (nativeStream.content || nativeStream.reasoning) {
+      const blocks = [
+        ...(nativeStream.reasoning ? [{ type: 'reasoning', text: nativeStream.reasoning }] : []),
+        ...(nativeStream.content ? [{ type: 'text', text: nativeStream.content }] : []),
+      ];
+      const next = {
+        runId,
+        status: nativeStream.done ? (nativeStream.error ? 'failed' : 'completed') : 'running',
+        blocks,
+        fileChanges: [],
+        usage: { inputTokens: null, outputTokens: null, reasoningTokens: null },
+      };
+      streamStateRef.current = next;
+      setStreamState(next);
+    }
+
+    if (!nativeStream.done || persistedStreamRunRef.current === runId) return;
+    persistedStreamRunRef.current = runId;
+    const status = nativeStream.error ? 'failed' : 'completed';
+    setIsStreaming(false);
+    setActiveRunFinishedAt(new Date().toISOString());
+    void Promise.all([
+      nativeStream.content
+        ? v2call('conversation.appendMessage', { conversation_id: activeConversationId, role: 'assistant', content: nativeStream.content })
+        : Promise.resolve(),
+      v2call('run.finish', { run_id: runId, status, error_code: nativeStream.error ?? null }),
+    ]).then(() => loadMessages(activeConversationId)).catch(error => {
+      toast(classifyError(error).userMessage, 'error');
+    });
+  }, [activeConversationId, isStreaming, loadMessages, nativeStream, toast]);
+
   // The Tauri boundary intentionally owns the daemon socket. Until it exposes a
   // push bridge, replay new persisted events with a cursor so no event is lost.
   useEffect(() => {
@@ -450,11 +511,11 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
 
     const poll = async () => {
       try {
-        const result = await v2call<{ events: RunEvent[] }>('run.getEvents', {
+        const result = await v2call<RunEvent[]>('run.getEvents', {
           run_id: runId,
           after_sequence: cursor,
         });
-        for (const event of result.events ?? []) {
+        for (const event of result) {
           if (cancelled || event.sequence <= cursor) continue;
           cursor = event.sequence;
           handleStreamEvent({ ...event, runId });
@@ -487,7 +548,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   }, [loadConversationRun, loadMessages]);
 
   // ── Create conversation ──
-  const handleCreateConversation = useCallback(async () => {
+  const handleCreateConversation = useCallback(async (projectPath = activeProjectPath) => {
     if (isCreatingConversation) return;
     setIsCreatingConversation(true);
     setInputDisabledReason('creating');
@@ -505,15 +566,16 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
         title: t(locale, 'assistant.newConversation'),
         provider_id: selection.providerId,
         model_id: selection.modelId,
-        project_id: activeProjectPath,
+        project_id: projectPath,
       });
 
-      setConversations(prev => [{ ...result, project_id: activeProjectPath }, ...prev]);
+      setConversations(prev => [{ ...result, project_id: projectPath }, ...prev]);
       setActiveConversationId(result.id);
       setMessages([]);
       setStreamState(null);
       streamStateRef.current = null;
       setIsStreaming(false);
+      resetStream();
       setInputDisabledReason(null);
     } catch (err) {
       toast(classifyError(err).userMessage, 'error');
@@ -618,9 +680,18 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
       const newState = createAssistantStreamState(run.id);
       streamStateRef.current = newState;
       setStreamState(newState);
+      persistedStreamRunRef.current = null;
+      resetStream();
 
       // Reload messages to show the user message
       await loadMessages(activeConversationId);
+      const assistantApi = window.nativesAPI?.assistant;
+      if (!assistantApi) throw new Error('Assistant streaming API unavailable');
+      await assistantApi.streamChat({
+        sessionId: activeConversationId,
+        model: modelId,
+        messages: [{ role: 'user', content }],
+      });
 
     } catch (err) {
       setIsStreaming(false);
@@ -640,7 +711,9 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
         streamStateRef.current = next;
         return next;
       });
-      await v2call('run.cancel', { id: runId });
+      await v2call('run.cancel', { run_id: runId });
+      const assistantApi = window.nativesAPI?.assistant;
+      if (assistantApi && activeConversationId) await assistantApi.cancelStream(activeConversationId);
       // Keep event replay active until the daemon publishes `interrupted`.
     } catch (error) {
       if (previousState) {
@@ -698,7 +771,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   // ── Update conversation title ──
   const handleUpdateTitle = useCallback(async (id: string, title: string) => {
     try {
-      await v2call('conversation.update', { id, title });
+      await v2call('conversation.rename', { id, title });
       setConversations(prev => prev.map(c =>
         c.id === id ? { ...c, title } : c
       ));
@@ -739,21 +812,21 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
       if (!projectPath) return;
 
       // Register project with daemon
-      const result = await v2call<{ canonical_path: string }>('project.register', { path: projectPath });
-      handleSelectProject(result.canonical_path);
-      await loadConversations();
+      const result = await window.nativesAPI?.project.register(projectPath);
+      if (!result) throw new Error('Project API unavailable');
+      handleSelectProject(result.path);
+      await Promise.all([loadConversations(), loadProjects()]);
     } catch (error) {
       const classified = classifyError(error);
       // Do not show toast for cancellation — it's not an error
       if (classified.category === 'PROJECT_PATH_REQUIRED') return;
       toast(classified.userMessage, 'error');
     }
-  }, [handleSelectProject, loadConversations, toast]);
+  }, [handleSelectProject, loadConversations, loadProjects, toast]);
 
   // ── Determine active conversation ──
   const activeConversation = conversations.find(c => c.id === activeConversationId);
   const projectGroups = useMemo(() => {
-    const registeredProjects = activeProjectPath ? [activeProjectPath] : [];
     const groups = groupAssistantConversations(
       conversations.map(conversation => ({
         id: conversation.id,
@@ -762,11 +835,11 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
         projectId: conversation.project_id ?? '',
         updatedAt: conversation.updated_at,
       })),
-      registeredProjects,
+      registeredProjects.map(project => project.path),
       t(locale, 'assistant.unassignedProject'),
     );
     return groups;
-  }, [activeProjectPath, conversations, locale]);
+  }, [conversations, locale, registeredProjects]);
   const creationState = projectCreationState({
     engine: daemonConnected ? 'ready' : (daemonError ? 'unavailable' : 'connecting'),
     providerReadiness,
@@ -791,8 +864,8 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
     selectConversation: id => { void handleSelectConversation(id); },
     selectProject: handleSelectProject,
     addProjectFolder: () => { void handlePickProject(); },
-    pickProject: () => { void handlePickProject(); },
-    createConversation: (_mode?: 'chat' | 'agent') => { void handleCreateConversation(); },
+    createConversation: () => { void handleCreateConversation(); },
+    createConversationInProject: path => { handleSelectProject(path); void handleCreateConversation(path); },
     renameConversation: (id, title) => { void handleUpdateTitle(id, title); },
     archiveConversation: id => { void handleArchiveConversation(id); },
     deleteConversation: id => { void handleDeleteConversation(id); },
@@ -813,7 +886,6 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
       loading: loadingConversations,
       creationState,
       isCreatingConversation,
-      creatingMode: isCreatingConversation ? 'agent' : null,
     });
   }, [activeConversationId, activeProjectPath, isCreatingConversation, creationState, loadingConversations, projectGroups, publishNavigation]);
 
@@ -837,6 +909,14 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
 
   // ── Map messages to timeline format ──
   const timelineMessages = messages.map(mapMessageToTimeline);
+  const modelSelectorProviders: ProviderWithModels[] = providers.map(provider => ({
+    id: provider.id,
+    name: provider.display_name,
+    presetName: provider.provider_type,
+    baseUrl: provider.api_base_url,
+    keys: [],
+    models: provider.models?.map(model => ({ id: model.id, displayName: model.display_name })),
+  }));
 
   // Add streaming blocks as a pending message if streaming
   const streamingBlocks = streamState?.blocks ?? [];
@@ -891,6 +971,20 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   // ── Render: main layout ──
   return (
     <div className="flex h-full w-full" style={{ fontFamily: 'inherit' }}>
+      {leftPanelOpen ? (
+        <aside className="flex w-64 shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--surface)]">
+          <div className="flex h-11 items-center justify-between border-b border-[var(--border-subtle)] px-3">
+            <span className="text-sm font-medium text-[var(--text-secondary)]">{t(locale, 'nav.assistant')}</span>
+            <button type="button" onClick={() => setLeftPanelOpen(false)} className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]" aria-label={t(locale, 'common.collapse')} title={t(locale, 'common.collapse')}><PanelLeftClose size={15} /></button>
+          </div>
+          <AssistantSidebarSection locale={locale} onNavigateAssistant={() => undefined} />
+        </aside>
+      ) : (
+        <div className="w-9 shrink-0 border-r border-[var(--border-subtle)] bg-[var(--surface)] pt-2">
+          <button type="button" onClick={() => setLeftPanelOpen(true)} className="m-1 rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]" aria-label={t(locale, 'common.expand')} title={t(locale, 'common.expand')}><PanelLeftOpen size={15} /></button>
+        </div>
+      )}
+
       {/* ── Center Panel: Conversation Timeline ── */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
@@ -917,7 +1011,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
             </div>
             <div className="flex items-center gap-2">
               <ModelSelectorDropdown
-                providers={providers as unknown as ProviderWithModels[]}
+                providers={modelSelectorProviders}
                 selectedProviderId={activeConversation.provider_id}
                 selectedModel={activeConversation.model_id}
                 onSelect={handleSelectModel}
@@ -933,15 +1027,6 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
             <div className="text-center">
               <div className="text-sm text-[var(--text-disabled)] mb-2">
                 {t(locale, 'assistant.selectConversation')}
-              </div>
-              <div className="flex gap-2 justify-center">
-                <button
-                  onClick={handleCreateConversation}
-                  disabled={creationState !== 'ready' || isCreatingConversation}
-                  className="px-4 py-2 rounded-lg bg-[var(--primary-soft)] text-[var(--primary)] text-sm font-medium hover:opacity-80 transition-opacity disabled:opacity-40"
-                >
-                  {t(locale, 'assistant.newConversation')}
-                </button>
               </div>
               {creationState !== 'ready' && (
                 <div className="mt-3 text-xs text-[var(--text-disabled)]">
@@ -979,6 +1064,31 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
           </>
         )}
       </div>
+
+      {rightPanelOpen ? (
+        <aside className="flex w-80 shrink-0 flex-col border-l border-[var(--border-subtle)] bg-[var(--surface)]">
+          <div className="flex h-11 items-center justify-between border-b border-[var(--border-subtle)] px-3">
+            <span className="text-sm font-medium text-[var(--text-secondary)]">{activeConversation?.model_id || t(locale, 'assistant.selectConversation')}</span>
+            <button type="button" onClick={() => setRightPanelOpen(false)} className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]" aria-label={t(locale, 'common.collapse')} title={t(locale, 'common.collapse')}><PanelRightClose size={15} /></button>
+          </div>
+          <div className="border-b border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-disabled)]">
+            <div className="truncate">{activeConversation?.provider_id || '—'}</div>
+            <div className="mt-1">{streamState?.usage.inputTokens ?? 0} / {streamState?.usage.outputTokens ?? 0} tokens</div>
+          </div>
+          <RunInspector
+            runId={streamState?.runId ?? null}
+            status={streamState?.status ?? 'idle'}
+            events={runEvents.map(event => ({ sequence: event.sequence, type: event.type, timestamp: event.timestamp }))}
+            artifacts={artifacts}
+            subAgents={[]}
+            locale={locale}
+          />
+        </aside>
+      ) : (
+        <div className="w-9 shrink-0 border-l border-[var(--border-subtle)] bg-[var(--surface)] pt-2">
+          <button type="button" onClick={() => setRightPanelOpen(true)} className="m-1 rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]" aria-label={t(locale, 'common.expand')} title={t(locale, 'common.expand')}><PanelRightOpen size={15} /></button>
+        </div>
+      )}
 
     </div>
   );

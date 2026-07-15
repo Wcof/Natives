@@ -8,6 +8,7 @@
 
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { unwrapAssistantRpc, type AssistantRpcEnvelope } from './assistant-rpc';
 
 // ── Ghostty render state payload (feature gate ghostty-vt) ──
 
@@ -946,7 +947,8 @@ const nativesAPI: NativesAPI = {
   // Assistant in-process RPC (no daemon sidecar)
   assistantV2: {
     request: <T>(method: string, params?: unknown): Promise<T> =>
-      cmd<T>('assistant_rpc_request', { method, params: params ?? null }),
+      cmd<AssistantRpcEnvelope<T>>('assistant_rpc_request', { method, params: params ?? null })
+        .then(unwrapAssistantRpc),
     getStatus: (): Promise<{ connected: boolean; error: string | null }> =>
       cmd<{ connected: boolean; error: string | null }>('assistant_status'),
   },

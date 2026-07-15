@@ -18,16 +18,10 @@ pub fn project_list() -> Result<Vec<ProjectInfo>> {
 
     let mut stmt = conn
         .prepare(
-            "SELECT DISTINCT
-                s.project_id,
-                s.project_id,
-                COALESCE(
-                    (SELECT COUNT(*) FROM assistant_sessions s2 WHERE s2.project_id = s.project_id),
-                    0
-                ) as conv_count
-             FROM assistant_sessions s
-             WHERE s.project_id IS NOT NULL AND s.project_id != ''
-             ORDER BY s.project_id",
+            "SELECT p.id, p.path, p.label,
+                (SELECT COUNT(*) FROM assistant_conversations c WHERE c.project_id = p.path AND c.archived_at IS NULL)
+             FROM assistant_projects p
+             ORDER BY p.last_opened_at DESC, p.label COLLATE NOCASE",
         )
         .map_err(|e| format!("Failed to prepare project list query: {e}"))?;
 
@@ -62,6 +56,12 @@ pub fn project_register(path: String) -> Result<ProjectInfo> {
     if path.is_empty() {
         return Err("Project path cannot be empty".into());
     }
+    let canonical = std::fs::canonicalize(&path)
+        .map_err(|_| "Project directory does not exist".to_string())?;
+    if !canonical.is_dir() {
+        return Err("Project path must be a directory".into());
+    }
+    let path = canonical.to_string_lossy().to_string();
 
     let label = path
         .trim_end_matches('/')
@@ -70,12 +70,15 @@ pub fn project_register(path: String) -> Result<ProjectInfo> {
         .unwrap_or(&path)
         .to_string();
 
-    Ok(ProjectInfo {
-        id: path.clone(),
-        path,
-        label,
-        conversation_count: 0,
-    })
+    let now = chrono::Utc::now().to_rfc3339();
+    let conn = db::get_assistant_db_conn().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO assistant_projects (id, path, label, created_at, last_opened_at)
+         VALUES (?1, ?2, ?3, ?4, ?4)
+         ON CONFLICT(path) DO UPDATE SET label = excluded.label, last_opened_at = excluded.last_opened_at",
+        rusqlite::params![path, path, label, now],
+    ).map_err(|e| format!("Failed to register project: {e}"))?;
+    Ok(ProjectInfo { id: path.clone(), path, label, conversation_count: 0 })
 }
 
 /// Open a project directory in the file browser / terminal.
