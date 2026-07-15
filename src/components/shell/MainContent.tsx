@@ -7,6 +7,7 @@ import ErrorBoundary from '@/components/ui/ErrorBoundary';
 import SettingsPage from './SettingsPage';
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 import { getBuiltinTool } from '@/lib/builtin-tools';
+import { isSettingsView, getSettingsSection } from './settings-navigation';
 
 // Lazy-loaded heavy page components
 const LazyWorkshopPage = lazy(() => import('./WorkshopPage'));
@@ -91,9 +92,12 @@ export default function MainContent({
     return children;
   }
 
+  // Settings routing — handle all settings: prefixed views
+  if (isSettingsView(activeView)) {
+    return <SettingsPage activeSection={getSettingsSection(activeView)} />;
+  }
+
   switch (activeView) {
-    case 'settings':
-      return <SettingsPage activeTab="theme" />;
     case 'workshop':
       return <Suspense fallback={<LazyFallback />}><LazyWorkshopPage onInstall={() => {}} /></Suspense>;
     case 'files':
@@ -113,10 +117,6 @@ export default function MainContent({
     case 'dashboard':
       return children;
     default:
-      if (activeView.startsWith('settings:')) {
-        const tab = activeView.split(':')[1] || 'theme';
-        return <SettingsPage activeTab={tab as any} />;
-      }
       if (activeView.startsWith('module:')) {
         return <div ref={iframeContainerRef} style={{ width: '100%', height: '100%' }} />;
       }

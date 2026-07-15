@@ -42,6 +42,7 @@ const LazyFallback = () => (
 import { useLayoutEvents } from './hooks/useLayoutEvents';
 import { useModuleEvents } from './hooks/useModuleEvents';
 import { useFileEvents } from './hooks/useFileEvents';
+import { isSettingsView, normalizeSettingsTarget } from './settings-navigation';
 
 interface ShellState {
   sidebarCollapsed: boolean;
@@ -213,11 +214,28 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   }, []);
 
   const handleModuleSelect = useCallback((moduleId: string) => {
+    // Check settings navigation first — catches __settings__, settings, settings:*
+    const settingsTarget = normalizeSettingsTarget(moduleId);
+    if (settingsTarget) {
+      setActiveView(settingsTarget);
+      // Close module-details when entering settings; preserve notifications and file-preview
+      setState((prev) =>
+        prev.rightPanelMode === 'module-details'
+          ? { ...prev, rightPanelMode: 'closed' }
+          : prev,
+      );
+      return;
+    }
+
     if (moduleId === '__dashboard__') {
       setActiveView('dashboard');
-    } else if (moduleId === '__settings__') {
-      setActiveView('settings');
     } else if (moduleId === '__workshop__') {
+      setActiveView('workshop');
+    } else if (moduleId === '__assistant__') {
+      setActiveView('assistant');
+    } else if (moduleId === '__notifications__') {
+      toggleRightPanel('notifications');
+    } else if (moduleId.startsWith('__files__:')) {
       setActiveView('workshop');
     } else if (moduleId === '__assistant__') {
       setActiveView('assistant');
@@ -258,7 +276,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       setActiveView(`module:${moduleId}`);
       setRightPanelMode('module-details');
     }
-  }, [toggleRightPanel, setRightPanelMode]);
+  }, [toggleRightPanel, setRightPanelMode, setActiveView, setState]);
 
   // File selection handler — opens preview in right panel
   const handleFileSelect = useCallback((entry: FileEntry) => {
@@ -268,6 +286,8 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
   // Widget mode check — render only the ControlHub on transparent background
   const isWidgetMode = typeof window !== 'undefined' && window.location.search.includes('mode=widget');
+  const isSettingsMode = isSettingsView(activeView);
+  const effectiveSidebarCollapsed = isSettingsMode ? false : state.sidebarCollapsed;
 
 
   // P1-5: Show onboarding if no username is set
@@ -305,10 +325,10 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       {/* Left: Sidebar */}
       <div
         className="h-full shrink-0 transition-[width] duration-200 relative z-10"
-        style={{ width: state.sidebarCollapsed ? 0 : state.sidebarWidth, overflow: state.sidebarCollapsed ? 'hidden' : undefined }}
+        style={{ width: effectiveSidebarCollapsed ? 0 : state.sidebarWidth, overflow: effectiveSidebarCollapsed ? 'hidden' : undefined }}
       >
         <MemoizedSidebar
-          isCollapsed={state.sidebarCollapsed}
+          isCollapsed={effectiveSidebarCollapsed}
           onToggle={toggleSidebar}
           width={state.sidebarWidth}
           onResize={(w) => setState((prev) => ({ ...prev, sidebarWidth: w }))}
@@ -323,14 +343,14 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       <div className="flex-1 flex flex-col min-w-0 h-full box-border relative z-10">
         {/* Main Content — conditional bottom margin to preserve gap when terminal is visible */}
         <motion.div
-          className={`flex-1 surface-section min-w-0 overflow-hidden relative flex flex-col${state.terminalCollapsed ? '' : ' mb-3'}`}
+          className={`flex-1 surface-section min-w-0 overflow-hidden relative flex flex-col${state.terminalCollapsed || isSettingsMode ? '' : ' mb-3'}`}
           style={{ paddingTop: '28px' }}
           initial={prefersReducedMotion ? undefined : { opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={prefersReducedMotion ? undefined : { type: 'spring', stiffness: 100, damping: 20, mass: 0.8 }}
         >
           {/* ↓ relative z-20 确保 header 的下拉菜单不被 content panel 遮住 */}
-          {activeView !== 'dashboard' && (
+          {activeView !== 'dashboard' && !isSettingsMode && (
             <div className="relative z-20 shrink-0">
               <MemoizedHeader
                 activeView={activeView}
@@ -363,22 +383,25 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           <div id="content-overlay-root" style={{ position: 'absolute', inset: 0, zIndex: 50, pointerEvents: 'none' }} />
         </motion.div>
 
-        {/* Terminal — bottom of workspace column */}
-        <TerminalPanel
-          isCollapsed={state.terminalCollapsed}
-          onToggle={toggleTerminal}
-          height={state.terminalHeight}
-          onResize={(h) => setState((prev) => ({ ...prev, terminalHeight: h }))}
-          isMaximized={state.terminalMaximized}
-          onMaximizeToggle={toggleMaximized}
-          onSessionCreated={(id) => { terminalSessionIdRef.current = id; }}
-          followMode={followMode !== 'off'}
-          onFollowModeToggle={cycleFollowMode}
-        />
+        {/* Terminal — bottom of workspace column, hidden via CSS to preserve state */}
+        <div className={isSettingsMode ? 'hidden' : 'contents'}>
+          <TerminalPanel
+            isCollapsed={state.terminalCollapsed}
+            onToggle={toggleTerminal}
+            height={state.terminalHeight}
+            onResize={(h) => setState((prev) => ({ ...prev, terminalHeight: h }))}
+            isMaximized={state.terminalMaximized}
+            onMaximizeToggle={toggleMaximized}
+            onSessionCreated={(id) => { terminalSessionIdRef.current = id; }}
+            followMode={followMode !== 'off'}
+            onFollowModeToggle={cycleFollowMode}
+          />
+        </div>
       </div>
 
       {state.rightPanelMode !== 'closed' && (
-        <RightPanel
+        <div className={isSettingsMode ? 'hidden' : 'contents'}>
+          <RightPanel
           mode={state.rightPanelMode}
           onModeChange={setRightPanelMode}
           previewSubMode={state.previewSubMode}
@@ -427,6 +450,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
             <ModuleDetails moduleId={activeView.slice(7)} locale={locale} />
           )}
         </RightPanel>
+        </div>
       )}
       <CommandPalette
         isOpen={state.cmdkOpen}

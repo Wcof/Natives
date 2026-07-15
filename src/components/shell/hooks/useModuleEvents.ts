@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { getIframeManager } from '@/lib/iframe-manager';
 import { classifyError } from '@/lib/error-classifier';
 import { pushRecentModule } from '@/lib/recent-modules';
+import { DEFAULT_SETTINGS_VIEW } from '@/components/shell/settings-navigation';
 
 interface UseModuleEventsOptions {
   activeView: string;
@@ -99,7 +100,7 @@ export function useModuleEvents({
     const handleRelease = () => setReleaseWizardOpen(true);
     const handleNavigate = (e: Event) => {
       const view = (e as CustomEvent).detail;
-      if (view === '__settings__') setActiveView('settings');
+      if (view === '__settings__') setActiveView(DEFAULT_SETTINGS_VIEW);
       else if (view === '__workshop__') setActiveView('workshop');
       else if (view === 'ai') setActiveView('ai');
       else if (view === 'tools') setActiveView('tools');
