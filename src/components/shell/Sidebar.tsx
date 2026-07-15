@@ -606,13 +606,13 @@ export default function Sidebar({
               className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all w-full font-medium"
             >
               <ArrowLeft size={13} />
-              <span>{locale === 'zh' ? '返回主页' : 'Back to Home'}</span>
+              <span>{t(locale, 'settings.backHome')}</span>
             </button>
           </div>
 
           {/* Section title */}
           <div className="px-5 pb-2 pt-1 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
-            {locale === 'zh' ? '系统设置' : 'System Settings'}
+            {t(locale, 'settings.title')}
           </div>
 
           {/* Settings items — flat nav with five sections */}

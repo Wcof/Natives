@@ -94,7 +94,7 @@ export default function MainContent({
 
   // Settings routing — handle all settings: prefixed views
   if (isSettingsView(activeView)) {
-    return <SettingsPage activeSection={getSettingsSection(activeView)} />;
+    return <SettingsPage activeSection={getSettingsSection(activeView)} locale={locale} />;
   }
 
   switch (activeView) {

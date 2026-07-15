@@ -77,11 +77,20 @@ function InlineLoadError({
 
 export default function SettingsPage({
   activeSection = 'general',
+  locale: externalLocale,
 }: {
   activeSection?: SettingsSection;
+  locale?: Locale;
 }) {
   const { toast: globalToast } = useToast();
-  const [locale, setLocaleState] = useState<Locale>('zh');
+  const [locale, setLocaleState] = useState<Locale>(externalLocale ?? 'zh');
+
+  // Sync with external locale prop when it changes
+  useEffect(() => {
+    if (externalLocale && externalLocale !== locale) {
+      setLocaleState(externalLocale);
+    }
+  }, [externalLocale]);
 
   // ── Theme / locale state ──
   const [currentTheme, setCurrentTheme] = useState('light');
