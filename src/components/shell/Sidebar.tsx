@@ -27,7 +27,6 @@ import {
   ArrowLeft,
   ChevronLeft,
   Palette,
-  Key,
   Plug,
   SlidersHorizontal,
   Cpu,
@@ -36,6 +35,11 @@ import * as LucideIcons from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import { BUILTIN_TOOLS, seedAllBuiltinTools } from '@/lib/builtin-tools';
 import AssistantSidebarSection from '@/components/assistant/AssistantSidebarSection';
+import {
+  isSettingsView,
+  getSettingsSection,
+  type SettingsSection,
+} from './settings-navigation';
 
 interface ModuleManifest {
   id: string;
@@ -90,6 +94,18 @@ interface FavoriteItem {
   addedAt: number;
 }
 
+const SETTINGS_NAV_ITEMS = [
+  { id: 'general', labelKey: 'settings.tabGeneral', icon: Settings },
+  { id: 'appearance', labelKey: 'settings.tabAppearance', icon: Palette },
+  { id: 'providers', labelKey: 'settings.tabProviders', icon: Cpu },
+  { id: 'runtime', labelKey: 'settings.tabExecutor', icon: SlidersHorizontal },
+  { id: 'plugins', labelKey: 'settings.tabPlugins', icon: Plug },
+] satisfies ReadonlyArray<{
+  id: SettingsSection;
+  labelKey: string;
+  icon: LucideIcon;
+}>;
+
 interface SidebarProps {
   isCollapsed: boolean;
   onToggle: () => void;
@@ -108,7 +124,7 @@ function getModuleId(module: ModuleItem): string {
 function getNavigationId(activeModuleId?: string): string | null {
   if (!activeModuleId) return null;
   if (activeModuleId === 'dashboard' || activeModuleId === '__dashboard__') return '__dashboard__';
-  if (activeModuleId === 'settings' || activeModuleId === '__settings__') return '__settings__';
+  if (isSettingsView(activeModuleId)) return '__settings__';
   if (activeModuleId === 'workshop' || activeModuleId === '__workshop__') return '__workshop__';
   if (activeModuleId === 'assistant' || activeModuleId === '__assistant__') return '__assistant__';
   if (activeModuleId.startsWith('module:')) return activeModuleId;
@@ -224,8 +240,8 @@ export default function Sidebar({
     [onModuleSelect],
   );
 
-  const isSettingsMode = activeModuleId?.startsWith('settings') || activeModuleId === 'settings';
-  const activeSettingsTab = activeModuleId?.startsWith('settings:') ? activeModuleId.split(':')[1] : 'theme';
+  const isSettingsMode = isSettingsView(activeModuleId);
+  const activeSettingsSection = getSettingsSection(activeModuleId);
 
   const loadFavorites = useCallback(async () => {
     try {
@@ -590,7 +606,7 @@ export default function Sidebar({
               className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all w-full font-medium"
             >
               <ArrowLeft size={13} />
-              <span>{locale === 'zh' ? '返回个人主页' : 'Back to Homepage'}</span>
+              <span>{locale === 'zh' ? '返回主页' : 'Back to Home'}</span>
             </button>
           </div>
 
@@ -599,30 +615,25 @@ export default function Sidebar({
             {locale === 'zh' ? '系统设置' : 'System Settings'}
           </div>
 
-          {/* Settings items */}
+          {/* Settings items — flat nav with five sections */}
           <div className="flex flex-col gap-0.5 px-3 flex-1 overflow-y-auto">
-            {[
-              { id: 'theme', label: t(locale, 'settings.tabTheme'), icon: Palette },
-              { id: 'env', label: t(locale, 'settings.tabEnv'), icon: Key },
-              { id: 'plugins', label: t(locale, 'settings.tabPlugins'), icon: Plug },
-              { id: 'executor', label: t(locale, 'settings.tabExecutor'), icon: SlidersHorizontal },
-              { id: 'providers', label: t(locale, 'settings.tabProviders'), icon: Cpu },
-            ].map((item) => {
+            {SETTINGS_NAV_ITEMS.map((item) => {
               const Icon = item.icon;
-              const isActive = activeSettingsTab === item.id;
+              const isActive = activeSettingsSection === item.id;
               return (
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => selectNavigation(`settings:${item.id}`, `settings:${item.id}`)}
+                  aria-current={isActive ? 'page' : undefined}
+                  onClick={() => selectNavigation('__settings__', `settings:${item.id}`)}
                   className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all ${
                     isActive
                       ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
-                      : 'bg-[var(--surface-hover)] text-[var(--text-secondary)] hover:text-[var(--primary)] hover:bg-[var(--border-subtle)]'
+                      : 'text-[var(--text-secondary)] hover:text-[var(--primary)] hover:bg-[var(--border-subtle)]'
                   }`}
                 >
                   <Icon size={15} className="shrink-0" />
-                  <span className="truncate text-sm">{item.label}</span>
+                  <span className="truncate text-sm">{t(locale, item.labelKey)}</span>
                 </button>
               );
             })}
@@ -819,7 +830,7 @@ export default function Sidebar({
             </button>
             <button
               type="button"
-              onClick={() => selectNavigation('settings:theme', 'settings:theme')}
+              onClick={() => selectNavigation('__settings__', 'settings:general')}
               className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
                 activeNavigationId === '__settings__'
                   ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
