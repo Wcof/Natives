@@ -27,15 +27,35 @@ struct Turn {
 struct TurnRecord {
     ts: i64,
     session_id: String,
+    #[serde(default)]
+    turn_id: u64,
     usage: TokenUsage,
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 struct TokenUsage {
     prompt: i64,
     completion: i64,
     #[serde(default)]
     cached: i64,
+}
+
+#[derive(Deserialize)]
+struct SessionSnapshot {
+    #[serde(default)]
+    messages: Vec<SnapshotMessage>,
+}
+
+#[derive(Deserialize)]
+struct SnapshotMessage {
+    meta: Option<SnapshotMessageMeta>,
+}
+
+#[derive(Deserialize)]
+struct SnapshotMessageMeta {
+    session_id: String,
+    turn_id: u64,
+    tokens: TokenUsage,
 }
 
 #[derive(Default, Deserialize)]
@@ -114,6 +134,7 @@ fn scan_session_logs(root: &Path, start_ms: i64, end_ms: i64, tz: &chrono_tz::Tz
         } else {
             meta.working_dir
         };
+        let snapshot_usage = read_snapshot_usage(&path.with_extension("snapshot"));
         let Ok(content) = fs::read_to_string(path) else {
             continue;
         };
@@ -124,6 +145,11 @@ fn scan_session_logs(root: &Path, start_ms: i64, end_ms: i64, tz: &chrono_tz::Tz
             if record.ts < start_ms || record.ts >= end_ms {
                 continue;
             }
+            let usage = snapshot_usage
+                .get(&(record.session_id.clone(), record.turn_id))
+                .unwrap_or(&record.usage);
+            let (input_tokens, output_tokens, cached_tokens) =
+                (usage.prompt, usage.completion, usage.cached);
             let (date, hour_start_ms) = localized_time_metrics(record.ts, tz);
             turns.push(Turn {
                 timestamp_ms: record.ts,
@@ -131,9 +157,9 @@ fn scan_session_logs(root: &Path, start_ms: i64, end_ms: i64, tz: &chrono_tz::Tz
                 hour_start_ms,
                 session_id: record.session_id,
                 project: project.clone(),
-                input_tokens: record.usage.prompt,
-                output_tokens: record.usage.completion,
-                cached_tokens: record.usage.cached,
+                input_tokens,
+                output_tokens,
+                cached_tokens,
                 active_seconds: meta
                     .turn_stats
                     .get(index)
@@ -143,6 +169,27 @@ fn scan_session_logs(root: &Path, start_ms: i64, end_ms: i64, tz: &chrono_tz::Tz
         }
     }
     turns
+}
+
+fn read_snapshot_usage(path: &Path) -> HashMap<(String, u64), TokenUsage> {
+    let Ok(bytes) = fs::read(path) else {
+        return HashMap::new();
+    };
+    let Ok(snapshot) = serde_json::from_slice::<SessionSnapshot>(&bytes) else {
+        return HashMap::new();
+    };
+    let mut usage = HashMap::<(String, u64), TokenUsage>::new();
+    for meta in snapshot
+        .messages
+        .into_iter()
+        .filter_map(|message| message.meta)
+    {
+        let entry = usage.entry((meta.session_id, meta.turn_id)).or_default();
+        entry.prompt = entry.prompt.saturating_add(meta.tokens.prompt);
+        entry.completion = entry.completion.saturating_add(meta.tokens.completion);
+        entry.cached = entry.cached.saturating_add(meta.tokens.cached);
+    }
+    usage
 }
 
 fn daily(turns: &[Turn]) -> Vec<UsageDailyRecord> {
@@ -285,5 +332,37 @@ mod tests {
         assert_eq!(daily[0].cache_read_tokens, Some(40));
         assert_eq!(daily[0].total_tokens, Some(120));
         assert_eq!(super::sessions(&turns)[0].active_seconds, Some(3));
+    }
+
+    #[test]
+    fn uses_snapshot_request_usage_for_multi_round_turn() {
+        let root =
+            std::env::temp_dir().join(format!("natives-atomcode-snapshot-{}", std::process::id()));
+        let project = root.join("sessions/project-hash");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("session-1.jsonl"),
+            r#"{"v":1,"ts":1784020263399,"session_id":"session-1","turn_id":2,"usage":{"prompt":100,"completion":20,"cached":40}}
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("session-1.snapshot"),
+            r#"{"messages":[{"meta":{"session_id":"session-1","turn_id":2,"tokens":{"prompt":100,"completion":10,"cached":40}}},{"meta":{"session_id":"session-1","turn_id":2,"tokens":{"prompt":150,"completion":20,"cached":100}}}]}"#,
+        )
+        .unwrap();
+
+        let turns = scan_session_logs(
+            &root.join("sessions"),
+            1_784_020_000_000,
+            1_784_030_000_000,
+            &chrono_tz::UTC,
+        );
+        std::fs::remove_dir_all(root).unwrap();
+        let daily = super::daily(&turns);
+        assert_eq!(daily[0].input_tokens, Some(250));
+        assert_eq!(daily[0].output_tokens, Some(30));
+        assert_eq!(daily[0].cache_read_tokens, Some(140));
+        assert_eq!(daily[0].total_tokens, Some(280));
     }
 }
