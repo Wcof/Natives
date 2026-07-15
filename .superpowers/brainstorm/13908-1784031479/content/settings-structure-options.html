@@ -1,0 +1,86 @@
+<h2>设置页采用哪种结构？</h2>
+<p class="subtitle">三种方案都保留现有能力、删除“环境变量”，并在进入设置时隐藏终端和右侧面板。</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:14px;background:#ececeb">
+      <div style="display:grid;grid-template-columns:155px 1fr;height:250px;border:1px solid #c8c8c5;border-radius:10px;overflow:hidden;background:#fff;color:#242424;font:12px system-ui">
+        <aside style="background:#f4f4f2;border-right:1px solid #ddd;padding:12px 9px">
+          <div style="padding:7px 8px;margin-bottom:12px;border-radius:6px;color:#555">← 返回主页</div>
+          <div style="font-size:10px;color:#888;padding:0 8px 6px">设置</div>
+          <div style="padding:7px 8px;background:#dededb;border-radius:6px;font-weight:600">通用</div>
+          <div style="padding:7px 8px">外观</div>
+          <div style="padding:7px 8px">服务商</div>
+          <div style="padding:7px 8px">执行引擎</div>
+          <div style="padding:7px 8px">插件</div>
+        </aside>
+        <main style="padding:22px 28px">
+          <div style="font-size:18px;font-weight:650;margin-bottom:5px">通用</div>
+          <div style="color:#777;margin-bottom:22px">配置 Natives 的基础偏好</div>
+          <div style="border-top:1px solid #e5e5e3;padding:14px 0;display:flex;justify-content:space-between"><span>语言</span><span style="border:1px solid #ccc;padding:4px 8px;border-radius:5px">简体中文⌄</span></div>
+        </main>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A · 扁平五页（推荐）</h3>
+      <p>通用、外观、服务商、执行引擎、插件各自成页。结构最接近 Codex，定位直接，改动最小。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:14px;background:#ececeb">
+      <div style="display:grid;grid-template-columns:165px 1fr;height:250px;border:1px solid #c8c8c5;border-radius:10px;overflow:hidden;background:#fff;color:#242424;font:12px system-ui">
+        <aside style="background:#f4f4f2;border-right:1px solid #ddd;padding:12px 9px">
+          <div style="padding:7px 8px;margin-bottom:10px;border-radius:6px;color:#555">← 返回主页</div>
+          <div style="font-size:9px;color:#999;padding:5px 8px">基础</div>
+          <div style="padding:6px 8px;background:#dededb;border-radius:6px;font-weight:600">通用</div>
+          <div style="padding:6px 8px">外观</div>
+          <div style="font-size:9px;color:#999;padding:10px 8px 5px">AI</div>
+          <div style="padding:6px 8px">服务商</div>
+          <div style="padding:6px 8px">执行引擎</div>
+          <div style="font-size:9px;color:#999;padding:10px 8px 5px">扩展</div>
+          <div style="padding:6px 8px">插件</div>
+        </aside>
+        <main style="padding:22px 28px">
+          <div style="font-size:18px;font-weight:650;margin-bottom:5px">通用</div>
+          <div style="color:#777;margin-bottom:22px">配置 Natives 的基础偏好</div>
+          <div style="border-top:1px solid #e5e5e3;padding:14px 0;display:flex;justify-content:space-between"><span>语言</span><span style="border:1px solid #ccc;padding:4px 8px;border-radius:5px">简体中文⌄</span></div>
+        </main>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B · 分组五页</h3>
+      <p>在相同五页上增加“基础 / AI / 扩展”分组。扩展性更好，但目前只有五项，分组略显多余。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:14px;background:#ececeb">
+      <div style="display:grid;grid-template-columns:150px 1fr;height:250px;border:1px solid #c8c8c5;border-radius:10px;overflow:hidden;background:#fff;color:#242424;font:12px system-ui">
+        <aside style="background:#f4f4f2;border-right:1px solid #ddd;padding:12px 9px">
+          <div style="padding:7px 8px;margin-bottom:12px;border-radius:6px;color:#555">← 返回主页</div>
+          <div style="font-size:10px;color:#888;padding:0 8px 6px">页面目录</div>
+          <div style="padding:6px 8px;border-left:2px solid #333;font-weight:600">通用</div>
+          <div style="padding:6px 8px">外观</div>
+          <div style="padding:6px 8px">服务商</div>
+          <div style="padding:6px 8px">执行引擎</div>
+          <div style="padding:6px 8px">插件</div>
+        </aside>
+        <main style="padding:18px 26px;overflow:hidden">
+          <div style="font-size:16px;font-weight:650;margin-bottom:8px">通用</div>
+          <div style="height:35px;border-top:1px solid #ddd;padding-top:8px">语言</div>
+          <div style="font-size:16px;font-weight:650;margin:10px 0 8px">外观</div>
+          <div style="height:55px;border-top:1px solid #ddd;padding-top:8px">主题预览卡片</div>
+          <div style="font-size:16px;font-weight:650;margin:10px 0 8px">服务商</div>
+          <div style="border-top:1px solid #ddd;padding-top:8px;color:#777">继续向下滚动…</div>
+        </main>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C · 单页滚动</h3>
+      <p>所有设置放在一张长页面，左侧只是锚点。浏览连贯，但服务商与执行引擎内容较长，页面会很重。</p>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:18px">点击方案卡片进行选择，然后回到对话里告诉我你的想法。</p>

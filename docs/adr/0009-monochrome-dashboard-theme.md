@@ -1,5 +1,7 @@
 # ADR 0009: Monochrome Dashboard and Grayscale Global Brand Accent
 
+> **Status**: Superseded in scope by [ADR 0010](./0010-global-neutral-spectrum.md). Its semantic-color and restrained-Dashboard decisions remain valid.
+
 ## Context
 
 The Natives workspace features a Dashboard that displays system and tool usage. The current system guidelines enforce color constraints:

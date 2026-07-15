@@ -52,7 +52,7 @@ function MetricCard({ icon, label, value, delta, subLabel, subValue }: CardProps
   );
 }
 
-function renderDelta(current: number | null, previous: number | null, isLowerBetter = true) {
+function renderDelta(current: number | null, previous: number | null, isLowerBetter: boolean, newLabel: string) {
   if (current === null || previous === null) {
     return <span style={{ color: 'var(--text-faint)', fontSize: '11px', marginLeft: '6px' }}>—</span>;
   }
@@ -70,7 +70,7 @@ function renderDelta(current: number | null, previous: number | null, isLowerBet
         fontWeight: 600,
         marginLeft: '6px'
       }}>
-        New
+        {newLabel}
       </span>
     );
   }
@@ -136,31 +136,31 @@ export function UsageMetricGrid({ metrics, prevMetrics, totalSessions, prevTotal
           icon={<Coins size={12} />}
           label={t(locale, 'usage.estimatedCost')}
           value={costStr}
-          delta={renderDelta(metrics?.estimatedCost ?? null, prevMetrics?.estimatedCost ?? null, true)}
+          delta={renderDelta(metrics?.estimatedCost ?? null, prevMetrics?.estimatedCost ?? null, true, t(locale, 'usage.newData'))}
         />
         <MetricCard
           icon={<Cpu size={12} />}
           label={t(locale, 'usage.totalTokens')}
           value={tokensStr}
-          delta={renderDelta(metrics?.totalTokens ?? null, prevMetrics?.totalTokens ?? null, true)}
+          delta={renderDelta(metrics?.totalTokens ?? null, prevMetrics?.totalTokens ?? null, true, t(locale, 'usage.newData'))}
         />
         <MetricCard
           icon={<Download size={12} />}
           label={t(locale, 'usage.inputTokens')}
           value={inputStr}
-          delta={renderDelta(metrics?.totalInputTokens ?? null, prevMetrics?.totalInputTokens ?? null, true)}
+          delta={renderDelta(metrics?.totalInputTokens ?? null, prevMetrics?.totalInputTokens ?? null, true, t(locale, 'usage.newData'))}
         />
         <MetricCard
           icon={<Upload size={12} />}
           label={t(locale, 'usage.outputTokens')}
           value={outputStr}
-          delta={renderDelta(metrics?.totalOutputTokens ?? null, prevMetrics?.totalOutputTokens ?? null, true)}
+          delta={renderDelta(metrics?.totalOutputTokens ?? null, prevMetrics?.totalOutputTokens ?? null, true, t(locale, 'usage.newData'))}
         />
         <MetricCard
           icon={<Database size={12} />}
           label={t(locale, 'usage.cacheRead')}
           value={cacheReadStr}
-          delta={renderDelta(metrics?.totalCacheReadTokens ?? null, prevMetrics?.totalCacheReadTokens ?? null, true)}
+          delta={renderDelta(metrics?.totalCacheReadTokens ?? null, prevMetrics?.totalCacheReadTokens ?? null, true, t(locale, 'usage.newData'))}
           subLabel={t(locale, 'usage.cacheCreation')}
           subValue={cacheCreationStr}
         />
@@ -172,31 +172,31 @@ export function UsageMetricGrid({ metrics, prevMetrics, totalSessions, prevTotal
           icon={<Clock size={12} />}
           label={t(locale, 'usage.estimatedActiveDuration')}
           value={durationStr}
-          delta={renderDelta(metrics?.estimatedActiveSeconds ?? null, prevMetrics?.estimatedActiveSeconds ?? null, false)}
+          delta={renderDelta(metrics?.estimatedActiveSeconds ?? null, prevMetrics?.estimatedActiveSeconds ?? null, false, t(locale, 'usage.newData'))}
         />
         <MetricCard
           icon={<Timer size={12} />}
           label={t(locale, 'usage.totalDuration')}
           value={spanStr}
-          delta={renderDelta(metrics?.sessionSpanMs ?? null, prevMetrics?.sessionSpanMs ?? null, false)}
+          delta={renderDelta(metrics?.sessionSpanMs ?? null, prevMetrics?.sessionSpanMs ?? null, false, t(locale, 'usage.newData'))}
         />
         <MetricCard
           icon={<MessageSquare size={12} />}
           label={t(locale, 'usage.sessions')}
           value={String(totalSessions)}
-          delta={renderDelta(totalSessions, prevTotalSessions, false)}
+          delta={renderDelta(totalSessions, prevTotalSessions, false, t(locale, 'usage.newData'))}
         />
         <MetricCard
           icon={<MessageSquare size={12} />}
           label={t(locale, 'usage.totalMessages')}
           value={totalMsg != null ? fmtCount(totalMsg) : '—'}
-          delta={renderDelta(totalMsg, prevTotalMsg, false)}
+          delta={renderDelta(totalMsg, prevTotalMsg, false, t(locale, 'usage.newData'))}
         />
         <MetricCard
           icon={<User size={12} />}
           label={t(locale, 'usage.userMessages')}
           value={metrics?.totalUserMessages != null ? fmtCount(metrics.totalUserMessages) : '—'}
-          delta={renderDelta(metrics?.totalUserMessages ?? null, prevMetrics?.totalUserMessages ?? null, false)}
+          delta={renderDelta(metrics?.totalUserMessages ?? null, prevMetrics?.totalUserMessages ?? null, false, t(locale, 'usage.newData'))}
         />
       </div>
     </div>

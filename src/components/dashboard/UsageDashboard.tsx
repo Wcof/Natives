@@ -1,9 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useLocale, t } from '@/i18n';
-import type { UsageDashboardResponse, UsageDashboardRequest, UsageMetrics } from '@/types/usage';
+import type { UsageDashboardResponse, UsageCacheReadResult, UsageCacheMetadata, UsageMetrics, UsageViewRequest, DashboardState } from '@/types/usage';
 import { filterUsageRecords, aggregateUsageMetrics, uniqueSessionCount } from '@/lib/usage-dashboard';
 import {
   serializeUsageCsv, serializeUsageBadgeSvg, serializeUsageMarkdown,
@@ -13,41 +12,17 @@ import { UsageToolbar } from './UsageToolbar';
 import { UsageMetricGrid } from './UsageMetricGrid';
 import { UsageCharts } from './UsageCharts';
 import { UsageSourcesPanel } from './UsageSourcesPanel';
-import {
-  RefreshCw, AlertCircle, Inbox,
-} from 'lucide-react';
-import { EmptyState } from '@/components/ui/EmptyState';
+import { RefreshCw, AlertCircle, X } from 'lucide-react';
 import { classifyError } from '@/lib/error-classifier';
 import styles from './UsageDashboard.module.css';
 import Modal from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
 
-// ── Date presets ──
-const PRESETS: { key: string; labelKey: string; days: number }[] = [
-  { key: 'today', labelKey: 'usage.dateToday', days: 1 },
-  { key: '7d', labelKey: 'usage.date7d', days: 7 },
-  { key: '30d', labelKey: 'usage.date30d', days: 30 },
-  { key: '90d', labelKey: 'usage.date90d', days: 90 },
-  { key: 'custom', labelKey: 'usage.dateCustom', days: 0 },
-];
-
-function getDateRange(days: number): { startMs: number; endMs: number } {
-  const now = new Date();
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-  if (days === 1) {
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-    return { startMs: start.getTime(), endMs: end.getTime() };
-  }
-  const start = new Date(end.getTime() - days * 86400000);
-  return { startMs: start.getTime(), endMs: end.getTime() };
-}
-
-type LoadState = 'idle' | 'loading' | 'error' | 'empty' | 'partial' | 'loaded';
-
 export function UsageDashboard() {
   const locale = useLocale();
   const { toast } = useToast();
-  
+  const requestIdRef = useRef(0);
+
   const [preset, setPreset] = useState('30d');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
@@ -55,77 +30,124 @@ export function UsageDashboard() {
   const [modelFilter, setModelFilter] = useState<string[] | null>(null);
   const [projectFilter, setProjectFilter] = useState<string[] | null>(null);
   const [terminalFilter, setTerminalFilter] = useState<string[] | null>(null);
-  const [data, setData] = useState<UsageDashboardResponse | null>(null);
-  const [lastRefresh, setLastRefresh] = useState<number | null>(null);
-  const [loadState, setLoadState] = useState<LoadState>('idle');
+  const [state, setState] = useState<DashboardState>({ kind: 'reading-cache' });
+  const [isSyncing, setIsSyncing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [errorRetryable, setErrorRetryable] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<number | null>(null);
+  const [dismissedWarningKey, setDismissedWarningKey] = useState<string | null>(null);
+  const [warningSeconds, setWarningSeconds] = useState(10);
 
   // Export state
   const [exportType, setExportType] = useState<'csv' | 'badge' | null>(null);
   const [exportFilename, setExportFilename] = useState('');
   const [isExporting, setIsExporting] = useState(false);
 
-  // Compute date range
-  const dateRange = useMemo(() => {
-    if (preset === 'custom') {
-      if (!customStart || !customEnd) return null;
-      const start = new Date(customStart + 'T00:00:00');
-      const endDate = new Date(customEnd + 'T23:59:59.999');
-      if (start > endDate) return null;
-      return { startMs: start.getTime(), endMs: endDate.getTime() };
-    }
-    const p = PRESETS.find((pr) => pr.key === preset);
-    return p ? getDateRange(p.days) : getDateRange(30);
-  }, [preset, customStart, customEnd]);
+  // Handle directory selection via picker
+  const handleSelectDir = useCallback(async () => {
+    try {
+      const api = window.nativesAPI;
+      if (api?.dialog?.pickDirectory) {
+        const dir = await api.dialog.pickDirectory();
+        if (dir) {
+          setProjectFilter([dir]);
+        }
+      }
+    } catch { /* ignore */ }
+  }, []);
 
-  // Fetch data
-  const fetchData = useCallback(async (force = false) => {
-    if (!dateRange) return;
-    if (force) setIsRefreshing(true);
-    else setLoadState('loading');
+  const buildViewRequest = useCallback((timeZone: string): UsageViewRequest => ({
+    preset: preset as UsageViewRequest['preset'],
+    timeZone,
+    projectPath: projectFilter?.[0] ?? null,
+    customStartMs: preset === 'custom' && customStart ? new Date(`${customStart}T00:00:00`).getTime() : undefined,
+    // The end date is inclusive in the UI, but backend ranges are exclusive.
+    customEndMs: preset === 'custom' && customEnd ? new Date(`${customEnd}T23:59:59.999`).getTime() + 1 : undefined,
+  }), [preset, customStart, customEnd, projectFilter]);
+
+  // Sync data is user initiated. Cache reads never start a scan by themselves.
+  const handleSync = useCallback(async () => {
+    setIsSyncing(true);
     setErrorMsg(null);
     try {
       const api = window.nativesAPI;
-      if (!api?.usage?.refresh) throw new Error('usage API not available');
-      const request: UsageDashboardRequest = {
-        startMs: dateRange.startMs,
-        endMs: dateRange.endMs,
-        force,
-        includeComparison: true,
-        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
-      };
-      const response = (await api.usage.refresh(request)) as UsageDashboardResponse;
-      setData(response);
-      setLastRefresh(Date.now());
-      if (response.daily.length === 0 && response.sessions.length === 0) {
-        setLoadState('empty');
-      } else if (response.warnings.some((w: any) => w.sourceId !== null && !w.code.startsWith('CLI'))) {
-        setLoadState('partial');
-      } else {
-        setLoadState('loaded');
-      }
+      if (!api?.usage?.sync) throw new Error('usage API not available');
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      const result = (await api.usage.sync({
+        timeZone,
+        currentView: buildViewRequest(timeZone),
+      })) as { metadata: UsageCacheMetadata; response: UsageDashboardResponse };
+      setState({ kind: 'ready', data: result.response, metadata: result.metadata });
+      setLastSyncTime(result.metadata.generatedAtMs);
+      toast(t(locale, 'usage.syncedSuccess'), 'success');
     } catch (err: any) {
       const classified = classifyError(err);
       setErrorMsg(classified.userMessage);
-      setErrorRetryable(classified.retryable);
-      setLoadState('error');
+      toast(classified.userMessage, 'error');
+      // Keep old data on failure
     } finally {
-      setIsRefreshing(false);
+      setIsSyncing(false);
     }
-  }, [dateRange]);
+  }, [buildViewRequest, locale, toast]);
 
-  // Fetch on date range change
+  // Fetch cached data on mount / preset change
+  const loadCached = useCallback(async () => {
+    const rid = ++requestIdRef.current;
+    setErrorMsg(null);
+    try {
+      const api = window.nativesAPI;
+      if (!api?.usage?.getCached) throw new Error('usage API not available');
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      const query = buildViewRequest(timeZone);
+      const result = (await api.usage.getCached(query)) as UsageCacheReadResult;
+      // Ignore stale responses
+      if (rid !== requestIdRef.current) return;
+      if (result.state === 'ready') {
+        setState({ kind: 'ready', data: result.response, metadata: result.metadata });
+        setLastSyncTime(result.metadata.generatedAtMs);
+      } else {
+        setState({ kind: 'missing-cache' });
+      }
+    } catch (err: any) {
+      if (rid !== requestIdRef.current) return;
+      const classified = classifyError(err);
+      setErrorMsg(classified.userMessage);
+      setState({ kind: 'missing-cache' });
+    }
+  }, [buildViewRequest]);
+
+  // Load cache on mount and preset change
   useEffect(() => {
-    fetchData(false);
-  }, [fetchData]);
+    setState({ kind: 'reading-cache' });
+    loadCached();
+  }, [loadCached]);
 
   // Filtered data
+  const data = state.kind === 'ready' ? state.data : null;
+  const metadata = state.kind === 'ready' ? state.metadata : null;
+  const warningKey = data?.warnings.map((warning) => `${warning.sourceId ?? 'system'}:${warning.code}`).sort().join('|') ?? '';
+  const showWarning = warningKey.length > 0 && dismissedWarningKey !== warningKey;
+
+  useEffect(() => {
+    if (!showWarning) return;
+    setWarningSeconds(10);
+    const timer = window.setInterval(() => {
+      setWarningSeconds((seconds) => {
+        if (seconds <= 1) {
+          setDismissedWarningKey(warningKey);
+          return 0;
+        }
+        return seconds - 1;
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [showWarning, warningKey]);
+
   const filtered = useMemo(() => {
     if (!data) return null;
-    return filterUsageRecords(data, sourceFilter, modelFilter, projectFilter, terminalFilter);
-  }, [data, sourceFilter, modelFilter, projectFilter, terminalFilter]);
+    // Directory selection is applied while slicing the cache on the backend. Do not
+    // filter it again here, otherwise child projects are incorrectly excluded.
+    return filterUsageRecords(data, sourceFilter, modelFilter, null, terminalFilter);
+  }, [data, sourceFilter, modelFilter, terminalFilter]);
 
   // Aggregated metrics
   const metrics: UsageMetrics | null = useMemo(() => {
@@ -150,11 +172,11 @@ export function UsageDashboard() {
       },
       sourceFilter,
       modelFilter,
-      projectFilter,
+      null,
       terminalFilter,
     );
     return aggregateUsageMetrics(filteredComp.daily, filteredComp.sessions, data.sources);
-  }, [data?.comparison, data?.sources, sourceFilter, modelFilter, projectFilter, terminalFilter]);
+  }, [data?.comparison, data?.sources, sourceFilter, modelFilter, terminalFilter]);
 
   const prevTotalSessions = useMemo(() => {
     if (!data?.comparison) return 0;
@@ -167,11 +189,11 @@ export function UsageDashboard() {
       },
       sourceFilter,
       modelFilter,
-      projectFilter,
+      null,
       terminalFilter,
     );
     return uniqueSessionCount(filteredComp.sessions);
-  }, [data?.comparison, sourceFilter, modelFilter, projectFilter, terminalFilter]);
+  }, [data?.comparison, sourceFilter, modelFilter, terminalFilter]);
 
   const shareable = useMemo(() => hasShareableMetrics(metrics), [metrics]);
 
@@ -185,14 +207,27 @@ export function UsageDashboard() {
 
   // Asynchronous export execution (non-blocking UI)
   const handleDoExport = async () => {
-    if (!filtered || !exportType || !exportFilename) return;
+    if (!filtered || !exportType) return;
     setIsExporting(true);
     try {
       const api = window.nativesAPI;
+      // Get save path via dialog
+      let savePath = exportFilename;
+      if (api?.dialog?.saveFile) {
+        const result = await api.dialog.saveFile();
+        if (!result) {
+          setIsExporting(false);
+          return; // User cancelled
+        }
+        savePath = result;
+      } else if (!exportFilename) {
+        throw new Error('Either dialog.saveFile or exportFilename is required');
+      }
+
       if (exportType === 'csv') {
         const csv = serializeUsageCsv(filtered.daily);
         if (api?.fs?.writeFileAtomic) {
-          await api.fs.writeFileAtomic(exportFilename, csv);
+          await api.fs.writeFileAtomic(savePath, csv);
           toast(t(locale, 'usage.exportedSuccess'), 'success');
         } else {
           throw new Error('writeFileAtomic not available');
@@ -207,7 +242,7 @@ export function UsageDashboard() {
           sessions: metrics.totalSessions,
         });
         if (api?.fs?.writeFileAtomic) {
-          await api.fs.writeFileAtomic(exportFilename, svg);
+          await api.fs.writeFileAtomic(savePath, svg);
           toast(t(locale, 'usage.badgeSaved'), 'success');
         } else {
           throw new Error('writeFileAtomic not available');
@@ -226,43 +261,21 @@ export function UsageDashboard() {
     const period = `${new Date(data.range.startMs).toISOString().slice(0, 10)} – ${new Date(data.range.endMs).toISOString().slice(0, 10)}`;
     const md = serializeUsageMarkdown(period, metrics, totalSessions);
     try {
-      await navigator.clipboard.writeText(md);
+      const api = window.nativesAPI;
+      if (api?.clipboard?.write) {
+        await api.clipboard.write(md);
+      } else {
+        await navigator.clipboard.writeText(md);
+      }
       toast(t(locale, 'usage.copiedToClipboard'), 'success');
     } catch (err: any) {
       toast(classifyError(err).userMessage, 'error');
     }
   }, [filtered, data, metrics, totalSessions, locale, toast]);
 
-  if (loadState === 'idle' || loadState === 'loading') {
+  if (state.kind === 'reading-cache') {
     return (
-      <div className={styles.loadingContainer}>
-        <div className={styles.loadingInner}>
-          <RefreshCw size={24} style={{ animation: 'spin 0.8s linear infinite', color: 'var(--text-dim)' }} />
-          <span className={styles.loadingText}>{t(locale, 'usage.loading')}</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (loadState === 'error') {
-    return (
-      <div className={styles.errorContainer}>
-        <div className={styles.errorCard}>
-          <AlertCircle size={24} style={{ color: 'var(--danger)' }} />
-          <p className={styles.errorText}>{errorMsg}</p>
-          {errorRetryable && (
-            <button onClick={() => fetchData(true)} className={styles.retryButton}>
-              {t(locale, 'usage.retry')}
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  if (loadState === 'empty') {
-    return (
-      <div className={styles.emptyContainer}>
+      <div className={styles.container}>
         <div className={styles.toolbarSection}>
           <UsageToolbar
             preset={preset}
@@ -271,40 +284,36 @@ export function UsageDashboard() {
             customEnd={customEnd}
             onCustomStartChange={setCustomStart}
             onCustomEndChange={setCustomEnd}
-            sources={data?.dimensions.sources ?? []}
-            models={data?.dimensions.models ?? []}
-            projects={data?.dimensions.projects ?? []}
-            terminals={data?.dimensions.terminals ?? []}
-            sourceFilter={sourceFilter}
-            modelFilter={modelFilter}
-            projectFilter={projectFilter}
-            terminalFilter={terminalFilter}
-            onSourceFilterChange={setSourceFilter}
-            onModelFilterChange={setModelFilter}
-            onProjectFilterChange={setProjectFilter}
-            onTerminalFilterChange={setTerminalFilter}
+            sources={[]}
+            models={[]}
+            projects={[]}
+            terminals={[]}
+            sourceFilter={null}
+            modelFilter={null}
+            projectFilter={null}
+            terminalFilter={null}
+            onSourceFilterChange={() => {}}
+            onModelFilterChange={() => {}}
+            onProjectFilterChange={() => {}}
+            onTerminalFilterChange={() => {}}
+            onSelectDir={handleSelectDir}
           />
         </div>
-        <EmptyState
-          icon={<Inbox size={32} />}
-          title={t(locale, 'usage.emptyTitle')}
-          description={t(locale, 'usage.emptyHint')}
+        {/* Metrics show static —, no loading text */}
+        <UsageMetricGrid
+          metrics={null}
+          prevMetrics={null}
+          totalSessions={0}
+          prevTotalSessions={0}
         />
       </div>
     );
   }
 
-  return (
-    <div className={styles.container}>
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        gap: 16,
-        marginBottom: SPACING.md,
-        flexWrap: 'wrap',
-      }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
+  if (state.kind === 'missing-cache') {
+    return (
+      <div className={styles.container}>
+        <div className={styles.toolbarSection}>
           <UsageToolbar
             preset={preset}
             onPresetChange={setPreset}
@@ -312,104 +321,143 @@ export function UsageDashboard() {
             customEnd={customEnd}
             onCustomStartChange={setCustomStart}
             onCustomEndChange={setCustomEnd}
-            sources={data?.dimensions.sources ?? []}
-            models={data?.dimensions.models ?? []}
-            projects={data?.dimensions.projects ?? []}
-            terminals={data?.dimensions.terminals ?? []}
-            sourceFilter={sourceFilter}
-            modelFilter={modelFilter}
-            projectFilter={projectFilter}
-            terminalFilter={terminalFilter}
-            onSourceFilterChange={setSourceFilter}
-            onModelFilterChange={setModelFilter}
-            onProjectFilterChange={setProjectFilter}
-            onTerminalFilterChange={setTerminalFilter}
-            style={{ marginBottom: 0 }}
+            sources={[]}
+            models={[]}
+            projects={[]}
+            terminals={[]}
+            sourceFilter={null}
+            modelFilter={null}
+            projectFilter={null}
+            terminalFilter={null}
+            onSourceFilterChange={() => {}}
+            onModelFilterChange={() => {}}
+            onProjectFilterChange={() => {}}
+            onTerminalFilterChange={() => {}}
+            onSelectDir={handleSelectDir}
           />
         </div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <div className={styles.cacheEmptyState}>
+          <div className={styles.cacheEmptyText}>
+            {t(locale, 'usage.noCache')}
+          </div>
+          <button
+            onClick={handleSync}
+            disabled={isSyncing}
+            className={styles.primaryAction}
+          >
+            {isSyncing ? t(locale, 'usage.syncing') : t(locale, 'usage.syncData')}
+          </button>
+          {errorMsg && (
+            <p className={styles.cacheError}>{errorMsg}</p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.container}>
+      <div className={styles.header}>
+        <div className={styles.headerActions}>
+          {/* Date range display */}
+          {metadata && data && (
+            <span className={styles.dateRange}>
+              {new Date(data.range.startMs).toLocaleDateString()} – {new Date(data.range.endMs).toLocaleDateString()}
+            </span>
+          )}
           <button
             onClick={handleCopyMarkdown}
             disabled={!shareable}
-            style={{
-              padding: '6px 12px',
-              borderRadius: '20px',
-              border: '1px solid var(--border)',
-              background: 'var(--bg-2)',
-              color: 'var(--text)',
-              fontSize: '11px',
-              fontWeight: 500,
-              cursor: 'pointer',
-              opacity: shareable ? 1 : 0.5,
-            }}
+            className={styles.secondaryAction}
           >
-            {locale === 'zh' ? '分享' : 'Share'}
+            {t(locale, 'usage.share')}
           </button>
           <button
-            onClick={() => fetchData(true)}
-            disabled={isRefreshing}
-            style={{
-              padding: '6px 12px',
-              borderRadius: '20px',
-              border: '1px solid var(--border)',
-              background: 'var(--bg-2)',
-              color: 'var(--text)',
-              fontSize: '11px',
-              fontWeight: 500,
-              cursor: 'pointer',
-              opacity: isRefreshing ? 0.6 : 1,
-            }}
+            onClick={handleSync}
+            disabled={isSyncing}
+            aria-busy={isSyncing}
+            className={styles.secondaryAction}
           >
-            {locale === 'zh' ? '同步数据' : 'Sync Data'}
+            <RefreshCw size={12} style={{ animation: isSyncing ? 'spin 0.8s linear infinite' : undefined }} />
+            {isSyncing ? t(locale, 'usage.syncing') : t(locale, 'usage.syncData')}
           </button>
+          {lastSyncTime && (
+            <span className={styles.dateRange}>
+              {t(locale, 'usage.dataAsOf')} {new Date(lastSyncTime).toLocaleString()}
+            </span>
+          )}
           <button
             onClick={() => openExportDialog('badge')}
             disabled={!shareable}
-            style={{
-              padding: '6px 12px',
-              borderRadius: '20px',
-              border: '1px solid var(--border)',
-              background: 'var(--bg-2)',
-              color: 'var(--text)',
-              fontSize: '11px',
-              fontWeight: 500,
-              cursor: 'pointer',
-              opacity: shareable ? 1 : 0.5,
-            }}
+            className={styles.secondaryAction}
           >
-            {locale === 'zh' ? '使用量 Badge' : 'Usage Badge'}
+            {t(locale, 'usage.usageBadge')}
           </button>
         </div>
       </div>
 
-      {loadState === 'partial' && data && (
+      {/* Toolbar: date presets + filters */}
+      <UsageToolbar
+        preset={preset}
+        onPresetChange={setPreset}
+        customStart={customStart}
+        customEnd={customEnd}
+        onCustomStartChange={setCustomStart}
+        onCustomEndChange={setCustomEnd}
+        sources={data?.dimensions.sources ?? []}
+        models={data?.dimensions.models ?? []}
+        projects={data?.dimensions.projects ?? []}
+        terminals={data?.dimensions.terminals ?? []}
+        sourceFilter={sourceFilter}
+        modelFilter={modelFilter}
+        projectFilter={projectFilter}
+        terminalFilter={terminalFilter}
+        onSourceFilterChange={setSourceFilter}
+        onModelFilterChange={setModelFilter}
+        onProjectFilterChange={setProjectFilter}
+        onTerminalFilterChange={setTerminalFilter}
+        onSelectDir={handleSelectDir}
+        style={{ marginBottom: 0 }}
+      />
+
+      {data && showWarning && (
         <div className={styles.partialBanner}>
           <AlertCircle size={14} style={{ color: 'var(--warning)' }} />
           <span>
             {t(locale, 'usage.partialData')}: {data.warnings.filter((w) => w.sourceId !== null).length} {t(locale, 'usage.warningsCount')}
           </span>
+          <span className={styles.warningCountdown}>{t(locale, 'usage.warningAutoClose', { seconds: warningSeconds })}</span>
+          <button
+            type="button"
+            className={styles.warningClose}
+            onClick={() => setDismissedWarningKey(warningKey)}
+            aria-label={t(locale, 'usage.closeWarning')}
+            title={t(locale, 'usage.closeWarning')}
+          >
+            <X size={14} />
+          </button>
         </div>
       )}
 
-      <UsageMetricGrid
+      {metrics && (<UsageMetricGrid
         metrics={metrics}
         prevMetrics={prevMetrics}
         totalSessions={totalSessions}
         prevTotalSessions={prevTotalSessions}
-      />
+      />)}
 
-      <UsageCharts
+      {filtered && (<UsageCharts
         daily={filtered?.daily ?? []}
         activity={filtered?.activity ?? []}
         sessions={filtered?.sessions ?? []}
         sources={data?.sources ?? []}
         metrics={metrics}
-        lastRefresh={lastRefresh}
-      />
+        lastRefresh={lastSyncTime}
+      />)}
 
       {data && (
         <div className={styles.sourcesSection}>
-          <UsageSourcesPanel sources={data.sources} warnings={data.warnings} lastRefresh={lastRefresh} rtk={data.rtk} />
+          <UsageSourcesPanel sources={data.sources} warnings={data.warnings} lastRefresh={lastSyncTime} rtk={data.rtk} />
         </div>
       )}
 
@@ -424,7 +472,7 @@ export function UsageDashboard() {
           <div style={{ padding: '8px 0', display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <label style={{ fontSize: '11px', color: 'var(--text-dim)', fontWeight: 500 }}>
-                {locale === 'zh' ? '导出文件路径 (包含文件名)' : 'Export Path (including filename)'}
+                {t(locale, 'usage.exportPath')}
               </label>
               <input
                 type="text"

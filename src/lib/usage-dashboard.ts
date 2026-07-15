@@ -249,6 +249,7 @@ export function buildHourlyHeatmap(
 export function buildSourceDistribution(
   daily: UsageDailyRecord[],
   sources: UsageDashboardResponse['sources'],
+  othersLabel: string = 'Others',
 ): SourceDistributionItem[] {
   const sourceMap = new Map<string, number>();
   let grandTotal = 0;
@@ -260,7 +261,7 @@ export function buildSourceDistribution(
     grandTotal += r.totalTokens;
   }
 
-  return Array.from(sourceMap.entries())
+  const sorted = Array.from(sourceMap.entries())
     .map(([sourceId, totalTokens]) => {
       const sourceInfo = sources.find((s) => s.id === sourceId);
       return {
@@ -271,12 +272,30 @@ export function buildSourceDistribution(
       };
     })
     .sort((a, b) => (b.totalTokens ?? 0) - (a.totalTokens ?? 0));
+
+  // Top 6 + "other" merging
+  if (sorted.length > 6) {
+    const top6 = sorted.slice(0, 6);
+    const other = sorted.slice(6);
+    const otherTotal = other.reduce((sum, item) => sum + (item.totalTokens ?? 0), 0);
+    const otherPercentage = grandTotal > 0 ? otherTotal / grandTotal : null;
+    top6.push({
+      sourceId: '__other__',
+      label: othersLabel,
+      totalTokens: otherTotal,
+      percentage: otherPercentage,
+    });
+    return top6;
+  }
+
+  return sorted;
 }
 
 // ── Model distribution ──
 
 export function buildModelDistribution(
   daily: UsageDailyRecord[],
+  othersLabel: string = 'Others',
 ): ModelDistributionItem[] {
   const modelMap = new Map<string, number>();
   let grandTotal = 0;
@@ -289,7 +308,7 @@ export function buildModelDistribution(
     grandTotal += r.totalTokens;
   }
 
-  return Array.from(modelMap.entries())
+  const sorted = Array.from(modelMap.entries())
     .map(([key, totalTokens]) => ({
       modelId: key === '__unrecorded__' ? null : key,
       label: key === '__unrecorded__' ? '__unrecorded__' : key,
@@ -297,6 +316,23 @@ export function buildModelDistribution(
       percentage: grandTotal > 0 ? totalTokens / grandTotal : null,
     }))
     .sort((a, b) => (b.totalTokens ?? 0) - (a.totalTokens ?? 0));
+
+  // Top 6 + "other" merging
+  if (sorted.length > 6) {
+    const top6 = sorted.slice(0, 6);
+    const other = sorted.slice(6);
+    const otherTotal = other.reduce((sum, item) => sum + (item.totalTokens ?? 0), 0);
+    const otherPercentage = grandTotal > 0 ? otherTotal / grandTotal : null;
+    top6.push({
+      modelId: null,
+      label: othersLabel,
+      totalTokens: otherTotal,
+      percentage: otherPercentage,
+    });
+    return top6;
+  }
+
+  return sorted;
 }
 
 // ── Coverage ──
@@ -456,4 +492,18 @@ export function buildDistribution(
       percentage: totalTokens > 0 ? tokens / totalTokens : null,
     }))
     .sort((a, b) => (b.totalTokens ?? 0) - (a.totalTokens ?? 0));
+}
+
+/**
+ * Map a value to a chart volume level (0-8).
+ * - value = 0 → 0
+ * - non-zero → max(1, ceil(value / visibleMax * 8))
+ * - visibleMax <= 0 → 0
+ */
+export function getChartVolumeLevel(value: number, visibleMax: number): 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 {
+  if (value === 0 || visibleMax <= 0) return 0;
+  const level = Math.ceil((value / visibleMax) * 8);
+  if (level >= 8) return 8;
+  if (level <= 1) return 1;
+  return Math.max(1, Math.min(8, level)) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 }

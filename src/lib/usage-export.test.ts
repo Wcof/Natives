@@ -41,6 +41,22 @@ describe('serializeUsageCsv', () => {
     const csv = serializeUsageCsv(daily);
     assert.ok(csv.includes(',test,,,,,,,,,,unavailable'), 'null fields should be empty');
   });
+
+  it('prevents CSV formula injection for = + - @', () => {
+    const daily: UsageDailyRecord[] = [
+      {
+        date: '2026-07-01', sourceId: '=SUM(A1:A10)', modelId: '+GET(/etc/passwd)', projectId: '-cmd', terminalId: '@DANGER',
+        inputTokens: 1, outputTokens: 2, cacheCreationTokens: 0, cacheReadTokens: 0, totalTokens: 3,
+        costUsd: null, costQuality: 'unavailable',
+      },
+    ];
+    const csv = serializeUsageCsv(daily);
+    // Each formula-starting value should be prefixed with a single quote
+    assert.ok(csv.includes("'=SUM(A1:A10)"), '= should be escaped');
+    assert.ok(csv.includes("'+GET(/etc/passwd)"), '+ should be escaped');
+    assert.ok(csv.includes("'-cmd"), '- should be escaped');
+    assert.ok(csv.includes("'@DANGER"), '@ should be escaped');
+  });
 });
 
 describe('serializeUsageBadgeSvg', () => {

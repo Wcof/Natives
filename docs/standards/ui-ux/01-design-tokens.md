@@ -1,14 +1,14 @@
 # UI/UE 01 · 设计令牌与主题系统
 
-> **版本**: 1.0.0 · **日期**: 2026-06-15
-> **关联 ADR**: 无
-> **关联源文件**: `src/lib/design-tokens.ts`（TS 常量）、`src/lib/theme-engine.ts`（二皮肤 + Zod 校验 + 应用）、`src/app/globals.css`、`docs/STYLE_GUIDE_AUDIT.md`（历史改造清单，已被本篇收口为规范）
+> **版本**: 1.1.0 · **日期**: 2026-07-14
+> **关联 ADR**: [ADR 0009](../../adr/0009-monochrome-dashboard-theme.md)、[ADR 0010](../../adr/0010-global-neutral-spectrum.md)
+> **关联源文件**: `src/lib/design-tokens.ts`（TS 常量）、`src/lib/theme-engine.ts`（深浅主题 + Zod 校验 + 应用）、`src/app/globals.css`、`docs/STYLE_GUIDE_AUDIT.md`（历史改造清单，已被本篇收口为规范）
 
 ---
 
 ## 一、本篇要约束什么
 
-Natives 的视觉一致性靠「设计令牌」保证——颜色、间距、圆角、字号、阴影、过渡都从统一源头出发，二套皮肤通过覆盖语义令牌切换。本篇把令牌体系、二皮肤契约、Vibe 材质层、字体绑定钉成规范。
+Natives 的视觉一致性靠「设计令牌」保证——颜色、间距、圆角、字号、阴影、过渡都从统一源头出发，深浅主题通过覆盖语义令牌切换。本篇把全局中性色阶、主题契约、数据可视化、Vibe 材质层与字体绑定钉成规范。
 
 > `STYLE_GUIDE_AUDIT.md` 是一次性改造清单（历史），**其约束性已被本篇取代**；本篇是权威。
 
@@ -21,40 +21,34 @@ Natives 同时维护两套令牌，各有用途：
 | 令牌集 | 位置 | 用途 | 是否随主题变 |
 |--------|------|------|-------------|
 | **TS 常量** | `src/lib/design-tokens.ts`（`SPACING` / `FONT_SIZE` / `BORDER_RADIUS` / `TRANSITION` / `SHADOW`） | 给 inline style / 计算用，**不随主题变** | 否（结构性数值） |
-| **CSS 语义变量** | `theme-engine.ts` 的 `THEMES` → 注入为 `--bg` / `--text` / `--accent` 等 | 给样式表 / `var(--x)` 引用，**随主题变** | 是（皮肤相关） |
+| **CSS 语义变量** | `theme-engine.ts` 的 `THEMES` → 注入为 `--background` / `--surface` / `--text` / `--primary` 等 | 给样式表 / `var(--x)` 引用，**随主题变** | 是（主题相关） |
 
 #### R-U1 · 视觉值必须引用令牌，禁止魔法数字
 - **等级**：MUST
 - **分类**：主题、命名
 - **规则**：组件中的所有视觉值**必须**引用令牌：
-  - 皮肤相关（颜色等）→ CSS 变量 `var(--bg)` / `var(--accent)`，或 `THEME_TOKENS.bg`。
+  - 主题相关（颜色等）→ CSS 语义变量 `var(--background)` / `var(--surface)` / `var(--primary)`。
   - 结构性（间距/圆角/字号/阴影/过渡）→ `design-tokens.ts` 的常量 `SPACING.md` / `BORDER_RADIUS.lg` / `TRANSITION.fast`。
   - **禁止**硬编码 `#1a1a2e`、`padding: 13px`、`0.2s ease` 等魔法值。
-- **正例**：`padding: SPACING.md`、`color: 'var(--accent)'`、`transition: TRANSITION.fast`。
+- **正例**：`padding: SPACING.md`、`color: 'var(--primary)'`、`transition: TRANSITION.fast`。
 - **反例**：`background: '#0b0c0a'`（硬编码，换皮肤失效）；`border-radius: 8px`（应 `BORDER_RADIUS.lg`）。
-- **为什么**：令牌是二皮肤与视觉一致性的唯一保证；魔法值会让换肤局部失效、让间距节奏失控。
+- **为什么**：令牌是深浅主题与视觉一致性的唯一保证；魔法值会让换肤局部失效、让间距节奏失控。
 - **检查方法**：见 `frontend/01` R-E4 的 grep 思路；新增魔法值时优先找现有令牌。
 
 ---
 
-## 三、二皮肤契约、Vibe 材质层与 Liquid Glass 边界
+## 三、深浅主题契约、全局中性色阶与 Liquid Glass 边界
 
-当前 Natives 皮肤定义分为两层：常规二皮肤（定义在 `theme-engine.ts` 的 `THEMES`：`terminal-volt`（深色）、`frosted-jasmine`（浅色磨砂茉莉））与 Vibe 材质层（定义在 `globals.css` 的 `--vibe-*` / `--liquid-*` / `--glass-*` 变量）。CSS `data-theme` 属性值直接使用主题 ID：`terminal-volt`、`frosted-jasmine`。
+当前 Natives 主题定义分为两层：`theme-engine.ts` 中的常规 `dark` / `light` 主题，以及 `globals.css` 中的 `--vibe-*` / `--liquid-*` / `--glass-*` 材质层。历史主题 ID 只可作为兼容别名，新增规范与组件必须使用 `dark` / `light` 语义。
 
 参考 CodePilot 的 macOS visual profile 后，Natives 的结论是：高级磨砂玻璃不能靠到处叠 `backdrop-filter` 实现。它必须先有透明窗口与透明根节点作为底座，再由 shell / navigation / floating control 分层承载玻璃材质，内容阅读层保持稳定和可读。真正的 Liquid Glass 只用于少数高价值容器或控件，不作为全局背景滤镜滥用。
 
-#### R-U2 · 皮肤系统必须共享或对齐语义键并满足色系一致性
+#### R-U2 · 深浅主题必须共享语义键并使用全局中性色板
 - **等级**: MUST
 - **分类**：主题
-- **规则**：每套常规皮肤**必须**提供**完全相同**的语义键集合（`bg` / `bg-2` / `bg-3` / `panel` / `border` / `text` / `text-dim` / `text-faint` / `accent` / `accent-ink` / `radius` / `font-display`）。磨砂玻璃皮肤在常规键之外，引入布局令牌（`--vibe-*`）。
-- **色系隔离红线与黑白灰例外**：
-  - **单色主页例外 (ADR 0009)**：Dashboard 页面以高密度、克制、黑白灰为主，不使用彩色渐变或装饰光。
-  - **Terminal Volt (深色模式)**：除 Dashboard 的单色界面与语义状态外，必须由**亮绿色/极光绿**（`#00ff9c`）主导，严禁混入任何暖橙色。
-  - **Frosted Jasmine (浅色模式)**：除 Dashboard 的单色界面与语义状态外，必须由**暖橙色/桃红色**（`#ff793f` / `#f05b3f`）主导，作为 hover 态、激活选中态等主色调，严禁混入任何极光绿。
-- **色彩同步参数**：
-  - `terminal-volt` (深色): `--vibe-sidebar-bg` 为 `rgba(20, 24, 30, 0.68)`，`--vibe-canvas-bg` 为暗色渐变，`--vibe-btn-bg` 为 `rgba(255, 255, 255, 0.06)`，强调色为 `#00ff9c`（极光绿）。
-  - `frosted-jasmine` (浅色): `--vibe-sidebar-bg` 为 `rgba(255, 255, 255, 0.52)`，`--vibe-canvas-bg` 为暖白渐变，`--vibe-btn-bg` 为 `rgba(255, 255, 255, 0.4)`，强调色为 `#ff793f`（暖橙色）。
-- **为什么**：保证二皮肤切换时所有布局组件（侧栏、顶栏、按钮、状态度量）的颜色和玻璃质感同步变化，且绝对不发生风格漂移。同时支持 Dashboard 纯黑白灰的专业高密度数据呈现。
+- **规则**：每套常规主题**必须**提供完全相同的语义键集合，至少覆盖 `background` / `surface` / `surface-hover` / `sidebar` / `border` / `border-subtle` / `text` / `text-body` / `text-secondary` / `text-disabled` / `primary` / `primary-hover` / `primary-soft` / `primary-dark`。磨砂材质可以增加 `--vibe-*`，但不得建立另一套颜色权威。
+- **全局单色规则**：页面、侧栏、弹窗、控件、图表和第一方模块必须以 R-U2.5 的中性色板为品牌基底，不再由绿色或橙色主导。彩色仅允许用于 danger、warning、success、info、Diff、终端 ANSI、用户内容和第三方嵌入内容。
+- **为什么**：全局共享同一色板和语义角色，既能保持黑白灰品牌一致性，也能用足够的光度层次表达界面结构和数据体量。
 
 #### R-U2.1 · 玻璃效果必须遵守材质分层矩阵
 - **等级**：MUST
@@ -106,116 +100,104 @@ Natives 同时维护两套令牌，各有用途：
 - **为什么**：Natives 是生产力桌面应用，内容可信度和长时间阅读舒适度高于视觉炫技。
 - **检查方法**：深色/浅色两套主题下查看代码、表单、终端、长列表；若文字边缘变糊或背景抢占注意力，必须降低玻璃强度。
 
-#### 关键代码片段 (Theme Code Snippets)
+#### R-U2.5 · 全局原始中性色板必须固定且不可按页面改写
 
-##### 1. 皮肤引擎配置契约 (`src/lib/theme-engine.ts`)
-```typescript
-export const THEMES: Record<string, Theme> = {
-  'frosted-jasmine': {
-    bg: '#fffdfa',
-    'bg-2': '#ffffff',
-    'bg-3': '#fff8f2',
-    panel: '#fffdfa',
-    border: '#ecdccf',
-    text: '#2d1f14',
-    'text-dim': '#7a6b5a',
-    'text-faint': '#b8a594',
-    accent: '#ff793f',
-    'accent-ink': '#ffffff',
-    radius: '12px',
-    'font-display': '"Noto Serif SC", Georgia, serif',
-    danger: '#f05b3f',
-    'danger-soft': '#f05b3f20',
-    warning: '#ffa466',
-    info: '#be88ed',
-    'diff-add': '#ff9856',
-    'diff-del': '#f05b3f',
-    'diff-mod': '#be88ed',
-  },
-  'terminal-volt': {
-    bg: '#0d0f12',
-    'bg-2': '#15181d',
-    'bg-3': '#1c2027',
-    panel: '#0d0f12',
-    border: '#2a2f38',
-    text: '#dcdfe6',
-    'text-dim': '#8b90a0',
-    'text-faint': '#555a66',
-    accent: '#00ff9c',
-    'accent-ink': '#0d0f12',
-    radius: '4px',
-    'font-display': '"JetBrains Mono", "Fira Code", monospace',
-    danger: '#ff3a4d',
-    'danger-soft': '#ff3a4d15',
-    warning: '#ffb545',
-    info: '#45b5ff',
-    'diff-add': '#00ff9c',
-    'diff-del': '#ff3a4d',
-    'diff-mod': '#45b5ff',
-  },
-};
-```
+- **等级**：MUST
+- **分类**：主题、数据可视化、命名
+- **规则**：系统必须提供以下 15 级 `--neutral-*` 原始色阶。该色阶在深浅主题中保持同值；主题切换只改变语义令牌映射，禁止反向重定义原始色值。
 
-##### 2. CSS 关联颜色联动系统 (`src/app/globals.css`)
-```css
-/* Terminal Volt 联动色 */
-[data-theme="terminal-volt"] {
-  --accent: #00ff9c;
-  --accent-soft: rgba(0, 255, 156, 0.12);
-  --accent-border: rgba(0, 255, 156, 0.35);
-  --accent-ink: #0c0e12;
-  --vibe-btn-hover-bg: rgba(0, 255, 156, 0.08);
-  --vibe-btn-hover-color: #00ff9c;
-  --vibe-btn-text: rgba(255, 255, 255, 0.65);
-  --vibe-active-bg: rgba(0, 255, 156, 0.12);
-  --vibe-active-color: #00ff9c;
-  --vibe-accent-color: #00ff9c;
-  --vibe-folder-bg: linear-gradient(180deg, #50ffbe 0%, #00ff9c 100%);
-  --vibe-folder-flap-bg: linear-gradient(180deg, #78ffd1 0%, #2bffa6 100%);
-  --vibe-progress-bg: linear-gradient(to right, #00ff9c, #00ddff);
-}
+| 原始令牌 | HEX | RGB | 基准用途 |
+|---|---:|---:|---|
+| `--neutral-0` | `#010101` | `1, 1, 1` | 最深 Canvas、选中亮色控件上的文字 |
+| `--neutral-100` | `#111113` | `17, 17, 19` | 深色 Shell 次级背景 |
+| `--neutral-150` | `#18181A` | `24, 24, 26` | 深色内容块、浅色选中控件 |
+| `--neutral-200` | `#202024` | `32, 32, 36` | 深色低层级填充、零值热力格 |
+| `--neutral-250` | `#27262B` | `39, 38, 43` | 深色未选控件 |
+| `--neutral-300` | `#323137` | `50, 49, 55` | 深色 Hover、强边框 |
+| `--neutral-400` | `#48474D` | `72, 71, 77` | 低强调图形、浅色正文 |
+| `--neutral-500` | `#646268` | `100, 98, 104` | 浅色次要文字、图表中低量级 |
+| `--neutral-600` | `#7F7D83` | `127, 125, 131` | 中性中点、图表中量级 |
+| `--neutral-700` | `#9B999E` | `155, 153, 158` | 深色未选文字、辅助信息 |
+| `--neutral-800` | `#B7B5BA` | `183, 181, 186` | 图表中高量级、浅色弱边界 |
+| `--neutral-850` | `#D4D3D7` | `212, 211, 215` | 深色正文、浅色 Hover |
+| `--neutral-900` | `#E8E7EA` | `232, 231, 234` | 浅色未选控件、深色高量级图形 |
+| `--neutral-950` | `#FAFAFC` | `250, 250, 252` | 深色主要文字和选中控件、浅色 Canvas |
+| `--neutral-1000` | `#FFFFFF` | `255, 255, 255` | 浅色内容块；不得大面积替代 Canvas |
 
-/* Frosted Jasmine 联动色 */
-[data-theme="frosted-jasmine"] {
-  --accent: #ff793f;
-  --accent-soft: rgba(255, 121, 63, 0.15);
-  --accent-border: rgba(255, 121, 63, 0.40);
-  --accent-ink: #ffffff;
-  --vibe-btn-hover-bg: rgba(255, 121, 63, 0.1);
-  --vibe-btn-hover-color: #e05a1d;
-  --vibe-btn-text: #8e8e93;
-  --vibe-active-bg: rgba(255, 121, 63, 0.15);
-  --vibe-active-color: #ff793f;
-  --vibe-accent-color: #ff793f;
-  --vibe-folder-bg: linear-gradient(180deg, #ff9856 0%, #ff793f 100%);
-  --vibe-folder-flap-bg: linear-gradient(180deg, #ffa466 0%, #ff8548 100%);
-  --vibe-progress-bg: linear-gradient(to right, #ff9856, #f05b3f);
-}
-```
+- **正例**：在主题定义中将 `surface` 映射到 `--neutral-150`，图表组件消费 `--chart-volume-4`。
+- **反例**：某个页面自行新增 `#707075`，或在浅色主题中把 `--neutral-150` 改成另一颜色。
+- **为什么**：固定色板让背景、边框、文字和图表共享同一光度语言，避免“同为灰色但每页不同”。
 
+#### R-U2.6 · 深浅主题必须按固定语义映射消费色板
 
-##### 3. 灰度阶梯色系统 (Grayscale Steps System)
+- **等级**：MUST
+- **分类**：主题、可访问性
+- **规则**：以下核心角色必须采用固定映射；组件只能消费角色令牌，不得直接消费 `--neutral-*`，数据可视化令牌除外。
 
-为了避免单纯的三色（黑白灰）导致层级缺失，系统在 `globals.css` 中引入了基于黑白灰的十阶灰度色（`--gray-50` 到 `--gray-900`），在深浅两套主题中自动反向映射，保证在任何模式下均有清晰的阶梯对比：
+| 语义角色 | 深色主题 | 浅色主题 |
+|---|---|---|
+| `--background` | `--neutral-0` (`#010101`) | `--neutral-950` (`#FAFAFC`) |
+| `--surface` | `--neutral-150` (`#18181A`) | `--neutral-1000` (`#FFFFFF`) |
+| `--surface-hover` | `--neutral-200` (`#202024`) | `--neutral-900` (`#E8E7EA`) |
+| `--sidebar` | `--neutral-100` (`#111113`) | `--neutral-900` (`#E8E7EA`) |
+| `--border-subtle` | `--neutral-200` (`#202024`) | `--neutral-900` (`#E8E7EA`) |
+| `--border` | `--neutral-300` (`#323137`) | `--neutral-850` (`#D4D3D7`) |
+| `--text` | `--neutral-950` (`#FAFAFC`) | `--neutral-150` (`#18181A`) |
+| `--text-body` | `--neutral-850` (`#D4D3D7`) | `--neutral-400` (`#48474D`) |
+| `--text-secondary` | `--neutral-700` (`#9B999E`) | `--neutral-500` (`#646268`) |
+| `--text-disabled` | `--neutral-500` (`#646268`) | `--neutral-700` (`#9B999E`) |
+| `--primary` | `--neutral-950` (`#FAFAFC`) | `--neutral-150` (`#18181A`) |
+| `--primary-hover` | `--neutral-850` (`#D4D3D7`) | `--neutral-300` (`#323137`) |
+| `--primary-soft` | `--neutral-250` (`#27262B`) | `--neutral-900` (`#E8E7EA`) |
+| `--primary-dark` | `--neutral-0` (`#010101`) | `--neutral-0` (`#010101`) |
+| `--control-bg` | `--neutral-250` (`#27262B`) | `--neutral-900` (`#E8E7EA`) |
+| `--control-bg-hover` | `--neutral-300` (`#323137`) | `--neutral-850` (`#D4D3D7`) |
+| `--control-fg` | `--neutral-700` (`#9B999E`) | `--neutral-500` (`#646268`) |
+| `--control-selected-bg` | `--neutral-950` (`#FAFAFC`) | `--neutral-150` (`#18181A`) |
+| `--control-selected-bg-hover` | `--neutral-850` (`#D4D3D7`) | `--neutral-300` (`#323137`) |
+| `--control-selected-fg` | `--neutral-0` (`#010101`) | `--neutral-950` (`#FAFAFC`) |
 
-| 令牌名称 | 浅色模式 (Light Mode) | 深色模式 (Dark Mode) | 典型用途 |
-| :--- | :--- | :--- | :--- |
-| `--gray-50` | `#FAFAFA` (极浅灰/白) | `#080808` (深黑/底色) | 页面最底层背景或输入框背景 |
-| `--gray-100` | `#F4F4F2` (背景色) | `#151515` (卡片背景) | 大面积内容区域的背景 |
-| `--gray-200` | `#EDEDEB` (侧栏背景) | `#1E1E1E` (卡片悬停) | 侧边栏底色或悬停背景 |
-| `--gray-300` | `#E2E2DF` (细边框) | `#222222` (细边框) | 装饰线与微弱边框 |
-| `--gray-400` | `#D5D5D2` (硬边框) | `#2A2A2A` (硬边框) | 强分割线与输入框边框 |
-| `--gray-500` | `#999999` (禁用字) | `#666666` (禁用字) | 禁用文本与占位符 |
-| `--gray-600` | `#666666` (次要字) | `#A3A3A3` (次要字) | 说明文本与辅助文字 |
-| `--gray-700` | `#333333` (正文字) | `#D4D4D4` (正文字) | 正文段落与普通列表 |
-| `--gray-800` | `#1E1E1E` (悬停字) | `#F5F5F5` (正文高亮) | 悬停状态的文本或强正文 |
-| `--gray-900` | `#111111` (最深字) | `#FAFAFA` (极亮白/标题) | 核心标题、黑体强调字 |
+- **规则补充**：主要正文对比度必须达到 WCAG AA 4.5:1；大号文字、图标、图表关键边界至少达到 3:1。禁用状态可以低于正文标准，但不得承担必要信息。
+- **为什么**：语义反转比数学反色更可控，能保持两套主题相同的信息层级。
 
-##### 4. 选中按钮的前背景冲突色 (Contrasting Selection Colors)
+#### R-U2.7 · 图表体量必须使用 0 + 8 级顺序色阶
 
-选中状态（如侧边栏激活项、选择器选中卡片）的背景色和文本色必须使用冲突色（高对比度双色），严禁前背景色相同导致不可读：
-- **深色模式 (Dark)**：激活背景 `--accent` 为亮色时，其上的文字 `--accent-ink` **必须**映射为暗冲突色（如 `#0A0A0A` 或 `var(--background)`），确保在白色或亮色激活底色上文字清晰可见。
-- **浅色模式 (Light)**：激活背景 `--accent` 为暗色时，其上的文字 `--accent-ink` **必须**映射为亮冲突色（如 `#FFFFFF`），确保高对比度可读性。
+- **等级**：MUST
+- **分类**：数据可视化、无假数据、可访问性
+- **规则**：热力图、分布条、密度图和其他“数值越大视觉越强”的图表必须使用 `--chart-volume-0` 至 `--chart-volume-8`。`0` 仅代表真实零值或无活动；缺失数据必须使用独立的空态/纹理，禁止伪装成零值。
+
+| 图表令牌 | 深色主题 | 浅色主题 |
+|---|---|---|
+| `--chart-volume-0` | `#202024` | `#E8E7EA` |
+| `--chart-volume-1` | `#323137` | `#D4D3D7` |
+| `--chart-volume-2` | `#48474D` | `#B7B5BA` |
+| `--chart-volume-3` | `#646268` | `#9B999E` |
+| `--chart-volume-4` | `#7F7D83` | `#7F7D83` |
+| `--chart-volume-5` | `#9B999E` | `#646268` |
+| `--chart-volume-6` | `#B7B5BA` | `#48474D` |
+| `--chart-volume-7` | `#D4D3D7` | `#323137` |
+| `--chart-volume-8` | `#FAFAFC` | `#18181A` |
+
+- **映射公式**：默认使用图表当前可见数据域内的线性映射。`value = 0` 使用 level 0；非零值使用 `max(1, ceil(value / visibleMax * 8))`。当 `visibleMax = 0` 时全部使用 level 0。
+- **长尾例外**：仅在数据明显长尾时允许平方根或对数映射；必须在图例中标明“平方根刻度”或“对数刻度”，Tooltip 仍显示真实值。
+- **禁止**：用临时 `opacity`、任意 rgba、品牌色或语义状态色表达普通数据体量。
+- **为什么**：同一顺序色阶能让用户快速判断数量级，同时避免深浅主题中“越亮/越暗”的含义相反。
+
+#### R-U2.8 · 分类图表不得只依赖相邻灰色区分类别
+
+- **等级**：MUST
+- **分类**：数据可视化、可访问性
+- **规则**：分类分布必须按数值降序展示并同时提供标签与真实值。默认最多展示前 6 类，第 7 类起合并为“其他”；禁止仅靠颜色识别类别。
+- **折线规则**：最多同时展示 3 条主线，分别使用主题下的高、中、低对比中性色，并辅以实线、虚线、点线或数据点形状。超过 3 条时改用筛选器，不继续堆叠相近灰线。
+- **饼图规则**：只有类别不超过 6 且标签可同时显示时才可使用；否则优先使用排序横向条形图。
+- **为什么**：灰阶适合表达顺序和体量，不适合无限扩展类别；标签和线型能避免色觉、屏幕质量与相邻灰度导致的歧义。
+
+#### R-U2.9 · 语义彩色不得被图表灰阶吞并或滥用
+
+- **等级**：MUST
+- **分类**：主题、数据可视化、可访问性
+- **规则**：danger、warning、success、info、Diff 与终端 ANSI 保留独立色相。它们只表达明确语义，不得作为普通系列色或装饰强调色；普通增长/下降数据若不代表成功或故障，仍使用中性色并配合 `+` / `−`、箭头和文字说明。
+- **为什么**：限制彩色出现频率，既保持全局黑白灰品牌，也让真正重要的异常和状态更醒目。
 
 
 #### R-U3 · 皮肤切换必须即时且经 Zod 校验
@@ -289,13 +271,13 @@ Natives 引入了专为桌面小组件 (Widget) 模式设计的 "Polished Crysta
 
 ## 六、字体与图标绑定
 
-不同皮肤有不同的「展示字体」语义（`terminal-volt` 用等宽、`frosted-jasmine` 用衬线）。
+字体系统与颜色系统解耦；深浅主题切换不得改变同一信息层级的字体角色。
 
 #### R-U5 · 标题/品牌/激活态消费 `--font-display`
 - **等级**：SHOULD
 - **分类**：主题、命名
-- **规则**：侧栏品牌、主标题、面包屑激活态、卡片标题等「展示性」文字**应该**用 `font-family: var(--font-display);`，让字体随皮肤变化呈现不同语境。代码文件名、数值、终端数据**应该**用等宽（`var(--font-mono)` 或 `design-tokens` 中的 mono 栈）。正文 UI 用 `var(--font-ui)`。
-- **为什么**：见 `STYLE_GUIDE_AUDIT.md` 的 typography 缺口分析——字体不随皮肤绑定会丧失 frosted-jasmine 的雅致衬线感与 terminal-volt 的终端等宽感。
+- **规则**：侧栏品牌、主标题、面包屑激活态、卡片标题等「展示性」文字**应该**用 `font-family: var(--font-display);`。代码文件名、数值、终端数据**应该**用等宽（`var(--font-mono)` 或 `design-tokens` 中的 mono 栈）。正文 UI 用 `var(--font-ui)`。
+- **为什么**：固定字体角色可避免主题切换同时改变颜色和排版，降低视觉漂移。
 - **检查方法**：标题类元素核对字体来源。
 
 #### R-U6 · 统一使用专业 SVG 图标，禁止使用 UI 字符 Emoji
@@ -315,7 +297,12 @@ Natives 引入了专为桌面小组件 (Widget) 模式设计的 "Polished Crysta
 ## 七、本篇合规自检清单
 
 - [ ] 我的视觉值都引用了令牌（TS 常量或 CSS 变量），没有魔法数字（R-U1）。
-- [ ] 若我新增了语义键，已在二皮肤全部补齐（R-U2）。
+- [ ] 若我新增了语义键，已在深浅主题全部补齐（R-U2）。
+- [ ] 我的第一方 UI 颜色来自固定的 15 级中性色板，没有页面私有灰色（R-U2.5）。
+- [ ] 我的深浅主题按统一语义映射消费色板，正文与关键图形达到对比度要求（R-U2.6）。
+- [ ] 我的体量图表使用 `--chart-volume-0..8`，零值、缺失值和非零值没有混淆（R-U2.7）。
+- [ ] 我的分类图表同时提供标签/数值，没有只靠相邻灰色区分类别（R-U2.8）。
+- [ ] 我的彩色只用于语义状态、Diff、终端 ANSI 或用户内容，没有作为普通图表装饰色（R-U2.9）。
 - [ ] 我的玻璃效果符合材质分层矩阵，没有把内容阅读层强行玻璃化（R-U2.1, R-U2.4）。
 - [ ] 我的 Liquid Glass 使用统一 `--liquid-*` / `--vibe-*` / `--main-card-*` 令牌，且没有自造参数体系（R-U2.2）。
 - [ ] 应用背景磨砂的透明链路完整，没有根节点或 wrapper 变成不透明底色（R-U2.3）。

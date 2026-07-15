@@ -106,7 +106,7 @@
 
 ---
 
-## 附录：当前表清单（10 张）
+## 附录：当前表清单（11 张）
 
 > 新增表请在此登记，并补 `ALTER` 迁移逻辑。
 
@@ -122,3 +122,4 @@
 | `notifications` | 通知历史 |
 | `module_order` | 侧边栏排序 |
 | `permission_audit_log` | 权限审计日志 |
+| `usage_dashboard_snapshots` | 用量看板快照缓存（按 time_zone 主键，v6） |

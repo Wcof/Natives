@@ -8,7 +8,7 @@
 
 ## 为什么需要这套规范
 
-Natives 已积累了 PRD（两版）、ARCHITECTURE、7 个 ADR、STYLE_GUIDE_AUDIT、4 个 REMEDIATION 计划。这些文档里**约束**与**现状描述**混杂，后续开发者（含 AI 协作者）分不清「必须遵守什么」与「现在恰好是这样」。
+Natives 已积累了 PRD（两版）、ARCHITECTURE、10 个 ADR、STYLE_GUIDE_AUDIT、4 个 REMEDIATION 计划。这些文档里**约束**与**现状描述**混杂，后续开发者（含 AI 协作者）分不清「必须遵守什么」与「现在恰好是这样」。
 
 本目录把所有**约束**抽离、统一治理：
 
@@ -132,7 +132,7 @@ docs/standards/
 | `docs/PRD.md` / `PRD-v2.md` | 产品需求现状描述 | `product/` |
 | `docs/architecture/ARCHITECTURE.md` | 架构现状描述（含部分约束） | `technical/`、`frontend/` |
 | `docs/architecture/DESIGN_DISCUSSION.md` | 43 个决策的历史 Q&A | 仅供溯源 |
-| `docs/adr/0001~0007` | 架构决策记录 | 各规范篇「关联 ADR」处引用 |
+| `docs/adr/0001~0010` | 架构决策记录 | 各规范篇「关联 ADR」处引用 |
 | `docs/STYLE_GUIDE_AUDIT.md` | 一次性视觉改造清单（历史） | `ui-ux/` |
 | `docs/REMEDIATION_*.md` | 历史修复计划（归档参考） | 无直接对应 |
 | `CONTEXT.md` | 项目领域术语表 | 与 `00-glossary.md` 互补 |

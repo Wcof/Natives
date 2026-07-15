@@ -2,11 +2,12 @@
 // Merges data from all sources, reconciles totals, builds final response.
 
 use crate::usage::{
-    self, cache_key, collect_dimensions, mask_home, now_ms,
+    collect_dimensions, now_ms,
     ccusage::{
         scan_ccusage_all, build_ccusage_source_states, CcusageSourceResult, CcusageDailyEntry,
     },
     claude::{scan_claude_logs, claude_source_status, ClaudeScanResult},
+    atomcode::{scan_atomcode_logs, atomcode_source_status, AtomcodeScanResult},
     codex::{scan_codex_logs, codex_source_status, CodexScanResult},
     natives::{scan_natives_db, natives_source_status, NativesScanResult},
     RtkSummary, UsageDashboardRequest, UsageDashboardResponse, UsageDashboardRange,
@@ -64,6 +65,11 @@ pub async fn build_dashboard_response(
         scan_codex_logs(start_ms, end_ms, &tz_clone)
     });
 
+    let tz_clone = tz;
+    let atomcode_handle = tokio::task::spawn_blocking(move || {
+        scan_atomcode_logs(start_ms, end_ms, &tz_clone)
+    });
+
     let natives_handle = tokio::task::spawn_blocking(move || {
         scan_natives_db(start_ms, end_ms)
     });
@@ -74,9 +80,10 @@ pub async fn build_dashboard_response(
 
     let ccusage_fut = scan_ccusage_all(&since_str, &until_str, &tz_name);
 
-    let (claude_res, codex_res, natives_res, ccusage_res) = tokio::join!(
+    let (claude_res, codex_res, atomcode_res, natives_res, ccusage_res) = tokio::join!(
         claude_handle,
         codex_handle,
+        atomcode_handle,
         natives_handle,
         ccusage_fut
     );
@@ -97,6 +104,11 @@ pub async fn build_dashboard_response(
         state: UsageSourceState::Unavailable,
         breadcrumbs: vec![],
         warnings: vec![],
+    });
+
+    let atomcode_native = atomcode_res.unwrap_or_else(|_| AtomcodeScanResult {
+        daily: vec![], activity: vec![], sessions: vec![], state: UsageSourceState::Unavailable,
+        breadcrumbs: vec![], warnings: vec![],
     });
 
     let natives_native = natives_res.unwrap_or_else(|_| NativesScanResult {
@@ -128,18 +140,23 @@ pub async fn build_dashboard_response(
     // 4. Merge all daily, activity, and sessions
     let mut all_daily: Vec<UsageDailyRecord> = claude_daily;
     all_daily.extend(codex_daily);
+    all_daily.extend(atomcode_native.daily);
     
     for result in &ccusage_res.results {
-        all_daily.extend(result.daily.clone());
+        if !is_native_usage_source(&result.source_id) {
+            all_daily.extend(result.daily.clone());
+        }
     }
     all_daily.extend(natives_native.daily);
 
     let mut all_activity: Vec<UsageActivityBucket> = claude_native.activity;
     all_activity.extend(codex_native.activity);
+    all_activity.extend(atomcode_native.activity);
     all_activity.extend(natives_native.activity);
 
     let mut all_sessions: Vec<UsageSessionRecord> = claude_native.sessions;
     all_sessions.extend(codex_native.sessions);
+    all_sessions.extend(atomcode_native.sessions);
     all_sessions.extend(natives_native.sessions);
 
     // 5. Partition into Current vs Comparison periods in memory
@@ -191,16 +208,22 @@ pub async fn build_dashboard_response(
     // Add Claude/Codex/Natives always (since they are core builtins)
     sources.push(claude_source_status(&claude_native.state, &claude_native.breadcrumbs));
     sources.push(codex_source_status(&codex_native.state, &codex_native.breadcrumbs));
+    sources.push(atomcode_source_status(&atomcode_native.state, &atomcode_native.breadcrumbs));
     sources.push(natives_source_status(&natives_native.state));
 
     // Add ccusage active sources dynamically
-    let ccs_states = build_ccusage_source_states(&ccusage_res.results);
+    let external_ccusage_results: Vec<_> = ccusage_res.results.iter()
+        .filter(|result| !is_native_usage_source(&result.source_id))
+        .cloned()
+        .collect();
+    let ccs_states = build_ccusage_source_states(&external_ccusage_results);
     sources.extend(ccs_states);
 
     // 7. Collect warnings
     let mut all_warnings = Vec::new();
     all_warnings.extend(claude_native.warnings);
     all_warnings.extend(codex_native.warnings);
+    all_warnings.extend(atomcode_native.warnings);
     all_warnings.extend(natives_native.warnings);
     all_warnings.extend(ccusage_res.warnings);
     all_warnings.extend(reconciliation_warnings);
@@ -225,6 +248,13 @@ pub async fn build_dashboard_response(
         rtk,
         warnings: all_warnings,
     }
+}
+
+/// Claude and Codex are already parsed from their local event logs. ccusage
+/// may report the same tools, but must only validate/enrich them, never add a
+/// second set of usage rows.
+fn is_native_usage_source(source_id: &str) -> bool {
+    matches!(source_id.to_ascii_lowercase().as_str(), "claude" | "codex")
 }
 
 /// Reconciliation and cost allocation function for a specific source.
@@ -415,4 +445,16 @@ fn read_rtk_summary() -> Option<RtkSummary> {
         total_saved_tokens: stats.total_tokens_saved,
         total_commands: stats.total_commands,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_sources_are_not_added_again_from_ccusage() {
+        assert!(is_native_usage_source("claude"));
+        assert!(is_native_usage_source("codex"));
+        assert!(!is_native_usage_source("gemini"));
+    }
 }

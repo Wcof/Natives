@@ -7,7 +7,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { useToast } from '@/components/ui/Toast';
 import { classifyError } from '@/lib/error-classifier';
 import { SPACING } from '@/lib/design-tokens';
-import { Palette, Globe, Package, RefreshCw, Trash, Loader, RotateCcw } from 'lucide-react';
+import { Palette, Globe, Package, RefreshCw, Trash, Loader, RotateCcw, Sun, Terminal } from 'lucide-react';
 import RuntimePanel from '@/components/assistant/RuntimePanel';
 import ProviderDetail from '@/components/settings/ProviderDetail';
 import AddProviderDialog from '@/components/settings/AddProviderDialog';
@@ -18,8 +18,8 @@ import {
 
 // ── Theme skins — only light/dark as supported by the theme engine ──
 const THEMES = [
-  { id: 'light', labelKey: 'settings.themeJasmine', icon: '☀️' },
-  { id: 'dark', labelKey: 'settings.themeTerminal', icon: '🌙' },
+  { id: 'light', labelKey: 'settings.themeJasmine', icon: <Sun size={20} /> },
+  { id: 'dark', labelKey: 'settings.themeTerminal', icon: <Terminal size={20} /> },
 ];
 
 // ── Local components ──
@@ -129,10 +129,18 @@ export default function SettingsPage({
   async function loadTheme() {
     try {
       const api = window.nativesAPI;
-      const saved = await api?.db?.get('theme_id').catch(() => null);
-      if (saved && typeof saved === 'string') {
-        const normalized = normalizeThemeId(saved);
-        setCurrentTheme(normalized);
+      if (api?.getTheme) {
+        const saved = await api.getTheme().catch(() => null);
+        if (saved && typeof saved === 'string') {
+          const normalized = normalizeThemeId(saved);
+          setCurrentTheme(normalized);
+        }
+      } else {
+        const saved = await api?.db?.get('theme_id').catch(() => null);
+        if (saved && typeof saved === 'string') {
+          const normalized = normalizeThemeId(saved);
+          setCurrentTheme(normalized);
+        }
       }
       const loc = await api?.getLocale?.().catch(() => 'zh');
       if (loc) setCurrentLocale(loc);
@@ -144,8 +152,11 @@ export default function SettingsPage({
     setCurrentTheme(normalized);
     applyTheme(normalized);
     try {
-      await window.nativesAPI?.db?.set('theme_id', normalized);
-      if ((window.nativesAPI as any)?.theme?.setTheme) await (window.nativesAPI as any).theme.setTheme(normalized);
+      const api = window.nativesAPI;
+      if (api?.setTheme) {
+        await api.setTheme(normalized);
+      }
+      await api?.db?.set('theme_id', normalized);
     } catch { /* persist best-effort */ }
   }
 
@@ -278,22 +289,44 @@ export default function SettingsPage({
             <h3 style={{ fontSize: 'var(--font-size-md)', fontWeight: 600 }}>{t(locale, 'settings.theme')}</h3>
           </div>
           <div style={{ display: 'flex', gap: SPACING.sm }}>
-            {THEMES.map(th => (
-              <button
-                key={th.id}
-                type="button"
-                aria-pressed={currentTheme === th.id}
-                onClick={() => handleSelectTheme(th.id)}
-                style={{
-                  flex: 1, padding: `${SPACING.sm}px`, borderRadius: 'var(--radius-sm)',
-                  background: currentTheme === th.id ? 'var(--primary-soft)' : 'var(--background)',
-                  border: currentTheme === th.id ? '1px solid var(--primary)' : '1px solid var(--border)',
-                  color: 'var(--text)', cursor: 'pointer', fontSize: 'var(--font-size-sm)', textAlign: 'center',
-                }}>
-                <div style={{ fontSize: 20, marginBottom: 4 }}>{th.icon}</div>
-                <div>{t(locale, th.labelKey)}</div>
-              </button>
-            ))}
+            {THEMES.map(th => {
+              const isSelected = currentTheme === th.id;
+              return (
+                <button
+                  key={th.id}
+                  type="button"
+                  aria-pressed={isSelected}
+                  onClick={() => handleSelectTheme(th.id)}
+                  style={{
+                    flex: 1,
+                    padding: `${SPACING.sm}px`,
+                    borderRadius: 'var(--radius-sm)',
+                    background: isSelected ? 'var(--control-selected-bg)' : 'var(--control-bg)',
+                    border: isSelected ? '1px solid var(--border)' : '1px solid var(--border-subtle)',
+                    color: isSelected ? 'var(--control-selected-fg)' : 'var(--control-fg)',
+                    cursor: 'pointer',
+                    fontSize: 'var(--font-size-sm)',
+                    textAlign: 'center',
+                    transition: 'all 150ms ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isSelected) {
+                      e.currentTarget.style.background = 'var(--control-bg-hover)';
+                    } else {
+                      e.currentTarget.style.background = 'var(--control-selected-bg-hover)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = isSelected ? 'var(--control-selected-bg)' : 'var(--control-bg)';
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: 4 }}>
+                    {th.icon}
+                  </div>
+                  <div>{t(locale, th.labelKey)}</div>
+                </button>
+              );
+            })}
           </div>
         </div>
       </>

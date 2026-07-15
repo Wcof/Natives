@@ -1,4 +1,8 @@
-# 个人主页 Token 统计迁移至 ccusage 重构方案
+> ⚠️ **本计划已被 `docs/refactor-plan-dashboard-ccusage-snapshot.md` 替代。**
+> 本文件保留仅作历史参考，**不得继续实施**其中的自动TTL刷新、Skills Dashboard和Electron IPC设计。
+> 替代方案采用 SQLite 专用快照表、一次点击同步、全局中性色阶。
+
+# 个人主页 Token 统计迁移至 ccusage 重构方案（已过时）
 
 > 本文档为个人主页（Dashboard）的 Token 使用量及成本统计能力全面迁移至 `ccusage` 插件的重构设计方案。该方案旨在通过 `ccusage` 统一管理多编码代理（Claude Code, Codex, Copilot CLI 等）的 Token 用量与成本，简化后端自定义解析，并保证前端渲染的 100% 兼容性。
 

@@ -7,15 +7,22 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import type { RtkUsage, RtkCommandStat } from '@/types/agent';
 import { useAsyncData } from '@/hooks/useAsyncData';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import type { UsageCacheReadResult } from '@/types/usage';
 
 export default function RtkPanel() {
   const { data: usage, loading, error, reload: fetchUsage } = useAsyncData(async () => {
     const api = window.nativesAPI;
-    if (!api?.usage?.refresh) return null;
-    const end = Date.now();
-    const start = end - 30 * 86400000;
-    const result = (await api.usage.refresh({ startMs: start, endMs: end, force: false, includeComparison: false, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' })) as any;
-    return (result?.rtk ?? null) as RtkUsage | null;
+    if (!api?.usage?.getCached) return null;
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    const result = (await api.usage.getCached({
+      preset: '30d',
+      timeZone,
+      projectPath: null,
+    })) as UsageCacheReadResult;
+    if (result.state === 'ready') {
+      return (result.response as any)?.rtk ?? null;
+    }
+    return null;
   }, []);
   const [paused, setPaused] = useState(false);
   const [locale, setLocale] = useState<Locale>('zh');
@@ -31,6 +38,7 @@ export default function RtkPanel() {
   }, []);
 
   const topCommands: RtkCommandStat[] = usage?.topCommands ?? [];
+  const rtkData = usage as { totalSavedTokens?: number; totalCommands?: number } | null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 'var(--space-sm)' }}>
@@ -72,7 +80,7 @@ export default function RtkPanel() {
           background: 'var(--surface)', border: '1px solid var(--border)',
         }}>
           <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--primary)' }}>
-            {usage?.totalSaved ?? 0}
+            {rtkData?.totalSavedTokens ?? 0}
           </div>
           <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)', marginTop: 2 }}>
             {t(locale, 'aiWorkbench.tokensSaved')}
@@ -83,7 +91,7 @@ export default function RtkPanel() {
           background: 'var(--surface)', border: '1px solid var(--border)',
         }}>
           <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)' }}>
-            {usage?.totalCommands ?? 0}
+            {rtkData?.totalCommands ?? 0}
           </div>
           <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)', marginTop: 2 }}>
             {t(locale, 'aiWorkbench.commands')}

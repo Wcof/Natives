@@ -12,12 +12,17 @@ import type {
 
 // ── CSV Export ──
 
-/** 转义 CSV 单元格值 */
+/** 转义 CSV 单元格值，防止公式注入（= + - @） */
 function escapeCsv(val: string): string {
-  if (val.includes(',') || val.includes('"') || val.includes('\n') || val.includes('\r')) {
-    return `"${val.replace(/"/g, '""')}"`;
+  // Prevent CSV formula injection: if value starts with =, +, -, @, prepend a single quote
+  let safe = val;
+  if (/^[=+\-@]/.test(safe)) {
+    safe = "'" + safe;
   }
-  return val;
+  if (safe.includes(',') || safe.includes('"') || safe.includes('\n') || safe.includes('\r')) {
+    return `"${safe.replace(/"/g, '""')}"`;
+  }
+  return safe;
 }
 
 /** 将 daily 记录序列化为 CSV（UTF-8 BOM） */

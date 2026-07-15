@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { SPACING, BORDER_RADIUS } from '@/lib/design-tokens';
-import { useLocale } from '@/i18n';
+import { useLocale, t } from '@/i18n';
 import type { UsageDimension } from '@/types/usage';
 import { Terminal, Cpu, Folder, Monitor, ChevronDown } from 'lucide-react';
 
@@ -25,16 +25,17 @@ interface Props {
   onModelFilterChange: (val: string[] | null) => void;
   onProjectFilterChange: (val: string[] | null) => void;
   onTerminalFilterChange: (val: string[] | null) => void;
+  onSelectDir?: () => void;
   style?: React.CSSProperties;
 }
 
 const PRESETS = [
-  { key: 'today', labelZh: '今天', labelEn: 'Today' },
-  { key: '24h', labelZh: '24H', labelEn: '24H' },
-  { key: '7d', labelZh: '7D', labelEn: '7D' },
-  { key: '30d', labelZh: '30D', labelEn: '30D' },
-  { key: '90d', labelZh: '90D', labelEn: '90D' },
-  { key: 'custom', labelZh: '自定义', labelEn: 'Custom' },
+  { key: 'today', labelKey: 'usage.dateToday' },
+  { key: '24h', labelKey: 'usage.date24h' },
+  { key: '7d', labelKey: 'usage.date7d' },
+  { key: '30d', labelKey: 'usage.date30d' },
+  { key: '90d', labelKey: 'usage.date90d' },
+  { key: 'custom', labelKey: 'usage.dateCustom' },
 ];
 
 interface FilterDropdownProps {
@@ -48,7 +49,7 @@ interface FilterDropdownProps {
 function FilterDropdown({ icon, value, onChange, options, placeholder }: FilterDropdownProps) {
   return (
     <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-      <span style={{ position: 'absolute', left: 10, pointerEvents: 'none', display: 'flex', alignItems: 'center', color: 'var(--text-dim)' }}>
+      <span style={{ position: 'absolute', left: 10, pointerEvents: 'none', display: 'flex', alignItems: 'center', color: 'var(--text-secondary)' }}>
         {icon}
       </span>
       <select
@@ -58,8 +59,8 @@ function FilterDropdown({ icon, value, onChange, options, placeholder }: FilterD
           padding: '5px 24px 5px 28px',
           borderRadius: 20,
           border: '1px solid var(--border)',
-          background: 'var(--bg-2)',
-          color: 'var(--text)',
+          background: 'var(--control-bg)',
+          color: 'var(--control-fg)',
           fontSize: '11px',
           cursor: 'pointer',
           appearance: 'none',
@@ -76,7 +77,7 @@ function FilterDropdown({ icon, value, onChange, options, placeholder }: FilterD
           </option>
         ))}
       </select>
-      <span style={{ position: 'absolute', right: 10, pointerEvents: 'none', display: 'flex', alignItems: 'center', color: 'var(--text-dim)' }}>
+      <span style={{ position: 'absolute', right: 10, pointerEvents: 'none', display: 'flex', alignItems: 'center', color: 'var(--text-secondary)' }}>
         <ChevronDown size={10} />
       </span>
     </div>
@@ -88,6 +89,7 @@ export function UsageToolbar({
   sources, models, projects, terminals,
   sourceFilter, modelFilter, projectFilter, terminalFilter,
   onSourceFilterChange, onModelFilterChange, onProjectFilterChange, onTerminalFilterChange,
+  onSelectDir,
   style,
 }: Props) {
   const locale = useLocale();
@@ -105,7 +107,7 @@ export function UsageToolbar({
       {/* ── Date presets pill container ── */}
       <div style={{
         display: 'flex',
-        background: 'var(--bg-2)',
+        background: 'var(--control-bg)',
         padding: '3px',
         borderRadius: 20,
         border: '1px solid var(--border)',
@@ -113,7 +115,7 @@ export function UsageToolbar({
       }}>
         {PRESETS.map((p) => {
           const active = preset === p.key;
-          const label = locale === 'zh' ? p.labelZh : p.labelEn;
+          const label = t(locale, p.labelKey);
           return (
             <button
               key={p.key}
@@ -123,8 +125,8 @@ export function UsageToolbar({
                 borderRadius: 16,
                 fontSize: '11px',
                 border: 'none',
-                background: active ? 'var(--text)' : 'var(--surface-hover)',
-                color: active ? 'var(--bg)' : 'var(--text-secondary)',
+                background: active ? 'var(--control-selected-bg)' : 'transparent',
+                color: active ? 'var(--control-selected-fg)' : 'var(--control-fg)',
                 cursor: 'pointer',
                 fontWeight: active ? 600 : 400,
                 transition: 'all 0.1s ease',
@@ -147,13 +149,13 @@ export function UsageToolbar({
               padding: '4px 8px',
               borderRadius: BORDER_RADIUS.sm,
               border: '1px solid var(--border)',
-              background: 'var(--bg-2)',
+              background: 'var(--control-bg)',
               color: 'var(--text)',
               fontSize: '11px',
               outline: 'none',
             }}
           />
-          <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>—</span>
+          <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>—</span>
           <input
             type="date"
             value={customEnd}
@@ -162,7 +164,7 @@ export function UsageToolbar({
               padding: '4px 8px',
               borderRadius: BORDER_RADIUS.sm,
               border: '1px solid var(--border)',
-              background: 'var(--bg-2)',
+              background: 'var(--control-bg)',
               color: 'var(--text)',
               fontSize: '11px',
               outline: 'none',
@@ -179,7 +181,7 @@ export function UsageToolbar({
             value={sourceFilter?.[0] ?? ''}
             onChange={(val) => onSourceFilterChange(val ? [val] : null)}
             options={sources}
-            placeholder={locale === 'zh' ? '工具 全部' : 'Tools All'}
+            placeholder={t(locale, 'usage.filterTool') + ' ' + t(locale, 'usage.sourceAll')}
           />
         )}
 
@@ -189,7 +191,7 @@ export function UsageToolbar({
             value={modelFilter?.[0] ?? ''}
             onChange={(val) => onModelFilterChange(val ? [val] : null)}
             options={models}
-            placeholder={locale === 'zh' ? '模型 全部' : 'Models All'}
+            placeholder={t(locale, 'usage.filterModel') + ' ' + t(locale, 'usage.modelAll')}
           />
         )}
 
@@ -197,9 +199,18 @@ export function UsageToolbar({
           <FilterDropdown
             icon={<Folder size={12} />}
             value={projectFilter?.[0] ?? ''}
-            onChange={(val) => onProjectFilterChange(val ? [val] : null)}
-            options={projects}
-            placeholder={locale === 'zh' ? '项目 全部' : 'Projects All'}
+            onChange={(val) => {
+              if (val === '__select_dir__') {
+                onSelectDir?.();
+              } else {
+                onProjectFilterChange(val ? [val] : null);
+              }
+            }}
+            options={[
+              ...projects,
+              { id: '__select_dir__', label: t(locale, 'usage.selectDir') },
+            ]}
+            placeholder={t(locale, 'usage.filterProject') + ' ' + t(locale, 'usage.projectAll')}
           />
         )}
 
@@ -209,7 +220,7 @@ export function UsageToolbar({
             value={terminalFilter?.[0] ?? ''}
             onChange={(val) => onTerminalFilterChange(val ? [val] : null)}
             options={terminals}
-            placeholder={locale === 'zh' ? '终端 全部' : 'Terminals All'}
+            placeholder={t(locale, 'usage.filterTerminal') + ' ' + t(locale, 'usage.terminalAll')}
           />
         )}
       </div>

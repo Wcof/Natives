@@ -1,7 +1,51 @@
 import { z } from 'zod';
 
-// ── AI Natives Design System V1.0 Theme Schema ──
-// 纯色 Surface · 轻边框 · 双主题 (light / dark) · 无 backdrop-filter
+// ── AI Natives Design System V1.1 Theme Schema ──
+// 全局中性色阶 · ADR 0010
+
+// ── 15 级全局中性色板（固定，不随主题变化） ──
+export const NEUTRAL_PALETTE = {
+  0: '#010101',
+  100: '#111113',
+  150: '#18181A',
+  200: '#202024',
+  250: '#27262B',
+  300: '#323137',
+  400: '#48474D',
+  500: '#646268',
+  600: '#7F7D83',
+  700: '#9B999E',
+  800: '#B7B5BA',
+  850: '#D4D3D7',
+  900: '#E8E7EA',
+  950: '#FAFAFC',
+  1000: '#FFFFFF',
+} as const;
+
+// ── Chart volume 色阶（0-8，数据体量映射） ──
+export const CHART_VOLUME_DARK: Record<number, string> = {
+  0: '#202024',
+  1: '#323137',
+  2: '#48474D',
+  3: '#646268',
+  4: '#7F7D83',
+  5: '#9B999E',
+  6: '#B7B5BA',
+  7: '#D4D3D7',
+  8: '#FAFAFC',
+};
+
+export const CHART_VOLUME_LIGHT: Record<number, string> = {
+  0: '#E8E7EA',
+  1: '#D4D3D7',
+  2: '#B7B5BA',
+  3: '#9B999E',
+  4: '#7F7D83',
+  5: '#646268',
+  6: '#48474D',
+  7: '#323137',
+  8: '#18181A',
+};
 
 const ThemeSchema = z.object({
   background: z.string().regex(/^#[0-9a-fA-F]{6}$/),
@@ -18,6 +62,12 @@ const ThemeSchema = z.object({
   'primary-hover': z.string().regex(/^#[0-9a-fA-F]{6}$/),
   'primary-soft': z.string().regex(/^#[0-9a-fA-F]{6}$/),
   'primary-dark': z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  'control-bg': z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  'control-bg-hover': z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  'control-fg': z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  'control-selected-bg': z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  'control-selected-bg-hover': z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  'control-selected-fg': z.string().regex(/^#[0-9a-fA-F]{6}$/),
   danger: z.string().regex(/^#[0-9a-fA-F]{6}$/),
   warning: z.string().regex(/^#[0-9a-fA-F]{6}$/),
   info: z.string().regex(/^#[0-9a-fA-F]{6}$/),
@@ -29,24 +79,30 @@ const ThemeSchema = z.object({
 
 export type Theme = z.infer<typeof ThemeSchema>;
 
-// ── V1.0 Built-in Themes ──
+// ── V1.1 Built-in Themes (using NEUTRAL_PALETTE) ──
 
 export const THEMES: Record<string, Theme> = {
   light: {
-    background: '#F4F4F2',
-    surface: '#FFFFFF',
-    'surface-hover': '#ECECEA',
-    sidebar: '#EDEDEB',
-    border: '#D5D5D2',
-    'border-subtle': '#E2E2DF',
-    text: '#111111',
-    'text-body': '#333333',
-    'text-secondary': '#666666',
-    'text-disabled': '#999999',
-    primary: '#111111',
-    'primary-hover': '#333333',
-    'primary-soft': '#E2E2DF',
-    'primary-dark': '#000000',
+    background: NEUTRAL_PALETTE[950],
+    surface: NEUTRAL_PALETTE[1000],
+    'surface-hover': NEUTRAL_PALETTE[900],
+    sidebar: NEUTRAL_PALETTE[900],
+    border: NEUTRAL_PALETTE[850],
+    'border-subtle': NEUTRAL_PALETTE[900],
+    text: NEUTRAL_PALETTE[150],
+    'text-body': NEUTRAL_PALETTE[400],
+    'text-secondary': NEUTRAL_PALETTE[500],
+    'text-disabled': NEUTRAL_PALETTE[700],
+    primary: NEUTRAL_PALETTE[150],
+    'primary-hover': NEUTRAL_PALETTE[300],
+    'primary-soft': NEUTRAL_PALETTE[900],
+    'primary-dark': NEUTRAL_PALETTE[0],
+    'control-bg': NEUTRAL_PALETTE[900],
+    'control-bg-hover': NEUTRAL_PALETTE[850],
+    'control-fg': NEUTRAL_PALETTE[500],
+    'control-selected-bg': NEUTRAL_PALETTE[150],
+    'control-selected-bg-hover': NEUTRAL_PALETTE[300],
+    'control-selected-fg': NEUTRAL_PALETTE[950],
     danger: '#DC2626',
     warning: '#D97706',
     info: '#2563EB',
@@ -56,20 +112,26 @@ export const THEMES: Record<string, Theme> = {
     'diff-mod': '#D97706',
   },
   dark: {
-    background: '#080808',
-    surface: '#151515',
-    'surface-hover': '#1E1E1E',
-    sidebar: '#0D0D0D',
-    border: '#2A2A2A',
-    'border-subtle': '#222222',
-    text: '#F5F5F5',
-    'text-body': '#D4D4D4',
-    'text-secondary': '#A3A3A3',
-    'text-disabled': '#666666',
-    primary: '#F5F5F5',
-    'primary-hover': '#D4D4D4',
-    'primary-soft': '#262626',
-    'primary-dark': '#FFFFFF',
+    background: NEUTRAL_PALETTE[0],
+    surface: NEUTRAL_PALETTE[150],
+    'surface-hover': NEUTRAL_PALETTE[200],
+    sidebar: NEUTRAL_PALETTE[100],
+    border: NEUTRAL_PALETTE[300],
+    'border-subtle': NEUTRAL_PALETTE[200],
+    text: NEUTRAL_PALETTE[950],
+    'text-body': NEUTRAL_PALETTE[850],
+    'text-secondary': NEUTRAL_PALETTE[700],
+    'text-disabled': NEUTRAL_PALETTE[500],
+    primary: NEUTRAL_PALETTE[950],
+    'primary-hover': NEUTRAL_PALETTE[850],
+    'primary-soft': NEUTRAL_PALETTE[250],
+    'primary-dark': NEUTRAL_PALETTE[0],
+    'control-bg': NEUTRAL_PALETTE[250],
+    'control-bg-hover': NEUTRAL_PALETTE[300],
+    'control-fg': NEUTRAL_PALETTE[700],
+    'control-selected-bg': NEUTRAL_PALETTE[950],
+    'control-selected-bg-hover': NEUTRAL_PALETTE[850],
+    'control-selected-fg': NEUTRAL_PALETTE[0],
     danger: '#EF4444',
     warning: '#F59E0B',
     info: '#3B82F6',
@@ -121,7 +183,7 @@ export function validateTheme(theme: Record<string, unknown>): Theme {
 export function normalizeThemeId(themeId: string | null | undefined): 'light' | 'dark' {
   if (themeId === 'terminal-volt' || themeId === 'dark') return 'dark';
   if (themeId === 'frosted-jasmine' || themeId === 'light') return 'light';
-  return 'light';
+  return 'dark'; // New default is dark
 }
 
 export function applyTheme(themeId: string): void {
@@ -129,17 +191,29 @@ export function applyTheme(themeId: string): void {
 
   const theme = THEMES[resolvedId];
   if (!theme) {
-    console.warn(`Theme '${themeId}' not found, falling back to light`);
-    return applyTheme('light');
+    console.warn(`Theme '${themeId}' not found, falling back to dark`);
+    return applyTheme('dark');
   }
 
   const root = document.documentElement;
   root.setAttribute('data-theme', resolvedId);
 
-  // Apply CSS variables
+  // Apply neutral palette CSS variables
+  for (const [key, value] of Object.entries(NEUTRAL_PALETTE)) {
+    root.style.setProperty(`--neutral-${key}`, value);
+  }
+
+  // Apply theme CSS variables
   for (const [key, value] of Object.entries(theme)) {
     const cssVar = `--${key}`;
     root.style.setProperty(cssVar, value);
+  }
+
+  // Apply chart volume CSS variables
+  const chartVolumes = resolvedId === 'dark' ? CHART_VOLUME_DARK : CHART_VOLUME_LIGHT;
+  for (let i = 0; i <= 8; i++) {
+    const val = chartVolumes[i];
+    if (val) root.style.setProperty(`--chart-volume-${i}`, val);
   }
 
   // Apply terminal ANSI colors
@@ -164,5 +238,20 @@ export function onThemeChange(cb: ThemeListeners): () => void {
 }
 
 export function getThemeId(): string {
-  return document.documentElement.getAttribute('data-theme') || 'light';
+  return document.documentElement.getAttribute('data-theme') || 'dark';
+}
+
+// ── Chart volume helper ──
+
+/**
+ * Map a value to a chart volume level (0-8).
+ * value = 0 → 0
+ * non-zero → max(1, ceil(value / visibleMax * 8))
+ */
+export function getChartVolumeLevel(value: number, visibleMax: number): 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 {
+  if (value === 0 || visibleMax <= 0) return 0;
+  const level = Math.ceil((value / visibleMax) * 8);
+  if (level >= 8) return 8;
+  if (level <= 1) return 1;
+  return Math.max(1, Math.min(8, level)) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 }

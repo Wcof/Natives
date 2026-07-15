@@ -458,7 +458,61 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         .map_err(Error::Database)?;
     }
 
+    // Cache tables must be ensured independently of the schema marker. Some existing
+    // installations already have a later version marker but never received this table.
+    // `CREATE TABLE IF NOT EXISTS` makes startup repair safe and non-destructive.
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS usage_dashboard_snapshots (
+            time_zone TEXT PRIMARY KEY,
+            schema_version INTEGER NOT NULL,
+            generated_at_ms INTEGER NOT NULL,
+            coverage_start_ms INTEGER NOT NULL,
+            coverage_end_ms INTEGER NOT NULL,
+            payload_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        [],
+    )
+    .map_err(Error::Database)?;
+
+    // Migration v5→v6: record the version only when this database has not advanced
+    // beyond it. Never downgrade a newer marker.
+    if current_version < 6 {
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '6')",
+            [],
+        )
+        .map_err(Error::Database)?;
+    }
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repairs_snapshot_table_when_schema_marker_is_already_newer() {
+        let conn = Connection::open_in_memory().expect("open in-memory database");
+        create_tables(&conn).expect("create base tables");
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '7')",
+            [],
+        )
+        .expect("set newer schema marker");
+
+        apply_migrations(&conn).expect("repair migrations");
+
+        let table_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'usage_dashboard_snapshots'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query sqlite schema");
+        assert_eq!(table_exists, 1);
+    }
 }
 
 // ──────────────────────────────────────────────

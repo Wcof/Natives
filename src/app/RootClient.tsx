@@ -6,6 +6,7 @@ import '@/lib/tauri-adapter';
 import ShellLayout from '@/components/shell/ShellLayout';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { ToastProvider } from '@/components/ui/Toast';
+import { AssistantWorkspaceProvider } from '@/components/assistant/AssistantWorkspaceContext';
 
 /* ═══════════════════════════════════════════════
    RootClient — Client Component
@@ -34,9 +35,11 @@ export default function RootClient({ children }: { children: ReactNode }) {
   return (
     <ThemeProvider>
       <ToastProvider>
-        <div className="h-full w-full overflow-hidden bg-transparent [&_div[data-sidebar]]:h-full [&_[data-shell-content]]:h-full">
-          <ShellLayout>{children}</ShellLayout>
-        </div>
+        <AssistantWorkspaceProvider>
+          <div className="h-full w-full overflow-hidden bg-transparent [&_div[data-sidebar]]:h-full [&_[data-shell-content]]:h-full">
+            <ShellLayout>{children}</ShellLayout>
+          </div>
+        </AssistantWorkspaceProvider>
       </ToastProvider>
     </ThemeProvider>
   );

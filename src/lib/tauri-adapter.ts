@@ -239,7 +239,30 @@ export interface NativesAPI {
     read: () => Promise<string>;
   };
   usage: {
-    refresh: (params: { startMs: number; endMs: number; force: boolean; includeComparison: boolean; timeZone: string }) => Promise<unknown>;
+    getCached: (query: {
+      preset: 'today' | '24h' | '7d' | '30d' | '90d' | 'custom';
+      timeZone: string;
+      projectPath: string | null;
+      customStartMs?: number;
+      customEndMs?: number;
+    }) => Promise<{
+      state: 'ready';
+      metadata: { schemaVersion: number; generatedAtMs: number; coverageStartMs: number; coverageEndMs: number; timeZone: string };
+      response: unknown;
+    } | { state: 'missing'; metadata: null; response: null }>;
+    sync: (request: {
+      timeZone: string;
+      currentView: {
+        preset: 'today' | '24h' | '7d' | '30d' | '90d' | 'custom';
+        timeZone: string;
+        projectPath: string | null;
+        customStartMs?: number;
+        customEndMs?: number;
+      };
+    }) => Promise<{
+      metadata: { schemaVersion: number; generatedAtMs: number; coverageStartMs: number; coverageEndMs: number; timeZone: string };
+      response: unknown;
+    }>;
   };
   codegraph: {
     read: () => Promise<unknown>;
@@ -340,6 +363,7 @@ export interface NativesAPI {
   /** Dialog (file/directory picker) */
   dialog: {
     pickDirectory(): Promise<string | null>;
+    saveFile(): Promise<string | null>;
   };
   /** Runtime 抽象层（Slice B） */
   runtime: {
@@ -724,8 +748,23 @@ const nativesAPI: NativesAPI = {
 
   // Usage
   usage: {
-    refresh: (params: { startMs: number; endMs: number; force: boolean; includeComparison: boolean; timeZone: string }) =>
-      cmd('usage_refresh', { request: params }),
+    getCached: (query: {
+      preset: 'today' | '24h' | '7d' | '30d' | '90d' | 'custom';
+      timeZone: string;
+      projectPath: string | null;
+      customStartMs?: number;
+      customEndMs?: number;
+    }) => cmd('usage_get_cached', { query }),
+    sync: (request: {
+      timeZone: string;
+      currentView: {
+        preset: 'today' | '24h' | '7d' | '30d' | '90d' | 'custom';
+        timeZone: string;
+        projectPath: string | null;
+        customStartMs?: number;
+        customEndMs?: number;
+      };
+    }) => cmd('usage_sync', { request }),
   },
 
   // CodeGraph
@@ -740,6 +779,15 @@ const nativesAPI: NativesAPI = {
       try {
         const { open } = await import('@tauri-apps/plugin-dialog');
         const selected = await open({ directory: true, multiple: false });
+        return selected as string | null;
+      } catch {
+        return null;
+      }
+    },
+    saveFile: async () => {
+      try {
+        const { save } = await import('@tauri-apps/plugin-dialog');
+        const selected = await save();
         return selected as string | null;
       } catch {
         return null;

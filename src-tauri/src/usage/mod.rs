@@ -2,10 +2,12 @@
 // Real data collection from ccusage, Claude logs, Codex logs, and Natives DB.
 
 mod aggregate;
+mod atomcode;
 mod ccusage;
 mod claude;
 mod codex;
 mod natives;
+pub mod snapshot;
 
 use crate::db;
 use crate::Error;
@@ -14,14 +16,15 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
 // ── Re-exports ──
 pub use aggregate::*;
+pub use atomcode::*;
 pub use ccusage::*;
 pub use claude::*;
 pub use codex::*;
 pub use natives::*;
+pub use snapshot::*;
 
 // ── IPC Contract Types (mirror frontend types/usage.ts) ──
 
@@ -30,7 +33,6 @@ pub use natives::*;
 pub struct UsageDashboardRequest {
     pub start_ms: i64,
     pub end_ms: i64,
-    pub force: bool,
     pub include_comparison: bool,
     pub time_zone: String,
 }
@@ -227,52 +229,27 @@ pub struct RtkSummary {
     pub total_commands: i64,
 }
 
-// ── Response Cache ──
-
-struct CacheEntry {
-    response: UsageDashboardResponse,
-    stored_at: Instant,
-}
-
-impl CacheEntry {
-    fn is_valid(&self, ttl: Duration) -> bool {
-        self.stored_at.elapsed() < ttl
-    }
-}
-
 pub struct UsageCache {
-    cache: Mutex<HashMap<String, CacheEntry>>,
+    snapshot_cache: Mutex<HashMap<String, crate::usage::snapshot::UsageDashboardSnapshot>>,
 }
 
 impl UsageCache {
     pub fn new() -> Self {
         Self {
-            cache: Mutex::new(HashMap::new()),
+            snapshot_cache: Mutex::new(HashMap::new()),
         }
     }
 
-    pub fn get(&self, key: &str) -> Option<UsageDashboardResponse> {
-        let map = self.cache.lock().ok()?;
-        let entry = map.get(key)?;
-        if entry.is_valid(Duration::from_secs(30)) {
-            Some(entry.response.clone())
-        } else {
-            None
-        }
+    /// Get a snapshot from memory cache (no TTL — lasts until session end or re-sync).
+    pub fn get_snapshot(&self, time_zone: &str) -> Option<crate::usage::snapshot::UsageDashboardSnapshot> {
+        let map = self.snapshot_cache.lock().ok()?;
+        map.get(time_zone).cloned()
     }
 
-    pub fn set(&self, key: &str, response: UsageDashboardResponse) {
-        if let Ok(mut map) = self.cache.lock() {
-            map.insert(key.to_string(), CacheEntry {
-                response,
-                stored_at: Instant::now(),
-            });
-        }
-    }
-
-    pub fn invalidate(&self, key: &str) {
-        if let Ok(mut map) = self.cache.lock() {
-            map.remove(key);
+    /// Set a snapshot in memory cache.
+    pub fn set_snapshot(&self, time_zone: &str, snapshot: crate::usage::snapshot::UsageDashboardSnapshot) {
+        if let Ok(mut map) = self.snapshot_cache.lock() {
+            map.insert(time_zone.to_string(), snapshot);
         }
     }
 }
@@ -293,15 +270,6 @@ pub fn validate_request(req: &UsageDashboardRequest) -> Result<(), Error> {
     let _: chrono_tz::Tz = req.time_zone.parse()
         .map_err(|_| Error::InvalidInput("Invalid IANA timeZone".into()))?;
     Ok(())
-}
-
-pub fn cache_key(
-    start_ms: i64,
-    end_ms: i64,
-    include_comparison: bool,
-    time_zone: &str,
-) -> String {
-    format!("{}:{}:{}:{}", start_ms, end_ms, include_comparison, time_zone)
 }
 
 // ── Helpers ──
@@ -406,40 +374,20 @@ mod tests {
 
     #[test]
     fn invalid_range_is_rejected() {
-        let req = UsageDashboardRequest { start_ms: -1, end_ms: 100, force: false, include_comparison: false, time_zone: "UTC".into() };
+        let req = UsageDashboardRequest { start_ms: -1, end_ms: 100, include_comparison: false, time_zone: "UTC".into() };
         assert!(validate_request(&req).is_err());
 
-        let req = UsageDashboardRequest { start_ms: 100, end_ms: 100, force: false, include_comparison: false, time_zone: "UTC".into() };
+        let req = UsageDashboardRequest { start_ms: 100, end_ms: 100, include_comparison: false, time_zone: "UTC".into() };
         assert!(validate_request(&req).is_err());
 
-        let req = UsageDashboardRequest { start_ms: 200, end_ms: 100, force: false, include_comparison: false, time_zone: "UTC".into() };
+        let req = UsageDashboardRequest { start_ms: 200, end_ms: 100, include_comparison: false, time_zone: "UTC".into() };
         assert!(validate_request(&req).is_err());
     }
 
     #[test]
     fn range_end_is_exclusive() {
-        let req = UsageDashboardRequest { start_ms: 0, end_ms: 100, force: false, include_comparison: false, time_zone: "UTC".into() };
+        let req = UsageDashboardRequest { start_ms: 0, end_ms: 100, include_comparison: false, time_zone: "UTC".into() };
         assert!(validate_request(&req).is_ok());
-    }
-
-    #[test]
-    fn cache_is_scoped_by_range() {
-        let key1 = cache_key(0, 1000, false, "UTC");
-        let key2 = cache_key(0, 2000, false, "UTC");
-        assert_ne!(key1, key2);
-        assert_eq!(cache_key(0, 1000, false, "UTC"), key1);
-        let key3 = cache_key(0, 1000, true, "UTC");
-        assert_ne!(key1, key3);
-        let key4 = cache_key(0, 1000, false, "Asia/Shanghai");
-        assert_ne!(key1, key4);
-    }
-
-    #[test]
-    fn force_bypasses_response_cache() {
-        let req_force = UsageDashboardRequest { start_ms: 0, end_ms: 1000, force: true, include_comparison: false, time_zone: "UTC".into() };
-        let req_normal = UsageDashboardRequest { start_ms: 0, end_ms: 1000, force: false, include_comparison: false, time_zone: "UTC".into() };
-        assert!(req_force.force);
-        assert!(!req_normal.force);
     }
 
     #[test]

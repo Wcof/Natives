@@ -372,7 +372,8 @@ pub fn run() {
             commands::update::update_get_muted,
             commands::update::update_get_dismissed,
             // Usage
-            commands::usage::usage_refresh,
+            commands::usage::usage_get_cached,
+            commands::usage::usage_sync,
             // CodeGraph
             commands::codegraph::read_codegraph,
             commands::codegraph::rtk_gain,

@@ -1,6 +1,7 @@
 use crate::db;
 use crate::Result;
 use serde::Serialize;
+use std::path::Path;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -9,6 +10,7 @@ pub struct ProjectInfo {
     pub path: String,
     pub label: String,
     pub conversation_count: i64,
+    pub exists: bool,
 }
 
 /// List all registered projects with conversation counts.
@@ -28,18 +30,15 @@ pub fn project_list() -> Result<Vec<ProjectInfo>> {
     let projects = stmt
         .query_map([], |row| {
             let path: String = row.get(1)?;
-            let conv_count: i64 = row.get(2)?;
-            let label = path
-                    .trim_end_matches('/')
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(&path)
-                    .to_string();
+            let label: String = row.get(2)?;
+            let conv_count: i64 = row.get(3)?;
+            let exists = Path::new(&path).exists();
             Ok(ProjectInfo {
                 id: row.get(0)?,
                 path,
                 label,
                 conversation_count: conv_count,
+                exists,
             })
         })
         .map_err(|e| format!("Failed to query projects: {e}"))?
@@ -52,23 +51,40 @@ pub fn project_list() -> Result<Vec<ProjectInfo>> {
 /// Register a project path.
 #[tauri::command]
 pub fn project_register(path: String) -> Result<ProjectInfo> {
-    let path = path.trim().to_string();
-    if path.is_empty() {
+    let trimmed = path.trim().to_string();
+    if trimmed.is_empty() {
         return Err("Project path cannot be empty".into());
     }
-    let canonical = std::fs::canonicalize(&path)
-        .map_err(|_| "Project directory does not exist".to_string())?;
-    if !canonical.is_dir() {
-        return Err("Project path must be a directory".into());
-    }
-    let path = canonical.to_string_lossy().to_string();
 
-    let label = path
-        .trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or(&path)
-        .to_string();
+    // Expand ~ to home directory
+    let expanded = if trimmed.starts_with('~') {
+        if let Some(home) = dirs::home_dir() {
+            trimmed.replacen('~', &home.to_string_lossy(), 1)
+        } else {
+            trimmed.clone()
+        }
+    } else {
+        trimmed.clone()
+    };
+
+    // Check the path exists and is a directory
+    let path_ref = Path::new(&expanded);
+    if !path_ref.exists() {
+        return Err("Project path does not exist".into());
+    }
+    if !path_ref.is_dir() {
+        return Err("Project path is not a directory".into());
+    }
+
+    // Canonicalize to get the absolute, normalized path
+    let canonical = path_ref.canonicalize()
+        .map_err(|e| format!("Failed to canonicalize path: {e}"))?;
+    let canonical_str = canonical.to_string_lossy().to_string();
+
+    let label = canonical
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| canonical_str.clone());
 
     let now = chrono::Utc::now().to_rfc3339();
     let conn = db::get_assistant_db_conn().map_err(|e| e.to_string())?;
@@ -76,9 +92,15 @@ pub fn project_register(path: String) -> Result<ProjectInfo> {
         "INSERT INTO assistant_projects (id, path, label, created_at, last_opened_at)
          VALUES (?1, ?2, ?3, ?4, ?4)
          ON CONFLICT(path) DO UPDATE SET label = excluded.label, last_opened_at = excluded.last_opened_at",
-        rusqlite::params![path, path, label, now],
+        rusqlite::params![canonical_str, canonical_str, label, now],
     ).map_err(|e| format!("Failed to register project: {e}"))?;
-    Ok(ProjectInfo { id: path.clone(), path, label, conversation_count: 0 })
+    Ok(ProjectInfo {
+        id: canonical_str.clone(),
+        path: canonical_str,
+        label,
+        conversation_count: 0,
+        exists: true,
+    })
 }
 
 /// Open a project directory in the file browser / terminal.

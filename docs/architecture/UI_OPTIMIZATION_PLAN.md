@@ -13,7 +13,7 @@
 | A | Header 顶栏 | 新建全局顶栏（sidebar toggle + breadcrumb + 右侧操作区） | `ShellLayout.tsx` + 新建 `Header.tsx` |
 | B | 占用透视 | 新建磁盘占用弹窗 + statusbar 入口 + 右键菜单入口 | 新建 `DiskUsagePanel.tsx`, 改 `FileContextMenu.tsx`, `FileBrowser.tsx` |
 | C | 右键菜单增强 | 补齐 Natives2 菜单项（在终端打开、在 Finder 显示、收藏/取消收藏、预览） | `FileContextMenu.tsx`, `FileBrowser.tsx`, `FileList.tsx`, `FileGrid.tsx` |
-| D | 个人主页 | 仪表盘 → 个人主页：移除快捷操作，加入 Skill 透视 + 用量分析 | `page.tsx`, `UsagePanel.tsx` |
+| D | 个人主页 | 仪表盘 → 个人主页：移除快捷操作，加入 Skill 透视 + 用量分析（⚠️ 本章节已过时，被 `docs/refactor-plan-dashboard-ccusage-snapshot.md` 替代）| `page.tsx`, `UsagePanel.tsx` |
 | E | Terminal 默认收起 | `terminalCollapsed` 默认 `true` | `ShellLayout.tsx` |
 
 ---

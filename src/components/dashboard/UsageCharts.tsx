@@ -5,10 +5,10 @@ import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 import { useLocale, t } from '@/i18n';
 import type { UsageDailyRecord, UsageActivityBucket, UsageSessionRecord, UsageMetrics, UsageSourceStatus } from '@/types/usage';
 import {
-  buildDailyTrend, buildHourlyHeatmap, buildSourceDistribution, buildModelDistribution,
+  buildDailyTrend, buildHourlyHeatmap, buildSourceDistribution, buildModelDistribution, getChartVolumeLevel,
 } from '@/lib/usage-dashboard';
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from 'recharts';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { BarChart3, Clock, PieChart, Calendar } from 'lucide-react';
@@ -27,8 +27,9 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
 
   const trend = useMemo(() => buildDailyTrend(daily, activity), [daily, activity]);
   const heatmap = useMemo(() => buildHourlyHeatmap(activity), [activity]);
-  const sourceDist = useMemo(() => buildSourceDistribution(daily, sources), [daily, sources]);
-  const modelDist = useMemo(() => buildModelDistribution(daily), [daily]);
+  const othersLabel = t(locale, 'usage.others');
+  const sourceDist = useMemo(() => buildSourceDistribution(daily, sources, othersLabel), [daily, sources, othersLabel]);
+  const modelDist = useMemo(() => buildModelDistribution(daily, othersLabel), [daily, othersLabel]);
 
   // Check if any source supports hourly data
   const hasHourlySources = sources.some((s) => s.capabilities.hourly);
@@ -55,7 +56,10 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
     return { matrix: arr, maxVal };
   }, [heatmap, heatmapMetric]);
 
-  const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const DAY_LABELS = [
+    t(locale, 'usage.dayMon'), t(locale, 'usage.dayTue'), t(locale, 'usage.dayWed'),
+    t(locale, 'usage.dayThu'), t(locale, 'usage.dayFri'), t(locale, 'usage.daySat'), t(locale, 'usage.daySun'),
+  ];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.md }}>
@@ -72,7 +76,7 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
             <div style={{ display: 'flex', background: 'var(--bg-3)', padding: '2px', borderRadius: '12px', border: '1px solid var(--border)' }}>
               {(['token', 'cost', 'duration'] as const).map((m) => {
                 const active = trendMetric === m;
-                const label = m === 'token' ? 'Token' : m === 'cost' ? (locale === 'zh' ? '费用' : 'Cost') : (locale === 'zh' ? '时长' : 'Duration');
+                const label = m === 'token' ? t(locale, 'usage.tokenLabel') : m === 'cost' ? t(locale, 'usage.costLabel') : t(locale, 'usage.durationLabel');
                 return (
                   <button
                     key={m}
@@ -104,25 +108,25 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
                   <XAxis dataKey="date" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={(v: string) => v.slice(5)} />
                   <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} />
                   <Tooltip contentStyle={{ background: 'var(--bg)', border: '0.0625rem solid var(--border)', borderRadius: 8, fontSize: 11 }} />
-                  <Bar dataKey="inputTokens" stackId="a" fill="var(--text-dim)" opacity={0.4} name="Input" />
-                  <Bar dataKey="outputTokens" stackId="a" fill="var(--text)" name="Output" />
-                  <Bar dataKey="cacheReadTokens" stackId="a" fill="var(--accent)" name="Cache Read" />
+                  <Bar dataKey="inputTokens" stackId="a" fill="var(--chart-volume-2)" name={t(locale, 'usage.inputTokens')} />
+                  <Bar dataKey="cacheReadTokens" stackId="a" fill="var(--chart-volume-5)" name={t(locale, 'usage.cacheRead')} />
+                  <Bar dataKey="outputTokens" stackId="a" fill="var(--chart-volume-8)" name={t(locale, 'usage.outputTokens')} />
                 </BarChart>
               ) : trendMetric === 'cost' ? (
                 <BarChart data={trend}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                   <XAxis dataKey="date" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={(v: string) => v.slice(5)} />
                   <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={(v: number) => `$${v.toFixed(2)}`} />
-                  <Tooltip contentStyle={{ background: 'var(--bg)', border: '0.0625rem solid var(--border)', borderRadius: 8, fontSize: 11 }} formatter={(v: any) => [`$${Number(v).toFixed(4)}`, 'Cost']} />
-                  <Bar dataKey="costUsd" fill="var(--success)" radius={[2, 2, 0, 0]} name="Cost" />
+                  <Tooltip contentStyle={{ background: 'var(--bg)', border: '0.0625rem solid var(--border)', borderRadius: 8, fontSize: 11 }} formatter={(v: any) => [`$${Number(v).toFixed(4)}`, t(locale, 'usage.costLabel')]} />
+                  <Bar dataKey="costUsd" fill="var(--chart-volume-7)" radius={[2, 2, 0, 0]} name={t(locale, 'usage.costLabel')} />
                 </BarChart>
               ) : (
                 <BarChart data={trend.map(t_ => ({ ...t_, activeMinutes: (t_.activeSeconds ?? 0) / 60 }))}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                   <XAxis dataKey="date" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={(v: string) => v.slice(5)} />
                   <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} />
-                  <Tooltip contentStyle={{ background: 'var(--bg)', border: '0.0625rem solid var(--border)', borderRadius: 8, fontSize: 11 }} formatter={(v: any) => [`${Number(v).toFixed(1)} m`, 'Active Time']} />
-                  <Bar dataKey="activeMinutes" fill="var(--accent)" radius={[2, 2, 0, 0]} name="Active Time" />
+                  <Tooltip contentStyle={{ background: 'var(--bg)', border: '0.0625rem solid var(--border)', borderRadius: 8, fontSize: 11 }} formatter={(v: any) => [`${Number(v).toFixed(1)} ${t(locale, 'usage.minutes')}`, t(locale, 'usage.estimatedActiveDuration')]} />
+                  <Bar dataKey="activeMinutes" fill="var(--chart-volume-7)" radius={[2, 2, 0, 0]} name={t(locale, 'usage.estimatedActiveDuration')} />
                 </BarChart>
               )}
             </ResponsiveContainer>
@@ -142,7 +146,7 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
             <div style={{ display: 'flex', background: 'var(--bg-3)', padding: '2px', borderRadius: '12px', border: '1px solid var(--border)' }}>
               {(['token', 'duration'] as const).map((m) => {
                 const active = heatmapMetric === m;
-                const label = m === 'token' ? 'Token' : (locale === 'zh' ? '时长' : 'Duration');
+                const label = m === 'token' ? t(locale, 'usage.tokenLabel') : t(locale, 'usage.durationLabel');
                 return (
                   <button
                     key={m}
@@ -184,14 +188,11 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
                     <div key={rIdx} style={{ display: 'flex', gap: 3 }}>
                       {row.map((val, cIdx) => {
                         const hasVal = val > 0;
-                        const opacity = hasVal ? 0.15 + 0.85 * Math.sqrt(val / (grid.maxVal || 1)) : 0.05;
+                        const level = getChartVolumeLevel(val, grid.maxVal);
+                        const colorVar = `var(--chart-volume-${level})`;
                         const tooltip = `${DAY_LABELS[rIdx]} ${cIdx.toString().padStart(2, '0')}:00 — ${
-                          hasVal ? (heatmapMetric === 'token' ? val.toLocaleString() + ' tokens' : Math.round(val / 60) + ' min') : '0'
+                          hasVal ? (heatmapMetric === 'token' ? `${val.toLocaleString()} ${t(locale, 'usage.tokens')}` : `${Math.round(val / 60)} ${t(locale, 'usage.minutes')}`) : '0'
                         }`;
-                        
-                        const rowArr = grid.matrix[rIdx];
-                        const valCheck = rowArr ? rowArr[cIdx] : 0;
-                        const colorVar = valCheck > 0 ? 'var(--text)' : 'var(--text-dim)';
 
                         return (
                           <div
@@ -202,18 +203,15 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
                               aspectRatio: '1',
                               borderRadius: '2px',
                               background: colorVar,
-                              opacity: opacity,
                               cursor: 'pointer',
                               transition: 'transform 0.1s ease',
                             }}
                             onMouseEnter={(e) => {
                               e.currentTarget.style.transform = 'scale(1.3)';
-                              e.currentTarget.style.opacity = '1';
                               e.currentTarget.style.zIndex = '10';
                             }}
                             onMouseLeave={(e) => {
                               e.currentTarget.style.transform = 'none';
-                              e.currentTarget.style.opacity = String(opacity);
                               e.currentTarget.style.zIndex = '1';
                             }}
                           />
@@ -266,7 +264,13 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
                 <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} />
                 <YAxis type="category" dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} width={60} />
                 <Tooltip contentStyle={{ background: 'var(--bg)', border: '0.0625rem solid var(--border)', borderRadius: 8 }} />
-                <Bar dataKey="totalTokens" fill="var(--accent)" radius={[0, 2, 2, 0]} name={t(locale, 'usage.totalTokens')} />
+                <Bar dataKey="totalTokens" radius={[0, 2, 2, 0]} name={t(locale, 'usage.totalTokens')}>
+                  {sourceDist.map((entry, index) => {
+                    const maxVal = Math.max(...sourceDist.map(d => d.totalTokens ?? 0));
+                    const level = getChartVolumeLevel(entry.totalTokens ?? 0, maxVal);
+                    return <Cell key={`cell-${index}`} fill={`var(--chart-volume-${level})`} />;
+                  })}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           ) : (
@@ -284,7 +288,13 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
                 <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} />
                 <YAxis type="category" dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} width={80} />
                 <Tooltip contentStyle={{ background: 'var(--bg)', border: '0.0625rem solid var(--border)', borderRadius: 8 }} />
-                <Bar dataKey="totalTokens" fill="var(--accent)" radius={[0, 2, 2, 0]} name={t(locale, 'usage.totalTokens')} />
+                <Bar dataKey="totalTokens" radius={[0, 2, 2, 0]} name={t(locale, 'usage.totalTokens')}>
+                  {modelDist.map((entry, index) => {
+                    const maxVal = Math.max(...modelDist.map(d => d.totalTokens ?? 0));
+                    const level = getChartVolumeLevel(entry.totalTokens ?? 0, maxVal);
+                    return <Cell key={`cell-${index}`} fill={`var(--chart-volume-${level})`} />;
+                  })}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           ) : (

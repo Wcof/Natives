@@ -1,12 +1,51 @@
-// ── Natives Usage Dashboard IPC Contract ──
+// ── Natives Usage Dashboard IPC Contract v2 (Snapshot-based) ──
+// Supersedes the old UsageDashboardRequest with UsageViewRequest / UsageCacheReadResult.
 // Frozen: do not rename fields without a coordinated backend + frontend update.
 
-export interface UsageDashboardRequest {
-  startMs: number;
-  endMs: number;
-  force: boolean;
-  includeComparison: boolean;
+export type UsageRangePreset =
+  | 'today'
+  | '24h'
+  | '7d'
+  | '30d'
+  | '90d'
+  | 'custom';
+
+export interface UsageViewRequest {
+  preset: UsageRangePreset;
   timeZone: string;
+  projectPath: string | null;
+  customStartMs?: number;
+  customEndMs?: number;
+}
+
+export interface UsageCacheMetadata {
+  schemaVersion: number;
+  generatedAtMs: number;
+  coverageStartMs: number;
+  coverageEndMs: number;
+  timeZone: string;
+}
+
+export type UsageCacheReadResult =
+  | {
+      state: 'ready';
+      metadata: UsageCacheMetadata;
+      response: UsageDashboardResponse;
+    }
+  | {
+      state: 'missing';
+      metadata: null;
+      response: null;
+    };
+
+export interface UsageSyncRequest {
+  timeZone: string;
+  currentView: UsageViewRequest;
+}
+
+export interface UsageSyncResult {
+  metadata: UsageCacheMetadata;
+  response: UsageDashboardResponse;
 }
 
 export interface UsagePeriodData {
@@ -209,3 +248,14 @@ export interface ModelDistributionItem {
   totalTokens: number | null;
   percentage: number | null;
 }
+
+// ── Dashboard state model ──
+
+export type DashboardState =
+  | { kind: 'reading-cache' }
+  | { kind: 'missing-cache' }
+  | {
+      kind: 'ready';
+      data: UsageDashboardResponse;
+      metadata: UsageCacheMetadata;
+    };
