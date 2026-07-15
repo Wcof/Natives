@@ -17,6 +17,25 @@ const SM: Record<ProviderKeyStatus, React.ReactNode> = {
   untested:     <CircleAlert size={10} style={{ color: 'var(--text-disabled)' }} />,
 };
 
+// ── Local ProviderHeader component ──
+function ProviderHeader({
+  locale,
+  showAddProvider,
+}: {
+  locale: Locale;
+  showAddProvider: () => void;
+}) {
+  return (
+    <div style={{display:'flex',justifyContent:'space-between',marginBottom:SPACING.lg}}>
+      <div>
+        <h2 style={{fontSize:FONT_SIZE.lg,fontWeight:600,color:'var(--text)',margin:0}}>{t(locale,'settings.providers')}</h2>
+        <p style={{marginTop:6,fontSize:FONT_SIZE.xs,color:'var(--text-secondary)'}}>{t(locale,'settings.providersDesc')}</p>
+      </div>
+      <button className="btn btn-primary" onClick={showAddProvider}><Plus size={15}/> {t(locale,'settings.addProvider')}</button>
+    </div>
+  );
+}
+
 export default function ProviderDetail({ locale, providers, loading, showAddProvider, onSaveDefaults, onAddKey, onTestKey, onSetPrimaryKey, onDeleteKey, onDeleteProvider }: {
   locale: Locale; providers: ProviderSummary[]; loading: boolean;
   showAddProvider: () => void;
@@ -39,8 +58,8 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
   const sel = providers.find(x => x.id === sid) ?? fil[0] ?? null;
   if (sel && !(sel.id in md)) md[sel.id] = sel.defaultModel ?? '';
 
-  if (loading) return (<section><h2 style={{fontSize:FONT_SIZE.lg,fontWeight:600,color:'var(--text)',margin:0}}>{t(locale,'settings.providers')}</h2><div style={{minHeight:160,display:'flex',alignItems:'center',justifyContent:'center',border:'1px dashed var(--border)',borderRadius:BORDER_RADIUS.md,marginTop:SPACING.lg}}><Loader size={22} className="animate-spin" style={{color:'var(--text-disabled)'}}/><span style={{marginLeft:8,color:'var(--text-secondary)',fontSize:FONT_SIZE.sm}}>{t(locale,'settings.providersLoading')}</span></div></section>);
-  if (providers.length === 0) return (<section><div style={{display:'flex',justifyContent:'space-between',marginBottom:SPACING.lg}}><h2 style={{fontSize:FONT_SIZE.lg,fontWeight:600,color:'var(--text)',margin:0}}>{t(locale,'settings.providers')}</h2><button className="btn btn-primary" onClick={showAddProvider}><Plus size={15}/> {t(locale,'settings.addProvider')}</button></div><div style={{minHeight:160,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',border:'1px dashed var(--border)',borderRadius:BORDER_RADIUS.md,padding:SPACING.xxl}}><Server size={24} style={{color:'var(--text-disabled)',marginBottom:SPACING.sm}}/><div style={{color:'var(--text)'}}>{t(locale,'settings.noProviders')}</div></div></section>);
+  if (loading) return (<section><ProviderHeader locale={locale} showAddProvider={showAddProvider} /><div style={{minHeight:160,display:'flex',alignItems:'center',justifyContent:'center',border:'1px dashed var(--border)',borderRadius:BORDER_RADIUS.md,marginTop:SPACING.lg}}><Loader size={22} className="animate-spin" style={{color:'var(--text-disabled)'}}/><span style={{marginLeft:8,color:'var(--text-secondary)',fontSize:FONT_SIZE.sm}}>{t(locale,'settings.providersLoading')}</span></div></section>);
+  if (providers.length === 0) return (<section><ProviderHeader locale={locale} showAddProvider={showAddProvider} /><div style={{minHeight:160,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',border:'1px dashed var(--border)',borderRadius:BORDER_RADIUS.md,padding:SPACING.xxl}}><Server size={24} style={{color:'var(--text-disabled)',marginBottom:SPACING.sm}}/><div style={{color:'var(--text)'}}>{t(locale,'settings.noProviders')}</div></div></section>);
 
   const hm = async () => { if (!sel) return; const v = md[sel.id]?.trim()??''; ssm(sel.id); sme(x=>({...x,[sel.id]:''})); try { await onSaveDefaults(sel.id, v||null); } catch(e) { sme(x=>({...x,[sel.id]:classifyError(e).userMessage})); } finally { ssm(null); } };
   const hk = async () => { if (!sel||!nk.trim()) return; sak(sel.id); sae(null); try { await onAddKey(sel.id, nl.trim()||`Key ${sel.keys.length+1}`, nk); snl(''); snk(''); } catch(e) { sae(classifyError(e).userMessage); } finally { sak(null); } };
@@ -48,12 +67,11 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
 
   return (
     <section>
-      <div style={{display:'flex',justifyContent:'space-between',marginBottom:SPACING.lg}}>
-        <h2 style={{fontSize:FONT_SIZE.lg,fontWeight:600,color:'var(--text)',margin:0}}>{t(locale,'settings.providers')}</h2>
-        <button className="btn btn-primary" onClick={showAddProvider}><Plus size={15}/> {t(locale,'settings.addProvider')}</button>
-      </div>
-      <div style={{display:'grid',gridTemplateColumns:'minmax(170px,0.3fr) minmax(0,1fr)',border:'1px solid var(--border)',borderRadius:BORDER_RADIUS.md,overflow:'hidden',minHeight:380}}>
-        <aside style={{background:'var(--surface-hover)',borderRight:'1px solid var(--border)',padding:SPACING.md}}>
+      <ProviderHeader locale={locale} showAddProvider={showAddProvider} />
+      <div
+        className="grid min-h-[380px] grid-cols-1 overflow-hidden rounded-lg border border-[var(--border)] md:grid-cols-[minmax(170px,0.3fr)_minmax(0,1fr)]"
+      >
+        <aside className="border-b border-[var(--border)] md:border-b-0 md:border-r" style={{background:'var(--surface-hover)',padding:SPACING.md}}>
           <div style={{display:'flex',alignItems:'center',gap:8,height:34,padding:'0 9px',border:'1px solid var(--border)',borderRadius:BORDER_RADIUS.sm,background:'var(--surface)'}}>
             <Search size={14} style={{color:'var(--text-disabled)'}}/>
             <input value={q} onChange={e=>sq(e.target.value)} placeholder={t(locale,'settings.searchProvider')} style={{flex:1,border:0,outline:0,background:'transparent',color:'var(--text)',fontSize:FONT_SIZE.xs}}/>
