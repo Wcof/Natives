@@ -11,17 +11,19 @@
 //!   - 流式输出：实时 delta + tool_call 推送
 //!   - 中断支持：通过 cancel_rx 随时中断
 
-use std::collections::{HashSet, VecDeque};
-use std::path::{Path, PathBuf};
-use crate::runtime::RuntimeEvent;
 use crate::runtime::native::capability::{
-    CancellationToken, CapabilityContext, CapabilityExecutor, CapabilityRegistry, CapabilityRequest,
-    PermissionEngine, PermissionMode,
+    CancellationToken, CapabilityContext, CapabilityExecutor, CapabilityRegistry,
+    CapabilityRequest, PermissionEngine, PermissionMode,
 };
 use crate::runtime::native::hook_pipeline::HookPipeline;
 use crate::runtime::native::rule_engine::RuleEngine;
-use crate::runtime::native::stream_provider::{SseClient, OpenAiDeltaConsumer, ConsumeResult, DeltaConsumer};
+use crate::runtime::native::stream_provider::{
+    ConsumeResult, DeltaConsumer, OpenAiDeltaConsumer, SseClient,
+};
+use crate::runtime::RuntimeEvent;
 use serde_json::json;
+use std::collections::{HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use tauri::Emitter;
 use tokio::sync::mpsc;
 
@@ -169,6 +171,7 @@ impl AgentLoop {
         enabled_tools: &std::collections::HashMap<String, bool>,
         hook_pipeline: &HookPipeline,
         rule_engine: &RuleEngine,
+        permission_mode: PermissionMode,
         cancel_rx: &mut tokio::sync::oneshot::Receiver<()>,
     ) {
         self.state = AgentState::Thinking;
@@ -176,7 +179,8 @@ impl AgentLoop {
         // 构建注册表（每次刷新，确保插件注册的能力可用）
         let registry = {
             let mut reg = CapabilityRegistry::new();
-            for cap in crate::runtime::native::capability::create_default_capabilities(modules_dir) {
+            for cap in crate::runtime::native::capability::create_default_capabilities(modules_dir)
+            {
                 reg.register(cap);
             }
             for (name, enabled) in enabled_tools {
@@ -186,20 +190,30 @@ impl AgentLoop {
         };
 
         // 构建工具列表（OpenAI function-calling 格式）
-        let tools_json: Vec<serde_json::Value> = registry.list_visible_tools().iter().map(|meta| json!({
-            "type": "function",
-            "function": {
-                "name": meta.name,
-                "description": meta.description,
-                "parameters": meta.parameters,
-            }
-        })).collect();
+        let tools_json: Vec<serde_json::Value> = registry
+            .list_visible_tools()
+            .iter()
+            .map(|meta| {
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": meta.name,
+                        "description": meta.description,
+                        "parameters": meta.parameters,
+                    }
+                })
+            })
+            .collect();
 
         // 创建 SSE 客户端
         let sse_client = match SseClient::new() {
             Ok(c) => c,
             Err(e) => {
-                let _ = tx.send(RuntimeEvent::RunFailed { error: e.to_string() }).await;
+                let _ = tx
+                    .send(RuntimeEvent::RunFailed {
+                        error: e.to_string(),
+                    })
+                    .await;
                 self.state = AgentState::Failed(e.to_string());
                 return;
             }
@@ -226,14 +240,17 @@ impl AgentLoop {
             // ── Thinking: 调用 LLM ──
             self.state = AgentState::Thinking;
 
-            let response = match sse_client.stream_chat(
-                &self.config.base_url,
-                &self.config.api_key,
-                &self.config.model,
-                &self.round_messages,
-                &tools_json,
-                cancel_rx,
-            ).await {
+            let response = match sse_client
+                .stream_chat(
+                    &self.config.base_url,
+                    &self.config.api_key,
+                    &self.config.model,
+                    &self.round_messages,
+                    &tools_json,
+                    cancel_rx,
+                )
+                .await
+            {
                 Ok(r) => r,
                 Err(e) => {
                     self.emit_failed(tx, app_handle, session_id, &e).await;
@@ -263,7 +280,8 @@ impl AgentLoop {
                 let chunk = match chunk_result {
                     Ok(c) => c,
                     Err(e) => {
-                        self.emit_failed(tx, app_handle, session_id, &format!("Stream error: {e}")).await;
+                        self.emit_failed(tx, app_handle, session_id, &format!("Stream error: {e}"))
+                            .await;
                         self.state = AgentState::Failed(format!("Stream error: {e}"));
                         return;
                     }
@@ -275,33 +293,46 @@ impl AgentLoop {
                 while let Some(line_end) = buffer.find('\n') {
                     let line = buffer[..line_end].trim().to_string();
                     buffer = buffer[line_end + 1..].to_string();
-                    if line.is_empty() || line.starts_with(':') { continue; }
-                    let Some(data) = line.strip_prefix("data: ") else { continue; };
-                    if data == "[DONE]" { continue; }
+                    if line.is_empty() || line.starts_with(':') {
+                        continue;
+                    }
+                    let Some(data) = line.strip_prefix("data: ") else {
+                        continue;
+                    };
+                    if data == "[DONE]" {
+                        continue;
+                    }
 
                     let events = consumer.consume(data);
                     for event in events {
                         match event {
                             ConsumeResult::Delta(text) => {
-                                let (clean_delta, _) = crate::assistant_stream_proxy::extract_think_tag(&text);
+                                let (clean_delta, _) =
+                                    crate::assistant_stream_proxy::extract_think_tag(&text);
                                 assistant_text.push_str(&clean_delta);
-                                let _ = tx.send(RuntimeEvent::AssistantDelta { text: clean_delta }).await;
+                                let _ = tx
+                                    .send(RuntimeEvent::AssistantDelta { text: clean_delta })
+                                    .await;
                             }
                             ConsumeResult::Reasoning(r) => {
-                                let _ = app_handle.emit("assistant:stream_update",
+                                let _ = app_handle.emit(
+                                    "assistant:stream_update",
                                     crate::assistant_stream_proxy::StreamPayload {
                                         session_id: session_id.to_string(),
                                         reasoning: Some(r),
                                         ..Default::default()
-                                    });
+                                    },
+                                );
                             }
                             ConsumeResult::ToolCall(tc) => {
                                 any_tool_call = true;
-                                let _ = tx.send(RuntimeEvent::ToolStarted {
-                                    tool_name: tc.name.clone(),
-                                    tool_call_id: tc.id.clone(),
-                                    args: tc.arguments.clone(),
-                                }).await;
+                                let _ = tx
+                                    .send(RuntimeEvent::ToolStarted {
+                                        tool_name: tc.name.clone(),
+                                        tool_call_id: tc.id.clone(),
+                                        args: tc.arguments.clone(),
+                                    })
+                                    .await;
                             }
                             ConsumeResult::Done => {
                                 // 由下层循环处理
@@ -374,7 +405,8 @@ impl AgentLoop {
                 if self.doom_count >= self.config.doom_threshold {
                     let msg = format!(
                         "Doom loop detected: same tool combination '{}' repeated {} times",
-                        sig, self.doom_count + 1
+                        sig,
+                        self.doom_count + 1
                     );
                     eprintln!("[AgentLoop] {}", crate::log_sanitizer::sanitize(&msg));
                     self.emit_failed(tx, app_handle, session_id, &msg).await;
@@ -390,7 +422,10 @@ impl AgentLoop {
             if !self.seen_signatures.insert(sig.clone()) {
                 // 重复出现历史签名（工具组合曾出现过）
                 // 注：不一定是问题，但值得记录
-                eprintln!("[AgentLoop] Repeated tool signature detected: {}", crate::log_sanitizer::sanitize(&sig));
+                eprintln!(
+                    "[AgentLoop] Repeated tool signature detected: {}",
+                    crate::log_sanitizer::sanitize(&sig)
+                );
             }
 
             // ── 记录工具历史 ──
@@ -404,24 +439,39 @@ impl AgentLoop {
             }
 
             // ── 通过 CapabilityExecutor 执行工具 ──
-            let requests: Vec<CapabilityRequest> = invocations.iter().map(|inv| CapabilityRequest {
-                call_id: inv.id.clone(),
-                name: inv.name.clone(),
-                arguments: inv.arguments.clone(),
-                working_dir: working_dir.clone(),
-            }).collect();
+            let requests: Vec<CapabilityRequest> = invocations
+                .iter()
+                .map(|inv| CapabilityRequest {
+                    call_id: inv.id.clone(),
+                    name: inv.name.clone(),
+                    arguments: inv.arguments.clone(),
+                    working_dir: working_dir.clone(),
+                })
+                .collect();
 
-            let context = CapabilityContext {
-                session_id: session_id.to_string(),
-                working_dir: working_dir.clone(),
-                project_root: working_dir.clone(),
-                source: "native-agent-loop".into(),
-                permission_mode: PermissionMode::Allow,
-            };
             let cancellation = CancellationToken::new();
             let executor = CapabilityExecutor::new(&registry, PermissionEngine::default());
             let mut results = Vec::with_capacity(requests.len());
             for request in &requests {
+                let request_mode = if permission_mode == PermissionMode::Ask {
+                    match await_permission(request, session_id, tx, cancel_rx).await {
+                        Some(mode) => mode,
+                        None => {
+                            self.emit_cancelled(tx, app_handle, session_id).await;
+                            self.state = AgentState::Done;
+                            return;
+                        }
+                    }
+                } else {
+                    permission_mode.clone()
+                };
+                let context = CapabilityContext {
+                    session_id: session_id.to_string(),
+                    working_dir: working_dir.clone(),
+                    project_root: working_dir.clone(),
+                    source: "native-agent-loop".into(),
+                    permission_mode: request_mode,
+                };
                 results.push(
                     executor
                         .execute(
@@ -435,11 +485,17 @@ impl AgentLoop {
                 );
             }
 
-            let failed_count = results.iter().filter(|r| {
-                matches!(r.status, crate::runtime::native::capability::CapabilityStatus::Error
-                    | crate::runtime::native::capability::CapabilityStatus::Rejected
-                    | crate::runtime::native::capability::CapabilityStatus::CircuitBroken)
-            }).count() as u32;
+            let failed_count = results
+                .iter()
+                .filter(|r| {
+                    matches!(
+                        r.status,
+                        crate::runtime::native::capability::CapabilityStatus::Error
+                            | crate::runtime::native::capability::CapabilityStatus::Rejected
+                            | crate::runtime::native::capability::CapabilityStatus::CircuitBroken
+                    )
+                })
+                .count() as u32;
 
             // 更新工具历史
             if let Some(entry) = self.tool_history.back_mut() {
@@ -454,30 +510,41 @@ impl AgentLoop {
                     crate::runtime::native::capability::CapabilityStatus::Success => "success",
                     crate::runtime::native::capability::CapabilityStatus::Error => "error",
                     crate::runtime::native::capability::CapabilityStatus::Rejected => "rejected",
-                    crate::runtime::native::capability::CapabilityStatus::CircuitBroken => "circuit_broken",
+                    crate::runtime::native::capability::CapabilityStatus::CircuitBroken => {
+                        "circuit_broken"
+                    }
                     crate::runtime::native::capability::CapabilityStatus::TimedOut => "timed_out",
                 };
 
-                let _ = tx.send(RuntimeEvent::ToolCompleted {
-                    tool_call_id: tr.call_id.clone(),
-                    status: status_str.into(),
-                    output: tr.output.clone(),
-                }).await;
-                if matches!(tr.status, crate::runtime::native::capability::CapabilityStatus::Rejected) {
+                let _ = tx
+                    .send(RuntimeEvent::ToolCompleted {
+                        tool_call_id: tr.call_id.clone(),
+                        status: status_str.into(),
+                        output: tr.output.clone(),
+                    })
+                    .await;
+                if matches!(
+                    tr.status,
+                    crate::runtime::native::capability::CapabilityStatus::Rejected
+                ) {
                     let tool_name = invocations
                         .iter()
                         .find(|inv| inv.id == tr.call_id)
                         .map(|inv| inv.name.clone())
                         .unwrap_or_else(|| "unknown".into());
-                    let reason = tr.output.get("message")
+                    let reason = tr
+                        .output
+                        .get("message")
                         .and_then(|v| v.as_str())
                         .unwrap_or("Tool rejected")
                         .to_string();
-                    let _ = tx.send(RuntimeEvent::ToolRejected {
-                        tool_name,
-                        tool_call_id: tr.call_id.clone(),
-                        reason,
-                    }).await;
+                    let _ = tx
+                        .send(RuntimeEvent::ToolRejected {
+                            tool_name,
+                            tool_call_id: tr.call_id.clone(),
+                            reason,
+                        })
+                        .await;
                 }
 
                 // 工具结果注入（OpenAI 格式）
@@ -498,7 +565,10 @@ impl AgentLoop {
             if failed_count > 0 {
                 self.self_heal_count += failed_count;
                 if self.self_heal_count >= self.config.max_self_heal {
-                    let msg = format!("Circuit broken after {} failed attempts", self.self_heal_count);
+                    let msg = format!(
+                        "Circuit broken after {} failed attempts",
+                        self.self_heal_count
+                    );
                     eprintln!("[AgentLoop] {msg}");
                     self.emit_failed(tx, app_handle, session_id, &msg).await;
                     self.state = AgentState::Failed(msg);
@@ -513,51 +583,160 @@ impl AgentLoop {
     // ── 辅助发射方法 ──
 
     async fn emit_complete(
-        &self, tx: &mpsc::Sender<RuntimeEvent>,
+        &self,
+        tx: &mpsc::Sender<RuntimeEvent>,
         app_handle: &tauri::AppHandle,
         session_id: &str,
         reason: &str,
     ) {
-        let _ = app_handle.emit("assistant:stream_update",
+        let _ = app_handle.emit(
+            "assistant:stream_update",
             crate::assistant_stream_proxy::StreamPayload {
                 session_id: session_id.to_string(),
                 done: true,
-                error: if reason != "done" { Some(reason.to_string()) } else { None },
+                error: if reason != "done" {
+                    Some(reason.to_string())
+                } else {
+                    None
+                },
                 ..Default::default()
-            });
-        let _ = tx.send(RuntimeEvent::RunCompleted { reason: reason.into() }).await;
+            },
+        );
+        let _ = tx
+            .send(RuntimeEvent::RunCompleted {
+                reason: reason.into(),
+            })
+            .await;
     }
 
     async fn emit_failed(
-        &self, tx: &mpsc::Sender<RuntimeEvent>,
+        &self,
+        tx: &mpsc::Sender<RuntimeEvent>,
         app_handle: &tauri::AppHandle,
         session_id: &str,
         error: &str,
     ) {
-        let _ = app_handle.emit("assistant:stream_update",
+        let _ = app_handle.emit(
+            "assistant:stream_update",
             crate::assistant_stream_proxy::StreamPayload {
                 session_id: session_id.to_string(),
                 done: true,
                 error: Some(error.to_string()),
                 ..Default::default()
-            });
-        let _ = tx.send(RuntimeEvent::RunFailed { error: error.into() }).await;
+            },
+        );
+        let _ = tx
+            .send(RuntimeEvent::RunFailed {
+                error: error.into(),
+            })
+            .await;
     }
 
     async fn emit_cancelled(
-        &self, tx: &mpsc::Sender<RuntimeEvent>,
+        &self,
+        tx: &mpsc::Sender<RuntimeEvent>,
         app_handle: &tauri::AppHandle,
         session_id: &str,
     ) {
-        let _ = app_handle.emit("assistant:stream_update",
+        let _ = app_handle.emit(
+            "assistant:stream_update",
             crate::assistant_stream_proxy::StreamPayload {
                 session_id: session_id.to_string(),
                 done: true,
                 error: Some("Cancelled".into()),
                 ..Default::default()
-            });
-        let _ = tx.send(RuntimeEvent::RunCompleted { reason: "cancelled".into() }).await;
+            },
+        );
+        let _ = tx
+            .send(RuntimeEvent::RunCompleted {
+                reason: "cancelled".into(),
+            })
+            .await;
     }
+}
+
+async fn await_permission(
+    request: &CapabilityRequest,
+    session_id: &str,
+    tx: &mpsc::Sender<RuntimeEvent>,
+    cancel_rx: &mut tokio::sync::oneshot::Receiver<()>,
+) -> Option<PermissionMode> {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let run_id = crate::db::get_assistant_db_conn().ok().and_then(|conn| {
+        conn.query_row(
+            "SELECT id FROM assistant_runs WHERE conversation_id = ?1 AND status = 'running' ORDER BY started_at DESC LIMIT 1",
+            rusqlite::params![session_id],
+            |row| row.get::<_, String>(0),
+        ).ok()
+    });
+    let run_id = match run_id {
+        Some(run_id) => run_id,
+        None => return Some(PermissionMode::Deny),
+    };
+    let already_granted = crate::db::get_assistant_db_conn()
+        .ok()
+        .and_then(|conn| {
+            conn.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM assistant_permission_requests approved
+                    JOIN assistant_runs approved_run ON approved_run.id = approved.run_id
+                    JOIN assistant_runs current_run ON current_run.id = ?1
+                    JOIN assistant_conversations approved_conversation ON approved_conversation.id = approved_run.conversation_id
+                    JOIN assistant_conversations current_conversation ON current_conversation.id = current_run.conversation_id
+                    WHERE approved.status = 'approved' AND approved.tool_name = ?2 AND (
+                        (approved.scope = 'this_run' AND approved.run_id = ?1) OR
+                        (approved.scope = 'project' AND current_conversation.project_id IS NOT NULL AND approved_conversation.project_id = current_conversation.project_id)
+                    )
+                )",
+                rusqlite::params![run_id, request.name],
+                |row| row.get::<_, bool>(0),
+            )
+            .ok()
+        })
+        .unwrap_or(false);
+    if already_granted {
+        return Some(PermissionMode::Allow);
+    }
+    let inserted = crate::db::get_assistant_db_conn().ok().and_then(|conn| {
+        conn.execute(
+            "INSERT INTO assistant_permission_requests (id, run_id, tool_call_id, tool_name, reason, input, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![request_id, run_id, request.call_id, request.name, "Tool requires approval", request.arguments.to_string(), chrono::Utc::now().to_rfc3339()],
+        ).ok()
+    });
+    if inserted.is_none() {
+        return Some(PermissionMode::Deny);
+    }
+    let _ = tx.send(RuntimeEvent::PermissionRequested {
+        tool_name: request.name.clone(),
+        tool_call_id: request_id.clone(),
+        reason: "Tool requires approval".into(),
+        args: request.arguments.clone(),
+    }).await;
+
+    for _ in 0..3_000 {
+        if cancel_rx.try_recv().is_ok() {
+            return None;
+        }
+        let status = crate::db::get_assistant_db_conn().ok().and_then(|conn| {
+            conn.query_row(
+                "SELECT status FROM assistant_permission_requests WHERE id = ?1",
+                rusqlite::params![request_id],
+                |row| row.get::<_, String>(0),
+            ).ok()
+        });
+        match status.as_deref() {
+            Some("approved") => return Some(PermissionMode::Allow),
+            Some("rejected" | "expired") => return Some(PermissionMode::Deny),
+            _ => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+        }
+    }
+    if let Ok(conn) = crate::db::get_assistant_db_conn() {
+        let _ = conn.execute(
+            "UPDATE assistant_permission_requests SET status = 'expired', responded_at = ?1 WHERE id = ?2",
+            rusqlite::params![chrono::Utc::now().to_rfc3339(), request_id],
+        );
+    }
+    Some(PermissionMode::Deny)
 }
 
 #[cfg(test)]
@@ -568,11 +747,13 @@ mod tests {
     fn test_tool_signature_sorted() {
         let invocations = vec![
             crate::assistant_executor::ToolInvocation {
-                id: "1".into(), name: "write_file".into(),
+                id: "1".into(),
+                name: "write_file".into(),
                 arguments: json!({}),
             },
             crate::assistant_executor::ToolInvocation {
-                id: "2".into(), name: "read_file".into(),
+                id: "2".into(),
+                name: "read_file".into(),
                 arguments: json!({}),
             },
         ];

@@ -1,174 +1,147 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Check, ChevronDown, Paperclip, Plus, Send, ShieldCheck, Square, X } from 'lucide-react';
 import type { Locale } from '@/i18n';
+import {
+  canSendAssistantDraft,
+  fileNameFromPath,
+  type AssistantAttachment,
+  type AssistantDraft,
+  type AssistantPermissionProfile,
+} from '@/lib/assistant-composer';
+import ModelSelectorDropdown, { type ProviderWithModels } from './ModelSelectorDropdown';
 import SlashCommandPopover from './SlashCommandPopover';
 
-interface SlashCommand {
-  id: string;
-  label: string;
-  description: string;
-  category: 'system' | 'skill' | 'mcp';
-}
+interface SlashCommand { id: string; label: string; description: string; category: 'system' | 'skill' | 'mcp' }
 
 interface MessageInputProps {
   locale: Locale;
-  onSend: (content: string) => void;
+  onSend: (draft: AssistantDraft) => Promise<boolean>;
   onStop: () => void;
   isStreaming: boolean;
   disabled?: boolean;
-  placeholder?: string;
-  noProject?: boolean;
-  /** 优先于 disabled：'no_provider' = 无 provider；'creating' = 会话创建中 */
   inputDisabledReason?: 'no_provider' | 'no_model' | 'creating' | null;
+  permissionProfile: AssistantPermissionProfile;
+  onPermissionChange: (profile: AssistantPermissionProfile) => Promise<void>;
+  providers: ProviderWithModels[];
+  selectedProviderId: string;
+  selectedModel?: string;
+  onSelectModel: (providerId: string, model: string) => void;
 }
 
-export default function MessageInput({
-  locale,
-  onSend,
-  onStop,
-  isStreaming,
-  disabled = false,
-  placeholder,
-  noProject = false,
-  inputDisabledReason = null,
-}: MessageInputProps) {
+const permissionLabels = {
+  readonly: { zh: '只读', en: 'Read only' },
+  ask: { zh: '需要时询问', en: 'Ask when needed' },
+  full_access: { zh: '完全访问', en: 'Full access' },
+} as const;
+
+export default function MessageInput(props: MessageInputProps) {
+  const { locale, onSend, onStop, isStreaming, disabled = false, inputDisabledReason = null,
+    permissionProfile, onPermissionChange, providers, selectedProviderId, selectedModel, onSelectModel } = props;
+  const zh = locale.startsWith('zh');
   const [input, setInput] = useState('');
+  const [attachments, setAttachments] = useState<AssistantAttachment[]>([]);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashQuery, setSlashQuery] = useState('');
+  const [slashAnchor, setSlashAnchor] = useState<DOMRect | null>(null);
+  const [permissionOpen, setPermissionOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const inputContainerRef = useRef<HTMLDivElement>(null);
   const lastSlashIndex = useRef(-1);
+  const effectiveDisabled = disabled || inputDisabledReason === 'no_provider' || inputDisabledReason === 'no_model' || inputDisabledReason === 'creating';
 
   useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px';
-    }
+    if (!textareaRef.current) return;
+    textareaRef.current.style.height = 'auto';
+    textareaRef.current.style.height = `${Math.min(Math.max(textareaRef.current.scrollHeight, 88), 220)}px`;
   }, [input]);
 
-  // Track slash state from input
-  useEffect(() => {
-    const slashIdx = input.lastIndexOf('/');
-    if (slashIdx >= 0) {
-      // Check if there's text before the slash (not at start of line)
-      const beforeSlash = input.slice(0, slashIdx);
-      const atLineStart = slashIdx === 0 || beforeSlash.endsWith('\n');
-      if (atLineStart) {
-        setSlashOpen(true);
-        setSlashQuery(input.slice(slashIdx + 1));
-        lastSlashIndex.current = slashIdx;
-      } else {
-        setSlashOpen(false);
-      }
-    } else {
-      setSlashOpen(false);
+  const handleInputChange = (value: string) => {
+    setInput(value);
+    const slashIndex = value.lastIndexOf('/');
+    const atLineStart = slashIndex === 0 || (slashIndex > 0 && value.slice(0, slashIndex).endsWith('\n'));
+    setSlashOpen(atLineStart);
+    if (atLineStart) {
+      setSlashQuery(value.slice(slashIndex + 1));
+      lastSlashIndex.current = slashIndex;
+      setSlashAnchor(textareaRef.current?.getBoundingClientRect() ?? null);
     }
-  }, [input]);
+  };
 
-  const handleSend = () => {
-    const trimmed = input.trim();
-    if (!trimmed || isStreaming || effectiveDisabled) return;
-    onSend(trimmed);
+  const handleSend = async () => {
+    if (isStreaming || effectiveDisabled || !canSendAssistantDraft(input, attachments)) return;
+    const sent = await onSend({ content: input.trim(), attachments });
+    if (!sent) return;
     setInput('');
+    setAttachments([]);
     setSlashOpen(false);
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
+  const handleAddFiles = async () => {
+    const paths = await window.nativesAPI?.dialog.pickFiles();
+    if (!paths?.length) return;
+    setAttachments(current => {
+      const known = new Set(current.map(item => item.path));
+      return [...current, ...paths.filter(path => !known.has(path)).map(path => ({
+        path, name: fileNameFromPath(path), mimeType: 'application/octet-stream', size: 0,
+      }))];
+    });
   };
 
-  const handleSlashSelect = useCallback((cmd: SlashCommand) => {
-    // Replace the slash query with the full command + space
-    const before = input.slice(0, lastSlashIndex.current);
-    setInput(`${before}${cmd.id} `);
+  const handleSlashSelect = useCallback((command: SlashCommand) => {
+    setInput(`${input.slice(0, lastSlashIndex.current)}${command.id} `);
     setSlashOpen(false);
     textareaRef.current?.focus();
   }, [input]);
 
-  const t = (key: string) => {
-    const lang = locale.startsWith('zh') ? 'zh' : 'en';
-    const messages: Record<string, Record<string, string>> = {
-      send: { zh: '发送', en: 'Send' },
-      stop: { zh: '停止生成', en: 'Stop' },
-      inputPlaceholder: { zh: '输入消息...', en: 'Type a message...' },
-      noProject: { zh: '当前无项目上下文，部分能力受限（如 /create-app 等指令暂不可用）', en: 'No project context, some features limited (e.g. /create-app unavailable)' },
-      noProviderHint: { zh: '请先在设置中配置 AI 供应商', en: 'Configure an AI provider first' },
-      creatingSession: { zh: '正在创建会话...', en: 'Starting session...' },
-    };
-    return messages[key]?.[lang] ?? key;
-  };
-
-  // inputDisabledReason 优先于 disabled
-  const reasonDisabled = inputDisabledReason === 'no_provider' || inputDisabledReason === 'creating';
-  const effectiveDisabled = disabled || reasonDisabled;
-  const helperText = inputDisabledReason === 'no_provider'
-    ? t('noProviderHint')
-    : inputDisabledReason === 'creating'
-      ? t('creatingSession')
-      : null;
+  const placeholder = inputDisabledReason === 'creating'
+    ? (zh ? '正在创建会话…' : 'Starting conversation…')
+    : inputDisabledReason === 'no_provider' || inputDisabledReason === 'no_model'
+      ? (zh ? '请先配置可用的供应商和模型' : 'Configure a provider and model first')
+      : (zh ? '描述任务，或输入 / 使用指令' : 'Describe a task, or type / for commands');
 
   return (
-    <div className="flex flex-col gap-2 px-4 py-3 border-t border-[var(--border-subtle)] relative">
-      {noProject && (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-600 dark:text-amber-400">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="8" x2="12" y2="12" />
-            <line x1="12" y1="16" x2="12.01" y2="16" />
-          </svg>
-          <span>{t('noProject')}</span>
-        </div>
-      )}
-
-      <div ref={inputContainerRef} className="relative">
-        {/* Slash command popover */}
-        <SlashCommandPopover
-          isOpen={slashOpen}
-          query={slashQuery}
-          onSelect={handleSlashSelect}
-          onClose={() => setSlashOpen(false)}
-          disabled={noProject}
-          anchorRect={textareaRef.current?.getBoundingClientRect() ?? null}
-        />
-
-        <div className="flex items-end gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 focus-within:border-[var(--primary)] transition-colors">
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={helperText || placeholder || t('inputPlaceholder')}
-            disabled={effectiveDisabled}
-            rows={1}
-            className="min-w-0 flex-1 bg-transparent text-sm text-[var(--text)] outline-none resize-none placeholder:text-[var(--text-disabled)] max-h-[200px]"
-          />
-          {isStreaming ? (
-            <button
-              onClick={onStop}
-              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors text-sm font-medium"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="6" y="6" width="12" height="12" rx="2" />
-              </svg>
-              <span className="hidden sm:inline">{t('stop')}</span>
-            </button>
-          ) : (
-            <button
-              onClick={handleSend}
-              disabled={!input.trim() || effectiveDisabled}
-              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--primary-soft)] text-[var(--primary)] hover:opacity-80 transition-opacity text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="22" y1="2" x2="11" y2="13" />
-                <polygon points="22 2 15 22 11 13 2 9 22 2" />
-              </svg>
-              <span className="hidden sm:inline">{t('send')}</span>
-            </button>
-          )}
+    <div className="mx-auto w-full max-w-[860px] px-5 pb-5 pt-2">
+      <div className="relative rounded-[22px] border border-[var(--border)] bg-[var(--surface)] shadow-[0_8px_30px_rgba(0,0,0,0.08)] transition focus-within:border-[var(--text-disabled)]">
+        <SlashCommandPopover isOpen={slashOpen} query={slashQuery} onSelect={handleSlashSelect} onClose={() => setSlashOpen(false)} disabled={false} anchorRect={slashAnchor} />
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 px-4 pt-3">
+            {attachments.map(file => (
+              <div key={file.path} title={file.path} className="flex max-w-52 items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-hover)] px-2 py-1 text-xs text-[var(--text-secondary)]">
+                <Paperclip size={12} /><span className="truncate">{file.name}</span>
+                <button type="button" onClick={() => setAttachments(items => items.filter(item => item.path !== file.path))} className="rounded p-0.5 hover:bg-[var(--surface-active)]" aria-label={zh ? '移除附件' : 'Remove attachment'}><X size={11} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+        <textarea ref={textareaRef} value={input} onChange={event => handleInputChange(event.target.value)}
+          onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void handleSend(); } }}
+          placeholder={placeholder} disabled={effectiveDisabled} rows={3}
+          className="block min-h-[108px] w-full resize-none bg-transparent px-4 pb-2 pt-4 text-[15px] leading-6 text-[var(--text)] outline-none placeholder:text-[var(--text-disabled)] disabled:cursor-not-allowed" />
+        <div className="flex items-center justify-between gap-3 px-3 pb-3">
+          <div className="flex min-w-0 items-center gap-1">
+            <button type="button" onClick={() => void handleAddFiles()} disabled={effectiveDisabled || isStreaming} title={zh ? '添加附件' : 'Add attachment'} className="grid h-8 w-8 place-items-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-40"><Plus size={18} /></button>
+            <div className="relative">
+              <button type="button" onClick={() => setPermissionOpen(open => !open)} className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"><ShieldCheck size={15} /><span>{permissionLabels[permissionProfile][zh ? 'zh' : 'en']}</span><ChevronDown size={12} /></button>
+              {permissionOpen && (
+                <div className="absolute bottom-full left-0 z-50 mb-2 w-48 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5 shadow-popup">
+                  {(Object.keys(permissionLabels) as AssistantPermissionProfile[]).map(profile => (
+                    <button key={profile} type="button" onClick={() => { setPermissionOpen(false); void onPermissionChange(profile); }} className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
+                      {permissionLabels[profile][zh ? 'zh' : 'en']}{permissionProfile === profile && <Check size={14} />}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="flex min-w-0 items-center gap-1">
+            <ModelSelectorDropdown providers={providers} selectedProviderId={selectedProviderId} selectedModel={selectedModel} onSelect={onSelectModel} locale={locale} />
+            {isStreaming ? (
+              <button type="button" onClick={onStop} title={zh ? '停止生成' : 'Stop'} className="grid h-8 w-8 place-items-center rounded-full bg-[var(--text)] text-[var(--surface)]"><Square size={12} fill="currentColor" /></button>
+            ) : (
+              <button type="button" onClick={() => void handleSend()} disabled={effectiveDisabled || !canSendAssistantDraft(input, attachments)} title={zh ? '发送' : 'Send'} className="grid h-8 w-8 place-items-center rounded-full bg-[var(--text)] text-[var(--surface)] transition disabled:opacity-25"><Send size={15} /></button>
+            )}
+          </div>
         </div>
       </div>
     </div>

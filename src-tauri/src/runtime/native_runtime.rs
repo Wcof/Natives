@@ -100,7 +100,7 @@ impl NativeRuntime {
 
         // 初始化插件管理器
         let mut plugin_manager = PluginManager::new();
-        
+
         // 添加插件搜索路径：项目根目录的 plugins/
         let project_root = std::env::current_dir().ok();
         if let Some(ref root) = project_root {
@@ -175,14 +175,21 @@ impl NativeRuntime {
         let registry = self.registry.lock().await;
         let plugin_manager = self.plugin_manager.lock().await;
         let rule_engine = self.rule_engine.lock().await;
-        build_catalog_from_parts(&registry, &plugin_manager, &rule_engine, self.project_root.as_ref())
+        build_catalog_from_parts(
+            &registry,
+            &plugin_manager,
+            &rule_engine,
+            self.project_root.as_ref(),
+        )
     }
 }
 
 pub fn build_native_runtime_catalog() -> NativeRuntimeCatalog {
     let modules_dir = modules_root();
     let mut registry = CapabilityRegistry::new();
-    registry.register_all(crate::runtime::native::capability::create_default_capabilities(&modules_dir));
+    registry.register_all(
+        crate::runtime::native::capability::create_default_capabilities(&modules_dir),
+    );
 
     let project_root = std::env::current_dir().ok();
     let mut plugin_manager = PluginManager::new();
@@ -207,7 +214,12 @@ pub fn build_native_runtime_catalog() -> NativeRuntimeCatalog {
         }
     }
 
-    build_catalog_from_parts(&registry, &plugin_manager, &rule_engine, project_root.as_ref())
+    build_catalog_from_parts(
+        &registry,
+        &plugin_manager,
+        &rule_engine,
+        project_root.as_ref(),
+    )
 }
 
 fn build_catalog_from_parts(
@@ -218,7 +230,8 @@ fn build_catalog_from_parts(
 ) -> NativeRuntimeCatalog {
     let plugin_roots = plugin_manager.plugin_roots();
     let project_root = project_root.cloned().unwrap_or_else(|| PathBuf::from("."));
-    let mut cas = crate::runtime::native::command_agent_skill::CasManager::new(project_root, plugin_roots);
+    let mut cas =
+        crate::runtime::native::command_agent_skill::CasManager::new(project_root, plugin_roots);
     cas.load_all();
 
     let hooks = plugin_manager
@@ -256,9 +269,15 @@ fn build_catalog_from_parts(
 
 #[async_trait]
 impl AgentRuntime for NativeRuntime {
-    fn id(&self) -> &'static str { "native" }
-    fn display_name(&self) -> &'static str { "Native Runtime (Atomic Capability Engine v2)" }
-    fn is_available(&self) -> bool { true }
+    fn id(&self) -> &'static str {
+        "native"
+    }
+    fn display_name(&self) -> &'static str {
+        "Native Runtime (Atomic Capability Engine v2)"
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
 
     async fn stream(&self, options: RuntimeStreamOptions) -> Result<EventStream> {
         // ── 1. 解密凭据（P1 安全）──
@@ -271,14 +290,18 @@ impl AgentRuntime for NativeRuntime {
         let modules_dir = modules_root();
 
         // ── 2. 使用可选的工作目录 ──
-        let working_dir = options.working_directory.clone()
+        let working_dir = options
+            .working_directory
+            .clone()
             .or_else(|| self.project_root.clone());
 
         // 组装上下文
         let system_prompt = if let Some(ref wd) = working_dir {
-            crate::runtime::native::context_assembler::assemble(
-                Some(wd), &options.prompt, 8000,
-            ).await.ok().map(|c| c.system_prompt).unwrap_or_default()
+            crate::runtime::native::context_assembler::assemble(Some(wd), &options.prompt, 8000)
+                .await
+                .ok()
+                .map(|c| c.system_prompt)
+                .unwrap_or_default()
         } else {
             String::new()
         };
@@ -299,7 +322,9 @@ impl AgentRuntime for NativeRuntime {
                     initial_messages.push(json!({ "role": "user", "content": modified }));
                 }
                 crate::runtime::native::hook_pipeline::PromptAction::Block(msg) => {
-                    return Err(crate::Error::InvalidInput(format!("Prompt blocked by hook: {msg}")));
+                    return Err(crate::Error::InvalidInput(format!(
+                        "Prompt blocked by hook: {msg}"
+                    )));
                 }
             }
         }
@@ -309,6 +334,15 @@ impl AgentRuntime for NativeRuntime {
         let enabled_tools = exec_settings.enabled_tools;
         let max_self_heal: u32 = exec_settings.max_self_heal;
         let max_steps: u32 = exec_settings.max_steps.unwrap_or(50);
+        let permission_mode = match options
+            .runtime_options
+            .get("permission_profile")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("readonly") => crate::runtime::native::capability::PermissionMode::Deny,
+            Some("full_access") => crate::runtime::native::capability::PermissionMode::Allow,
+            _ => crate::runtime::native::capability::PermissionMode::Ask,
+        };
 
         // ── 4. 创建事件通道 ──
         let (tx, rx) = tokio::sync::mpsc::channel::<RuntimeEvent>(64);
@@ -336,22 +370,28 @@ impl AgentRuntime for NativeRuntime {
             let engine = rule_engine_clone.lock().await;
 
             let mut loop_runner = AgentLoop::new(config, initial_messages);
-            loop_runner.run(
-                &tx,
-                &app2,
-                &sid,
-                &modules_dir,
-                working_dir.clone(),
-                &enabled_tools,
-                &pipeline,
-                &engine,
-                &mut cancel_rx,
-            ).await;
+            loop_runner
+                .run(
+                    &tx,
+                    &app2,
+                    &sid,
+                    &modules_dir,
+                    working_dir.clone(),
+                    &enabled_tools,
+                    &pipeline,
+                    &engine,
+                    permission_mode,
+                    &mut cancel_rx,
+                )
+                .await;
 
             // 记录最终状态
             println!(
                 "[NativeRuntime] Session {} completed: {:?} ({} steps, {} self-heal)",
-                sid, loop_runner.state(), loop_runner.step(), loop_runner.self_heal_count(),
+                sid,
+                loop_runner.state(),
+                loop_runner.step(),
+                loop_runner.self_heal_count(),
             );
 
             // pipeline 和 engine 在闭包结束自动释放
@@ -374,20 +414,24 @@ async fn resolve_provider_credentials(provider_id: &str) -> Result<(String, Stri
     let db = crate::db::get_assistant_db_conn()
         .map_err(|e| crate::Error::Internal(format!("DB connection: {e}")))?;
 
-    let row = db.query_row(
-        "SELECT k.api_key_encrypted, k.dek_encrypted, p.base_url
+    let row = db
+        .query_row(
+            "SELECT k.api_key_encrypted, k.dek_encrypted, p.base_url
          FROM provider_api_keys k
          JOIN user_providers p ON k.provider_id = p.id
          WHERE k.provider_id = ?1
          ORDER BY k.created_at ASC LIMIT 1",
-        rusqlite::params![provider_id],
-        |row| {
-            let encrypted_key: String = row.get(0)?;
-            let dek_encrypted: String = row.get(1)?;
-            let base_url: String = row.get(2)?;
-            Ok((encrypted_key, dek_encrypted, base_url))
-        }
-    ).map_err(|e| crate::Error::InvalidInput(format!("Provider '{provider_id}' not found: {e}")))?;
+            rusqlite::params![provider_id],
+            |row| {
+                let encrypted_key: String = row.get(0)?;
+                let dek_encrypted: String = row.get(1)?;
+                let base_url: String = row.get(2)?;
+                Ok((encrypted_key, dek_encrypted, base_url))
+            },
+        )
+        .map_err(|e| {
+            crate::Error::InvalidInput(format!("Provider '{provider_id}' not found: {e}"))
+        })?;
 
     let (encrypted_key, dek_encrypted, base_url) = row;
 

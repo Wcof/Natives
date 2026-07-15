@@ -40,19 +40,19 @@ export interface ContentBlock {
 // ─── Block Renderers ────────────────────────────────────
 
 function TextBlock({ block }: { block: ContentBlock }) {
-  return <div className="prose prose-sm max-w-none">{block.text}</div>;
+  return <div className="whitespace-pre-wrap break-words text-[15px] leading-7">{block.text}</div>;
 }
 
 function ReasoningBlock({ block }: { block: ContentBlock }) {
   const [expanded, setExpanded] = React.useState(false);
   return (
-    <div className="border-l-2 border-[var(--border)] pl-3 my-2">
+    <div className="my-2 rounded-lg bg-[var(--surface-hover)] px-3 py-2">
       <button
         onClick={() => setExpanded(!expanded)}
         className="text-xs text-[var(--text-disabled)] hover:text-[var(--text-secondary)] transition-colors"
         aria-expanded={expanded}
       >
-        {expanded ? 'Hide reasoning' : 'Show reasoning'}
+        {expanded ? '隐藏思考过程' : '查看思考过程'}
       </button>
       {expanded && block.reasoning && (
         <div className="mt-1 text-sm text-[var(--text-secondary)] italic">
@@ -96,6 +96,7 @@ function FileReferenceBlock({ block }: { block: ContentBlock }) {
 }
 
 function ToolCallBlock({ block }: { block: ContentBlock }) {
+  const [expanded, setExpanded] = React.useState(block.toolStatus === 'failed');
   const statusColor = {
     pending: 'var(--warning)',
     running: 'var(--primary)',
@@ -105,15 +106,15 @@ function ToolCallBlock({ block }: { block: ContentBlock }) {
   }[block.toolStatus || 'pending'];
 
   return (
-    <div className="border rounded-lg my-2 overflow-hidden">
-      <div className="flex items-center gap-2 px-3 py-2 bg-[var(--surface-hover)] text-xs font-medium">
+    <div className="my-2 overflow-hidden rounded-lg border border-[var(--border-subtle)]">
+      <button type="button" onClick={() => setExpanded(value => !value)} className="flex w-full items-center gap-2 bg-[var(--surface-hover)] px-3 py-2 text-left text-xs font-medium">
         <span className="w-2 h-2 rounded-full" style={{ backgroundColor: statusColor }} />
         <span className="font-mono">{block.toolName}</span>
         {block.toolStatus && (
           <span className="text-[var(--text-disabled)] ml-auto">{block.toolStatus}</span>
         )}
-      </div>
-      {block.toolInput && (
+      </button>
+      {expanded && block.toolInput && (
         <div className="px-3 py-2 text-xs font-mono text-[var(--text-secondary)] overflow-x-auto">
           <pre className="whitespace-pre-wrap">{JSON.stringify(block.toolInput, null, 2)}</pre>
         </div>

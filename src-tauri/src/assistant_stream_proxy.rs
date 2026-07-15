@@ -14,14 +14,13 @@
 //! 安全：API Key 全程在 Rust 内存，前端只收事件（CONTEXT.md L37/L40 红线）。
 
 use crate::{Error, Result};
+use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::Emitter;
-use lazy_static::lazy_static;
 
 lazy_static! {
-    static ref STREAM_REGISTRY: Mutex<HashMap<String, StreamHandle>> =
-        Mutex::new(HashMap::new());
+    static ref STREAM_REGISTRY: Mutex<HashMap<String, StreamHandle>> = Mutex::new(HashMap::new());
 }
 
 struct StreamHandle {
@@ -78,14 +77,14 @@ pub async fn stream_chat(
     let _state_unused = state; // 持有 state 避免 DB 连接释放（兼容既有签名）
 
     // 从现行会话表取 provider_id（Native runtime 内部会再解密 key）
-    let provider_id: String = {
+    let (provider_id, permission_profile): (String, String) = {
         let asst_conn = crate::db::get_assistant_db_conn()
             .map_err(|e| Error::Internal(format!("failed to get assistant DB: {e}")))?;
         asst_conn
             .query_row(
-                "SELECT provider_id FROM assistant_conversations WHERE id = ?1",
+                "SELECT provider_id, COALESCE(permission_profile_id, 'ask') FROM assistant_conversations WHERE id = ?1",
                 rusqlite::params![input.session_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(|e| Error::Internal(format!("Failed to fetch session provider: {e}")))?
     };
@@ -95,12 +94,15 @@ pub async fn stream_chat(
 
     // emit 降级提示（若有）——前端工作台横幅消费
     if let Some(h) = hint {
-        let _ = app_handle.emit("assistant:stream_update", StreamPayload {
-            session_id: input.session_id.clone(),
-            error: None,
-            done: false,
-            ..Default::default()
-        });
+        let _ = app_handle.emit(
+            "assistant:stream_update",
+            StreamPayload {
+                session_id: input.session_id.clone(),
+                error: None,
+                done: false,
+                ..Default::default()
+            },
+        );
         // 独立 hint 事件（前端可监听 `assistant://stream/hint` 显示横幅）
         let _ = app_handle.emit("assistant://stream/hint", h);
     }
@@ -109,25 +111,34 @@ pub async fn stream_chat(
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
     {
         let mut registry = STREAM_REGISTRY.lock().unwrap();
-        registry.insert(input.session_id.clone(), StreamHandle { abort_handle: cancel_tx });
+        registry.insert(
+            input.session_id.clone(),
+            StreamHandle {
+                abort_handle: cancel_tx,
+            },
+        );
     }
 
     // 拼首轮 prompt：把 messages 序列化为单串 user prompt（Native runtime 内部按 round 累加）
-    let prompt = input.messages.iter()
+    let prompt = input
+        .messages
+        .iter()
         .map(|m| format!("[{}]: {}", m.role, m.content))
         .collect::<Vec<_>>()
         .join("\n");
 
-    let stream = runtime.stream(crate::runtime::RuntimeStreamOptions {
-        session_id: input.session_id.clone(),
-        prompt,
-        model: input.model.clone(),
-        provider_id,
-        system_prompt: None,
-        working_directory: std::env::current_dir().ok(),
-        abort_receiver: cancel_rx,
-        runtime_options: serde_json::json!({}),
-    }).await?;
+    let stream = runtime
+        .stream(crate::runtime::RuntimeStreamOptions {
+            session_id: input.session_id.clone(),
+            prompt,
+            model: input.model.clone(),
+            provider_id,
+            system_prompt: None,
+            working_directory: std::env::current_dir().ok(),
+            abort_receiver: cancel_rx,
+            runtime_options: serde_json::json!({ "permission_profile": permission_profile }),
+        })
+        .await?;
 
     // 转发 runtime 事件流到 Tauri Event channel（Native runtime 内部已 emit 既有 StreamPayload，
     // 这里消费 RuntimeEvent 仅供未来统一 channel 切换；当前保持双发兼容）
@@ -138,28 +149,49 @@ pub async fn stream_chat(
         use futures_util::StreamExt;
         while let Some(ev) = stream.next().await {
             // 透传 RuntimeEvent 到新 channel（前端 Slice K 会迁移监听）
-            let is_terminal = matches!(ev, crate::runtime::RuntimeEvent::RunCompleted { .. }
-                | crate::runtime::RuntimeEvent::RunFailed { .. });
+            let is_terminal = matches!(
+                ev,
+                crate::runtime::RuntimeEvent::RunCompleted { .. }
+                    | crate::runtime::RuntimeEvent::RunFailed { .. }
+            );
             let _ = app2.emit(&format!("assistant://stream/{}", sid), &ev);
             match &ev {
                 crate::runtime::RuntimeEvent::AssistantDelta { text } => {
-                    let _ = app2.emit("assistant:stream_update", StreamPayload {
-                        session_id: sid.clone(), delta: Some(text.clone()), ..Default::default()
-                    });
+                    let _ = app2.emit(
+                        "assistant:stream_update",
+                        StreamPayload {
+                            session_id: sid.clone(),
+                            delta: Some(text.clone()),
+                            ..Default::default()
+                        },
+                    );
                 }
                 crate::runtime::RuntimeEvent::RunCompleted { .. } => {
-                    let _ = app2.emit("assistant:stream_update", StreamPayload {
-                        session_id: sid.clone(), done: true, ..Default::default()
-                    });
+                    let _ = app2.emit(
+                        "assistant:stream_update",
+                        StreamPayload {
+                            session_id: sid.clone(),
+                            done: true,
+                            ..Default::default()
+                        },
+                    );
                 }
                 crate::runtime::RuntimeEvent::RunFailed { error } => {
-                    let _ = app2.emit("assistant:stream_update", StreamPayload {
-                        session_id: sid.clone(), done: true, error: Some(error.clone()), ..Default::default()
-                    });
+                    let _ = app2.emit(
+                        "assistant:stream_update",
+                        StreamPayload {
+                            session_id: sid.clone(),
+                            done: true,
+                            error: Some(error.clone()),
+                            ..Default::default()
+                        },
+                    );
                 }
                 _ => {}
             }
-            if is_terminal { break; }
+            if is_terminal {
+                break;
+            }
         }
         cleanup_registry(&sid);
     });
@@ -170,7 +202,7 @@ pub async fn stream_chat(
 /// Extract `...` tags from a content delta.
 /// Returns (clean_content, optional_reasoning_text).
 pub fn extract_think_tag(delta: &str) -> (String, Option<String>) {
-    use std::sync::atomic::{Ordering, AtomicU8};
+    use std::sync::atomic::{AtomicU8, Ordering};
     thread_local! {
         static IN_THINK: AtomicU8 = const { AtomicU8::new(0) };
     }
@@ -202,7 +234,11 @@ pub fn extract_think_tag(delta: &str) -> (String, Option<String>) {
             }
         }
 
-        let reasoning_opt = if reasoning.is_empty() { None } else { Some(reasoning) };
+        let reasoning_opt = if reasoning.is_empty() {
+            None
+        } else {
+            Some(reasoning)
+        };
         (clean, reasoning_opt)
     })
 }
@@ -237,14 +273,20 @@ mod tests {
         let input = StreamChatInput {
             session_id: "test-session".to_string(),
             model: "gpt-4".to_string(),
-            messages: vec![ChatMessage { role: "user".into(), content: "Hello".into() }],
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: "Hello".into(),
+            }],
             runtime_override: None,
         };
         let json = serde_json::to_value(&input).unwrap();
         assert_eq!(json["sessionId"], "test-session");
         assert_eq!(json["model"], "gpt-4");
         assert!(json.get("apiKey").is_none(), "apiKey must not be present");
-        assert!(json.get("providerBaseUrl").is_none(), "providerBaseUrl must not be present");
+        assert!(
+            json.get("providerBaseUrl").is_none(),
+            "providerBaseUrl must not be present"
+        );
         assert_eq!(json["messages"][0]["role"], "user");
     }
 

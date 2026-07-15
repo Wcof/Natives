@@ -10,7 +10,6 @@ import type {
 import type { LucideIcon } from 'lucide-react';
 import {
   Bell,
-  Bot,
   Download,
   FileText,
   Layers,
@@ -33,6 +32,7 @@ import {
   Plug,
   SlidersHorizontal,
   Cpu,
+  PanelLeftClose,
 } from 'lucide-react';
 import * as LucideIcons from 'lucide-react';
 import { t, type Locale } from '@/i18n';
@@ -473,7 +473,7 @@ export default function Sidebar({
       {/* ── 窗口控制 + Brand Header ── */}
       <div className="shrink-0" data-tauri-drag-region >
         {/* 窗口控制按钮行 */}
-      <div className="flex items-center justify-start gap-[6px] px-3 pt-2.5 pb-1">
+      <div className="flex w-full items-center justify-start gap-[6px] px-3 pt-2.5 pb-1">
         {/* 关闭 — macOS 红圆 */}
         <button
           onClick={() => handleWindowAction('close')}
@@ -586,6 +586,15 @@ export default function Sidebar({
               </div>
             )}
           </div>
+          <button
+            type="button"
+            onClick={onToggle}
+            className="ml-auto flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+            aria-label={t(locale, 'sidebar.collapse')}
+            title={t(locale, 'sidebar.collapse')}
+          >
+            <PanelLeftClose size={15} />
+          </button>
         </div>
 
         {/* Brand Header */}
@@ -694,33 +703,27 @@ export default function Sidebar({
               })}
             </div>
 
-            {/* Assistant is a top-level project launcher. */}
+            {/* Assistant is a first-level directory, parallel to Quick Access. */}
             <div className="mb-1 px-3">
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => selectNavigation('assistant', '__assistant__')}
-                  className="drag-none flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-1.5 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-colors duration-150"
-                >
-                  <Bot size={15} className="shrink-0 text-[var(--text-tertiary)]" />
-                  <span className="truncate">{t(locale, 'nav.assistant')}</span>
-                </button>
+              <div className="flex items-center px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
+                <span className="min-w-0 flex-1 truncate">{t(locale, 'nav.assistant')}</span>
                 <button
                   type="button"
                   onClick={() => setAssistantExpanded(value => !value)}
-                  className="rounded px-1.5 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all"
+                  className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
                   title={assistantExpanded ? t(locale, 'common.collapse') : t(locale, 'common.expand')}
+                  aria-label={assistantExpanded ? t(locale, 'common.collapse') : t(locale, 'common.expand')}
                 >
-                  {assistantExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  {assistantExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                 </button>
                 <button
                   type="button"
                   onClick={() => { selectNavigation('assistant', '__assistant__'); assistantActions?.addProjectFolder(); }}
-                  className="rounded px-1.5 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all"
+                  className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
                   title={t(locale, 'assistant.chooseProjectDirectory')}
                   aria-label={t(locale, 'assistant.chooseProjectDirectory')}
                 >
-                  <FolderPlus size={14} />
+                  <FolderPlus size={13} />
                 </button>
               </div>
               {assistantExpanded && (

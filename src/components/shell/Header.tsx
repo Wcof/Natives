@@ -335,12 +335,12 @@ export default function Header({
         userSelect: 'none',
       }}
     >
-      {/* Sidebar toggle — always visible */}
-      {onToggleSidebar && (
+      {/* Restore the sidebar from the workspace only while it is hidden. */}
+      {sidebarCollapsed && onToggleSidebar && (
         <button
-          className={`btn-secondary-v1 !h-8 !w-8 !p-0 flex items-center justify-center shrink-0 ${sidebarCollapsed ? '' : 'active'}`}
+          className="btn-secondary-v1 !h-8 !w-8 !p-0 flex items-center justify-center shrink-0"
           onClick={onToggleSidebar}
-          title={t(locale, sidebarCollapsed ? 'sidebar.expand' : 'sidebar.collapse')}
+          title={t(locale, 'sidebar.expand')}
         >
           <PanelLeft size={15} />
         </button>

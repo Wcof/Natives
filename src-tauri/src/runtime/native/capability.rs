@@ -150,7 +150,11 @@ pub struct CapabilityVersion {
 
 impl CapabilityVersion {
     pub const fn new(major: u16, minor: u16, patch: u16) -> Self {
-        Self { major, minor, patch }
+        Self {
+            major,
+            minor,
+            patch,
+        }
     }
 }
 
@@ -366,33 +370,55 @@ impl PermissionEngine {
         context: &CapabilityContext,
     ) -> PermissionDecision {
         if matches_pattern_list(&self.settings.deny, &request.name) {
-            return PermissionDecision::deny("Denied by runtime permission settings", "settings.deny");
+            return PermissionDecision::deny(
+                "Denied by runtime permission settings",
+                "settings.deny",
+            );
         }
         if matches_pattern_list(&self.settings.allow, &request.name) {
-            return PermissionDecision::allow("Allowed by runtime permission settings", "settings.allow");
+            return PermissionDecision::allow(
+                "Allowed by runtime permission settings",
+                "settings.allow",
+            );
         }
         if matches_pattern_list(&self.settings.ask, &request.name) {
-            return PermissionDecision::ask("Requires approval by runtime permission settings", "settings.ask");
+            if context.permission_mode != PermissionMode::Allow {
+                return PermissionDecision::ask(
+                    "Requires approval by runtime permission settings",
+                    "settings.ask",
+                );
+            }
         }
 
         match meta.permission {
             CapabilityPermission::Deny | CapabilityPermission::Unsupported => {
-                PermissionDecision::deny("Capability is disabled or unsupported", "capability.default")
+                PermissionDecision::deny(
+                    "Capability is disabled or unsupported",
+                    "capability.default",
+                )
             }
-            CapabilityPermission::Ask => {
-                if context.permission_mode == PermissionMode::Allow {
+            CapabilityPermission::Ask => match context.permission_mode {
+                PermissionMode::Allow => {
                     PermissionDecision::allow("Auto-allowed by context permission mode", "context")
-                } else {
+                }
+                PermissionMode::Deny => {
+                    PermissionDecision::deny("Denied by read-only context", "context")
+                }
+                PermissionMode::Ask => {
                     PermissionDecision::ask("Capability requires approval", "capability.default")
                 }
+            },
+            CapabilityPermission::Allow => {
+                PermissionDecision::allow("Capability is allowed", "capability.default")
             }
-            CapabilityPermission::Allow => PermissionDecision::allow("Capability is allowed", "capability.default"),
         }
     }
 }
 
 fn matches_pattern_list(patterns: &[String], name: &str) -> bool {
-    patterns.iter().any(|pattern| capability_pattern_matches(pattern, name))
+    patterns
+        .iter()
+        .any(|pattern| capability_pattern_matches(pattern, name))
 }
 
 fn capability_pattern_matches(pattern: &str, name: &str) -> bool {
@@ -400,8 +426,12 @@ fn capability_pattern_matches(pattern: &str, name: &str) -> bool {
     pattern == name
         || pattern == normalized
         || pattern == "*"
-        || pattern.strip_suffix('*').is_some_and(|prefix| name.starts_with(prefix) || normalized.starts_with(prefix))
-        || pattern.strip_prefix('*').is_some_and(|suffix| name.ends_with(suffix) || normalized.ends_with(suffix))
+        || pattern
+            .strip_suffix('*')
+            .is_some_and(|prefix| name.starts_with(prefix) || normalized.starts_with(prefix))
+        || pattern
+            .strip_prefix('*')
+            .is_some_and(|suffix| name.ends_with(suffix) || normalized.ends_with(suffix))
 }
 
 pub struct CapabilityRegistry {
@@ -424,8 +454,13 @@ impl CapabilityRegistry {
     pub fn register(&mut self, cap: Arc<dyn AtomicCapability>) {
         let meta = cap.meta();
         let name = meta.name.clone();
-        self.enabled.entry(name.clone()).or_insert(meta.default_enabled);
-        self.groups.entry(meta.group.clone()).or_default().push(name.clone());
+        self.enabled
+            .entry(name.clone())
+            .or_insert(meta.default_enabled);
+        self.groups
+            .entry(meta.group.clone())
+            .or_default()
+            .push(name.clone());
         self.capabilities.insert(name, cap);
     }
 
@@ -440,7 +475,10 @@ impl CapabilityRegistry {
     }
 
     pub fn resolve_name(&self, name: &str) -> String {
-        self.aliases.get(name).cloned().unwrap_or_else(|| name.to_string())
+        self.aliases
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
     }
 
     pub fn get(&self, name: &str) -> Option<&Arc<dyn AtomicCapability>> {
@@ -512,7 +550,8 @@ impl CapabilityRegistry {
                 results
             }),
             Err(_) => {
-                let runtime = tokio::runtime::Runtime::new().expect("create runtime for capability execution");
+                let runtime = tokio::runtime::Runtime::new()
+                    .expect("create runtime for capability execution");
                 runtime.block_on(async {
                     let mut results = Vec::with_capacity(requests.len());
                     for req in requests {
@@ -585,7 +624,9 @@ impl<'a> CapabilityExecutor<'a> {
             );
         }
 
-        let permission = self.permission_engine.evaluate(&canonical_request, &meta, context);
+        let permission = self
+            .permission_engine
+            .evaluate(&canonical_request, &meta, context);
         if permission.action == PermissionAction::Deny
             || (permission.action == PermissionAction::Ask && meta.has_side_effects)
         {
@@ -675,7 +716,9 @@ impl<'a> CapabilityExecutor<'a> {
 
         let exec = capability.execute(&canonical_request, context, cancellation);
         let exec_result = if meta.timeout_ms > 0 {
-            match tokio::time::timeout(std::time::Duration::from_millis(meta.timeout_ms), exec).await {
+            match tokio::time::timeout(std::time::Duration::from_millis(meta.timeout_ms), exec)
+                .await
+            {
                 Ok(outcome) => outcome,
                 Err(_) => Err(Error::Internal(format!(
                     "Capability '{}' timed out after {}ms",
@@ -712,7 +755,11 @@ impl<'a> CapabilityExecutor<'a> {
 
         capability.after_exec(&canonical_request, context, &capability_result);
         if let Some(pipeline) = hook_pipeline {
-            pipeline.after_tool(&canonical_request, &mut capability_result, &context.session_id);
+            pipeline.after_tool(
+                &canonical_request,
+                &mut capability_result,
+                &context.session_id,
+            );
         }
         capability_result
     }
@@ -764,14 +811,31 @@ pub fn create_default_capabilities(modules_dir: &Path) -> Vec<Arc<dyn AtomicCapa
         Arc::new(MultiEditCapability),
         Arc::new(GlobCapability),
         Arc::new(GrepCapability),
-        Arc::new(crate::assistant_executor::WriteModuleCapability::new(modules_dir.to_path_buf())),
+        Arc::new(crate::assistant_executor::WriteModuleCapability::new(
+            modules_dir.to_path_buf(),
+        )),
         Arc::new(crate::assistant_executor::RunTerminalCapability::new()),
         Arc::new(crate::assistant_executor::LintModuleCapability::new()),
-        Arc::new(UnsupportedManifestCapability::new("TodoWrite", "Workflow todo tracking is exposed in the catalog but not executable yet.")),
-        Arc::new(UnsupportedManifestCapability::new("NotebookRead", "Notebook support is not enabled in Natives Native Runtime yet.")),
-        Arc::new(UnsupportedManifestCapability::new("NotebookEdit", "Notebook support is not enabled in Natives Native Runtime yet.")),
-        Arc::new(UnsupportedManifestCapability::new("WebSearch", "Network search is disabled in first-stage Native Runtime replication.")),
-        Arc::new(UnsupportedManifestCapability::new("WebFetch", "Network fetch is disabled in first-stage Native Runtime replication.")),
+        Arc::new(UnsupportedManifestCapability::new(
+            "TodoWrite",
+            "Workflow todo tracking is exposed in the catalog but not executable yet.",
+        )),
+        Arc::new(UnsupportedManifestCapability::new(
+            "NotebookRead",
+            "Notebook support is not enabled in Natives Native Runtime yet.",
+        )),
+        Arc::new(UnsupportedManifestCapability::new(
+            "NotebookEdit",
+            "Notebook support is not enabled in Natives Native Runtime yet.",
+        )),
+        Arc::new(UnsupportedManifestCapability::new(
+            "WebSearch",
+            "Network search is disabled in first-stage Native Runtime replication.",
+        )),
+        Arc::new(UnsupportedManifestCapability::new(
+            "WebFetch",
+            "Network fetch is disabled in first-stage Native Runtime replication.",
+        )),
     ]
 }
 
@@ -1018,12 +1082,16 @@ impl AtomicCapability for GrepCapability {
             }
             let path = entry.path();
             if let Some(filter) = glob_filter {
-                let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+                let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
                 if !simple_glob_match(filter, file_name) {
                     continue;
                 }
             }
-            let Ok(content) = std::fs::read_to_string(path) else { continue };
+            let Ok(content) = std::fs::read_to_string(path) else {
+                continue;
+            };
             for (idx, line) in content.lines().enumerate() {
                 if regex.is_match(line) {
                     matches.push(serde_json::json!({
@@ -1162,10 +1230,46 @@ mod tests {
     }
 
     #[test]
+    fn read_only_context_denies_ask_capabilities() {
+        let engine = PermissionEngine::default();
+        let meta = CapabilityMeta::new("Write", "Write file", serde_json::json!({}), "filesystem")
+            .with_permission(CapabilityPermission::Ask);
+        let request = CapabilityRequest {
+            call_id: "1".into(),
+            name: "Write".into(),
+            arguments: serde_json::json!({}),
+            working_dir: None,
+        };
+        let mut context = CapabilityContext::for_session("s", None);
+        context.permission_mode = PermissionMode::Deny;
+
+        assert_eq!(
+            engine.evaluate(&request, &meta, &context).action,
+            PermissionAction::Deny
+        );
+    }
+
+    #[test]
+    fn approved_context_overrides_default_ask_rule() {
+        let engine = PermissionEngine::default();
+        let meta = CapabilityMeta::new("Bash", "Run command", serde_json::json!({}), "terminal")
+            .with_permission(CapabilityPermission::Ask);
+        let request = CapabilityRequest { call_id: "1".into(), name: "Bash".into(), arguments: serde_json::json!({}), working_dir: None };
+        let mut context = CapabilityContext::for_session("s", None);
+        context.permission_mode = PermissionMode::Allow;
+
+        assert_eq!(engine.evaluate(&request, &meta, &context).action, PermissionAction::Allow);
+    }
+
+    #[test]
     fn default_capabilities_include_claude_and_natives_tools() {
         let mut registry = CapabilityRegistry::new();
         registry.register_all(create_default_capabilities(Path::new("/tmp")));
-        let names: Vec<String> = registry.list_metadata().into_iter().map(|m| m.name).collect();
+        let names: Vec<String> = registry
+            .list_metadata()
+            .into_iter()
+            .map(|m| m.name)
+            .collect();
 
         assert!(names.contains(&"Read".into()));
         assert!(names.contains(&"Write".into()));
