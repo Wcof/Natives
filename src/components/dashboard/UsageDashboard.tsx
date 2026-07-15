@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useLocale, t } from '@/i18n';
 import type { UsageDashboardResponse, UsageCacheReadResult, UsageCacheMetadata, UsageMetrics, UsageViewRequest, DashboardState } from '@/types/usage';
-import { filterUsageRecords, aggregateUsageMetrics, uniqueSessionCount } from '@/lib/usage-dashboard';
+import { filterUsageRecords, aggregateUsageMetrics, uniqueSessionCount, buildSourceDimensions } from '@/lib/usage-dashboard';
 import {
   serializeUsageCsv, serializeUsageBadgeSvg, serializeUsageMarkdown,
   hasShareableMetrics, defaultExportFilename,
@@ -404,7 +404,7 @@ export function UsageDashboard() {
         customEnd={customEnd}
         onCustomStartChange={setCustomStart}
         onCustomEndChange={setCustomEnd}
-        sources={data?.dimensions.sources ?? []}
+        sources={buildSourceDimensions(data?.sources ?? [])}
         models={data?.dimensions.models ?? []}
         projects={data?.dimensions.projects ?? []}
         terminals={data?.dimensions.terminals ?? []}

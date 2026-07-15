@@ -25,8 +25,9 @@ struct ClaudeJsonLine {
     #[serde(default)]
     message: Option<ClaudeMessage>,
     #[serde(default)]
+    #[serde(alias = "sessionId")]
     session_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "requestId")]
     request_id: Option<String>,
     #[serde(default)]
     #[serde(rename = "type")]
@@ -43,6 +44,8 @@ struct ClaudeJsonLine {
 struct ClaudeMessage {
     #[serde(default)]
     id: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
     #[serde(default)]
     usage: Option<ClaudeUsage>,
 }
@@ -186,7 +189,7 @@ pub fn scan_claude_logs(
                                 .clone()
                                 .unwrap_or_else(|| format!("claude:unknown:{}", date));
 
-                            let project = relative.clone();
+                            let project = event.cwd.clone().or_else(|| relative.clone());
                             let project_label = project.clone();
 
                             all_events.push(ParsedEvent {
@@ -196,7 +199,7 @@ pub fn scan_claude_logs(
                                 date,
                                 source_id: "claude".into(),
                                 session_id: format!("claude:{}:{}", session_id, req_id),
-                                model: event.model.clone(),
+                                model: event.message.as_ref().and_then(|m| m.model.clone()).or_else(|| event.model.clone()),
                                 project,
                                 project_label,
                                 input_tokens: usage.input_tokens.unwrap_or(0),
@@ -263,7 +266,8 @@ fn build_claude_daily(events: &[ParsedEvent]) -> Vec<UsageDailyRecord> {
         entry.1 += event.output_tokens;
         entry.2 += event.cache_creation_tokens;
         entry.3 += event.cache_read_tokens;
-        entry.4 += event.input_tokens + event.output_tokens; // total = input + output
+        entry.4 += event.input_tokens + event.output_tokens
+            + event.cache_creation_tokens + event.cache_read_tokens;
     }
 
     let mut records = Vec::new();
@@ -438,6 +442,14 @@ pub fn claude_source_status(state: &UsageSourceState, breadcrumbs: &Vec<UsageBre
 mod tests {
     use super::*;
 
+    #[test]
+    fn claude_reads_model_from_message() {
+        let event: ClaudeJsonLine = serde_json::from_str(
+            r#"{"type":"assistant","sessionId":"s1","timestamp":"2026-07-15T10:00:00Z","message":{"id":"m1","model":"claude-sonnet-4","usage":{"input_tokens":100,"output_tokens":20,"cache_creation_input_tokens":10,"cache_read_input_tokens":50}}}"#,
+        ).unwrap();
+        assert_eq!(event.message.and_then(|m| m.model).as_deref(), Some("claude-sonnet-4"));
+    }
+
     fn make_event(id: &str, req_id: &str, ts_ms: i64, model: Option<&str>) -> ParsedEvent {
         ParsedEvent {
             dedup_key: format!("{}:{}", id, req_id),
@@ -471,6 +483,12 @@ mod tests {
     fn claude_event_uses_real_hour() {
         let event = make_event("msg1", "req1", 3600000, Some("sonnet")); // 1 hour in ms
         assert_eq!(event.hour_start_ms, 3600000);
+    }
+
+    #[test]
+    fn claude_total_includes_cache_tokens() {
+        let daily = build_claude_daily(&[make_event("msg1", "req1", 1000, Some("sonnet"))]);
+        assert_eq!(daily[0].total_tokens, Some(180));
     }
 
     #[test]

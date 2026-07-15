@@ -8,10 +8,8 @@ import {
   aggregateUsageMetrics,
   buildDailyTrend,
   buildHourlyHeatmap,
-  buildSourceDistribution,
-  buildModelDistribution,
-  calculateMetricCoverage,
   uniqueSessionCount,
+  buildSourceDimensions,
 } from './usage-dashboard';
 
 function mockResponse(overrides?: Partial<UsageDashboardResponse>): UsageDashboardResponse {
@@ -68,6 +66,21 @@ describe('filterUsageRecords', () => {
     };
     assert.equal(record.inputTokens, null);
     assert.equal(record.outputTokens, null);
+  });
+});
+
+describe('buildSourceDimensions', () => {
+  it('lists every adapted tool even when only one has usage rows', () => {
+    const sources = [
+      { id: 'claude', label: 'Claude', kind: 'external', state: 'ok', breadcrumbs: [], capabilities: { totalTokens: true, tokenBreakdown: true, cache: true, cost: false, hourly: true, project: true, messages: true, sessions: true, duration: true }, durationMethod: 'event_gap_estimate' },
+      { id: 'codex', label: 'Codex', kind: 'external', state: 'ok', breadcrumbs: [], capabilities: { totalTokens: true, tokenBreakdown: true, cache: true, cost: false, hourly: true, project: true, messages: true, sessions: true, duration: true }, durationMethod: 'event_gap_estimate' },
+      { id: 'atomcode', label: 'Atomcode', kind: 'external', state: 'ok', breadcrumbs: [], capabilities: { totalTokens: true, tokenBreakdown: true, cache: true, cost: false, hourly: true, project: true, messages: true, sessions: true, duration: true }, durationMethod: 'session_bounds' },
+    ] satisfies UsageDashboardResponse['sources'];
+    assert.deepEqual(buildSourceDimensions(sources), [
+      { id: 'atomcode', label: 'Atomcode' },
+      { id: 'claude', label: 'Claude' },
+      { id: 'codex', label: 'Codex' },
+    ]);
   });
 });
 

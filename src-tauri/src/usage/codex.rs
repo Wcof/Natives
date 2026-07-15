@@ -45,15 +45,13 @@ struct CodexJsonLine {
 
 #[derive(Debug, Deserialize)]
 struct CodexTokenUsage {
-    #[serde(default)]
+    #[serde(default, alias = "input_tokens")]
     input: Option<i64>,
-    #[serde(default)]
+    #[serde(default, alias = "output_tokens")]
     output: Option<i64>,
-    #[serde(default)]
-    #[serde(rename = "reasoning")]
+    #[serde(default, rename = "reasoning", alias = "reasoning_output_tokens")]
     reasoning_tokens: Option<i64>,
-    #[serde(default)]
-    #[serde(rename = "input_cache_hit")]
+    #[serde(default, rename = "input_cache_hit", alias = "cached_input_tokens")]
     input_cache_hit: Option<i64>,
 }
 
@@ -92,6 +90,71 @@ pub struct CodexScanResult {
     pub state: UsageSourceState,
     pub breadcrumbs: Vec<UsageBreadcrumb>,
     pub warnings: Vec<UsageWarning>,
+}
+
+#[derive(Default)]
+struct CodexFileContext {
+    session_id: Option<String>,
+    model: Option<String>,
+    project: Option<String>,
+}
+
+fn collect_session_files(sessions_dir: &std::path::Path, archived_dir: &std::path::Path) -> HashMap<String, PathBuf> {
+    let mut files = HashMap::new();
+    for root in [archived_dir, sessions_dir] {
+        if !root.exists() {
+            continue;
+        }
+        for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
+                if let Some(id) = path.file_stem().and_then(|s| s.to_str()) {
+                    files.insert(id.to_string(), path.to_path_buf());
+                }
+            }
+        }
+    }
+    files
+}
+
+fn normalize_codex_line(line: &str, context: &mut CodexFileContext) -> Option<CodexJsonLine> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let line_type = value.get("type").and_then(|v| v.as_str());
+    let payload = value.get("payload");
+
+    match line_type {
+        Some("session_meta") => {
+            context.session_id = payload?.get("id").and_then(|v| v.as_str()).map(String::from);
+            context.project = payload?.get("cwd").and_then(|v| v.as_str()).map(String::from);
+            return None;
+        }
+        Some("turn_context") => {
+            context.model = payload?.get("model").and_then(|v| v.as_str()).map(String::from);
+            context.project = payload?.get("cwd").and_then(|v| v.as_str()).map(String::from).or_else(|| context.project.clone());
+            return None;
+        }
+        Some("event_msg") if payload?.get("type").and_then(|v| v.as_str()) == Some("token_count") => {
+            let info = payload?.get("info")?;
+            return Some(CodexJsonLine {
+                event_id: None,
+                session_id: context.session_id.clone(),
+                event_type: Some("token_count".into()),
+                timestamp: value.get("timestamp").and_then(|v| v.as_str()).map(String::from),
+                last_token_usage: info.get("last_token_usage").cloned().and_then(|v| serde_json::from_value(v).ok()),
+                total_token_usage: info.get("total_token_usage").cloned().and_then(|v| serde_json::from_value(v).ok()),
+                turn_context: Some(CodexTurnContext {
+                    model: context.model.clone(),
+                    cwd: context.project.clone(),
+                    project: context.project.clone(),
+                }),
+                replay_for: None,
+                fork_from: None,
+            });
+        }
+        _ => {}
+    }
+
+    serde_json::from_value(value).ok()
 }
 
 /// Scan Codex session directories for JSONL event files.
@@ -135,40 +198,7 @@ pub fn scan_codex_logs(
         breadcrumb_main
     };
 
-    // Collect active session files first
-    let mut session_files: HashMap<String, PathBuf> = HashMap::new();
-
-    if sessions_dir.exists() {
-        for entry in WalkDir::new(&sessions_dir)
-            .max_depth(3)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
-                if let Some(session_id) = path.file_stem().and_then(|s| s.to_str()) {
-                    // Active overrides archived
-                    session_files.insert(session_id.to_string(), path.to_path_buf());
-                }
-            }
-        }
-    }
-
-    // Collect archived — only if not already in active
-    if archived_dir.exists() {
-        for entry in WalkDir::new(&archived_dir)
-            .max_depth(3)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
-                if let Some(session_id) = path.file_stem().and_then(|s| s.to_str()) {
-                    session_files.entry(session_id.to_string()).or_insert(path.to_path_buf());
-                }
-            }
-        }
-    }
+    let session_files = collect_session_files(&sessions_dir, &archived_dir);
 
     if session_files.is_empty() {
         return CodexScanResult {
@@ -189,6 +219,7 @@ pub fn scan_codex_logs(
 
     for (_sid, path) in &session_files {
         if let Ok(content) = fs::read_to_string(path) {
+            let mut context = CodexFileContext::default();
             let mut lines: Vec<(usize, String)> = content
                 .lines()
                 .enumerate()
@@ -200,7 +231,7 @@ pub fn scan_codex_logs(
             // Parse events in order for cumulative tracking
             let mut session_events = Vec::new();
             for (_, line) in &lines {
-                if let Ok(event) = serde_json::from_str::<CodexJsonLine>(line) {
+                if let Some(event) = normalize_codex_line(line, &mut context) {
                     // Skip replay/fork events
                     let is_replay = event.replay_for.is_some() || event.fork_from.is_some();
 
@@ -394,7 +425,8 @@ fn build_codex_activity(events: &[ParsedCodexEvent]) -> Vec<UsageActivityBucket>
             event.model.clone(),
             event.project.clone(),
         );
-        let total = event.input_tokens + event.output_tokens + event.cache_read_tokens;
+        // Codex input_tokens already includes cached_input_tokens.
+        let total = event.input_tokens + event.output_tokens;
         groups.entry(key).or_default().push(total);
     }
 
@@ -523,6 +555,32 @@ pub fn codex_source_status(state: &UsageSourceState, breadcrumbs: &Vec<UsageBrea
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_finds_current_four_level_session_layout() {
+        let root = std::env::temp_dir().join(format!("natives-codex-{}", std::process::id()));
+        let sessions = root.join("sessions/2026/07/15");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("rollout.jsonl"), "{}\n").unwrap();
+        let files = collect_session_files(&root.join("sessions"), &root.join("archived_sessions"));
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn codex_normalizes_current_rollout_token_event() {
+        let mut context = CodexFileContext::default();
+        let meta = r#"{"timestamp":"2026-07-15T10:00:00Z","type":"session_meta","payload":{"id":"session-1","cwd":"/work/natives"}}"#;
+        let turn = r#"{"timestamp":"2026-07-15T10:00:01Z","type":"turn_context","payload":{"model":"gpt-5.6","cwd":"/work/natives"}}"#;
+        let tokens = r#"{"timestamp":"2026-07-15T10:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20,"reasoning_output_tokens":5,"total_tokens":120},"total_token_usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20,"reasoning_output_tokens":5,"total_tokens":120}}}}"#;
+
+        assert!(normalize_codex_line(meta, &mut context).is_none());
+        assert!(normalize_codex_line(turn, &mut context).is_none());
+        let event = normalize_codex_line(tokens, &mut context).expect("token event");
+        assert_eq!(event.session_id.as_deref(), Some("session-1"));
+        assert_eq!(event.turn_context.as_ref().and_then(|c| c.model.as_deref()), Some("gpt-5.6"));
+        assert_eq!(compute_codex_delta(&event, None), (100, 20, 40));
+    }
 
     #[test]
     fn codex_last_token_usage_is_delta() {

@@ -796,6 +796,8 @@ export const en = {
     lastRefresh: 'Last Refreshed',
     rtkSavings: 'RTK Savings',
     tokens: 'tokens',
+    inputOutput: 'Input/Output',
+    cache: 'Cache',
     minutes: 'min',
     commands: 'commands',
     cost: 'Cost',

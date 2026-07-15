@@ -11,7 +11,8 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from 'recharts';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { BarChart3, Clock, PieChart, Calendar } from 'lucide-react';
+import { BarChart3, Clock, PieChart } from 'lucide-react';
+import { fmtCount } from '@/lib/format';
 
 interface Props {
   daily: UsageDailyRecord[];
@@ -24,6 +25,9 @@ interface Props {
 
 export function UsageCharts({ daily, activity, sessions, sources, metrics, lastRefresh }: Props) {
   const locale = useLocale();
+  const numberLocale = locale.startsWith('zh') ? 'zh-CN' : 'en-US';
+  const compact = (value: number) => fmtCount(value, locale);
+  const exact = (value: unknown) => Number(value ?? 0).toLocaleString(numberLocale);
 
   const trend = useMemo(() => buildDailyTrend(daily, activity), [daily, activity]);
   const heatmap = useMemo(() => buildHourlyHeatmap(activity), [activity]);
@@ -106,8 +110,8 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
                 <BarChart data={trend}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                   <XAxis dataKey="date" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={(v: string) => v.slice(5)} />
-                  <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} />
-                  <Tooltip contentStyle={{ background: 'var(--bg)', border: '0.0625rem solid var(--border)', borderRadius: 8, fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={compact} />
+                  <Tooltip contentStyle={{ background: 'var(--bg)', border: '0.0625rem solid var(--border)', borderRadius: 8, fontSize: 11 }} formatter={exact} />
                   <Bar dataKey="inputTokens" stackId="a" fill="var(--chart-volume-2)" name={t(locale, 'usage.inputTokens')} />
                   <Bar dataKey="cacheReadTokens" stackId="a" fill="var(--chart-volume-5)" name={t(locale, 'usage.cacheRead')} />
                   <Bar dataKey="outputTokens" stackId="a" fill="var(--chart-volume-8)" name={t(locale, 'usage.outputTokens')} />
@@ -191,7 +195,7 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
                         const level = getChartVolumeLevel(val, grid.maxVal);
                         const colorVar = `var(--chart-volume-${level})`;
                         const tooltip = `${DAY_LABELS[rIdx]} ${cIdx.toString().padStart(2, '0')}:00 — ${
-                          hasVal ? (heatmapMetric === 'token' ? `${val.toLocaleString()} ${t(locale, 'usage.tokens')}` : `${Math.round(val / 60)} ${t(locale, 'usage.minutes')}`) : '0'
+                          hasVal ? (heatmapMetric === 'token' ? `${val.toLocaleString(numberLocale)} ${t(locale, 'usage.tokens')}` : `${Math.round(val / 60)} ${t(locale, 'usage.minutes')}`) : '0'
                         }`;
 
                         return (
@@ -261,9 +265,9 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
             <ResponsiveContainer width="100%" height={180}>
               <BarChart data={sourceDist} layout="vertical">
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} />
+                <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={compact} />
                 <YAxis type="category" dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} width={60} />
-                <Tooltip contentStyle={{ background: 'var(--bg)', border: '0.0625rem solid var(--border)', borderRadius: 8 }} />
+                <Tooltip contentStyle={{ background: 'var(--bg)', border: '0.0625rem solid var(--border)', borderRadius: 8 }} formatter={exact} />
                 <Bar dataKey="totalTokens" radius={[0, 2, 2, 0]} name={t(locale, 'usage.totalTokens')}>
                   {sourceDist.map((entry, index) => {
                     const maxVal = Math.max(...sourceDist.map(d => d.totalTokens ?? 0));
@@ -285,9 +289,9 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
             <ResponsiveContainer width="100%" height={180}>
               <BarChart data={modelDist.map((m) => ({ ...m, label: m.modelId === null ? t(locale, 'usage.unrecordedModel') : m.modelId }))} layout="vertical">
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} />
+                <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={compact} />
                 <YAxis type="category" dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} width={80} />
-                <Tooltip contentStyle={{ background: 'var(--bg)', border: '0.0625rem solid var(--border)', borderRadius: 8 }} />
+                <Tooltip contentStyle={{ background: 'var(--bg)', border: '0.0625rem solid var(--border)', borderRadius: 8 }} formatter={exact} />
                 <Bar dataKey="totalTokens" radius={[0, 2, 2, 0]} name={t(locale, 'usage.totalTokens')}>
                   {modelDist.map((entry, index) => {
                     const maxVal = Math.max(...modelDist.map(d => d.totalTokens ?? 0));

@@ -162,7 +162,7 @@ fn daily(turns: &[Turn]) -> Vec<UsageDailyRecord> {
                 output_tokens: Some(output),
                 cache_creation_tokens: None,
                 cache_read_tokens: Some(cache),
-                total_tokens: Some(input + output),
+                total_tokens: Some(input + output + cache),
                 cost_usd: None,
                 cost_quality: UsageQuality::Unavailable,
             },
@@ -176,7 +176,7 @@ fn activity(turns: &[Turn]) -> Vec<UsageActivityBucket> {
         let e = grouped
             .entry((t.hour_start_ms, t.model.clone(), t.project.clone()))
             .or_insert((0, 0, 0));
-        e.0 += t.input_tokens + t.output_tokens;
+        e.0 += t.input_tokens + t.output_tokens + t.cached_tokens;
         e.1 += 1;
         e.2 += t.active_seconds;
     }
@@ -266,5 +266,7 @@ mod tests {
         assert_eq!(turn.model.as_deref(), Some("gpt-5"));
         assert_eq!(turn.session_id, "session-1");
         assert_eq!(turn.project, "project-a");
+        let records = super::daily(&[turn]);
+        assert_eq!(records[0].total_tokens, Some(160));
     }
 }

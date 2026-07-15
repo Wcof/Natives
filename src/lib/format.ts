@@ -34,10 +34,11 @@ export function fmtDateTime(ms: number): string {
 }
 
 /** 数字格式化（用于统计卡片） */
-export function fmtCount(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
+export function fmtCount(n: number, locale: string = 'en'): string {
+  return new Intl.NumberFormat(locale.startsWith('zh') ? 'zh-CN' : 'en-US', {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(n);
 }
 
 /** 时长格式化（秒 → 可读文本） */

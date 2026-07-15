@@ -15,6 +15,12 @@ import type {
   UsageSourceStatus,
 } from '@/types/usage';
 
+export function buildSourceDimensions(sources: UsageSourceStatus[]) {
+  return sources
+    .map(({ id, label }) => ({ id, label }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
 // ── Filtering ──
 
 export function filterUsageRecords(

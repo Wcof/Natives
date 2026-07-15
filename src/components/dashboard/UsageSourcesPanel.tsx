@@ -82,9 +82,9 @@ export function UsageSourcesPanel({ sources, warnings, lastRefresh, rtk }: Props
               </div>
             )}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-              <CapabilityBadge label="Tokens" available={s.capabilities.totalTokens} />
-              <CapabilityBadge label="Input/Output" available={s.capabilities.tokenBreakdown} />
-              <CapabilityBadge label="Cache" available={s.capabilities.cache} />
+              <CapabilityBadge label={t(locale, 'usage.tokens')} available={s.capabilities.totalTokens} />
+              <CapabilityBadge label={t(locale, 'usage.inputOutput')} available={s.capabilities.tokenBreakdown} />
+              <CapabilityBadge label={t(locale, 'usage.cache')} available={s.capabilities.cache} />
               <CapabilityBadge label={t(locale, 'usage.cost')} available={s.capabilities.cost} />
               <CapabilityBadge label={t(locale, 'usage.hourly')} available={s.capabilities.hourly} />
               <CapabilityBadge label={t(locale, 'usage.project')} available={s.capabilities.project} />

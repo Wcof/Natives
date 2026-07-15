@@ -18,12 +18,14 @@ interface CardProps {
   icon: React.ReactNode;
   label: string;
   value: string;
+  exactValue?: string;
   delta: React.ReactNode;
   subLabel?: string;
   subValue?: string;
+  exactSubValue?: string;
 }
 
-function MetricCard({ icon, label, value, delta, subLabel, subValue }: CardProps) {
+function MetricCard({ icon, label, value, exactValue, delta, subLabel, subValue, exactSubValue }: CardProps) {
   return (
     <div style={{
       padding: `${SPACING.sm}px ${SPACING.md}px`,
@@ -39,13 +41,13 @@ function MetricCard({ icon, label, value, delta, subLabel, subValue }: CardProps
         <span className="truncate">{label}</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', margin: '4px 0' }}>
-        <span style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>{value}</span>
+        <span title={exactValue} style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text)', fontFamily: 'var(--font-mono)' }}>{value}</span>
         {delta}
       </div>
       {subLabel && (
         <div style={{ fontSize: '11px', color: 'var(--text-faint)', display: 'flex', justifyContent: 'space-between' }}>
           <span>{subLabel}</span>
-          <span style={{ fontFamily: 'var(--font-mono)' }}>{subValue}</span>
+          <span title={exactSubValue} style={{ fontFamily: 'var(--font-mono)' }}>{subValue}</span>
         </div>
       )}
     </div>
@@ -110,11 +112,12 @@ export function UsageMetricGrid({ metrics, prevMetrics, totalSessions, prevTotal
   const costStr = metrics?.estimatedCost != null ? `$${metrics.estimatedCost.toFixed(4)}` : '—';
   
   // Tokens card values
-  const tokensStr = metrics?.totalTokens != null ? fmtCount(metrics.totalTokens) : '—';
-  const inputStr = metrics?.totalInputTokens != null ? fmtCount(metrics.totalInputTokens) : '—';
-  const outputStr = metrics?.totalOutputTokens != null ? fmtCount(metrics.totalOutputTokens) : '—';
-  const cacheReadStr = metrics?.totalCacheReadTokens != null ? fmtCount(metrics.totalCacheReadTokens) : '—';
-  const cacheCreationStr = metrics?.totalCacheCreationTokens != null ? fmtCount(metrics.totalCacheCreationTokens) : '—';
+  const tokensStr = metrics?.totalTokens != null ? fmtCount(metrics.totalTokens, locale) : '—';
+  const inputStr = metrics?.totalInputTokens != null ? fmtCount(metrics.totalInputTokens, locale) : '—';
+  const outputStr = metrics?.totalOutputTokens != null ? fmtCount(metrics.totalOutputTokens, locale) : '—';
+  const cacheReadStr = metrics?.totalCacheReadTokens != null ? fmtCount(metrics.totalCacheReadTokens, locale) : '—';
+  const cacheCreationStr = metrics?.totalCacheCreationTokens != null ? fmtCount(metrics.totalCacheCreationTokens, locale) : '—';
+  const exact = (value: number | null | undefined) => value == null ? undefined : value.toLocaleString(locale.startsWith('zh') ? 'zh-CN' : 'en-US');
 
   // Duration card values
   const durationStr = metrics?.estimatedActiveSeconds != null ? fmtDuration(metrics.estimatedActiveSeconds) : '—';
@@ -142,27 +145,32 @@ export function UsageMetricGrid({ metrics, prevMetrics, totalSessions, prevTotal
           icon={<Cpu size={12} />}
           label={t(locale, 'usage.totalTokens')}
           value={tokensStr}
+          exactValue={exact(metrics?.totalTokens)}
           delta={renderDelta(metrics?.totalTokens ?? null, prevMetrics?.totalTokens ?? null, true, t(locale, 'usage.newData'))}
         />
         <MetricCard
           icon={<Download size={12} />}
           label={t(locale, 'usage.inputTokens')}
           value={inputStr}
+          exactValue={exact(metrics?.totalInputTokens)}
           delta={renderDelta(metrics?.totalInputTokens ?? null, prevMetrics?.totalInputTokens ?? null, true, t(locale, 'usage.newData'))}
         />
         <MetricCard
           icon={<Upload size={12} />}
           label={t(locale, 'usage.outputTokens')}
           value={outputStr}
+          exactValue={exact(metrics?.totalOutputTokens)}
           delta={renderDelta(metrics?.totalOutputTokens ?? null, prevMetrics?.totalOutputTokens ?? null, true, t(locale, 'usage.newData'))}
         />
         <MetricCard
           icon={<Database size={12} />}
           label={t(locale, 'usage.cacheRead')}
           value={cacheReadStr}
+          exactValue={exact(metrics?.totalCacheReadTokens)}
           delta={renderDelta(metrics?.totalCacheReadTokens ?? null, prevMetrics?.totalCacheReadTokens ?? null, true, t(locale, 'usage.newData'))}
           subLabel={t(locale, 'usage.cacheCreation')}
           subValue={cacheCreationStr}
+          exactSubValue={exact(metrics?.totalCacheCreationTokens)}
         />
       </div>
 
@@ -183,19 +191,22 @@ export function UsageMetricGrid({ metrics, prevMetrics, totalSessions, prevTotal
         <MetricCard
           icon={<MessageSquare size={12} />}
           label={t(locale, 'usage.sessions')}
-          value={String(totalSessions)}
+          value={fmtCount(totalSessions, locale)}
+          exactValue={exact(totalSessions)}
           delta={renderDelta(totalSessions, prevTotalSessions, false, t(locale, 'usage.newData'))}
         />
         <MetricCard
           icon={<MessageSquare size={12} />}
           label={t(locale, 'usage.totalMessages')}
-          value={totalMsg != null ? fmtCount(totalMsg) : '—'}
+          value={totalMsg != null ? fmtCount(totalMsg, locale) : '—'}
+          exactValue={exact(totalMsg)}
           delta={renderDelta(totalMsg, prevTotalMsg, false, t(locale, 'usage.newData'))}
         />
         <MetricCard
           icon={<User size={12} />}
           label={t(locale, 'usage.userMessages')}
-          value={metrics?.totalUserMessages != null ? fmtCount(metrics.totalUserMessages) : '—'}
+          value={metrics?.totalUserMessages != null ? fmtCount(metrics.totalUserMessages, locale) : '—'}
+          exactValue={exact(metrics?.totalUserMessages)}
           delta={renderDelta(metrics?.totalUserMessages ?? null, prevMetrics?.totalUserMessages ?? null, false, t(locale, 'usage.newData'))}
         />
       </div>
