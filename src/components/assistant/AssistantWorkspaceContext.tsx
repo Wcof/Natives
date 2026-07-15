@@ -10,10 +10,7 @@ export interface AssistantNavigationSnapshot {
   activeProjectPath: string | null;
   loading: boolean;
   creationState: AssistantProjectCreationState;
-  /** New field: true while a conversation is being created */
   isCreatingConversation: boolean;
-  /** @deprecated Use isCreatingConversation instead. Kept for AssistantSidebarSection compat. */
-  creatingMode: 'chat' | 'agent' | null;
 }
 
 export interface AssistantRuntimeSnapshot {
@@ -36,11 +33,8 @@ export interface AssistantWorkspaceActions {
   selectConversation(id: string): void;
   selectProject(path: string | null): void;
   addProjectFolder(): void;
-  /** @deprecated Use addProjectFolder instead. Kept for AssistantSidebarSection compat. */
-  pickProject(): void;
   createConversation(): void;
-  /** @deprecated createConversation no longer accepts a mode. Kept for AssistantSidebarSection compat. */
-  createConversation(mode: 'chat' | 'agent'): void;
+  createConversationInProject(path: string): void;
   renameConversation(id: string, title: string): void;
   archiveConversation(id: string): void;
   deleteConversation(id: string): void;
@@ -60,7 +54,6 @@ interface AssistantWorkspaceContextValue {
 const emptyNavigation: AssistantNavigationSnapshot = {
   groups: [], selectedId: null, activeProjectPath: null, loading: true,
   creationState: 'engine_unavailable', isCreatingConversation: false,
-  creatingMode: null,
 };
 
 const emptyRuntime: AssistantRuntimeSnapshot = {

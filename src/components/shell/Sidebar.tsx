@@ -26,6 +26,9 @@ import {
   Zap,
   ArrowLeft,
   ChevronLeft,
+  ChevronDown,
+  ChevronRight,
+  FolderPlus,
   Palette,
   Plug,
   SlidersHorizontal,
@@ -35,6 +38,7 @@ import * as LucideIcons from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import { BUILTIN_TOOLS, seedAllBuiltinTools } from '@/lib/builtin-tools';
 import AssistantSidebarSection from '@/components/assistant/AssistantSidebarSection';
+import { useAssistantWorkspace } from '@/components/assistant/AssistantWorkspaceContext';
 import {
   isSettingsView,
   getSettingsSection,
@@ -194,9 +198,11 @@ export default function Sidebar({
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
   const [favoritesExpanded, setFavoritesExpanded] = useState(false);
+  const [assistantExpanded, setAssistantExpanded] = useState(true);
   const [activeNavigationId, setActiveNavigationId] = useState<string | null>(
     () => getNavigationId(activeModuleId),
   );
+  const { actions: assistantActions } = useAssistantWorkspace();
 
   // Builtin tool enabled state (from DB)
   const [enabledTools, setEnabledTools] = useState<Array<{ id: string; driver: string }>>([]);
@@ -688,53 +694,36 @@ export default function Sidebar({
               })}
             </div>
 
-            {/* Assistant section — clickable header with inline [+] */}
+            {/* Assistant is a top-level project launcher. */}
             <div className="mb-1 px-3">
               <div className="flex items-center gap-1">
                 <button
                   type="button"
                   onClick={() => selectNavigation('assistant', '__assistant__')}
-                  className="drag-none flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors duration-150"
+                  className="drag-none flex min-w-0 flex-1 items-center gap-2 rounded-lg px-3 py-1.5 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-colors duration-150"
                 >
-                  <Bot size={14} className="shrink-0 text-[var(--text-disabled)]" />
+                  <Bot size={15} className="shrink-0 text-[var(--text-tertiary)]" />
                   <span className="truncate">{t(locale, 'nav.assistant')}</span>
                 </button>
                 <button
-                  onClick={async () => {
-                    const api = window.nativesAPI;
-                    if (!api?.assistant?.createSession) return;
-                    try {
-                      const title = `Session ${new Date().toLocaleTimeString(locale === 'zh' ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`;
-                      const presets = (await api.provider.list()) as any[];
-                      const firstPreset = presets?.[0];
-                      const firstKey = firstPreset?.keys?.[0];
-                      if (!firstPreset || !firstKey) {
-                        alert(locale === 'zh' ? '请先配置 AI 服务商和 API Key' : 'Please configure AI Provider and API Key first');
-                        selectNavigation('settings:providers', 'settings:providers');
-                        return;
-                      }
-                      const defaultModel = firstPreset.defaultModel || 'gpt-4o';
-                      const sess = (await api.assistant.createSession({
-                        projectId: null,
-                        title,
-                        modelId: defaultModel,
-                        providerId: firstPreset.id,
-                      })) as any;
-                      selectNavigation('assistant', '__assistant__');
-                      setTimeout(() => {
-                        window.dispatchEvent(new CustomEvent('assistant-session-created', { detail: sess }));
-                      }, 50);
-                    } catch (e: any) {
-                      alert(e.message || e);
-                    }
-                  }}
+                  type="button"
+                  onClick={() => setAssistantExpanded(value => !value)}
                   className="rounded px-1.5 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all"
-                  title={locale === 'zh' ? '新建对话' : 'New Chat'}
+                  title={assistantExpanded ? t(locale, 'common.collapse') : t(locale, 'common.expand')}
                 >
-                  <Plus size={13} />
+                  {assistantExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { selectNavigation('assistant', '__assistant__'); assistantActions?.addProjectFolder(); }}
+                  className="rounded px-1.5 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all"
+                  title={t(locale, 'assistant.chooseProjectDirectory')}
+                  aria-label={t(locale, 'assistant.chooseProjectDirectory')}
+                >
+                  <FolderPlus size={14} />
                 </button>
               </div>
-              {activeNavigationId === '__assistant__' && (
+              {assistantExpanded && (
                 <AssistantSidebarSection locale={locale} onNavigateAssistant={() => selectNavigation('__assistant__', '__assistant__')} />
               )}
             </div>
