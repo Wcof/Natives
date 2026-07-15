@@ -33,10 +33,9 @@ import type { AssistantRunEvent } from '@/lib/assistant-types';
 import { useAssistantWorkspace, type AssistantWorkspaceActions } from './AssistantWorkspaceContext';
 import ModelSelectorDropdown from './ModelSelectorDropdown';
 import RunInspector from './RunInspector';
-import AssistantSidebarSection from './AssistantSidebarSection';
 import { useAssistantStream } from './hooks/useAssistantStream';
 import type { ProjectSummary, ProviderSummary } from '@/lib/tauri-adapter';
-import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react';
+import { PanelRightClose, PanelRightOpen } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────
 
@@ -219,7 +218,6 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
   const [registeredProjects, setRegisteredProjects] = useState<ProjectSummary[]>([]);
-  const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
 
   // ── Run state (unified via AssistantStreamState) ──
@@ -971,20 +969,6 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   // ── Render: main layout ──
   return (
     <div className="flex h-full w-full" style={{ fontFamily: 'inherit' }}>
-      {leftPanelOpen ? (
-        <aside className="flex w-64 shrink-0 flex-col border-r border-[var(--border-subtle)] bg-[var(--surface)]">
-          <div className="flex h-11 items-center justify-between border-b border-[var(--border-subtle)] px-3">
-            <span className="text-sm font-medium text-[var(--text-secondary)]">{t(locale, 'nav.assistant')}</span>
-            <button type="button" onClick={() => setLeftPanelOpen(false)} className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]" aria-label={t(locale, 'common.collapse')} title={t(locale, 'common.collapse')}><PanelLeftClose size={15} /></button>
-          </div>
-          <AssistantSidebarSection locale={locale} onNavigateAssistant={() => undefined} />
-        </aside>
-      ) : (
-        <div className="w-9 shrink-0 border-r border-[var(--border-subtle)] bg-[var(--surface)] pt-2">
-          <button type="button" onClick={() => setLeftPanelOpen(true)} className="m-1 rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]" aria-label={t(locale, 'common.expand')} title={t(locale, 'common.expand')}><PanelLeftOpen size={15} /></button>
-        </div>
-      )}
-
       {/* ── Center Panel: Conversation Timeline ── */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}

@@ -137,7 +137,7 @@ export default function AssistantSidebarSection({ locale, onNavigateAssistant }:
   }, [filteredGroups, collapsed]);
 
   return (
-    <div className="mb-3 px-3">
+    <div className="mb-3">
       {/* ── Project and conversation tree ── */}
       <div className="max-h-72 overflow-y-auto" onKeyDown={handleKeyDown} role="listbox" aria-label={t(locale, 'nav.assistant')} aria-activedescendant={focusedIndex !== null ? `conv-${flatItems[focusedIndex]?.id}` : undefined}>
         {/* ── Search Input ── */}
