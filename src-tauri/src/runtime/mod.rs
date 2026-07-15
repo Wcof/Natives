@@ -46,6 +46,7 @@ pub enum RuntimeEvent {
         tool_name: String,
         tool_call_id: String,
         reason: String,
+        args: serde_json::Value,
     },
     ToolCompleted {
         tool_call_id: String,

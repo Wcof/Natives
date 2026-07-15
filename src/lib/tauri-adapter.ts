@@ -363,6 +363,7 @@ export interface NativesAPI {
   /** Dialog (file/directory picker) */
   dialog: {
     pickDirectory(): Promise<string | null>;
+    pickFiles(): Promise<string[]>;
     saveFile(): Promise<string | null>;
   };
   /** Runtime 抽象层（Slice B） */
@@ -782,6 +783,16 @@ const nativesAPI: NativesAPI = {
         return selected as string | null;
       } catch {
         return null;
+      }
+    },
+    pickFiles: async () => {
+      try {
+        const { open } = await import('@tauri-apps/plugin-dialog');
+        const selected = await open({ directory: false, multiple: true });
+        if (!selected) return [];
+        return Array.isArray(selected) ? selected : [selected];
+      } catch {
+        return [];
       }
     },
     saveFile: async () => {

@@ -8,6 +8,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { t, type Locale } from '@/i18n';
 import ConversationTimeline from './ConversationTimeline';
+import type { ContentBlock } from './blocks';
 import MessageInput from './MessageInput';
 import { useToast } from '@/components/ui/Toast';
 import { classifyError } from '@/lib/error-classifier';
@@ -31,10 +32,11 @@ import {
 } from '@/lib/assistant-stream-state';
 import type { AssistantRunEvent } from '@/lib/assistant-types';
 import { useAssistantWorkspace, type AssistantWorkspaceActions } from './AssistantWorkspaceContext';
-import ModelSelectorDropdown from './ModelSelectorDropdown';
 import RunInspector from './RunInspector';
+import PermissionRequestCard from './PermissionRequestCard';
 import { useAssistantStream } from './hooks/useAssistantStream';
 import type { ProjectSummary, ProviderSummary } from '@/lib/tauri-adapter';
+import { normalizePermissionProfile, type AssistantDraft, type AssistantPermissionProfile } from '@/lib/assistant-composer';
 import { PanelRightClose, PanelRightOpen } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────
@@ -46,6 +48,7 @@ interface Conversation {
   title: string;
   provider_id: string;
   model_id: string;
+  permission_profile_id?: AssistantPermissionProfile;
   created_at: string;
   updated_at: string;
   archived_at?: string | null;
@@ -134,55 +137,53 @@ function v2call<T = unknown>(method: string, params?: unknown): Promise<T> {
   return window.nativesAPI.assistantV2.request(method, params) as Promise<T>;
 }
 
-function mapBlockToContentBlock(block: MessageBlock): import('./blocks').ContentBlock {
+function mapBlockToContentBlock(block: MessageBlock): ContentBlock {
   const content = (block.content ?? {}) as Record<string, unknown>;
-  const CB = undefined as unknown as import('./blocks').ContentBlock;
 
   switch (block.type) {
     case 'text':
-      return { type: 'text', text: String(content.text ?? content.content ?? '') } as typeof CB;
+      return { type: 'text', text: String(content.text ?? content.content ?? '') };
     case 'reasoning':
-      return { type: 'reasoning', text: String(content.text ?? content.reasoning ?? content.content ?? ''), signature: content.signature ? String(content.signature) : undefined } as typeof CB;
+      return { type: 'reasoning', reasoning: String(content.text ?? content.reasoning ?? content.content ?? ''), signature: content.signature ? String(content.signature) : undefined };
     case 'image':
-      return { type: 'image', mimeType: String(content.mime_type ?? 'image/png'), data: String(content.data ?? ''), altText: String(content.alt_text ?? '') } as typeof CB;
+      return { type: 'image', mimeType: String(content.mime_type ?? 'image/png'), imageUrl: String(content.data ?? ''), altText: String(content.alt_text ?? '') };
     case 'file_reference':
-      return { type: 'file_reference', path: String(content.path ?? content.file_path ?? ''), mimeType: String(content.mime_type ?? 'application/octet-stream'), size: Number(content.size ?? content.file_size ?? 0), sha256: content.sha256 ? String(content.sha256) : undefined } as typeof CB;
+      return { type: 'file_reference', filePath: String(content.path ?? content.file_path ?? ''), mimeType: String(content.mime_type ?? 'application/octet-stream'), fileSize: Number(content.size ?? content.file_size ?? 0) };
     case 'tool_call':
       return {
         type: 'tool_call',
-        id: String(content.tool_call_id ?? content.id ?? ''),
-        name: String(content.tool_name ?? content.name ?? ''),
-        input: content.input ?? content.arguments ?? {},
-        status: (content.status ?? 'pending') as 'pending' | 'running' | 'completed' | 'failed' | 'rejected',
-      } as typeof CB;
+        toolCallId: String(content.tool_call_id ?? content.id ?? ''),
+        toolName: String(content.tool_name ?? content.name ?? ''),
+        toolInput: (content.input ?? content.arguments ?? {}) as Record<string, unknown>,
+        toolStatus: (content.status ?? 'pending') as 'pending' | 'running' | 'completed' | 'failed' | 'rejected',
+      };
     case 'tool_result':
       return {
         type: 'tool_result',
         toolCallId: String(content.tool_call_id ?? ''),
-        output: content.output ?? content.result,
+        toolOutput: content.output ?? content.result,
         isError: Boolean(content.is_error ?? false),
         durationMs: content.duration_ms == null ? undefined : Number(content.duration_ms),
-      } as typeof CB;
+      };
     case 'citation':
       return {
         type: 'citation',
-        uri: String(content.uri ?? content.url ?? ''),
-        title: content.title ? String(content.title) : undefined,
-        text: content.text ? String(content.text) : undefined,
-      } as typeof CB;
+        citationUri: String(content.uri ?? content.url ?? ''),
+        citationTitle: content.title ? String(content.title) : undefined,
+      };
     case 'error':
       return {
         type: 'error',
-        code: String(content.code ?? content.error_code ?? ''),
-        message: String(content.message ?? content.error_message ?? ''),
+        errorCode: String(content.code ?? content.error_code ?? ''),
+        errorMessage: String(content.message ?? content.error_message ?? ''),
         retryable: Boolean(content.retryable ?? false),
-      } as typeof CB;
+      };
     default:
       return {
         type: 'legacy',
         raw: JSON.stringify(content, null, 2),
         originalType: block.type,
-      } as typeof CB;
+      };
   }
 }
 
@@ -193,6 +194,8 @@ function mapMessageToTimeline(msg: Message): import('./ConversationTimeline').Me
     contentBlocks: (msg.content_blocks ?? []).map(mapBlockToContentBlock),
     status: msg.status,
     createdAt: msg.created_at,
+    inputTokens: msg.input_tokens,
+    outputTokens: msg.output_tokens,
   };
 }
 
@@ -219,6 +222,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
   const [registeredProjects, setRegisteredProjects] = useState<ProjectSummary[]>([]);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const [respondedPermissionId, setRespondedPermissionId] = useState<string | null>(null);
 
   // ── Run state (unified via AssistantStreamState) ──
   const [streamState, setStreamState] = useState<AssistantStreamState | null>(null);
@@ -468,14 +472,20 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
     const runId = activeRunIdRef.current;
     if (!runId || !activeConversationId || !isStreaming) return;
 
-    if (nativeStream.content || nativeStream.reasoning) {
-      const blocks = [
-        ...(nativeStream.reasoning ? [{ type: 'reasoning', text: nativeStream.reasoning }] : []),
-        ...(nativeStream.content ? [{ type: 'text', text: nativeStream.content }] : []),
-      ];
+    if (nativeStream.content || nativeStream.reasoning || nativeStream.toolCall || nativeStream.toolEvents.length > 0) {
+      const blocks: import('./blocks').ContentBlock[] = [];
+      if (nativeStream.reasoning) blocks.push({ type: 'reasoning', reasoning: nativeStream.reasoning });
+      for (const tool of nativeStream.toolEvents) {
+        blocks.push({ type: 'tool_call', toolCallId: tool.id, toolName: tool.name, toolInput: tool.input, toolStatus: tool.status });
+        if (tool.output !== undefined) blocks.push({ type: 'tool_result', toolCallId: tool.id, toolOutput: tool.output, isError: tool.status === 'failed' || tool.status === 'rejected' });
+      }
+      if (nativeStream.toolCall) blocks.push({ type: 'tool_call', toolCallId: 'active-tool', toolName: nativeStream.toolCall, toolInput: {}, toolStatus: nativeStream.toolStatus === 'error' ? 'failed' : nativeStream.done ? 'completed' : 'running' });
+      if (nativeStream.toolResult !== null) blocks.push({ type: 'tool_result', toolCallId: 'active-tool', toolOutput: nativeStream.toolResult, isError: nativeStream.toolStatus === 'error' });
+      if (nativeStream.content) blocks.push({ type: 'text', text: nativeStream.content });
       const next = {
         runId,
         status: nativeStream.done ? (nativeStream.error ? 'failed' : 'completed') : 'running',
+        lastSequence: streamStateRef.current?.lastSequence ?? 0,
         blocks,
         fileChanges: [],
         usage: { inputTokens: null, outputTokens: null, reasoningTokens: null },
@@ -489,9 +499,17 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
     const status = nativeStream.error ? 'failed' : 'completed';
     setIsStreaming(false);
     setActiveRunFinishedAt(new Date().toISOString());
+    const persistedBlocks = [
+      ...(nativeStream.reasoning ? [{ type: 'reasoning', reasoning: nativeStream.reasoning }] : []),
+      ...nativeStream.toolEvents.flatMap(tool => [
+        { type: 'tool_call', tool_call_id: tool.id, tool_name: tool.name, input: tool.input, status: tool.status },
+        ...(tool.output === undefined ? [] : [{ type: 'tool_result', tool_call_id: tool.id, output: tool.output, is_error: tool.status === 'failed' || tool.status === 'rejected' }]),
+      ]),
+      ...(nativeStream.content ? [{ type: 'text', text: nativeStream.content }] : []),
+    ];
     void Promise.all([
-      nativeStream.content
-        ? v2call('conversation.appendMessage', { conversation_id: activeConversationId, role: 'assistant', content: nativeStream.content })
+      persistedBlocks.length > 0
+        ? v2call('conversation.appendMessage', { conversation_id: activeConversationId, role: 'assistant', blocks: persistedBlocks })
         : Promise.resolve(),
       v2call('run.finish', { run_id: runId, status, error_code: nativeStream.error ?? null }),
     ]).then(() => loadMessages(activeConversationId)).catch(error => {
@@ -565,6 +583,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
         provider_id: selection.providerId,
         model_id: selection.modelId,
         project_id: projectPath,
+        permission_profile_id: 'ask',
       });
 
       setConversations(prev => [{ ...result, project_id: projectPath }, ...prev]);
@@ -581,7 +600,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
     } finally {
       setIsCreatingConversation(false);
     }
-  }, [isCreatingConversation, providers, providerReadiness, activeProjectPath, locale, toast]);
+  }, [isCreatingConversation, providers, providerReadiness, activeProjectPath, locale, resetStream, toast]);
 
   const handleSelectModel = useCallback(async (providerId: string, modelId: string) => {
     if (!activeConversationId) return;
@@ -601,6 +620,18 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
             }
           : conversation,
       ));
+    } catch (error) {
+      toast(classifyError(error).userMessage, 'error');
+    }
+  }, [activeConversationId, toast]);
+
+  const handlePermissionChange = useCallback(async (profile: AssistantPermissionProfile) => {
+    if (!activeConversationId) return;
+    try {
+      await v2call('conversation.update_permission', { id: activeConversationId, permission_profile_id: profile });
+      setConversations(current => current.map(conversation => conversation.id === activeConversationId
+        ? { ...conversation, permission_profile_id: profile }
+        : conversation));
     } catch (error) {
       toast(classifyError(error).userMessage, 'error');
     }
@@ -639,18 +670,18 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   }, [activeConversationId, toast]);
 
   // ── Send message / Start run ──
-  const handleSend = useCallback(async (content: string) => {
-    if (!activeConversationId) return;
+  const handleSend = useCallback(async ({ content, attachments }: AssistantDraft): Promise<boolean> => {
+    if (!activeConversationId) return false;
 
     const conversation = conversations.find(c => c.id === activeConversationId);
-    if (!conversation) return;
+    if (!conversation) return false;
 
     const selection = selectAssistantModel(providers);
     const providerId = conversation.provider_id || selection?.providerId || '';
     const modelId = conversation.model_id || selection?.modelId || '';
     if (!providerId || !modelId) {
       setInputDisabledReason(providerReadiness === 'no_model' ? 'no_model' : 'no_provider');
-      return;
+      return false;
     }
 
     setIsStreaming(true);
@@ -669,6 +700,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
         provider_id: providerId,
         model_id: modelId,
         content,
+        attachments: attachments.map(file => ({ path: file.path, name: file.name, mime_type: file.mimeType, size: file.size })),
       });
 
       latestRunIdRef.current = run.id;
@@ -688,14 +720,15 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
       await assistantApi.streamChat({
         sessionId: activeConversationId,
         model: modelId,
-        messages: [{ role: 'user', content }],
+        messages: [{ role: 'user', content: [content, ...attachments.map(file => `[Attached file: ${file.path}]`)].filter(Boolean).join('\n') }],
       });
-
+      return true;
     } catch (err) {
       setIsStreaming(false);
       toast(classifyError(err).userMessage, 'error');
+      return false;
     }
-  }, [activeConversationId, conversations, providers, providerReadiness, loadMessages, toast]);
+  }, [activeConversationId, conversations, providers, providerReadiness, resetStream, loadMessages, toast]);
 
   // ── Stop / Cancel run ──
   const handleStop = useCallback(async () => {
@@ -720,7 +753,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
       }
       toast(classifyError(error).userMessage, 'error');
     }
-  }, [toast]);
+  }, [activeConversationId, toast]);
 
   // ── Retry run ──
   const handleRetry = useCallback(async () => {
@@ -761,6 +794,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
         approved,
         scope: scope ?? 'once',
       });
+      setRespondedPermissionId(requestId);
     } catch (err) {
       toast(classifyError(err).userMessage, 'error');
     }
@@ -848,7 +882,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
     provider: providerReadiness,
   });
   const assistantEvents = useMemo<AssistantRunEvent[]>(() => {
-    const runId = streamState?.runId ?? activeRunIdRef.current ?? '';
+    const runId = streamState?.runId ?? '';
     return runEvents.map(event => ({
       runId,
       sequence: event.sequence,
@@ -927,7 +961,9 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
           role: 'assistant' as const,
           contentBlocks: streamingBlocks,
           status: isStreaming ? 'streaming' : activeRunStatus,
-          createdAt: new Date().toISOString(),
+          createdAt: activeRunStartedAt ?? new Date().toISOString(),
+          startedAt: activeRunStartedAt ?? undefined,
+          finishedAt: activeRunFinishedAt ?? undefined,
         },
       ]
     : timelineMessages;
@@ -993,15 +1029,6 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
                 }}
               />
             </div>
-            <div className="flex items-center gap-2">
-              <ModelSelectorDropdown
-                providers={modelSelectorProviders}
-                selectedProviderId={activeConversation.provider_id}
-                selectedModel={activeConversation.model_id}
-                onSelect={handleSelectModel}
-                locale={locale}
-              />
-            </div>
           </div>
         )}
 
@@ -1031,8 +1058,20 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
                 messages={timelineWithStreaming}
                 loading={loadingMessages}
                 locale={locale}
+                onRetry={handleRetry}
               />
             </div>
+
+            {nativeStream.permissionRequest && nativeStream.permissionRequest.id !== respondedPermissionId && (
+              <div className="mx-auto w-full max-w-[860px] px-5">
+                <PermissionRequestCard
+                  request={{ ...nativeStream.permissionRequest, status: 'pending', createdAt: new Date().toISOString() }}
+                  onApprove={(id, scope) => { void handlePermissionResponse(id, true, scope); }}
+                  onReject={id => { void handlePermissionResponse(id, false); }}
+                  locale={locale}
+                />
+              </div>
+            )}
 
             {/* Input area */}
             <div className="shrink-0">
@@ -1042,7 +1081,13 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
                 onStop={handleStop}
                 isStreaming={isStreaming}
                 disabled={!activeConversationId}
-                inputDisabledReason={inputDisabledReason as 'no_provider' | 'creating' | null | undefined}
+                inputDisabledReason={inputDisabledReason}
+                permissionProfile={normalizePermissionProfile(activeConversation?.permission_profile_id)}
+                onPermissionChange={handlePermissionChange}
+                providers={modelSelectorProviders}
+                selectedProviderId={activeConversation?.provider_id ?? ''}
+                selectedModel={activeConversation?.model_id}
+                onSelectModel={handleSelectModel}
               />
             </div>
           </>

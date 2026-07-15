@@ -35,6 +35,18 @@ export interface StreamState {
   toolStatus: string | null;
   toolResult: unknown;
   selfHealCount: number;
+  toolEvents: Array<{ id: string; name: string; input: Record<string, unknown>; status: 'running' | 'completed' | 'failed' | 'rejected'; output?: unknown }>;
+  permissionRequest: { id: string; toolName: string; reason: string; input: Record<string, unknown> } | null;
+}
+
+interface RuntimeEventPayload {
+  type: string;
+  tool_name?: string;
+  tool_call_id?: string;
+  args?: Record<string, unknown>;
+  reason?: string;
+  status?: string;
+  output?: unknown;
 }
 
 export function useAssistantStream({ sessionId, locale }: UseAssistantStreamOptions) {
@@ -48,6 +60,8 @@ export function useAssistantStream({ sessionId, locale }: UseAssistantStreamOpti
     toolStatus: null,
     toolResult: null,
     selfHealCount: 0,
+    toolEvents: [],
+    permissionRequest: null,
   });
   const bufferRef = useRef('');
   const toolCallBufferRef = useRef('');
@@ -62,6 +76,7 @@ export function useAssistantStream({ sessionId, locale }: UseAssistantStreamOpti
       setStreamState({
         content: '', toolCall: '', reasoning: '', isStreaming: false,
         error: null, done: false, toolStatus: null, toolResult: null, selfHealCount: 0,
+        toolEvents: [], permissionRequest: null,
       });
       return;
     }
@@ -155,6 +170,23 @@ export function useAssistantStream({ sessionId, locale }: UseAssistantStreamOpti
       });
 
       unlistenRef.current = unlisten;
+
+      const unlistenRuntime = await listen<RuntimeEventPayload>(`assistant://stream/${sessionId}`, event => {
+        const payload = event.payload;
+        if (payload.type === 'tool_started' && payload.tool_call_id) {
+          setStreamState(previous => ({ ...previous, toolEvents: [...previous.toolEvents.filter(item => item.id !== payload.tool_call_id), {
+            id: payload.tool_call_id!, name: payload.tool_name ?? 'tool', input: payload.args ?? {}, status: 'running',
+          }] }));
+        } else if ((payload.type === 'tool_completed' || payload.type === 'tool_rejected') && payload.tool_call_id) {
+          setStreamState(previous => ({ ...previous, toolEvents: previous.toolEvents.map(item => item.id === payload.tool_call_id ? {
+            ...item, status: payload.type === 'tool_rejected' ? 'rejected' : payload.status === 'success' ? 'completed' : 'failed', output: payload.output ?? payload.reason,
+          } : item) }));
+        } else if (payload.type === 'permission_requested' && payload.tool_call_id) {
+          setStreamState(previous => ({ ...previous, permissionRequest: { id: payload.tool_call_id!, toolName: payload.tool_name ?? 'tool', reason: payload.reason ?? '', input: payload.args ?? {} } }));
+        }
+      });
+      const previousUnlisten = unlistenRef.current;
+      unlistenRef.current = () => { previousUnlisten?.(); unlistenRuntime(); };
     };
 
     setupListener();
@@ -175,6 +207,7 @@ export function useAssistantStream({ sessionId, locale }: UseAssistantStreamOpti
     setStreamState({
       content: '', toolCall: '', reasoning: '', isStreaming: false,
       error: null, done: false, toolStatus: null, toolResult: null, selfHealCount: 0,
+      toolEvents: [], permissionRequest: null,
     });
   }, []);
 
