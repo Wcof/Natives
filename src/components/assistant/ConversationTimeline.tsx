@@ -51,7 +51,7 @@ export default function ConversationTimeline({ messages, loading, locale, onRetr
       <div className="mx-auto flex w-full max-w-[860px] flex-col gap-7 px-5 py-7">
         {messages.map(message => {
           const user = message.role === 'user';
-          const start = Date.parse(message.startedAt ?? message.createdAt);
+          const start = message.startedAt ? Date.parse(message.startedAt) : Number.NaN;
           const end = message.finishedAt ? Date.parse(message.finishedAt) : (now || start);
           const duration = Number.isFinite(start) ? formatElapsed(end - start) : null;
           const tokens = (message.inputTokens ?? 0) + (message.outputTokens ?? 0);

@@ -36,7 +36,7 @@ import RunInspector from './RunInspector';
 import PermissionRequestCard from './PermissionRequestCard';
 import { useAssistantStream } from './hooks/useAssistantStream';
 import type { ProjectSummary, ProviderSummary } from '@/lib/tauri-adapter';
-import { normalizePermissionProfile, type AssistantDraft, type AssistantPermissionProfile } from '@/lib/assistant-composer';
+import { assistantRetryPrompt, normalizePermissionProfile, type AssistantDraft, type AssistantPermissionProfile } from '@/lib/assistant-composer';
 import { PanelRightClose, PanelRightOpen } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────
@@ -763,6 +763,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
     if (!conversation?.provider_id || !conversation.model_id) return;
     const lastUserMessage = [...messages].reverse().find(message => message.role === 'user');
     if (!lastUserMessage) return;
+    const prompt = assistantRetryPrompt(lastUserMessage.content_blocks);
     try {
       const run = await v2call<Run>('run.start', {
         conversation_id: activeConversationId,
@@ -781,10 +782,19 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
       const newState = createAssistantStreamState(run.id);
       streamStateRef.current = newState;
       setStreamState(newState);
+      persistedStreamRunRef.current = null;
+      resetStream();
+      const assistantApi = window.nativesAPI?.assistant;
+      if (!assistantApi) throw new Error('Assistant streaming API unavailable');
+      await assistantApi.streamChat({
+        sessionId: activeConversationId!,
+        model: conversation.model_id,
+        messages: [{ role: 'user', content: prompt }],
+      });
     } catch (err) {
       toast(classifyError(err).userMessage, 'error');
     }
-  }, [activeConversationId, conversations, messages, toast]);
+  }, [activeConversationId, conversations, messages, resetStream, toast]);
 
   // ── Permission response ──
   const handlePermissionResponse = useCallback(async (requestId: string, approved: boolean, scope?: string) => {
@@ -953,7 +963,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   // Add streaming blocks as a pending message if streaming
   const streamingBlocks = streamState?.blocks ?? [];
   const activeRunStatus = streamState?.status ?? 'idle';
-  const timelineWithStreaming = streamingBlocks.length > 0 && activeRunStatus !== 'completed'
+  const timelineWithStreaming = (isStreaming || streamingBlocks.length > 0) && activeRunStatus !== 'completed'
     ? [
         ...timelineMessages,
         {

@@ -673,6 +673,30 @@ async fn await_permission(
         Some(run_id) => run_id,
         None => return Some(PermissionMode::Deny),
     };
+    let already_granted = crate::db::get_assistant_db_conn()
+        .ok()
+        .and_then(|conn| {
+            conn.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM assistant_permission_requests approved
+                    JOIN assistant_runs approved_run ON approved_run.id = approved.run_id
+                    JOIN assistant_runs current_run ON current_run.id = ?1
+                    JOIN assistant_conversations approved_conversation ON approved_conversation.id = approved_run.conversation_id
+                    JOIN assistant_conversations current_conversation ON current_conversation.id = current_run.conversation_id
+                    WHERE approved.status = 'approved' AND approved.tool_name = ?2 AND (
+                        (approved.scope = 'this_run' AND approved.run_id = ?1) OR
+                        (approved.scope = 'project' AND current_conversation.project_id IS NOT NULL AND approved_conversation.project_id = current_conversation.project_id)
+                    )
+                )",
+                rusqlite::params![run_id, request.name],
+                |row| row.get::<_, bool>(0),
+            )
+            .ok()
+        })
+        .unwrap_or(false);
+    if already_granted {
+        return Some(PermissionMode::Allow);
+    }
     let inserted = crate::db::get_assistant_db_conn().ok().and_then(|conn| {
         conn.execute(
             "INSERT INTO assistant_permission_requests (id, run_id, tool_call_id, tool_name, reason, input, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
