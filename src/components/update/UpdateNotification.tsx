@@ -122,6 +122,7 @@ export default function UpdateNotification({ locale }: UpdateNotificationProps) 
           border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
           padding: '12px 16px', boxShadow: 'var(--shadow-popup)', maxWidth: 300,
           animation: 'slideUp 200ms ease',
+          pointerEvents: 'auto',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.sm, marginBottom: SPACING.sm }}>

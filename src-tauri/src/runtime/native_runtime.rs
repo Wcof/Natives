@@ -30,6 +30,7 @@ use crate::runtime::native::command_agent_skill::{Agent, Command, Skill};
 use crate::runtime::native::hook_pipeline::HookPipeline;
 use crate::runtime::native::plugin_system::{McpManifest, PluginManager, PluginMeta};
 use crate::runtime::native::rule_engine::RuleEngine;
+use crate::runtime::native::subagent::{KillTaskCapability, SubagentCoordinator, TaskCapability, TaskOutputCapability};
 use crate::Result;
 use async_trait::async_trait;
 use serde_json::json;
@@ -79,6 +80,7 @@ pub struct NativeRuntime {
     plugin_manager: Arc<Mutex<PluginManager>>,
     /// 项目根目录
     project_root: Option<PathBuf>,
+    subagent_coordinator: Arc<SubagentCoordinator>,
 }
 
 impl NativeRuntime {
@@ -133,14 +135,30 @@ impl NativeRuntime {
             }
         }
 
+        let registry = Arc::new(Mutex::new(registry));
+        let hook_pipeline = Arc::new(Mutex::new(pipeline));
+        let rule_engine = Arc::new(Mutex::new(rule_engine));
+        let subagent_coordinator = SubagentCoordinator::new(
+            registry.clone(),
+            hook_pipeline.clone(),
+            rule_engine.clone(),
+        );
         let rt = Self {
             app_handle,
-            registry: Arc::new(Mutex::new(registry)),
-            hook_pipeline: Arc::new(Mutex::new(pipeline)),
-            rule_engine: Arc::new(Mutex::new(rule_engine)),
+            registry,
+            hook_pipeline,
+            rule_engine,
             plugin_manager: Arc::new(Mutex::new(plugin_manager)),
             project_root,
+            subagent_coordinator,
         };
+
+        {
+            let mut registry = rt.registry.blocking_lock();
+            registry.register(Arc::new(TaskCapability { coordinator: rt.subagent_coordinator.clone() }));
+            registry.register(Arc::new(TaskOutputCapability { coordinator: rt.subagent_coordinator.clone() }));
+            registry.register(Arc::new(KillTaskCapability { coordinator: rt.subagent_coordinator.clone() }));
+        }
 
         println!(
             "[NativeRuntime] Initialized with {} capabilities, {} rules, {} plugins",
@@ -255,8 +273,14 @@ fn build_catalog_from_parts(
         })
         .collect();
 
+    let mut capabilities = registry.list_metadata();
+    for metadata in crate::runtime::native::subagent::catalog_metadata() {
+        if !capabilities.iter().any(|item| item.name == metadata.name) {
+            capabilities.push(metadata);
+        }
+    }
     NativeRuntimeCatalog {
-        capabilities: registry.list_metadata(),
+        capabilities,
         plugins: plugin_manager.list_plugins(),
         hooks,
         rules,
@@ -284,11 +308,8 @@ impl AgentRuntime for NativeRuntime {
         let provider_id = options.provider_id.clone();
         let (api_key, base_url) = resolve_provider_credentials(&provider_id).await?;
 
-        let app = self.app_handle.clone();
         let session_id = options.session_id.clone();
         let mut cancel_rx = options.abort_receiver;
-        let modules_dir = modules_root();
-
         // ── 2. 使用可选的工作目录 ──
         let working_dir = options
             .working_directory
@@ -331,7 +352,6 @@ impl AgentRuntime for NativeRuntime {
 
         // ── 3. 加载执行设置 ──
         let exec_settings = load_executor_settings();
-        let enabled_tools = exec_settings.enabled_tools;
         let max_self_heal: u32 = exec_settings.max_self_heal;
         let max_steps: u32 = exec_settings.max_steps.unwrap_or(50);
         let permission_mode = match options
@@ -348,12 +368,35 @@ impl AgentRuntime for NativeRuntime {
         let (tx, rx) = tokio::sync::mpsc::channel::<RuntimeEvent>(64);
 
         // ── 5. 启动 Agent Loop（传递所有增强组件） ──
-        let app2 = app.clone();
         let sid = session_id.clone();
 
         // 提前 clone 需要跨 async 闭包的 Arc<Mutex<...>>
         let hook_pipeline_clone = self.hook_pipeline.clone();
         let rule_engine_clone = self.rule_engine.clone();
+        let registry = {
+            let mut registry = self.registry.lock().await;
+            for (name, enabled) in &exec_settings.enabled_tools {
+                registry.set_enabled(name, *enabled);
+            }
+            registry.clone()
+        };
+        let explicit_tool_unsupported = crate::db::get_assistant_db_conn()
+            .ok()
+            .and_then(|conn| {
+                conn.query_row(
+                    "SELECT capabilities FROM assistant_model_cache WHERE provider_id = ?1 AND model_id = ?2",
+                    rusqlite::params![options.provider_id, options.model],
+                    |row| row.get::<_, String>(0),
+                ).ok()
+            })
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|capabilities| capabilities.get("tool_calling").and_then(|value| value.as_bool()))
+            .is_some_and(|supported| !supported);
+        if explicit_tool_unsupported && !registry.list_visible_tools().is_empty() {
+            return Err(crate::Error::InvalidInput(
+                "MODEL_TOOL_CALLING_UNSUPPORTED: selected model cannot execute tools".into(),
+            ));
+        }
 
         tokio::spawn(async move {
             let config = LoopConfig {
@@ -361,6 +404,7 @@ impl AgentRuntime for NativeRuntime {
                 max_self_heal,
                 doom_threshold: 3,
                 model: options.model.clone(),
+                provider_id: options.provider_id.clone(),
                 base_url,
                 api_key,
             };
@@ -373,11 +417,10 @@ impl AgentRuntime for NativeRuntime {
             loop_runner
                 .run(
                     &tx,
-                    &app2,
                     &sid,
-                    &modules_dir,
+                    &options.run_id,
                     working_dir.clone(),
-                    &enabled_tools,
+                    &registry,
                     &pipeline,
                     &engine,
                     permission_mode,
@@ -411,7 +454,9 @@ impl AgentRuntime for NativeRuntime {
 
 /// 解密 provider 凭据（P1 安全：全程 Rust 内存，不经过前端）
 async fn resolve_provider_credentials(provider_id: &str) -> Result<(String, String)> {
-    let db = crate::db::get_assistant_db_conn()
+    // Provider settings are owned by the main application database. The
+    // assistant database only stores conversations/runs that reference them.
+    let db = crate::db::get_main_conn()
         .map_err(|e| crate::Error::Internal(format!("DB connection: {e}")))?;
 
     let row = db
@@ -419,8 +464,8 @@ async fn resolve_provider_credentials(provider_id: &str) -> Result<(String, Stri
             "SELECT k.api_key_encrypted, k.dek_encrypted, p.base_url
          FROM provider_api_keys k
          JOIN user_providers p ON k.provider_id = p.id
-         WHERE k.provider_id = ?1
-         ORDER BY k.created_at ASC LIMIT 1",
+         WHERE k.provider_id = ?1 AND COALESCE(k.is_active, 1) = 1
+         ORDER BY COALESCE(k.is_primary, 0) DESC, k.created_at DESC LIMIT 1",
             rusqlite::params![provider_id],
             |row| {
                 let encrypted_key: String = row.get(0)?;

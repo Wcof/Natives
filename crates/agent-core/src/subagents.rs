@@ -43,6 +43,7 @@ pub enum SubAgentStatus {
     Running,
     Completed,
     Failed(String),
+    Cancelled,
 }
 
 /// Manages sub-agent execution.

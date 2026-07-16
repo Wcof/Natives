@@ -45,7 +45,7 @@ export default function ModelSelectorDropdown({
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const selectedProvider = providers.find((p) => p.id === selectedProviderId);
-  const models = selectedProvider?.models?.map((m: ModelInfo) => m.id) || ['gpt-4o'];
+  const models = selectedProvider?.models?.map((m: ModelInfo) => m.id) ?? [];
 
   // Click outside to close
   useEffect(() => {
@@ -60,7 +60,7 @@ export default function ModelSelectorDropdown({
   }, [isOpen]);
 
   const label = selectedProvider
-    ? `${selectedProvider.name} / ${selectedModel || models[0] || 'default'}`
+    ? `${selectedProvider.name} / ${selectedModel || models[0] || (locale.startsWith('zh') ? '未选择模型' : 'No model')}`
     : locale.startsWith('zh') ? '选择模型' : 'Select model';
 
   return (
@@ -88,13 +88,17 @@ export default function ModelSelectorDropdown({
             </div>
           ) : (
             providers.map((provider) => {
-              const providerModels = provider.models?.map((m: ModelInfo) => m.id) || ['gpt-4o'];
+              const providerModels = provider.models?.map((m: ModelInfo) => m.id) ?? [];
               return (
                 <div key={provider.id}>
                   <div className="px-2.5 pb-1 pt-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.06em] text-[var(--text-disabled)]">
                     {provider.name}
                   </div>
-                  {providerModels.map((model) => (
+                  {providerModels.length === 0 ? (
+                    <div className="px-2.5 py-2 text-xs text-[var(--text-disabled)]">
+                      {locale.startsWith('zh') ? '未发现可用模型' : 'No discovered models'}
+                    </div>
+                  ) : providerModels.map((model) => (
                     <button
                       key={model}
                       type="button"

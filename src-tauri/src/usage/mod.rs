@@ -6,7 +6,11 @@ mod atomcode;
 mod ccusage;
 mod claude;
 mod codex;
+mod detected;
+mod gemini;
+mod grok;
 mod natives;
+mod opencode;
 pub mod snapshot;
 
 use crate::db;
@@ -15,6 +19,7 @@ use chrono::{DateTime, Utc, Datelike, Timelike, TimeZone};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 // ── Re-exports ──
@@ -23,7 +28,11 @@ pub use atomcode::*;
 pub use ccusage::*;
 pub use claude::*;
 pub use codex::*;
+pub use detected::*;
+pub use gemini::*;
+pub use grok::*;
 pub use natives::*;
+pub use opencode::*;
 pub use snapshot::*;
 
 // ── IPC Contract Types (mirror frontend types/usage.ts) ──
@@ -89,6 +98,7 @@ pub enum UsageQuality {
 #[serde(rename_all = "camelCase")]
 pub enum UsageSourceState {
     Ok,
+    Detected,
     Partial,
     Unavailable,
 }
@@ -366,6 +376,23 @@ pub fn mask_home(path: &str) -> String {
     }
 }
 
+pub fn select_tool_home(custom: Option<PathBuf>, default: PathBuf) -> PathBuf {
+    custom.unwrap_or(default)
+}
+
+pub fn tool_home(env_key: &str, default_name: &str) -> Option<PathBuf> {
+    let custom = std::env::var_os(env_key).map(PathBuf::from);
+    let default = dirs::home_dir()?.join(default_name);
+    Some(select_tool_home(custom, default))
+}
+
+pub(crate) fn token_total(input: i64, output: i64, cache_creation: i64, cache_read: i64) -> i64 {
+    input
+        .saturating_add(output)
+        .saturating_add(cache_creation)
+        .saturating_add(cache_read)
+}
+
 // ── Tests ──
 
 #[cfg(test)]
@@ -412,6 +439,18 @@ mod tests {
         assert!(dims.sources.is_empty());
         assert!(dims.models.is_empty());
         assert!(dims.projects.is_empty());
+    }
+
+    #[test]
+    fn custom_tool_home_overrides_default_home() {
+        let custom = PathBuf::from("/custom/tool");
+        let default = PathBuf::from("/default/tool");
+        assert_eq!(select_tool_home(Some(custom.clone()), default), custom);
+    }
+
+    #[test]
+    fn total_tokens_include_all_cache_tokens() {
+        assert_eq!(token_total(60, 20, 10, 40), 130);
     }
 
     #[test]
@@ -473,6 +512,7 @@ mod tests {
         assert_eq!(serde_json::to_string(&UsageSourceState::Ok).unwrap(), "\"ok\"");
         assert_eq!(serde_json::to_string(&UsageSourceState::Partial).unwrap(), "\"partial\"");
         assert_eq!(serde_json::to_string(&UsageSourceState::Unavailable).unwrap(), "\"unavailable\"");
+        assert_eq!(serde_json::to_string(&UsageSourceState::Detected).unwrap(), "\"detected\"");
 
         // Assert BreadcrumbKind serialization matches snake_case
         assert_eq!(serde_json::to_string(&BreadcrumbKind::Cli).unwrap(), "\"cli\"");

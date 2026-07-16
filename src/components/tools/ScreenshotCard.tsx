@@ -39,6 +39,7 @@ export default function ScreenshotCard() {
       overflow: 'hidden',
       boxShadow: 'var(--shadow-popup)',
       animation: 'slideUp 200ms ease',
+      pointerEvents: 'auto',
     }}>
       <div style={{ padding: SPACING.sm, borderBottom: '0.0625rem solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text)' }}>{t(locale, 'screenshot.newScreenshot')}</span>

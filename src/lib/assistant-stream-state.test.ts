@@ -19,3 +19,21 @@ test('ignores another run and duplicate sequence', () => {
   assert.equal(state.status, 'idle');
   assert.equal(reduceAssistantStreamEvent(state, { runId: 'a', sequence: 0, type: 'completed', payload: {} }), state);
 });
+
+test('restores a pending permission request from persisted events', () => {
+  const state = reduceAssistantStreamEvent(createAssistantStreamState('run'), {
+    runId: 'run', sequence: 1, type: 'permission_requested',
+    payload: { tool_call_id: 'permission', tool_name: 'Write', reason: 'needs approval', args: { path: 'a' } },
+  });
+  assert.equal(state.status, 'waiting_permission');
+  assert.equal(state.permissionRequest?.id, 'permission');
+});
+
+test('freezes reasoning time when assistant output begins', () => {
+  let state = createAssistantStreamState('run');
+  state = reduceAssistantStreamEvent(state, { runId: 'run', sequence: 1, timestamp: '2026-07-16T00:00:01Z', type: 'reasoning_delta', payload: { text: 'plan' } });
+  state = reduceAssistantStreamEvent(state, { runId: 'run', sequence: 2, timestamp: '2026-07-16T00:00:03Z', type: 'assistant_delta', payload: { text: 'answer' } });
+  assert.equal(state.reasoningStartedAt, '2026-07-16T00:00:01Z');
+  assert.equal(state.reasoningFinishedAt, '2026-07-16T00:00:03Z');
+  assert.equal(state.blocks[0]!.type, 'reasoning');
+});

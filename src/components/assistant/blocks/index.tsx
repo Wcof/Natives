@@ -45,14 +45,15 @@ function TextBlock({ block }: { block: ContentBlock }) {
 
 function ReasoningBlock({ block }: { block: ContentBlock }) {
   const [expanded, setExpanded] = React.useState(false);
+  const duration = block.durationMs == null ? '' : ` · ${(block.durationMs / 1000).toFixed(1)}s`;
   return (
-    <div className="my-2 rounded-lg bg-[var(--surface-hover)] px-3 py-2">
+    <div className="my-3 border-y border-[var(--border-subtle)] py-2">
       <button
         onClick={() => setExpanded(!expanded)}
         className="text-xs text-[var(--text-disabled)] hover:text-[var(--text-secondary)] transition-colors"
         aria-expanded={expanded}
       >
-        {expanded ? '隐藏思考过程' : '查看思考过程'}
+        {expanded ? '隐藏思考过程' : '查看思考过程'}{duration}
       </button>
       {expanded && block.reasoning && (
         <div className="mt-1 text-sm text-[var(--text-secondary)] italic">

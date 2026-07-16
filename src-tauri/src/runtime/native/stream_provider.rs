@@ -57,29 +57,30 @@ pub struct ToolCallAccumulator {
 }
 
 impl ToolCallAccumulator {
-    /// 应用一个 fragment，返回是否产生了新的完整 tool_call
+    /// 应用一个 fragment。工具调用只有在本轮结束时统一 drain，避免
+    /// id/name 先到、参数后到时提前产生空参数和重复事件。
     pub fn apply(&mut self, fragment: &SseEvent) -> Option<AccumulatedToolCall> {
         match fragment {
-            SseEvent::ToolCallFragment { index, id, name, arguments_fragment } => {
+            SseEvent::ToolCallFragment {
+                index,
+                id,
+                name,
+                arguments_fragment,
+            } => {
                 while self.slots.len() <= *index {
-                    self.slots.push((String::new(), String::new(), String::new()));
+                    self.slots
+                        .push((String::new(), String::new(), String::new()));
                 }
                 let slot = &mut self.slots[*index];
-                if let Some(id) = id { slot.0 = id.clone(); }
-                if let Some(name) = name { slot.1 = name.clone(); }
+                if let Some(id) = id {
+                    slot.0 = id.clone();
+                }
+                if let Some(name) = name {
+                    slot.1 = name.clone();
+                }
                 slot.2.push_str(arguments_fragment);
 
-                // 如果 id 和 name 都完整了，返回累积结果
-                if !slot.0.is_empty() && !slot.1.is_empty() {
-                    let args = serde_json::from_str(&slot.2).unwrap_or(json!({}));
-                    Some(AccumulatedToolCall {
-                        id: slot.0.clone(),
-                        name: slot.1.clone(),
-                        arguments: args,
-                    })
-                } else {
-                    None
-                }
+                None
             }
             _ => None,
         }
@@ -91,7 +92,11 @@ impl ToolCallAccumulator {
         for (id, name, args_str) in self.slots.drain(..) {
             if !id.is_empty() && !name.is_empty() {
                 let args = serde_json::from_str(&args_str).unwrap_or(json!({}));
-                result.push(AccumulatedToolCall { id, name, arguments: args });
+                result.push(AccumulatedToolCall {
+                    id,
+                    name,
+                    arguments: args,
+                });
             }
         }
         result
@@ -125,7 +130,9 @@ pub trait DeltaConsumer: Send + Sync {
     /// 消费一段 SSE data 行，返回解析结果
     fn consume(&mut self, data: &str) -> Vec<ConsumeResult>;
     /// 清空剩余的累积工具调用
-    fn drain_tools(&mut self) -> Vec<AccumulatedToolCall> { vec![] }
+    fn drain_tools(&mut self) -> Vec<AccumulatedToolCall> {
+        vec![]
+    }
 }
 
 /// OpenAI 兼容格式的 SSE 消费者
@@ -135,7 +142,9 @@ pub struct OpenAiDeltaConsumer {
 
 impl OpenAiDeltaConsumer {
     pub fn new() -> Self {
-        Self { accumulator: ToolCallAccumulator::default() }
+        Self {
+            accumulator: ToolCallAccumulator::default(),
+        }
     }
 
     pub fn into_accumulator(self) -> ToolCallAccumulator {
@@ -191,11 +200,17 @@ impl DeltaConsumer for OpenAiDeltaConsumer {
                 let idx = tc["index"].as_u64().unwrap_or(0) as usize;
                 let id = tc["id"].as_str().map(|s| s.to_string());
                 let name = tc["function"]["name"].as_str().map(|s| s.to_string());
-                let args_frag = tc["function"]["arguments"].as_str().unwrap_or("").to_string();
+                let args_frag = tc["function"]["arguments"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
 
-                if let Some(complete) = self.accumulator.apply(
-                    &SseEvent::ToolCallFragment { index: idx, id, name, arguments_fragment: args_frag }
-                ) {
+                if let Some(complete) = self.accumulator.apply(&SseEvent::ToolCallFragment {
+                    index: idx,
+                    id,
+                    name,
+                    arguments_fragment: args_frag,
+                }) {
                     results.push(ConsumeResult::ToolCall(complete));
                 }
             }
@@ -247,8 +262,15 @@ impl SseClient {
             "tools": tools,
         });
 
-        let request = self.client
-            .post(format!("{}/v1/chat/completions", base_url.trim_end_matches('/')))
+        let completions_url = if base_url.ends_with("/chat/completions") {
+            base_url.to_string()
+        } else {
+            format!("{}/chat/completions", base_url.trim_end_matches('/'))
+        };
+
+        let request = self
+            .client
+            .post(&completions_url)
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {}", api_key))
             .json(&body);
@@ -284,7 +306,7 @@ pub async fn parse_sse_stream(
     let mut buffer = String::new();
 
     let mut stream = response.bytes_stream();
-    while let Some(chunk_result) = stream.next().await {
+    'sse: while let Some(chunk_result) = stream.next().await {
         let chunk = match chunk_result {
             Ok(c) => c,
             Err(_) => break,
@@ -296,9 +318,15 @@ pub async fn parse_sse_stream(
         while let Some(line_end) = buffer.find('\n') {
             let line = buffer[..line_end].trim().to_string();
             buffer = buffer[line_end + 1..].to_string();
-            if line.is_empty() || line.starts_with(':') { continue; }
-            let Some(data) = line.strip_prefix("data: ") else { continue; };
-            if data == "[DONE]" { continue; }
+            if line.is_empty() || line.starts_with(':') {
+                continue;
+            }
+            let Some(data) = line.strip_prefix("data: ") else {
+                continue;
+            };
+            if data == "[DONE]" {
+                break 'sse;
+            }
 
             let events = consumer.consume(data);
             all_results.extend(events);
@@ -318,7 +346,9 @@ mod tests {
         let mut consumer = OpenAiDeltaConsumer::new();
         let data = r#"{"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}"#;
         let results = consumer.consume(data);
-        assert!(results.iter().any(|r| matches!(r, ConsumeResult::Delta(t) if t == "Hello")));
+        assert!(results
+            .iter()
+            .any(|r| matches!(r, ConsumeResult::Delta(t) if t == "Hello")));
     }
 
     #[test]
@@ -342,5 +372,29 @@ mod tests {
         assert_eq!(drained.len(), 1);
         assert_eq!(drained[0].id, "call_1");
         assert_eq!(drained[0].name, "read_file");
+    }
+
+    #[test]
+    fn fragmented_tool_call_emits_once_with_complete_arguments() {
+        let mut acc = ToolCallAccumulator::default();
+        assert!(acc
+            .apply(&SseEvent::ToolCallFragment {
+                index: 0,
+                id: Some("call_1".into()),
+                name: Some("read_file".into()),
+                arguments_fragment: String::from("{\"path\":\""),
+            })
+            .is_none());
+        assert!(acc
+            .apply(&SseEvent::ToolCallFragment {
+                index: 0,
+                id: None,
+                name: None,
+                arguments_fragment: String::from("/tmp\"}"),
+            })
+            .is_none());
+        let drained = acc.drain();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].arguments["path"], "/tmp");
     }
 }

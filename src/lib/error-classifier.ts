@@ -59,6 +59,33 @@ export interface ErrorContext {
   stderr?: string;
 }
 
+// ── Extraction Helpers ──────────────────────────────────────────
+
+/**
+ * Extract an error code from a structured daemon error or an Error instance.
+ */
+function extractErrorCode(error: unknown): string | undefined {
+  if (error instanceof Error) return (error as NodeJS.ErrnoException).code;
+  if (typeof error === 'object' && error !== null) {
+    const obj = error as Record<string, unknown>;
+    if (typeof obj.code === 'string') return obj.code;
+  }
+  return undefined;
+}
+
+/**
+ * Extract a user-facing message from a structured daemon error.
+ */
+function extractErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null) {
+    const obj = error as Record<string, unknown>;
+    if (typeof obj.message === 'string' && obj.message) return obj.message;
+    if (typeof obj.technical_message === 'string' && obj.technical_message) return obj.technical_message;
+  }
+  return String(error);
+}
+
 // ── Pattern definitions ─────────────────────────────────────────
 
 interface ErrorPattern {
@@ -136,7 +163,7 @@ const ERROR_PATTERNS: ErrorPattern[] = [
     category: 'DB_ERROR',
     patterns: ['SQLITE', 'sqlite', 'database', 'db error', 'no such table', 'disk I/O'],
     codes: ['SQLITE_ERROR', 'SQLITE_CORRUPT', 'SQLITE_FULL'],
-    userMessage: () => 'Database error',
+    userMessage: (ctx) => `Database error: ${extractErrorMessage(ctx.error)}`,
     actionHint: () => 'An internal database error occurred. Try restarting the application.',
     retryable: true,
   },
@@ -337,30 +364,7 @@ function buildRecoveryActions(category: ErrorCategory): RecoveryAction[] {
  * Classify an error into a structured error with user-facing message,
  * actionable hints, and recovery action buttons.
  */
-/**
- * Extract an error code from a structured daemon error or an Error instance.
- */
-function extractErrorCode(error: unknown): string | undefined {
-  if (error instanceof Error) return (error as NodeJS.ErrnoException).code;
-  if (typeof error === 'object' && error !== null) {
-    const obj = error as Record<string, unknown>;
-    if (typeof obj.code === 'string') return obj.code;
-  }
-  return undefined;
-}
 
-/**
- * Extract a user-facing message from a structured daemon error.
- */
-function extractErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'object' && error !== null) {
-    const obj = error as Record<string, unknown>;
-    if (typeof obj.message === 'string' && obj.message) return obj.message;
-    if (typeof obj.technical_message === 'string' && obj.technical_message) return obj.technical_message;
-  }
-  return String(error);
-}
 
 export function classifyError(error: unknown, moduleIdOrCtx?: string | ErrorContext): ClassifiedError {
   const ctx: ErrorContext = typeof moduleIdOrCtx === 'string'
@@ -399,8 +403,8 @@ export function classifyError(error: unknown, moduleIdOrCtx?: string | ErrorCont
     : Math.random().toString(36).slice(2, 10);
   return {
     category: 'UNKNOWN',
-    userMessage: `操作未完成，请重试。诊断编号：${diagnosticId}。`,
-    actionHint: `Operation could not be completed. Diagnostic ID: ${diagnosticId}. Please try again.`,
+    userMessage: `操作未完成：${rawMessage || '未知错误'}。诊断编号：${diagnosticId}。`,
+    actionHint: `Operation failed: ${rawMessage || 'Unknown error'}. Diagnostic ID: ${diagnosticId}.`,
     retryable: false,
     rawMessage,
     moduleId: ctx.moduleId,

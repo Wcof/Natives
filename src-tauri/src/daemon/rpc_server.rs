@@ -771,6 +771,7 @@ async fn handle_conversation_get_messages(request: &RpcRequest, data_store: &Arc
 }
 
 async fn handle_run_start(request: &RpcRequest, data_store: &Arc<DataStore>, event_bus: &Arc<EventBus>) -> RpcResponse {
+    let _ = data_store.migrate_legacy_provider_keys();
     let conversation_id = match request.params.get("conversation_id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return error_response(request, "INVALID_INPUT", "Missing 'conversation_id' parameter"),
@@ -1118,6 +1119,7 @@ async fn handle_permission_respond(request: &RpcRequest, data_store: &Arc<DataSt
 }
 
 async fn handle_provider_list(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
+    let _ = data_store.migrate_legacy_provider_keys();
     let conn = data_store.conn();
     let mut stmt = match conn.prepare(
         "SELECT id, provider_type, display_name, api_base_url, health_status, default_model, created_at, updated_at

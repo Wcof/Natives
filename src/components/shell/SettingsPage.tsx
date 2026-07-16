@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { normalizeThemeId, applyTheme } from '@/lib/theme-engine';
 import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
@@ -34,12 +34,12 @@ function SettingsPageHeader({
   action?: React.ReactNode;
 }) {
   return (
-    <header className="mb-8 flex items-start justify-between gap-4">
+    <header className="settings-page-header">
       <div>
-        <h2 className="text-xl font-semibold tracking-tight text-[var(--text)]">
+        <h2>
           {title}
         </h2>
-        <p className="mt-1.5 text-sm text-[var(--text-secondary)]">
+        <p>
           {description}
         </p>
       </div>
@@ -166,7 +166,6 @@ export default function SettingsPage({
     setLocaleState(nextLocale as Locale);
     try {
       await window.nativesAPI?.setLocale?.(nextLocale);
-      if ((window.nativesAPI as any)?.locale?.setLocale) await (window.nativesAPI as any).locale.setLocale(nextLocale);
     } catch { /* ignore */ }
   }
 
@@ -220,11 +219,11 @@ export default function SettingsPage({
     finally { setProvidersLoading(false); }
   }
 
-  async function handleSaveProvider(data: { presetName: string; name: string; websiteUrl: string; baseUrl: string; keys: { label: string; apiKey: string }[] }) {
+  async function handleSaveProvider(data: { providerType: string; name: string; websiteUrl: string; baseUrl: string; defaultModel: string; keys: { label: string; apiKey: string }[] }) {
     const api = window.nativesAPI;
     if (api?.provider?.create) {
       const initialKey = data.keys[0] ? { label: data.keys[0].label, apiKey: data.keys[0].apiKey } : { label: 'default', apiKey: '' };
-      await api.provider.create({ providerType: data.presetName, displayName: data.name, websiteUrl: data.websiteUrl, baseUrl: data.baseUrl, defaultModel: '', initialKey });
+      await api.provider.create({ providerType: data.providerType, displayName: data.name, websiteUrl: data.websiteUrl, baseUrl: data.baseUrl, defaultModel: data.defaultModel, initialKey });
     } else throw new Error('Provider API not available');
     globalToast(t(locale, 'settings.providerAdded'), 'success');
     await loadProviders();
@@ -233,11 +232,9 @@ export default function SettingsPage({
   async function handleDeleteProvider(id: string) { const a = window.nativesAPI; if (!a?.provider?.delete) return; await a.provider.delete(id); globalToast(t(locale, 'settings.providerDeleted'), 'success'); await loadProviders(); }
   async function handleSaveDefaults(pid: string, m: string | null) { const a = window.nativesAPI; if (a?.provider?.updateDefaults) { await a.provider.updateDefaults({ providerId: pid, defaultModel: m ?? '' }); await loadProviders(); } else throw new Error('updateDefaults'); }
   async function handleAddKey(pid: string, l: string, k: string) { const a = window.nativesAPI; if (a?.provider?.addKey) await a.provider.addKey({ providerId: pid, label: l, apiKey: k }); else throw new Error('addKey'); await loadProviders(); }
-  async function handleTestKey(pid: string, kid: string): Promise<TestKeyResult> { const a = window.nativesAPI; if (a?.provider?.testKey) { const r = await a.provider.testKey({ providerId: pid, keyId: kid }); await loadProviders(); return r as unknown as TestKeyResult; } throw new Error('testKey'); }
+  async function handleTestKey(pid: string, kid: string, model?: string): Promise<TestKeyResult> { const a = window.nativesAPI; if (a?.provider?.testKey) { const r = await a.provider.testKey({ providerId: pid, keyId: kid, model }); await loadProviders(); return r as unknown as TestKeyResult; } throw new Error('testKey'); }
   async function handleSetPrimaryKey(pid: string, kid: string) { const a = window.nativesAPI; if (a?.provider?.setPrimaryKey) { await a.provider.setPrimaryKey({ providerId: pid, keyId: kid }); await loadProviders(); } else throw new Error('setPrimaryKey'); }
   async function handleDeleteKey(pid: string, kid: string) { const a = window.nativesAPI; if (a?.provider?.deleteKey) await a.provider.deleteKey({ providerId: pid, keyId: kid }); else throw new Error('deleteKey'); await loadProviders(); }
-
-  const cardStyle: React.CSSProperties = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: SPACING.md };
 
   // ── Render sections ──
 
@@ -248,25 +245,17 @@ export default function SettingsPage({
           title={t(locale, 'settings.tabGeneral')}
           description={t(locale, 'settings.generalDesc')}
         />
-        <div style={cardStyle}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.sm, marginBottom: SPACING.md }}>
-            <Globe size={16} />
-            <h3 style={{ fontSize: 'var(--font-size-md)', fontWeight: 600 }}>{t(locale, 'settings.language')}</h3>
+        <div className="settings-preference-card">
+          <div className="settings-preference-copy">
+            <span className="settings-preference-icon"><Globe size={18} /></span>
+            <div><h3>{t(locale, 'settings.language')}</h3><p>{locale === 'zh' ? '选择应用界面使用的语言。' : 'Choose the language used by the interface.'}</p></div>
           </div>
           <select
+            className="settings-select"
             value={currentLocale}
             onChange={(event) =>
               void handleLocaleChange(event.target.value)
             }
-            style={{
-              padding: `${SPACING.xs}px ${SPACING.md}px`,
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid var(--border)',
-              background: 'var(--surface)',
-              color: 'var(--text)',
-              fontSize: 'var(--font-size-sm)',
-              cursor: 'pointer',
-            }}
           >
             <option value="zh">简体中文</option>
             <option value="en">English</option>
@@ -283,12 +272,12 @@ export default function SettingsPage({
           title={t(locale, 'settings.tabAppearance')}
           description={t(locale, 'settings.appearanceDesc')}
         />
-        <div style={cardStyle}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.sm, marginBottom: SPACING.md }}>
-            <Palette size={16} />
-            <h3 style={{ fontSize: 'var(--font-size-md)', fontWeight: 600 }}>{t(locale, 'settings.theme')}</h3>
+        <div className="settings-section-card">
+          <div className="settings-section-heading settings-section-heading-with-icon">
+            <span className="settings-preference-icon"><Palette size={18} /></span>
+            <div><h4>{t(locale, 'settings.theme')}</h4><p>{locale === 'zh' ? '主题会立即应用，并自动保存。' : 'Theme changes apply immediately and save automatically.'}</p></div>
           </div>
-          <div style={{ display: 'flex', gap: SPACING.sm }}>
+          <div className="settings-theme-grid">
             {THEMES.map(th => {
               const isSelected = currentTheme === th.id;
               return (
@@ -297,33 +286,12 @@ export default function SettingsPage({
                   type="button"
                   aria-pressed={isSelected}
                   onClick={() => handleSelectTheme(th.id)}
-                  style={{
-                    flex: 1,
-                    padding: `${SPACING.sm}px`,
-                    borderRadius: 'var(--radius-sm)',
-                    background: isSelected ? 'var(--control-selected-bg)' : 'var(--control-bg)',
-                    border: isSelected ? '1px solid var(--border)' : '1px solid var(--border-subtle)',
-                    color: isSelected ? 'var(--control-selected-fg)' : 'var(--control-fg)',
-                    cursor: 'pointer',
-                    fontSize: 'var(--font-size-sm)',
-                    textAlign: 'center',
-                    transition: 'all 150ms ease',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!isSelected) {
-                      e.currentTarget.style.background = 'var(--control-bg-hover)';
-                    } else {
-                      e.currentTarget.style.background = 'var(--control-selected-bg-hover)';
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = isSelected ? 'var(--control-selected-bg)' : 'var(--control-bg)';
-                  }}
+                  className={`settings-theme-option${isSelected ? ' selected' : ''}`}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginBottom: 4 }}>
+                  <div className="settings-theme-preview">
                     {th.icon}
                   </div>
-                  <div>{t(locale, th.labelKey)}</div>
+                  <div><strong>{t(locale, th.labelKey)}</strong><span>{t(locale, th.id === 'dark' ? 'settings.themeDescTerminal' : 'settings.themeDescJasmine')}</span></div>
                 </button>
               );
             })}
@@ -397,32 +365,31 @@ export default function SettingsPage({
             {t(locale, 'common.loading')}
           </div>
         ) : plugins.length === 0 ? (
-          <div style={cardStyle}>
-            <div style={{ textAlign: 'center', padding: SPACING.xl, color: 'var(--text-disabled)', fontSize: 'var(--font-size-sm)' }}>
+          <div className="settings-section-card">
+            <div className="settings-plugin-empty">
               <Package size={24} style={{ margin: '0 auto 8px', display: 'block', opacity: 0.5 }} />
               {t(locale, 'settings.noPlugins')}
             </div>
           </div>
         ) : (
-          <div style={cardStyle}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <div className="settings-section-card settings-plugin-list">
               {plugins.map(p => (
-                <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: SPACING.sm, padding: `${SPACING.xs}px ${SPACING.sm}px`, borderRadius: 'var(--radius-sm)', border: '1px solid transparent', transition: 'all 0.1s' }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 'var(--font-size-sm)', fontWeight: 500 }}>{p.name}</div>
-                    {p.version && <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-disabled)' }}>v{p.version}</div>}
+                <div key={p.id} className="settings-plugin-row">
+                  <span className="settings-preference-icon"><Package size={17} /></span>
+                  <div className="settings-plugin-copy">
+                    <strong>{p.name}</strong>
+                    <span>{p.description || (locale === 'zh' ? '暂无插件说明' : 'No description')}</span>
+                    {p.version && <small>v{p.version}</small>}
                   </div>
                   <button onClick={() => handleTogglePlugin(p.id, p.enabled)}
-                    style={{ padding: '3px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: p.enabled ? 'var(--primary-soft)' : 'var(--surface)', color: 'var(--text)', cursor: 'pointer', fontSize: 'var(--font-size-xs)' }}>
+                    className={`settings-status-button${p.enabled ? ' enabled' : ''}`}>
                     {p.enabled ? t(locale, 'common.disable') : t(locale, 'common.enable')}
                   </button>
-                  <button onClick={() => handleUninstallPlugin(p.id)}
-                    style={{ padding: '3px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid transparent', background: 'transparent', color: 'var(--danger)', cursor: 'pointer', fontSize: 'var(--font-size-xs)' }}>
+                  <button onClick={() => handleUninstallPlugin(p.id)} className="settings-icon-button danger">
                     <Trash size={12} />
                   </button>
                 </div>
               ))}
-            </div>
           </div>
         )}
       </>
@@ -448,7 +415,7 @@ export default function SettingsPage({
     <div style={{ height: '100%', overflow: 'auto' }}>
       <div
         style={{
-          width: 'min(100%, 760px)',
+          width: 'min(100%, 920px)',
           margin: '0 auto',
           boxSizing: 'border-box',
           padding: `${SPACING.xl}px ${SPACING.lg}px ${SPACING.xxl}px`,

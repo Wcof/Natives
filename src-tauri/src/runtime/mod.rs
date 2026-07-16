@@ -18,6 +18,7 @@ use std::path::PathBuf;
 
 /// 单次 stream 调用的入参（对应 CodePilot RuntimeStreamOptions）
 pub struct RuntimeStreamOptions {
+    pub run_id: String,
     pub session_id: String,
     pub prompt: String,
     pub model: String,
@@ -37,6 +38,7 @@ pub struct RuntimeStreamOptions {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RuntimeEvent {
     AssistantDelta { text: String },
+    ReasoningDelta { text: String },
     ToolStarted {
         tool_name: String,
         tool_call_id: String,

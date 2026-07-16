@@ -16,7 +16,6 @@ interface SlashCommandPopoverProps {
   onSelect: (command: SlashCommand) => void;
   onClose: () => void;
   disabled?: boolean;
-  anchorRect?: DOMRect | null;
 }
 
 const SYSTEM_COMMANDS: SlashCommand[] = [
@@ -32,7 +31,6 @@ export default function SlashCommandPopover({
   onSelect,
   onClose,
   disabled = false,
-  anchorRect,
 }: SlashCommandPopoverProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -44,6 +42,14 @@ export default function SlashCommandPopover({
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (!isOpen) return;
+
+      if (filteredCommands.length === 0) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          onClose();
+        }
+        return;
+      }
 
       switch (e.key) {
         case 'ArrowDown':
@@ -72,8 +78,8 @@ export default function SlashCommandPopover({
   useEffect(() => {
     if (isOpen) {
       setSelectedIndex(0);
-      document.addEventListener('keydown', handleKeyDown);
-      return () => document.removeEventListener('keydown', handleKeyDown);
+      document.addEventListener('keydown', handleKeyDown, true);
+      return () => document.removeEventListener('keydown', handleKeyDown, true);
     }
   }, [isOpen, handleKeyDown]);
 
@@ -95,23 +101,21 @@ export default function SlashCommandPopover({
     };
   }, [isOpen, onClose]);
 
-  if (!isOpen || filteredCommands.length === 0 || disabled) return null;
-
-  const top = anchorRect ? anchorRect.bottom + 4 : 'auto';
-  const left = anchorRect ? anchorRect.left : 'auto';
+  if (!isOpen || disabled) return null;
 
   return (
     <div
       ref={popoverRef}
-      className="absolute z-50 min-w-[280px] max-w-[400px] rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5 shadow-popup"
-      style={{ top, left }}
+      className="absolute bottom-full left-0 z-50 mb-2 min-w-[280px] max-w-[400px] rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5 shadow-popup"
     >
       {/* Category header */}
       <div className="px-2.5 pb-1 pt-1 text-[0.625rem] font-semibold uppercase tracking-[0.06em] text-[var(--text-disabled)]">
         System Commands
       </div>
 
-      <div className="flex flex-col gap-0.5">
+      {filteredCommands.length === 0 ? (
+        <div className="px-2.5 py-2 text-xs text-[var(--text-disabled)]">No matching commands</div>
+      ) : <div className="flex flex-col gap-0.5">
         {filteredCommands.map((cmd, index) => (
           <button
             key={cmd.id}
@@ -128,7 +132,7 @@ export default function SlashCommandPopover({
             <span className="text-[0.6875rem] text-[var(--text-disabled)] truncate">{cmd.description}</span>
           </button>
         ))}
-      </div>
+      </div>}
 
       {disabled && (
         <div className="px-2.5 py-2 text-[0.6875rem] text-amber-400 border-t border-[var(--border-subtle)] mt-1">

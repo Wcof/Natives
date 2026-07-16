@@ -4,12 +4,12 @@ use crate::usage::{
     UsageSourceKind, UsageSourceState, UsageSourceStatus, UsageWarning,
 };
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use walkdir::WalkDir;
 
-const SESSIONS_DIR: &str = ".atomcode/sessions";
+const SESSIONS_DIR: &str = "sessions";
 
 struct Turn {
     timestamp_ms: i64,
@@ -69,6 +69,21 @@ struct SessionMeta {
 #[derive(Deserialize)]
 struct TurnStat {
     duration_ms: u64,
+    #[serde(default)]
+    total_tokens: i64,
+    #[serde(default)]
+    turn_count: i64,
+}
+
+#[derive(Deserialize)]
+struct ArchivedSession {
+    id: String,
+    #[serde(default)]
+    working_dir: String,
+    created_at: i64,
+    updated_at: i64,
+    #[serde(default)]
+    turn_stats: Vec<TurnStat>,
 }
 
 pub struct AtomcodeScanResult {
@@ -81,7 +96,7 @@ pub struct AtomcodeScanResult {
 }
 
 pub fn scan_atomcode_logs(start_ms: i64, end_ms: i64, tz: &chrono_tz::Tz) -> AtomcodeScanResult {
-    let Some(home) = dirs::home_dir() else {
+    let Some(home) = crate::usage::tool_home("ATOMCODE_HOME", ".atomcode") else {
         return empty(UsageSourceState::Unavailable, vec![]);
     };
     let root = home.join(SESSIONS_DIR);
@@ -94,13 +109,123 @@ pub fn scan_atomcode_logs(start_ms: i64, end_ms: i64, tz: &chrono_tz::Tz) -> Ato
     }
 
     let turns = scan_session_logs(&root, start_ms, end_ms, tz);
+    let current_ids: HashSet<String> = turns.iter().map(|turn| turn.session_id.clone()).collect();
+    let mut archived = scan_archived_sessions(&root, start_ms, end_ms, tz, &current_ids);
+    let mut daily = daily(&turns);
+    daily.append(&mut archived.daily);
+    let mut activity = activity(&turns);
+    activity.append(&mut archived.activity);
+    let mut sessions = sessions(&turns);
+    sessions.append(&mut archived.sessions);
     AtomcodeScanResult {
-        daily: daily(&turns),
-        activity: activity(&turns),
-        sessions: sessions(&turns),
+        daily,
+        activity,
+        sessions,
         state: UsageSourceState::Ok,
         breadcrumbs,
         warnings: vec![],
+    }
+}
+
+fn scan_archived_sessions(
+    root: &Path,
+    start_ms: i64,
+    end_ms: i64,
+    tz: &chrono_tz::Tz,
+    current_ids: &HashSet<String>,
+) -> AtomcodeScanResult {
+    let mut result = empty(UsageSourceState::Ok, vec![]);
+    for entry in WalkDir::new(root)
+        .max_depth(2)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(bytes) = fs::read(path) else {
+            continue;
+        };
+        let Ok(session) = serde_json::from_slice::<ArchivedSession>(&bytes) else {
+            continue;
+        };
+        if current_ids.contains(&session.id) {
+            continue;
+        }
+        let updated_at_ms = timestamp_ms(session.updated_at);
+        if updated_at_ms < start_ms || updated_at_ms >= end_ms {
+            continue;
+        }
+        let created_at_ms = timestamp_ms(session.created_at);
+        let total_tokens = session
+            .turn_stats
+            .iter()
+            .map(|stat| stat.total_tokens.max(0))
+            .sum::<i64>();
+        let active_seconds = session
+            .turn_stats
+            .iter()
+            .map(|stat| stat.duration_ms.div_ceil(1000) as i64)
+            .sum::<i64>();
+        let user_messages = session.turn_stats.len() as i64;
+        let assistant_messages = session
+            .turn_stats
+            .iter()
+            .map(|stat| stat.turn_count.max(1))
+            .sum::<i64>();
+        let project = (!session.working_dir.is_empty()).then_some(session.working_dir);
+        let (date, hour_start_ms) = localized_time_metrics(updated_at_ms, tz);
+
+        if total_tokens > 0 {
+            result.daily.push(UsageDailyRecord {
+                date,
+                source_id: "atomcode".into(),
+                model_id: None,
+                project_id: project.clone(),
+                terminal_id: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_creation_tokens: None,
+                cache_read_tokens: None,
+                total_tokens: Some(total_tokens),
+                cost_usd: None,
+                cost_quality: UsageQuality::Unavailable,
+            });
+            result.activity.push(UsageActivityBucket {
+                hour_start_ms,
+                source_id: "atomcode".into(),
+                model_id: None,
+                project_id: project.clone(),
+                terminal_id: None,
+                total_tokens: Some(total_tokens),
+                user_messages,
+                assistant_messages,
+                active_seconds: Some(active_seconds),
+            });
+        }
+        result.sessions.push(UsageSessionRecord {
+            session_id: format!("atomcode:{}", session.id),
+            source_id: "atomcode".into(),
+            model_id: None,
+            project_id: project,
+            terminal_id: None,
+            started_at_ms: created_at_ms,
+            ended_at_ms: updated_at_ms,
+            user_messages,
+            assistant_messages,
+            active_seconds: Some(active_seconds),
+            duration_quality: UsageQuality::Reported,
+        });
+    }
+    result
+}
+
+fn timestamp_ms(value: i64) -> i64 {
+    if value.abs() < 10_000_000_000 {
+        value.saturating_mul(1000)
+    } else {
+        value
     }
 }
 
@@ -117,7 +242,11 @@ fn empty(state: UsageSourceState, breadcrumbs: Vec<UsageBreadcrumb>) -> Atomcode
 
 fn scan_session_logs(root: &Path, start_ms: i64, end_ms: i64, tz: &chrono_tz::Tz) -> Vec<Turn> {
     let mut turns = Vec::new();
-    for entry in WalkDir::new(root).max_depth(2).into_iter().filter_map(Result::ok) {
+    for entry in WalkDir::new(root)
+        .max_depth(2)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
         let path = entry.path();
         if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
             continue;
@@ -148,8 +277,11 @@ fn scan_session_logs(root: &Path, start_ms: i64, end_ms: i64, tz: &chrono_tz::Tz
             let usage = snapshot_usage
                 .get(&(record.session_id.clone(), record.turn_id))
                 .unwrap_or(&record.usage);
-            let (input_tokens, output_tokens, cached_tokens) =
-                (usage.prompt, usage.completion, usage.cached);
+            let (input_tokens, output_tokens, cached_tokens) = (
+                usage.prompt.saturating_sub(usage.cached),
+                usage.completion,
+                usage.cached,
+            );
             let (date, hour_start_ms) = localized_time_metrics(record.ts, tz);
             turns.push(Turn {
                 timestamp_ms: record.ts,
@@ -204,21 +336,22 @@ fn daily(turns: &[Turn]) -> Vec<UsageDailyRecord> {
     }
     grouped
         .into_iter()
-        .map(|((date, project_id), (input, output, cache))| UsageDailyRecord {
-            date,
-            source_id: "atomcode".into(),
-            model_id: None,
-            project_id: Some(project_id),
-            terminal_id: None,
-            input_tokens: Some(input),
-            output_tokens: Some(output),
-            cache_creation_tokens: None,
-            cache_read_tokens: Some(cache),
-            // Atomcode's cached count is a subset of prompt, not an extra amount.
-            total_tokens: Some(input + output),
-            cost_usd: None,
-            cost_quality: UsageQuality::Unavailable,
-        })
+        .map(
+            |((date, project_id), (input, output, cache))| UsageDailyRecord {
+                date,
+                source_id: "atomcode".into(),
+                model_id: None,
+                project_id: Some(project_id),
+                terminal_id: None,
+                input_tokens: Some(input),
+                output_tokens: Some(output),
+                cache_creation_tokens: None,
+                cache_read_tokens: Some(cache),
+                total_tokens: Some(crate::usage::token_total(input, output, 0, cache)),
+                cost_usd: None,
+                cost_quality: UsageQuality::Unavailable,
+            },
+        )
         .collect()
 }
 
@@ -228,23 +361,30 @@ fn activity(turns: &[Turn]) -> Vec<UsageActivityBucket> {
         let entry = grouped
             .entry((turn.hour_start_ms, turn.project.clone()))
             .or_insert((0, 0, 0));
-        entry.0 += turn.input_tokens + turn.output_tokens;
+        entry.0 += crate::usage::token_total(
+            turn.input_tokens,
+            turn.output_tokens,
+            0,
+            turn.cached_tokens,
+        );
         entry.1 += 1;
         entry.2 += turn.active_seconds;
     }
     grouped
         .into_iter()
-        .map(|((hour_start_ms, project_id), (tokens, messages, seconds))| UsageActivityBucket {
-            hour_start_ms,
-            source_id: "atomcode".into(),
-            model_id: None,
-            project_id: Some(project_id),
-            terminal_id: None,
-            total_tokens: Some(tokens),
-            user_messages: messages,
-            assistant_messages: messages,
-            active_seconds: Some(seconds),
-        })
+        .map(
+            |((hour_start_ms, project_id), (tokens, messages, seconds))| UsageActivityBucket {
+                hour_start_ms,
+                source_id: "atomcode".into(),
+                model_id: None,
+                project_id: Some(project_id),
+                terminal_id: None,
+                total_tokens: Some(tokens),
+                user_messages: messages,
+                assistant_messages: messages,
+                active_seconds: Some(seconds),
+            },
+        )
         .collect()
 }
 
@@ -263,8 +403,16 @@ fn sessions(turns: &[Turn]) -> Vec<UsageSessionRecord> {
                 model_id: None,
                 project_id: Some(first.project.clone()),
                 terminal_id: None,
-                started_at_ms: turns.iter().map(|turn| turn.timestamp_ms).min().unwrap_or(0),
-                ended_at_ms: turns.iter().map(|turn| turn.timestamp_ms).max().unwrap_or(0),
+                started_at_ms: turns
+                    .iter()
+                    .map(|turn| turn.timestamp_ms)
+                    .min()
+                    .unwrap_or(0),
+                ended_at_ms: turns
+                    .iter()
+                    .map(|turn| turn.timestamp_ms)
+                    .max()
+                    .unwrap_or(0),
                 user_messages: turns.len() as i64,
                 assistant_messages: turns.len() as i64,
                 active_seconds: Some(turns.iter().map(|turn| turn.active_seconds).sum()),
@@ -301,7 +449,8 @@ pub fn atomcode_source_status(
 
 #[cfg(test)]
 mod tests {
-    use super::scan_session_logs;
+    use super::{scan_archived_sessions, scan_session_logs};
+    use std::collections::HashSet;
 
     #[test]
     fn scans_atomcode_session_ledger() {
@@ -328,7 +477,7 @@ mod tests {
         let daily = super::daily(&turns);
         assert_eq!(daily.len(), 1);
         assert_eq!(daily[0].project_id.as_deref(), Some("/work/natives"));
-        assert_eq!(daily[0].input_tokens, Some(100));
+        assert_eq!(daily[0].input_tokens, Some(60));
         assert_eq!(daily[0].cache_read_tokens, Some(40));
         assert_eq!(daily[0].total_tokens, Some(120));
         assert_eq!(super::sessions(&turns)[0].active_seconds, Some(3));
@@ -360,9 +509,36 @@ mod tests {
         );
         std::fs::remove_dir_all(root).unwrap();
         let daily = super::daily(&turns);
-        assert_eq!(daily[0].input_tokens, Some(250));
+        assert_eq!(daily[0].input_tokens, Some(110));
         assert_eq!(daily[0].output_tokens, Some(30));
         assert_eq!(daily[0].cache_read_tokens, Some(140));
         assert_eq!(daily[0].total_tokens, Some(280));
+    }
+
+    #[test]
+    fn scans_standalone_archived_sessions_without_inventing_breakdown() {
+        let root =
+            std::env::temp_dir().join(format!("natives-atomcode-archive-{}", std::process::id()));
+        let project = root.join("sessions/project-hash");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("archived-session.json"),
+            r#"{"id":"archive-1","working_dir":"/work/archive","created_at":1784020103,"updated_at":1784020263,"turn_stats":[{"duration_ms":3000,"total_tokens":900}]}"#,
+        )
+        .unwrap();
+
+        let result = scan_archived_sessions(
+            &root.join("sessions"),
+            1_784_020_000_000,
+            1_784_030_000_000,
+            &chrono_tz::UTC,
+            &HashSet::new(),
+        );
+        std::fs::remove_dir_all(root).unwrap();
+
+        assert_eq!(result.daily.len(), 1);
+        assert_eq!(result.daily[0].total_tokens, Some(900));
+        assert_eq!(result.daily[0].input_tokens, None);
+        assert_eq!(result.sessions[0].session_id, "atomcode:archive-1");
     }
 }

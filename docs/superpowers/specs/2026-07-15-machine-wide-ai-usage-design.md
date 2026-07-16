@@ -26,9 +26,9 @@ Cursor、Claude Desktop、ChatGPT Desktop 和 Antigravity 首版只做安装或�
 
 ## 统一统计口径
 
-- 输入 Token 只表示新鲜输入，不包含缓存读取。
+- 输入 Token 保留来源报告口径；Codex 的原始输入包含缓存输入。
 - 缓存读取和缓存写入分别单列。
-- 总 Token = 新鲜输入 + 输出；缓存不重复混入总 Token。
+- 总 Token = 输入 + 输出 + 缓存读取 + 缓存写入；Codex 按原始输入再加缓存，以匹配 Codex 自身统计。
 - 推理 Token 若来源明确说明包含在输出中则不重复相加；单独上报时并入输出。
 - 费用只使用来源原始费用或项目已有可靠定价；未知为 `null`。
 - 同一来源使用稳定的 `session_id + request/message/turn_id` 去重；代理日志和会话日志能证明为同一请求时只保留一份。
@@ -69,7 +69,7 @@ Atomcode 当前会话由 `.jsonl + .snapshot + .meta` 组成，归档会话是�
 - Atomcode 回归：当前会话缓存归一化、归档 `.json` 纳入、当前/归档 session ID 去重、Snapshot 缺失回退。
 - OpenCode、Gemini CLI、Grok CLI 使用最小真实格式 fixture 验证 Token、时间和去重。
 - 来源发现测试覆盖默认目录、自定义 Home、已检测但无可靠用量。
-- 聚合测试确保缓存不进入总 Token、未知字段保持 `null`、同一事件不重复累计。
+- 聚合测试确保缓存进入总 Token、未知字段保持 `null`、同一事件不重复累计。
 - 运行用量模块 Rust 测试、`cargo check`、前端类型检查与 `git diff --check`。
 
 ## 非目标

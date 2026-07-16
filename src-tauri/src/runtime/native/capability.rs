@@ -14,10 +14,21 @@ use std::sync::{
     Arc,
 };
 use std::time::Instant;
+use tokio::sync::Notify;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct CancellationToken {
     cancelled: Arc<AtomicBool>,
+    notify: Arc<Notify>,
+}
+
+impl Default for CancellationToken {
+    fn default() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            notify: Arc::new(Notify::new()),
+        }
+    }
 }
 
 impl CancellationToken {
@@ -27,10 +38,18 @@ impl CancellationToken {
 
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
+        self.notify.notify_waiters();
     }
 
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
+    }
+
+    pub async fn cancelled(&self) {
+        if self.is_cancelled() {
+            return;
+        }
+        self.notify.notified().await;
     }
 }
 
@@ -51,21 +70,35 @@ impl Default for PermissionMode {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CapabilityContext {
+    pub run_id: String,
     pub session_id: String,
     pub working_dir: Option<PathBuf>,
     pub project_root: Option<PathBuf>,
     pub source: String,
     pub permission_mode: PermissionMode,
+    #[serde(skip_serializing)]
+    pub model: String,
+    #[serde(skip_serializing)]
+    pub provider_id: String,
+    #[serde(skip_serializing)]
+    pub base_url: String,
+    #[serde(skip_serializing)]
+    pub api_key: String,
 }
 
 impl CapabilityContext {
     pub fn for_session(session_id: impl Into<String>, working_dir: Option<PathBuf>) -> Self {
         Self {
+            run_id: String::new(),
             session_id: session_id.into(),
             project_root: working_dir.clone(),
             working_dir,
             source: "native".into(),
             permission_mode: PermissionMode::Ask,
+            model: String::new(),
+            provider_id: String::new(),
+            base_url: String::new(),
+            api_key: String::new(),
         }
     }
 }
@@ -375,6 +408,19 @@ impl PermissionEngine {
                 "settings.deny",
             );
         }
+        let mutates = meta.side_effects.iter().any(|effect| matches!(
+            effect,
+            CapabilitySideEffect::WriteFs
+                | CapabilitySideEffect::ExecuteProcess
+                | CapabilitySideEffect::Network
+                | CapabilitySideEffect::ModuleWrite
+        ));
+        if mutates && context.permission_mode == PermissionMode::Deny {
+            return PermissionDecision::deny("Read-only mode blocks changes", "context");
+        }
+        if mutates && context.permission_mode == PermissionMode::Ask {
+            return PermissionDecision::ask("This action requires approval", "context");
+        }
         if matches_pattern_list(&self.settings.allow, &request.name) {
             return PermissionDecision::allow(
                 "Allowed by runtime permission settings",
@@ -434,6 +480,7 @@ fn capability_pattern_matches(pattern: &str, name: &str) -> bool {
             .is_some_and(|suffix| name.ends_with(suffix) || normalized.ends_with(suffix))
 }
 
+#[derive(Clone)]
 pub struct CapabilityRegistry {
     capabilities: HashMap<String, Arc<dyn AtomicCapability>>,
     aliases: HashMap<String, String>,
@@ -581,6 +628,18 @@ impl<'a> CapabilityExecutor<'a> {
         }
     }
 
+    pub fn permission_decision(
+        &self,
+        request: &CapabilityRequest,
+        context: &CapabilityContext,
+    ) -> PermissionDecision {
+        let canonical = self.registry.resolve_name(&request.name);
+        let Some(capability) = self.registry.get(&canonical) else {
+            return PermissionDecision::deny("Unknown capability", "registry");
+        };
+        self.permission_engine.evaluate(request, &capability.meta(), context)
+    }
+
     pub async fn execute(
         &self,
         request: &CapabilityRequest,
@@ -715,18 +774,25 @@ impl<'a> CapabilityExecutor<'a> {
         }
 
         let exec = capability.execute(&canonical_request, context, cancellation);
-        let exec_result = if meta.timeout_ms > 0 {
-            match tokio::time::timeout(std::time::Duration::from_millis(meta.timeout_ms), exec)
-                .await
-            {
-                Ok(outcome) => outcome,
-                Err(_) => Err(Error::Internal(format!(
-                    "Capability '{}' timed out after {}ms",
-                    meta.name, meta.timeout_ms
-                ))),
+        let exec_result = async {
+            if meta.timeout_ms > 0 {
+                match tokio::time::timeout(std::time::Duration::from_millis(meta.timeout_ms), exec)
+                    .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(_) => Err(Error::Internal(format!(
+                        "Capability '{}' timed out after {}ms",
+                        meta.name, meta.timeout_ms
+                    ))),
+                }
+            } else {
+                exec.await
             }
-        } else {
-            exec.await
+        };
+        tokio::pin!(exec_result);
+        let exec_result = tokio::select! {
+            _ = cancellation.cancelled() => Err(Error::Internal("Capability execution cancelled".into())),
+            result = &mut exec_result => result,
         };
 
         let mut capability_result = match exec_result {
@@ -1259,6 +1325,19 @@ mod tests {
         context.permission_mode = PermissionMode::Allow;
 
         assert_eq!(engine.evaluate(&request, &meta, &context).action, PermissionAction::Allow);
+    }
+
+    #[test]
+    fn ask_mode_allows_reads_but_requests_mutations() {
+        let engine = PermissionEngine::default();
+        let request = CapabilityRequest { call_id: "1".into(), name: "Read".into(), arguments: serde_json::json!({}), working_dir: None };
+        let read = CapabilityMeta::new("Read", "Read file", serde_json::json!({}), "filesystem")
+            .with_side_effects(vec![CapabilitySideEffect::ReadFs]);
+        let write = CapabilityMeta::new("Write", "Write file", serde_json::json!({}), "filesystem")
+            .with_side_effects(vec![CapabilitySideEffect::WriteFs]);
+        let context = CapabilityContext::for_session("s", None);
+        assert_eq!(engine.evaluate(&request, &read, &context).action, PermissionAction::Allow);
+        assert_eq!(engine.evaluate(&CapabilityRequest { name: "Write".into(), ..request }, &write, &context).action, PermissionAction::Ask);
     }
 
     #[test]

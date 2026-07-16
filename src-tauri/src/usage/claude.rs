@@ -15,7 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-const CLAUDE_PROJECTS_DIR: &str = ".claude/projects";
+const CLAUDE_PROJECTS_DIR: &str = "projects";
 const EVENT_GAP_MAX_SECS: f64 = 300.0;
 
 // ── Minimal JSON structs ──
@@ -97,7 +97,7 @@ pub fn scan_claude_logs(
     let mut warnings = Vec::new();
     let mut all_events: Vec<ParsedEvent> = Vec::new();
 
-    let home = match dirs::home_dir() {
+    let home = match crate::usage::tool_home("CLAUDE_CONFIG_DIR", ".claude") {
         Some(h) => h,
         None => {
             warnings.push(UsageWarning {
@@ -266,8 +266,12 @@ fn build_claude_daily(events: &[ParsedEvent]) -> Vec<UsageDailyRecord> {
         entry.1 += event.output_tokens;
         entry.2 += event.cache_creation_tokens;
         entry.3 += event.cache_read_tokens;
-        entry.4 += event.input_tokens + event.output_tokens
-            + event.cache_creation_tokens + event.cache_read_tokens;
+        entry.4 += crate::usage::token_total(
+            event.input_tokens,
+            event.output_tokens,
+            event.cache_creation_tokens,
+            event.cache_read_tokens,
+        );
     }
 
     let mut records = Vec::new();
@@ -306,8 +310,12 @@ fn build_claude_activity(events: &[ParsedEvent]) -> Vec<UsageActivityBucket> {
             event.model.clone(),
             event.project.clone(),
         );
-        let total = event.input_tokens + event.output_tokens
-            + event.cache_creation_tokens + event.cache_read_tokens;
+        let total = crate::usage::token_total(
+            event.input_tokens,
+            event.output_tokens,
+            event.cache_creation_tokens,
+            event.cache_read_tokens,
+        );
         // Each event with usage implies an assistant message
         *assistant_msg_count.entry(key.clone()).or_insert(0) += 1;
         groups.entry(key).or_default().push(total);

@@ -28,3 +28,4 @@ pub mod hook_pipeline;
 pub mod plugin_system;
 pub mod rule_engine;
 pub mod stream_provider;
+pub mod subagent;

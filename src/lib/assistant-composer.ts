@@ -24,6 +24,17 @@ export function fileNameFromPath(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
 }
 
+export function mimeTypeFromPath(path: string): string {
+  const extension = fileNameFromPath(path).split('.').at(-1)?.toLowerCase();
+  return extension === 'json' ? 'application/json'
+    : extension === 'md' ? 'text/markdown'
+      : extension === 'ts' || extension === 'tsx' ? 'text/typescript'
+        : extension === 'js' || extension === 'jsx' ? 'text/javascript'
+          : extension === 'css' ? 'text/css'
+            : extension === 'html' ? 'text/html'
+              : 'text/plain';
+}
+
 export function assistantRetryPrompt(blocks: Array<{ type: string; content: unknown }>): string {
   return blocks.map(block => {
     const content = (block.content ?? {}) as Record<string, unknown>;

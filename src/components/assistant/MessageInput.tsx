@@ -9,6 +9,7 @@ import {
   type AssistantAttachment,
   type AssistantDraft,
   type AssistantPermissionProfile,
+  mimeTypeFromPath,
 } from '@/lib/assistant-composer';
 import ModelSelectorDropdown, { type ProviderWithModels } from './ModelSelectorDropdown';
 import SlashCommandPopover from './SlashCommandPopover';
@@ -19,6 +20,7 @@ interface MessageInputProps {
   locale: Locale;
   onSend: (draft: AssistantDraft) => Promise<boolean>;
   onStop: () => void;
+  onBlockedSend?: () => void;
   isStreaming: boolean;
   disabled?: boolean;
   inputDisabledReason?: 'no_provider' | 'no_model' | 'creating' | null;
@@ -37,15 +39,15 @@ const permissionLabels = {
 } as const;
 
 export default function MessageInput(props: MessageInputProps) {
-  const { locale, onSend, onStop, isStreaming, disabled = false, inputDisabledReason = null,
+  const { locale, onSend, onStop, onBlockedSend, isStreaming, disabled = false, inputDisabledReason = null,
     permissionProfile, onPermissionChange, providers, selectedProviderId, selectedModel, onSelectModel } = props;
   const zh = locale.startsWith('zh');
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<AssistantAttachment[]>([]);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashQuery, setSlashQuery] = useState('');
-  const [slashAnchor, setSlashAnchor] = useState<DOMRect | null>(null);
   const [permissionOpen, setPermissionOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastSlashIndex = useRef(-1);
   const effectiveDisabled = disabled || inputDisabledReason === 'no_provider' || inputDisabledReason === 'no_model' || inputDisabledReason === 'creating';
@@ -53,7 +55,7 @@ export default function MessageInput(props: MessageInputProps) {
   useEffect(() => {
     if (!textareaRef.current) return;
     textareaRef.current.style.height = 'auto';
-    textareaRef.current.style.height = `${Math.min(Math.max(textareaRef.current.scrollHeight, 88), 220)}px`;
+    textareaRef.current.style.height = `${Math.min(Math.max(textareaRef.current.scrollHeight, 36), 200)}px`;
   }, [input]);
 
   const handleInputChange = (value: string) => {
@@ -64,27 +66,45 @@ export default function MessageInput(props: MessageInputProps) {
     if (atLineStart) {
       setSlashQuery(value.slice(slashIndex + 1));
       lastSlashIndex.current = slashIndex;
-      setSlashAnchor(textareaRef.current?.getBoundingClientRect() ?? null);
     }
   };
 
   const handleSend = async () => {
-    if (isStreaming || effectiveDisabled || !canSendAssistantDraft(input, attachments)) return;
-    const sent = await onSend({ content: input.trim(), attachments });
-    if (!sent) return;
+    if (submitting || effectiveDisabled || !canSendAssistantDraft(input, attachments)) return;
+    if (isStreaming) {
+      onBlockedSend?.();
+      return;
+    }
+    const draft = { content: input.trim(), attachments };
+    setSubmitting(true);
     setInput('');
     setAttachments([]);
     setSlashOpen(false);
+    try {
+      const sent = await onSend(draft);
+      if (!sent) {
+        setInput(current => current || draft.content);
+        setAttachments(current => current.length ? current : draft.attachments);
+      }
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleAddFiles = async () => {
     const paths = await window.nativesAPI?.dialog.pickFiles();
     if (!paths?.length) return;
+    const selected = (await Promise.all(paths.map(async path => {
+      try {
+        const metadata = await window.nativesAPI?.fs?.readFile(path) as unknown as { size?: number } | undefined;
+        return { path, name: fileNameFromPath(path), mimeType: mimeTypeFromPath(path), size: Number(metadata?.size ?? 0) };
+      } catch {
+        return null;
+      }
+    }))).filter((file): file is AssistantAttachment => file !== null);
     setAttachments(current => {
       const known = new Set(current.map(item => item.path));
-      return [...current, ...paths.filter(path => !known.has(path)).map(path => ({
-        path, name: fileNameFromPath(path), mimeType: 'application/octet-stream', size: 0,
-      }))];
+      return [...current, ...selected.filter(file => !known.has(file.path))];
     });
   };
 
@@ -102,8 +122,8 @@ export default function MessageInput(props: MessageInputProps) {
 
   return (
     <div className="mx-auto w-full max-w-[860px] px-5 pb-5 pt-2">
-      <div className="relative rounded-[22px] border border-[var(--border)] bg-[var(--surface)] shadow-[0_8px_30px_rgba(0,0,0,0.08)] transition focus-within:border-[var(--text-disabled)]">
-        <SlashCommandPopover isOpen={slashOpen} query={slashQuery} onSelect={handleSlashSelect} onClose={() => setSlashOpen(false)} disabled={false} anchorRect={slashAnchor} />
+      <div className="relative rounded-[22px] border border-[var(--border)] bg-[var(--surface)] shadow-[0_8px_30px_rgba(0,0,0,0.08)]">
+        <SlashCommandPopover isOpen={slashOpen} query={slashQuery} onSelect={handleSlashSelect} onClose={() => setSlashOpen(false)} disabled={false} />
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-2 px-4 pt-3">
             {attachments.map(file => (
@@ -115,9 +135,10 @@ export default function MessageInput(props: MessageInputProps) {
           </div>
         )}
         <textarea ref={textareaRef} value={input} onChange={event => handleInputChange(event.target.value)}
-          onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void handleSend(); } }}
-          placeholder={placeholder} disabled={effectiveDisabled} rows={3}
-          className="block min-h-[108px] w-full resize-none bg-transparent px-4 pb-2 pt-4 text-[15px] leading-6 text-[var(--text)] outline-none placeholder:text-[var(--text-disabled)] disabled:cursor-not-allowed" />
+          onKeyDown={event => { if (!event.defaultPrevented && event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void handleSend(); } }}
+          placeholder={placeholder} disabled={effectiveDisabled} rows={1}
+          className="block w-full resize-none bg-transparent px-4 pb-2 pt-4 text-[15px] leading-6 text-[var(--text)] placeholder:text-[var(--text-disabled)] disabled:cursor-not-allowed"
+          style={{ outline: 'none', boxShadow: 'none', overflowY: 'auto' }} />
         <div className="flex items-center justify-between gap-3 px-3 pb-3">
           <div className="flex min-w-0 items-center gap-1">
             <button type="button" onClick={() => void handleAddFiles()} disabled={effectiveDisabled || isStreaming} title={zh ? '添加附件' : 'Add attachment'} className="grid h-8 w-8 place-items-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-40"><Plus size={18} /></button>
@@ -136,7 +157,7 @@ export default function MessageInput(props: MessageInputProps) {
           </div>
           <div className="flex min-w-0 items-center gap-1">
             <ModelSelectorDropdown providers={providers} selectedProviderId={selectedProviderId} selectedModel={selectedModel} onSelect={onSelectModel} locale={locale} />
-            {isStreaming ? (
+            {isStreaming || submitting ? (
               <button type="button" onClick={onStop} title={zh ? '停止生成' : 'Stop'} className="grid h-8 w-8 place-items-center rounded-full bg-[var(--text)] text-[var(--surface)]"><Square size={12} fill="currentColor" /></button>
             ) : (
               <button type="button" onClick={() => void handleSend()} disabled={effectiveDisabled || !canSendAssistantDraft(input, attachments)} title={zh ? '发送' : 'Send'} className="grid h-8 w-8 place-items-center rounded-full bg-[var(--text)] text-[var(--surface)] transition disabled:opacity-25"><Send size={15} /></button>

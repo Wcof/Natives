@@ -58,7 +58,7 @@ Use one active fixture whose Snapshot contains two requests and one standalone a
 assert_eq!(active.input_tokens, Some((100 - 40) + (150 - 100)));
 assert_eq!(active.output_tokens, Some(30));
 assert_eq!(active.cache_read_tokens, Some(140));
-assert_eq!(active.total_tokens, Some(140));
+assert_eq!(active.total_tokens, Some(280));
 assert_eq!(archived.total_tokens, Some(900));
 assert_eq!(archived.input_tokens, None);
 ```
@@ -94,7 +94,7 @@ assert_eq!(result.daily[0].input_tokens, Some(10));
 assert_eq!(result.daily[0].output_tokens, Some(5));
 assert_eq!(result.daily[0].cache_read_tokens, Some(7));
 assert_eq!(result.daily[0].cache_creation_tokens, Some(3));
-assert_eq!(result.daily[0].total_tokens, Some(15));
+assert_eq!(result.daily[0].total_tokens, Some(25));
 ```
 
 - [ ] **Step 2: Verify RED**
@@ -121,13 +121,13 @@ Expected: all OpenCode tests pass.
 
 - [ ] **Step 1: Write a failing Gemini fixture test**
 
-Create `tmp/project/chats/session-1.json` containing one `type: gemini` message with input/output/thoughts/cached fields. Assert thoughts are included once in output and cache is excluded from total.
+Create `tmp/project/chats/session-1.json` containing one `type: gemini` message with input/output/thoughts/cached fields. Assert thoughts and cache are included once in total.
 
 ```rust
 assert_eq!(record.input_tokens, Some(10));
 assert_eq!(record.output_tokens, Some(6));
 assert_eq!(record.cache_read_tokens, Some(8));
-assert_eq!(record.total_tokens, Some(16));
+assert_eq!(record.total_tokens, Some(24));
 ```
 
 - [ ] **Step 2: Verify RED**
@@ -160,7 +160,7 @@ Create `sessions/project/session/summary.json` and `signals.json` using document
 assert_eq!(record.input_tokens, Some(7_210));
 assert_eq!(record.cache_read_tokens, Some(41_000));
 assert_eq!(record.output_tokens, Some(1_893));
-assert_eq!(record.total_tokens, Some(9_103));
+assert_eq!(record.total_tokens, Some(50_103));
 ```
 
 - [ ] **Step 2: Verify RED**
@@ -190,7 +190,7 @@ Expected: all Grok tests pass.
 
 - [ ] **Step 1: Write failing root and aggregate tests**
 
-Assert custom Home plus default Home are deduplicated, cache-normalized records retain cache without adding it to total, and detected-only statuses enter the source list without daily rows.
+Assert custom Home plus default Home are deduplicated, cache tokens are included in total, and detected-only statuses enter the source list without daily rows.
 
 ```rust
 assert_eq!(dedupe_paths(vec![root.clone(), root.clone()]), vec![root]);
@@ -210,7 +210,7 @@ Resolve default and process-visible custom homes (`CLAUDE_CONFIG_DIR`, `CODEX_HO
 
 - [ ] **Step 4: Bump snapshot schema**
 
-Change `SNAPSHOT_SCHEMA_VERSION` from `4` to `5` so cache-inclusive Atomcode snapshots are rejected.
+Change `SNAPSHOT_SCHEMA_VERSION` to `6` so snapshots using the old total-token formula are rejected.
 
 - [ ] **Step 5: Verify GREEN**
 

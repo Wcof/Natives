@@ -47,6 +47,7 @@ pub struct UserProvider {
     pub default_model: Option<String>,
     pub primary_key_id: Option<String>,
     pub keys: Vec<ProviderKey>,
+    pub models: Vec<DiscoveredModel>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -99,11 +100,50 @@ pub struct ProviderTestInput {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RawProviderTestInput {
+    #[serde(default)]
+    pub provider_type: String,
     pub base_url: String,
     pub api_key: String,
     /// Optional model to test with (for OpenAI-compatible providers)
     #[serde(default)]
     pub model: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderDiscoveryInput {
+    #[serde(default)]
+    pub provider_type: String,
+    pub base_url: String,
+    pub api_key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderDiscoverySavedInput {
+    pub provider_id: String,
+    pub key_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveredModel {
+    pub id: String,
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProviderDefaultsInput {
+    pub provider_id: String,
+    pub default_model: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetPrimaryKeyInput {
+    pub provider_id: String,
+    pub key_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -179,6 +219,23 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
         .map(|(kid, pid, _, _, _, _, _, _, _, _, _)| (pid.clone(), kid.clone()))
         .collect();
 
+    let model_rows: std::collections::HashMap<String, Vec<DiscoveredModel>> = {
+        let assistant = crate::db::get_assistant_db_conn()?;
+        let mut stmt = assistant.prepare(
+            "SELECT provider_id, model_id, display_name FROM assistant_model_cache ORDER BY model_id ASC",
+        ).map_err(|e| Error::Internal(e.to_string()))?;
+        let mut grouped: std::collections::HashMap<String, Vec<DiscoveredModel>> = std::collections::HashMap::new();
+        let rows = stmt.query_map([], |row| Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+        ))).map_err(|e| Error::Internal(e.to_string()))?;
+        for row in rows.flatten() {
+            grouped.entry(row.0).or_default().push(DiscoveredModel { id: row.1, display_name: row.2 });
+        }
+        grouped
+    };
+
     // Assemble — keys are masked, NEVER return full key to frontend
     let result = providers
         .into_iter()
@@ -204,7 +261,10 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
                 })
                 .collect();
 
-            UserProvider { id, preset_name, name, website_url, base_url, default_model, primary_key_id, keys, created_at, updated_at }
+            UserProvider {
+                models: model_rows.get(&id).cloned().unwrap_or_default(),
+                id, preset_name, name, website_url, base_url, default_model, primary_key_id, keys, created_at, updated_at,
+            }
         })
         .collect();
 
@@ -214,36 +274,47 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
 /// Add a new provider with initial key and default model.
 #[tauri::command]
 pub fn add_provider(state: State<'_, AppState>, input: AddProviderInput) -> Result<UserProvider> {
-    let pool_conn = state.db.get()
+    let display_name = input.display_name.trim().to_string();
+    let provider_type = input.provider_type.trim().to_string();
+    let base_url = normalize_url(&input.base_url)?;
+    let default_model = input.default_model.trim().to_string();
+    let api_key = input.initial_key.api_key.trim();
+    if display_name.is_empty() || provider_type.is_empty() || default_model.is_empty() || api_key.is_empty() {
+        return Err(Error::InvalidInput("Provider name, type, default model, and API key are required".to_string()));
+    }
+    let mut pool_conn = state.db.get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
-
-    ensure_tables(conn)?;
+    ensure_tables(&pool_conn)?;
 
     let id = uuid_v4();
     let now = chrono_now();
-
-    conn.execute(
+    let transaction = pool_conn.transaction().map_err(|e| Error::Internal(e.to_string()))?;
+    transaction.execute(
         "INSERT INTO user_providers (id, preset_name, name, website_url, base_url, default_model, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![id, input.provider_type, input.display_name, input.website_url, input.base_url, input.default_model, now, now],
+        params![id, provider_type, display_name, input.website_url.trim(), base_url, default_model, now, now],
     ).map_err(|e| Error::Internal(e.to_string()))?;
 
     let kid = uuid_v4();
-    let masked_key = mask_api_key(&input.initial_key.api_key);
-    let (encrypted, dek_encrypted) = if input.initial_key.api_key.is_empty() {
-        (String::new(), String::new())
-    } else {
-        provider_key_manager::envelope_encrypt(&input.initial_key.api_key, conn)?
-    };
-    conn.execute(
+    let masked_key = mask_api_key(api_key);
+    let (encrypted, dek_encrypted) = provider_key_manager::envelope_encrypt(api_key, &transaction)?;
+    let key_label = input.initial_key.label.trim();
+    let key_label = if key_label.is_empty() { "API Key" } else { key_label };
+    transaction.execute(
         "INSERT INTO provider_api_keys (id, provider_id, label, api_key_encrypted, dek_encrypted, masked_key, is_primary, is_active, test_status, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, 1, 'untested', ?7)",
-        params![kid, id, input.initial_key.label, encrypted, dek_encrypted, masked_key, now],
+        params![kid, id, key_label, encrypted, dek_encrypted, masked_key, now],
+    ).map_err(|e| Error::Internal(e.to_string()))?;
+    transaction.commit().map_err(|e| Error::Internal(e.to_string()))?;
+
+    let assistant = crate::db::get_assistant_db_conn()?;
+    assistant.execute(
+        "INSERT OR IGNORE INTO assistant_model_cache (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at) VALUES (?1, ?2, ?3, ?4, '{}', 0, 0, 'manual', datetime('now'))",
+        params![uuid_v4(), id, default_model, default_model],
     ).map_err(|e| Error::Internal(e.to_string()))?;
 
     let key = ProviderKey {
         id: kid, provider_id: id.clone(),
-        label: input.initial_key.label, masked_key,
+        label: key_label.to_string(), masked_key,
         is_primary: true, is_active: true,
         status: "untested".to_string(),
         last_tested_at: None, last_error_code: None, last_error_message: None,
@@ -251,11 +322,12 @@ pub fn add_provider(state: State<'_, AppState>, input: AddProviderInput) -> Resu
     };
 
     Ok(UserProvider {
-        id, preset_name: input.provider_type, name: input.display_name,
-        website_url: input.website_url, base_url: input.base_url,
-        default_model: Some(input.default_model),
+        id, preset_name: provider_type, name: display_name,
+        website_url: input.website_url.trim().to_string(), base_url,
+        default_model: Some(default_model.clone()),
         primary_key_id: Some(key.id.clone()),
         keys: vec![key],
+        models: vec![DiscoveredModel { id: default_model.clone(), display_name: Some(default_model.clone()) }],
         created_at: now.clone(), updated_at: now,
     })
 }
@@ -292,6 +364,55 @@ pub fn add_provider_key(state: State<'_, AppState>, input: AddProviderKeyInput) 
         last_tested_at: None, last_error_code: None, last_error_message: None,
         created_at: now,
     })
+}
+
+#[tauri::command]
+pub fn provider_update_defaults(state: State<'_, AppState>, input: UpdateProviderDefaultsInput) -> Result<()> {
+    let model = input.default_model.trim();
+    if model.is_empty() {
+        return Err(Error::InvalidInput("Default model cannot be empty".to_string()));
+    }
+    let pool_conn = state.db.get()
+        .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
+    let updated = pool_conn.execute(
+        "UPDATE user_providers SET default_model = ?1, updated_at = ?2 WHERE id = ?3",
+        params![model, chrono_now(), input.provider_id],
+    ).map_err(|e| Error::Internal(e.to_string()))?;
+    if updated == 0 {
+        return Err(Error::InvalidInput("Provider not found".to_string()));
+    }
+    let assistant = crate::db::get_assistant_db_conn()?;
+    assistant.execute(
+        "INSERT OR IGNORE INTO assistant_model_cache (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at) VALUES (?1, ?2, ?3, ?4, '{}', 0, 0, 'manual', datetime('now'))",
+        params![uuid_v4(), input.provider_id, model, model],
+    ).map_err(|e| Error::Internal(e.to_string()))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn provider_set_primary_key(state: State<'_, AppState>, input: SetPrimaryKeyInput) -> Result<()> {
+    let mut pool_conn = state.db.get()
+        .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
+    ensure_tables(&pool_conn)?;
+    let transaction = pool_conn.transaction().map_err(|e| Error::Internal(e.to_string()))?;
+    let eligible: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM provider_api_keys WHERE id = ?1 AND provider_id = ?2 AND is_active = 1 AND test_status = 'valid')",
+        params![input.key_id, input.provider_id],
+        |row| row.get(0),
+    ).map_err(|e| Error::Internal(e.to_string()))?;
+    if !eligible {
+        return Err(Error::InvalidInput("Test the key successfully before setting it as primary".to_string()));
+    }
+    transaction.execute(
+        "UPDATE provider_api_keys SET is_primary = 0 WHERE provider_id = ?1",
+        params![input.provider_id],
+    ).map_err(|e| Error::Internal(e.to_string()))?;
+    transaction.execute(
+        "UPDATE provider_api_keys SET is_primary = 1 WHERE id = ?1 AND provider_id = ?2",
+        params![input.key_id, input.provider_id],
+    ).map_err(|e| Error::Internal(e.to_string()))?;
+    transaction.commit().map_err(|e| Error::Internal(e.to_string()))?;
+    Ok(())
 }
 
 /// Delete a provider API key.
@@ -369,6 +490,108 @@ fn normalize_url(raw: &str) -> Result<String> {
 /// Build the chat completions URL from a normalized base URL
 fn chat_completions_url(base_url: &str) -> String {
     format!("{}/chat/completions", base_url.trim_end_matches('/'))
+}
+
+fn models_url(base_url: &str) -> Result<String> {
+    Ok(format!("{}/models", normalize_url(base_url)?.trim_end_matches('/')))
+}
+
+#[tauri::command]
+pub async fn provider_discover_models(input: ProviderDiscoveryInput) -> Result<Vec<DiscoveredModel>> {
+    if input.api_key.trim().is_empty() {
+        return Err(Error::InvalidInput("API key cannot be empty".to_string()));
+    }
+    let response = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| Error::Internal(format!("Failed to build HTTP client: {e}")))?
+        .get(models_url(&input.base_url)?)
+        .header("Authorization", format!("Bearer {}", input.api_key.trim()))
+        .send()
+        .await
+        .map_err(|e| Error::Internal(if e.is_timeout() { "Model discovery timed out".to_string() } else { format!("Model discovery failed: {e}") }))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::Internal(format!("Model discovery HTTP {status}: {}", body.chars().take(200).collect::<String>())));
+    }
+    let payload = response.json::<serde_json::Value>().await
+        .map_err(|e| Error::Internal(format!("Invalid model response: {e}")))?;
+    let mut models: Vec<DiscoveredModel> = payload.get("data")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|model| {
+            let id = model.get("id")?.as_str()?.trim();
+            if id.is_empty() { return None; }
+            let display_name = model.get("display_name")
+                .or_else(|| model.get("displayName"))
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
+            Some(DiscoveredModel { id: id.to_string(), display_name })
+        })
+        .collect();
+    models.sort_by(|left, right| left.id.cmp(&right.id));
+    models.dedup_by(|left, right| left.id == right.id);
+    Ok(models)
+}
+
+#[tauri::command]
+pub async fn provider_discover_models_saved(
+    state: State<'_, AppState>,
+    input: ProviderDiscoverySavedInput,
+) -> Result<Vec<DiscoveredModel>> {
+    let provider_id = input.provider_id;
+    let key_id = input.key_id;
+    let (base_url, api_key) = {
+        let pool_conn = state.db.get()
+            .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
+        let conn: &rusqlite::Connection = &*pool_conn;
+        let (encrypted, dek, base_url): (String, Option<String>, String) = conn
+            .query_row(
+                "SELECT k.api_key_encrypted, k.dek_encrypted, p.base_url
+                 FROM provider_api_keys k
+                 JOIN user_providers p ON k.provider_id = p.id
+                 WHERE k.id = ?1 AND k.provider_id = ?2",
+                params![key_id, provider_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(|e| Error::Internal(format!("Failed to fetch key: {e}")))?;
+        let api_key = if let Some(dek) = &dek {
+            if !dek.is_empty() {
+                provider_key_manager::envelope_decrypt(&encrypted, dek, conn)?
+            } else {
+                let encryption_key = env_manager::get_encryption_key(conn)?;
+                env_manager::decrypt(&encrypted, &encryption_key)?
+            }
+        } else {
+            let encryption_key = env_manager::get_encryption_key(conn)?;
+            env_manager::decrypt(&encrypted, &encryption_key)?
+        };
+        (base_url, api_key)
+    };
+
+    let discover_input = ProviderDiscoveryInput {
+        provider_type: "openai_compatible".to_string(),
+        base_url,
+        api_key,
+    };
+    let models = provider_discover_models(discover_input).await?;
+    let assistant = crate::db::get_assistant_db_conn()?;
+    let tx = assistant.unchecked_transaction().map_err(|e| Error::Internal(e.to_string()))?;
+    tx.execute("DELETE FROM assistant_model_cache WHERE provider_id = ?1", params![provider_id])
+        .map_err(|e| Error::Internal(e.to_string()))?;
+    for model in &models {
+        tx.execute(
+            "INSERT INTO assistant_model_cache (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at) VALUES (?1, ?2, ?3, ?4, '{}', 0, 0, 'api_discovery', datetime('now'))",
+            params![uuid_v4(), provider_id, model.id, model.display_name],
+        ).map_err(|e| Error::Internal(e.to_string()))?;
+    }
+    tx.commit().map_err(|e| Error::Internal(e.to_string()))?;
+    Ok(models)
 }
 
 /// Execute the actual provider test request (shared by provider_test and test_provider_raw).
@@ -485,8 +708,8 @@ async fn execute_provider_test(
         };
     }
 
-    // Legacy test: GET /v1/models endpoint
-    let request_url = format!("{}/v1/models", normalized.trim_end_matches('/'));
+    // Legacy test: GET /models on the normalized OpenAI-compatible base URL.
+    let request_url = format!("{}/models", normalized.trim_end_matches('/'));
 
     let response = client
         .get(&request_url)
@@ -526,42 +749,47 @@ pub async fn provider_test(
     state: State<'_, AppState>,
     input: ProviderTestInput,
 ) -> Result<ProviderTestResult> {
-    let pool_conn = state.db.get()
-        .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let conn: &rusqlite::Connection = &*pool_conn;
-
-    // Fetch the API key and base URL
-    let (api_key_encrypted, dek_encrypted, base_url): (String, Option<String>, String) = conn
-        .query_row(
-            "SELECT k.api_key_encrypted, k.dek_encrypted, p.base_url
-             FROM provider_api_keys k
-             JOIN user_providers p ON k.provider_id = p.id
-             WHERE k.id = ?1 AND k.provider_id = ?2",
-            params![input.key_id, input.provider_id],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            },
-        )
-        .map_err(|e| Error::Internal(format!("Failed to fetch key: {e}")))?;
-
-    // Decrypt the API key
-    let api_key = if let Some(dek) = &dek_encrypted {
-        if !dek.is_empty() {
-            provider_key_manager::envelope_decrypt(&api_key_encrypted, dek, conn)?
+    let provider_id = input.provider_id;
+    let key_id = input.key_id;
+    let (base_url, api_key, default_model) = {
+        let pool_conn = state.db.get()
+            .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
+        let conn: &rusqlite::Connection = &*pool_conn;
+        let (encrypted, dek, base_url, default_model): (String, Option<String>, String, Option<String>) = conn
+            .query_row(
+                "SELECT k.api_key_encrypted, k.dek_encrypted, p.base_url, p.default_model
+                 FROM provider_api_keys k
+                 JOIN user_providers p ON k.provider_id = p.id
+                 WHERE k.id = ?1 AND k.provider_id = ?2",
+                params![key_id, provider_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .map_err(|e| Error::Internal(format!("Failed to fetch key: {e}")))?;
+        let api_key = if let Some(dek) = &dek {
+            if !dek.is_empty() {
+                provider_key_manager::envelope_decrypt(&encrypted, dek, conn)?
+            } else {
+                let encryption_key = env_manager::get_encryption_key(conn)?;
+                env_manager::decrypt(&encrypted, &encryption_key)?
+            }
         } else {
             let encryption_key = env_manager::get_encryption_key(conn)?;
-            env_manager::decrypt(&api_key_encrypted, &encryption_key)?
-        }
-    } else {
-        let encryption_key = env_manager::get_encryption_key(conn)?;
-        env_manager::decrypt(&api_key_encrypted, &encryption_key)?
+            env_manager::decrypt(&encrypted, &encryption_key)?
+        };
+        (base_url, api_key, default_model)
     };
 
-    Ok(execute_provider_test(&base_url, &api_key, input.model.as_deref()).await)
+    let model = input.model.or(default_model);
+    let result = execute_provider_test(&base_url, &api_key, model.as_deref()).await;
+    let now = chrono_now();
+    let status = if result.success { "valid" } else { "invalid" };
+    state.db.get()
+        .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?
+        .execute(
+        "UPDATE provider_api_keys SET test_status = ?1, last_test_at = ?2, last_error_message = ?3, updated_at = ?2 WHERE id = ?4 AND provider_id = ?5",
+        params![status, now, result.error, key_id, provider_id],
+    ).map_err(|e| Error::Internal(e.to_string()))?;
+    Ok(result)
 }
 
 /// Test a provider connection using a raw API key (without saving).
@@ -756,6 +984,11 @@ mod tests {
     fn test_chat_completions_url_trailing_slash() {
         let result = chat_completions_url("https://example.com/");
         assert_eq!(result, "https://example.com/chat/completions");
+    }
+
+    #[test]
+    fn test_models_url_does_not_duplicate_v1() {
+        assert_eq!(models_url("https://api.openai.com/v1").unwrap(), "https://api.openai.com/v1/models");
     }
 
     // ── Integration tests (simulate manual validation) ──

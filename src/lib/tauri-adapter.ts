@@ -35,8 +35,8 @@ export interface ProviderKeySummary {
   isActive: boolean;
   status: 'untested' | 'valid' | 'invalid' | 'rate_limited' | 'unavailable';
   lastTestedAt: string | null;
-  lastErrorCode: string | null;
-  lastErrorMessage: string | null;
+  lastError: string | null;
+  createdAt: string;
 }
 
 export interface ProviderSummary {
@@ -48,6 +48,7 @@ export interface ProviderSummary {
   defaultModel: string | null;
   primaryKeyId: string | null;
   keys: ProviderKeySummary[];
+  models?: Array<{ id: string; displayName?: string | null }>;
 }
 
 export interface ProviderTestResult {
@@ -56,6 +57,56 @@ export interface ProviderTestResult {
   testedAt: string;
   errorCode: string | null;
   userMessage: string | null;
+}
+
+interface StoredProviderKey extends Omit<ProviderKeySummary, 'lastError'> {
+  lastErrorMessage: string | null;
+}
+
+interface StoredProvider {
+  id: string;
+  presetName: string;
+  name: string;
+  websiteUrl: string;
+  baseUrl: string;
+  defaultModel: string | null;
+  primaryKeyId: string | null;
+  keys: StoredProviderKey[];
+  models?: Array<{ id: string; displayName?: string | null }>;
+}
+
+interface StoredProviderTestResult {
+  success: boolean;
+  error: string | null;
+}
+
+function normalizeProviderKey(key: StoredProviderKey): ProviderKeySummary {
+  const { lastErrorMessage, ...rest } = key;
+  return { ...rest, lastError: lastErrorMessage };
+}
+
+function normalizeProvider(provider: StoredProvider): ProviderSummary {
+  return {
+    id: provider.id,
+    providerType: provider.presetName,
+    displayName: provider.name,
+    websiteUrl: provider.websiteUrl,
+    baseUrl: provider.baseUrl,
+    defaultModel: provider.defaultModel,
+    primaryKeyId: provider.primaryKeyId,
+    keys: provider.keys.map(normalizeProviderKey),
+    models: provider.models ?? [],
+  };
+}
+
+function normalizeProviderTest(result: StoredProviderTestResult): ProviderTestResult {
+  return {
+    success: result.success,
+    status: result.success ? 'valid' : 'invalid',
+    testedAt: new Date().toISOString(),
+    errorCode: null,
+    userMessage: result.error,
+  };
 }
 
 export interface ProjectSummary {
@@ -283,8 +334,9 @@ export interface NativesAPI {
     updateDefaults: (input: { providerId: string; defaultModel: string }) => Promise<void>;
     addKey: (input: { providerId: string; label: string; apiKey: string }) => Promise<ProviderKeySummary>;
     testCandidate: (input: { providerType: string; baseUrl: string; apiKey: string; model: string }) => Promise<ProviderTestResult>;
-    testKey: (input: { providerId: string; keyId: string }) => Promise<ProviderTestResult>;
+    testKey: (input: { providerId: string; keyId: string; model?: string }) => Promise<ProviderTestResult>;
     discoverModels: (input: { providerType: string; baseUrl: string; apiKey: string }) => Promise<Array<{ id: string; displayName?: string }>>;
+    discoverModelsSaved: (input: { providerId: string; keyId: string }) => Promise<Array<{ id: string; displayName?: string }>>;
     setPrimaryKey: (input: { providerId: string; keyId: string }) => Promise<void>;
     deleteKey: (input: { providerId: string; keyId: string }) => Promise<void>;
   };
@@ -342,7 +394,7 @@ export interface NativesAPI {
     updateMessageStatus: (params: { messageId: string; status: string; toolResult?: string }) => Promise<void>;
     updateSessionTitle: (params: { sessionId: string; title: string }) => Promise<void>;
     updateSessionModel: (params: { sessionId: string; modelId: string; providerId: string }) => Promise<void>;
-    streamChat: (params: { sessionId: string; model: string; messages: Array<{ role: string; content: string }> }) => Promise<void>;
+    streamChat: (params: { sessionId: string; runId: string; model?: string; runtimeOverride?: string; messages: Array<{ role: string; content: string }> }) => Promise<void>;
     cancelStream: (sessionId: string) => Promise<void>;
   };
   /** 执行引擎设置（PRD 3.4） */
@@ -359,6 +411,7 @@ export interface NativesAPI {
   project: {
     list(): Promise<ProjectSummary[]>;
     register(path: string): Promise<ProjectSummary>;
+    remove(id: string): Promise<void>;
   };
   /** Dialog (file/directory picker) */
   dialog: {
@@ -600,7 +653,10 @@ const nativesAPI: NativesAPI = {
 
   // Locale
   getLocale: () => cmd('get_locale'),
-  setLocale: (locale: string) => cmd('set_locale', { locale }),
+  setLocale: async (locale: string) => {
+    window.dispatchEvent(new CustomEvent('locale-changed', { detail: locale }));
+    await cmd('set_locale', { locale });
+  },
 
   // Notifications
   notification: {
@@ -808,24 +864,26 @@ const nativesAPI: NativesAPI = {
 
   // Provider (unified API — single source of truth)
   provider: {
-    list: () => cmd<ProviderSummary[]>('list_providers'),
+    list: () => cmd<StoredProvider[]>('list_providers').then(providers => providers.map(normalizeProvider)),
     create: (input: { providerType: string; displayName: string; websiteUrl: string; baseUrl: string; defaultModel: string; initialKey: { label: string; apiKey: string } }) =>
-      cmd<ProviderSummary>('add_provider', input),
-    delete: (providerId: string) => cmd('delete_provider', { id: providerId }),
+      cmd<StoredProvider>('add_provider', { input }).then(normalizeProvider),
+    delete: (providerId: string) => cmd('delete_provider', { providerId }),
     updateDefaults: (input: { providerId: string; defaultModel: string }) =>
-      cmd('assistant_provider_update_defaults', { input }),
+      cmd('provider_update_defaults', { input }),
     addKey: (input: { providerId: string; label: string; apiKey: string }) =>
-      cmd<ProviderKeySummary>('add_provider_key', input),
+      cmd<StoredProviderKey>('add_provider_key', { input }).then(normalizeProviderKey),
     testCandidate: (input: { providerType: string; baseUrl: string; apiKey: string; model: string }) =>
-      cmd<ProviderTestResult>('test_provider_raw', { input }),
-    testKey: (input: { providerId: string; keyId: string }) =>
-      cmd<ProviderTestResult>('assistant_provider_test_key', { input }),
+      cmd<StoredProviderTestResult>('test_provider_raw', { input }).then(normalizeProviderTest),
+    testKey: (input: { providerId: string; keyId: string; model?: string }) =>
+      cmd<StoredProviderTestResult>('provider_test', { input }).then(normalizeProviderTest),
     discoverModels: (input: { providerType: string; baseUrl: string; apiKey: string }) =>
       cmd<Array<{ id: string; displayName?: string }>>('provider_discover_models', { input }),
+    discoverModelsSaved: (input: { providerId: string; keyId: string }) =>
+      cmd<Array<{ id: string; displayName?: string }>>('provider_discover_models_saved', { input }),
     setPrimaryKey: (input: { providerId: string; keyId: string }) =>
-      cmd('assistant_provider_set_primary_key', { input }),
+      cmd('provider_set_primary_key', { input }),
     deleteKey: (input: { providerId: string; keyId: string }) =>
-      cmd('assistant_provider_delete_key', { input }),
+      cmd('delete_provider_key', { input }),
   },
 
   // Assistant
@@ -846,7 +904,7 @@ const nativesAPI: NativesAPI = {
       cmd('assistant_update_session_title', params),
     updateSessionModel: (params: { sessionId: string; modelId: string; providerId: string }) =>
       cmd('assistant_update_session_model', params),
-    streamChat: (params: { sessionId: string; model: string; messages: Array<{ role: string; content: string }> }) =>
+    streamChat: (params: { sessionId: string; runId: string; model?: string; runtimeOverride?: string; messages: Array<{ role: string; content: string }> }) =>
       cmd('stream_chat', { input: params }),
     cancelStream: (sessionId: string) =>
       cmd('cancel_stream', { sessionId }),
@@ -1016,6 +1074,7 @@ const nativesAPI: NativesAPI = {
   project: {
     list: (): Promise<ProjectSummary[]> => cmd<ProjectSummary[]>('project_list'),
     register: (path: string): Promise<ProjectSummary> => cmd<ProjectSummary>('project_register', { path }),
+    remove: (id: string): Promise<void> => cmd<void>('project_remove', { id }),
   },
 };
 

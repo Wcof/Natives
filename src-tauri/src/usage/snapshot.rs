@@ -12,7 +12,7 @@ use rusqlite::OptionalExtension;
 
 /// Schema version for snapshot serialization.
 /// Increment when the payload structure changes.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 4;
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 6;
 
 /// Internal snapshot structure stored in SQLite as JSON.
 /// Not directly exposed to the frontend — the frontend gets a sliced

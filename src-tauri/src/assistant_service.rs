@@ -102,6 +102,7 @@ async fn dispatch_rpc(data_store: &Arc<DataStore>, method: &str, params: &Value)
         "run.finish" => handle_run_finish(data_store, params).await,
         "run.retry" => handle_run_retry(data_store, params).await,
         "run.list" => handle_run_list(data_store, params).await,
+        "run.listChildren" => handle_run_list_children(data_store, params).await,
         "run.getEvents" => handle_run_get_events(data_store, params).await,
         "permission.respond" => handle_permission_respond(data_store, params).await,
         "artifact.list" => handle_artifact_list(data_store, params).await,
@@ -483,18 +484,15 @@ async fn handle_conversation_delete(data_store: &Arc<DataStore>, params: &Value)
         None => return error_response("MISSING_PARAM", "id is required"),
     };
 
+    crate::assistant_stream_proxy::cancel_stream_sync(id);
     let conn = data_store.conn();
-    if let Err(e) = conn.execute(
-        "DELETE FROM assistant_messages WHERE conversation_id = ?1",
-        rusqlite::params![id],
-    ) {
-        return error_response("DB_DELETE_ERROR", &e.to_string());
-    }
-    if let Err(e) = conn.execute(
+    match conn.execute(
         "DELETE FROM assistant_conversations WHERE id = ?1",
         rusqlite::params![id],
     ) {
-        return error_response("DB_DELETE_ERROR", &e.to_string());
+        Ok(0) => return error_response("NOT_FOUND", "conversation not found"),
+        Ok(_) => {}
+        Err(e) => return error_response("DB_DELETE_ERROR", &e.to_string()),
     }
     success_response(serde_json::json!({ "deleted": true }))
 }
@@ -524,10 +522,57 @@ async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcRes
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    if attachments.len() > 10 {
+        return error_response("INVALID_INPUT", "At most 10 attachments are allowed");
+    }
+    let mut normalized_attachments = Vec::with_capacity(attachments.len());
+    for attachment in &attachments {
+        let path = match attachment.get("path").and_then(Value::as_str) {
+            Some(path) if !path.trim().is_empty() => path.trim(),
+            _ => return error_response("INVALID_INPUT", "attachment path is required"),
+        };
+        let metadata = match crate::file_manager::read_file(path) {
+            Ok(metadata) if !metadata.truncated => metadata,
+            Ok(_) => {
+                return error_response(
+                    "INVALID_INPUT",
+                    "attachments must be UTF-8 files smaller than 2 MB",
+                )
+            }
+            Err(error) => {
+                return error_response(
+                    "INVALID_INPUT",
+                    &format!("Attachment cannot be read: {error}"),
+                )
+            }
+        };
+        let name = std::path::Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(path);
+        normalized_attachments.push(serde_json::json!({
+            "path": path,
+            "name": name,
+            "mime_type": attachment.get("mime_type").and_then(Value::as_str).unwrap_or("text/plain"),
+            "size": metadata.size,
+        }));
+    }
     let run_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
     let conn = data_store.conn();
+    let pair_available = conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM assistant_model_cache model
+            JOIN assistant_provider_keys key ON key.provider_id = model.provider_id AND key.is_active = 1
+            WHERE model.provider_id = ?1 AND model.model_id = ?2
+        )",
+        rusqlite::params![provider_id, model_id],
+        |row| row.get::<_, bool>(0),
+    ).unwrap_or(false);
+    if !pair_available {
+        return error_response("INVALID_PARAM", "Provider/model pair is not available");
+    }
     let transaction = match conn.unchecked_transaction() {
         Ok(transaction) => transaction,
         Err(e) => return error_response("DB_ERROR", &e.to_string()),
@@ -550,17 +595,7 @@ async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcRes
             }
             block_index += 1;
         }
-        for attachment in &attachments {
-            let path = match attachment.get("path").and_then(Value::as_str) {
-                Some(path) if !path.trim().is_empty() => path,
-                _ => return error_response("INVALID_PARAM", "attachment path is required"),
-            };
-            let payload = serde_json::json!({
-                "path": path,
-                "name": attachment.get("name").and_then(Value::as_str).unwrap_or(path),
-                "mime_type": attachment.get("mime_type").and_then(Value::as_str).unwrap_or("application/octet-stream"),
-                "size": attachment.get("size").and_then(Value::as_i64).unwrap_or(0),
-            });
+        for payload in &normalized_attachments {
             if let Err(e) = transaction.execute(
                 "INSERT INTO assistant_message_blocks (id, message_id, block_type, block_index, content) VALUES (?1, ?2, 'file_reference', ?3, ?4)",
                 rusqlite::params![uuid::Uuid::new_v4().to_string(), message_id, block_index, payload.to_string()],
@@ -581,6 +616,18 @@ async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcRes
         rusqlite::params![conversation_id],
         |row| row.get::<_, String>(0),
     ).unwrap_or_else(|_| "ask".to_string());
+    let active_primary: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM assistant_runs
+             WHERE conversation_id = ?1 AND parent_run_id IS NULL
+               AND status IN ('queued','preparing','running','waiting_permission','cancelling'))",
+            rusqlite::params![conversation_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+    if active_primary {
+        return error_response("RUN_ALREADY_ACTIVE", "This conversation already has an active run");
+    }
     if let Err(e) = transaction.execute(
         "INSERT INTO assistant_runs (id, conversation_id, status, trigger_message_id, provider_id, model_id, permission_profile, started_at)
          VALUES (?1, ?2, 'running', ?3, ?4, ?5, ?6, ?7)",
@@ -659,7 +706,7 @@ async fn handle_run_list(data_store: &Arc<DataStore>, params: &Value) -> RpcResp
     if let Some(cid) = conversation_id {
         let conn = data_store.conn();
         let mut stmt = match conn.prepare(
-            "SELECT id, conversation_id, status, provider_id, model_id, permission_profile, started_at, finished_at, error_code, step_count FROM assistant_runs WHERE conversation_id = ?1 ORDER BY started_at DESC"
+            "SELECT id, conversation_id, status, provider_id, model_id, permission_profile, started_at, finished_at, error_code, step_count FROM assistant_runs WHERE conversation_id = ?1 AND parent_run_id IS NULL ORDER BY started_at DESC"
         ) {
             Ok(s) => s,
             Err(e) => return error_response("DB_ERROR", &e.to_string()),
@@ -675,7 +722,7 @@ async fn handle_run_list(data_store: &Arc<DataStore>, params: &Value) -> RpcResp
     } else {
         let conn = data_store.conn();
         let mut stmt = match conn.prepare(
-            "SELECT id, conversation_id, status, provider_id, model_id, permission_profile, started_at, finished_at, error_code, step_count FROM assistant_runs ORDER BY started_at DESC"
+            "SELECT id, conversation_id, status, provider_id, model_id, permission_profile, started_at, finished_at, error_code, step_count FROM assistant_runs WHERE parent_run_id IS NULL ORDER BY started_at DESC"
         ) {
             Ok(s) => s,
             Err(e) => return error_response("DB_ERROR", &e.to_string()),
@@ -689,6 +736,26 @@ async fn handle_run_list(data_store: &Arc<DataStore>, params: &Value) -> RpcResp
         drop(conn);
         success_response(serde_json::json!(collected))
     }
+}
+
+async fn handle_run_list_children(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
+    let parent_id = match params.get("parent_run_id").and_then(Value::as_str) {
+        Some(id) => id,
+        None => return error_response("MISSING_PARAM", "parent_run_id is required"),
+    };
+    let conn = data_store.conn();
+    let mut stmt = match conn.prepare(
+        "SELECT id, conversation_id, status, provider_id, model_id, permission_profile, started_at, finished_at, error_code, step_count
+         FROM assistant_runs WHERE parent_run_id = ?1 ORDER BY started_at ASC",
+    ) {
+        Ok(stmt) => stmt,
+        Err(e) => return error_response("DB_ERROR", &e.to_string()),
+    };
+    let rows = match stmt.query_map(rusqlite::params![parent_id], row_to_run) {
+        Ok(rows) => rows,
+        Err(e) => return error_response("DB_QUERY_ERROR", &e.to_string()),
+    };
+    success_response(serde_json::json!(rows.filter_map(|row| row.ok()).collect::<Vec<_>>()))
 }
 
 fn row_to_run(row: &rusqlite::Row) -> rusqlite::Result<Value> {
@@ -765,11 +832,15 @@ async fn handle_permission_respond(data_store: &Arc<DataStore>, params: &Value) 
 
     let now = chrono::Utc::now().to_rfc3339();
     let conn = data_store.conn();
-    if let Err(e) = conn.execute(
-        "UPDATE assistant_permission_requests SET status = ?1, scope = ?2, responded_at = ?3 WHERE id = ?4",
+    let changed = match conn.execute(
+        "UPDATE assistant_permission_requests SET status = ?1, scope = ?2, responded_at = ?3 WHERE id = ?4 AND status = 'pending'",
         rusqlite::params![if approved { "approved" } else { "rejected" }, scope, now, request_id],
     ) {
-        return error_response("DB_UPDATE_ERROR", &e.to_string());
+        Ok(changed) => changed,
+        Err(e) => return error_response("DB_UPDATE_ERROR", &e.to_string()),
+    };
+    if changed == 0 {
+        return error_response("NOT_FOUND", "permission request is no longer pending");
     }
     success_response(serde_json::json!({ "request_id": request_id, "approved": approved }))
 }
@@ -901,6 +972,11 @@ mod tests {
     #[tokio::test]
     async fn conversation_permission_and_attachments_round_trip() {
         let store = Arc::new(DataStore::new(":memory:").unwrap());
+        let attachment_path = std::path::PathBuf::from(format!(
+            "/tmp/natives-assistant-test-{}.txt",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&attachment_path, "example attachment").unwrap();
         let created = dispatch_rpc(
             &store,
             "conversation.create",
@@ -926,6 +1002,9 @@ mod tests {
         )
         .await;
         assert!(updated.success);
+        store.conn().execute("INSERT INTO assistant_provider_configs (id, provider_type, display_name, api_base_url, created_at, updated_at) VALUES ('provider', 'openai', 'Provider', 'https://example.com', datetime('now'), datetime('now'))", []).unwrap();
+        store.conn().execute("INSERT INTO assistant_provider_keys (id, provider_id, encrypted_key, masked_key, created_at) VALUES ('key', 'provider', 'encrypted', '***', datetime('now'))", []).unwrap();
+        store.conn().execute("INSERT INTO assistant_model_cache (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at) VALUES ('model-cache', 'provider', 'model', 'model', '{}', 0, 0, 'manual', datetime('now'))", []).unwrap();
 
         let started = dispatch_rpc(
             &store,
@@ -936,7 +1015,7 @@ mod tests {
                 "model_id": "model",
                 "content": "Inspect this file",
                 "attachments": [{
-                    "path": "/tmp/example.txt",
+                    "path": attachment_path.to_string_lossy().to_string(),
                     "name": "example.txt",
                     "mime_type": "text/plain",
                     "size": 12
@@ -950,14 +1029,23 @@ mod tests {
             "INSERT INTO assistant_permission_requests (id, run_id, tool_call_id, tool_name, reason, input, created_at) VALUES ('permission', ?1, 'tool', 'Read', 'test', '{}', ?2)",
             rusqlite::params![run_id, chrono::Utc::now().to_rfc3339()],
         ).unwrap();
-        let responded = dispatch_rpc(&store, "permission.respond", &serde_json::json!({
-            "request_id": "permission", "approved": true, "scope": "this_run"
-        })).await;
+        let responded = dispatch_rpc(
+            &store,
+            "permission.respond",
+            &serde_json::json!({
+                "request_id": "permission", "approved": true, "scope": "this_run"
+            }),
+        )
+        .await;
         assert!(responded.success);
-        let permission: (String, String) = store.conn().query_row(
-            "SELECT status, scope FROM assistant_permission_requests WHERE id = 'permission'", [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        ).unwrap();
+        let permission: (String, String) = store
+            .conn()
+            .query_row(
+                "SELECT status, scope FROM assistant_permission_requests WHERE id = 'permission'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
         assert_eq!(permission, ("approved".into(), "this_run".into()));
 
         let conversations = dispatch_rpc(&store, "conversation.list", &Value::Null)
@@ -989,8 +1077,9 @@ mod tests {
         assert_eq!(messages[0]["content_blocks"][1]["type"], "file_reference");
         assert_eq!(
             messages[0]["content_blocks"][1]["content"]["path"],
-            "/tmp/example.txt"
+            attachment_path.to_string_lossy().to_string()
         );
+        let _ = std::fs::remove_file(attachment_path);
     }
 
     #[tokio::test]

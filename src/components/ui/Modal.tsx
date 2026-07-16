@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef } from 'react';
 import { useHydrated } from '@/hooks/useHydrated';
-import type { CSSProperties, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
@@ -21,10 +21,6 @@ interface ModalProps {
   className?: string;
   contentClassName?: string;
 }
-
-type ModalWidthStyle = CSSProperties & {
-  '--modal-width': string;
-};
 
 export default function Modal({
   isOpen,
@@ -106,13 +102,9 @@ export default function Modal({
   }
 
   const showHeader = Boolean(title) || showCloseButton;
-  const widthStyle: ModalWidthStyle = {
-    '--modal-width': `${width}px`,
-  };
-
   return createPortal(
     <div
-      style={{ position: 'absolute', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0, 0, 0, 0.4)', animation: `fadeIn ${TRANSITION.normal}` }}
+      style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0, 0, 0, 0.4)', animation: `fadeIn ${TRANSITION.normal}`, pointerEvents: 'auto' }}
       onMouseDown={(event) => {
         if (
           closeOnBackdropClick &&
@@ -130,7 +122,6 @@ export default function Modal({
         tabIndex={-1}
         className={['anim-dropIn', className].filter(Boolean).join(' ')}
         style={{
-          ...widthStyle,
           background: 'var(--surface)',
           border: '1px solid var(--border)',
           borderRadius: BORDER_RADIUS.lg,
@@ -139,7 +130,7 @@ export default function Modal({
           flexDirection: 'column',
           overflow: 'hidden',
           maxHeight: '85vh',
-          width: `min(var(--modal-width),calc(100vw-2rem))`,
+          width: `min(${width}px, calc(100vw - 2rem))`,
           outline: 'none',
         }}
         onKeyDown={handleKeyDown}

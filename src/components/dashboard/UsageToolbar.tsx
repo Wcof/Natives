@@ -27,6 +27,7 @@ interface Props {
   onTerminalFilterChange: (val: string[] | null) => void;
   onSelectDir?: () => void;
   style?: React.CSSProperties;
+  children?: React.ReactNode;
 }
 
 const PRESETS = [
@@ -42,8 +43,16 @@ interface FilterDropdownProps {
   icon: React.ReactNode;
   value: string;
   onChange: (val: string) => void;
-  options: { id: string; label: string }[];
+  options: { id: string; label: string; title?: string }[];
   placeholder: string;
+}
+
+function getPathBasename(path: string): string {
+  if (!path) return '';
+  const cleaned = path.replace(/[/\\]+$/, '');
+  const lastSlashIndex = Math.max(cleaned.lastIndexOf('/'), cleaned.lastIndexOf('\\'));
+  if (lastSlashIndex === -1) return cleaned;
+  return cleaned.substring(lastSlashIndex + 1);
 }
 
 function FilterDropdown({ icon, value, onChange, options, placeholder }: FilterDropdownProps) {
@@ -56,6 +65,7 @@ function FilterDropdown({ icon, value, onChange, options, placeholder }: FilterD
         value={value}
         onChange={(e) => onChange(e.target.value)}
         style={{
+          width: '160px',
           padding: '5px 24px 5px 28px',
           borderRadius: 20,
           border: '1px solid var(--border)',
@@ -68,11 +78,14 @@ function FilterDropdown({ icon, value, onChange, options, placeholder }: FilterD
           fontFamily: 'inherit',
           outline: 'none',
           fontWeight: 500,
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
         }}
       >
         <option value="">{placeholder}</option>
         {options.map((o) => (
-          <option key={o.id} value={o.id}>
+          <option key={o.id} value={o.id} title={o.title ?? o.label}>
             {o.label}
           </option>
         ))}
@@ -91,6 +104,7 @@ export function UsageToolbar({
   onSourceFilterChange, onModelFilterChange, onProjectFilterChange, onTerminalFilterChange,
   onSelectDir,
   style,
+  children,
 }: Props) {
   const locale = useLocale();
 
@@ -207,8 +221,15 @@ export function UsageToolbar({
               }
             }}
             options={[
-              ...projects,
-              { id: '__select_dir__', label: t(locale, 'usage.selectDir') },
+              ...projects.map((p) => {
+                const isPath = p.label.includes('/') || p.label.includes('\\');
+                return {
+                  id: p.id,
+                  label: isPath ? getPathBasename(p.label) : p.label,
+                  title: p.label,
+                };
+              }),
+              { id: '__select_dir__', label: t(locale, 'usage.selectDir'), title: t(locale, 'usage.selectDir') },
             ]}
             placeholder={t(locale, 'usage.filterProject') + ' ' + t(locale, 'usage.projectAll')}
           />
@@ -224,6 +245,7 @@ export function UsageToolbar({
           />
         )}
       </div>
+      {children}
     </div>
   );
 }

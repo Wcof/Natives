@@ -55,6 +55,8 @@
 
 复用现有 `AssistantSidebarSection`、`AssistantWorkspaceContext`、结构化消息块、run 事件 reducer、供应商 API 和流式代理。参考 CodePilot 的交互规则，但不复制其组件体系或引入新依赖。本次不实现消息分支、会话 rewind、生成式 Widget 或虚拟列表；当前会话规模不需要这些能力。
 
+助理不保留独立搜索框。后续复用文件搜索的同一入口，并通过搜索类型区分“文件”“项目”和“会话”。
+
 ## 验收标准
 
 - 页面上只出现一个项目/会话左栏。

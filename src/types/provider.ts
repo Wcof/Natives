@@ -3,6 +3,8 @@
 /** 预设供应商模板（来自 cc-switch 的数据子集） */
 export interface ProviderPreset {
   name: string;
+  /** Only protocols implemented by the provider backend may be configured. */
+  protocol?: 'openai_compatible' | 'anthropic';
   /** 中文名（用于 locale=zh 时显示） */
   nameZh?: string;
   websiteUrl: string;
@@ -56,6 +58,7 @@ export interface ProviderKeySummary {
 export interface ProviderSummary {
   id: string; providerType: string; displayName: string; websiteUrl: string; baseUrl: string;
   defaultModel: string | null; primaryKeyId: string | null; keys: ProviderKeySummary[];
+  models?: Array<{ id: string; displayName?: string | null }>;
 }
 
 export interface CreateProviderInput {

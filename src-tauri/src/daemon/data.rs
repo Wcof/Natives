@@ -20,8 +20,9 @@ impl DataStore {
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA foreign_keys=ON;
-             PRAGMA busy_timeout=5000;"
-        ).map_err(|e| crate::Error::Internal(format!("Failed to set pragmas: {e}")))?;
+             PRAGMA busy_timeout=5000;",
+        )
+        .map_err(|e| crate::Error::Internal(format!("Failed to set pragmas: {e}")))?;
 
         let store = DataStore {
             conn: Mutex::new(conn),
@@ -54,7 +55,10 @@ impl DataStore {
                     })
                     .unwrap_or_default();
                 let v1_cols: Vec<(&str, &str)> = vec![
-                    ("conversation_id", "TEXT REFERENCES assistant_conversations(id) ON DELETE CASCADE"),
+                    (
+                        "conversation_id",
+                        "TEXT REFERENCES assistant_conversations(id) ON DELETE CASCADE",
+                    ),
                     ("parent_message_id", "TEXT"),
                     ("role", "TEXT NOT NULL DEFAULT 'user'"),
                     ("status", "TEXT NOT NULL DEFAULT 'complete'"),
@@ -65,29 +69,70 @@ impl DataStore {
                 ];
                 for (col, def) in v1_cols {
                     if !existing_cols.contains(&col.to_string()) {
-                        let sql = format!("ALTER TABLE assistant_messages ADD COLUMN {} {}", col, def);
+                        let sql =
+                            format!("ALTER TABLE assistant_messages ADD COLUMN {} {}", col, def);
                         let _ = conn.execute_batch(&sql);
                     }
                 }
+            }
+
+            let has_runs: bool = conn
+                .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='assistant_runs'")
+                .and_then(|mut stmt| stmt.exists([]))
+                .unwrap_or(false);
+            if has_runs {
+                for (column, definition) in [
+                    ("parent_run_id", "TEXT REFERENCES assistant_runs(id) ON DELETE CASCADE"),
+                    ("subagent_definition_id", "TEXT"),
+                ] {
+                    let exists = conn
+                        .prepare("PRAGMA table_info(assistant_runs)")
+                        .and_then(|mut stmt| {
+                            let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+                            Ok(rows.filter_map(|row| row.ok()).any(|name| name == column))
+                        })
+                        .unwrap_or(false);
+                    if !exists {
+                        let _ = conn.execute(
+                            &format!("ALTER TABLE assistant_runs ADD COLUMN {column} {definition}"),
+                            [],
+                        );
+                    }
+                }
+                let _ = conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_runs_parent ON assistant_runs(parent_run_id)",
+                    [],
+                );
             }
         }
 
         // Step 1: Run schema migrations within a transaction
         {
-            let mut conn = self.conn.lock().map_err(|e| crate::Error::Internal(e.to_string()))?;
-            let tx = conn.transaction()
-                .map_err(|e| crate::Error::Internal(format!("Migration transaction failed: {e}")))?;
+            let mut conn = self
+                .conn
+                .lock()
+                .map_err(|e| crate::Error::Internal(e.to_string()))?;
+            let tx = conn.transaction().map_err(|e| {
+                crate::Error::Internal(format!("Migration transaction failed: {e}"))
+            })?;
 
             // Ensure schema version table exists
             tx.execute_batch(
                 "CREATE TABLE IF NOT EXISTS _schema_version (
                     version INTEGER PRIMARY KEY,
                     applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-                );"
-            ).map_err(|e| crate::Error::Internal(format!("Schema version table creation failed: {e}")))?;
+                );",
+            )
+            .map_err(|e| {
+                crate::Error::Internal(format!("Schema version table creation failed: {e}"))
+            })?;
 
             let current_version: i64 = tx
-                .query_row("SELECT COALESCE(MAX(version), 0) FROM _schema_version", [], |row| row.get(0))
+                .query_row(
+                    "SELECT COALESCE(MAX(version), 0) FROM _schema_version",
+                    [],
+                    |row| row.get(0),
+                )
                 .unwrap_or(0);
 
             // Apply migrations sequentially
@@ -104,12 +149,18 @@ impl DataStore {
 
             for (version, sql) in migrations {
                 if version > current_version {
-                    tx.execute_batch(sql)
-                        .map_err(|e| crate::Error::Internal(format!("Migration v{version} failed: {e}")))?;
+                    tx.execute_batch(sql).map_err(|e| {
+                        crate::Error::Internal(format!("Migration v{version} failed: {e}"))
+                    })?;
                     tx.execute(
                         "INSERT INTO _schema_version (version) VALUES (?1)",
                         rusqlite::params![version],
-                    ).map_err(|e| crate::Error::Internal(format!("Failed to record migration v{version}: {e}")))?;
+                    )
+                    .map_err(|e| {
+                        crate::Error::Internal(format!(
+                            "Failed to record migration v{version}: {e}"
+                        ))
+                    })?;
                 }
             }
 
@@ -120,36 +171,88 @@ impl DataStore {
         // Step 2: Run legacy data migration in a fresh transaction
         self.migrate_legacy_provider_keys()?;
         self.migrate_legacy_assistant_messages()?;
+        self.repair_message_blocks_foreign_key()?;
+        self.recover_stale_runs()?;
+        {
+            let conn = self.conn();
+            conn.execute(
+                "INSERT OR IGNORE INTO _schema_version (version) VALUES (9)",
+                [],
+            )
+            .map_err(|e| crate::Error::Internal(format!("Failed to record migration v9: {e}")))?;
+        }
+        self.cleanup_orphaned_rows()?;
 
         Ok(())
     }
 
     /// Migrate provider keys from old legacy tables (user_providers / provider_api_keys).
     /// Only runs if the legacy tables exist. Idempotent — INSERT OR IGNORE.
-    fn migrate_legacy_provider_keys(&self) -> Result<()> {
-        let mut conn = self.conn.lock().map_err(|e| crate::Error::Internal(e.to_string()))?;
+    pub fn migrate_legacy_provider_keys(&self) -> Result<()> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+
+        let is_memory = self.db_path == ":memory:";
+        let mut attached = false;
+
+        if !is_memory {
+            let path = std::path::Path::new(&self.db_path);
+            if let Some(parent) = path.parent() {
+                let natives_db_path = parent.join("natives.db");
+                if natives_db_path.exists() {
+                    let attach_sql = format!(
+                        "ATTACH DATABASE '{}' AS natives_db",
+                        natives_db_path.to_string_lossy().replace('\'', "''")
+                    );
+                    conn.execute(&attach_sql, []).map_err(|e| {
+                        crate::Error::Internal(format!("Failed to attach natives.db: {e}"))
+                    })?;
+                    attached = true;
+                }
+            }
+        }
 
         // Check if legacy tables exist
-        let has_legacy_providers: bool = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='user_providers'")
+        let has_legacy_providers: bool = if attached {
+            conn.prepare("SELECT name FROM natives_db.sqlite_master WHERE type='table' AND name='user_providers'")
+                .and_then(|mut stmt| stmt.exists([]))
+                .unwrap_or(false)
+        } else {
+            conn.prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='user_providers'",
+            )
             .and_then(|mut stmt| stmt.exists([]))
-            .unwrap_or(false);
+            .unwrap_or(false)
+        };
 
-        let has_legacy_keys: bool = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='provider_api_keys'")
+        let has_legacy_keys: bool = if attached {
+            conn.prepare("SELECT name FROM natives_db.sqlite_master WHERE type='table' AND name='provider_api_keys'")
+                .and_then(|mut stmt| stmt.exists([]))
+                .unwrap_or(false)
+        } else {
+            conn.prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='provider_api_keys'",
+            )
             .and_then(|mut stmt| stmt.exists([]))
-            .unwrap_or(false);
+            .unwrap_or(false)
+        };
 
         if !has_legacy_providers && !has_legacy_keys {
+            if attached {
+                conn.execute("DETACH DATABASE natives_db", []).ok();
+            }
             return Ok(());
         }
 
-        let tx = conn.transaction()
-            .map_err(|e| crate::Error::Internal(format!("Legacy migration transaction failed: {e}")))?;
+        let tx = conn.transaction().map_err(|e| {
+            crate::Error::Internal(format!("Legacy migration transaction failed: {e}"))
+        })?;
 
         // Migrate providers from user_providers
         if has_legacy_providers {
-            tx.execute_batch(
+            let provider_sql = if attached {
                 "INSERT OR IGNORE INTO assistant_provider_configs
                  (id, provider_type, display_name, api_base_url, website_url, default_model, health_status, created_at, updated_at)
                  SELECT
@@ -163,18 +266,41 @@ impl DataStore {
                      up.name,
                      up.base_url,
                      up.website_url,
-                     NULL,
+                     up.default_model,
+                     'unknown',
+                     up.created_at,
+                     up.updated_at
+                 FROM natives_db.user_providers up
+                 WHERE up.id NOT IN (SELECT id FROM assistant_provider_configs)"
+            } else {
+                "INSERT OR IGNORE INTO assistant_provider_configs
+                 (id, provider_type, display_name, api_base_url, website_url, default_model, health_status, created_at, updated_at)
+                 SELECT
+                     up.id,
+                     CASE WHEN up.preset_name = 'openai' THEN 'openai'
+                          WHEN up.preset_name = 'anthropic' THEN 'anthropic'
+                          WHEN up.preset_name = 'gemini' THEN 'gemini'
+                          WHEN up.preset_name = 'deepseek' THEN 'deepseek'
+                          WHEN up.preset_name = 'ollama' THEN 'ollama'
+                          ELSE 'openai_compatible' END,
+                     up.name,
+                     up.base_url,
+                     up.website_url,
+                     up.default_model,
                      'unknown',
                      up.created_at,
                      up.updated_at
                  FROM user_providers up
                  WHERE up.id NOT IN (SELECT id FROM assistant_provider_configs)"
-            ).map_err(|e| crate::Error::Internal(format!("Legacy provider migration failed: {e}")))?;
+            };
+            tx.execute_batch(provider_sql).map_err(|e| {
+                crate::Error::Internal(format!("Legacy provider migration failed: {e}"))
+            })?;
         }
 
         // Migrate keys from provider_api_keys
         if has_legacy_keys {
-            tx.execute_batch(
+            let keys_sql = if attached {
                 "INSERT OR IGNORE INTO assistant_provider_keys
                  (id, provider_id, encrypted_key, masked_key, label, is_active, is_primary, test_status, created_at, updated_at)
                  SELECT
@@ -185,18 +311,80 @@ impl DataStore {
                           THEN SUBSTR(pak.api_key_encrypted, 1, 4) || '...' || SUBSTR(pak.api_key_encrypted, -4)
                           ELSE '***' END,
                      pak.label,
-                     1,
-                     0,
-                     'untested',
+                     pak.is_active,
+                     pak.is_primary,
+                     pak.test_status,
                      pak.created_at,
-                     pak.created_at
+                     pak.updated_at
+                 FROM natives_db.provider_api_keys pak
+                 WHERE pak.id NOT IN (SELECT id FROM assistant_provider_keys)"
+            } else {
+                "INSERT OR IGNORE INTO assistant_provider_keys
+                 (id, provider_id, encrypted_key, masked_key, label, is_active, is_primary, test_status, created_at, updated_at)
+                 SELECT
+                     pak.id,
+                     pak.provider_id,
+                     pak.api_key_encrypted,
+                     CASE WHEN LENGTH(pak.api_key_encrypted) > 8
+                          THEN SUBSTR(pak.api_key_encrypted, 1, 4) || '...' || SUBSTR(pak.api_key_encrypted, -4)
+                          ELSE '***' END,
+                     pak.label,
+                     pak.is_active,
+                     pak.is_primary,
+                     pak.test_status,
+                     pak.created_at,
+                     pak.updated_at
                  FROM provider_api_keys pak
                  WHERE pak.id NOT IN (SELECT id FROM assistant_provider_keys)"
-            ).map_err(|e| crate::Error::Internal(format!("Legacy key migration failed: {e}")))?;
+            };
+            tx.execute_batch(keys_sql)
+                .map_err(|e| crate::Error::Internal(format!("Legacy key migration failed: {e}")))?;
+        }
+
+        // Auto-seed assistant_model_cache with default models from user_providers
+        if has_legacy_providers {
+            let model_sql = if attached {
+                "INSERT OR IGNORE INTO assistant_model_cache
+                 (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at)
+                 SELECT
+                     up.id || ':' || up.default_model,
+                     up.id,
+                     up.default_model,
+                     up.default_model,
+                     '{}',
+                     0,
+                     0,
+                     'api_discovery',
+                     up.created_at
+                 FROM natives_db.user_providers up
+                 WHERE up.default_model IS NOT NULL AND up.default_model != ''"
+            } else {
+                "INSERT OR IGNORE INTO assistant_model_cache
+                 (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at)
+                 SELECT
+                     up.id || ':' || up.default_model,
+                     up.id,
+                     up.default_model,
+                     up.default_model,
+                     '{}',
+                     0,
+                     0,
+                     'api_discovery',
+                     up.created_at
+                 FROM user_providers up
+                 WHERE up.default_model IS NOT NULL AND up.default_model != ''"
+            };
+            tx.execute_batch(model_sql).map_err(|e| {
+                crate::Error::Internal(format!("Default model cache seeding failed: {e}"))
+            })?;
         }
 
         tx.commit()
             .map_err(|e| crate::Error::Internal(format!("Legacy migration commit failed: {e}")))?;
+
+        if attached {
+            let _ = conn.execute("DETACH DATABASE natives_db", []);
+        }
 
         Ok(())
     }
@@ -207,15 +395,48 @@ impl DataStore {
     /// Also migrates data from old `assistant_sessions` if it exists.
     /// This is idempotent: skips if already renamed or never existed.
     fn migrate_legacy_assistant_messages(&self) -> Result<()> {
-        let conn = self.conn();
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
 
-        // Check if assistant_sessions exists and migrate data
-        let has_sessions: bool = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='assistant_sessions'")
+        let is_memory = self.db_path == ":memory:";
+        let mut attached = false;
+
+        if !is_memory {
+            let path = std::path::Path::new(&self.db_path);
+            if let Some(parent) = path.parent() {
+                let natives_db_path = parent.join("natives.db");
+                if natives_db_path.exists() {
+                    let attach_sql = format!(
+                        "ATTACH DATABASE '{}' AS natives_db",
+                        natives_db_path.to_string_lossy().replace('\'', "''")
+                    );
+                    conn.execute(&attach_sql, []).map_err(|e| {
+                        crate::Error::Internal(format!(
+                            "Failed to attach natives.db for messages: {e}"
+                        ))
+                    })?;
+                    attached = true;
+                }
+            }
+        }
+
+        // Check if legacy assistant_sessions exists in the right DB
+        let has_sessions: bool = if attached {
+            conn.prepare("SELECT name FROM natives_db.sqlite_master WHERE type='table' AND name='assistant_sessions'")
+                .and_then(|mut stmt| stmt.exists([]))
+                .unwrap_or(false)
+        } else {
+            conn.prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='assistant_sessions'",
+            )
             .and_then(|mut stmt| stmt.exists([]))
-            .unwrap_or(false);
+            .unwrap_or(false)
+        };
+
         if has_sessions {
-            conn.execute_batch(
+            let insert_convs_sql = if attached {
                 "INSERT OR IGNORE INTO assistant_conversations
                     (id, project_id, title, provider_id, model_id, created_at, updated_at)
                  SELECT
@@ -224,43 +445,128 @@ impl DataStore {
                      COALESCE(provider_id, 'unknown'),
                      COALESCE(model_id, 'unknown'),
                      created_at, updated_at
-                 FROM assistant_sessions;"
-            ).map_err(|e| crate::Error::Internal(format!("Legacy sessions migration failed: {e}")))?;
+                 FROM natives_db.assistant_sessions"
+            } else {
+                "INSERT OR IGNORE INTO assistant_conversations
+                    (id, project_id, title, provider_id, model_id, created_at, updated_at)
+                 SELECT
+                     id, project_id,
+                     COALESCE(title, ''),
+                     COALESCE(provider_id, 'unknown'),
+                     COALESCE(model_id, 'unknown'),
+                     created_at, updated_at
+                 FROM assistant_sessions"
+            };
+            conn.execute_batch(insert_convs_sql).map_err(|e| {
+                crate::Error::Internal(format!("Legacy sessions migration failed: {e}"))
+            })?;
         }
 
-        // Check if assistant_messages has session_id column (old structure)
-        let has_session_id: bool = conn
-            .prepare("PRAGMA table_info(assistant_messages)")
-            .and_then(|mut stmt| {
-                let cols: Vec<String> = stmt
-                    .query_map([], |row| row.get::<_, String>(1))
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
-                    .filter_map(|r| r.ok())
-                    .collect();
-                Ok(cols.contains(&"session_id".to_string()))
-            })
-            .unwrap_or(false);
+        // Check if assistant_messages has session_id column (old structure) in the right DB
+        let has_legacy_messages_table: bool = if attached {
+            conn.prepare("SELECT name FROM natives_db.sqlite_master WHERE type='table' AND name='assistant_messages'")
+                .and_then(|mut stmt| stmt.exists([]))
+                .unwrap_or(false)
+        } else {
+            conn.prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='assistant_messages'",
+            )
+            .and_then(|mut stmt| stmt.exists([]))
+            .unwrap_or(false)
+        };
+
+        let has_session_id: bool = if has_legacy_messages_table {
+            let pragma_sql = if attached {
+                "PRAGMA natives_db.table_info(assistant_messages)"
+            } else {
+                "PRAGMA table_info(assistant_messages)"
+            };
+            conn.prepare(pragma_sql)
+                .and_then(|mut stmt| {
+                    let cols: Vec<String> = stmt
+                        .query_map([], |row| row.get::<_, String>(1))
+                        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+                        .filter_map(|r| r.ok())
+                        .collect();
+                    Ok(cols.contains(&"session_id".to_string()))
+                })
+                .unwrap_or(false)
+        } else {
+            false
+        };
 
         if !has_session_id {
+            if attached {
+                let _ = conn.execute("DETACH DATABASE natives_db", []);
+            }
             return Ok(());
         }
 
-        // Check if legacy_assistant_messages already exists (from a previous run)
-        let legacy_exists: bool = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='legacy_assistant_messages'")
-            .and_then(|mut stmt| stmt.exists([]))
-            .unwrap_or(false);
+        // Drop local legacy_assistant_messages if it exists, so we can copy fresh from natives_db
+        conn.execute_batch("DROP TABLE IF EXISTS legacy_assistant_messages;")
+            .ok();
 
-        if legacy_exists {
-            // Target already exists — drop the old assistant_messages table
-            // since its content is already in legacy_assistant_messages
-            conn.execute_batch("DROP TABLE IF EXISTS assistant_messages;")
-                .map_err(|e| crate::Error::Internal(format!("Drop old messages failed: {e}")))?;
+        // Create legacy_assistant_messages locally and load from natives_db
+        if attached {
+            conn.execute_batch(
+                "CREATE TABLE legacy_assistant_messages (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    parent_message_id TEXT,
+                    role TEXT,
+                    content TEXT,
+                    status TEXT,
+                    created_at TEXT
+                );
+                INSERT INTO legacy_assistant_messages
+                SELECT id, session_id, parent_message_id, role, content, status, created_at
+                FROM natives_db.assistant_messages;",
+            )
+            .map_err(|e| {
+                crate::Error::Internal(format!("Failed to copy legacy assistant_messages: {e}"))
+            })?;
         } else {
             conn.execute_batch(
-                "ALTER TABLE assistant_messages RENAME TO legacy_assistant_messages;"
-            ).map_err(|e| crate::Error::Internal(format!("Legacy messages rename failed: {e}")))?;
+                "ALTER TABLE assistant_messages RENAME TO legacy_assistant_messages;",
+            )
+            .map_err(|e| crate::Error::Internal(format!("Legacy messages rename failed: {e}")))?;
         }
+
+        // Recreate the new schema version of assistant_messages immediately
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS assistant_messages (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL REFERENCES assistant_conversations(id) ON DELETE CASCADE,
+                parent_message_id TEXT,
+                role TEXT NOT NULL CHECK(role IN ('system','user','assistant')),
+                status TEXT NOT NULL DEFAULT 'complete' CHECK(status IN ('sending','streaming','complete','failed','interrupted')),
+                input_tokens INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
+                reasoning_tokens INTEGER,
+                cost_usd REAL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_messages_conversation ON assistant_messages(conversation_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_messages_parent ON assistant_messages(parent_message_id);"
+        ).map_err(|e| crate::Error::Internal(format!("Failed to recreate assistant_messages: {e}")))?;
+
+        // Migrate legacy assistant messages to new schema
+        conn.execute_batch(
+            "INSERT OR IGNORE INTO assistant_messages
+                (id, conversation_id, role, status, created_at)
+             SELECT
+                 m.id, m.session_id,
+                 COALESCE(m.role, 'user'),
+                 COALESCE(m.status, 'complete'),
+                 m.created_at
+             FROM legacy_assistant_messages m
+             JOIN assistant_conversations c ON c.id = m.session_id;",
+        )
+        .map_err(|e| {
+            crate::Error::Internal(format!(
+                "Failed to migrate legacy messages to assistant_messages: {e}"
+            ))
+        })?;
 
         // Migrate text content from legacy messages into new message blocks
         let _ = conn.execute_batch(
@@ -274,15 +580,192 @@ impl DataStore {
                  m.content,
                  json_object('legacy', 1, 'role', m.role)
              FROM legacy_assistant_messages m
-             WHERE m.content IS NOT NULL AND m.content != '';"
+             JOIN assistant_messages am ON am.id = m.id
+             WHERE m.content IS NOT NULL AND m.content != '';",
         );
 
+        if attached {
+            let _ = conn.execute("DETACH DATABASE natives_db", []);
+        }
+
+        Ok(())
+    }
+
+    /// Repair databases where SQLite rewrote message_blocks' FK to the
+    /// temporary legacy table while assistant_messages was being renamed.
+    fn repair_message_blocks_foreign_key(&self) -> Result<()> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+        let target: Option<String> = conn
+            .prepare("PRAGMA foreign_key_list(assistant_message_blocks)")
+            .and_then(|mut stmt| {
+                let mut rows = stmt.query([])?;
+                rows.next()?.map(|row| row.get(2)).transpose()
+            })
+            .map_err(|e| {
+                crate::Error::Internal(format!("Failed to inspect message block foreign key: {e}"))
+            })?;
+
+        if target.as_deref() == Some("assistant_messages") {
+            return Ok(());
+        }
+
+        let tx = conn
+            .transaction()
+            .map_err(|e| crate::Error::Internal(format!("Message block migration failed: {e}")))?;
+        tx.execute_batch(
+            "CREATE TABLE assistant_message_blocks_v9 (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL REFERENCES assistant_messages(id) ON DELETE CASCADE,
+                block_type TEXT NOT NULL,
+                block_index INTEGER NOT NULL DEFAULT 0,
+                content TEXT NOT NULL,
+                metadata TEXT
+            );
+            INSERT OR IGNORE INTO assistant_message_blocks_v9
+                (id, message_id, block_type, block_index, content, metadata)
+            SELECT b.id, b.message_id, b.block_type, b.block_index, b.content, b.metadata
+            FROM assistant_message_blocks b
+            JOIN assistant_messages m ON m.id = b.message_id;
+            DROP TABLE assistant_message_blocks;
+            ALTER TABLE assistant_message_blocks_v9 RENAME TO assistant_message_blocks;",
+        )
+        .map_err(|e| {
+            crate::Error::Internal(format!("Message block foreign key repair failed: {e}"))
+        })?;
+        tx.commit().map_err(|e| {
+            crate::Error::Internal(format!("Message block migration commit failed: {e}"))
+        })?;
+        Ok(())
+    }
+
+    /// Finish runs left active by an interrupted app process and preserve any
+    /// streamed text/reasoning that was already recorded in run events.
+    fn recover_stale_runs(&self) -> Result<()> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+        let stale: Vec<(String, String)> = {
+            let mut stmt = conn.prepare(
+                "SELECT id, conversation_id FROM assistant_runs WHERE status IN ('queued','preparing','running','waiting_permission','cancelling')"
+            ).map_err(|e| crate::Error::Internal(format!("Failed to inspect stale runs: {e}")))?;
+            let rows = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map_err(|e| crate::Error::Internal(format!("Failed to read stale runs: {e}")))?;
+            let mut result = Vec::new();
+            for row in rows {
+                if let Ok(row) = row {
+                    result.push(row);
+                }
+            }
+            result
+        };
+
+        for (run_id, conversation_id) in stale {
+            let events: Vec<(String, String)> = {
+                let mut stmt = conn.prepare(
+                    "SELECT event_type, payload FROM assistant_run_events WHERE run_id = ?1 ORDER BY sequence ASC"
+                ).map_err(|e| crate::Error::Internal(format!("Failed to inspect stale run events: {e}")))?;
+                let rows = stmt
+                    .query_map(rusqlite::params![run_id], |row| {
+                        Ok((row.get(0)?, row.get(1)?))
+                    })
+                    .map_err(|e| {
+                        crate::Error::Internal(format!("Failed to read stale run events: {e}"))
+                    })?;
+                let mut result = Vec::new();
+                for row in rows {
+                    if let Ok(row) = row {
+                        result.push(row);
+                    }
+                }
+                result
+            };
+            let mut text = String::new();
+            let mut reasoning = String::new();
+            for (event_type, payload) in &events {
+                let value: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
+                match event_type.as_str() {
+                    "assistant_delta" => text.push_str(
+                        value
+                            .get("text")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default(),
+                    ),
+                    "reasoning_delta" => reasoning.push_str(
+                        value
+                            .get("text")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default(),
+                    ),
+                    _ => {}
+                }
+            }
+
+            let tx = conn
+                .transaction()
+                .map_err(|e| crate::Error::Internal(format!("Stale run recovery failed: {e}")))?;
+            let now = chrono::Utc::now().to_rfc3339();
+            if !text.is_empty() || !reasoning.is_empty() {
+                let message_id = uuid::Uuid::new_v4().to_string();
+                tx.execute(
+                    "INSERT INTO assistant_messages (id, conversation_id, role, status, created_at) VALUES (?1, ?2, 'assistant', 'interrupted', ?3)",
+                    rusqlite::params![message_id, conversation_id, now],
+                ).map_err(|e| crate::Error::Internal(format!("Failed to recover assistant message: {e}")))?;
+                let mut index = 0_i64;
+                if !reasoning.is_empty() {
+                    tx.execute(
+                        "INSERT INTO assistant_message_blocks (id, message_id, block_type, block_index, content) VALUES (?1, ?2, 'reasoning', ?3, ?4)",
+                        rusqlite::params![uuid::Uuid::new_v4().to_string(), message_id, index, serde_json::json!({"reasoning": reasoning}).to_string()],
+                    ).map_err(|e| crate::Error::Internal(format!("Failed to recover reasoning block: {e}")))?;
+                    index += 1;
+                }
+                if !text.is_empty() {
+                    tx.execute(
+                        "INSERT INTO assistant_message_blocks (id, message_id, block_type, block_index, content) VALUES (?1, ?2, 'text', ?3, ?4)",
+                        rusqlite::params![uuid::Uuid::new_v4().to_string(), message_id, index, text],
+                    ).map_err(|e| crate::Error::Internal(format!("Failed to recover text block: {e}")))?;
+                }
+            }
+            tx.execute("UPDATE assistant_permission_requests SET status = 'rejected', responded_at = ?1 WHERE run_id = ?2 AND status = 'pending'", rusqlite::params![now, run_id])
+                .map_err(|e| crate::Error::Internal(format!("Failed to close stale permission request: {e}")))?;
+            tx.execute("UPDATE assistant_runs SET status = 'interrupted', error_code = COALESCE(error_code, 'app_restarted'), finished_at = ?1 WHERE id = ?2", rusqlite::params![now, run_id])
+                .map_err(|e| crate::Error::Internal(format!("Failed to recover stale run: {e}")))?;
+            let sequence: i64 = tx.query_row("SELECT COALESCE(MAX(sequence), 0) + 1 FROM assistant_run_events WHERE run_id = ?1", rusqlite::params![run_id], |row| row.get(0))
+                .unwrap_or(1);
+            tx.execute("INSERT INTO assistant_run_events (run_id, sequence, timestamp, event_type, payload) VALUES (?1, ?2, ?3, 'interrupted', ?4)", rusqlite::params![run_id, sequence, now, serde_json::json!({"reason":"app_restarted"}).to_string()])
+                .map_err(|e| crate::Error::Internal(format!("Failed to record stale run recovery: {e}")))?;
+            tx.commit().map_err(|e| {
+                crate::Error::Internal(format!("Stale run recovery commit failed: {e}"))
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Clean up any orphaned rows that violate foreign key constraints to keep database integrity.
+    fn cleanup_orphaned_rows(&self) -> Result<()> {
+        let conn = self.conn();
+        conn.execute_batch(
+            "DELETE FROM assistant_messages WHERE conversation_id NOT IN (SELECT id FROM assistant_conversations);
+             DELETE FROM assistant_message_blocks WHERE message_id NOT IN (SELECT id FROM assistant_messages);
+             DELETE FROM assistant_runs WHERE conversation_id NOT IN (SELECT id FROM assistant_conversations);
+             DELETE FROM assistant_run_events WHERE run_id NOT IN (SELECT id FROM assistant_runs);
+             DELETE FROM assistant_tool_calls WHERE run_id NOT IN (SELECT id FROM assistant_runs);
+             DELETE FROM assistant_permission_requests WHERE run_id NOT IN (SELECT id FROM assistant_runs);
+             DELETE FROM assistant_artifacts WHERE run_id NOT IN (SELECT id FROM assistant_runs);
+             DELETE FROM assistant_context_snapshots WHERE run_id NOT IN (SELECT id FROM assistant_runs);"
+        ).map_err(|e| crate::Error::Internal(format!("Failed to clean up orphaned database rows: {e}")))?;
         Ok(())
     }
 
     /// Get a reference to the underlying connection.
     pub fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().expect("DataStore connection lock poisoned")
+        self.conn
+            .lock()
+            .expect("DataStore connection lock poisoned")
     }
 
     /// Get the database file path.
@@ -562,22 +1045,6 @@ CREATE TABLE IF NOT EXISTS assistant_projects (
 );
 ";
 
-/// v9: Migrate legacy message content into new message_blocks.
-/// Requires MIGRATION_008 to have renamed old messages table.
-const MIGRATION_009: &str = "
-INSERT OR IGNORE INTO assistant_message_blocks
-    (id, message_id, block_type, block_index, content, metadata)
-SELECT
-    hex(randomblob(16)),
-    m.id,
-    'text',
-    0,
-    m.content,
-    json_object('legacy', 1, 'role', m.role)
-FROM legacy_assistant_messages m
-WHERE m.content IS NOT NULL AND m.content != '';
-";
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -628,9 +1095,13 @@ mod tests {
 
         let version: i64 = store
             .conn()
-            .query_row("SELECT COALESCE(MAX(version), 0) FROM _schema_version", [], |row| row.get(0))
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM _schema_version",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
     }
 
     #[test]
@@ -644,5 +1115,53 @@ mod tests {
             [],
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_repairs_legacy_message_block_foreign_key() {
+        let store = DataStore::new(":memory:").unwrap();
+        {
+            let conn = store.conn();
+            conn.execute_batch(
+                "ALTER TABLE assistant_messages RENAME TO legacy_assistant_messages;
+                 CREATE TABLE assistant_messages (
+                    id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL REFERENCES assistant_conversations(id) ON DELETE CASCADE,
+                    parent_message_id TEXT,
+                    role TEXT NOT NULL CHECK(role IN ('system','user','assistant')),
+                    status TEXT NOT NULL DEFAULT 'complete',
+                    input_tokens INTEGER DEFAULT 0,
+                    output_tokens INTEGER DEFAULT 0,
+                    reasoning_tokens INTEGER,
+                    cost_usd REAL,
+                    created_at TEXT NOT NULL
+                 );"
+            ).unwrap();
+        }
+
+        store.repair_message_blocks_foreign_key().unwrap();
+        let target: String = store
+            .conn()
+            .query_row(
+                "PRAGMA foreign_key_list(assistant_message_blocks)",
+                [],
+                |row| row.get(2),
+            )
+            .unwrap();
+        assert_eq!(target, "assistant_messages");
+
+        let conn = store.conn();
+        conn.execute(
+            "INSERT INTO assistant_conversations (id, title, provider_id, model_id, created_at, updated_at) VALUES ('c1', '', 'p1', 'm1', 'now', 'now')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO assistant_messages (id, conversation_id, role, created_at) VALUES ('m1', 'c1', 'user', 'now')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO assistant_message_blocks (id, message_id, block_type, content) VALUES ('b1', 'm1', 'text', 'hello')",
+            [],
+        ).unwrap();
     }
 }

@@ -34,7 +34,6 @@ import type { AssistantRunEvent } from '@/lib/assistant-types';
 import { useAssistantWorkspace, type AssistantWorkspaceActions } from './AssistantWorkspaceContext';
 import RunInspector from './RunInspector';
 import PermissionRequestCard from './PermissionRequestCard';
-import { useAssistantStream } from './hooks/useAssistantStream';
 import type { ProjectSummary, ProviderSummary } from '@/lib/tauri-adapter';
 import { assistantRetryPrompt, normalizePermissionProfile, type AssistantDraft, type AssistantPermissionProfile } from '@/lib/assistant-composer';
 import { PanelRightClose, PanelRightOpen } from 'lucide-react';
@@ -144,7 +143,7 @@ function mapBlockToContentBlock(block: MessageBlock): ContentBlock {
     case 'text':
       return { type: 'text', text: String(content.text ?? content.content ?? '') };
     case 'reasoning':
-      return { type: 'reasoning', reasoning: String(content.text ?? content.reasoning ?? content.content ?? ''), signature: content.signature ? String(content.signature) : undefined };
+      return { type: 'reasoning', reasoning: String(content.text ?? content.reasoning ?? content.content ?? ''), signature: content.signature ? String(content.signature) : undefined, durationMs: content.duration_ms == null ? undefined : Number(content.duration_ms) };
     case 'image':
       return { type: 'image', mimeType: String(content.mime_type ?? 'image/png'), imageUrl: String(content.data ?? ''), altText: String(content.alt_text ?? '') };
     case 'file_reference':
@@ -203,7 +202,7 @@ function mapMessageToTimeline(msg: Message): import('./ConversationTimeline').Me
 
 export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) {
   const { toast } = useToast();
-  const { publishNavigation, publishRuntime, registerActions } = useAssistantWorkspace();
+  const { publishNavigation, publishRuntime, registerActions, navigation } = useAssistantWorkspace();
 
   // ── Connection state ──
   const [daemonConnected, setDaemonConnected] = useState(false);
@@ -212,7 +211,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
 
   // ── Data state ──
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(navigation.selectedId);
   const [messages, setMessages] = useState<Message[]>([]);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [providerLoadError, setProviderLoadError] = useState<string | null>(null);
@@ -222,12 +221,12 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
   const [registeredProjects, setRegisteredProjects] = useState<ProjectSummary[]>([]);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
-  const [respondedPermissionId, setRespondedPermissionId] = useState<string | null>(null);
 
   // ── Run state (unified via AssistantStreamState) ──
   const [streamState, setStreamState] = useState<AssistantStreamState | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const [subAgents, setSubAgents] = useState<Array<{ id: string; task: string; status: string }>>([]);
   // Derived from streamState, kept for backward compat with RunInspector & publishRuntime
   const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
   const [activeRunStartedAt, setActiveRunStartedAt] = useState<string | null>(null);
@@ -236,15 +235,19 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   // ── UI state ──
   const [inputDisabledReason, setInputDisabledReason] = useState<'no_provider' | 'no_model' | 'creating' | null>(null);
   const [isCreatingConversation, setIsCreatingConversation] = useState(false);
+  const [pendingUserMessage, setPendingUserMessage] = useState<Message | null>(null);
 
   // Refs
   const streamStateRef = useRef<AssistantStreamState | null>(null);
+  const activeConversationIdRef = useRef<string | null>(activeConversationId);
   const latestRunIdRef = useRef<string | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
   const eventsRef = useRef<RunEvent[]>([]);
   const batchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const persistedStreamRunRef = useRef<string | null>(null);
-  const { streamState: nativeStream, resetStream } = useAssistantStream({ sessionId: activeConversationId, locale });
+
+  useEffect(() => {
+    activeConversationIdRef.current = activeConversationId;
+  }, [activeConversationId]);
 
   const checkDaemonStatus = useCallback(async (): Promise<boolean> => {
     try {
@@ -253,17 +256,26 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
         setRendererOnly(true);
         setDaemonConnected(false);
         setDaemonError(t(locale, 'assistant.desktopEngineRequired'));
+        setLoadingConversations(false);
         return false;
       }
       setRendererOnly(false);
-      const status = await assistantApi.getStatus();
+      // Bound the health check so a hung invoke cannot leave the UI on the connecting spinner forever.
+      const status = await Promise.race([
+        assistantApi.getStatus(),
+        new Promise<never>((_, reject) => {
+          window.setTimeout(() => reject(new Error(t(locale, 'assistant.daemonNotConnected'))), 5_000);
+        }),
+      ]);
       const connected = status?.connected === true;
       setDaemonConnected(connected);
       setDaemonError(connected ? null : (status?.error ?? t(locale, 'assistant.daemonNotConnected')));
+      if (!connected) setLoadingConversations(false);
       return connected;
     } catch (error) {
       setDaemonConnected(false);
       setDaemonError(classifyError(error).userMessage);
+      setLoadingConversations(false);
       return false;
     }
   }, [locale]);
@@ -301,8 +313,8 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
         api_base_url: provider.baseUrl,
         health_status: 'unknown',
         default_model: provider.defaultModel,
-        has_active_key: provider.keys.some(key => key.isActive && key.status === 'valid'),
-        models: provider.defaultModel ? [{ id: provider.defaultModel }] : [],
+        has_active_key: provider.keys.some(key => key.isActive && (key.status === 'valid' || key.status === 'untested')),
+        models: provider.models?.map(model => ({ id: model.id, displayName: model.displayName ?? undefined })) ?? [],
       }));
       const readiness = classifyProviderReadiness(nextProviders);
       setProviders(nextProviders);
@@ -317,7 +329,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   };
 
   // ── Load conversations ──
-  const loadConversations = async () => {
+  const loadConversations = useCallback(async () => {
     setLoadingConversations(true);
     try {
       const result = await v2call<Conversation[]>('conversation.list', { include_archived: false });
@@ -327,7 +339,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
     } finally {
       setLoadingConversations(false);
     }
-  };
+  }, [toast]);
 
   const loadProjects = useCallback(async () => {
     const projects = await window.nativesAPI?.project.list();
@@ -353,42 +365,63 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
 
   // ── Load messages ──
   const loadMessages = useCallback(async (conversationId: string) => {
+    if (conversationId.startsWith('temp-')) {
+      if (activeConversationIdRef.current === conversationId) {
+        setMessages([]);
+        setLoadingMessages(false);
+      }
+      return;
+    }
     setLoadingMessages(true);
     try {
       const result = await v2call<Message[]>('conversation.getMessages', {
         conversation_id: conversationId,
       });
-      setMessages(result);
+      if (activeConversationIdRef.current === conversationId) setMessages(result);
     } catch (err) {
       toast(classifyError(err).userMessage, 'error');
     } finally {
-      setLoadingMessages(false);
+      if (activeConversationIdRef.current === conversationId) setLoadingMessages(false);
     }
   }, [toast]);
 
   // ── Load artifacts ──
-  const loadArtifacts = useCallback(async (runId: string) => {
+  const loadArtifacts = useCallback(async (runId: string, conversationId?: string) => {
     try {
       const result = await v2call<Artifact[]>('artifact.list', { run_id: runId });
-      setArtifacts(result);
+      if (!conversationId || activeConversationIdRef.current === conversationId) setArtifacts(result);
     } catch {
-      setArtifacts([]);
+      if (!conversationId || activeConversationIdRef.current === conversationId) setArtifacts([]);
     }
   }, []);
 
   const loadConversationRun = useCallback(async (conversationId: string) => {
+    if (conversationId.startsWith('temp-')) {
+      latestRunIdRef.current = null;
+      activeRunIdRef.current = null;
+      setActiveRunStartedAt(null);
+      setActiveRunFinishedAt(null);
+      setStreamState(null);
+      setRunEvents([]);
+      setArtifacts([]);
+      setSubAgents([]);
+      return;
+    }
     try {
       const result = await v2call<Run[]>('run.list', { conversation_id: conversationId, limit: 1 });
       const run = result[0];
       if (!run) return;
+      if (activeConversationIdRef.current !== conversationId) return;
       latestRunIdRef.current = run.id;
       activeRunIdRef.current = run.id;
       setActiveRunStartedAt(run.started_at ?? null);
       setActiveRunFinishedAt(run.finished_at ?? null);
       const [eventResult] = await Promise.all([
         v2call<RunEvent[]>('run.getEvents', { run_id: run.id, after_sequence: 0 }),
-        loadArtifacts(run.id),
+        loadArtifacts(run.id, conversationId),
       ]);
+      const childRuns = await v2call<Array<{ id: string; status: string }>>('run.listChildren', { parent_run_id: run.id });
+      if (activeConversationIdRef.current !== conversationId) return;
       const restoredEvents = eventResult;
       let restored = createAssistantStreamState(run.id);
       for (const event of restoredEvents) {
@@ -409,6 +442,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
       // Rebuild events from the restored state for the RunInspector
       eventsRef.current = restoredEvents;
       setRunEvents(restoredEvents);
+      setSubAgents(childRuns.map(child => ({ id: child.id, task: `Subagent ${child.id.slice(0, 8)}`, status: child.status })));
     } catch {
       // No run for this conversation — that's fine
     }
@@ -426,6 +460,18 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
       type: event.type as AssistantRunEvent['type'],
       payload: (event.payload ?? {}) as Record<string, unknown>,
     });
+
+    // Clear streaming on terminal events even if the reducer no-ops (duplicate sequence).
+    if (event.runId === latestRunIdRef.current) {
+      const terminalEvent = event.type === 'completed' || event.type === 'failed' || event.type === 'interrupted';
+      if (terminalEvent) {
+        setIsStreaming(false);
+        setActiveRunFinishedAt(event.timestamp ?? new Date().toISOString());
+      } else if (event.type !== 'usage_updated' && next !== previous) {
+        setIsStreaming(true);
+      }
+    }
+
     if (next === previous) return;
     streamStateRef.current = next;
 
@@ -448,74 +494,13 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
       setRunEvents([...eventsRef.current]);
     }, 30);
 
-    // Check if this is for the active run
     if (event.runId === latestRunIdRef.current) {
       const terminalEvent = event.type === 'completed' || event.type === 'failed' || event.type === 'interrupted';
-      if (!terminalEvent && event.type !== 'usage_updated') setIsStreaming(true);
-
-      if (terminalEvent) {
-        setIsStreaming(false);
-        setActiveRunFinishedAt(event.timestamp ?? new Date().toISOString());
-        // Reload messages to get the final persisted state
-        if (activeConversationId) {
-          void loadMessages(activeConversationId).finally(() => {
-            // Stream state remains as the live rendering until persisted messages arrive
-          });
-        }
+      if (terminalEvent && activeConversationId) {
+        void loadMessages(activeConversationId);
       }
     }
   }, [activeConversationId, loadMessages]);
-
-  // The runtime streams over Tauri events. Mirror it into the workbench while it
-  // runs, then persist the completed answer so reopening the session is stable.
-  useEffect(() => {
-    const runId = activeRunIdRef.current;
-    if (!runId || !activeConversationId || !isStreaming) return;
-
-    if (nativeStream.content || nativeStream.reasoning || nativeStream.toolCall || nativeStream.toolEvents.length > 0) {
-      const blocks: import('./blocks').ContentBlock[] = [];
-      if (nativeStream.reasoning) blocks.push({ type: 'reasoning', reasoning: nativeStream.reasoning });
-      for (const tool of nativeStream.toolEvents) {
-        blocks.push({ type: 'tool_call', toolCallId: tool.id, toolName: tool.name, toolInput: tool.input, toolStatus: tool.status });
-        if (tool.output !== undefined) blocks.push({ type: 'tool_result', toolCallId: tool.id, toolOutput: tool.output, isError: tool.status === 'failed' || tool.status === 'rejected' });
-      }
-      if (nativeStream.toolCall) blocks.push({ type: 'tool_call', toolCallId: 'active-tool', toolName: nativeStream.toolCall, toolInput: {}, toolStatus: nativeStream.toolStatus === 'error' ? 'failed' : nativeStream.done ? 'completed' : 'running' });
-      if (nativeStream.toolResult !== null) blocks.push({ type: 'tool_result', toolCallId: 'active-tool', toolOutput: nativeStream.toolResult, isError: nativeStream.toolStatus === 'error' });
-      if (nativeStream.content) blocks.push({ type: 'text', text: nativeStream.content });
-      const next = {
-        runId,
-        status: nativeStream.done ? (nativeStream.error ? 'failed' : 'completed') : 'running',
-        lastSequence: streamStateRef.current?.lastSequence ?? 0,
-        blocks,
-        fileChanges: [],
-        usage: { inputTokens: null, outputTokens: null, reasoningTokens: null },
-      };
-      streamStateRef.current = next;
-      setStreamState(next);
-    }
-
-    if (!nativeStream.done || persistedStreamRunRef.current === runId) return;
-    persistedStreamRunRef.current = runId;
-    const status = nativeStream.error ? 'failed' : 'completed';
-    setIsStreaming(false);
-    setActiveRunFinishedAt(new Date().toISOString());
-    const persistedBlocks = [
-      ...(nativeStream.reasoning ? [{ type: 'reasoning', reasoning: nativeStream.reasoning }] : []),
-      ...nativeStream.toolEvents.flatMap(tool => [
-        { type: 'tool_call', tool_call_id: tool.id, tool_name: tool.name, input: tool.input, status: tool.status },
-        ...(tool.output === undefined ? [] : [{ type: 'tool_result', tool_call_id: tool.id, output: tool.output, is_error: tool.status === 'failed' || tool.status === 'rejected' }]),
-      ]),
-      ...(nativeStream.content ? [{ type: 'text', text: nativeStream.content }] : []),
-    ];
-    void Promise.all([
-      persistedBlocks.length > 0
-        ? v2call('conversation.appendMessage', { conversation_id: activeConversationId, role: 'assistant', blocks: persistedBlocks })
-        : Promise.resolve(),
-      v2call('run.finish', { run_id: runId, status, error_code: nativeStream.error ?? null }),
-    ]).then(() => loadMessages(activeConversationId)).catch(error => {
-      toast(classifyError(error).userMessage, 'error');
-    });
-  }, [activeConversationId, isStreaming, loadMessages, nativeStream, toast]);
 
   // The Tauri boundary intentionally owns the daemon socket. Until it exposes a
   // push bridge, replay new persisted events with a cursor so no event is lost.
@@ -547,11 +532,15 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [isStreaming, handleStreamEvent]);
+  }, [isStreaming, streamState?.runId, handleStreamEvent]);
 
   // ── Select conversation ──
-  const handleSelectConversation = useCallback(async (id: string) => {
+  const handleSelectConversation = useCallback((id: string) => {
+    if (id === activeConversationIdRef.current) return;
     setActiveConversationId(id);
+    activeConversationIdRef.current = id;
+    setLoadingMessages(false);
+    setConversations(prev => prev.filter(c => !c.id.startsWith('temp-') || c.id === id));
     streamStateRef.current = null;
     setStreamState(null);
     setIsStreaming(false);
@@ -560,50 +549,53 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
     eventsRef.current = [];
     latestRunIdRef.current = null;
     activeRunIdRef.current = null;
-    await Promise.all([loadMessages(id), loadConversationRun(id)]);
-  }, [loadConversationRun, loadMessages]);
+  }, []);
+
+  // ── Load messages when active conversation changes or daemon connects ──
+  useEffect(() => {
+    if (!daemonConnected || !activeConversationId) return;
+    void loadMessages(activeConversationId);
+    void loadConversationRun(activeConversationId);
+  }, [daemonConnected, activeConversationId, loadMessages, loadConversationRun]);
 
   // ── Create conversation ──
-  const handleCreateConversation = useCallback(async (projectPath = activeProjectPath) => {
-    if (isCreatingConversation) return;
-    setIsCreatingConversation(true);
-    setInputDisabledReason('creating');
+  const handleCreateConversation = useCallback((projectPath = activeProjectPath) => {
+    const cleanId = `temp-${Date.now()}`;
+    const newConv: Conversation = {
+      id: cleanId,
+      mode: 'agent',
+      project_id: projectPath,
+      title: t(locale, 'assistant.newConversation'),
+      provider_id: '',
+      model_id: '',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      archived_at: null,
+    };
 
-    try {
-      // Find default provider/model
-      const selection = selectAssistantModel(providers);
-      if (!selection) {
-        setInputDisabledReason(providerReadiness === 'no_model' ? 'no_model' : 'no_provider');
-        return;
-      }
-
-      const result = await v2call<Conversation>('conversation.create', {
-        mode: 'agent',
-        title: t(locale, 'assistant.newConversation'),
-        provider_id: selection.providerId,
-        model_id: selection.modelId,
-        project_id: projectPath,
-        permission_profile_id: 'ask',
-      });
-
-      setConversations(prev => [{ ...result, project_id: projectPath }, ...prev]);
-      setActiveConversationId(result.id);
-      setMessages([]);
-      setStreamState(null);
-      streamStateRef.current = null;
-      setIsStreaming(false);
-      resetStream();
-      setInputDisabledReason(null);
-    } catch (err) {
-      toast(classifyError(err).userMessage, 'error');
-      setInputDisabledReason(providerReadiness === 'ready' ? null : providerReadiness);
-    } finally {
-      setIsCreatingConversation(false);
-    }
-  }, [isCreatingConversation, providers, providerReadiness, activeProjectPath, locale, resetStream, toast]);
+    setConversations(prev => [newConv, ...prev].filter(c => !c.id.startsWith('temp-') || c.id === cleanId));
+    setActiveConversationId(cleanId);
+    setMessages([]);
+    setStreamState(null);
+    streamStateRef.current = null;
+    setIsStreaming(false);
+    setInputDisabledReason(null);
+  }, [activeProjectPath, locale]);
 
   const handleSelectModel = useCallback(async (providerId: string, modelId: string) => {
     if (!activeConversationId) return;
+    if (activeConversationId.startsWith('temp-')) {
+      setConversations(previous => previous.map(conversation =>
+        conversation.id === activeConversationId
+          ? {
+              ...conversation,
+              provider_id: providerId,
+              model_id: modelId,
+            }
+          : conversation,
+      ));
+      return;
+    }
     try {
       const result = await v2call<{ updated_at?: string }>('conversation.update_model', {
         id: activeConversationId,
@@ -627,6 +619,12 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
 
   const handlePermissionChange = useCallback(async (profile: AssistantPermissionProfile) => {
     if (!activeConversationId) return;
+    if (activeConversationId.startsWith('temp-')) {
+      setConversations(current => current.map(conversation => conversation.id === activeConversationId
+        ? { ...conversation, permission_profile_id: profile }
+        : conversation));
+      return;
+    }
     try {
       await v2call('conversation.update_permission', { id: activeConversationId, permission_profile_id: profile });
       setConversations(current => current.map(conversation => conversation.id === activeConversationId
@@ -654,7 +652,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   }, [activeConversationId, toast]);
 
   // ── Delete conversation ──
-  const handleDeleteConversation = useCallback(async (id: string) => {
+  const handleDeleteConversation = useCallback(async (id: string): Promise<boolean> => {
     try {
       await v2call('conversation.delete', { id });
       setConversations(prev => prev.filter(c => c.id !== id));
@@ -664,8 +662,10 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
         setStreamState(null);
         streamStateRef.current = null;
       }
+      return true;
     } catch (err) {
       toast(classifyError(err).userMessage, 'error');
+      return false;
     }
   }, [activeConversationId, toast]);
 
@@ -692,11 +692,42 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
     setActiveRunStartedAt(null);
     setActiveRunFinishedAt(null);
     eventsRef.current = [];
+    setPendingUserMessage({
+      id: `pending-user-${Date.now()}`,
+      conversation_id: activeConversationId,
+      role: 'user',
+      status: 'sending',
+      created_at: new Date().toISOString(),
+      content_blocks: [{ type: 'text', index: 0, content: { text: content } }],
+    });
+
+    let targetConvId = activeConversationId;
+    const isTemp = activeConversationId.startsWith('temp-');
 
     try {
+      if (isTemp) {
+        const title = content.trim()
+          ? (content.trim().length > 30 ? content.trim().slice(0, 30) + '...' : content.trim())
+          : t(locale, 'assistant.newConversation');
+
+        const result = await v2call<Conversation>('conversation.create', {
+          mode: 'agent',
+          title: title,
+          provider_id: providerId,
+          model_id: modelId,
+          project_id: conversation.project_id,
+          permission_profile_id: conversation.permission_profile_id ?? 'ask',
+        });
+
+        // Replace temporary conversation in list with real one
+        setConversations(prev => prev.map(c => c.id === activeConversationId ? { ...result, project_id: conversation.project_id } : c));
+        setActiveConversationId(result.id);
+        targetConvId = result.id;
+      }
+
       // Start a new run
       const run = await v2call<Run>('run.start', {
-        conversation_id: activeConversationId,
+        conversation_id: targetConvId,
         provider_id: providerId,
         model_id: modelId,
         content,
@@ -710,25 +741,27 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
       const newState = createAssistantStreamState(run.id);
       streamStateRef.current = newState;
       setStreamState(newState);
-      persistedStreamRunRef.current = null;
-      resetStream();
 
       // Reload messages to show the user message
-      await loadMessages(activeConversationId);
+      await loadMessages(targetConvId);
+      setPendingUserMessage(null);
       const assistantApi = window.nativesAPI?.assistant;
       if (!assistantApi) throw new Error('Assistant streaming API unavailable');
       await assistantApi.streamChat({
-        sessionId: activeConversationId,
+        sessionId: targetConvId,
+        runId: run.id,
         model: modelId,
+        runtimeOverride: 'native',
         messages: [{ role: 'user', content: [content, ...attachments.map(file => `[Attached file: ${file.path}]`)].filter(Boolean).join('\n') }],
       });
       return true;
     } catch (err) {
       setIsStreaming(false);
+      setPendingUserMessage(null);
       toast(classifyError(err).userMessage, 'error');
       return false;
     }
-  }, [activeConversationId, conversations, providers, providerReadiness, resetStream, loadMessages, toast]);
+  }, [activeConversationId, conversations, providers, providerReadiness, loadMessages, toast]);
 
   // ── Stop / Cancel run ──
   const handleStop = useCallback(async () => {
@@ -782,19 +815,19 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
       const newState = createAssistantStreamState(run.id);
       streamStateRef.current = newState;
       setStreamState(newState);
-      persistedStreamRunRef.current = null;
-      resetStream();
       const assistantApi = window.nativesAPI?.assistant;
       if (!assistantApi) throw new Error('Assistant streaming API unavailable');
       await assistantApi.streamChat({
         sessionId: activeConversationId!,
+        runId: run.id,
         model: conversation.model_id,
+        runtimeOverride: 'native',
         messages: [{ role: 'user', content: prompt }],
       });
     } catch (err) {
       toast(classifyError(err).userMessage, 'error');
     }
-  }, [activeConversationId, conversations, messages, resetStream, toast]);
+  }, [activeConversationId, conversations, messages, toast]);
 
   // ── Permission response ──
   const handlePermissionResponse = useCallback(async (requestId: string, approved: boolean, scope?: string) => {
@@ -804,7 +837,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
         approved,
         scope: scope ?? 'once',
       });
-      setRespondedPermissionId(requestId);
+      setStreamState(previous => previous ? { ...previous, permissionRequest: null, status: approved ? 'running' : previous.status } : previous);
     } catch (err) {
       toast(classifyError(err).userMessage, 'error');
     }
@@ -866,11 +899,22 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
     }
   }, [handleSelectProject, loadConversations, loadProjects, toast]);
 
+  const handleRemoveProject = useCallback(async (projectPath: string) => {
+    try {
+      await window.nativesAPI?.project.remove(projectPath);
+      if (activeProjectPath === projectPath) handleSelectProject(null);
+      await Promise.all([loadConversations(), loadProjects()]);
+    } catch (error) {
+      toast(classifyError(error).userMessage, 'error');
+    }
+  }, [activeProjectPath, handleSelectProject, loadConversations, loadProjects, toast]);
+
   // ── Determine active conversation ──
   const activeConversation = conversations.find(c => c.id === activeConversationId);
   const projectGroups = useMemo(() => {
+    const cleanConversations = conversations.filter(c => !c.id.startsWith('temp-'));
     const groups = groupAssistantConversations(
-      conversations.map(conversation => ({
+      cleanConversations.map(conversation => ({
         id: conversation.id,
         title: conversation.title,
         mode: conversation.mode,
@@ -908,12 +952,25 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
     addProjectFolder: () => { void handlePickProject(); },
     createConversation: () => { void handleCreateConversation(); },
     createConversationInProject: path => { handleSelectProject(path); void handleCreateConversation(path); },
+    removeProject: path => { void handleRemoveProject(path); },
     renameConversation: (id, title) => { void handleUpdateTitle(id, title); },
     archiveConversation: id => { void handleArchiveConversation(id); },
-    deleteConversation: id => { void handleDeleteConversation(id); },
+    deleteConversation: handleDeleteConversation,
     retryRun: () => { void handleRetry(); },
     respondPermission: (requestId, approved) => { void handlePermissionResponse(requestId, approved); },
-  }), [handleArchiveConversation, handleCreateConversation, handleDeleteConversation, handlePermissionResponse, handlePickProject, handleRetry, handleSelectConversation, handleSelectProject, handleUpdateTitle]);
+  }), [handleArchiveConversation, handleCreateConversation, handleDeleteConversation, handlePermissionResponse, handlePickProject, handleRemoveProject, handleRetry, handleSelectConversation, handleSelectProject, handleUpdateTitle]);
+
+  useEffect(() => {
+    if (navigation.pendingCreateProjectPath !== undefined) {
+      const targetPath = navigation.pendingCreateProjectPath;
+      publishNavigation({
+        ...navigation,
+        pendingCreateProjectPath: undefined,
+      });
+      handleSelectProject(targetPath);
+      handleCreateConversation(targetPath || undefined);
+    }
+  }, [navigation, publishNavigation, handleSelectProject, handleCreateConversation]);
 
   useEffect(() => {
     registerActions(workspaceActions);
@@ -929,7 +986,31 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
       creationState,
       isCreatingConversation,
     });
-  }, [activeConversationId, activeProjectPath, isCreatingConversation, creationState, loadingConversations, projectGroups, publishNavigation]);
+    return () => {
+      // Leaving the assistant view unmounts this workbench; keep the sidebar snapshot usable.
+      const cleanConversations = conversations.filter(c => !c.id.startsWith('temp-'));
+      const cleanGroups = groupAssistantConversations(
+        cleanConversations.map(conversation => ({
+          id: conversation.id,
+          title: conversation.title,
+          mode: conversation.mode,
+          projectId: conversation.project_id ?? '',
+          updatedAt: conversation.updated_at,
+        })),
+        registeredProjects.map(project => project.path),
+        t(locale, 'assistant.unassignedProject'),
+      );
+
+      publishNavigation({
+        groups: cleanGroups,
+        selectedId: activeConversationId && activeConversationId.startsWith('temp-') ? null : activeConversationId,
+        activeProjectPath,
+        loading: false,
+        creationState,
+        isCreatingConversation: false,
+      });
+    };
+  }, [activeConversationId, activeProjectPath, isCreatingConversation, creationState, loadingConversations, projectGroups, publishNavigation, conversations, registeredProjects, locale]);
 
   useEffect(() => {
     publishRuntime({
@@ -950,8 +1031,8 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
   }, [activeConversation, activeConversationId, activeRunFinishedAt, activeRunStartedAt, streamState, artifacts, assistantEvents, fileChanges, publishRuntime]);
 
   // ── Map messages to timeline format ──
-  const timelineMessages = messages.map(mapMessageToTimeline);
-  const modelSelectorProviders: ProviderWithModels[] = providers.map(provider => ({
+  const timelineMessages = [...messages, ...(pendingUserMessage ? [pendingUserMessage] : [])].map(mapMessageToTimeline);
+  const modelSelectorProviders: ProviderWithModels[] = providers.filter(provider => provider.has_active_key && (provider.models?.length ?? 0) > 0).map(provider => ({
     id: provider.id,
     name: provider.display_name,
     presetName: provider.provider_type,
@@ -974,6 +1055,8 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
           createdAt: activeRunStartedAt ?? new Date().toISOString(),
           startedAt: activeRunStartedAt ?? undefined,
           finishedAt: activeRunFinishedAt ?? undefined,
+          reasoningStartedAt: streamState?.reasoningStartedAt,
+          reasoningFinishedAt: streamState?.reasoningFinishedAt,
         },
       ]
     : timelineMessages;
@@ -1072,10 +1155,10 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
               />
             </div>
 
-            {nativeStream.permissionRequest && nativeStream.permissionRequest.id !== respondedPermissionId && (
+            {streamState?.permissionRequest && (
               <div className="mx-auto w-full max-w-[860px] px-5">
                 <PermissionRequestCard
-                  request={{ ...nativeStream.permissionRequest, status: 'pending', createdAt: new Date().toISOString() }}
+                  request={{ ...streamState.permissionRequest, status: 'pending', createdAt: new Date().toISOString() }}
                   onApprove={(id, scope) => { void handlePermissionResponse(id, true, scope); }}
                   onReject={id => { void handlePermissionResponse(id, false); }}
                   locale={locale}
@@ -1089,6 +1172,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
                 locale={locale}
                 onSend={handleSend}
                 onStop={handleStop}
+                onBlockedSend={() => toast(locale.startsWith('zh') ? '当前回答仍在生成，请等待或先停止' : 'The current response is still generating. Wait or stop it first.', 'warning')}
                 isStreaming={isStreaming}
                 disabled={!activeConversationId}
                 inputDisabledReason={inputDisabledReason}
@@ -1119,7 +1203,7 @@ export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) 
             status={streamState?.status ?? 'idle'}
             events={runEvents.map(event => ({ sequence: event.sequence, type: event.type, timestamp: event.timestamp }))}
             artifacts={artifacts}
-            subAgents={[]}
+            subAgents={subAgents}
             locale={locale}
           />
         </aside>

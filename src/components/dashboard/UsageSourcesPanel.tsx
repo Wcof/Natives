@@ -4,7 +4,7 @@ import React from 'react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 import { useLocale, t } from '@/i18n';
 import type { UsageSourceStatus, UsageWarning, RtkSummary } from '@/types/usage';
-import { Layers, AlertCircle, Clock, Zap, CheckCircle, XCircle, MinusCircle } from 'lucide-react';
+import { Layers, AlertCircle, Clock, Zap, CheckCircle, XCircle, MinusCircle, CircleDot } from 'lucide-react';
 
 interface Props {
   sources: UsageSourceStatus[];
@@ -16,6 +16,7 @@ interface Props {
 function StateIcon({ state }: { state: UsageSourceStatus['state'] }) {
   switch (state) {
     case 'ok': return <CheckCircle size={14} style={{ color: 'var(--semantic-green)' }} />;
+    case 'detected': return <CircleDot size={14} style={{ color: 'var(--text-faint)' }} />;
     case 'partial': return <AlertCircle size={14} style={{ color: 'var(--warning)' }} />;
     case 'unavailable': return <XCircle size={14} style={{ color: 'var(--danger)' }} />;
   }
@@ -79,6 +80,11 @@ export function UsageSourcesPanel({ sources, warnings, lastRefresh, rtk }: Props
                 {s.breadcrumbs.map((b, i) => (
                   <span key={i}>{i > 0 ? ' · ' : ''}{b.label}</span>
                 ))}
+              </div>
+            )}
+            {s.state === 'detected' && (
+              <div style={{ fontSize: 10, color: 'var(--text-faint)', marginBottom: 4 }}>
+                {t(locale, 'usage.detectedUnmeasurable')}
               </div>
             )}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>

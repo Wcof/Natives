@@ -114,13 +114,22 @@ pub fn project_open(id: String) -> Result<()> {
     Ok(())
 }
 
-/// Remove a project registration (does not delete conversations).
+/// Remove a project registration without deleting its conversations.
+/// Existing conversations are moved to the explicit unassigned group.
 #[tauri::command]
 pub fn project_remove(id: String) -> Result<()> {
-    // For now this is a metadata-only operation: the project row in
-    // the assistant DB exists implicitly via session.project_id = id.
-    // We do NOT delete the sessions — the plan says to keep DB tables
-    // for rollback. Future iterations may add a explicit project registry table.
-    let _ = id;
+    let mut conn = db::get_assistant_db_conn().map_err(|e| e.to_string())?;
+    let transaction = conn.transaction()
+        .map_err(|e| format!("Failed to start project removal: {e}"))?;
+    transaction.execute(
+        "UPDATE assistant_conversations SET project_id = NULL WHERE project_id = ?1",
+        rusqlite::params![id],
+    ).map_err(|e| format!("Failed to unassign project conversations: {e}"))?;
+    transaction.execute(
+        "DELETE FROM assistant_projects WHERE id = ?1 OR path = ?1",
+        rusqlite::params![id],
+    ).map_err(|e| format!("Failed to remove project: {e}"))?;
+    transaction.commit()
+        .map_err(|e| format!("Failed to commit project removal: {e}"))?;
     Ok(())
 }

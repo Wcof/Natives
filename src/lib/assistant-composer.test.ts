@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assistantRetryPrompt, canSendAssistantDraft, fileNameFromPath, normalizePermissionProfile } from './assistant-composer';
+import { assistantRetryPrompt, canSendAssistantDraft, fileNameFromPath, mimeTypeFromPath, normalizePermissionProfile } from './assistant-composer';
 
 test('allows text or attachment-only drafts', () => {
   assert.equal(canSendAssistantDraft('', []), false);
@@ -19,4 +19,5 @@ test('normalizes permission profiles and file names', () => {
   assert.equal(normalizePermissionProfile('full_access'), 'full_access');
   assert.equal(normalizePermissionProfile('unknown'), 'ask');
   assert.equal(fileNameFromPath('C:\\tmp\\note.md'), 'note.md');
+  assert.equal(mimeTypeFromPath('/tmp/note.md'), 'text/markdown');
 });

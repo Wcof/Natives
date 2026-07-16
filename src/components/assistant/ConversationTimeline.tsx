@@ -15,6 +15,8 @@ export interface Message {
   outputTokens?: number;
   startedAt?: string;
   finishedAt?: string;
+  reasoningStartedAt?: string | null;
+  reasoningFinishedAt?: string | null;
 }
 
 interface ConversationTimelineProps {
@@ -55,17 +57,23 @@ export default function ConversationTimeline({ messages, loading, locale, onRetr
           const end = message.finishedAt ? Date.parse(message.finishedAt) : (now || start);
           const duration = Number.isFinite(start) ? formatElapsed(end - start) : null;
           const tokens = (message.inputTokens ?? 0) + (message.outputTokens ?? 0);
+          const reasoningStart = message.reasoningStartedAt ? Date.parse(message.reasoningStartedAt) : Number.NaN;
+          const reasoningEnd = message.reasoningFinishedAt ? Date.parse(message.reasoningFinishedAt) : (hasActive ? now : Number.NaN);
+          const contentBlocks = [...message.contentBlocks].sort((left, right) => Number(right.type === 'reasoning') - Number(left.type === 'reasoning')).map(block => block.type === 'reasoning' && Number.isFinite(reasoningStart)
+            ? { ...block, durationMs: Math.max(0, reasoningEnd - reasoningStart) }
+            : block);
+          const hasReasoning = contentBlocks.some(block => block.type === 'reasoning');
           return (
             <article key={message.id} className={user ? 'ml-auto max-w-[78%]' : 'mr-auto w-full max-w-[760px]'}>
               <div className={user ? 'rounded-2xl rounded-br-md bg-[var(--surface-hover)] px-4 py-2.5 text-left text-[var(--text)]' : 'text-left text-[var(--text)]'}>
-                {renderBlocks(message.contentBlocks)}
-                {!user && (message.status === 'streaming' || message.status === 'running') && message.contentBlocks.length === 0 && (
+                {renderBlocks(contentBlocks)}
+                {!user && (message.status === 'streaming' || message.status === 'running') && contentBlocks.length === 0 && (
                   <div className="flex items-center gap-2 text-sm text-[var(--text-secondary)]"><span className="h-2 w-2 animate-pulse rounded-full bg-[var(--primary)]" />{zh ? '正在思考' : 'Thinking'}{duration ? ` · ${duration}` : ''}</div>
                 )}
               </div>
               <div className={`mt-1 flex min-h-6 items-center gap-1 text-[11px] text-[var(--text-disabled)] ${user ? 'justify-end' : 'justify-start'}`}>
                 <span>{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                {!user && duration && <span>· {message.status === 'streaming' || message.status === 'running' ? (zh ? `思考 ${duration}` : `Thinking ${duration}`) : duration}</span>}
+                {!user && duration && !hasReasoning && <span>· {duration}</span>}
                 {!user && tokens > 0 && <span>· {tokens} tokens</span>}
                 <button type="button" onClick={() => { void navigator.clipboard.writeText(messagePlainText(message.contentBlocks)); setCopiedId(message.id); window.setTimeout(() => setCopiedId(null), 1200); }} title={zh ? '复制' : 'Copy'} className="ml-1 rounded p-1 hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]">{copiedId === message.id ? <Check size={12} /> : <Copy size={12} />}</button>
                 {message.id === lastRetryableId && onRetry && <button type="button" onClick={onRetry} title={zh ? '重试' : 'Retry'} className="rounded p-1 hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"><RefreshCw size={12} /></button>}

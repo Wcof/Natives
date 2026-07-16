@@ -5,6 +5,18 @@ import type { ProviderPreset } from '@/types/provider';
  * 显示时根据当前 locale 切换：locale=zh 显示 nameZh/descriptionZh，否则显示 name/description。
  */
 export const PROVIDER_PRESETS: ProviderPreset[] = [
+  {
+    name: 'Custom Provider',
+    nameZh: '自定义供应商',
+    websiteUrl: '',
+    baseUrl: '',
+    description: 'Any API that implements the OpenAI-compatible protocol',
+    descriptionZh: '适用于实现 OpenAI 兼容协议的 API 服务',
+    category: 'third_party',
+    protocol: 'openai_compatible',
+    icon: 'custom',
+    iconColor: '#6B7280',
+  },
   // ── 官方 ──
   {
     name: 'Claude Official',
@@ -363,5 +375,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     description: 'SenseNova OpenAI-compatible endpoint. Models: sensenova-6.7-flash-lite, deepseek-v4-flash',
     descriptionZh: '商汤 SenseNova OpenAI 兼容接口。模型：sensenova-6.7-flash-lite、deepseek-v4-flash',
     category: 'cn_official', icon: 'sensenova', iconColor: '#0B7BFF',
+    protocol: 'openai_compatible',
   },
 ];
+
+export const CONFIGURABLE_PROVIDER_PRESETS = PROVIDER_PRESETS.filter(
+  (provider) => provider.protocol === 'openai_compatible' || provider.protocol === undefined,
+);

@@ -114,6 +114,13 @@ pub fn run() {
             let db_path = data_dir.join("natives.db");
             let pool = db::init_db_pool(&db_path)
                 .map_err(|e| format!("failed to init database pool: {e}"))?;
+            {
+                let conn = pool
+                    .get()
+                    .map_err(|e| format!("failed to initialize subagent tables: {e}"))?;
+                commands::subagent::ensure_tables(&conn)
+                    .map_err(|e| format!("failed to initialize subagent tables: {e}"))?;
+            }
             // 注册主 pool 到全局，供 runtime 等无 State 上下文模块访问
             db::register_main_pool(pool.clone());
 
@@ -383,6 +390,10 @@ pub fn run() {
             commands::provider::delete_provider,
             commands::provider::add_provider_key,
             commands::provider::delete_provider_key,
+            commands::provider::provider_update_defaults,
+            commands::provider::provider_set_primary_key,
+            commands::provider::provider_discover_models,
+            commands::provider::provider_discover_models_saved,
             // Project （统一项目目录 API）
             commands::project::project_list,
             commands::project::project_register,

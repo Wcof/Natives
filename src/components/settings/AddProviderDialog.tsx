@@ -1,128 +1,337 @@
 'use client';
 
-import { useState, useMemo } from 'react';
-import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
-import { PROVIDER_PRESETS } from '@/lib/provider-presets';
-import { Search, Globe, Link, Key, Check, Wifi, Loader, RefreshCw } from 'lucide-react';
-import { t as tr } from '@/i18n';
+import { useMemo, useState, type CSSProperties } from 'react';
+import { Check, ChevronRight, KeyRound, Loader, RefreshCw, Search, Server, ShieldCheck, Wifi } from 'lucide-react';
+import { CONFIGURABLE_PROVIDER_PRESETS } from '@/lib/provider-presets';
+import { t } from '@/i18n';
+import type { ProviderPreset } from '@/types/provider';
 import Modal from '@/components/ui/Modal';
 import { classifyError } from '@/lib/error-classifier';
 import { canTestDiscoveredModel, connectionFingerprint, normalizeDiscoveredModels, selectDiscoveredModel } from '@/lib/provider-model-selection';
 
-interface Props { locale: string; onClose: () => void; onSave: (data: { presetName: string; name: string; websiteUrl: string; baseUrl: string; keys: { label: string; apiKey: string }[] }) => Promise<void>; }
+interface SaveProviderInput {
+  providerType: string;
+  name: string;
+  websiteUrl: string;
+  baseUrl: string;
+  defaultModel: string;
+  keys: { label: string; apiKey: string }[];
+}
+
+interface Props {
+  locale: string;
+  onClose: () => void;
+  onSave: (data: SaveProviderInput) => Promise<void>;
+}
+
+interface DiscoveredModel {
+  id: string;
+  displayName?: string;
+}
+
+type ProviderColorStyle = CSSProperties & { '--provider-color': string };
+
+function providerName(provider: ProviderPreset, locale: string) {
+  return locale.startsWith('zh') && provider.nameZh ? provider.nameZh : provider.name;
+}
+
+function providerDescription(provider: ProviderPreset, locale: string) {
+  return locale.startsWith('zh') && provider.descriptionZh
+    ? provider.descriptionZh
+    : provider.description ?? '';
+}
 
 export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
-  const [search, setSearch] = useState('');
-  const [sel, setSel] = useState<any | null>(null);
-  const [name, setName] = useState(''); const [wu, setWu] = useState(''); const [bu, setBu] = useState('');
-  const [dm, setDm] = useState(''); const [mos, setMos] = useState<Array<{ id: string; displayName?: string }>>([]);
-  const [fm, setFm] = useState(false); const [fme, setFme] = useState<string | null>(null);
-  const [sv, setSv] = useState(false); const [te, setTe] = useState(false);
-  const [trr, setTrr] = useState<{ success: boolean; error?: string } | null>(null);
-  const [sve, setSve] = useState<string | null>(null); const [dfp, setDfp] = useState<string | null>(null);
-  const [kl, setKl] = useState('API Key 1'); const [kv, setKv] = useState('');
+  const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState<ProviderPreset | null>(null);
+  const [name, setName] = useState('');
+  const [websiteUrl, setWebsiteUrl] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [keyLabel, setKeyLabel] = useState('API Key 1');
+  const [apiKey, setApiKey] = useState('');
+  const [models, setModels] = useState<DiscoveredModel[]>([]);
+  const [defaultModel, setDefaultModel] = useState('');
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [discoveryFingerprint, setDiscoveryFingerprint] = useState<string | null>(null);
+  const [discovering, setDiscovering] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; error?: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-  const fil = useMemo(() => {
-    if (!search.trim()) return PROVIDER_PRESETS;
-    const q = search.toLowerCase();
-    return PROVIDER_PRESETS.filter((p: any) => p.name.toLowerCase().includes(q) || (p.nameZh?.toLowerCase() ?? '').includes(q) || (p.description?.toLowerCase() ?? '').includes(q) || (p.descriptionZh?.toLowerCase() ?? '').includes(q) || p.websiteUrl.toLowerCase().includes(q));
-  }, [search]);
+  const filteredProviders = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return CONFIGURABLE_PROVIDER_PRESETS;
+    return CONFIGURABLE_PROVIDER_PRESETS.filter((provider) =>
+      `${provider.name} ${provider.nameZh ?? ''} ${provider.description ?? ''} ${provider.descriptionZh ?? ''}`
+        .toLowerCase()
+        .includes(needle),
+    );
+  }, [query]);
 
-  const hs = (preset: any) => { setSel(preset); setName(pn(preset, locale)); setWu(preset.websiteUrl); setBu(preset.baseUrl); setDm(''); setKl('API Key 1'); setKv(''); setMos([]); setFme(null); setDfp(null); setTrr(null); setSve(null); };
-  const hsv = async () => {
-    if (!name.trim() || !sel) return;
-    if (!dm.trim()) { setSve('Default model is required.'); return; }
-    if (!kv.trim()) { setSve('An API key is required.'); return; }
-    if (!trr?.success) { setSve('Test the connection before saving.'); return; }
-    setSv(true); setSve(null);
-    try { await onSave({ presetName: sel.name, name: name.trim(), websiteUrl: wu.trim(), baseUrl: bu.trim(), keys: [{ label: kl.trim() || 'API Key 1', apiKey: kv }] }); setKv(''); onClose(); }
-    catch (e) { setSve(classifyError(e).userMessage); setSv(false); }
+  const effectiveBaseUrl = baseUrl.trim();
+  const effectiveApiKey = apiKey.trim();
+  const currentFingerprint = connectionFingerprint(effectiveBaseUrl, effectiveApiKey);
+  const discoveryCurrent = discoveryFingerprint === currentFingerprint;
+  const detailsReady = Boolean(name.trim() && effectiveBaseUrl && effectiveApiKey);
+  const canTest = detailsReady && Boolean(defaultModel.trim());
+  const canSave = detailsReady && canTest && testResult?.success === true && !saving;
+
+  const invalidateConnection = () => {
+    setModels([]);
+    setDefaultModel('');
+    setDiscoveryFingerprint(null);
+    setDiscoveryError(null);
+    setTestResult(null);
+    setSaveError(null);
   };
 
-  const t = (k: string) => tr(locale, k);
-  const hk = kv.trim().length > 0; const desc = sel ? pd(sel, locale) : '';
-  const fp = connectionFingerprint(bu, kv); const dc = dfp === fp;
-  const cum = dc && canTestDiscoveredModel(mos);
-  const cs = !sv && name.trim().length > 0 && hk && cum && trr?.success === true;
-  const inv = () => { setMos([]); setDm(''); setFme(null); setDfp(null); setTrr(null); };
-  const htt = async () => { if (!sel || !hk || !cum) return; setTe(true); setTrr(null); try { const a = window.nativesAPI; if (a?.provider?.testCandidate) { const r = await a.provider.testCandidate({ providerType: 'openai', baseUrl: bu.trim() || sel.baseUrl, apiKey: kv.trim(), model: dm }); setTrr({ success: r.success, error: r.userMessage ?? undefined }); } else setTrr({ success: false, error: t('settings.providerTestUnavailable') }); } catch (e) { setTrr({ success: false, error: classifyError(e).userMessage }); } finally { setTe(false); } };
-  const hd = async () => {
-    if (!sel || !hk || fm) return; setFm(true); setFme(null);
+  const selectProvider = (provider: ProviderPreset) => {
+    setSelected(provider);
+    setName(providerName(provider, locale));
+    setWebsiteUrl(provider.websiteUrl);
+    setBaseUrl(provider.baseUrl);
+    setKeyLabel('API Key 1');
+    setApiKey('');
+    invalidateConnection();
+  };
+
+  const discoverModels = async () => {
+    if (!selected || !effectiveBaseUrl || !effectiveApiKey || discovering) return;
+    setDiscovering(true);
+    setDiscoveryError(null);
+    setTestResult(null);
     try {
-      const a = window.nativesAPI?.provider;
-      if (!a?.discoverModels) { setFme(t('settings.modelDiscoveryUnavailable')); return; }
-      const ms = normalizeDiscoveredModels(await a.discoverModels({ providerType: 'openai', baseUrl: bu.trim() || sel.baseUrl, apiKey: kv.trim() }));
-      setMos(ms); const m = selectDiscoveredModel(ms); if (m) setDm(m.id);
-      setDfp(connectionFingerprint(bu.trim() || sel.baseUrl, kv.trim())); setTrr(null);
-      if (ms.length === 0) setFme(t('settings.noModelsDiscovered'));
-    } catch (e) { setFme(classifyError(e).userMessage); } finally { setFm(false); }
+      const providerApi = window.nativesAPI?.provider;
+      if (!providerApi?.discoverModels) throw new Error(t(locale, 'settings.modelDiscoveryUnavailable'));
+      const discovered = normalizeDiscoveredModels(await providerApi.discoverModels({
+        providerType: selected.protocol ?? 'openai_compatible',
+        baseUrl: effectiveBaseUrl,
+        apiKey: effectiveApiKey,
+      }));
+      setModels(discovered);
+      setDefaultModel(selectDiscoveredModel(discovered)?.id ?? '');
+      setDiscoveryFingerprint(currentFingerprint);
+      if (discovered.length === 0) setDiscoveryError(t(locale, 'settings.noModelsDiscovered'));
+    } catch (error) {
+      setModels([]);
+      setDefaultModel('');
+      setDiscoveryFingerprint(null);
+      setDiscoveryError(classifyError(error).userMessage);
+    } finally {
+      setDiscovering(false);
+    }
+  };
+
+  const testConnection = async () => {
+    if (!selected || !canTest || testing) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const providerApi = window.nativesAPI?.provider;
+      if (!providerApi?.testCandidate) throw new Error(t(locale, 'settings.providerTestUnavailable'));
+      const result = await providerApi.testCandidate({
+        providerType: selected.protocol ?? 'openai_compatible',
+        baseUrl: effectiveBaseUrl,
+        apiKey: effectiveApiKey,
+        model: defaultModel,
+      });
+      setTestResult({ success: result.success, error: result.userMessage ?? undefined });
+    } catch (error) {
+      setTestResult({ success: false, error: classifyError(error).userMessage });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const saveProvider = async () => {
+    if (!selected) return;
+    if (!effectiveApiKey) return setSaveError(t(locale, 'settings.apiKeyRequired'));
+    if (!defaultModel) return setSaveError(t(locale, 'settings.defaultModelRequired'));
+    if (!testResult?.success) return setSaveError(t(locale, 'settings.testBeforeSave'));
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await onSave({
+        providerType: selected.protocol ?? 'openai_compatible',
+        name: name.trim(),
+        websiteUrl: websiteUrl.trim(),
+        baseUrl: effectiveBaseUrl,
+        defaultModel,
+        keys: [{ label: keyLabel.trim() || 'API Key 1', apiKey: effectiveApiKey }],
+      });
+      setApiKey('');
+      onClose();
+    } catch (error) {
+      setSaveError(classifyError(error).userMessage);
+      setSaving(false);
+    }
   };
 
   return (
-    <Modal isOpen={true} onClose={onClose} title={t('settings.addProvider')} width={700} contentClassName="!p-0 flex flex-col min-h-0 overflow-hidden">
-      <div style={{ padding: `${SPACING.sm}px ${SPACING.lg}px`, borderBottom: '0.0625rem solid var(--border)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.sm, padding: `${SPACING.xs}px ${SPACING.sm}px`, borderRadius: BORDER_RADIUS.md, background: 'var(--surface)', border: '0.0625rem solid var(--border)' }}>
-          <Search size={14} style={{ color: 'var(--text-disabled)' }} />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder={t('settings.searchProvider')} style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: 'var(--text)', fontSize: FONT_SIZE.sm }} />
-        </div>
-      </div>
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        <div style={{ flex: 1, overflow: 'auto', padding: `${SPACING.sm}px` }}>
-          {fil.length === 0 ? <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-disabled)', fontSize: FONT_SIZE.sm }}>{t('settings.noProviderMatch')}</div>
-          : fil.map((preset: any) => {
-            const s = sel?.name === preset.name;
-            return <div key={preset.name} onClick={() => hs(preset)} style={{ display: 'flex', alignItems: 'center', gap: SPACING.sm, padding: `${SPACING.sm}px ${SPACING.md}px`, borderRadius: BORDER_RADIUS.lg, cursor: 'pointer', background: s ? 'linear-gradient(135deg, var(--primary-soft) 0%, color-mix(in srgb, var(--primary-soft) 80%, transparent) 100%)' : 'transparent', border: s ? '0.0625rem solid var(--primary)' : '0.0625rem solid transparent', transition: 'all 0.12s', marginBottom: 3 }}>
-              <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: preset.iconColor || 'var(--primary)' }} />
-              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: FONT_SIZE.sm, fontWeight: s ? 600 : 400, color: 'var(--text)' }}>{pn(preset, locale)}</div>{pd(preset, locale) && <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>{pd(preset, locale)}</div>}</div>
-              {preset.category && <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)', background: 'var(--surface)', padding: '1px 5px', borderRadius: BORDER_RADIUS.sm, textTransform: 'uppercase' }}>{preset.category}</span>}
-              {s && <Check size={14} style={{ color: 'var(--primary)', flexShrink: 0 }} />}
-            </div>;
-          })}
-        </div>
-        <div style={{ width: 300, flexShrink: 0, borderLeft: '0.0625rem solid var(--border)', padding: `${SPACING.md}px ${SPACING.lg}px`, overflow: 'auto', background: 'var(--surface)' }}>
-          {sel ? <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.sm }}>
-            <h3 style={{ fontSize: FONT_SIZE.md, fontWeight: 600, color: 'var(--text)', marginBottom: SPACING.xs }}>{pn(sel, locale)}</h3>
-            {desc && <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)', lineHeight: 1.4 }}>{desc}</div>}
-            <Field label="Name" icon={<Globe size={12} />}><input value={name} onChange={e => setName(e.target.value)} style={inp} /></Field>
-            <Field label="Website URL" icon={<Link size={12} />}><input value={wu} onChange={e => setWu(e.target.value)} style={inp} /></Field>
-            <Field label="Base URL" icon={<Link size={12} />}><input value={bu} onChange={e => { setBu(e.target.value); inv(); }} style={inp} /></Field>
-            <Field label="Initial API Key" icon={<Key size={12} />}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                <input value={kl} onChange={e => setKl(e.target.value)} placeholder="Label" style={inp} />
-                <input value={kv} onChange={e => { setKv(e.target.value); if (dfp) inv(); }} type="password" placeholder="sk-..." style={inp} />
-              </div>
-            </Field>
-            <Field label="Default Model" icon={<Link size={12} />}>
-              <div style={{ display: 'flex', gap: SPACING.xs }}>
-                <select value={dm} onChange={e => setDm(e.target.value)} style={{ ...inp, flex: 1 }} disabled={mos.length === 0 || !dc}>
-                  {mos.length === 0 && <option value="">Fetch models first</option>}
-                  {mos.map(m => <option key={m.id} value={m.id}>{m.displayName ?? m.id}</option>)}
-                </select>
-                <button type="button" onClick={hd} disabled={!hk || fm} title="Fetch" style={{ ...inp, width: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4 }}>{fm ? <Loader size={13} className="animate-spin" /> : <RefreshCw size={13} />} Fetch</button>
-              </div>
-              {mos.length > 0 && <div style={{ marginTop: 4, color: 'var(--success)', fontSize: FONT_SIZE.xs }}>{mos.length} models found</div>}
-              {fme && <div style={{ marginTop: 4, color: 'var(--danger)', fontSize: FONT_SIZE.xs }}>{fme}</div>}
-            </Field>
-            <div style={{ marginTop: SPACING.xs, display: 'flex', flexDirection: 'column', gap: SPACING.sm }}>
-              <button onClick={htt} disabled={te || !hk || !cum} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'center', padding: '6px 12px', borderRadius: BORDER_RADIUS.md, background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text)', cursor: (te || !cum) ? 'not-allowed' : 'pointer', fontSize: FONT_SIZE.xs, opacity: te ? 0.6 : 1 }}>
-                {te ? <Loader size={12} className="animate-spin" /> : <Wifi size={12} />}{te ? 'Testing…' : 'Test Connection'}
+    <Modal isOpen onClose={onClose} title={t(locale, 'settings.addProvider')} width={920} contentClassName="!p-0 flex flex-col min-h-0 overflow-hidden">
+      <div className="add-provider-intro"><ShieldCheck size={16} /><span>{t(locale, 'settings.providerSetupIntro')}</span></div>
+
+      <div className="add-provider-layout">
+        <aside className="add-provider-picker">
+          <div className="add-provider-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t(locale, 'settings.searchProvider')} /></div>
+          <div className="add-provider-options">
+            {filteredProviders.map((provider) => (
+              <button key={provider.name} type="button" className="add-provider-option" aria-pressed={selected?.name === provider.name} onClick={() => selectProvider(provider)}>
+                <span className="add-provider-logo" style={{ '--provider-color': provider.iconColor ?? 'var(--primary)' } as ProviderColorStyle}>{providerName(provider, locale).slice(0, 1).toUpperCase()}</span>
+                <span className="add-provider-option-copy"><strong>{providerName(provider, locale)}</strong><span>{providerDescription(provider, locale)}</span></span>
+                <ChevronRight size={15} />
               </button>
-              {trr && <div style={{ padding: `${SPACING.xs}px ${SPACING.sm}px`, borderRadius: BORDER_RADIUS.sm, background: trr.success ? 'var(--primary-soft)' : 'rgba(239, 68, 68, 0.08)', border: `1px solid ${trr.success ? 'var(--success)' : 'var(--danger)'}`, fontSize: FONT_SIZE.xs, color: trr.success ? 'var(--success)' : 'var(--danger)' }}>
-                {trr.success ? '✓ Connection successful' : `✗ ${trr.error || 'Connection failed'}`}
-              </div>}
-            </div>
-            {sve && <div style={{ color: 'var(--danger)', fontSize: FONT_SIZE.xs }}>{sve}</div>}
-            <button onClick={hsv} disabled={!cs} className="btn btn-primary" style={{ marginTop: SPACING.sm, fontSize: FONT_SIZE.sm, padding: '7px 0' }}>{sv ? 'Saving…' : 'Save'}</button>
-          </div> : <div style={{ textAlign: 'center', padding: SPACING.xl, color: 'var(--text-disabled)', fontSize: FONT_SIZE.sm }}>Select a provider from the left</div>}
+            ))}
+            {filteredProviders.length === 0 && <div className="add-provider-no-results">{t(locale, 'settings.noProviderMatch')}</div>}
+          </div>
+        </aside>
+
+        <div className="add-provider-form-panel">
+          {!selected ? (
+            <div className="add-provider-empty"><span><Server size={24} /></span><strong>{t(locale, 'settings.selectProvider')}</strong><p>{t(locale, 'settings.selectProviderDesc')}</p></div>
+          ) : (
+            <>
+              <div className="add-provider-steps" aria-label={t(locale, 'settings.connectionSetup')}>
+                <span className={detailsReady ? 'complete' : 'active'}><b>1</b>{t(locale, 'settings.providerDetails')}</span>
+                <span className={canTest ? 'complete' : detailsReady ? 'active' : ''}><b>2</b>{t(locale, 'settings.fetchModels')}</span>
+                <span className={testResult?.success ? 'complete' : canTest ? 'active' : ''}><b>3</b>{t(locale, 'assistant.testConnection')}</span>
+              </div>
+
+              <div className="add-provider-form-scroll">
+                <section className="add-provider-section">
+                  <div className="add-provider-section-title"><span>1</span><div><h3>{t(locale, 'settings.providerDetails')}</h3><p>{t(locale, 'settings.providerDetailsDesc')}</p></div></div>
+                  <div className="add-provider-field-grid">
+                    <label><span>{t(locale, 'settings.providerName')}</span><input className="settings-input" value={name} onChange={(event) => setName(event.target.value)} placeholder={t(locale, 'settings.providerNamePlaceholder')} /></label>
+                    <label><span>{t(locale, 'settings.websiteOptional')}</span><input className="settings-input" value={websiteUrl} onChange={(event) => setWebsiteUrl(event.target.value)} placeholder="https://example.com" /></label>
+                    <label className="wide"><span>{t(locale, 'settings.baseUrl')}</span><input className="settings-input add-provider-mono" value={baseUrl} onChange={(event) => { setBaseUrl(event.target.value); invalidateConnection(); }} placeholder="https://api.example.com/v1" /></label>
+                  </div>
+                </section>
+
+                <section className="add-provider-section">
+                  <div className="add-provider-section-title"><span>2</span><div><h3>{t(locale, 'settings.credential')}</h3><p>{t(locale, 'settings.credentialDesc')}</p></div></div>
+                  <div className="add-provider-key-fields">
+                    <label><span>{t(locale, 'settings.keyLabel')}</span><input className="settings-input" value={keyLabel} onChange={(event) => setKeyLabel(event.target.value)} placeholder={t(locale, 'settings.keyLabelPlaceholder')} /></label>
+                    <label><span>API Key</span><div className="add-provider-key-input"><KeyRound size={15} /><input type="password" value={apiKey} onChange={(event) => { setApiKey(event.target.value); invalidateConnection(); }} placeholder={t(locale, 'settings.apiKeyPlaceholder')} /></div></label>
+                  </div>
+                </section>
+
+                <section className="add-provider-section">
+                  <div className="add-provider-section-title"><span>3</span><div><h3>{t(locale, 'settings.connectionSetup')}</h3><p>{t(locale, 'settings.connectionSetupDesc')}</p></div></div>
+                  <div className="add-provider-connection-row">
+                    <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+                      <input
+                        className="settings-input"
+                        value={defaultModel}
+                        onChange={(event) => {
+                          setDefaultModel(event.target.value);
+                          setTestResult(null);
+                        }}
+                        onFocus={() => {
+                          if (models.length > 0 && discoveryCurrent) setDropdownOpen(true);
+                        }}
+                        placeholder={locale.startsWith('zh') ? '输入或选择默认模型' : 'Enter or select default model'}
+                        style={{ paddingRight: '32px' }}
+                      />
+                      {models.length > 0 && discoveryCurrent && (
+                        <button
+                          type="button"
+                          onClick={() => setDropdownOpen(!dropdownOpen)}
+                          style={{
+                            position: 'absolute',
+                            right: 0,
+                            top: 0,
+                            bottom: 0,
+                            width: '32px',
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: 'var(--text-secondary)',
+                          }}
+                        >
+                          <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        </button>
+                      )}
+
+                      {dropdownOpen && models.length > 0 && discoveryCurrent && (
+                        <>
+                          <div
+                            style={{ position: 'fixed', inset: 0, zIndex: 998 }}
+                            onClick={() => setDropdownOpen(false)}
+                          />
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: '100%',
+                              left: 0,
+                              right: 0,
+                              marginTop: '4px',
+                              maxHeight: '200px',
+                              overflowY: 'auto',
+                              background: 'var(--surface)',
+                              border: '1px solid var(--border)',
+                              borderRadius: 'var(--radius-sm)',
+                              boxShadow: 'var(--shadow-popup)',
+                              zIndex: 999,
+                            }}
+                          >
+                            {models.map((model) => (
+                              <button
+                                key={model.id}
+                                type="button"
+                                onClick={() => {
+                                  setDefaultModel(model.id);
+                                  setTestResult(null);
+                                  setDropdownOpen(false);
+                                }}
+                                style={{
+                                  width: '100%',
+                                  padding: '8px 12px',
+                                  textAlign: 'left',
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: 'var(--text)',
+                                  fontSize: '13px',
+                                  cursor: 'pointer',
+                                  outline: 'none',
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.background = 'var(--surface-hover)';
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.background = 'transparent';
+                                }}
+                              >
+                                {model.displayName ?? model.id}
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    <button type="button" className="btn" onClick={discoverModels} disabled={!detailsReady || discovering}>{discovering ? <Loader size={14} className="animate-spin" /> : <RefreshCw size={14} />}{discovering ? t(locale, 'settings.fetchingModels') : t(locale, 'settings.fetchModels')}</button>
+                    <button type="button" className="btn" onClick={testConnection} disabled={!canTest || testing}>{testing ? <Loader size={14} className="animate-spin" /> : <Wifi size={14} />}{t(locale, 'assistant.testConnection')}</button>
+                  </div>
+                  {models.length > 0 && discoveryCurrent && <div className="add-provider-success"><Check size={13} />{t(locale, 'settings.modelsFound', { count: models.length })}</div>}
+                  {discoveryError && <div className="add-provider-message error">{discoveryError}</div>}
+                  {testResult && <div className={`add-provider-message ${testResult.success ? 'success' : 'error'}`}>{testResult.success ? <><Check size={14} />{t(locale, 'assistant.testSuccess')}</> : testResult.error || t(locale, 'assistant.testFailed')}</div>}
+                </section>
+              </div>
+
+              <footer className="add-provider-footer">
+                <div>{saveError ? <span className="add-provider-footer-error">{saveError}</span> : !canSave ? t(locale, 'settings.completeProviderSteps') : <span className="add-provider-footer-ready"><Check size={13} />{t(locale, 'assistant.testSuccess')}</span>}</div>
+                <div><button type="button" className="btn" onClick={onClose}>{t(locale, 'common.cancel')}</button><button type="button" className="btn btn-primary" onClick={saveProvider} disabled={!canSave}>{saving ? <Loader size={14} className="animate-spin" /> : <Check size={14} />}{saving ? t(locale, 'settings.savingProvider') : t(locale, 'settings.saveProvider')}</button></div>
+              </footer>
+            </>
+          )}
         </div>
       </div>
     </Modal>
   );
 }
-
-function pn(p: any, l: string) { return (l.startsWith('zh') && p.nameZh) ? p.nameZh : p.name; }
-function pd(p: any, l: string) { return (l.startsWith('zh') && p.descriptionZh) ? p.descriptionZh : (p.description || ''); }
-function Field({ label, icon, children }: { label: string; icon: React.ReactNode; children: React.ReactNode }) {
-  return <div><div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 3 }}><span style={{ color: 'var(--text-disabled)', display: 'inline-flex' }}>{icon}</span><span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)' }}>{label}</span></div>{children}</div>;
-}
-const inp: React.CSSProperties = { width: '100%', boxSizing: 'border-box', padding: '5px 8px', borderRadius: BORDER_RADIUS.sm, border: '0.0625rem solid var(--border)', background: 'var(--background)', color: 'var(--text)', fontSize: FONT_SIZE.xs, outline: 'none', fontFamily: 'var(--font-mono)' };

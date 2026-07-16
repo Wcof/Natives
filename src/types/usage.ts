@@ -65,6 +65,7 @@ export type UsageQuality =
 
 export type UsageSourceState =
   | 'ok'
+  | 'detected'
   | 'partial'
   | 'unavailable';
 

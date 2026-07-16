@@ -40,7 +40,9 @@ pub fn load_executor_settings() -> ExecutorSettings {
         max_self_heal: 3,
         max_steps: None,
     };
-    let Ok(pool_conn) = db::get_assistant_db_conn() else {
+    // Runtime settings are application configuration, so they live with the
+    // provider/runtime registry in natives.db. Assistant DB is run data only.
+    let Ok(pool_conn) = db::get_main_conn() else {
         return defaults;
     };
     let conn: &rusqlite::Connection = &*pool_conn;

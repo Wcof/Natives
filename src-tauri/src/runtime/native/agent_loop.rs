@@ -23,9 +23,15 @@ use crate::runtime::native::stream_provider::{
 use crate::runtime::RuntimeEvent;
 use serde_json::json;
 use std::collections::{HashSet, VecDeque};
-use std::path::{Path, PathBuf};
-use tauri::Emitter;
+use std::path::PathBuf;
 use tokio::sync::mpsc;
+
+fn cancellation_requested(cancel_rx: &mut tokio::sync::oneshot::Receiver<()>) -> bool {
+    !matches!(
+        cancel_rx.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    )
+}
 
 // ──────────────────────────────────────────────
 // 状态机定义
@@ -48,6 +54,7 @@ pub struct LoopConfig {
     pub max_self_heal: u32,
     pub doom_threshold: u32,
     pub model: String,
+    pub provider_id: String,
     pub base_url: String,
     pub api_key: String,
 }
@@ -59,6 +66,7 @@ impl Default for LoopConfig {
             max_self_heal: 3,
             doom_threshold: 3,
             model: String::new(),
+            provider_id: String::new(),
             base_url: String::new(),
             api_key: String::new(),
         }
@@ -164,30 +172,16 @@ impl AgentLoop {
     pub async fn run(
         &mut self,
         tx: &mpsc::Sender<RuntimeEvent>,
-        app_handle: &tauri::AppHandle,
         session_id: &str,
-        modules_dir: &Path,
+        run_id: &str,
         working_dir: Option<PathBuf>,
-        enabled_tools: &std::collections::HashMap<String, bool>,
+        registry: &CapabilityRegistry,
         hook_pipeline: &HookPipeline,
         rule_engine: &RuleEngine,
         permission_mode: PermissionMode,
         cancel_rx: &mut tokio::sync::oneshot::Receiver<()>,
     ) {
         self.state = AgentState::Thinking;
-
-        // 构建注册表（每次刷新，确保插件注册的能力可用）
-        let registry = {
-            let mut reg = CapabilityRegistry::new();
-            for cap in crate::runtime::native::capability::create_default_capabilities(modules_dir)
-            {
-                reg.register(cap);
-            }
-            for (name, enabled) in enabled_tools {
-                reg.set_enabled(name, *enabled);
-            }
-            reg
-        };
 
         // 构建工具列表（OpenAI function-calling 格式）
         let tools_json: Vec<serde_json::Value> = registry
@@ -222,8 +216,8 @@ impl AgentLoop {
         // ── 主循环 ──
         loop {
             // 中断检查
-            if cancel_rx.try_recv().is_ok() {
-                self.emit_cancelled(tx, app_handle, session_id).await;
+            if cancellation_requested(cancel_rx) {
+                self.emit_cancelled(tx).await;
                 self.state = AgentState::Done;
                 return;
             }
@@ -232,7 +226,7 @@ impl AgentLoop {
             self.step += 1;
             if self.step > self.config.max_steps {
                 let msg = format!("Max steps ({}) exceeded", self.config.max_steps);
-                self.emit_complete(tx, app_handle, session_id, &msg).await;
+                self.emit_complete(tx, &msg).await;
                 self.state = AgentState::Failed(msg);
                 return;
             }
@@ -253,7 +247,7 @@ impl AgentLoop {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    self.emit_failed(tx, app_handle, session_id, &e).await;
+                    self.emit_failed(tx, &e).await;
                     self.state = AgentState::Failed(e);
                     return;
                 }
@@ -268,11 +262,29 @@ impl AgentLoop {
 
             use futures_util::StreamExt;
             let mut any_tool_call = false;
+            let mut received_stream_data = false;
 
-            while let Some(chunk_result) = stream.next().await {
+            'sse: loop {
+                let next_chunk = if received_stream_data {
+                    match tokio::time::timeout(std::time::Duration::from_secs(8), stream.next())
+                        .await
+                    {
+                        Ok(chunk) => chunk,
+                        Err(_) => {
+                            self.emit_complete(tx, "stream_idle_after_output").await;
+                            self.state = AgentState::Done;
+                            return;
+                        }
+                    }
+                } else {
+                    stream.next().await
+                };
+                let Some(chunk_result) = next_chunk else {
+                    break 'sse;
+                };
                 // 中断检查
-                if cancel_rx.try_recv().is_ok() {
-                    self.emit_cancelled(tx, app_handle, session_id).await;
+                if cancellation_requested(cancel_rx) {
+                    self.emit_cancelled(tx).await;
                     self.state = AgentState::Done;
                     return;
                 }
@@ -280,8 +292,7 @@ impl AgentLoop {
                 let chunk = match chunk_result {
                     Ok(c) => c,
                     Err(e) => {
-                        self.emit_failed(tx, app_handle, session_id, &format!("Stream error: {e}"))
-                            .await;
+                        self.emit_failed(tx, &format!("Stream error: {e}")).await;
                         self.state = AgentState::Failed(format!("Stream error: {e}"));
                         return;
                     }
@@ -300,13 +311,14 @@ impl AgentLoop {
                         continue;
                     };
                     if data == "[DONE]" {
-                        continue;
+                        break 'sse;
                     }
 
                     let events = consumer.consume(data);
                     for event in events {
                         match event {
                             ConsumeResult::Delta(text) => {
+                                received_stream_data = true;
                                 let (clean_delta, _) =
                                     crate::assistant_stream_proxy::extract_think_tag(&text);
                                 assistant_text.push_str(&clean_delta);
@@ -315,14 +327,8 @@ impl AgentLoop {
                                     .await;
                             }
                             ConsumeResult::Reasoning(r) => {
-                                let _ = app_handle.emit(
-                                    "assistant:stream_update",
-                                    crate::assistant_stream_proxy::StreamPayload {
-                                        session_id: session_id.to_string(),
-                                        reasoning: Some(r),
-                                        ..Default::default()
-                                    },
-                                );
+                                received_stream_data = true;
+                                let _ = tx.send(RuntimeEvent::ReasoningDelta { text: r }).await;
                             }
                             ConsumeResult::ToolCall(tc) => {
                                 any_tool_call = true;
@@ -334,9 +340,7 @@ impl AgentLoop {
                                     })
                                     .await;
                             }
-                            ConsumeResult::Done => {
-                                // 由下层循环处理
-                            }
+                            ConsumeResult::Done => break 'sse,
                             ConsumeResult::Skip => {}
                         }
                     }
@@ -347,6 +351,16 @@ impl AgentLoop {
             let remaining_tools = consumer.drain_tools();
             if !remaining_tools.is_empty() {
                 any_tool_call = true;
+                for tool in &remaining_tools {
+                    let _ = tx
+                        .send(RuntimeEvent::ToolStarted {
+                            tool_name: tool.name.clone(),
+                            tool_call_id: tool.id.clone(),
+                            args: tool.arguments.clone(),
+                        })
+                        .await;
+                    persist_tool_call_started(run_id, session_id, tool);
+                }
             }
 
             // ── 思维循环检测 ──
@@ -363,7 +377,7 @@ impl AgentLoop {
 
             // ── 没有 tool_call → 完成 ──
             if !any_tool_call {
-                self.emit_complete(tx, app_handle, session_id, "done").await;
+                self.emit_complete(tx, "done").await;
                 self.state = AgentState::Done;
                 return;
             }
@@ -382,7 +396,7 @@ impl AgentLoop {
                 .collect();
 
             if invocations.is_empty() {
-                self.emit_complete(tx, app_handle, session_id, "done").await;
+                self.emit_complete(tx, "done").await;
                 self.state = AgentState::Done;
                 return;
             }
@@ -409,7 +423,7 @@ impl AgentLoop {
                         self.doom_count + 1
                     );
                     eprintln!("[AgentLoop] {}", crate::log_sanitizer::sanitize(&msg));
-                    self.emit_failed(tx, app_handle, session_id, &msg).await;
+                    self.emit_failed(tx, &msg).await;
                     self.state = AgentState::Failed(msg);
                     return;
                 }
@@ -450,14 +464,29 @@ impl AgentLoop {
                 .collect();
 
             let cancellation = CancellationToken::new();
-            let executor = CapabilityExecutor::new(&registry, PermissionEngine::default());
+            let executor = CapabilityExecutor::new(registry, PermissionEngine::default());
             let mut results = Vec::with_capacity(requests.len());
             for request in &requests {
-                let request_mode = if permission_mode == PermissionMode::Ask {
-                    match await_permission(request, session_id, tx, cancel_rx).await {
+                let probe_context = CapabilityContext {
+                    run_id: run_id.to_string(),
+                    session_id: session_id.to_string(),
+                    working_dir: working_dir.clone(),
+                    project_root: working_dir.clone(),
+                    source: "native-agent-loop".into(),
+                    permission_mode: permission_mode.clone(),
+                    model: self.config.model.clone(),
+                    provider_id: self.config.provider_id.clone(),
+                    base_url: self.config.base_url.clone(),
+                    api_key: self.config.api_key.clone(),
+                };
+                let request_mode = if matches!(
+                    executor.permission_decision(request, &probe_context).action,
+                    crate::runtime::native::capability::PermissionAction::Ask
+                ) {
+                    match await_permission(request, run_id, tx, cancel_rx).await {
                         Some(mode) => mode,
                         None => {
-                            self.emit_cancelled(tx, app_handle, session_id).await;
+                            self.emit_cancelled(tx).await;
                             self.state = AgentState::Done;
                             return;
                         }
@@ -466,23 +495,36 @@ impl AgentLoop {
                     permission_mode.clone()
                 };
                 let context = CapabilityContext {
+                    run_id: run_id.to_string(),
                     session_id: session_id.to_string(),
                     working_dir: working_dir.clone(),
                     project_root: working_dir.clone(),
                     source: "native-agent-loop".into(),
                     permission_mode: request_mode,
+                    model: self.config.model.clone(),
+                    provider_id: self.config.provider_id.clone(),
+                    base_url: self.config.base_url.clone(),
+                    api_key: self.config.api_key.clone(),
                 };
-                results.push(
-                    executor
-                        .execute(
-                            request,
-                            &context,
-                            Some(hook_pipeline),
-                            Some(rule_engine),
-                            &cancellation,
-                        )
-                        .await,
+                let execution = executor.execute(
+                    request,
+                    &context,
+                    Some(hook_pipeline),
+                    Some(rule_engine),
+                    &cancellation,
                 );
+                tokio::pin!(execution);
+                let result = tokio::select! {
+                    _ = &mut *cancel_rx => {
+                        cancellation.cancel();
+                        self.emit_cancelled(tx).await;
+                        self.state = AgentState::Done;
+                        return;
+                    }
+                    result = &mut execution => result,
+                };
+                persist_tool_call_finished(run_id, &result);
+                results.push(result);
             }
 
             let failed_count = results
@@ -570,7 +612,7 @@ impl AgentLoop {
                         self.self_heal_count
                     );
                     eprintln!("[AgentLoop] {msg}");
-                    self.emit_failed(tx, app_handle, session_id, &msg).await;
+                    self.emit_failed(tx, &msg).await;
                     self.state = AgentState::Failed(msg);
                     return;
                 }
@@ -582,26 +624,7 @@ impl AgentLoop {
 
     // ── 辅助发射方法 ──
 
-    async fn emit_complete(
-        &self,
-        tx: &mpsc::Sender<RuntimeEvent>,
-        app_handle: &tauri::AppHandle,
-        session_id: &str,
-        reason: &str,
-    ) {
-        let _ = app_handle.emit(
-            "assistant:stream_update",
-            crate::assistant_stream_proxy::StreamPayload {
-                session_id: session_id.to_string(),
-                done: true,
-                error: if reason != "done" {
-                    Some(reason.to_string())
-                } else {
-                    None
-                },
-                ..Default::default()
-            },
-        );
+    async fn emit_complete(&self, tx: &mpsc::Sender<RuntimeEvent>, reason: &str) {
         let _ = tx
             .send(RuntimeEvent::RunCompleted {
                 reason: reason.into(),
@@ -609,22 +632,7 @@ impl AgentLoop {
             .await;
     }
 
-    async fn emit_failed(
-        &self,
-        tx: &mpsc::Sender<RuntimeEvent>,
-        app_handle: &tauri::AppHandle,
-        session_id: &str,
-        error: &str,
-    ) {
-        let _ = app_handle.emit(
-            "assistant:stream_update",
-            crate::assistant_stream_proxy::StreamPayload {
-                session_id: session_id.to_string(),
-                done: true,
-                error: Some(error.to_string()),
-                ..Default::default()
-            },
-        );
+    async fn emit_failed(&self, tx: &mpsc::Sender<RuntimeEvent>, error: &str) {
         let _ = tx
             .send(RuntimeEvent::RunFailed {
                 error: error.into(),
@@ -632,21 +640,7 @@ impl AgentLoop {
             .await;
     }
 
-    async fn emit_cancelled(
-        &self,
-        tx: &mpsc::Sender<RuntimeEvent>,
-        app_handle: &tauri::AppHandle,
-        session_id: &str,
-    ) {
-        let _ = app_handle.emit(
-            "assistant:stream_update",
-            crate::assistant_stream_proxy::StreamPayload {
-                session_id: session_id.to_string(),
-                done: true,
-                error: Some("Cancelled".into()),
-                ..Default::default()
-            },
-        );
+    async fn emit_cancelled(&self, tx: &mpsc::Sender<RuntimeEvent>) {
         let _ = tx
             .send(RuntimeEvent::RunCompleted {
                 reason: "cancelled".into(),
@@ -655,24 +649,61 @@ impl AgentLoop {
     }
 }
 
+fn persist_tool_call_started(
+    run_id: &str,
+    conversation_id: &str,
+    tool: &crate::runtime::native::stream_provider::AccumulatedToolCall,
+) {
+    let Ok(conn) = crate::db::get_assistant_db_conn() else { return };
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO assistant_tool_calls
+         (id, run_id, conversation_id, tool_name, tool_call_id, input, status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7)",
+        rusqlite::params![
+            uuid::Uuid::new_v4().to_string(),
+            run_id,
+            conversation_id,
+            tool.name,
+            tool.id,
+            tool.arguments.to_string(),
+            chrono::Utc::now().to_rfc3339(),
+        ],
+    );
+}
+
+fn persist_tool_call_finished(
+    run_id: &str,
+    result: &crate::runtime::native::capability::CapabilityResult,
+) {
+    let Ok(conn) = crate::db::get_assistant_db_conn() else { return };
+    let status = match &result.status {
+        crate::runtime::native::capability::CapabilityStatus::Success => "completed",
+        crate::runtime::native::capability::CapabilityStatus::Rejected => "rejected",
+        crate::runtime::native::capability::CapabilityStatus::TimedOut => "timed_out",
+        _ => "failed",
+    };
+    let _ = conn.execute(
+        "UPDATE assistant_tool_calls SET output = ?1, status = ?2, is_error = ?3,
+         duration_ms = ?4, finished_at = ?5 WHERE run_id = ?6 AND tool_call_id = ?7",
+        rusqlite::params![
+            result.output.to_string(),
+            status,
+            (status != "completed") as i64,
+            result.duration_ms as i64,
+            chrono::Utc::now().to_rfc3339(),
+            run_id,
+            result.call_id,
+        ],
+    );
+}
+
 async fn await_permission(
     request: &CapabilityRequest,
-    session_id: &str,
+    run_id: &str,
     tx: &mpsc::Sender<RuntimeEvent>,
     cancel_rx: &mut tokio::sync::oneshot::Receiver<()>,
 ) -> Option<PermissionMode> {
     let request_id = uuid::Uuid::new_v4().to_string();
-    let run_id = crate::db::get_assistant_db_conn().ok().and_then(|conn| {
-        conn.query_row(
-            "SELECT id FROM assistant_runs WHERE conversation_id = ?1 AND status = 'running' ORDER BY started_at DESC LIMIT 1",
-            rusqlite::params![session_id],
-            |row| row.get::<_, String>(0),
-        ).ok()
-    });
-    let run_id = match run_id {
-        Some(run_id) => run_id,
-        None => return Some(PermissionMode::Deny),
-    };
     let already_granted = crate::db::get_assistant_db_conn()
         .ok()
         .and_then(|conn| {
@@ -706,15 +737,23 @@ async fn await_permission(
     if inserted.is_none() {
         return Some(PermissionMode::Deny);
     }
-    let _ = tx.send(RuntimeEvent::PermissionRequested {
-        tool_name: request.name.clone(),
-        tool_call_id: request_id.clone(),
-        reason: "Tool requires approval".into(),
-        args: request.arguments.clone(),
-    }).await;
+    if let Ok(conn) = crate::db::get_assistant_db_conn() {
+        let _ = conn.execute(
+            "UPDATE assistant_runs SET status = 'waiting_permission' WHERE id = ?1",
+            rusqlite::params![run_id],
+        );
+    }
+    let _ = tx
+        .send(RuntimeEvent::PermissionRequested {
+            tool_name: request.name.clone(),
+            tool_call_id: request_id.clone(),
+            reason: "Tool requires approval".into(),
+            args: request.arguments.clone(),
+        })
+        .await;
 
     for _ in 0..3_000 {
-        if cancel_rx.try_recv().is_ok() {
+        if cancellation_requested(cancel_rx) {
             return None;
         }
         let status = crate::db::get_assistant_db_conn().ok().and_then(|conn| {
@@ -722,11 +761,28 @@ async fn await_permission(
                 "SELECT status FROM assistant_permission_requests WHERE id = ?1",
                 rusqlite::params![request_id],
                 |row| row.get::<_, String>(0),
-            ).ok()
+            )
+            .ok()
         });
         match status.as_deref() {
-            Some("approved") => return Some(PermissionMode::Allow),
-            Some("rejected" | "expired") => return Some(PermissionMode::Deny),
+            Some("approved") => {
+                if let Ok(conn) = crate::db::get_assistant_db_conn() {
+                    let _ = conn.execute(
+                        "UPDATE assistant_runs SET status = 'running' WHERE id = ?1",
+                        rusqlite::params![run_id],
+                    );
+                }
+                return Some(PermissionMode::Allow);
+            }
+            Some("rejected" | "expired") => {
+                if let Ok(conn) = crate::db::get_assistant_db_conn() {
+                    let _ = conn.execute(
+                        "UPDATE assistant_runs SET status = 'running' WHERE id = ?1",
+                        rusqlite::params![run_id],
+                    );
+                }
+                return Some(PermissionMode::Deny);
+            }
             _ => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
         }
     }
@@ -742,6 +798,13 @@ async fn await_permission(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dropped_cancel_sender_stops_the_loop() {
+        let (sender, mut receiver) = tokio::sync::oneshot::channel();
+        drop(sender);
+        assert!(cancellation_requested(&mut receiver));
+    }
 
     #[test]
     fn test_tool_signature_sorted() {

@@ -14,8 +14,8 @@ use std::fs;
 use std::path::PathBuf;
 use walkdir::WalkDir;
 
-const CODEX_SESSIONS_DIR: &str = ".codex/sessions";
-const CODEX_ARCHIVED_DIR: &str = ".codex/archived_sessions";
+const CODEX_SESSIONS_DIR: &str = "sessions";
+const CODEX_ARCHIVED_DIR: &str = "archived_sessions";
 const EVENT_GAP_MAX_SECS: f64 = 300.0;
 
 // ── Minimal JSON structs ──
@@ -165,7 +165,7 @@ pub fn scan_codex_logs(
 ) -> CodexScanResult {
     let mut warnings = Vec::new();
 
-    let home = match dirs::home_dir() {
+    let home = match crate::usage::tool_home("CODEX_HOME", ".codex") {
         Some(h) => h,
         None => {
             warnings.push(UsageWarning {
@@ -249,8 +249,7 @@ pub fn scan_codex_logs(
                         prev_total.get(&event.session_id.clone().unwrap_or_default()),
                     );
 
-                    // Cache read should not exceed input
-                    let cache_read = cache_read.min(input);
+                    let (input, cache_read) = normalize_codex_input(input, cache_read);
 
                     // Update previous total for cumulative tracking
                     if let Some(ref total) = event.total_token_usage {
@@ -363,6 +362,10 @@ fn compute_codex_delta(
     (0, 0, 0)
 }
 
+fn normalize_codex_input(input: i64, cache_read: i64) -> (i64, i64) {
+    (input.max(0), cache_read.max(0))
+}
+
 fn build_codex_daily(events: &[ParsedCodexEvent]) -> Vec<UsageDailyRecord> {
     // Group by (date, model, project) to aggregate daily tokens
     let mut groups: HashMap<
@@ -383,7 +386,12 @@ fn build_codex_daily(events: &[ParsedCodexEvent]) -> Vec<UsageDailyRecord> {
         entry.0 += event.input_tokens;
         entry.1 += event.output_tokens;
         entry.2 += event.cache_read_tokens;
-        entry.3 += event.input_tokens + event.output_tokens; // total = input + output
+        entry.3 += crate::usage::token_total(
+            event.input_tokens,
+            event.output_tokens,
+            0,
+            event.cache_read_tokens,
+        );
     }
 
     let mut records = Vec::new();
@@ -425,8 +433,12 @@ fn build_codex_activity(events: &[ParsedCodexEvent]) -> Vec<UsageActivityBucket>
             event.model.clone(),
             event.project.clone(),
         );
-        // Codex input_tokens already includes cached_input_tokens.
-        let total = event.input_tokens + event.output_tokens;
+        let total = crate::usage::token_total(
+            event.input_tokens,
+            event.output_tokens,
+            0,
+            event.cache_read_tokens,
+        );
         groups.entry(key).or_default().push(total);
     }
 
@@ -538,7 +550,7 @@ pub fn codex_source_status(state: &UsageSourceState, breadcrumbs: &Vec<UsageBrea
         capabilities: SourceCapabilities {
             total_tokens: true,
             token_breakdown: true,
-            cache: false, // cache read is capped by input, not independently verifiable
+            cache: true,
             cost: false,
             hourly: true,
             project: true,
@@ -604,6 +616,33 @@ mod tests {
         let delta = compute_codex_delta(&event, None);
         assert_eq!(delta.0, 100); // input
         assert_eq!(delta.1, 20);  // output
+    }
+
+    #[test]
+    fn codex_preserves_raw_input_and_cache_for_total() {
+        assert_eq!(normalize_codex_input(100, 40), (100, 40));
+        assert_eq!(normalize_codex_input(20, 40), (20, 40));
+    }
+
+    #[test]
+    fn codex_daily_total_includes_cached_input() {
+        let daily = build_codex_daily(&[ParsedCodexEvent {
+            event_id: "event-1".into(),
+            timestamp_ms: 1,
+            hour_start_ms: 0,
+            date: "2026-07-10".into(),
+            session_id: "codex:session-1".into(),
+            model: Some("gpt-5".into()),
+            project: None,
+            project_label: None,
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_read_tokens: 40,
+            reasoning_tokens: 0,
+            input_cache_hit: 40,
+            is_replay_or_fork: false,
+        }]);
+        assert_eq!(daily[0].total_tokens, Some(160));
     }
 
     #[test]

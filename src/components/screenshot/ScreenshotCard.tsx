@@ -73,6 +73,7 @@ export default function ScreenshotCard({
           boxShadow: 'var(--shadow-popup)',
           minWidth: 220,
           animation: 'slideUp 200ms ease',
+          pointerEvents: 'auto',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.sm, marginBottom: SPACING.sm }}>

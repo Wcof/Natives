@@ -62,3 +62,4 @@ futures-util = "0.3"
 async-trait = "0.1"
 tokio-stream = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
+agent-core = { path = "../crates/agent-core" }

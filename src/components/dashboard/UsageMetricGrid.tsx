@@ -12,6 +12,7 @@ interface Props {
   prevMetrics: UsageMetrics | null;
   totalSessions: number;
   prevTotalSessions: number;
+  lastSyncTime?: number | null;
 }
 
 interface CardProps {
@@ -105,7 +106,7 @@ function renderDelta(current: number | null, previous: number | null, isLowerBet
   );
 }
 
-export function UsageMetricGrid({ metrics, prevMetrics, totalSessions, prevTotalSessions }: Props) {
+export function UsageMetricGrid({ metrics, prevMetrics, totalSessions, prevTotalSessions, lastSyncTime }: Props) {
   const locale = useLocale();
 
   // Cost card values
@@ -129,8 +130,15 @@ export function UsageMetricGrid({ metrics, prevMetrics, totalSessions, prevTotal
 
   return (
     <div style={{ marginBottom: SPACING.md }}>
-      <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text)', marginBottom: SPACING.sm, display: 'flex', alignItems: 'center', gap: 6 }}>
-        <Activity size={14} /> {t(locale, 'usage.metrics')}
+      <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text)', marginBottom: SPACING.sm, display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'space-between', width: '100%' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Activity size={14} /> {t(locale, 'usage.metrics')}
+        </div>
+        {lastSyncTime && (
+          <span style={{ fontSize: '11px', fontWeight: 400, color: 'var(--text-disabled)' }}>
+            {t(locale, 'usage.dataAsOf')} {new Date(lastSyncTime).toLocaleString()}
+          </span>
+        )}
       </div>
       
       {/* 第一排看板 */}

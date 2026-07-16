@@ -6,19 +6,26 @@ export interface AssistantStreamState {
   status: string;
   lastSequence: number;
   blocks: ContentBlock[];
+  reasoningStartedAt: string | null;
+  reasoningFinishedAt: string | null;
   fileChanges: AssistantFileChange[];
   usage: { inputTokens: number | null; outputTokens: number | null; reasoningTokens: number | null };
+  permissionRequest: { id: string; toolName: string; reason: string; input: Record<string, unknown> } | null;
 }
 
 export function createAssistantStreamState(runId: string): AssistantStreamState {
-  return { runId, status: 'idle', lastSequence: 0, blocks: [], fileChanges: [], usage: { inputTokens: null, outputTokens: null, reasoningTokens: null } };
+  return { runId, status: 'idle', lastSequence: 0, blocks: [], reasoningStartedAt: null, reasoningFinishedAt: null, fileChanges: [], usage: { inputTokens: null, outputTokens: null, reasoningTokens: null }, permissionRequest: null };
 }
 
 export function reduceAssistantStreamEvent(state: AssistantStreamState, event: AssistantRunEvent): AssistantStreamState {
   if (event.runId !== state.runId || event.sequence <= state.lastSequence) return state;
   const payload = event.payload;
   const next = { ...state, lastSequence: event.sequence, status: state.status === 'idle' ? 'running' : state.status };
-  if (event.type === 'completed' || event.type === 'failed' || event.type === 'interrupted') return { ...next, status: event.type };
+  const reasoningFinishedAt = next.reasoningStartedAt && !next.reasoningFinishedAt
+    ? event.timestamp ?? new Date().toISOString()
+    : next.reasoningFinishedAt;
+  if (event.type === 'completed' || event.type === 'failed' || event.type === 'interrupted') return { ...next, reasoningFinishedAt, status: event.type, permissionRequest: null };
+  if (event.type === 'permission_requested') return { ...next, status: 'waiting_permission', permissionRequest: { id: String(payload.tool_call_id ?? ''), toolName: String(payload.tool_name ?? 'tool'), reason: String(payload.reason ?? ''), input: (payload.args ?? {}) as Record<string, unknown> } };
   if (event.type === 'assistant_delta') {
     const text = String(payload.text ?? payload.delta ?? '');
     const blocks = [...state.blocks];
@@ -28,7 +35,7 @@ export function reduceAssistantStreamEvent(state: AssistantStreamState, event: A
       blocks[index] = { ...existing, text: `${existing.text ?? ''}${text}` };
     }
     else blocks.push({ type: 'text', text });
-    return { ...next, blocks };
+    return { ...next, reasoningFinishedAt, blocks };
   }
   if (event.type === 'reasoning_delta') {
     const reasoning = String(payload.text ?? payload.reasoning ?? '');
@@ -39,9 +46,9 @@ export function reduceAssistantStreamEvent(state: AssistantStreamState, event: A
       blocks[index] = { ...existing, reasoning: `${existing.reasoning ?? ''}${reasoning}` };
     }
     else blocks.unshift({ type: 'reasoning', reasoning });
-    return { ...next, blocks };
+    return { ...next, reasoningStartedAt: next.reasoningStartedAt ?? event.timestamp ?? new Date().toISOString(), blocks };
   }
-  if (event.type === 'tool_started') return { ...next, blocks: [...state.blocks, { type: 'tool_call', toolCallId: String(payload.tool_call_id ?? ''), toolName: String(payload.tool_name ?? 'tool'), toolInput: (payload.args ?? {}) as Record<string, unknown>, toolStatus: 'running' }] };
+  if (event.type === 'tool_started') return { ...next, reasoningFinishedAt, blocks: [...state.blocks, { type: 'tool_call', toolCallId: String(payload.tool_call_id ?? ''), toolName: String(payload.tool_name ?? 'tool'), toolInput: (payload.args ?? {}) as Record<string, unknown>, toolStatus: 'running' }] };
   if (event.type === 'tool_completed' || event.type === 'tool_rejected') {
     const id = String(payload.tool_call_id ?? '');
     const failed = event.type === 'tool_rejected' || payload.status !== 'success';

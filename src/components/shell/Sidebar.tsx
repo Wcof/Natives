@@ -174,7 +174,7 @@ function SidebarNavItem({
       title={title}
       className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-sm transition-all ${
         isActive
-          ? 'bg-[var(--primary-soft)] text-[var(--primary)] font-medium'
+          ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
           : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
       }`}
     >
@@ -704,7 +704,7 @@ export default function Sidebar({
             </div>
 
             {/* Assistant is a first-level directory, parallel to Quick Access. */}
-            <div className="mb-1 px-3">
+            <div className="mb-1">
               <div className="flex items-center px-3 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
                 <span className="min-w-0 flex-1 truncate">{t(locale, 'nav.assistant')}</span>
                 <button
@@ -727,7 +727,13 @@ export default function Sidebar({
                 </button>
               </div>
               {assistantExpanded && (
-                <AssistantSidebarSection locale={locale} onNavigateAssistant={() => selectNavigation('__assistant__', '__assistant__')} />
+                <div className="px-3">
+                   <AssistantSidebarSection
+                    locale={locale}
+                    activeNavigationId={activeNavigationId}
+                    onNavigateAssistant={() => selectNavigation('__assistant__', '__assistant__')}
+                  />
+                </div>
               )}
             </div>
 

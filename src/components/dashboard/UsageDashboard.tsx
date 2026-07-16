@@ -305,6 +305,7 @@ export function UsageDashboard() {
           prevMetrics={null}
           totalSessions={0}
           prevTotalSessions={0}
+          lastSyncTime={lastSyncTime}
         />
       </div>
     );
@@ -357,46 +358,7 @@ export function UsageDashboard() {
 
   return (
     <div className={styles.container}>
-      <div className={styles.header}>
-        <div className={styles.headerActions}>
-          {/* Date range display */}
-          {metadata && data && (
-            <span className={styles.dateRange}>
-              {new Date(data.range.startMs).toLocaleDateString()} – {new Date(data.range.endMs).toLocaleDateString()}
-            </span>
-          )}
-          <button
-            onClick={handleCopyMarkdown}
-            disabled={!shareable}
-            className={styles.secondaryAction}
-          >
-            {t(locale, 'usage.share')}
-          </button>
-          <button
-            onClick={handleSync}
-            disabled={isSyncing}
-            aria-busy={isSyncing}
-            className={styles.secondaryAction}
-          >
-            <RefreshCw size={12} style={{ animation: isSyncing ? 'spin 0.8s linear infinite' : undefined }} />
-            {isSyncing ? t(locale, 'usage.syncing') : t(locale, 'usage.syncData')}
-          </button>
-          {lastSyncTime && (
-            <span className={styles.dateRange}>
-              {t(locale, 'usage.dataAsOf')} {new Date(lastSyncTime).toLocaleString()}
-            </span>
-          )}
-          <button
-            onClick={() => openExportDialog('badge')}
-            disabled={!shareable}
-            className={styles.secondaryAction}
-          >
-            {t(locale, 'usage.usageBadge')}
-          </button>
-        </div>
-      </div>
-
-      {/* Toolbar: date presets + filters */}
+      {/* Toolbar: date presets + filters + unified sync row */}
       <UsageToolbar
         preset={preset}
         onPresetChange={setPreset}
@@ -417,8 +379,20 @@ export function UsageDashboard() {
         onProjectFilterChange={setProjectFilter}
         onTerminalFilterChange={setTerminalFilter}
         onSelectDir={handleSelectDir}
-        style={{ marginBottom: 0 }}
-      />
+        style={{ marginBottom: '16px' }}
+      >
+        <div style={{ marginLeft: 'auto' }}>
+          <button
+            onClick={handleSync}
+            disabled={isSyncing}
+            aria-busy={isSyncing}
+            className={styles.secondaryAction}
+          >
+            <RefreshCw size={12} style={{ animation: isSyncing ? 'spin 0.8s linear infinite' : undefined }} />
+            {isSyncing ? t(locale, 'usage.syncing') : t(locale, 'usage.syncData')}
+          </button>
+        </div>
+      </UsageToolbar>
 
       {data && showWarning && (
         <div className={styles.partialBanner}>
@@ -444,6 +418,7 @@ export function UsageDashboard() {
         prevMetrics={prevMetrics}
         totalSessions={totalSessions}
         prevTotalSessions={prevTotalSessions}
+        lastSyncTime={lastSyncTime}
       />)}
 
       {filtered && (<UsageCharts

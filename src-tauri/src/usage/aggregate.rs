@@ -2,18 +2,22 @@
 // Merges data from all sources, reconciles totals, builds final response.
 
 use crate::usage::{
-    collect_dimensions, now_ms,
+    atomcode::{atomcode_source_status, scan_atomcode_logs, AtomcodeScanResult},
     ccusage::{
-        scan_ccusage_all, build_ccusage_source_states, CcusageSourceResult, CcusageDailyEntry,
+        build_ccusage_source_states, scan_ccusage_all, CcusageDailyEntry,
     },
-    claude::{scan_claude_logs, claude_source_status, ClaudeScanResult},
-    atomcode::{scan_atomcode_logs, atomcode_source_status, AtomcodeScanResult},
-    codex::{scan_codex_logs, codex_source_status, CodexScanResult},
-    natives::{scan_natives_db, natives_source_status, NativesScanResult},
-    RtkSummary, UsageDashboardRequest, UsageDashboardResponse, UsageDashboardRange,
-    UsageDashboardDimensions, UsageDailyRecord, UsageActivityBucket, UsageSessionRecord,
-    UsageSourceStatus, UsageWarning, UsageWarningCode, UsageQuality,
-    UsageSourceState, UsagePeriodData,
+    claude::{claude_source_status, scan_claude_logs, ClaudeScanResult},
+    codex::{codex_source_status, scan_codex_logs, CodexScanResult},
+    collect_dimensions,
+    detected::detect_unmeasurable_sources,
+    gemini::{gemini_root, gemini_source_status, scan_gemini_root},
+    grok::{grok_root, grok_source_status, scan_grok_root},
+    natives::{natives_source_status, scan_natives_db, NativesScanResult},
+    now_ms,
+    opencode::{opencode_db_path, opencode_source_status, scan_opencode_db},
+    RtkSummary, UsageActivityBucket, UsageDailyRecord, UsageDashboardRange, UsageDashboardRequest,
+    UsageDashboardResponse, UsagePeriodData, UsageQuality, UsageSessionRecord, UsageSourceState,
+    UsageSourceStatus, UsageWarning, UsageWarningCode,
 };
 use chrono::{TimeZone, Utc};
 use chrono_tz::Tz;
@@ -23,7 +27,9 @@ use std::collections::HashMap;
 fn ms_to_ccusage_date_str(ms: i64, tz: &Tz) -> String {
     let secs = ms / 1000;
     let nanos = ((ms % 1000) * 1_000_000) as u32;
-    let local_dt = tz.timestamp_opt(secs, nanos).single()
+    let local_dt = tz
+        .timestamp_opt(secs, nanos)
+        .single()
         .unwrap_or_else(|| Utc.timestamp_millis_opt(ms).unwrap().with_timezone(tz));
     local_dt.format("%Y%m%d").to_string()
 }
@@ -32,15 +38,15 @@ fn ms_to_ccusage_date_str(ms: i64, tz: &Tz) -> String {
 fn ms_to_local_date_str(ms: i64, tz: &Tz) -> String {
     let secs = ms / 1000;
     let nanos = ((ms % 1000) * 1_000_000) as u32;
-    let local_dt = tz.timestamp_opt(secs, nanos).single()
+    let local_dt = tz
+        .timestamp_opt(secs, nanos)
+        .single()
         .unwrap_or_else(|| Utc.timestamp_millis_opt(ms).unwrap().with_timezone(tz));
     local_dt.format("%Y-%m-%d").to_string()
 }
 
 /// Build the complete UsageDashboardResponse for a given range (with comparison if requested).
-pub async fn build_dashboard_response(
-    req: &UsageDashboardRequest,
-) -> UsageDashboardResponse {
+pub async fn build_dashboard_response(req: &UsageDashboardRequest) -> UsageDashboardResponse {
     let generated_at_ms = now_ms();
     let tz: Tz = req.time_zone.parse().unwrap_or(chrono_tz::UTC);
 
@@ -57,21 +63,34 @@ pub async fn build_dashboard_response(
     let end_ms = query_end_ms;
     let tz_clone = tz;
 
-    let claude_handle = tokio::task::spawn_blocking(move || {
-        scan_claude_logs(start_ms, end_ms, &tz_clone)
-    });
+    let claude_handle =
+        tokio::task::spawn_blocking(move || scan_claude_logs(start_ms, end_ms, &tz_clone));
 
-    let codex_handle = tokio::task::spawn_blocking(move || {
-        scan_codex_logs(start_ms, end_ms, &tz_clone)
+    let codex_handle =
+        tokio::task::spawn_blocking(move || scan_codex_logs(start_ms, end_ms, &tz_clone));
+
+    let tz_clone = tz;
+    let atomcode_handle =
+        tokio::task::spawn_blocking(move || scan_atomcode_logs(start_ms, end_ms, &tz_clone));
+
+    let natives_handle = tokio::task::spawn_blocking(move || scan_natives_db(start_ms, end_ms));
+
+    let opencode_handle = tokio::task::spawn_blocking(move || {
+        opencode_db_path().map(|path| scan_opencode_db(&path, start_ms, end_ms, &tz_clone))
     });
 
     let tz_clone = tz;
-    let atomcode_handle = tokio::task::spawn_blocking(move || {
-        scan_atomcode_logs(start_ms, end_ms, &tz_clone)
+    let gemini_handle = tokio::task::spawn_blocking(move || {
+        gemini_root()
+            .filter(|root| root.join("tmp").is_dir())
+            .map(|root| scan_gemini_root(&root, start_ms, end_ms, &tz_clone))
     });
 
-    let natives_handle = tokio::task::spawn_blocking(move || {
-        scan_natives_db(start_ms, end_ms)
+    let tz_clone = tz;
+    let grok_handle = tokio::task::spawn_blocking(move || {
+        grok_root()
+            .filter(|root| root.exists())
+            .map(|root| scan_grok_root(&root, start_ms, end_ms, &tz_clone))
     });
 
     let since_str = ms_to_ccusage_date_str(start_ms, &tz);
@@ -80,11 +99,23 @@ pub async fn build_dashboard_response(
 
     let ccusage_fut = scan_ccusage_all(&since_str, &until_str, &tz_name);
 
-    let (claude_res, codex_res, atomcode_res, natives_res, ccusage_res) = tokio::join!(
+    let (
+        claude_res,
+        codex_res,
+        atomcode_res,
+        natives_res,
+        opencode_res,
+        gemini_res,
+        grok_res,
+        ccusage_res,
+    ) = tokio::join!(
         claude_handle,
         codex_handle,
         atomcode_handle,
         natives_handle,
+        opencode_handle,
+        gemini_handle,
+        grok_handle,
         ccusage_fut
     );
 
@@ -107,8 +138,12 @@ pub async fn build_dashboard_response(
     });
 
     let atomcode_native = atomcode_res.unwrap_or_else(|_| AtomcodeScanResult {
-        daily: vec![], activity: vec![], sessions: vec![], state: UsageSourceState::Unavailable,
-        breadcrumbs: vec![], warnings: vec![],
+        daily: vec![],
+        activity: vec![],
+        sessions: vec![],
+        state: UsageSourceState::Unavailable,
+        breadcrumbs: vec![],
+        warnings: vec![],
     });
 
     let natives_native = natives_res.unwrap_or_else(|_| NativesScanResult {
@@ -119,10 +154,13 @@ pub async fn build_dashboard_response(
         breadcrumbs: vec![],
         warnings: vec![],
     });
+    let opencode_native = opencode_res.ok().flatten();
+    let gemini_native = gemini_res.ok().flatten();
+    let grok_native = grok_res.ok().flatten();
 
     // 3. Reconciliation & Cost Allocation for Claude/Codex
     let mut reconciliation_warnings = Vec::new();
-    
+
     let claude_daily = reconcile_source(
         "claude",
         claude_native.daily,
@@ -141,7 +179,16 @@ pub async fn build_dashboard_response(
     let mut all_daily: Vec<UsageDailyRecord> = claude_daily;
     all_daily.extend(codex_daily);
     all_daily.extend(atomcode_native.daily);
-    
+    if let Some(result) = &opencode_native {
+        all_daily.extend(result.daily.clone());
+    }
+    if let Some(result) = &gemini_native {
+        all_daily.extend(result.daily.clone());
+    }
+    if let Some(result) = &grok_native {
+        all_daily.extend(result.daily.clone());
+    }
+
     for result in &ccusage_res.results {
         if !is_native_usage_source(&result.source_id) {
             all_daily.extend(result.daily.clone());
@@ -152,11 +199,29 @@ pub async fn build_dashboard_response(
     let mut all_activity: Vec<UsageActivityBucket> = claude_native.activity;
     all_activity.extend(codex_native.activity);
     all_activity.extend(atomcode_native.activity);
+    if let Some(result) = &opencode_native {
+        all_activity.extend(result.activity.clone());
+    }
+    if let Some(result) = &gemini_native {
+        all_activity.extend(result.activity.clone());
+    }
+    if let Some(result) = &grok_native {
+        all_activity.extend(result.activity.clone());
+    }
     all_activity.extend(natives_native.activity);
 
     let mut all_sessions: Vec<UsageSessionRecord> = claude_native.sessions;
     all_sessions.extend(codex_native.sessions);
     all_sessions.extend(atomcode_native.sessions);
+    if let Some(result) = &opencode_native {
+        all_sessions.extend(result.sessions.clone());
+    }
+    if let Some(result) = &gemini_native {
+        all_sessions.extend(result.sessions.clone());
+    }
+    if let Some(result) = &grok_native {
+        all_sessions.extend(result.sessions.clone());
+    }
     all_sessions.extend(natives_native.sessions);
 
     // 5. Partition into Current vs Comparison periods in memory
@@ -204,15 +269,36 @@ pub async fn build_dashboard_response(
 
     // 6. Build source statuses (only show sources actually detected/configured)
     let mut sources: Vec<UsageSourceStatus> = Vec::new();
-    
+
     // Add Claude/Codex/Natives always (since they are core builtins)
-    sources.push(claude_source_status(&claude_native.state, &claude_native.breadcrumbs));
-    sources.push(codex_source_status(&codex_native.state, &codex_native.breadcrumbs));
-    sources.push(atomcode_source_status(&atomcode_native.state, &atomcode_native.breadcrumbs));
+    sources.push(claude_source_status(
+        &claude_native.state,
+        &claude_native.breadcrumbs,
+    ));
+    sources.push(codex_source_status(
+        &codex_native.state,
+        &codex_native.breadcrumbs,
+    ));
+    sources.push(atomcode_source_status(
+        &atomcode_native.state,
+        &atomcode_native.breadcrumbs,
+    ));
     sources.push(natives_source_status(&natives_native.state));
+    if let Some(result) = &opencode_native {
+        sources.push(opencode_source_status(result));
+    }
+    if let Some(result) = &gemini_native {
+        sources.push(gemini_source_status(result));
+    }
+    if let Some(result) = &grok_native {
+        sources.push(grok_source_status(result));
+    }
+    sources.extend(detect_unmeasurable_sources());
 
     // Add ccusage active sources dynamically
-    let external_ccusage_results: Vec<_> = ccusage_res.results.iter()
+    let external_ccusage_results: Vec<_> = ccusage_res
+        .results
+        .iter()
         .filter(|result| !is_native_usage_source(&result.source_id))
         .cloned()
         .collect();
@@ -225,6 +311,15 @@ pub async fn build_dashboard_response(
     all_warnings.extend(codex_native.warnings);
     all_warnings.extend(atomcode_native.warnings);
     all_warnings.extend(natives_native.warnings);
+    if let Some(result) = opencode_native {
+        all_warnings.extend(result.warnings);
+    }
+    if let Some(result) = gemini_native {
+        all_warnings.extend(result.warnings);
+    }
+    if let Some(result) = grok_native {
+        all_warnings.extend(result.warnings);
+    }
     all_warnings.extend(ccusage_res.warnings);
     all_warnings.extend(reconciliation_warnings);
 
@@ -254,7 +349,10 @@ pub async fn build_dashboard_response(
 /// may report the same tools, but must only validate/enrich them, never add a
 /// second set of usage rows.
 fn is_native_usage_source(source_id: &str) -> bool {
-    matches!(source_id.to_ascii_lowercase().as_str(), "claude" | "codex")
+    matches!(
+        source_id.to_ascii_lowercase().as_str(),
+        "claude" | "codex" | "gemini" | "opencode"
+    )
 }
 
 /// Reconciliation and cost allocation function for a specific source.
@@ -310,8 +408,14 @@ fn reconcile_source(
                         details: {
                             let mut m = HashMap::new();
                             m.insert("date".into(), serde_json::Value::String(date.clone()));
-                            m.insert("ccusage_total".into(), serde_json::Value::Number(cc_total.into()));
-                            m.insert("scanned_total".into(), serde_json::Value::Number(native_total.into()));
+                            m.insert(
+                                "ccusage_total".into(),
+                                serde_json::Value::Number(cc_total.into()),
+                            );
+                            m.insert(
+                                "scanned_total".into(),
+                                serde_json::Value::Number(native_total.into()),
+                            );
                             m
                         },
                     });
@@ -324,9 +428,12 @@ fn reconcile_source(
                             // Try model-level breakdowns
                             for r in natives.iter_mut() {
                                 if let Some(ref model) = r.model_id {
-                                    if let Some(bd) = cc.breakdowns.iter().find(|b| &b.model == model) {
+                                    if let Some(bd) =
+                                        cc.breakdowns.iter().find(|b| &b.model == model)
+                                    {
                                         if bd.total_tokens > 0 {
-                                            let ratio = r.total_tokens.unwrap_or(0) as f64 / bd.total_tokens as f64;
+                                            let ratio = r.total_tokens.unwrap_or(0) as f64
+                                                / bd.total_tokens as f64;
                                             if let Some(bd_cost) = bd.cost {
                                                 r.cost_usd = Some(bd_cost * ratio);
                                                 r.cost_quality = if (ratio - 1.0).abs() < 0.001 {
@@ -342,10 +449,12 @@ fn reconcile_source(
                         }
 
                         // For records that still don't have cost, apportion from remaining day-level cost
-                        let allocated_sum: f64 = natives.iter().map(|r| r.cost_usd.unwrap_or(0.0)).sum();
+                        let allocated_sum: f64 =
+                            natives.iter().map(|r| r.cost_usd.unwrap_or(0.0)).sum();
                         let remaining_cost = (total_cost - allocated_sum).max(0.0);
-                        
-                        let unallocated_tokens: i64 = natives.iter()
+
+                        let unallocated_tokens: i64 = natives
+                            .iter()
                             .filter(|r| r.cost_usd.is_none())
                             .map(|r| r.total_tokens.unwrap_or(0))
                             .sum();
@@ -353,7 +462,8 @@ fn reconcile_source(
                         if unallocated_tokens > 0 && remaining_cost > 0.0 {
                             for r in natives.iter_mut() {
                                 if r.cost_usd.is_none() {
-                                    let ratio = r.total_tokens.unwrap_or(0) as f64 / unallocated_tokens as f64;
+                                    let ratio = r.total_tokens.unwrap_or(0) as f64
+                                        / unallocated_tokens as f64;
                                     r.cost_usd = Some(remaining_cost * ratio);
                                     r.cost_quality = UsageQuality::Estimated;
                                 }
@@ -397,11 +507,12 @@ fn reconcile_source(
                 } else {
                     for bd in &cc.breakdowns {
                         let bd_cost = bd.cost.unwrap_or(0.0);
-                        let (bd_cost_usd, bd_cost_quality) = if bd_cost == 0.0 && bd.total_tokens > 0 {
-                            (None, UsageQuality::Unavailable)
-                        } else {
-                            (Some(bd_cost), UsageQuality::Reported)
-                        };
+                        let (bd_cost_usd, bd_cost_quality) =
+                            if bd_cost == 0.0 && bd.total_tokens > 0 {
+                                (None, UsageQuality::Unavailable)
+                            } else {
+                                (Some(bd_cost), UsageQuality::Reported)
+                            };
                         reconciled_records.push(UsageDailyRecord {
                             date: date.clone(),
                             source_id: source_id.to_string(),
@@ -455,6 +566,7 @@ mod tests {
     fn native_sources_are_not_added_again_from_ccusage() {
         assert!(is_native_usage_source("claude"));
         assert!(is_native_usage_source("codex"));
-        assert!(!is_native_usage_source("gemini"));
+        assert!(is_native_usage_source("gemini"));
+        assert!(is_native_usage_source("opencode"));
     }
 }
