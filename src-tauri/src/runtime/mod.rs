@@ -1,15 +1,16 @@
 //! runtime/mod.rs — Runtime 抽象层
 //!
-//! 顶层 `trait AgentRuntime`，三个实现（Claude CLI / Codex CLI / Native），
+//! 顶层 `trait AgentRuntime`，用于 Claude CLI / Codex CLI 等独立 CLI runtime。
+//! Native Assistant 生产执行入口已切换为 Protocol v2 Agent Daemon，不走这里。
 //! `resolve_runtime` 按可用性自动分流。详见 CONTEXT.md「执行引擎」与
 //! docs/architecture/EXECUTION-ENGINE-DESIGN.md P1。
 
 #![allow(dead_code, unused_imports, unused_variables)]
-pub mod registry;
-pub mod native;
 pub mod claude_cli;
-pub mod codex_cli;
 pub mod cli_permission;
+pub mod codex_cli;
+pub mod native;
+pub mod registry;
 
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
@@ -27,7 +28,7 @@ pub struct RuntimeStreamOptions {
     pub working_directory: Option<PathBuf>,
     /// runtime 内部 await 它感知中断信号。
     pub abort_receiver: tokio::sync::oneshot::Receiver<()>,
-    /// runtime 专属透传字段（CLI 的 sdk_session_id、Native 的 files 等）
+    /// runtime 专属透传字段（例如 CLI 的 sdk_session_id）。
     pub runtime_options: serde_json::Value,
 }
 
@@ -37,8 +38,12 @@ pub struct RuntimeStreamOptions {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RuntimeEvent {
-    AssistantDelta { text: String },
-    ReasoningDelta { text: String },
+    AssistantDelta {
+        text: String,
+    },
+    ReasoningDelta {
+        text: String,
+    },
     ToolStarted {
         tool_name: String,
         tool_call_id: String,
@@ -68,9 +73,15 @@ pub enum RuntimeEvent {
         input_tokens: u64,
         output_tokens: u64,
     },
-    RunCompleted { reason: String },
-    RunFailed { error: String },
-    UnknownItem { raw: serde_json::Value },
+    RunCompleted {
+        reason: String,
+    },
+    RunFailed {
+        error: String,
+    },
+    UnknownItem {
+        raw: serde_json::Value,
+    },
 }
 
 pub type EventStream = BoxStream<'static, RuntimeEvent>;

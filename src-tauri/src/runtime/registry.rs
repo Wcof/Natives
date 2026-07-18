@@ -1,7 +1,8 @@
 //! runtime/registry.rs — Runtime 注册表 + 分流逻辑
 //!
-//! `resolve_runtime` 按优先级 Claude CLI > Codex CLI > Native 自动分流；
-//! 显式 override 不可用时抛错而非静默降级；降级到 Native 时返回 hint 字符串。
+//! `resolve_runtime` 按优先级 Claude CLI > Codex CLI 自动分流。
+//! 旧 Native runtime 已退役；只允许显式 override 到已注册的诊断/兼容 runtime，
+//! 默认绝不静默降级到 in-process Native。
 
 #![allow(dead_code, unused_imports, unused_variables)]
 use super::AgentRuntime;
@@ -22,12 +23,12 @@ pub async fn register(runtime: Arc<dyn AgentRuntime>) {
     all.push(runtime);
 }
 
-/// 按优先级 Claude CLI > Codex CLI > Native 分流。
+/// 按优先级 Claude CLI > Codex CLI 分流；不再默认降级到旧 Native。
 pub async fn resolve_runtime(
     override_id: Option<&str>,
 ) -> Result<(Arc<dyn AgentRuntime>, Option<String>)> {
     let all = REGISTRY.read().await;
-    let order = ["claude_cli", "codex_cli", "native"];
+    let order = ["claude_cli", "codex_cli"];
 
     if let Some(id) = override_id {
         if let Some(rt) = all.iter().find(|r| r.id() == id && r.is_available()) {
@@ -41,16 +42,11 @@ pub async fn resolve_runtime(
 
     for id in order {
         if let Some(rt) = all.iter().find(|r| r.id() == id && r.is_available()) {
-            let downgrade_hint = if id == "native" {
-                Some("未检测到 Claude/Codex CLI，已降级为内置引擎，建议安装以获得更好体验".into())
-            } else {
-                None
-            };
-            return Ok((rt.clone(), downgrade_hint));
+            return Ok((rt.clone(), None));
         }
     }
     Err(crate::Error::Internal(
-        "no runtime available (native should always be registered)".into(),
+        "no CLI runtime available; Native Assistant production execution uses Protocol v2 Agent Daemon".into(),
     ))
 }
 
@@ -77,8 +73,8 @@ pub struct RuntimeMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use crate::runtime::{AgentRuntime, EventStream, RuntimeStreamOptions};
+    use async_trait::async_trait;
 
     /// 序列化所有 registry 测试——避免全局 REGISTRY 并发污染
     static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -90,9 +86,15 @@ mod tests {
 
     #[async_trait]
     impl AgentRuntime for StubRuntime {
-        fn id(&self) -> &'static str { self.id_str }
-        fn display_name(&self) -> &'static str { self.id_str }
-        fn is_available(&self) -> bool { self.available }
+        fn id(&self) -> &'static str {
+            self.id_str
+        }
+        fn display_name(&self) -> &'static str {
+            self.id_str
+        }
+        fn is_available(&self) -> bool {
+            self.available
+        }
         async fn stream(&self, _options: RuntimeStreamOptions) -> crate::Result<EventStream> {
             unimplemented!("stub")
         }
@@ -109,22 +111,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_native_returns_downgrade_hint_when_no_cli() {
+    async fn resolve_does_not_default_to_retired_native_runtime() {
         let _g = TEST_LOCK.lock().await;
-        setup_registry(vec![StubRuntime { id_str: "native", available: true }]).await;
-        let (rt, hint) = resolve_runtime(None).await.unwrap();
+        setup_registry(vec![StubRuntime {
+            id_str: "native",
+            available: true,
+        }])
+        .await;
+        let err = match resolve_runtime(None).await {
+            Ok((rt, _)) => panic!("unexpected runtime selected: {}", rt.id()),
+            Err(error) => error.to_string(),
+        };
+        assert!(err.contains("Protocol v2 Agent Daemon"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn resolve_native_only_when_explicitly_requested_for_compat() {
+        let _g = TEST_LOCK.lock().await;
+        setup_registry(vec![StubRuntime {
+            id_str: "native",
+            available: true,
+        }])
+        .await;
+        let (rt, hint) = resolve_runtime(Some("native")).await.unwrap();
         assert_eq!(rt.id(), "native");
-        assert!(hint.is_some(), "降级到 Native 必须返回提示");
+        assert!(hint.is_none());
     }
 
     #[tokio::test]
     async fn resolve_prefers_claude_cli_when_available() {
         let _g = TEST_LOCK.lock().await;
         setup_registry(vec![
-            StubRuntime { id_str: "native", available: true },
-            StubRuntime { id_str: "codex_cli", available: true },
-            StubRuntime { id_str: "claude_cli", available: true },
-        ]).await;
+            StubRuntime {
+                id_str: "native",
+                available: true,
+            },
+            StubRuntime {
+                id_str: "codex_cli",
+                available: true,
+            },
+            StubRuntime {
+                id_str: "claude_cli",
+                available: true,
+            },
+        ])
+        .await;
         let (rt, hint) = resolve_runtime(None).await.unwrap();
         assert_eq!(rt.id(), "claude_cli");
         assert!(hint.is_none(), "非降级时 hint 为 None");
@@ -134,10 +165,20 @@ mod tests {
     async fn resolve_prefers_codex_cli_when_claude_unavailable() {
         let _g = TEST_LOCK.lock().await;
         setup_registry(vec![
-            StubRuntime { id_str: "native", available: true },
-            StubRuntime { id_str: "codex_cli", available: true },
-            StubRuntime { id_str: "claude_cli", available: false },
-        ]).await;
+            StubRuntime {
+                id_str: "native",
+                available: true,
+            },
+            StubRuntime {
+                id_str: "codex_cli",
+                available: true,
+            },
+            StubRuntime {
+                id_str: "claude_cli",
+                available: false,
+            },
+        ])
+        .await;
         let (rt, hint) = resolve_runtime(None).await.unwrap();
         assert_eq!(rt.id(), "codex_cli");
         assert!(hint.is_none());
@@ -147,21 +188,41 @@ mod tests {
     async fn resolve_override_unavailable_throws_error() {
         let _g = TEST_LOCK.lock().await;
         setup_registry(vec![
-            StubRuntime { id_str: "native", available: true },
-            StubRuntime { id_str: "claude_cli", available: false },
-        ]).await;
+            StubRuntime {
+                id_str: "native",
+                available: true,
+            },
+            StubRuntime {
+                id_str: "claude_cli",
+                available: false,
+            },
+        ])
+        .await;
         let result = resolve_runtime(Some("claude_cli")).await;
-        assert!(result.is_err(), "显式指定不可用 runtime 必须报错而非静默降级");
+        assert!(
+            result.is_err(),
+            "显式指定不可用 runtime 必须报错而非静默降级"
+        );
     }
 
     #[tokio::test]
     async fn resolve_override_available_returns_it() {
         let _g = TEST_LOCK.lock().await;
         setup_registry(vec![
-            StubRuntime { id_str: "native", available: true },
-            StubRuntime { id_str: "codex_cli", available: true },
-            StubRuntime { id_str: "claude_cli", available: true },
-        ]).await;
+            StubRuntime {
+                id_str: "native",
+                available: true,
+            },
+            StubRuntime {
+                id_str: "codex_cli",
+                available: true,
+            },
+            StubRuntime {
+                id_str: "claude_cli",
+                available: true,
+            },
+        ])
+        .await;
         let (rt, hint) = resolve_runtime(Some("codex_cli")).await.unwrap();
         assert_eq!(rt.id(), "codex_cli");
         assert!(hint.is_none(), "显式指定非降级");
@@ -170,8 +231,16 @@ mod tests {
     #[tokio::test]
     async fn register_dedup_by_id() {
         let _g = TEST_LOCK.lock().await;
-        setup_registry(vec![StubRuntime { id_str: "native", available: true }]).await;
-        register(Arc::new(StubRuntime { id_str: "native", available: true })).await;
+        setup_registry(vec![StubRuntime {
+            id_str: "native",
+            available: true,
+        }])
+        .await;
+        register(Arc::new(StubRuntime {
+            id_str: "native",
+            available: true,
+        }))
+        .await;
         let all = REGISTRY.read().await;
         assert_eq!(all.len(), 1, "重复 id 不应被注册两次");
     }
