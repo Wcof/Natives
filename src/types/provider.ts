@@ -4,7 +4,7 @@
 export interface ProviderPreset {
   name: string;
   /** Only protocols implemented by the provider backend may be configured. */
-  protocol?: 'openai_compatible' | 'anthropic';
+  protocol?: ApiProtocol;
   /** 中文名（用于 locale=zh 时显示） */
   nameZh?: string;
   websiteUrl: string;
@@ -18,6 +18,13 @@ export interface ProviderPreset {
   icon?: string;
   iconColor?: string;
 }
+
+export type ApiProtocol =
+  | 'openai_chat_completions'
+  | 'openai_responses'
+  | 'anthropic_messages'
+  | 'gemini_generate_content'
+  | 'ollama_chat';
 
 /** 单条 API Key — 返回给前端的始终是脱敏版本 */
 export interface ProviderKey {
@@ -56,13 +63,13 @@ export interface ProviderKeySummary {
 }
 
 export interface ProviderSummary {
-  id: string; providerType: string; displayName: string; websiteUrl: string; baseUrl: string;
+  id: string; providerType: string; apiProtocol: ApiProtocol; displayName: string; websiteUrl: string; baseUrl: string;
   defaultModel: string | null; primaryKeyId: string | null; keys: ProviderKeySummary[];
   models?: Array<{ id: string; displayName?: string | null }>;
 }
 
 export interface CreateProviderInput {
-  providerType: string; displayName: string; websiteUrl: string; baseUrl: string;
+  providerType: string; apiProtocol: ApiProtocol; displayName: string; websiteUrl: string; baseUrl: string;
   defaultModel: string | null; initialKey?: { label: string; apiKey: string } | null;
 }
 

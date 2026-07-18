@@ -1164,6 +1164,10 @@ mod tests {
     #[tokio::test]
     async fn cancel_mid_run_marks_interrupted() {
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
+        let runtime_dir = std::env::temp_dir().join(format!("natives-cancel-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(runtime_dir.join("runs")).unwrap();
+        let prev_runtime_dir = std::env::var("NATIVES_RUNTIME_DIR").ok();
+        std::env::set_var("NATIVES_RUNTIME_DIR", &runtime_dir);
         let rm = Arc::new(RunManager::new());
         let run = rm
             .create_run(CreateRunRequest {
@@ -1362,6 +1366,12 @@ mod tests {
             "production cancel must set engine cancel flag observed by tool execution"
         );
         std::env::remove_var("NATIVES_DAEMON_FIXTURE");
+        if let Some(v) = prev_runtime_dir {
+            std::env::set_var("NATIVES_RUNTIME_DIR", v);
+        } else {
+            std::env::remove_var("NATIVES_RUNTIME_DIR");
+        }
+        let _ = std::fs::remove_dir_all(runtime_dir);
     }
 
     #[tokio::test]

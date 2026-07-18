@@ -313,6 +313,7 @@ fn create_tables(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS user_providers (
             id TEXT PRIMARY KEY,
             preset_name TEXT NOT NULL,
+            api_protocol TEXT NOT NULL DEFAULT 'openai_chat_completions',
             name TEXT NOT NULL,
             website_url TEXT NOT NULL DEFAULT '',
             base_url TEXT NOT NULL DEFAULT '',
@@ -473,6 +474,34 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
             updated_at TEXT NOT NULL
         )",
         [],
+    )
+    .map_err(Error::Database)?;
+
+    let provider_cols: Vec<String> = conn
+        .prepare("PRAGMA table_info(user_providers)")
+        .map_err(Error::Database)?
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(Error::Database)?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !provider_cols.iter().any(|c| c == "api_protocol") {
+        conn.execute_batch(
+            "ALTER TABLE user_providers ADD COLUMN api_protocol TEXT NOT NULL DEFAULT 'openai_chat_completions';",
+        )
+        .map_err(Error::Database)?;
+    }
+    conn.execute_batch(
+        "UPDATE user_providers
+         SET api_protocol = CASE
+             WHEN lower(preset_name) IN ('anthropic', 'claude', 'anthropic_messages') THEN 'anthropic_messages'
+             WHEN lower(preset_name) IN ('openai_responses', 'responses') THEN 'openai_responses'
+             WHEN lower(preset_name) IN ('gemini', 'google', 'gemini_generate_content') THEN 'gemini_generate_content'
+             WHEN lower(preset_name) IN ('ollama', 'ollama_chat') THEN 'ollama_chat'
+             ELSE 'openai_chat_completions'
+         END
+         WHERE api_protocol IS NULL
+            OR api_protocol = ''
+            OR api_protocol IN ('openai_compatible', 'anthropic', 'claude');",
     )
     .map_err(Error::Database)?;
 

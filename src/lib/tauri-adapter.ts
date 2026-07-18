@@ -42,6 +42,7 @@ export interface ProviderKeySummary {
 export interface ProviderSummary {
   id: string;
   providerType: string;
+  apiProtocol: string;
   displayName: string;
   websiteUrl: string;
   baseUrl: string;
@@ -66,6 +67,7 @@ interface StoredProviderKey extends Omit<ProviderKeySummary, 'lastError'> {
 interface StoredProvider {
   id: string;
   presetName: string;
+  apiProtocol?: string;
   name: string;
   websiteUrl: string;
   baseUrl: string;
@@ -89,6 +91,7 @@ function normalizeProvider(provider: StoredProvider): ProviderSummary {
   return {
     id: provider.id,
     providerType: provider.presetName,
+    apiProtocol: provider.apiProtocol ?? provider.presetName,
     displayName: provider.name,
     websiteUrl: provider.websiteUrl,
     baseUrl: provider.baseUrl,
@@ -324,6 +327,7 @@ export interface NativesAPI {
     list: () => Promise<ProviderSummary[]>;
     create: (input: {
       providerType: string;
+      apiProtocol: string;
       displayName: string;
       websiteUrl: string;
       baseUrl: string;
@@ -333,9 +337,9 @@ export interface NativesAPI {
     delete: (providerId: string) => Promise<void>;
     updateDefaults: (input: { providerId: string; defaultModel: string }) => Promise<void>;
     addKey: (input: { providerId: string; label: string; apiKey: string }) => Promise<ProviderKeySummary>;
-    testCandidate: (input: { providerType: string; baseUrl: string; apiKey: string; model: string }) => Promise<ProviderTestResult>;
+    testCandidate: (input: { providerType: string; apiProtocol?: string; baseUrl: string; apiKey: string; model: string }) => Promise<ProviderTestResult>;
     testKey: (input: { providerId: string; keyId: string; model?: string }) => Promise<ProviderTestResult>;
-    discoverModels: (input: { providerType: string; baseUrl: string; apiKey: string }) => Promise<Array<{ id: string; displayName?: string }>>;
+    discoverModels: (input: { providerType: string; apiProtocol?: string; baseUrl: string; apiKey: string }) => Promise<Array<{ id: string; displayName?: string }>>;
     discoverModelsSaved: (input: { providerId: string; keyId: string }) => Promise<Array<{ id: string; displayName?: string }>>;
     setPrimaryKey: (input: { providerId: string; keyId: string }) => Promise<void>;
     deleteKey: (input: { providerId: string; keyId: string }) => Promise<void>;
@@ -868,18 +872,18 @@ const nativesAPI: NativesAPI = {
   // Provider (unified API — single source of truth)
   provider: {
     list: () => cmd<StoredProvider[]>('list_providers').then(providers => providers.map(normalizeProvider)),
-    create: (input: { providerType: string; displayName: string; websiteUrl: string; baseUrl: string; defaultModel: string; initialKey: { label: string; apiKey: string } }) =>
+    create: (input: { providerType: string; apiProtocol: string; displayName: string; websiteUrl: string; baseUrl: string; defaultModel: string; initialKey: { label: string; apiKey: string } }) =>
       cmd<StoredProvider>('add_provider', { input }).then(normalizeProvider),
     delete: (providerId: string) => cmd('delete_provider', { providerId }),
     updateDefaults: (input: { providerId: string; defaultModel: string }) =>
       cmd('provider_update_defaults', { input }),
     addKey: (input: { providerId: string; label: string; apiKey: string }) =>
       cmd<StoredProviderKey>('add_provider_key', { input }).then(normalizeProviderKey),
-    testCandidate: (input: { providerType: string; baseUrl: string; apiKey: string; model: string }) =>
+    testCandidate: (input: { providerType: string; apiProtocol?: string; baseUrl: string; apiKey: string; model: string }) =>
       cmd<StoredProviderTestResult>('test_provider_raw', { input }).then(normalizeProviderTest),
     testKey: (input: { providerId: string; keyId: string; model?: string }) =>
       cmd<StoredProviderTestResult>('provider_test', { input }).then(normalizeProviderTest),
-    discoverModels: (input: { providerType: string; baseUrl: string; apiKey: string }) =>
+    discoverModels: (input: { providerType: string; apiProtocol?: string; baseUrl: string; apiKey: string }) =>
       cmd<Array<{ id: string; displayName?: string }>>('provider_discover_models', { input }),
     discoverModelsSaved: (input: { providerId: string; keyId: string }) =>
       cmd<Array<{ id: string; displayName?: string }>>('provider_discover_models_saved', { input }),

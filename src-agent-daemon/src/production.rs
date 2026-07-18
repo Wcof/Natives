@@ -704,7 +704,7 @@ fn resolve_adapter(provider_id: &str) -> Box<dyn ProviderAdapter> {
         Box::new(provider_adapters::providers::deepseek::DeepSeekAdapter::new())
     } else if lower.contains("ollama") {
         Box::new(provider_adapters::providers::ollama::OllamaAdapter::new())
-    } else if lower.contains("compatible") {
+    } else if lower.contains("compatible") || lower.contains("chat_completions") {
         Box::new(provider_adapters::providers::openai_compatible::OpenAiCompatibleAdapter::new())
     } else if lower.contains("responses") {
         // Force Responses API path via env for this adapter instance.

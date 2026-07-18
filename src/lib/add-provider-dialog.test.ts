@@ -14,8 +14,8 @@ describe('add provider dialog contract', () => {
     assert.match(dialog, /CONFIGURABLE_PROVIDER_PRESETS/);
     assert.doesNotMatch(dialog, /selected\.protocol \?\? 'openai_compatible'/);
     assert.match(dialog, /<select[^>]*value=\{selectedProtocol\}/);
-    assert.match(dialog, /value="openai_compatible"/);
-    assert.match(dialog, /value="anthropic"/);
+    assert.match(dialog, /value="openai_chat_completions"/);
+    assert.match(dialog, /value="anthropic_messages"/);
   });
 
   it('labels the discover, test, and save sequence', () => {

@@ -220,11 +220,11 @@ export default function SettingsPage({
     finally { setProvidersLoading(false); }
   }
 
-  async function handleSaveProvider(data: { providerType: string; name: string; websiteUrl: string; baseUrl: string; defaultModel: string; keys: { label: string; apiKey: string }[] }) {
+  async function handleSaveProvider(data: { providerType: string; apiProtocol: string; name: string; websiteUrl: string; baseUrl: string; defaultModel: string; keys: { label: string; apiKey: string }[] }) {
     const api = window.nativesAPI;
     if (api?.provider?.create) {
       const initialKey = data.keys[0] ? { label: data.keys[0].label, apiKey: data.keys[0].apiKey } : { label: 'default', apiKey: '' };
-      await api.provider.create({ providerType: data.providerType, displayName: data.name, websiteUrl: data.websiteUrl, baseUrl: data.baseUrl, defaultModel: data.defaultModel, initialKey });
+      await api.provider.create({ providerType: data.providerType, apiProtocol: data.apiProtocol, displayName: data.name, websiteUrl: data.websiteUrl, baseUrl: data.baseUrl, defaultModel: data.defaultModel, initialKey });
     } else throw new Error('Provider API not available');
     globalToast(t(locale, 'settings.providerAdded'), 'success');
     await loadProviders();

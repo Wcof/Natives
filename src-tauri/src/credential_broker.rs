@@ -101,7 +101,7 @@ pub async fn credential_broker_resolve(
 
     let row = db
         .query_row(
-            "SELECT k.id, k.api_key_encrypted, k.dek_encrypted, p.base_url, p.preset_name
+            "SELECT k.id, k.api_key_encrypted, k.dek_encrypted, p.base_url, COALESCE(NULLIF(p.api_protocol, ''), p.preset_name)
              FROM provider_api_keys k
              JOIN user_providers p ON k.provider_id = p.id
              WHERE k.id = ?1 AND k.provider_id = ?2
@@ -119,7 +119,7 @@ pub async fn credential_broker_resolve(
         )
         .or_else(|_| {
             db.query_row(
-                "SELECT k.id, k.api_key_encrypted, k.dek_encrypted, p.base_url, p.preset_name
+                "SELECT k.id, k.api_key_encrypted, k.dek_encrypted, p.base_url, COALESCE(NULLIF(p.api_protocol, ''), p.preset_name)
                  FROM provider_api_keys k
                  JOIN user_providers p ON k.provider_id = p.id
                  WHERE k.provider_id = ?1 AND COALESCE(k.is_active, 1) = 1

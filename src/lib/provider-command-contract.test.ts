@@ -26,4 +26,10 @@ describe('provider renderer/Tauri contract', () => {
     assert.match(dialog, /defaultModel,/);
     assert.match(settings, /defaultModel: data\.defaultModel/);
   });
+
+  it('persists the selected provider protocol separately from the preset', () => {
+    assert.match(dialog, /apiProtocol: selectedProtocol/);
+    assert.match(settings, /apiProtocol: data\.apiProtocol/);
+    assert.match(commands, /api_protocol/);
+  });
 });

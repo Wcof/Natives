@@ -4,13 +4,14 @@ import { useMemo, useState, type CSSProperties } from 'react';
 import { Check, ChevronRight, KeyRound, Loader, RefreshCw, Search, Server, ShieldCheck, Wifi } from 'lucide-react';
 import { CONFIGURABLE_PROVIDER_PRESETS } from '@/lib/provider-presets';
 import { t } from '@/i18n';
-import type { ProviderPreset } from '@/types/provider';
+import type { ApiProtocol, ProviderPreset } from '@/types/provider';
 import Modal from '@/components/ui/Modal';
 import { classifyError } from '@/lib/error-classifier';
 import { connectionFingerprint, normalizeDiscoveredModels, selectDiscoveredModel } from '@/lib/provider-model-selection';
 
 interface SaveProviderInput {
   providerType: string;
+  apiProtocol: ApiProtocol;
   name: string;
   websiteUrl: string;
   baseUrl: string;
@@ -44,7 +45,7 @@ function providerDescription(provider: ProviderPreset, locale: string) {
 export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<ProviderPreset | null>(null);
-  const [selectedProtocol, setSelectedProtocol] = useState<NonNullable<ProviderPreset['protocol']>>('openai_compatible');
+  const [selectedProtocol, setSelectedProtocol] = useState<ApiProtocol>('openai_chat_completions');
   const [name, setName] = useState('');
   const [websiteUrl, setWebsiteUrl] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
@@ -93,7 +94,7 @@ export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
     setName(providerName(provider, locale));
     setWebsiteUrl(provider.websiteUrl);
     setBaseUrl(provider.baseUrl);
-    setSelectedProtocol(provider.protocol ?? 'openai_compatible');
+    setSelectedProtocol(provider.protocol ?? 'anthropic_messages');
     setKeyLabel('API Key 1');
     setApiKey('');
     invalidateConnection();
@@ -109,6 +110,7 @@ export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
       if (!providerApi?.discoverModels) throw new Error(t(locale, 'settings.modelDiscoveryUnavailable'));
       const discovered = normalizeDiscoveredModels(await providerApi.discoverModels({
         providerType: selectedProtocol,
+        apiProtocol: selectedProtocol,
         baseUrl: effectiveBaseUrl,
         apiKey: effectiveApiKey,
       }));
@@ -135,6 +137,7 @@ export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
       if (!providerApi?.testCandidate) throw new Error(t(locale, 'settings.providerTestUnavailable'));
       const result = await providerApi.testCandidate({
         providerType: selectedProtocol,
+        apiProtocol: selectedProtocol,
         baseUrl: effectiveBaseUrl,
         apiKey: effectiveApiKey,
         model: defaultModel,
@@ -156,7 +159,8 @@ export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
     setSaveError(null);
     try {
       await onSave({
-        providerType: selectedProtocol,
+        providerType: selected.name,
+        apiProtocol: selectedProtocol,
         name: name.trim(),
         websiteUrl: websiteUrl.trim(),
         baseUrl: effectiveBaseUrl,
@@ -208,7 +212,7 @@ export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
                     <label><span>{t(locale, 'settings.providerName')}</span><input className="settings-input" value={name} onChange={(event) => setName(event.target.value)} placeholder={t(locale, 'settings.providerNamePlaceholder')} /></label>
                     <label><span>{t(locale, 'settings.websiteOptional')}</span><input className="settings-input" value={websiteUrl} onChange={(event) => setWebsiteUrl(event.target.value)} placeholder="https://example.com" /></label>
                     <label className="wide"><span>{t(locale, 'settings.baseUrl')}</span><input className="settings-input add-provider-mono" value={baseUrl} onChange={(event) => { setBaseUrl(event.target.value); invalidateConnection(); }} placeholder="https://api.example.com/v1" /></label>
-                    <label><span>{locale.startsWith('zh') ? '协议' : 'Protocol'}</span><select className="settings-input" value={selectedProtocol} onChange={(event) => { setSelectedProtocol(event.target.value as typeof selectedProtocol); invalidateConnection(); }}><option value="openai_compatible">OpenAI Compatible</option><option value="anthropic">Anthropic / Claude</option></select></label>
+                    <label><span>{locale.startsWith('zh') ? '协议' : 'Protocol'}</span><select className="settings-input" value={selectedProtocol} onChange={(event) => { setSelectedProtocol(event.target.value as ApiProtocol); invalidateConnection(); }}><option value="openai_chat_completions">OpenAI Chat Completions</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option><option value="gemini_generate_content">Gemini Generate Content</option><option value="ollama_chat">Ollama Chat</option></select></label>
                   </div>
                 </section>
 

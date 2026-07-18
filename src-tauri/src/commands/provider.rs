@@ -41,6 +41,7 @@ pub struct ProviderKey {
 pub struct UserProvider {
     pub id: String,
     pub preset_name: String,
+    pub api_protocol: String,
     pub name: String,
     pub website_url: String,
     pub base_url: String,
@@ -56,6 +57,8 @@ pub struct UserProvider {
 #[serde(rename_all = "camelCase")]
 pub struct AddProviderInput {
     pub provider_type: String,
+    #[serde(default)]
+    pub api_protocol: Option<String>,
     pub display_name: String,
     pub website_url: String,
     pub base_url: String,
@@ -102,6 +105,8 @@ pub struct ProviderTestInput {
 pub struct RawProviderTestInput {
     #[serde(default)]
     pub provider_type: String,
+    #[serde(default)]
+    pub api_protocol: Option<String>,
     pub base_url: String,
     pub api_key: String,
     /// Optional model to test with (for OpenAI-compatible providers)
@@ -114,6 +119,8 @@ pub struct RawProviderTestInput {
 pub struct ProviderDiscoveryInput {
     #[serde(default)]
     pub provider_type: String,
+    #[serde(default)]
+    pub api_protocol: Option<String>,
     pub base_url: String,
     pub api_key: String,
 }
@@ -167,10 +174,10 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
 
     // Fetch providers
     let mut pstmt = conn.prepare(
-        "SELECT id, preset_name, name, website_url, base_url, default_model, created_at, updated_at FROM user_providers ORDER BY created_at DESC"
+        "SELECT id, preset_name, api_protocol, name, website_url, base_url, default_model, created_at, updated_at FROM user_providers ORDER BY created_at DESC"
     ).map_err(|e| Error::Internal(e.to_string()))?;
 
-    let providers: Vec<(String, String, String, String, String, Option<String>, String, String)> = pstmt
+    let providers: Vec<(String, String, String, String, String, String, Option<String>, String, String)> = pstmt
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -178,9 +185,10 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, String>(6)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?,
                 row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
             ))
         })
         .map_err(|e| Error::Internal(e.to_string()))?
@@ -239,7 +247,7 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
     // Assemble — keys are masked, NEVER return full key to frontend
     let result = providers
         .into_iter()
-        .map(|(id, preset_name, name, website_url, base_url, default_model, created_at, updated_at)| {
+        .map(|(id, preset_name, api_protocol, name, website_url, base_url, default_model, created_at, updated_at)| {
             let primary_key_id = primary_key_ids.get(&id).cloned();
             let keys: Vec<ProviderKey> = all_keys
                 .iter()
@@ -263,7 +271,7 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
 
             UserProvider {
                 models: model_rows.get(&id).cloned().unwrap_or_default(),
-                id, preset_name, name, website_url, base_url, default_model, primary_key_id, keys, created_at, updated_at,
+                id, preset_name, api_protocol, name, website_url, base_url, default_model, primary_key_id, keys, created_at, updated_at,
             }
         })
         .collect();
@@ -276,6 +284,7 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
 pub fn add_provider(state: State<'_, AppState>, input: AddProviderInput) -> Result<UserProvider> {
     let display_name = input.display_name.trim().to_string();
     let provider_type = input.provider_type.trim().to_string();
+    let api_protocol = normalize_api_protocol(input.api_protocol.as_deref().unwrap_or(&provider_type));
     let base_url = normalize_url(&input.base_url)?;
     let default_model = input.default_model.trim().to_string();
     let api_key = input.initial_key.api_key.trim();
@@ -290,8 +299,8 @@ pub fn add_provider(state: State<'_, AppState>, input: AddProviderInput) -> Resu
     let now = chrono_now();
     let transaction = pool_conn.transaction().map_err(|e| Error::Internal(e.to_string()))?;
     transaction.execute(
-        "INSERT INTO user_providers (id, preset_name, name, website_url, base_url, default_model, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![id, provider_type, display_name, input.website_url.trim(), base_url, default_model, now, now],
+        "INSERT INTO user_providers (id, preset_name, api_protocol, name, website_url, base_url, default_model, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![id, provider_type, api_protocol, display_name, input.website_url.trim(), base_url, default_model, now, now],
     ).map_err(|e| Error::Internal(e.to_string()))?;
 
     let kid = uuid_v4();
@@ -322,7 +331,7 @@ pub fn add_provider(state: State<'_, AppState>, input: AddProviderInput) -> Resu
     };
 
     Ok(UserProvider {
-        id, preset_name: provider_type, name: display_name,
+        id, preset_name: provider_type, api_protocol, name: display_name,
         website_url: input.website_url.trim().to_string(), base_url,
         default_model: Some(default_model.clone()),
         primary_key_id: Some(key.id.clone()),
@@ -499,6 +508,20 @@ fn is_anthropic_protocol(provider_type: &str) -> bool {
     )
 }
 
+fn normalize_api_protocol(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "anthropic" | "claude" | "anthropic-native" | "anthropic_messages" => "anthropic_messages",
+        "openai_responses" | "responses" => "openai_responses",
+        "gemini" | "google" | "gemini_generate_content" => "gemini_generate_content",
+        "ollama" | "ollama_chat" => "ollama_chat",
+        "openai" | "openai_compatible" | "openai-compatible" | "openai_chat_completions" | "" => {
+            "openai_chat_completions"
+        }
+        _ => "openai_chat_completions",
+    }
+    .to_string()
+}
+
 fn anthropic_url(base_url: &str, endpoint: &str) -> Result<String> {
     let base = base_url.trim().trim_end_matches('/');
     if base.is_empty() {
@@ -552,12 +575,13 @@ pub async fn provider_discover_models(input: ProviderDiscoveryInput) -> Result<V
     if input.api_key.trim().is_empty() {
         return Err(Error::InvalidInput("API key cannot be empty".to_string()));
     }
+    let api_protocol = normalize_api_protocol(input.api_protocol.as_deref().unwrap_or(&input.provider_type));
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| Error::Internal(format!("Failed to build HTTP client: {e}")))?;
-    let mut request = client.get(models_url(&input.provider_type, &input.base_url)?);
-    if is_anthropic_protocol(&input.provider_type) {
+    let mut request = client.get(models_url(&api_protocol, &input.base_url)?);
+    if is_anthropic_protocol(&api_protocol) {
         request = request
             .header("x-api-key", input.api_key.trim())
             .header("anthropic-version", "2023-06-01");
@@ -603,13 +627,14 @@ pub async fn provider_discover_models_saved(
 ) -> Result<Vec<DiscoveredModel>> {
     let provider_id = input.provider_id;
     let key_id = input.key_id;
-    let (provider_type, base_url, api_key) = {
+    let (api_protocol, base_url, api_key) = {
         let pool_conn = state.db.get()
             .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
         let conn: &rusqlite::Connection = &*pool_conn;
-        let (encrypted, dek, provider_type, base_url): (String, Option<String>, String, String) = conn
+        ensure_tables(conn)?;
+        let (encrypted, dek, api_protocol, base_url): (String, Option<String>, String, String) = conn
             .query_row(
-                "SELECT k.api_key_encrypted, k.dek_encrypted, p.preset_name, p.base_url
+                "SELECT k.api_key_encrypted, k.dek_encrypted, p.api_protocol, p.base_url
                  FROM provider_api_keys k
                  JOIN user_providers p ON k.provider_id = p.id
                  WHERE k.id = ?1 AND k.provider_id = ?2",
@@ -628,11 +653,12 @@ pub async fn provider_discover_models_saved(
             let encryption_key = env_manager::get_encryption_key(conn)?;
             env_manager::decrypt(&encrypted, &encryption_key)?
         };
-        (provider_type, base_url, api_key)
+        (api_protocol, base_url, api_key)
     };
 
     let discover_input = ProviderDiscoveryInput {
-        provider_type,
+        provider_type: api_protocol.clone(),
+        api_protocol: Some(api_protocol),
         base_url,
         api_key,
     };
@@ -813,18 +839,19 @@ pub async fn provider_test(
 ) -> Result<ProviderTestResult> {
     let provider_id = input.provider_id;
     let key_id = input.key_id;
-    let (provider_type, base_url, api_key, default_model) = {
+    let (_provider_type, api_protocol, base_url, api_key, default_model) = {
         let pool_conn = state.db.get()
             .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
         let conn: &rusqlite::Connection = &*pool_conn;
-        let (encrypted, dek, provider_type, base_url, default_model): (String, Option<String>, String, String, Option<String>) = conn
+        ensure_tables(conn)?;
+        let (encrypted, dek, provider_type, api_protocol, base_url, default_model): (String, Option<String>, String, String, String, Option<String>) = conn
             .query_row(
-                "SELECT k.api_key_encrypted, k.dek_encrypted, p.preset_name, p.base_url, p.default_model
+                "SELECT k.api_key_encrypted, k.dek_encrypted, p.preset_name, p.api_protocol, p.base_url, p.default_model
                  FROM provider_api_keys k
                  JOIN user_providers p ON k.provider_id = p.id
                  WHERE k.id = ?1 AND k.provider_id = ?2",
                 params![key_id, provider_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
             )
             .map_err(|e| Error::Internal(format!("Failed to fetch key: {e}")))?;
         let api_key = if let Some(dek) = &dek {
@@ -838,11 +865,12 @@ pub async fn provider_test(
             let encryption_key = env_manager::get_encryption_key(conn)?;
             env_manager::decrypt(&encrypted, &encryption_key)?
         };
-        (provider_type, base_url, api_key, default_model)
+        (provider_type, api_protocol, base_url, api_key, default_model)
     };
 
     let model = input.model.or(default_model);
-    let result = execute_provider_test(&provider_type, &base_url, &api_key, model.as_deref()).await;
+    let protocol = normalize_api_protocol(&api_protocol);
+    let result = execute_provider_test(&protocol, &base_url, &api_key, model.as_deref()).await;
     let now = chrono_now();
     let status = if result.success { "valid" } else { "invalid" };
     state.db.get()
@@ -860,7 +888,8 @@ pub async fn provider_test(
 pub async fn test_provider_raw(
     input: RawProviderTestInput,
 ) -> Result<ProviderTestResult> {
-    Ok(execute_provider_test(&input.provider_type, &input.base_url, &input.api_key, input.model.as_deref()).await)
+    let protocol = normalize_api_protocol(input.api_protocol.as_deref().unwrap_or(&input.provider_type));
+    Ok(execute_provider_test(&protocol, &input.base_url, &input.api_key, input.model.as_deref()).await)
 }
 
 // ── Helpers ──
@@ -873,6 +902,7 @@ fn ensure_tables(conn: &rusqlite::Connection) -> Result<()> {
         "CREATE TABLE IF NOT EXISTS user_providers (
             id TEXT PRIMARY KEY,
             preset_name TEXT NOT NULL,
+            api_protocol TEXT NOT NULL DEFAULT 'openai_chat_completions',
             name TEXT NOT NULL,
             website_url TEXT NOT NULL DEFAULT '',
             base_url TEXT NOT NULL DEFAULT '',
@@ -917,6 +947,20 @@ fn ensure_tables(conn: &rusqlite::Connection) -> Result<()> {
     };
 
     add_column_if_missing("user_providers", "default_model", "TEXT")?;
+    add_column_if_missing("user_providers", "api_protocol", "TEXT NOT NULL DEFAULT 'openai_chat_completions'")?;
+    conn.execute_batch(
+        "UPDATE user_providers
+         SET api_protocol = CASE
+             WHEN lower(preset_name) IN ('anthropic', 'claude', 'anthropic_messages') THEN 'anthropic_messages'
+             WHEN lower(preset_name) IN ('openai_responses', 'responses') THEN 'openai_responses'
+             WHEN lower(preset_name) IN ('gemini', 'google', 'gemini_generate_content') THEN 'gemini_generate_content'
+             WHEN lower(preset_name) IN ('ollama', 'ollama_chat') THEN 'ollama_chat'
+             ELSE 'openai_chat_completions'
+         END
+         WHERE api_protocol IS NULL
+            OR api_protocol = ''
+            OR api_protocol IN ('openai_compatible', 'anthropic', 'claude');"
+    ).map_err(|e| Error::Internal(e.to_string()))?;
     add_column_if_missing("provider_api_keys", "masked_key", "TEXT NOT NULL DEFAULT ''")?;
     add_column_if_missing("provider_api_keys", "is_primary", "INTEGER NOT NULL DEFAULT 0")?;
     add_column_if_missing("provider_api_keys", "is_active", "INTEGER NOT NULL DEFAULT 1")?;

@@ -61,7 +61,7 @@ impl NativesDbBroker {
 
         let row = if !key_id.is_empty() && key_id != "_primary_" {
             conn.query_row(
-                "SELECT k.id, k.api_key_encrypted, k.dek_encrypted, p.base_url, p.preset_name
+                "SELECT k.id, k.api_key_encrypted, k.dek_encrypted, p.base_url, COALESCE(NULLIF(p.api_protocol, ''), p.preset_name)
                  FROM provider_api_keys k
                  JOIN user_providers p ON k.provider_id = p.id
                  WHERE k.id = ?1 AND k.provider_id = ?2
@@ -82,7 +82,7 @@ impl NativesDbBroker {
             })?
         } else {
             conn.query_row(
-                "SELECT k.id, k.api_key_encrypted, k.dek_encrypted, p.base_url, p.preset_name
+                "SELECT k.id, k.api_key_encrypted, k.dek_encrypted, p.base_url, COALESCE(NULLIF(p.api_protocol, ''), p.preset_name)
                  FROM provider_api_keys k
                  JOIN user_providers p ON k.provider_id = p.id
                  WHERE k.provider_id = ?1 AND COALESCE(k.is_active, 1) = 1
@@ -223,7 +223,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
              CREATE TABLE user_providers (
-               id TEXT PRIMARY KEY, preset_name TEXT, name TEXT,
+               id TEXT PRIMARY KEY, preset_name TEXT, api_protocol TEXT, name TEXT,
                website_url TEXT, base_url TEXT, created_at TEXT, updated_at TEXT
              );
              CREATE TABLE provider_api_keys (
@@ -242,8 +242,8 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO user_providers (id, preset_name, name, website_url, base_url, created_at, updated_at)
-             VALUES ('provider-uuid', 'anthropic', 'x', '', 'https://example.test', 't', 't')",
+            "INSERT INTO user_providers (id, preset_name, api_protocol, name, website_url, base_url, created_at, updated_at)
+             VALUES ('provider-uuid', 'anthropic', 'anthropic_messages', 'x', '', 'https://example.test', 't', 't')",
             [],
         )
         .unwrap();
@@ -287,6 +287,6 @@ mod tests {
             cred.base_url.as_deref(),
             Some("https://example.test")
         );
-        assert_eq!(cred.provider_type.as_deref(), Some("anthropic"));
+        assert_eq!(cred.provider_type.as_deref(), Some("anthropic_messages"));
     }
 }

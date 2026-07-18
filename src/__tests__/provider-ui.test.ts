@@ -7,7 +7,7 @@ function mkKey(o: Partial<ProviderKeySummary> = {}): ProviderKeySummary {
 }
 function mkProv(o: Partial<ProviderSummary> = {}): ProviderSummary {
   const keys = o.keys||[mkKey({status:'valid',isPrimary:true})];
-  return { id: o.id||'p1', providerType: o.providerType||'openai', displayName: o.displayName||'O', websiteUrl: o.websiteUrl||'https://o.com', baseUrl: o.baseUrl||'https://api.o.com', defaultModel: o.defaultModel??'gpt-4o', primaryKeyId: o.primaryKeyId||(keys.find(k=>k.isPrimary)?.id??null), keys };
+  return { id: o.id||'p1', providerType: o.providerType||'openai', apiProtocol: o.apiProtocol||'openai_chat_completions', displayName: o.displayName||'O', websiteUrl: o.websiteUrl||'https://o.com', baseUrl: o.baseUrl||'https://api.o.com', defaultModel: o.defaultModel??'gpt-4o', primaryKeyId: o.primaryKeyId||(keys.find(k=>k.isPrimary)?.id??null), keys };
 }
 
 describe('ProviderKeySummary',()=>{

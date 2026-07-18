@@ -13,7 +13,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     description: 'Any API that implements the OpenAI-compatible protocol',
     descriptionZh: '适用于实现 OpenAI 兼容协议的 API 服务',
     category: 'third_party',
-    protocol: 'openai_compatible',
+    protocol: 'openai_chat_completions',
     icon: 'custom',
     iconColor: '#6B7280',
   },
@@ -375,10 +375,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     description: 'SenseNova OpenAI-compatible endpoint. Models: sensenova-6.7-flash-lite, deepseek-v4-flash',
     descriptionZh: '商汤 SenseNova OpenAI 兼容接口。模型：sensenova-6.7-flash-lite、deepseek-v4-flash',
     category: 'cn_official', icon: 'sensenova', iconColor: '#0B7BFF',
-    protocol: 'openai_compatible',
+    protocol: 'openai_chat_completions',
   },
 ];
 
-export const CONFIGURABLE_PROVIDER_PRESETS = PROVIDER_PRESETS.filter(
-  (provider) => provider.protocol === 'openai_compatible' || provider.protocol === undefined,
-);
+export const CONFIGURABLE_PROVIDER_PRESETS = PROVIDER_PRESETS;
