@@ -211,8 +211,7 @@ async fn live_engine_tool_loop() {
         "expected AgentEngine to execute list_dir (or similar) via RealProvider tool loop; events={events:?}"
     );
     assert!(
-        matches!(status, assistant_protocol::v2::RunStatusV2::Completed)
-            || !text.is_empty(),
+        matches!(status, assistant_protocol::v2::RunStatusV2::Completed) || !text.is_empty(),
         "expected completed or final text"
     );
 
@@ -284,11 +283,7 @@ async fn live_subagent_task_completes() {
             &AtomicBool::new(false),
         )
         .await;
-    assert!(
-        !result.is_error,
-        "task spawn failed: {}",
-        result.output
-    );
+    assert!(!result.is_error, "task spawn failed: {}", result.output);
     let task_id = result
         .output
         .get("task_id")
@@ -308,12 +303,16 @@ async fn live_subagent_task_completes() {
     assert_eq!(child_key, "live-child-key");
     assert_eq!(child_provider, provider_id.as_str());
 
-    let created = rt.events.replay_after("live-parent-sub", 0).iter().any(|e| {
-        matches!(
-            e.payload,
-            assistant_protocol::v2::RunEventKind::SubagentCreated { .. }
-        )
-    });
+    let created = rt
+        .events
+        .replay_after("live-parent-sub", 0)
+        .iter()
+        .any(|e| {
+            matches!(
+                e.payload,
+                assistant_protocol::v2::RunEventKind::SubagentCreated { .. }
+            )
+        });
     assert!(created, "expected SubagentCreated on parent run");
 
     // Poll task_output until terminal (child RealProvider HTTP).
@@ -363,12 +362,16 @@ async fn live_subagent_task_completes() {
         "expected child text output, got {text:?}"
     );
 
-    let parent_done = rt.events.replay_after("live-parent-sub", 0).iter().any(|e| {
-        matches!(
-            e.payload,
-            assistant_protocol::v2::RunEventKind::SubagentCompleted { .. }
-        )
-    });
+    let parent_done = rt
+        .events
+        .replay_after("live-parent-sub", 0)
+        .iter()
+        .any(|e| {
+            matches!(
+                e.payload,
+                assistant_protocol::v2::RunEventKind::SubagentCompleted { .. }
+            )
+        });
     assert!(parent_done, "expected SubagentCompleted on parent");
 
     if let Ok(dir) = std::env::var("NATIVES_TEST_SCRATCH") {
@@ -462,11 +465,12 @@ async fn live_engine_cancel_stream() {
 
     let mut saw_text = false;
     for _ in 0..120 {
-        if events
-            .replay_after(&run_id, 0)
-            .iter()
-            .any(|e| matches!(e.payload, assistant_protocol::v2::RunEventKind::TextDelta { .. }))
-        {
+        if events.replay_after(&run_id, 0).iter().any(|e| {
+            matches!(
+                e.payload,
+                assistant_protocol::v2::RunEventKind::TextDelta { .. }
+            )
+        }) {
             saw_text = true;
             break;
         }
@@ -500,6 +504,142 @@ async fn live_engine_cancel_stream() {
                 "saw_text_before_cancel": true,
                 "interrupted": true,
                 "event_count": events.replay_after(&run_id, 0).len(),
+            }))
+            .unwrap_or_default(),
+        );
+    }
+}
+
+/// Offline sanity: fixture path still works without live keys.
+#[tokio::test]
+#[ignore = "live network; set NATIVES_LIVE_E2E=1 and both provider credentials"]
+async fn live_cross_provider_subagent_openai_parent_anthropic_child() {
+    if !live_enabled() {
+        return;
+    }
+    std::env::remove_var("NATIVES_DAEMON_FIXTURE");
+
+    let parent_model =
+        std::env::var("NATIVES_TEST_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".into());
+    let child_model = std::env::var("NATIVES_TEST_ANTHROPIC_MODEL")
+        .expect("NATIVES_TEST_ANTHROPIC_MODEL required for cross-provider live subagent");
+
+    let rt = Arc::new(ProductionRuntime::new());
+    rt.set_permission_profile("full_access").await;
+    let engine = AgentEngine::new(rt.events.clone());
+    let parent_provider = RealProvider {
+        provider_id: "openai_compatible".into(),
+        key_id: Some("live-openai-parent".into()),
+    };
+    let tools = PermissionGatedTools {
+        gateway: {
+            let mut g = capability_gateway::CapabilityGateway::new();
+            if let Ok(cwd) = std::env::current_dir() {
+                g.set_project_root(cwd.to_string_lossy().to_string());
+            }
+            g.register_builtins();
+            Arc::new(g)
+        },
+        permissions: rt.permissions.clone(),
+        events: rt.events.clone(),
+        waiters: rt.permission_waiters.clone(),
+        subagents: rt.subagents.clone(),
+        task_outputs: rt.task_outputs.clone(),
+        engines: rt.engines.clone(),
+        runtime: None,
+        provider_id: "openai_compatible".into(),
+        parent_run_id: "live-cross-parent".into(),
+        conversation_id: "live-cross-conv".into(),
+        model_id: parent_model.clone(),
+        permission_profile: "full_access".into(),
+    };
+    let parent_status = engine
+        .run(
+            EngineRunConfig {
+                run_id: "live-cross-parent".into(),
+                conversation_id: "live-cross-conv".into(),
+                model: parent_model.clone(),
+                system_prompt: Some("Reply briefly. Do not use tools.".into()),
+                messages: Vec::new(),
+                user_content: "Say: parentok".into(),
+                max_steps: 3,
+            },
+            &parent_provider,
+            &tools,
+        )
+        .await
+        .expect("openai-compatible parent run");
+    assert_eq!(
+        parent_status,
+        assistant_protocol::v2::RunStatusV2::Completed
+    );
+
+    let child = tools
+        .execute_tool(
+            "task",
+            serde_json::json!({
+                "prompt": "Reply with exactly one word: childok",
+                "provider_id": "anthropic",
+                "model_id": child_model,
+                "key_id": "live-anthropic-child",
+                "permission_profile": "full_access"
+            }),
+            &AtomicBool::new(false),
+        )
+        .await;
+    assert!(
+        !child.is_error,
+        "cross-provider child spawn failed: {}",
+        child.output
+    );
+    assert_eq!(child.output["provider_id"], "anthropic");
+    assert_eq!(child.output["key_id"], "live-anthropic-child");
+    let task_id = child.output["task_id"]
+        .as_str()
+        .expect("task_id")
+        .to_string();
+
+    let mut final_status = String::new();
+    let mut final_output = String::new();
+    for _ in 0..120 {
+        if let Some(record) = rt.task_output(&task_id).await {
+            if record.status != "running" {
+                final_status = record.status;
+                final_output = record.output.unwrap_or_default();
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    assert_eq!(final_status, "completed", "child output={final_output:?}");
+    assert!(!final_output.trim().is_empty(), "expected child text");
+    let parent_events = rt.events.replay_after("live-cross-parent", 0);
+    assert!(parent_events.iter().any(|e| {
+        matches!(
+            e.payload,
+            assistant_protocol::v2::RunEventKind::SubagentCreated { .. }
+        )
+    }));
+    assert!(parent_events.iter().any(|e| {
+        matches!(
+            e.payload,
+            assistant_protocol::v2::RunEventKind::SubagentCompleted { .. }
+        )
+    }));
+
+    if let Ok(dir) = std::env::var("NATIVES_TEST_SCRATCH") {
+        let _ = std::fs::write(
+            std::path::Path::new(&dir).join("live-cross-provider-subagent.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "ok": true,
+                "parent_provider": "openai_compatible",
+                "parent_model": parent_model,
+                "child_provider": "anthropic",
+                "child_key_id": "live-anthropic-child",
+                "child_status": final_status,
+                "child_output_len": final_output.len(),
+                "subagent_created": true,
+                "subagent_completed": true,
             }))
             .unwrap_or_default(),
         );
@@ -550,7 +690,10 @@ async fn dual_provider_engine_fixture_subagent() {
         )
         .await
         .expect("parent fixture engine run");
-    assert_eq!(parent_status, assistant_protocol::v2::RunStatusV2::Completed);
+    assert_eq!(
+        parent_status,
+        assistant_protocol::v2::RunStatusV2::Completed
+    );
 
     let child = tools
         .execute_tool(
@@ -566,8 +709,15 @@ async fn dual_provider_engine_fixture_subagent() {
             &AtomicBool::new(false),
         )
         .await;
-    assert!(!child.is_error, "fixture child spawn failed: {}", child.output);
-    let task_id = child.output["task_id"].as_str().expect("task_id").to_string();
+    assert!(
+        !child.is_error,
+        "fixture child spawn failed: {}",
+        child.output
+    );
+    let task_id = child.output["task_id"]
+        .as_str()
+        .expect("task_id")
+        .to_string();
     assert_eq!(child.output["provider_id"], "anthropic");
     assert_eq!(child.output["key_id"], "fixture-child-key");
     assert_eq!(child.output["model_id"], "fixture-child-model");
@@ -583,9 +733,16 @@ async fn dual_provider_engine_fixture_subagent() {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     assert_eq!(status, "completed", "fixture child should complete");
-    assert!(rt.events.replay_after("fixture-parent-run", 0).iter().any(|e| {
-        matches!(e.payload, assistant_protocol::v2::RunEventKind::SubagentCreated { .. })
-    }));
+    assert!(rt
+        .events
+        .replay_after("fixture-parent-run", 0)
+        .iter()
+        .any(|e| {
+            matches!(
+                e.payload,
+                assistant_protocol::v2::RunEventKind::SubagentCreated { .. }
+            )
+        }));
 }
 
 #[tokio::test]

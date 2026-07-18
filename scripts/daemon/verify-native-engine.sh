@@ -159,8 +159,29 @@ provider_status openai_compatible NATIVES_TEST_OPENAI_KEY NATIVES_TEST_OPENAI_BA
 provider_status anthropic NATIVES_TEST_ANTHROPIC_KEY NATIVES_TEST_ANTHROPIC_BASE
 
 if [[ "$LIVE" -eq 1 ]]; then
-  write_json cross-provider-subagent-live.json "{\"status\":\"not_run\",\"reason\":\"cross_provider_live_subagent_test_not_implemented\",\"parent\":\"openai_compatible\",\"child\":\"anthropic\"}"
-  overall=1
+  openai_key_present=false
+  anthropic_key_present=false
+  [[ -n "${NATIVES_TEST_OPENAI_KEY:-}" ]] && openai_key_present=true
+  [[ -n "${NATIVES_TEST_ANTHROPIC_KEY:-}${ANTHROPIC_API_KEY:-}${ANTHROPIC_AUTH_TOKEN:-}" ]] && anthropic_key_present=true
+  if [[ "$openai_key_present" == true && "$anthropic_key_present" == true && -n "${NATIVES_TEST_MODEL:-}" && -n "${NATIVES_TEST_ANTHROPIC_MODEL:-}" ]]; then
+    log="$SCRATCH/cross-provider-subagent-live.log"
+    set +e
+    NATIVES_LIVE_E2E=1 NATIVES_TEST_SCRATCH="$SCRATCH" \
+      cargo test -p natives-agent-daemon --test live_engine_e2e \
+      live_cross_provider_subagent_openai_parent_anthropic_child -- --nocapture --ignored \
+      2>&1 | sanitize > "$log"
+    status=${PIPESTATUS[0]}
+    set -e
+    if [[ "$status" -eq 0 ]]; then
+      write_json cross-provider-subagent-live.json "{\"status\":\"pass\",\"parent\":\"openai_compatible\",\"child\":\"anthropic\",\"log\":\"cross-provider-subagent-live.log\"}"
+    else
+      write_json cross-provider-subagent-live.json "{\"status\":\"fail\",\"parent\":\"openai_compatible\",\"child\":\"anthropic\",\"log\":\"cross-provider-subagent-live.log\"}"
+      overall=1
+    fi
+  else
+    write_json cross-provider-subagent-live.json "{\"status\":\"not_run\",\"reason\":\"missing_openai_or_anthropic_credential_or_model\",\"parent\":\"openai_compatible\",\"child\":\"anthropic\",\"openai_key_present\":$openai_key_present,\"anthropic_key_present\":$anthropic_key_present}"
+    overall=1
+  fi
 fi
 
 git_rev="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
