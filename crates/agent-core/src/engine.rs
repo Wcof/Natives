@@ -97,7 +97,11 @@ pub enum EngineProviderEvent {
         reasoning_tokens: Option<u64>,
     },
     Completed,
-    Error(String),
+    Error {
+        message: String,
+        code: String,
+        retryable: bool,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -237,35 +241,207 @@ impl AgentEngine {
                 return Err(EngineError::MaxSteps);
             }
 
-            let provider_events = match self
-                .open_provider_stream_with_retry(
+            const MAX_PROVIDER_ATTEMPTS: u32 = 3;
+            let mut attempt = 1u32;
+            let (text_acc, tool_acc) = 'attempts: loop {
+                self.events.append(
                     run_id,
-                    provider,
-                    &config.model,
-                    messages.clone(),
-                    &tool_schemas,
-                    config.system_prompt.as_deref(),
-                )
-                .await
-            {
-                Ok(stream) => stream,
-                Err(EngineError::Cancelled) => {
-                    self.events.append(
-                        run_id,
-                        RunEventKind::Interrupted {
-                            reason: "cancelled".into(),
-                        },
-                    );
-                    return Ok(RunStatusV2::Interrupted);
+                    RunEventKind::GenerationAttemptStarted {
+                        attempt,
+                        max_attempts: MAX_PROVIDER_ATTEMPTS,
+                    },
+                );
+
+                let provider_events = match provider
+                    .stream(
+                        &config.model,
+                        messages.clone(),
+                        &tool_schemas,
+                        config.system_prompt.as_deref(),
+                        self.cancel.clone(),
+                    )
+                    .await
+                {
+                    Ok(stream) => stream,
+                    Err(EngineError::Cancelled) => {
+                        self.events.append(
+                            run_id,
+                            RunEventKind::Interrupted {
+                                reason: "cancelled".into(),
+                            },
+                        );
+                        return Ok(RunStatusV2::Interrupted);
+                    }
+                    Err(_e) if self.cancel.load(Ordering::SeqCst) => {
+                        self.events.append(
+                            run_id,
+                            RunEventKind::Interrupted {
+                                reason: "cancelled".into(),
+                            },
+                        );
+                        return Ok(RunStatusV2::Interrupted);
+                    }
+                    Err(e) if e.retryable() && attempt < MAX_PROVIDER_ATTEMPTS => {
+                        self.events.append(
+                            run_id,
+                            RunEventKind::GenerationAttemptFailed {
+                                attempt,
+                                code: e.code().into(),
+                                retryable: true,
+                                retrying: true,
+                            },
+                        );
+                        sleep_provider_backoff(attempt).await;
+                        attempt += 1;
+                        continue 'attempts;
+                    }
+                    Err(e) => {
+                        self.events.append(
+                            run_id,
+                            RunEventKind::GenerationAttemptFailed {
+                                attempt,
+                                code: e.code().into(),
+                                retryable: e.retryable(),
+                                retrying: false,
+                            },
+                        );
+                        self.events.append(
+                            run_id,
+                            RunEventKind::Failed {
+                                error: e.to_string(),
+                                code: e.code().into(),
+                            },
+                        );
+                        return Err(e);
+                    }
+                };
+
+                let mut text_acc = String::new();
+                let mut tool_acc: BTreeMap<usize, (String, String, String)> = BTreeMap::new();
+                let mut saw_generation_delta = false;
+                tokio::pin!(provider_events);
+
+                while let Some(event) = provider_events.next().await {
+                    if self.cancel.load(Ordering::SeqCst) {
+                        self.events.append(
+                            run_id,
+                            RunEventKind::Interrupted {
+                                reason: "cancelled".into(),
+                            },
+                        );
+                        return Ok(RunStatusV2::Interrupted);
+                    }
+                    match event {
+                        EngineProviderEvent::TextDelta(t) => {
+                            saw_generation_delta = true;
+                            text_acc.push_str(&t);
+                            self.events
+                                .append(run_id, RunEventKind::TextDelta { text: t });
+                        }
+                        EngineProviderEvent::ReasoningDelta(t) => {
+                            saw_generation_delta = true;
+                            self.events
+                                .append(run_id, RunEventKind::ReasoningDelta { text: t });
+                        }
+                        EngineProviderEvent::ToolCallDelta {
+                            index,
+                            id,
+                            name,
+                            arguments_delta,
+                        } => {
+                            saw_generation_delta = true;
+                            let entry = tool_acc.entry(index).or_insert_with(|| {
+                                (String::new(), String::new(), String::new())
+                            });
+                            if let Some(id) = id.clone() {
+                                if !id.is_empty() {
+                                    entry.0 = id;
+                                }
+                            }
+                            if let Some(name) = name.clone() {
+                                if !name.is_empty() {
+                                    entry.1 = name;
+                                }
+                            }
+                            entry.2.push_str(&arguments_delta);
+                            self.events.append(
+                                run_id,
+                                RunEventKind::ToolCallDelta {
+                                    index,
+                                    id,
+                                    name,
+                                    arguments_delta,
+                                },
+                            );
+                        }
+                        EngineProviderEvent::Usage {
+                            input_tokens,
+                            output_tokens,
+                            reasoning_tokens,
+                        } => {
+                            self.events.append(
+                                run_id,
+                                RunEventKind::UsageUpdated {
+                                    input_tokens,
+                                    output_tokens,
+                                    reasoning_tokens,
+                                },
+                            );
+                        }
+                        EngineProviderEvent::Error {
+                            message,
+                            code,
+                            retryable,
+                        } => {
+                            if !saw_generation_delta && retryable && attempt < MAX_PROVIDER_ATTEMPTS {
+                                self.events.append(
+                                    run_id,
+                                    RunEventKind::GenerationAttemptFailed {
+                                        attempt,
+                                        code,
+                                        retryable,
+                                        retrying: true,
+                                    },
+                            );
+                            sleep_provider_backoff(attempt).await;
+                            attempt += 1;
+                            continue 'attempts;
+                        }
+                            if saw_generation_delta {
+                                self.events.append(
+                                    run_id,
+                                    RunEventKind::GenerationAttemptDiscarded {
+                                        attempt,
+                                        reason: code.clone(),
+                                    },
+                                );
+                            }
+                            self.events.append(
+                                run_id,
+                                RunEventKind::GenerationAttemptFailed {
+                                    attempt,
+                                    code: code.clone(),
+                                    retryable,
+                                    retrying: false,
+                                },
+                            );
+                            self.events.append(
+                                run_id,
+                                RunEventKind::Failed {
+                                    error: message.clone(),
+                                    code: code.clone(),
+                                },
+                            );
+                            return Err(EngineError::Provider {
+                                message,
+                                code,
+                                retryable,
+                            });
+                        }
+                        EngineProviderEvent::Completed => {}
+                    }
                 }
-                Err(e) => return Err(e),
-            };
 
-            let mut text_acc = String::new();
-            let mut tool_acc: BTreeMap<usize, (String, String, String)> = BTreeMap::new();
-            tokio::pin!(provider_events);
-
-            while let Some(event) = provider_events.next().await {
                 if self.cancel.load(Ordering::SeqCst) {
                     self.events.append(
                         run_id,
@@ -275,83 +451,47 @@ impl AgentEngine {
                     );
                     return Ok(RunStatusV2::Interrupted);
                 }
-                match event {
-                    EngineProviderEvent::TextDelta(t) => {
-                        text_acc.push_str(&t);
-                        self.events
-                            .append(run_id, RunEventKind::TextDelta { text: t });
-                    }
-                    EngineProviderEvent::ReasoningDelta(t) => {
-                        self.events
-                            .append(run_id, RunEventKind::ReasoningDelta { text: t });
-                    }
-                    EngineProviderEvent::ToolCallDelta {
-                        index,
-                        id,
-                        name,
-                        arguments_delta,
-                    } => {
-                        let entry = tool_acc.entry(index).or_insert_with(|| {
-                            (String::new(), String::new(), String::new())
-                        });
-                        if let Some(id) = id.clone() {
-                            if !id.is_empty() {
-                                entry.0 = id;
-                            }
-                        }
-                        if let Some(name) = name.clone() {
-                            if !name.is_empty() {
-                                entry.1 = name;
-                            }
-                        }
-                        entry.2.push_str(&arguments_delta);
-                        self.events.append(
-                            run_id,
-                            RunEventKind::ToolCallDelta {
-                                index,
-                                id,
-                                name,
-                                arguments_delta,
-                            },
-                        );
-                    }
-                    EngineProviderEvent::Usage {
-                        input_tokens,
-                        output_tokens,
-                        reasoning_tokens,
-                    } => {
-                        self.events.append(
-                            run_id,
-                            RunEventKind::UsageUpdated {
-                                input_tokens,
-                                output_tokens,
-                                reasoning_tokens,
-                            },
-                        );
-                    }
-                    EngineProviderEvent::Error(err) => {
-                        self.events.append(
-                            run_id,
-                            RunEventKind::Failed {
-                                error: err.clone(),
-                                code: "provider_error".into(),
-                            },
-                        );
-                        return Err(EngineError::Message(err));
-                    }
-                    EngineProviderEvent::Completed => {}
-                }
-            }
 
-            if self.cancel.load(Ordering::SeqCst) {
-                self.events.append(
-                    run_id,
-                    RunEventKind::Interrupted {
-                        reason: "cancelled".into(),
-                    },
-                );
-                return Ok(RunStatusV2::Interrupted);
-            }
+                if !saw_generation_delta && attempt < 2 {
+                    self.events.append(
+                        run_id,
+                        RunEventKind::GenerationAttemptFailed {
+                            attempt,
+                            code: "EMPTY_RESPONSE".into(),
+                            retryable: true,
+                            retrying: true,
+                        },
+                    );
+                    sleep_provider_backoff(attempt).await;
+                    attempt += 1;
+                    continue 'attempts;
+                }
+                if !saw_generation_delta {
+                    self.events.append(
+                        run_id,
+                        RunEventKind::GenerationAttemptFailed {
+                            attempt,
+                            code: "EMPTY_RESPONSE".into(),
+                            retryable: false,
+                            retrying: false,
+                        },
+                    );
+                    self.events.append(
+                        run_id,
+                        RunEventKind::Failed {
+                            error: "provider returned empty response".into(),
+                            code: "EMPTY_RESPONSE".into(),
+                        },
+                    );
+                    return Err(EngineError::Provider {
+                        message: "provider returned empty response".into(),
+                        code: "EMPTY_RESPONSE".into(),
+                        retryable: false,
+                    });
+                }
+
+                break (text_acc, tool_acc);
+            };
 
             if !text_acc.is_empty() {
                 doom.observe_text(&text_acc);
@@ -587,78 +727,15 @@ impl AgentEngine {
         values_to_engine_messages(&result.messages)
     }
 
-    async fn open_provider_stream_with_retry(
-        &self,
-        run_id: &str,
-        provider: &dyn EngineProvider,
-        model: &str,
-        messages: Vec<EngineMessage>,
-        tool_schemas: &[ToolSchema],
-        system_prompt: Option<&str>,
-    ) -> Result<EngineProviderEventStream, EngineError> {
-        const MAX_PROVIDER_ATTEMPTS: u32 = 3;
+}
 
-        for attempt in 1..=MAX_PROVIDER_ATTEMPTS {
-            self.events.append(
-                run_id,
-                RunEventKind::GenerationAttemptStarted {
-                    attempt,
-                    max_attempts: MAX_PROVIDER_ATTEMPTS,
-                },
-            );
-            match provider
-                .stream(
-                    model,
-                    messages.clone(),
-                    tool_schemas,
-                    system_prompt,
-                    self.cancel.clone(),
-                )
-                .await
-            {
-                Ok(stream) => return Ok(stream),
-                Err(_e) if self.cancel.load(Ordering::SeqCst) => return Err(EngineError::Cancelled),
-                Err(e) if e.retryable() && attempt < MAX_PROVIDER_ATTEMPTS => {
-                    self.events.append(
-                        run_id,
-                        RunEventKind::GenerationAttemptFailed {
-                            attempt,
-                            code: e.code().into(),
-                            retryable: true,
-                            retrying: true,
-                        },
-                    );
-                    let backoff_ms = match attempt {
-                        1 => 500,
-                        2 => 1_000,
-                        _ => 2_000,
-                    };
-                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
-                }
-                Err(e) => {
-                    self.events.append(
-                        run_id,
-                        RunEventKind::GenerationAttemptFailed {
-                            attempt,
-                            code: e.code().into(),
-                            retryable: e.retryable(),
-                            retrying: false,
-                        },
-                    );
-                    self.events.append(
-                        run_id,
-                        RunEventKind::Failed {
-                            error: e.to_string(),
-                            code: e.code().into(),
-                        },
-                    );
-                    return Err(e);
-                }
-            }
-        }
-        unreachable!("provider attempts loop must return")
-    }
-
+async fn sleep_provider_backoff(attempt: u32) {
+    let backoff_ms = match attempt {
+        1 => 500,
+        2 => 1_000,
+        _ => 2_000,
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
 }
 
 fn engine_messages_to_values(messages: &[EngineMessage]) -> Vec<Value> {
@@ -1147,6 +1224,152 @@ mod tests {
             )
         }));
         assert!(events
+            .iter()
+            .any(|e| matches!(e.payload, RunEventKind::Completed { .. })));
+    }
+
+    #[tokio::test]
+    async fn retries_empty_provider_response_once() {
+        let engine = AgentEngine::new(EventSequencer::new());
+        let run_id = format!("r-empty-retry-{}", uuid::Uuid::new_v4());
+        let provider = FakeProvider {
+            rounds: Mutex::new(vec![
+                vec![EngineProviderEvent::Completed],
+                vec![
+                    EngineProviderEvent::TextDelta("after empty".into()),
+                    EngineProviderEvent::Completed,
+                ],
+            ]),
+        };
+
+        let status = engine
+            .run(
+                EngineRunConfig {
+                    run_id: run_id.clone(),
+                    conversation_id: "c1".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    user_content: "hi".into(),
+                    max_steps: 5,
+                },
+                &provider,
+                &FakeTools,
+            )
+            .await
+            .unwrap();
+        assert_eq!(status, RunStatusV2::Completed);
+        let events = engine.events.replay_after(&run_id, 0);
+        assert!(events.iter().any(|e| {
+            matches!(
+                &e.payload,
+                RunEventKind::GenerationAttemptFailed {
+                    attempt: 1,
+                    code,
+                    retrying: true,
+                    ..
+                } if code == "EMPTY_RESPONSE"
+            )
+        }));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e.payload, RunEventKind::GenerationAttemptStarted { .. }))
+                .count(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn retries_stream_error_before_first_delta() {
+        let engine = AgentEngine::new(EventSequencer::new());
+        let run_id = format!("r-pre-delta-error-{}", uuid::Uuid::new_v4());
+        let provider = FakeProvider {
+            rounds: Mutex::new(vec![
+                vec![EngineProviderEvent::Error {
+                    message: "upstream unavailable".into(),
+                    code: "http_503".into(),
+                    retryable: true,
+                }],
+                vec![
+                    EngineProviderEvent::TextDelta("ok".into()),
+                    EngineProviderEvent::Completed,
+                ],
+            ]),
+        };
+
+        let status = engine
+            .run(
+                EngineRunConfig {
+                    run_id: run_id.clone(),
+                    conversation_id: "c1".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    user_content: "hi".into(),
+                    max_steps: 5,
+                },
+                &provider,
+                &FakeTools,
+            )
+            .await
+            .unwrap();
+        assert_eq!(status, RunStatusV2::Completed);
+        let events = engine.events.replay_after(&run_id, 0);
+        assert!(events.iter().any(|e| {
+            matches!(
+                &e.payload,
+                RunEventKind::GenerationAttemptFailed {
+                    attempt: 1,
+                    code,
+                    retryable: true,
+                    retrying: true,
+                } if code == "http_503"
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn discards_partial_generation_error_without_retrying() {
+        let engine = AgentEngine::new(EventSequencer::new());
+        let run_id = format!("r-partial-error-{}", uuid::Uuid::new_v4());
+        let provider = FakeProvider {
+            rounds: Mutex::new(vec![vec![
+                EngineProviderEvent::TextDelta("partial".into()),
+                EngineProviderEvent::Error {
+                    message: "stream dropped".into(),
+                    code: "http_503".into(),
+                    retryable: true,
+                },
+            ]]),
+        };
+
+        let err = engine
+            .run(
+                EngineRunConfig {
+                    run_id: run_id.clone(),
+                    conversation_id: "c1".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    user_content: "hi".into(),
+                    max_steps: 5,
+                },
+                &provider,
+                &FakeTools,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::Provider { .. }));
+        let events = engine.events.replay_after(&run_id, 0);
+        assert!(events
+            .iter()
+            .any(|e| matches!(e.payload, RunEventKind::GenerationAttemptDiscarded { .. })));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e.payload, RunEventKind::GenerationAttemptStarted { .. }))
+                .count(),
+            1
+        );
+        assert!(!events
             .iter()
             .any(|e| matches!(e.payload, RunEventKind::Completed { .. })));
     }

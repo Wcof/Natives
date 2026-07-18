@@ -668,7 +668,11 @@ impl EngineProvider for RealProvider {
                                     reasoning_tokens: u.reasoning_tokens,
                                 },
                                 ProviderEvent::Completed => EngineProviderEvent::Completed,
-                                ProviderEvent::Error(e) => EngineProviderEvent::Error(e.message),
+                                ProviderEvent::Error(e) => EngineProviderEvent::Error {
+                                    message: e.message,
+                                    code: e.code,
+                                    retryable: e.retryable,
+                                },
                             };
                             (event, (stream, cancel))
                         });
