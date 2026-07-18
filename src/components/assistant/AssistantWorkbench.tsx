@@ -253,19 +253,11 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               ),
             );
           }
-        } catch {
+        } catch (err) {
           if (!cancelled) {
-            setProviders([
-              {
-                id: 'openai',
-                name: 'OpenAI',
-                presetName: 'openai',
-                baseUrl: '',
-                keys: [{ id: 'active', label: 'default', maskedKey: '••••' }],
-                models: [{ id: 'gpt-4o', displayName: 'GPT-4o' }],
-              },
-            ]);
-            setProviderReadiness('ready');
+            setProviders([]);
+            setProviderReadiness('no_provider');
+            toast(classifyError(err).userMessage, 'error');
           }
         }
       } catch (err) {
@@ -1125,10 +1117,6 @@ export default function AssistantWorkbench({
     if (preferFixture) {
       const adapter = new FixtureAssistantAdapter(goldenTextStream);
       return adapter;
-    }
-    // Browser without Tauri → fixture so UI is demoable
-    if (typeof window !== 'undefined' && !window.nativesAPI?.assistantV2) {
-      return new FixtureAssistantAdapter(goldenTextStream);
     }
     return createDefaultGateway(false);
   }, [preferFixture]);

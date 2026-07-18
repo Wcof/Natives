@@ -6,11 +6,8 @@ import { DaemonAssistantAdapter } from './daemon-adapter';
 import { FixtureAssistantAdapter } from './fixture-adapter';
 import type { AssistantGateway } from './gateway';
 
-/** Prefer real daemon when assistantV2 is present; otherwise Fixture for browser/dev. */
+/** Prefer real daemon. Fixture is allowed only when explicitly requested. */
 export function createDefaultGateway(preferFixture = false): AssistantGateway {
   if (preferFixture) return new FixtureAssistantAdapter({ id: 'default' });
-  if (typeof window !== 'undefined' && window.nativesAPI?.assistantV2?.request) {
-    return new DaemonAssistantAdapter();
-  }
-  return new FixtureAssistantAdapter({ id: 'browser-fallback' });
+  return new DaemonAssistantAdapter();
 }

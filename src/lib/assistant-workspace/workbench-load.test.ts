@@ -39,6 +39,11 @@ test('createDefaultGateway(preferFixture) returns FixtureAssistantAdapter surfac
   assert.equal(typeof g.request, 'function');
 });
 
+test('createDefaultGateway(false) fails closed without assistantV2', async () => {
+  const g = createDefaultGateway(false);
+  await assert.rejects(() => g.connect(), /assistantV2 not available/);
+});
+
 test('workbench source is composition-only (no v2call / streamChat / invent background status)', () => {
   assert.match(workbenchSrc, /AssistantStoreProvider/);
   assert.match(workbenchSrc, /data-gateway="1"/);
@@ -46,6 +51,8 @@ test('workbench source is composition-only (no v2call / streamChat / invent back
   assert.match(workbenchSrc, /CommandPalette/);
   assert.equal(workbenchSrc.includes('function v2call'), false);
   assert.equal(/\bstreamChat\s*[:(]/.test(workbenchSrc), false);
+  assert.equal(workbenchSrc.includes('browser-fallback'), false);
+  assert.equal(workbenchSrc.includes("id: 'openai'"), false);
   assert.equal(workbenchSrc.includes("status: 'background_watching'"), false);
   assert.equal(workbenchSrc.includes('createAssistantStreamState'), false);
   assert.equal(workbenchSrc.includes('reduceAssistantStreamEvent'), false);
