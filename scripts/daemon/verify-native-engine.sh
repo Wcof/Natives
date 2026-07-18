@@ -11,6 +11,7 @@ cd "$ROOT"
 
 SCRATCH=""
 LIVE=0
+HEADED_EVIDENCE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --scratch)
@@ -21,8 +22,12 @@ while [[ $# -gt 0 ]]; do
       LIVE=1
       shift
       ;;
+    --headed-evidence)
+      HEADED_EVIDENCE="${2:?--headed-evidence requires a directory}"
+      shift 2
+      ;;
     *)
-      echo "usage: $0 [--scratch DIR] [--live]" >&2
+      echo "usage: $0 [--scratch DIR] [--live] [--headed-evidence DIR]" >&2
       exit 2
       ;;
   esac
@@ -184,14 +189,31 @@ if [[ "$LIVE" -eq 1 ]]; then
   fi
 fi
 
+if [[ -n "$HEADED_EVIDENCE" ]]; then
+  log="$SCRATCH/gui-headed-evidence.log"
+  set +e
+  node scripts/daemon/check-gui-headed-evidence.mjs "$HEADED_EVIDENCE" 2>&1 | sanitize > "$log"
+  status=${PIPESTATUS[0]}
+  set -e
+  if [[ "$status" -eq 0 ]]; then
+    write_json gui-headed-evidence.json "{\"status\":\"pass\",\"evidence_dir\":\"$HEADED_EVIDENCE\",\"log\":\"gui-headed-evidence.log\"}"
+  else
+    write_json gui-headed-evidence.json "{\"status\":\"fail\",\"evidence_dir\":\"$HEADED_EVIDENCE\",\"log\":\"gui-headed-evidence.log\"}"
+    overall=1
+  fi
+else
+  write_json gui-headed-evidence.json "{\"status\":\"not_run\",\"reason\":\"headed_evidence_absent\"}"
+fi
+
 git_rev="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-write_json manifest.json "{\"git_rev\":\"$git_rev\",\"live_requested\":$LIVE,\"scratch\":\"$SCRATCH\"}"
+write_json manifest.json "{\"git_rev\":\"$git_rev\",\"live_requested\":$LIVE,\"headed_evidence\":\"$HEADED_EVIDENCE\",\"scratch\":\"$SCRATCH\"}"
 {
   echo "# Native Engine Verification"
   echo
   echo "- git: $git_rev"
   echo "- scratch: $SCRATCH"
   echo "- live requested: $LIVE"
+  echo "- headed evidence: ${HEADED_EVIDENCE:-not_run}"
   echo "- overall: $([[ "$overall" -eq 0 ]] && echo pass || echo fail)"
   echo
   echo "Evidence files are sanitized; provider credentials and OAuth tokens are not recorded."
