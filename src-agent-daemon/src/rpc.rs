@@ -414,6 +414,43 @@ async fn handle_rpc(
             )
             .await;
         }
+        names::CONVERSATION_CREATE
+        | names::CONVERSATION_LIST
+        | names::CONVERSATION_GET
+        | names::CONVERSATION_FORK
+        | names::CONVERSATION_GET_MESSAGES
+        | names::CONVERSATION_APPEND_MESSAGE
+        | names::CONVERSATION_RENAME
+        | names::CONVERSATION_UPDATE_MODEL
+        | names::CONVERSATION_UPDATE_PERMISSION
+        | names::CONVERSATION_ARCHIVE
+        | names::CONVERSATION_DELETE => {
+            match crate::conversation_store::request(&request.method, request.params.clone()).await
+            {
+                Ok(value) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        value,
+                    )
+                    .await
+                }
+                Err(e) => {
+                    send_error(
+                        writer,
+                        &DaemonError::new(
+                            error_codes::INVALID_INPUT,
+                            ErrorCategory::Validation,
+                            false,
+                            e,
+                        ),
+                    )
+                    .await
+                }
+            }
+        }
         names::RUN_CREATE => {
             match serde_json::from_value::<CreateRunRequest>(request.params.clone()) {
                 Ok(req) => match run_manager().create_run(req) {

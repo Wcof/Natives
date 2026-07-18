@@ -144,7 +144,8 @@ async fn dispatch_rpc(data_store: &Arc<DataStore>, method: &str, params: &Value)
 fn daemon_owned_method(method: &str) -> bool {
     // ponytail: run.start still writes local conversation/message/attachment rows until daemon
     // conversation RPC owns them; forwarding it here loses GUI-visible message attachments.
-    (method.starts_with("run.") && method != "run.start")
+    (method.starts_with("conversation.") && daemon_authority::authority_mode_label() == "uds")
+        || (method.starts_with("run.") && method != "run.start")
         || method.starts_with("daemon.")
         || method.starts_with("provider.")
         || method.starts_with("tool.")

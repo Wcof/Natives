@@ -17,6 +17,7 @@ pub mod extension_store;
 pub mod skill_store;
 pub mod memory_store;
 pub mod artifact_store;
+pub mod conversation_store;
 
 pub use run_manager::*;
 pub use production::*;

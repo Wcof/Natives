@@ -85,6 +85,17 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "provider.list",
     "provider.discoverModels",
     "provider.test",
+    "conversation.create",
+    "conversation.list",
+    "conversation.get",
+    "conversation.fork",
+    "conversation.getMessages",
+    "conversation.appendMessage",
+    "conversation.rename",
+    "conversation.update_model",
+    "conversation.update_permission",
+    "conversation.archive",
+    "conversation.delete",
     "run.create",
     "run.start",
     "run.cancel",
@@ -165,7 +176,15 @@ pub mod names {
     pub const CONVERSATION_CREATE: &str = "conversation.create";
     pub const CONVERSATION_LIST: &str = "conversation.list";
     pub const CONVERSATION_GET: &str = "conversation.get";
+    pub const CONVERSATION_FORK: &str = "conversation.fork";
     pub const CONVERSATION_UPDATE: &str = "conversation.update";
+    pub const CONVERSATION_GET_MESSAGES: &str = "conversation.getMessages";
+    pub const CONVERSATION_APPEND_MESSAGE: &str = "conversation.appendMessage";
+    pub const CONVERSATION_RENAME: &str = "conversation.rename";
+    pub const CONVERSATION_UPDATE_MODEL: &str = "conversation.update_model";
+    pub const CONVERSATION_UPDATE_PERMISSION: &str = "conversation.update_permission";
+    pub const CONVERSATION_ARCHIVE: &str = "conversation.archive";
+    pub const CONVERSATION_DELETE: &str = "conversation.delete";
     pub const RUN_CREATE: &str = "run.create";
     pub const RUN_START: &str = "run.start";
     pub const RUN_CANCEL: &str = "run.cancel";

@@ -114,6 +114,9 @@ impl ExecutionAuthority for EmbeddedAuthority {
         match method {
             "daemon.ping" => Ok(serde_json::json!({"pong": true})),
             "daemon.getCapabilities" => Ok(serde_json::to_value(RunManager::capabilities()).unwrap_or_default()),
+            m if m.starts_with("conversation.") => crate::conversation_store::request(m, params)
+                .await
+                .map_err(AuthorityError::Message),
             "run.create" => {
                 let req: CreateRunRequest = serde_json::from_value(params)
                     .map_err(|e| AuthorityError::Message(e.to_string()))?;
