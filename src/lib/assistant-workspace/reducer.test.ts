@@ -275,6 +275,37 @@ test('disconnect soft keeps messages and drafts', () => {
   assert.equal(state.composerByConversation.c1!.text, 'draft text');
 });
 
+test('generation attempt discard rolls back partial live text', () => {
+  let state = withRun(createInitialWorkspaceState());
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 1, 'generation_attempt_started', { attempt: 1 }),
+  });
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 2, 'text_delta', { text: 'bad partial' }),
+  });
+  assert.equal(state.liveByRun.r1!.blocks[0]!.text, 'bad partial');
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 3, 'generation_attempt_discarded', { attempt: 1, reason: 'http_503' }),
+  });
+  assert.equal(state.liveByRun.r1!.blocks.length, 0);
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 4, 'generation_attempt_started', { attempt: 2 }),
+  });
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 5, 'text_delta', { text: 'good' }),
+  });
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 6, 'generation_attempt_committed', { attempt: 2 }),
+  });
+  assert.equal(state.liveByRun.r1!.blocks[0]!.text, 'good');
+});
+
 test('draft isolation per conversation', () => {
   let state = createInitialWorkspaceState();
   state = workspaceReducer(state, {

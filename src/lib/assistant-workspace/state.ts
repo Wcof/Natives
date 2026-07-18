@@ -43,6 +43,7 @@ export interface LiveBubble {
   blocks: ContentBlock[];
   reasoningStartedAt: string | null;
   reasoningFinishedAt: string | null;
+  attemptSnapshots?: Record<number, ContentBlock[]>;
 }
 
 export interface AssistantWorkspaceState {

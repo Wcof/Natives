@@ -74,6 +74,7 @@ function ensureLive(state: AssistantWorkspaceState, run: Run): LiveBubble {
     blocks: [],
     reasoningStartedAt: null,
     reasoningFinishedAt: null,
+    attemptSnapshots: {},
   };
 }
 
@@ -134,6 +135,34 @@ function applyEventToLive(
   let removeInteractionId: string | undefined;
 
   switch (event.type) {
+    case 'generation_attempt_started': {
+      const attempt = Number(p.attempt ?? 0);
+      if (attempt > 0) {
+        live.attemptSnapshots = {
+          ...(live.attemptSnapshots ?? {}),
+          [attempt]: live.blocks.map((b) => ({ ...b })),
+        };
+      }
+      break;
+    }
+    case 'generation_attempt_discarded': {
+      const attempt = Number(p.attempt ?? 0);
+      const snapshot = attempt > 0 ? live.attemptSnapshots?.[attempt] : undefined;
+      if (snapshot) {
+        live.blocks = snapshot.map((b) => ({ ...b }));
+        live.attemptSnapshots = { ...(live.attemptSnapshots ?? {}) };
+        delete live.attemptSnapshots[attempt];
+      }
+      break;
+    }
+    case 'generation_attempt_committed': {
+      const attempt = Number(p.attempt ?? 0);
+      if (attempt > 0 && live.attemptSnapshots?.[attempt]) {
+        live.attemptSnapshots = { ...live.attemptSnapshots };
+        delete live.attemptSnapshots[attempt];
+      }
+      break;
+    }
     case 'text_delta':
     case 'assistant_delta': {
       const text = String(p.text ?? p.delta ?? '');
