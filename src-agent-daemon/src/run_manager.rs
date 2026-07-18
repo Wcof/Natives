@@ -1204,17 +1204,17 @@ mod tests {
                     _messages: Vec<agent_core::EngineMessage>,
                     _tools: &[agent_core::ToolSchema],
                     _system_prompt: Option<&str>,
-                ) -> Result<Vec<agent_core::EngineProviderEvent>, agent_core::EngineError>
+                ) -> Result<agent_core::EngineProviderEventStream, agent_core::EngineError>
                 {
                     // Stay in stream long enough for cancel to register.
                     for _ in 0..100 {
                         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                     }
                     let _ = &self.seen;
-                    Ok(vec![
+                    Ok(Box::pin(futures_util::stream::iter(vec![
                         agent_core::EngineProviderEvent::TextDelta("late".into()),
                         agent_core::EngineProviderEvent::Completed,
-                    ])
+                    ])))
                 }
             }
             struct CancelAwareTools {
@@ -1263,15 +1263,15 @@ mod tests {
                     messages: Vec<agent_core::EngineMessage>,
                     _tools: &[agent_core::ToolSchema],
                     _system_prompt: Option<&str>,
-                ) -> Result<Vec<agent_core::EngineProviderEvent>, agent_core::EngineError>
+                ) -> Result<agent_core::EngineProviderEventStream, agent_core::EngineError>
                 {
                     if messages.last().map(|m| m.role == "tool").unwrap_or(false) {
-                        return Ok(vec![
+                        return Ok(Box::pin(futures_util::stream::iter(vec![
                             agent_core::EngineProviderEvent::TextDelta("done".into()),
                             agent_core::EngineProviderEvent::Completed,
-                        ]);
+                        ])));
                     }
-                    Ok(vec![
+                    Ok(Box::pin(futures_util::stream::iter(vec![
                         agent_core::EngineProviderEvent::ToolCallDelta {
                             index: 0,
                             id: Some("c1".into()),
@@ -1279,7 +1279,7 @@ mod tests {
                             arguments_delta: r#"{"path":"x"}"#.into(),
                         },
                         agent_core::EngineProviderEvent::Completed,
-                    ])
+                    ])))
                 }
             }
             let tools = CancelAwareTools {

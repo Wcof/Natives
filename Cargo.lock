@@ -50,6 +50,7 @@ dependencies = [
  "assistant-protocol",
  "async-trait",
  "chrono",
+ "futures-util",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

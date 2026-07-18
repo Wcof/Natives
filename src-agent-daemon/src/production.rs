@@ -5,7 +5,7 @@
 
 use agent_core::{
     AgentEngine, EngineError, EngineMessage, EngineProvider, EngineProviderEvent,
-    EngineRunConfig, EngineToolRuntime, EventSequencer, HookEvent, HookRegistry,
+    EngineProviderEventStream, EngineRunConfig, EngineToolRuntime, EventSequencer, HookEvent, HookRegistry,
     PermissionManager, PermissionProfile, SubAgentConfig, SubAgentManager, SubAgentStatus,
     ToolExecutionResult, ToolSchema, AllowAllHook, CommandHook, HttpHook,
 };
@@ -594,7 +594,7 @@ impl EngineProvider for RealProvider {
         messages: Vec<EngineMessage>,
         tools: &[ToolSchema],
         system_prompt: Option<&str>,
-    ) -> Result<Vec<EngineProviderEvent>, EngineError> {
+    ) -> Result<EngineProviderEventStream, EngineError> {
         let credential =
             resolve_credential_for_run(&self.provider_id, self.key_id.as_deref(), "provider-stream")
                 .map_err(EngineError::Message)?;
@@ -635,42 +635,29 @@ impl EngineProvider for RealProvider {
             .stream(request, credential)
             .await
             .map_err(|e| EngineError::Message(e.message))?;
-        let mut out = Vec::new();
-        tokio::pin!(stream);
-        while let Some(ev) = stream.next().await {
-            match ev {
-                ProviderEvent::TextDelta(t) => out.push(EngineProviderEvent::TextDelta(t)),
-                ProviderEvent::ReasoningDelta(t) => out.push(EngineProviderEvent::ReasoningDelta(t)),
+        let mapped = stream.map(|ev| match ev {
+                ProviderEvent::TextDelta(t) => EngineProviderEvent::TextDelta(t),
+                ProviderEvent::ReasoningDelta(t) => EngineProviderEvent::ReasoningDelta(t),
                 ProviderEvent::ToolCallDelta {
                     index,
                     id,
                     name,
                     arguments_delta,
-                } => out.push(EngineProviderEvent::ToolCallDelta {
+                } => EngineProviderEvent::ToolCallDelta {
                     index,
                     id,
                     name,
                     arguments_delta,
-                }),
-                ProviderEvent::Usage(u) => out.push(EngineProviderEvent::Usage {
+                },
+                ProviderEvent::Usage(u) => EngineProviderEvent::Usage {
                     input_tokens: u.input_tokens,
                     output_tokens: u.output_tokens,
                     reasoning_tokens: u.reasoning_tokens,
-                }),
-                ProviderEvent::Completed => out.push(EngineProviderEvent::Completed),
-                ProviderEvent::Error(e) => {
-                    out.push(EngineProviderEvent::Error(e.message));
-                    break;
-                }
-            }
-        }
-        if !out
-            .iter()
-            .any(|e| matches!(e, EngineProviderEvent::Completed | EngineProviderEvent::Error(_)))
-        {
-            out.push(EngineProviderEvent::Completed);
-        }
-        Ok(out)
+                },
+                ProviderEvent::Completed => EngineProviderEvent::Completed,
+                ProviderEvent::Error(e) => EngineProviderEvent::Error(e.message),
+            });
+        Ok(Box::pin(mapped))
     }
 }
 
@@ -1679,24 +1666,24 @@ impl EngineProvider for FixtureProvider {
         messages: Vec<EngineMessage>,
         _tools: &[ToolSchema],
         _system_prompt: Option<&str>,
-    ) -> Result<Vec<EngineProviderEvent>, EngineError> {
+    ) -> Result<EngineProviderEventStream, EngineError> {
         // If last message is a tool result, complete with text.
         if messages
             .last()
             .map(|m| m.role == "tool")
             .unwrap_or(false)
         {
-            return Ok(vec![
+            return Ok(Box::pin(futures_util::stream::iter(vec![
                 EngineProviderEvent::TextDelta("tool path complete".into()),
                 EngineProviderEvent::Completed,
-            ]);
+            ])));
         }
-        match self.mode {
-            FixtureMode::TextOnly => Ok(vec![
+        let events = match self.mode {
+            FixtureMode::TextOnly => vec![
                 EngineProviderEvent::TextDelta("fixture answer".into()),
                 EngineProviderEvent::Completed,
-            ]),
-            FixtureMode::ToolThenText => Ok(vec![
+            ],
+            FixtureMode::ToolThenText => vec![
                 EngineProviderEvent::ToolCallDelta {
                     index: 0,
                     id: Some("call_1".into()),
@@ -1704,9 +1691,9 @@ impl EngineProvider for FixtureProvider {
                     arguments_delta: r#"{"path":"Cargo.toml"}"#.into(),
                 },
                 EngineProviderEvent::Completed,
-            ]),
+            ],
             // Side-effecting tool so PermissionManager ConfirmEach emits permission_requested.
-            FixtureMode::RequestPermissionPath => Ok(vec![
+            FixtureMode::RequestPermissionPath => vec![
                 EngineProviderEvent::ToolCallDelta {
                     index: 0,
                     id: Some("call_perm".into()),
@@ -1714,7 +1701,8 @@ impl EngineProvider for FixtureProvider {
                     arguments_delta: r#"{"path":"/tmp/natives-perm-test.txt","content":"x"}"#.into(),
                 },
                 EngineProviderEvent::Completed,
-            ]),
-        }
+            ],
+        };
+        Ok(Box::pin(futures_util::stream::iter(events)))
     }
 }

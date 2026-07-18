@@ -11,8 +11,10 @@ use crate::hooks::{HookDecision, HookEvent, HookRegistry, HookRequest};
 use crate::run_state::transition;
 use assistant_protocol::v1::run::RunStatus;
 use assistant_protocol::v2::{RunEventKind, RunStatusV2};
+use futures_util::{Stream, StreamExt};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -55,8 +57,11 @@ pub trait EngineProvider: Send + Sync {
         messages: Vec<EngineMessage>,
         tools: &[ToolSchema],
         system_prompt: Option<&str>,
-    ) -> Result<Vec<EngineProviderEvent>, EngineError>;
+    ) -> Result<EngineProviderEventStream, EngineError>;
 }
+
+pub type EngineProviderEventStream =
+    Pin<Box<dyn Stream<Item = EngineProviderEvent> + Send + 'static>>;
 
 #[derive(Debug, Clone)]
 pub struct EngineMessage {
@@ -230,8 +235,9 @@ impl AgentEngine {
 
             let mut text_acc = String::new();
             let mut tool_acc: BTreeMap<usize, (String, String, String)> = BTreeMap::new();
+            tokio::pin!(provider_events);
 
-            for event in provider_events {
+            while let Some(event) = provider_events.next().await {
                 if self.cancel.load(Ordering::SeqCst) {
                     self.events.append(
                         run_id,
@@ -667,16 +673,17 @@ mod tests {
             _messages: Vec<EngineMessage>,
             _tools: &[ToolSchema],
             _system_prompt: Option<&str>,
-        ) -> Result<Vec<EngineProviderEvent>, EngineError> {
+        ) -> Result<EngineProviderEventStream, EngineError> {
             let mut rounds = self.rounds.lock().unwrap();
-            if rounds.is_empty() {
-                Ok(vec![
+            let events = if rounds.is_empty() {
+                vec![
                     EngineProviderEvent::TextDelta("done".into()),
                     EngineProviderEvent::Completed,
-                ])
+                ]
             } else {
-                Ok(rounds.remove(0))
-            }
+                rounds.remove(0)
+            };
+            Ok(Box::pin(futures_util::stream::iter(events)))
         }
     }
 
@@ -780,5 +787,68 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e.payload, RunEventKind::ToolCallCompleted { .. })));
+    }
+
+    #[tokio::test]
+    async fn emits_text_delta_before_provider_stream_completes() {
+        struct DelayedCompletionProvider;
+        #[async_trait::async_trait]
+        impl EngineProvider for DelayedCompletionProvider {
+            async fn stream(
+                &self,
+                _model: &str,
+                _messages: Vec<EngineMessage>,
+                _tools: &[ToolSchema],
+                _system_prompt: Option<&str>,
+            ) -> Result<EngineProviderEventStream, EngineError> {
+                Ok(Box::pin(futures_util::stream::unfold(0, |state| async move {
+                    match state {
+                        0 => Some((EngineProviderEvent::TextDelta("early".into()), 1)),
+                        1 => {
+                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                            Some((EngineProviderEvent::Completed, 2))
+                        }
+                        _ => None,
+                    }
+                })))
+            }
+        }
+
+        let engine = AgentEngine::new(EventSequencer::new());
+        let events = engine.events.clone();
+        let handle = tokio::spawn(async move {
+            engine
+                .run(
+                    EngineRunConfig {
+                        run_id: "r-stream".into(),
+                        conversation_id: "c1".into(),
+                        model: "m".into(),
+                        system_prompt: None,
+                        user_content: "hi".into(),
+                        max_steps: 5,
+                    },
+                    &DelayedCompletionProvider,
+                    &FakeTools,
+                )
+                .await
+        });
+
+        let mut saw_text_before_done = false;
+        for _ in 0..20 {
+            let current = events.replay_after("r-stream", 0);
+            if current
+                .iter()
+                .any(|e| matches!(e.payload, RunEventKind::TextDelta { .. }))
+                && !current
+                    .iter()
+                    .any(|e| matches!(e.payload, RunEventKind::Completed { .. }))
+            {
+                saw_text_before_done = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(saw_text_before_done, "text delta must be emitted before stream completion");
+        handle.await.expect("join").expect("run");
     }
 }
