@@ -225,7 +225,7 @@ pub fn engine_history(conversation_id: &str) -> Result<Vec<EngineMessage>, Strin
     let Some(rows) = messages.as_array() else {
         return Ok(Vec::new());
     };
-    Ok(rows
+    let mut history: Vec<_> = rows
         .iter()
         .filter_map(|message| {
             let role = message.get("role")?.as_str()?.to_string();
@@ -251,7 +251,39 @@ pub fn engine_history(conversation_id: &str) -> Result<Vec<EngineMessage>, Strin
                 tool_calls: None,
             })
         })
-        .collect())
+        .collect();
+    if let Some(summary) = latest_context_summary(conversation_id)? {
+        history.insert(
+            0,
+            EngineMessage {
+                role: "system".into(),
+                content: summary,
+                tool_call_id: None,
+                tool_name: None,
+                tool_calls: None,
+            },
+        );
+    }
+    Ok(history)
+}
+
+fn latest_context_summary(conversation_id: &str) -> Result<Option<String>, String> {
+    let store = store()?;
+    let conn = store.conn()?;
+    conn.query_row(
+        "SELECT cs.summary
+         FROM context_snapshot cs
+         JOIN run r ON r.id = cs.run_id
+         WHERE r.conversation_id = ?1
+           AND cs.snapshot_type = 'compaction'
+           AND COALESCE(cs.summary, '') <> ''
+         ORDER BY cs.created_at DESC, cs.sequence DESC
+         LIMIT 1",
+        params![conversation_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
 }
 
 fn block_text(block: &Value) -> Option<String> {
@@ -285,6 +317,7 @@ pub fn append_assistant_turn_from_events(
     run_id: &str,
     events: &[RunEventV2],
 ) -> Result<Option<String>, String> {
+    persist_context_snapshots_from_events(run_id, events)?;
     let mut text = String::new();
     let mut blocks = vec![serde_json::json!({ "type": "run_reference", "run_id": run_id })];
     for event in events {
@@ -322,6 +355,56 @@ pub fn append_assistant_turn_from_events(
         .get("id")
         .and_then(Value::as_str)
         .map(str::to_string))
+}
+
+fn persist_context_snapshots_from_events(
+    run_id: &str,
+    events: &[RunEventV2],
+) -> Result<(), String> {
+    let store = store()?;
+    let conn = store.conn()?;
+    for event in events {
+        let RunEventKind::ContextCompressed {
+            before_tokens,
+            after_tokens,
+            summary,
+        } = &event.payload
+        else {
+            continue;
+        };
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM context_snapshot
+                 WHERE run_id = ?1 AND sequence = ?2 AND snapshot_type = 'compaction'",
+                params![run_id, event.sequence as i64],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if exists > 0 {
+            continue;
+        }
+        conn.execute(
+            "INSERT INTO context_snapshot (
+                id, run_id, sequence, snapshot_type, token_count, summary, snapshot_json
+             )
+             VALUES (?1, ?2, ?3, 'compaction', ?4, ?5, ?6)",
+            params![
+                uuid::Uuid::new_v4().to_string(),
+                run_id,
+                event.sequence as i64,
+                *after_tokens as i64,
+                summary,
+                serde_json::json!({
+                    "before_tokens": before_tokens,
+                    "after_tokens": after_tokens,
+                    "event_sequence": event.sequence
+                })
+                .to_string()
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn append_message(params: Value) -> Result<Value, String> {
@@ -600,6 +683,85 @@ mod tests {
         assert_eq!(history[1].role, "assistant");
         assert!(history[1].content.contains("done"));
         assert!(history[1].content.contains("tool result: read_file"));
+
+        if let Some(value) = previous_db {
+            std::env::set_var("NATIVES_DB_PATH", value);
+        } else {
+            std::env::remove_var("NATIVES_DB_PATH");
+        }
+        if let Some(value) = previous_runtime {
+            std::env::set_var("NATIVES_RUNTIME_DIR", value);
+        } else {
+            std::env::remove_var("NATIVES_RUNTIME_DIR");
+        }
+    }
+
+    #[test]
+    fn context_compression_events_persist_snapshot_and_reenter_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let previous_db = std::env::var("NATIVES_DB_PATH").ok();
+        let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
+        std::env::set_var("NATIVES_DB_PATH", dir.path().join("natives.db"));
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+
+        let store = store().unwrap();
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+             VALUES ('compact-conv', 'agent', 'Compact', 'openai', 'gpt-4o')",
+                [],
+            )
+            .unwrap();
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+             VALUES ('compact-run', 'compact-conv', 'completed', 'openai', 'gpt-4o')",
+                [],
+            )
+            .unwrap();
+        append_assistant_turn_from_events(
+            "compact-conv",
+            "compact-run",
+            &[
+                RunEventV2 {
+                    run_id: "compact-run".into(),
+                    sequence: 7,
+                    timestamp: chrono::Utc::now(),
+                    payload: RunEventKind::ContextCompressed {
+                        before_tokens: 100,
+                        after_tokens: 20,
+                        summary: "Previous compacted facts: alpha survives.".into(),
+                    },
+                },
+                RunEventV2 {
+                    run_id: "compact-run".into(),
+                    sequence: 8,
+                    timestamp: chrono::Utc::now(),
+                    payload: RunEventKind::TextDelta {
+                        text: "current answer".into(),
+                    },
+                },
+            ],
+        )
+        .unwrap();
+
+        let count: i64 = store
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM context_snapshot WHERE run_id = 'compact-run'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        let history = engine_history("compact-conv").unwrap();
+        assert_eq!(history[0].role, "system");
+        assert!(history[0].content.contains("alpha survives"));
 
         if let Some(value) = previous_db {
             std::env::set_var("NATIVES_DB_PATH", value);
