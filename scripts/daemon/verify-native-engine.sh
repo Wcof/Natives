@@ -126,6 +126,9 @@ provider_status() {
   if [[ "$provider" == "openai_compatible" ]]; then
     run_live_test adapter-text provider-adapters live_openai_compatible_e2e live_text_stream_completes
     run_live_test adapter-tool provider-adapters live_openai_compatible_e2e live_tool_roundtrip_body_and_second_turn
+  elif [[ "$provider" == "anthropic" ]]; then
+    run_live_test adapter-text provider-adapters live_anthropic_e2e live_text_stream_completes
+    run_live_test adapter-tool provider-adapters live_anthropic_e2e live_tool_roundtrip_blocks_and_second_turn
   else
     write_json "provider-$provider-adapter-text.json" "{\"provider\":\"$provider\",\"case\":\"adapter-text\",\"status\":\"not_run\",\"reason\":\"adapter_live_test_not_available\"}"
     write_json "provider-$provider-adapter-tool.json" "{\"provider\":\"$provider\",\"case\":\"adapter-tool\",\"status\":\"not_run\",\"reason\":\"adapter_live_test_not_available\"}"
