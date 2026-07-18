@@ -545,14 +545,18 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             models: (p.models ?? []).map((m) => ({ id: m.id, display_name: m.displayName })),
           })),
         );
+        if (!pick) {
+          toast(zh ? '请先配置供应商和模型' : 'Configure provider and model first', 'error');
+          return;
+        }
         dispatch({
           type: 'conversations/upsert',
           conversation: {
             id,
             mode: 'agent',
             title: t(locale, 'assistant.newConversation'),
-            providerId: pick?.providerId ?? 'openai',
-            modelId: pick?.modelId ?? 'gpt-4o',
+            providerId: pick.providerId,
+            modelId: pick.modelId,
             projectId: activeProjectPath,
             permissionProfileId: 'ask',
             createdAt: now,
@@ -673,14 +677,18 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               models: (p.models ?? []).map((m) => ({ id: m.id, display_name: m.displayName })),
             })),
           );
+          if (!pick) {
+            toast(zh ? '请先配置供应商和模型' : 'Configure provider and model first', 'error');
+            return;
+          }
           dispatch({
             type: 'conversations/upsert',
             conversation: {
               id,
               mode: 'agent',
               title: t(locale, 'assistant.newConversation'),
-              providerId: pick?.providerId ?? 'openai',
-              modelId: pick?.modelId ?? 'gpt-4o',
+              providerId: pick.providerId,
+              modelId: pick.modelId,
               projectId: activeProjectPath,
               permissionProfileId: 'ask',
               createdAt: now,
