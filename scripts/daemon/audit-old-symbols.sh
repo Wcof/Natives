@@ -133,6 +133,14 @@ else
   report "OK: UDS authority uses per-RPC authenticated clients"
 fi
 
+# 7) Provider protocol must be explicit; never infer from provider type / URL.
+if rg -n 'api_protocol\.as_deref\(\)\.unwrap_or\(|normalize_api_protocol\(input\.provider_type|normalize_api_protocol\(&input\.provider_type' src-tauri/src/commands/provider.rs 2>/dev/null; then
+  report "FAIL: provider commands infer missing api_protocol"
+  fail=1
+else
+  report "OK: provider commands require explicit api_protocol"
+fi
+
 echo "----"
 if [[ "$fail" -ne 0 ]]; then
   report "RESULT=FAIL"

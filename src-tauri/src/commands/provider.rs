@@ -11,7 +11,7 @@ fn mask_api_key(key: &str) -> String {
         return "***".to_string();
     }
     let prefix = &key[..4];
-    let suffix = &key[key.len()-4..];
+    let suffix = &key[key.len() - 4..];
     format!("{}…{}", prefix, suffix)
 }
 
@@ -166,7 +166,9 @@ pub struct ProviderTestResult {
 /// Full API keys are never returned to the frontend.
 #[tauri::command]
 pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
-    let pool_conn = state.db.get()
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
 
@@ -177,7 +179,17 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
         "SELECT id, preset_name, api_protocol, name, website_url, base_url, default_model, created_at, updated_at FROM user_providers ORDER BY created_at DESC"
     ).map_err(|e| Error::Internal(e.to_string()))?;
 
-    let providers: Vec<(String, String, String, String, String, String, Option<String>, String, String)> = pstmt
+    let providers: Vec<(
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        String,
+        String,
+    )> = pstmt
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -200,7 +212,19 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
         "SELECT id, provider_id, label, masked_key, is_primary, is_active, test_status, last_test_at, last_error_code, last_error_message, created_at FROM provider_api_keys ORDER BY created_at ASC"
     ).map_err(|e| Error::Internal(e.to_string()))?;
 
-    let all_keys: Vec<(String, String, String, String, bool, bool, String, Option<String>, Option<String>, Option<String>, String)> = kstmt
+    let all_keys: Vec<(
+        String,
+        String,
+        String,
+        String,
+        bool,
+        bool,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    )> = kstmt
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -232,14 +256,22 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
         let mut stmt = assistant.prepare(
             "SELECT provider_id, model_id, display_name FROM assistant_model_cache ORDER BY model_id ASC",
         ).map_err(|e| Error::Internal(e.to_string()))?;
-        let mut grouped: std::collections::HashMap<String, Vec<DiscoveredModel>> = std::collections::HashMap::new();
-        let rows = stmt.query_map([], |row| Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, Option<String>>(2)?,
-        ))).map_err(|e| Error::Internal(e.to_string()))?;
+        let mut grouped: std::collections::HashMap<String, Vec<DiscoveredModel>> =
+            std::collections::HashMap::new();
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .map_err(|e| Error::Internal(e.to_string()))?;
         for row in rows.flatten() {
-            grouped.entry(row.0).or_default().push(DiscoveredModel { id: row.1, display_name: row.2 });
+            grouped.entry(row.0).or_default().push(DiscoveredModel {
+                id: row.1,
+                display_name: row.2,
+            });
         }
         grouped
     };
@@ -247,33 +279,73 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
     // Assemble — keys are masked, NEVER return full key to frontend
     let result = providers
         .into_iter()
-        .map(|(id, preset_name, api_protocol, name, website_url, base_url, default_model, created_at, updated_at)| {
-            let primary_key_id = primary_key_ids.get(&id).cloned();
-            let keys: Vec<ProviderKey> = all_keys
-                .iter()
-                .filter(|(_, pid, _, _, _, _, _, _, _, _, _)| pid == &id)
-                .map(|(kid, _, label, masked_key, is_primary, is_active, test_status, last_test_at, last_error_code, last_error_message, kcreated)| {
-                    ProviderKey {
-                        id: kid.clone(),
-                        provider_id: id.clone(),
-                        label: label.clone(),
-                        masked_key: if masked_key.is_empty() { "••••••••".to_string() } else { masked_key.clone() },
-                        is_primary: *is_primary,
-                        is_active: *is_active,
-                        status: test_status.clone(),
-                        last_tested_at: last_test_at.clone(),
-                        last_error_code: last_error_code.clone(),
-                        last_error_message: last_error_message.clone(),
-                        created_at: kcreated.clone(),
-                    }
-                })
-                .collect();
+        .map(
+            |(
+                id,
+                preset_name,
+                api_protocol,
+                name,
+                website_url,
+                base_url,
+                default_model,
+                created_at,
+                updated_at,
+            )| {
+                let primary_key_id = primary_key_ids.get(&id).cloned();
+                let keys: Vec<ProviderKey> = all_keys
+                    .iter()
+                    .filter(|(_, pid, _, _, _, _, _, _, _, _, _)| pid == &id)
+                    .map(
+                        |(
+                            kid,
+                            _,
+                            label,
+                            masked_key,
+                            is_primary,
+                            is_active,
+                            test_status,
+                            last_test_at,
+                            last_error_code,
+                            last_error_message,
+                            kcreated,
+                        )| {
+                            ProviderKey {
+                                id: kid.clone(),
+                                provider_id: id.clone(),
+                                label: label.clone(),
+                                masked_key: if masked_key.is_empty() {
+                                    "••••••••".to_string()
+                                } else {
+                                    masked_key.clone()
+                                },
+                                is_primary: *is_primary,
+                                is_active: *is_active,
+                                status: test_status.clone(),
+                                last_tested_at: last_test_at.clone(),
+                                last_error_code: last_error_code.clone(),
+                                last_error_message: last_error_message.clone(),
+                                created_at: kcreated.clone(),
+                            }
+                        },
+                    )
+                    .collect();
 
-            UserProvider {
-                models: model_rows.get(&id).cloned().unwrap_or_default(),
-                id, preset_name, api_protocol, name, website_url, base_url, default_model, primary_key_id, keys, created_at, updated_at,
-            }
-        })
+                UserProvider {
+                    models: model_rows.get(&id).cloned().unwrap_or_default(),
+                    id,
+                    preset_name,
+                    api_protocol,
+                    name,
+                    website_url,
+                    base_url,
+                    default_model,
+                    primary_key_id,
+                    keys,
+                    created_at,
+                    updated_at,
+                }
+            },
+        )
         .collect();
 
     Ok(result)
@@ -284,20 +356,30 @@ pub fn list_providers(state: State<'_, AppState>) -> Result<Vec<UserProvider>> {
 pub fn add_provider(state: State<'_, AppState>, input: AddProviderInput) -> Result<UserProvider> {
     let display_name = input.display_name.trim().to_string();
     let provider_type = input.provider_type.trim().to_string();
-    let api_protocol = normalize_api_protocol(input.api_protocol.as_deref().unwrap_or(&provider_type));
+    let api_protocol = required_api_protocol(input.api_protocol.as_deref())?;
     let base_url = normalize_url(&input.base_url)?;
     let default_model = input.default_model.trim().to_string();
     let api_key = input.initial_key.api_key.trim();
-    if display_name.is_empty() || provider_type.is_empty() || default_model.is_empty() || api_key.is_empty() {
-        return Err(Error::InvalidInput("Provider name, type, default model, and API key are required".to_string()));
+    if display_name.is_empty()
+        || provider_type.is_empty()
+        || default_model.is_empty()
+        || api_key.is_empty()
+    {
+        return Err(Error::InvalidInput(
+            "Provider name, type, default model, and API key are required".to_string(),
+        ));
     }
-    let mut pool_conn = state.db.get()
+    let mut pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     ensure_tables(&pool_conn)?;
 
     let id = uuid_v4();
     let now = chrono_now();
-    let transaction = pool_conn.transaction().map_err(|e| Error::Internal(e.to_string()))?;
+    let transaction = pool_conn
+        .transaction()
+        .map_err(|e| Error::Internal(e.to_string()))?;
     transaction.execute(
         "INSERT INTO user_providers (id, preset_name, api_protocol, name, website_url, base_url, default_model, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![id, provider_type, api_protocol, display_name, input.website_url.trim(), base_url, default_model, now, now],
@@ -307,13 +389,19 @@ pub fn add_provider(state: State<'_, AppState>, input: AddProviderInput) -> Resu
     let masked_key = mask_api_key(api_key);
     let (encrypted, dek_encrypted) = provider_key_manager::envelope_encrypt(api_key, &transaction)?;
     let key_label = input.initial_key.label.trim();
-    let key_label = if key_label.is_empty() { "API Key" } else { key_label };
+    let key_label = if key_label.is_empty() {
+        "API Key"
+    } else {
+        key_label
+    };
     transaction.execute(
         "INSERT INTO provider_api_keys (id, provider_id, label, api_key_encrypted, dek_encrypted, masked_key, is_primary, is_active, test_status, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, 1, 'untested', ?7)",
         params![kid, id, key_label, encrypted, dek_encrypted, masked_key, now],
     ).map_err(|e| Error::Internal(e.to_string()))?;
-    transaction.commit().map_err(|e| Error::Internal(e.to_string()))?;
+    transaction
+        .commit()
+        .map_err(|e| Error::Internal(e.to_string()))?;
 
     let assistant = crate::db::get_assistant_db_conn()?;
     assistant.execute(
@@ -322,29 +410,47 @@ pub fn add_provider(state: State<'_, AppState>, input: AddProviderInput) -> Resu
     ).map_err(|e| Error::Internal(e.to_string()))?;
 
     let key = ProviderKey {
-        id: kid, provider_id: id.clone(),
-        label: key_label.to_string(), masked_key,
-        is_primary: true, is_active: true,
+        id: kid,
+        provider_id: id.clone(),
+        label: key_label.to_string(),
+        masked_key,
+        is_primary: true,
+        is_active: true,
         status: "untested".to_string(),
-        last_tested_at: None, last_error_code: None, last_error_message: None,
+        last_tested_at: None,
+        last_error_code: None,
+        last_error_message: None,
         created_at: now.clone(),
     };
 
     Ok(UserProvider {
-        id, preset_name: provider_type, api_protocol, name: display_name,
-        website_url: input.website_url.trim().to_string(), base_url,
+        id,
+        preset_name: provider_type,
+        api_protocol,
+        name: display_name,
+        website_url: input.website_url.trim().to_string(),
+        base_url,
         default_model: Some(default_model.clone()),
         primary_key_id: Some(key.id.clone()),
         keys: vec![key],
-        models: vec![DiscoveredModel { id: default_model.clone(), display_name: Some(default_model.clone()) }],
-        created_at: now.clone(), updated_at: now,
+        models: vec![DiscoveredModel {
+            id: default_model.clone(),
+            display_name: Some(default_model.clone()),
+        }],
+        created_at: now.clone(),
+        updated_at: now,
     })
 }
 
 /// Add an API key to an existing provider.
 #[tauri::command]
-pub fn add_provider_key(state: State<'_, AppState>, input: AddProviderKeyInput) -> Result<ProviderKey> {
-    let pool_conn = state.db.get()
+pub fn add_provider_key(
+    state: State<'_, AppState>,
+    input: AddProviderKeyInput,
+) -> Result<ProviderKey> {
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
 
@@ -367,26 +473,41 @@ pub fn add_provider_key(state: State<'_, AppState>, input: AddProviderKeyInput) 
 
     // Return masked key — never expose full key to frontend
     Ok(ProviderKey {
-        id: kid, provider_id: input.provider_id, label: input.label,
-        masked_key, is_primary: false, is_active: true,
+        id: kid,
+        provider_id: input.provider_id,
+        label: input.label,
+        masked_key,
+        is_primary: false,
+        is_active: true,
         status: "untested".to_string(),
-        last_tested_at: None, last_error_code: None, last_error_message: None,
+        last_tested_at: None,
+        last_error_code: None,
+        last_error_message: None,
         created_at: now,
     })
 }
 
 #[tauri::command]
-pub fn provider_update_defaults(state: State<'_, AppState>, input: UpdateProviderDefaultsInput) -> Result<()> {
+pub fn provider_update_defaults(
+    state: State<'_, AppState>,
+    input: UpdateProviderDefaultsInput,
+) -> Result<()> {
     let model = input.default_model.trim();
     if model.is_empty() {
-        return Err(Error::InvalidInput("Default model cannot be empty".to_string()));
+        return Err(Error::InvalidInput(
+            "Default model cannot be empty".to_string(),
+        ));
     }
-    let pool_conn = state.db.get()
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    let updated = pool_conn.execute(
-        "UPDATE user_providers SET default_model = ?1, updated_at = ?2 WHERE id = ?3",
-        params![model, chrono_now(), input.provider_id],
-    ).map_err(|e| Error::Internal(e.to_string()))?;
+    let updated = pool_conn
+        .execute(
+            "UPDATE user_providers SET default_model = ?1, updated_at = ?2 WHERE id = ?3",
+            params![model, chrono_now(), input.provider_id],
+        )
+        .map_err(|e| Error::Internal(e.to_string()))?;
     if updated == 0 {
         return Err(Error::InvalidInput("Provider not found".to_string()));
     }
@@ -399,35 +520,55 @@ pub fn provider_update_defaults(state: State<'_, AppState>, input: UpdateProvide
 }
 
 #[tauri::command]
-pub fn provider_set_primary_key(state: State<'_, AppState>, input: SetPrimaryKeyInput) -> Result<()> {
-    let mut pool_conn = state.db.get()
+pub fn provider_set_primary_key(
+    state: State<'_, AppState>,
+    input: SetPrimaryKeyInput,
+) -> Result<()> {
+    let mut pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     ensure_tables(&pool_conn)?;
-    let transaction = pool_conn.transaction().map_err(|e| Error::Internal(e.to_string()))?;
+    let transaction = pool_conn
+        .transaction()
+        .map_err(|e| Error::Internal(e.to_string()))?;
     let eligible: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM provider_api_keys WHERE id = ?1 AND provider_id = ?2 AND is_active = 1 AND test_status = 'valid')",
         params![input.key_id, input.provider_id],
         |row| row.get(0),
     ).map_err(|e| Error::Internal(e.to_string()))?;
     if !eligible {
-        return Err(Error::InvalidInput("Test the key successfully before setting it as primary".to_string()));
+        return Err(Error::InvalidInput(
+            "Test the key successfully before setting it as primary".to_string(),
+        ));
     }
-    transaction.execute(
-        "UPDATE provider_api_keys SET is_primary = 0 WHERE provider_id = ?1",
-        params![input.provider_id],
-    ).map_err(|e| Error::Internal(e.to_string()))?;
-    transaction.execute(
-        "UPDATE provider_api_keys SET is_primary = 1 WHERE id = ?1 AND provider_id = ?2",
-        params![input.key_id, input.provider_id],
-    ).map_err(|e| Error::Internal(e.to_string()))?;
-    transaction.commit().map_err(|e| Error::Internal(e.to_string()))?;
+    transaction
+        .execute(
+            "UPDATE provider_api_keys SET is_primary = 0 WHERE provider_id = ?1",
+            params![input.provider_id],
+        )
+        .map_err(|e| Error::Internal(e.to_string()))?;
+    transaction
+        .execute(
+            "UPDATE provider_api_keys SET is_primary = 1 WHERE id = ?1 AND provider_id = ?2",
+            params![input.key_id, input.provider_id],
+        )
+        .map_err(|e| Error::Internal(e.to_string()))?;
+    transaction
+        .commit()
+        .map_err(|e| Error::Internal(e.to_string()))?;
     Ok(())
 }
 
 /// Delete a provider API key.
 #[tauri::command]
-pub fn delete_provider_key(state: State<'_, AppState>, input: DeleteProviderKeyInput) -> Result<()> {
-    let pool_conn = state.db.get()
+pub fn delete_provider_key(
+    state: State<'_, AppState>,
+    input: DeleteProviderKeyInput,
+) -> Result<()> {
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
 
@@ -444,13 +585,16 @@ pub fn delete_provider_key(state: State<'_, AppState>, input: DeleteProviderKeyI
 
     if is_primary {
         // Cannot delete primary key — must switch to another key first
-        return Err(Error::InvalidInput("Cannot delete primary key. Set another key as primary first.".to_string()));
+        return Err(Error::InvalidInput(
+            "Cannot delete primary key. Set another key as primary first.".to_string(),
+        ));
     }
 
     conn.execute(
         "DELETE FROM provider_api_keys WHERE id = ?1 AND provider_id = ?2",
         params![input.key_id, input.provider_id],
-    ).map_err(|e| Error::Internal(e.to_string()))?;
+    )
+    .map_err(|e| Error::Internal(e.to_string()))?;
 
     Ok(())
 }
@@ -458,14 +602,22 @@ pub fn delete_provider_key(state: State<'_, AppState>, input: DeleteProviderKeyI
 /// Delete a provider and all its keys.
 #[tauri::command]
 pub fn delete_provider(state: State<'_, AppState>, provider_id: String) -> Result<()> {
-    let pool_conn = state.db.get()
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
 
-    conn.execute("DELETE FROM provider_api_keys WHERE provider_id = ?1", params![provider_id])
-        .map_err(|e| Error::Internal(e.to_string()))?;
-    conn.execute("DELETE FROM user_providers WHERE id = ?1", params![provider_id])
-        .map_err(|e| Error::Internal(e.to_string()))?;
+    conn.execute(
+        "DELETE FROM provider_api_keys WHERE provider_id = ?1",
+        params![provider_id],
+    )
+    .map_err(|e| Error::Internal(e.to_string()))?;
+    conn.execute(
+        "DELETE FROM user_providers WHERE id = ?1",
+        params![provider_id],
+    )
+    .map_err(|e| Error::Internal(e.to_string()))?;
     Ok(())
 }
 
@@ -514,12 +666,34 @@ fn normalize_api_protocol(value: &str) -> String {
         "openai_responses" | "responses" => "openai_responses",
         "gemini" | "google" | "gemini_generate_content" => "gemini_generate_content",
         "ollama" | "ollama_chat" => "ollama_chat",
-        "openai" | "openai_compatible" | "openai-compatible" | "openai_chat_completions" | "" => {
+        "openai" | "openai_compatible" | "openai-compatible" | "openai_chat_completions" => {
             "openai_chat_completions"
         }
-        _ => "openai_chat_completions",
+        other => other,
     }
     .to_string()
+}
+
+fn required_api_protocol(value: Option<&str>) -> Result<String> {
+    let raw = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            Error::InvalidInput(
+                "api_protocol is required; select a protocol explicitly".to_string(),
+            )
+        })?;
+    let protocol = normalize_api_protocol(raw);
+    match protocol.as_str() {
+        "openai_chat_completions"
+        | "openai_responses"
+        | "anthropic_messages"
+        | "gemini_generate_content"
+        | "ollama_chat" => Ok(protocol),
+        _ => Err(Error::InvalidInput(format!(
+            "Unsupported api_protocol={protocol}; select an explicit supported protocol"
+        ))),
+    }
 }
 
 fn anthropic_url(base_url: &str, endpoint: &str) -> Result<String> {
@@ -527,7 +701,8 @@ fn anthropic_url(base_url: &str, endpoint: &str) -> Result<String> {
     if base.is_empty() {
         return Err(Error::Internal("Base URL cannot be empty".to_string()));
     }
-    let base = base.strip_suffix("/v1/messages")
+    let base = base
+        .strip_suffix("/v1/messages")
         .or_else(|| base.strip_suffix("/v1/models"))
         .unwrap_or(base);
     if base.ends_with("/v1") {
@@ -564,25 +739,35 @@ fn provider_response_has_content(provider_type: &str, value: &serde_json::Value)
     match normalize_api_protocol(provider_type).as_str() {
         "anthropic_messages" => value["content"].as_array().is_some_and(|blocks| {
             blocks.iter().any(|block| {
-                block["text"].as_str().is_some_and(|text| !text.trim().is_empty())
+                block["text"]
+                    .as_str()
+                    .is_some_and(|text| !text.trim().is_empty())
             })
         }),
-        "openai_responses" => value["output_text"].as_str().is_some_and(|text| !text.trim().is_empty())
-            || value["output"].as_array().is_some_and(|items| {
-                items.iter().any(|item| {
-                    item["content"].as_array().is_some_and(|blocks| {
-                        blocks.iter().any(|block| {
-                            block["text"].as_str().is_some_and(|text| !text.trim().is_empty())
+        "openai_responses" => {
+            value["output_text"]
+                .as_str()
+                .is_some_and(|text| !text.trim().is_empty())
+                || value["output"].as_array().is_some_and(|items| {
+                    items.iter().any(|item| {
+                        item["content"].as_array().is_some_and(|blocks| {
+                            blocks.iter().any(|block| {
+                                block["text"]
+                                    .as_str()
+                                    .is_some_and(|text| !text.trim().is_empty())
+                            })
                         })
                     })
                 })
-            }),
+        }
         _ => {
             let content = &value["choices"][0]["message"]["content"];
             content.as_str().is_some_and(|text| !text.trim().is_empty())
                 || content.as_array().is_some_and(|blocks| {
                     blocks.iter().any(|block| {
-                        block["text"].as_str().is_some_and(|text| !text.trim().is_empty())
+                        block["text"]
+                            .as_str()
+                            .is_some_and(|text| !text.trim().is_empty())
                     })
                 })
         }
@@ -592,7 +777,9 @@ fn provider_response_has_content(provider_type: &str, value: &serde_json::Value)
 fn provider_test_body(provider_type: &str, model: &str) -> Result<serde_json::Value> {
     let model = model.trim();
     if model.is_empty() {
-        return Err(Error::InvalidInput("Model is required for provider test".to_string()));
+        return Err(Error::InvalidInput(
+            "Model is required for provider test".to_string(),
+        ));
     }
     match normalize_api_protocol(provider_type).as_str() {
         "anthropic_messages" => Ok(serde_json::json!({
@@ -645,11 +832,13 @@ fn provider_test_error(
 }
 
 #[tauri::command]
-pub async fn provider_discover_models(input: ProviderDiscoveryInput) -> Result<Vec<DiscoveredModel>> {
+pub async fn provider_discover_models(
+    input: ProviderDiscoveryInput,
+) -> Result<Vec<DiscoveredModel>> {
     if input.api_key.trim().is_empty() {
         return Err(Error::InvalidInput("API key cannot be empty".to_string()));
     }
-    let api_protocol = normalize_api_protocol(input.api_protocol.as_deref().unwrap_or(&input.provider_type));
+    let api_protocol = required_api_protocol(input.api_protocol.as_deref())?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
@@ -662,31 +851,47 @@ pub async fn provider_discover_models(input: ProviderDiscoveryInput) -> Result<V
     } else {
         request = request.header("Authorization", format!("Bearer {}", input.api_key.trim()));
     }
-    let response = request.send()
-        .await
-        .map_err(|e| Error::Internal(if e.is_timeout() { "Model discovery timed out".to_string() } else { format!("Model discovery failed: {e}") }))?;
+    let response = request.send().await.map_err(|e| {
+        Error::Internal(if e.is_timeout() {
+            "Model discovery timed out".to_string()
+        } else {
+            format!("Model discovery failed: {e}")
+        })
+    })?;
 
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        return Err(Error::Internal(format!("Model discovery HTTP {status}: {}", body.chars().take(200).collect::<String>())));
+        return Err(Error::Internal(format!(
+            "Model discovery HTTP {status}: {}",
+            body.chars().take(200).collect::<String>()
+        )));
     }
-    let payload = response.json::<serde_json::Value>().await
+    let payload = response
+        .json::<serde_json::Value>()
+        .await
         .map_err(|e| Error::Internal(format!("Invalid model response: {e}")))?;
-    let mut models: Vec<DiscoveredModel> = payload.get("data")
+    let mut models: Vec<DiscoveredModel> = payload
+        .get("data")
         .and_then(|value| value.as_array())
         .into_iter()
         .flatten()
         .filter_map(|model| {
             let id = model.get("id")?.as_str()?.trim();
-            if id.is_empty() { return None; }
-            let display_name = model.get("display_name")
+            if id.is_empty() {
+                return None;
+            }
+            let display_name = model
+                .get("display_name")
                 .or_else(|| model.get("displayName"))
                 .and_then(|value| value.as_str())
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned);
-            Some(DiscoveredModel { id: id.to_string(), display_name })
+            Some(DiscoveredModel {
+                id: id.to_string(),
+                display_name,
+            })
         })
         .collect();
     models.sort_by(|left, right| left.id.cmp(&right.id));
@@ -702,12 +907,14 @@ pub async fn provider_discover_models_saved(
     let provider_id = input.provider_id;
     let key_id = input.key_id;
     let (api_protocol, base_url, api_key) = {
-        let pool_conn = state.db.get()
+        let pool_conn = state
+            .db
+            .get()
             .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
         let conn: &rusqlite::Connection = &*pool_conn;
         ensure_tables(conn)?;
-        let (encrypted, dek, api_protocol, base_url): (String, Option<String>, String, String) = conn
-            .query_row(
+        let (encrypted, dek, api_protocol, base_url): (String, Option<String>, String, String) =
+            conn.query_row(
                 "SELECT k.api_key_encrypted, k.dek_encrypted, p.api_protocol, p.base_url
                  FROM provider_api_keys k
                  JOIN user_providers p ON k.provider_id = p.id
@@ -738,9 +945,14 @@ pub async fn provider_discover_models_saved(
     };
     let models = provider_discover_models(discover_input).await?;
     let assistant = crate::db::get_assistant_db_conn()?;
-    let tx = assistant.unchecked_transaction().map_err(|e| Error::Internal(e.to_string()))?;
-    tx.execute("DELETE FROM assistant_model_cache WHERE provider_id = ?1", params![provider_id])
+    let tx = assistant
+        .unchecked_transaction()
         .map_err(|e| Error::Internal(e.to_string()))?;
+    tx.execute(
+        "DELETE FROM assistant_model_cache WHERE provider_id = ?1",
+        params![provider_id],
+    )
+    .map_err(|e| Error::Internal(e.to_string()))?;
     for model in &models {
         tx.execute(
             "INSERT INTO assistant_model_cache (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at) VALUES (?1, ?2, ?3, ?4, '{}', 0, 0, 'api_discovery', datetime('now'))",
@@ -763,31 +975,51 @@ async fn execute_provider_test(
         .build()
     {
         Ok(c) => c,
-        Err(e) => return ProviderTestResult {
-            success: false,
-            error: Some(format!("Failed to build HTTP client: {e}")),
-        },
+        Err(e) => {
+            return ProviderTestResult {
+                success: false,
+                error: Some(format!("Failed to build HTTP client: {e}")),
+            }
+        }
     };
 
     let protocol = normalize_api_protocol(provider_type);
     let test_url = match provider_test_url(&protocol, base_url) {
         Ok(url) => url,
-        Err(e) => return ProviderTestResult {
-            success: false,
-            error: Some(provider_test_error(&protocol, model, None, None, format!("Invalid base URL: {e}"))),
-        },
+        Err(e) => {
+            return ProviderTestResult {
+                success: false,
+                error: Some(provider_test_error(
+                    &protocol,
+                    model,
+                    None,
+                    None,
+                    format!("Invalid base URL: {e}"),
+                )),
+            }
+        }
     };
 
     if let Some(model) = model {
         let body = match provider_test_body(&protocol, model) {
             Ok(body) => body,
-            Err(e) => return ProviderTestResult {
-                success: false,
-                error: Some(provider_test_error(&protocol, Some(model), None, None, e.to_string())),
-            },
+            Err(e) => {
+                return ProviderTestResult {
+                    success: false,
+                    error: Some(provider_test_error(
+                        &protocol,
+                        Some(model),
+                        None,
+                        None,
+                        e.to_string(),
+                    )),
+                }
+            }
         };
 
-        let mut request = client.post(&test_url).header("Content-Type", "application/json");
+        let mut request = client
+            .post(&test_url)
+            .header("Content-Type", "application/json");
         if is_anthropic_protocol(&protocol) {
             request = request
                 .header("x-api-key", api_key)
@@ -800,7 +1032,8 @@ async fn execute_provider_test(
         return match response {
             Ok(resp) => {
                 let status = resp.status();
-                let request_id = resp.headers()
+                let request_id = resp
+                    .headers()
                     .get("x-request-id")
                     .or_else(|| resp.headers().get("request-id"))
                     .and_then(|value| value.to_str().ok())
@@ -810,9 +1043,13 @@ async fn execute_provider_test(
                         Ok(json) => {
                             let has_content = provider_response_has_content(&protocol, &json);
                             if has_content {
-                                ProviderTestResult { success: true, error: None }
+                                ProviderTestResult {
+                                    success: true,
+                                    error: None,
+                                }
                             } else {
-                                let keys = json.as_object()
+                                let keys = json
+                                    .as_object()
                                     .map(|obj| obj.keys().cloned().collect::<Vec<_>>().join(", "))
                                     .unwrap_or_else(|| json.to_string().chars().take(80).collect());
                                 ProviderTestResult {
@@ -825,13 +1062,21 @@ async fn execute_provider_test(
                         }
                         Err(_) => ProviderTestResult {
                             success: false,
-                            error: Some(provider_test_error(&protocol, Some(model), Some(status), request_id, "Invalid JSON response from API".to_string())),
+                            error: Some(provider_test_error(
+                                &protocol,
+                                Some(model),
+                                Some(status),
+                                request_id,
+                                "Invalid JSON response from API".to_string(),
+                            )),
                         },
                     }
                 } else if status.is_client_error() {
                     let body = resp.text().await.unwrap_or_default();
                     let error_body = body.chars().take(300).collect::<String>();
-                    let classified = if error_body.contains("model_not_found") || error_body.contains("model not found") {
+                    let classified = if error_body.contains("model_not_found")
+                        || error_body.contains("model not found")
+                    {
                         format!("Model '{}' not available", model)
                     } else if status == 401 {
                         "Authentication failed — invalid API key".to_string()
@@ -840,12 +1085,31 @@ async fn execute_provider_test(
                     } else {
                         format!("HTTP {}: {}", status, error_body)
                     };
-                    ProviderTestResult { success: false, error: Some(provider_test_error(&protocol, Some(model), Some(status), request_id, classified)) }
+                    ProviderTestResult {
+                        success: false,
+                        error: Some(provider_test_error(
+                            &protocol,
+                            Some(model),
+                            Some(status),
+                            request_id,
+                            classified,
+                        )),
+                    }
                 } else {
                     let body = resp.text().await.unwrap_or_default();
                     ProviderTestResult {
                         success: false,
-                        error: Some(provider_test_error(&protocol, Some(model), Some(status), request_id, format!("HTTP {}: {}", status, body.chars().take(200).collect::<String>()))),
+                        error: Some(provider_test_error(
+                            &protocol,
+                            Some(model),
+                            Some(status),
+                            request_id,
+                            format!(
+                                "HTTP {}: {}",
+                                status,
+                                body.chars().take(200).collect::<String>()
+                            ),
+                        )),
                     }
                 }
             }
@@ -853,17 +1117,35 @@ async fn execute_provider_test(
                 if e.is_timeout() {
                     ProviderTestResult {
                         success: false,
-                        error: Some(provider_test_error(&protocol, Some(model), None, None, "Connection timed out (15s)".to_string())),
+                        error: Some(provider_test_error(
+                            &protocol,
+                            Some(model),
+                            None,
+                            None,
+                            "Connection timed out (15s)".to_string(),
+                        )),
                     }
                 } else if e.is_connect() {
                     ProviderTestResult {
                         success: false,
-                        error: Some(provider_test_error(&protocol, Some(model), None, None, "Cannot connect — check base URL and network".to_string())),
+                        error: Some(provider_test_error(
+                            &protocol,
+                            Some(model),
+                            None,
+                            None,
+                            "Cannot connect — check base URL and network".to_string(),
+                        )),
                     }
                 } else {
                     ProviderTestResult {
                         success: false,
-                        error: Some(provider_test_error(&protocol, Some(model), None, None, format!("Connection failed: {e}"))),
+                        error: Some(provider_test_error(
+                            &protocol,
+                            Some(model),
+                            None,
+                            None,
+                            format!("Connection failed: {e}"),
+                        )),
                     }
                 }
             }
@@ -872,10 +1154,18 @@ async fn execute_provider_test(
 
     let request_url = match models_url(&protocol, base_url) {
         Ok(url) => url,
-        Err(e) => return ProviderTestResult {
-            success: false,
-            error: Some(provider_test_error(&protocol, None, None, None, format!("Invalid base URL: {e}"))),
-        },
+        Err(e) => {
+            return ProviderTestResult {
+                success: false,
+                error: Some(provider_test_error(
+                    &protocol,
+                    None,
+                    None,
+                    None,
+                    format!("Invalid base URL: {e}"),
+                )),
+            }
+        }
     };
 
     let mut request = client.get(&request_url);
@@ -891,28 +1181,76 @@ async fn execute_provider_test(
     match response {
         Ok(resp) => {
             let status = resp.status();
-            let request_id = resp.headers()
+            let request_id = resp
+                .headers()
                 .get("x-request-id")
                 .or_else(|| resp.headers().get("request-id"))
                 .and_then(|value| value.to_str().ok())
                 .map(ToOwned::to_owned);
             if resp.status().is_success() {
-                ProviderTestResult { success: true, error: None }
+                ProviderTestResult {
+                    success: true,
+                    error: None,
+                }
             } else {
                 let body = resp.text().await.unwrap_or_default();
-                let classified = if status == 401 { "Authentication failed".to_string() }
-                    else if status == 404 { "Endpoint not found — check base URL".to_string() }
-                    else { format!("HTTP {}: {}", status, body.chars().take(200).collect::<String>()) };
-                ProviderTestResult { success: false, error: Some(provider_test_error(&protocol, None, Some(status), request_id, classified)) }
+                let classified = if status == 401 {
+                    "Authentication failed".to_string()
+                } else if status == 404 {
+                    "Endpoint not found — check base URL".to_string()
+                } else {
+                    format!(
+                        "HTTP {}: {}",
+                        status,
+                        body.chars().take(200).collect::<String>()
+                    )
+                };
+                ProviderTestResult {
+                    success: false,
+                    error: Some(provider_test_error(
+                        &protocol,
+                        None,
+                        Some(status),
+                        request_id,
+                        classified,
+                    )),
+                }
             }
         }
         Err(e) => {
             if e.is_timeout() {
-                ProviderTestResult { success: false, error: Some(provider_test_error(&protocol, None, None, None, "Connection timed out (15s)".to_string())) }
+                ProviderTestResult {
+                    success: false,
+                    error: Some(provider_test_error(
+                        &protocol,
+                        None,
+                        None,
+                        None,
+                        "Connection timed out (15s)".to_string(),
+                    )),
+                }
             } else if e.is_connect() {
-                ProviderTestResult { success: false, error: Some(provider_test_error(&protocol, None, None, None, "Cannot connect — check base URL and network".to_string())) }
+                ProviderTestResult {
+                    success: false,
+                    error: Some(provider_test_error(
+                        &protocol,
+                        None,
+                        None,
+                        None,
+                        "Cannot connect — check base URL and network".to_string(),
+                    )),
+                }
             } else {
-                ProviderTestResult { success: false, error: Some(provider_test_error(&protocol, None, None, None, format!("Connection failed: {e}"))) }
+                ProviderTestResult {
+                    success: false,
+                    error: Some(provider_test_error(
+                        &protocol,
+                        None,
+                        None,
+                        None,
+                        format!("Connection failed: {e}"),
+                    )),
+                }
             }
         }
     }
@@ -928,7 +1266,9 @@ pub async fn provider_test(
     let provider_id = input.provider_id;
     let key_id = input.key_id;
     let (_provider_type, api_protocol, base_url, api_key, default_model) = {
-        let pool_conn = state.db.get()
+        let pool_conn = state
+            .db
+            .get()
             .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
         let conn: &rusqlite::Connection = &*pool_conn;
         ensure_tables(conn)?;
@@ -953,7 +1293,13 @@ pub async fn provider_test(
             let encryption_key = env_manager::get_encryption_key(conn)?;
             env_manager::decrypt(&encrypted, &encryption_key)?
         };
-        (provider_type, api_protocol, base_url, api_key, default_model)
+        (
+            provider_type,
+            api_protocol,
+            base_url,
+            api_key,
+            default_model,
+        )
     };
 
     let model = input.model.or(default_model);
@@ -973,11 +1319,15 @@ pub async fn provider_test(
 /// Test a provider connection using a raw API key (without saving).
 /// Used by AddProviderDialog before the user saves the provider.
 #[tauri::command]
-pub async fn test_provider_raw(
-    input: RawProviderTestInput,
-) -> Result<ProviderTestResult> {
-    let protocol = normalize_api_protocol(input.api_protocol.as_deref().unwrap_or(&input.provider_type));
-    Ok(execute_provider_test(&protocol, &input.base_url, &input.api_key, input.model.as_deref()).await)
+pub async fn test_provider_raw(input: RawProviderTestInput) -> Result<ProviderTestResult> {
+    let protocol = required_api_protocol(input.api_protocol.as_deref())?;
+    Ok(execute_provider_test(
+        &protocol,
+        &input.base_url,
+        &input.api_key,
+        input.model.as_deref(),
+    )
+    .await)
 }
 
 // ── Helpers ──
@@ -1014,8 +1364,9 @@ fn ensure_tables(conn: &rusqlite::Connection) -> Result<()> {
             updated_at TEXT,
             last_leased_at TEXT,
             created_at TEXT NOT NULL
-        );"
-    ).map_err(|e| Error::Internal(e.to_string()))?;
+        );",
+    )
+    .map_err(|e| Error::Internal(e.to_string()))?;
 
     // Incremental migration: add missing columns for existing tables
     let add_column_if_missing = |table: &str, col: &str, def: &str| -> Result<()> {
@@ -1035,7 +1386,11 @@ fn ensure_tables(conn: &rusqlite::Connection) -> Result<()> {
     };
 
     add_column_if_missing("user_providers", "default_model", "TEXT")?;
-    add_column_if_missing("user_providers", "api_protocol", "TEXT NOT NULL DEFAULT 'openai_chat_completions'")?;
+    add_column_if_missing(
+        "user_providers",
+        "api_protocol",
+        "TEXT NOT NULL DEFAULT 'openai_chat_completions'",
+    )?;
     conn.execute_batch(
         "UPDATE user_providers
          SET api_protocol = CASE
@@ -1049,10 +1404,26 @@ fn ensure_tables(conn: &rusqlite::Connection) -> Result<()> {
             OR api_protocol = ''
             OR api_protocol IN ('openai_compatible', 'anthropic', 'claude');"
     ).map_err(|e| Error::Internal(e.to_string()))?;
-    add_column_if_missing("provider_api_keys", "masked_key", "TEXT NOT NULL DEFAULT ''")?;
-    add_column_if_missing("provider_api_keys", "is_primary", "INTEGER NOT NULL DEFAULT 0")?;
-    add_column_if_missing("provider_api_keys", "is_active", "INTEGER NOT NULL DEFAULT 1")?;
-    add_column_if_missing("provider_api_keys", "test_status", "TEXT NOT NULL DEFAULT 'untested'")?;
+    add_column_if_missing(
+        "provider_api_keys",
+        "masked_key",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        "provider_api_keys",
+        "is_primary",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(
+        "provider_api_keys",
+        "is_active",
+        "INTEGER NOT NULL DEFAULT 1",
+    )?;
+    add_column_if_missing(
+        "provider_api_keys",
+        "test_status",
+        "TEXT NOT NULL DEFAULT 'untested'",
+    )?;
     add_column_if_missing("provider_api_keys", "last_test_at", "TEXT")?;
     add_column_if_missing("provider_api_keys", "last_error_code", "TEXT")?;
     add_column_if_missing("provider_api_keys", "last_error_message", "TEXT")?;
@@ -1063,8 +1434,9 @@ fn ensure_tables(conn: &rusqlite::Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_primary_key
          ON provider_api_keys(provider_id)
-         WHERE is_primary = 1;"
-    ).map_err(|e| Error::Internal(e.to_string()))?;
+         WHERE is_primary = 1;",
+    )
+    .map_err(|e| Error::Internal(e.to_string()))?;
 
     // Auto-promote oldest key to primary if no primary key exists yet
     let primary_count: i64 = conn
@@ -1079,7 +1451,8 @@ fn ensure_tables(conn: &rusqlite::Connection) -> Result<()> {
             "UPDATE provider_api_keys SET is_primary = 1
              WHERE id = (SELECT id FROM provider_api_keys ORDER BY created_at ASC LIMIT 1)",
             [],
-        ).map_err(|e| Error::Internal(e.to_string()))?;
+        )
+        .map_err(|e| Error::Internal(e.to_string()))?;
     }
 
     Ok(())
@@ -1091,8 +1464,8 @@ fn uuid_v4() -> String {
     let bytes: [u8; 16] = rng.gen();
     // Set version (4) and variant (RFC 4122)
     let mut buf = bytes;
-    buf[6] = (buf[6] & 0x0f) | 0x40;  // version 4
-    buf[8] = (buf[8] & 0x3f) | 0x80;  // variant 10xx
+    buf[6] = (buf[6] & 0x0f) | 0x40; // version 4
+    buf[8] = (buf[8] & 0x3f) | 0x80; // variant 10xx
     format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
         buf[0], buf[1], buf[2], buf[3],
@@ -1182,7 +1555,10 @@ mod tests {
 
     #[test]
     fn test_models_url_does_not_duplicate_v1() {
-        assert_eq!(models_url("openai_compatible", "https://api.openai.com/v1").unwrap(), "https://api.openai.com/v1/models");
+        assert_eq!(
+            models_url("openai_compatible", "https://api.openai.com/v1").unwrap(),
+            "https://api.openai.com/v1/models"
+        );
     }
 
     #[test]
@@ -1191,9 +1567,15 @@ mod tests {
         let responses = serde_json::json!({"output_text": "ok"});
         let anthropic = serde_json::json!({"content": [{"type": "text", "text": "ok"}]});
         assert!(provider_response_has_content("openai_compatible", &openai));
-        assert!(provider_response_has_content("openai_responses", &responses));
+        assert!(provider_response_has_content(
+            "openai_responses",
+            &responses
+        ));
         assert!(provider_response_has_content("anthropic", &anthropic));
-        assert!(provider_response_has_content("anthropic_messages", &anthropic));
+        assert!(provider_response_has_content(
+            "anthropic_messages",
+            &anthropic
+        ));
         assert_eq!(
             provider_test_url("anthropic_messages", "https://api.anthropic.com").unwrap(),
             "https://api.anthropic.com/v1/messages"
@@ -1208,7 +1590,10 @@ mod tests {
     fn provider_test_builds_protocol_specific_request_bodies() {
         let anthropic = provider_test_body("anthropic_messages", "claude-sonnet").unwrap();
         assert_eq!(anthropic["model"], "claude-sonnet");
-        assert_eq!(anthropic["messages"][0]["content"], "Reply with exactly: ok");
+        assert_eq!(
+            anthropic["messages"][0]["content"],
+            "Reply with exactly: ok"
+        );
         assert!(anthropic.get("max_tokens").is_some());
         assert!(anthropic.get("max_output_tokens").is_none());
 
@@ -1221,6 +1606,9 @@ mod tests {
 
     #[test]
     fn unsupported_protocols_are_not_silently_tested_as_openai() {
+        assert!(required_api_protocol(None).is_err());
+        assert!(required_api_protocol(Some("")).is_err());
+        assert!(required_api_protocol(Some("unknown_protocol")).is_err());
         assert!(provider_test_url("gemini_generate_content", "https://example.com").is_err());
         assert!(models_url("ollama_chat", "http://localhost:11434").is_err());
         let message = provider_test_body("gemini_generate_content", "gemini-pro")
@@ -1272,19 +1660,27 @@ mod tests {
         ).unwrap();
 
         // Read back the key and verify masking
-        let (db_key, _masked): (String, String) = conn.query_row(
-            "SELECT k.api_key_encrypted, '' FROM provider_api_keys k WHERE k.id = ?1",
-            rusqlite::params![key_id],
-            |row| Ok((row.get(0)?, String::new())),
-        ).unwrap();
+        let (db_key, _masked): (String, String) = conn
+            .query_row(
+                "SELECT k.api_key_encrypted, '' FROM provider_api_keys k WHERE k.id = ?1",
+                rusqlite::params![key_id],
+                |row| Ok((row.get(0)?, String::new())),
+            )
+            .unwrap();
 
         // The DB stores the full key (encrypted in production, raw in test)
-        assert_eq!(db_key, full_key, "DB still has full key (encrypted in production)");
+        assert_eq!(
+            db_key, full_key,
+            "DB still has full key (encrypted in production)"
+        );
 
         // Simulate what the frontend sees: masked_key
         let frontend_key = mask_api_key(&db_key);
         assert_eq!(frontend_key, "sk-s…3456", "Frontend receives masked key");
-        assert!(!frontend_key.contains("abcdef123456"), "Full key not in frontend DTO");
+        assert!(
+            !frontend_key.contains("abcdef123456"),
+            "Full key not in frontend DTO"
+        );
         assert!(frontend_key.contains("…"), "Masked key uses ellipsis");
     }
 
@@ -1297,20 +1693,22 @@ mod tests {
     fn test_integration_test_connection_flow() {
         // Step 1: User enters base URL
         let raw_url = "https://token.sensenova.cn/v1/";
-        
+
         // Step 2: URL normalization removes trailing slash
         let normalized = normalize_url(raw_url).unwrap();
         assert_eq!(normalized, "https://token.sensenova.cn/v1");
-        
+
         // Step 3: Chat completions URL is derived
         let chat_url = chat_completions_url(&normalized);
         assert_eq!(chat_url, "https://token.sensenova.cn/v1/chat/completions");
-        
+
         // Step 4: User selects a model
         let model = "sensenova-6.7-flash-lite";
-        assert!(model.contains("sensenova") || model.contains("deepseek"), 
-                "Model is from the allowlist");
-        
+        assert!(
+            model.contains("sensenova") || model.contains("deepseek"),
+            "Model is from the allowlist"
+        );
+
         // Step 5: Key masking works for the raw key
         let raw_key = "sk-sensenova-test-key-abcdef123456";
         let masked = mask_api_key(raw_key);
@@ -1324,7 +1722,7 @@ mod tests {
         // Empty URL should be rejected
         assert!(normalize_url("").is_err());
         assert!(normalize_url("  ").is_err());
-        
+
         // Valid URL should work
         assert!(normalize_url("https://token.sensenova.cn/v1").is_ok());
     }
@@ -1333,12 +1731,16 @@ mod tests {
     #[test]
     fn test_integration_chat_completions_url_auto_derived() {
         let result = normalize_url("https://token.sensenova.cn/v1/chat/completions").unwrap();
-        assert_eq!(result, "https://token.sensenova.cn/v1", 
-                   "Base URL should be derived to /v1 when user pastes /chat/completions");
-        
+        assert_eq!(
+            result, "https://token.sensenova.cn/v1",
+            "Base URL should be derived to /v1 when user pastes /chat/completions"
+        );
+
         let chat_url = chat_completions_url(&result);
-        assert_eq!(chat_url, "https://token.sensenova.cn/v1/chat/completions",
-                   "Chat completions URL should be correctly rebuilt from derived base");
+        assert_eq!(
+            chat_url, "https://token.sensenova.cn/v1/chat/completions",
+            "Chat completions URL should be correctly rebuilt from derived base"
+        );
     }
 
     /// Verify that the ProviderKey DTO struct used for frontend communication
@@ -1360,11 +1762,17 @@ mod tests {
             last_error_message: None,
             created_at: "2026-01-01T00:00:00Z".to_string(),
         };
-        
+
         // Serialize to JSON and verify no api_key field
         let json = serde_json::to_value(&key).unwrap();
-        assert!(json.get("apiKey").is_none(), "DTO must not have apiKey field");
-        assert!(json.get("maskedKey").is_some(), "DTO must have maskedKey field");
+        assert!(
+            json.get("apiKey").is_none(),
+            "DTO must not have apiKey field"
+        );
+        assert!(
+            json.get("maskedKey").is_some(),
+            "DTO must have maskedKey field"
+        );
         assert_eq!(json["maskedKey"], "sk-a…1b2c");
     }
 }
