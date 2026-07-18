@@ -110,10 +110,70 @@ impl Default for EmbeddedAuthority {
 
 #[async_trait]
 impl ExecutionAuthority for EmbeddedAuthority {
-    async fn request(&self, method: &str, _params: Value) -> Result<Value, AuthorityError> {
-        Err(AuthorityError::Message(format!(
-            "{method} requires the UDS Agent Daemon"
-        )))
+    async fn request(&self, method: &str, params: Value) -> Result<Value, AuthorityError> {
+        match method {
+            "daemon.ping" => Ok(serde_json::json!({"pong": true})),
+            "daemon.getCapabilities" => Ok(serde_json::to_value(RunManager::capabilities()).unwrap_or_default()),
+            "run.create" => {
+                let req: CreateRunRequest = serde_json::from_value(params)
+                    .map_err(|e| AuthorityError::Message(e.to_string()))?;
+                serde_json::to_value(self.create_run(req).await?)
+                    .map_err(|e| AuthorityError::Message(e.to_string()))
+            }
+            "run.start" => {
+                let req: StartRunRequest = serde_json::from_value(params)
+                    .map_err(|e| AuthorityError::Message(e.to_string()))?;
+                serde_json::to_value(self.start_run(req).await?)
+                    .map_err(|e| AuthorityError::Message(e.to_string()))
+            }
+            "run.cancel" => {
+                let run_id = params
+                    .get("run_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| AuthorityError::Message("run_id required".into()))?;
+                serde_json::to_value(self.cancel_run(run_id).await?)
+                    .map_err(|e| AuthorityError::Message(e.to_string()))
+            }
+            "run.retry" => {
+                let run_id = params
+                    .get("run_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| AuthorityError::Message("run_id required".into()))?;
+                serde_json::to_value(self.retry_run(run_id).await?)
+                    .map_err(|e| AuthorityError::Message(e.to_string()))
+            }
+            "run.list" => {
+                let conversation_id = params.get("conversation_id").and_then(Value::as_str);
+                Ok(serde_json::json!({ "runs": self.list_runs(conversation_id).await? }))
+            }
+            "run.getEvents" | "run.replay" => {
+                let run_id = params
+                    .get("run_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| AuthorityError::Message("run_id required".into()))?;
+                let after = params
+                    .get("after_sequence")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                serde_json::to_value(self.replay_events(run_id, after).await?)
+                    .map_err(|e| AuthorityError::Message(e.to_string()))
+            }
+            "run.subscribe" => {
+                let run_id = params
+                    .get("run_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| AuthorityError::Message("run_id required".into()))?;
+                let after = params
+                    .get("after_sequence")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let events = self.subscribe_events(run_id, after).await?;
+                Ok(serde_json::json!({ "run_id": run_id, "events": events }))
+            }
+            _ => Err(AuthorityError::Message(format!(
+                "{method} requires the UDS Agent Daemon"
+            ))),
+        }
     }
 
     async fn create_run(&self, req: CreateRunRequest) -> Result<RunV2, AuthorityError> {

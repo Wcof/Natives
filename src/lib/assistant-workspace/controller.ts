@@ -4,7 +4,7 @@
  */
 import type { AssistantGateway } from '@/lib/assistant-gateway';
 import type { AttachmentRef, Run, RunEvent } from '@/lib/assistant-protocol';
-import { isActiveRunStatus } from '@/lib/assistant-protocol';
+import { isActiveRunStatus, mapWireRun } from '@/lib/assistant-protocol';
 import type { AssistantWorkspaceState, WorkspaceAction } from './state';
 
 export type Dispatch = (action: WorkspaceAction) => void;
@@ -245,6 +245,7 @@ export async function sendOrQueue(
     conversation_id: conversationId,
     provider_id: providerId,
     model_id: modelId,
+    permission_profile: conversation?.permissionProfileId ?? 'ask',
     content,
     attachments,
     project_path: projectPath,
@@ -253,15 +254,7 @@ export async function sendOrQueue(
   const mapped: Run =
     started && typeof started === 'object' && 'providerId' in started
       ? (started as Run)
-      : {
-          id: String((started as Record<string, unknown>).id),
-          conversationId,
-          status: 'running',
-          providerId,
-          modelId,
-          permissionProfile: 'ask',
-          startedAt: new Date().toISOString(),
-        };
+      : mapWireRun(started as Record<string, unknown>);
 
   dispatch({ type: 'run/upsert', run: { ...mapped, status: 'running' } });
   dispatch({ type: 'composer/clear', conversationId });

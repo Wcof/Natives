@@ -144,7 +144,12 @@ export class DaemonAssistantAdapter implements AssistantGateway {
     const messages = (Array.isArray(messagesRaw) ? messagesRaw : []).map((m) =>
       mapWireMessage((m ?? {}) as Record<string, unknown>),
     );
-    const runs = (Array.isArray(runsRaw) ? runsRaw : []).map((r) =>
+    const runRows = Array.isArray(runsRaw)
+      ? runsRaw
+      : Array.isArray((runsRaw as { runs?: unknown[] } | null)?.runs)
+        ? (runsRaw as { runs: unknown[] }).runs
+        : [];
+    const runs = runRows.map((r) =>
       mapWireRun((r ?? {}) as Record<string, unknown>),
     );
 

@@ -9,6 +9,8 @@ import {
   subscribeRun,
 } from './controller';
 import { FixtureAssistantAdapter } from '../assistant-gateway/fixture-adapter';
+import type { AssistantGateway } from '../assistant-gateway/gateway';
+import type { AssistantMethod } from '../assistant-protocol';
 import { goldenPermission, goldenTextStream } from '../assistant-fixtures/golden';
 import { createInitialWorkspaceState, workspaceReducer } from './reducer';
 
@@ -119,6 +121,60 @@ test('sendOrQueue accepts explicit projectPath over conversation', async () => {
     projectPath: '/explicit/path',
   });
   assert.ok(result.runId);
+});
+
+test('sendOrQueue forwards conversation permission profile to daemon run.start', async () => {
+  const seen: Record<string, unknown>[] = [];
+  const adapter: AssistantGateway = {
+    async connect() {},
+    async disconnect() {},
+    async request<T>(method: AssistantMethod, params?: unknown): Promise<T> {
+      if (method === 'run.start') {
+        seen.push(params as Record<string, unknown>);
+        return {
+          id: 'run-1',
+          conversation_id: 'conv-1',
+          status: 'running',
+          provider_id: 'openai',
+          model_id: 'gpt-4o',
+          permission_profile: 'readonly',
+        } as T;
+      }
+      return {} as T;
+    },
+    async *subscribe() {},
+    async getSnapshot() {
+      throw new Error('unused');
+    },
+  };
+  let state = createInitialWorkspaceState();
+  const dispatch = (a: import('./state').WorkspaceAction) => {
+    state = workspaceReducer(state, a);
+  };
+  state = workspaceReducer(state, {
+    type: 'conversations/upsert',
+    conversation: {
+      id: 'conv-1',
+      mode: 'agent',
+      title: 'p',
+      providerId: 'openai',
+      modelId: 'gpt-4o',
+      projectId: '/tmp/project',
+      permissionProfileId: 'readonly',
+      createdAt: 't',
+      updatedAt: 't',
+    },
+  });
+
+  await sendOrQueue(adapter, dispatch, state, {
+    conversationId: 'conv-1',
+    content: 'hi',
+    providerId: 'openai',
+    modelId: 'gpt-4o',
+    projectPath: '/tmp/project',
+  });
+
+  assert.equal(seen[0]?.permission_profile, 'readonly');
 });
 
 test('respondPermission binds run_id and request_id; cancelRun issues run.cancel', async () => {

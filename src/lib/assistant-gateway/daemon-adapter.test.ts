@@ -121,3 +121,28 @@ test('request never invents streamChat path — only injected methods', async ()
   assert.deepEqual(methods, ['run.start']);
   assert.ok(!methods.some((m) => m.toLowerCase().includes('stream')));
 });
+
+test('getSnapshot accepts daemon run.list envelope', async () => {
+  const adapter = new DaemonAssistantAdapter({
+    requestFn: async (method) => {
+      if (method === 'conversation.get') return { id: 'c', title: 'C' };
+      if (method === 'conversation.getMessages') return [];
+      if (method === 'run.list') {
+        return {
+          runs: [{
+            id: 'r',
+            conversation_id: 'c',
+            status: 'completed',
+            provider_id: 'openai',
+            model_id: 'm',
+          }],
+        };
+      }
+      if (method === 'run.getEvents') return [];
+      throw new Error(method);
+    },
+  });
+
+  const snapshot = await adapter.getSnapshot('c');
+  assert.equal(snapshot.runs[0]?.id, 'r');
+});

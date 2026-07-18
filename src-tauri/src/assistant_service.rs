@@ -85,6 +85,13 @@ pub async fn assistant_status(store: State<'_, Mutex<AssistantStore>>) -> Result
 
 /// Dispatch RPC method to the appropriate handler
 async fn dispatch_rpc(data_store: &Arc<DataStore>, method: &str, params: &Value) -> RpcResponse {
+    if daemon_owned_method(method) {
+        return match daemon_authority::request(method, params.clone()).await {
+            Ok(data) => success_response(data),
+            Err(error) => error_response("DAEMON_RPC_ERROR", &error),
+        };
+    }
+
     match method {
         "conversation.list" => handle_conversation_list(data_store, params).await,
         "conversation.create" => handle_conversation_create(data_store, params).await,
@@ -132,6 +139,20 @@ async fn dispatch_rpc(data_store: &Arc<DataStore>, method: &str, params: &Value)
         }
         _ => error_response("METHOD_NOT_FOUND", &format!("Unknown RPC method: {method}")),
     }
+}
+
+fn daemon_owned_method(method: &str) -> bool {
+    // ponytail: run.start still writes local conversation/message/attachment rows until daemon
+    // conversation RPC owns them; forwarding it here loses GUI-visible message attachments.
+    (method.starts_with("run.") && method != "run.start")
+        || method.starts_with("daemon.")
+        || method.starts_with("provider.")
+        || method.starts_with("tool.")
+        || method.starts_with("mcp.")
+        || method.starts_with("scheduler.")
+        || method.starts_with("extension.")
+        || method.starts_with("skill.")
+        || method.starts_with("memory.")
 }
 
 fn error_response(code: &str, message: &str) -> RpcResponse {
@@ -1668,6 +1689,15 @@ async fn handle_artifact_open(_data_store: &Arc<DataStore>, params: &Value) -> R
 mod tests {
     use super::*;
 
+    #[test]
+    fn run_start_stays_on_hybrid_path_until_daemon_owns_conversations() {
+        assert!(!daemon_owned_method("run.start"));
+        assert!(daemon_owned_method("run.list"));
+        assert!(daemon_owned_method("run.cancel"));
+        assert!(daemon_owned_method("provider.test"));
+        assert!(daemon_owned_method("mcp.list"));
+    }
+
     #[tokio::test]
     async fn implemented_daemon_method_is_not_rejected_by_legacy_dispatch() {
         let store = Arc::new(DataStore::new(":memory:").unwrap());
@@ -1778,6 +1808,7 @@ mod tests {
         .await;
         assert!(started.success, "run.start failed: {:?}", started.error);
         let run_id = started.data.as_ref().unwrap()["id"].as_str().unwrap();
+        assert_eq!(started.data.as_ref().unwrap()["permission_profile"], "readonly");
         store.conn().execute(
             "INSERT INTO assistant_permission_requests (id, run_id, tool_call_id, tool_name, reason, input, created_at) VALUES ('permission', ?1, 'tool', 'Read', 'test', '{}', ?2)",
             rusqlite::params![run_id, chrono::Utc::now().to_rfc3339()],
@@ -1801,13 +1832,6 @@ mod tests {
             .unwrap();
         assert_eq!(permission, ("approved".into(), "this_run".into()));
 
-        crate::daemon_authority::reset_authority_cache().await;
-        if let Some(mode) = previous_daemon_mode {
-            std::env::set_var("NATIVES_DAEMON_MODE", mode);
-        } else {
-            std::env::remove_var("NATIVES_DAEMON_MODE");
-        }
-
         let conversations = dispatch_rpc(&store, "conversation.list", &Value::Null)
             .await
             .data
@@ -1823,7 +1847,7 @@ mod tests {
         .await
         .data
         .unwrap();
-        assert_eq!(runs[0]["permission_profile"], "readonly");
+        assert_eq!(runs["runs"][0]["permission_profile"], "readonly");
         let messages = dispatch_rpc(
             &store,
             "conversation.getMessages",
@@ -1834,12 +1858,21 @@ mod tests {
         .await
         .data
         .unwrap();
-        assert_eq!(messages[0]["content_blocks"][1]["type"], "file_reference");
+        let file_block = messages[0]["content_blocks"]
+            .as_array()
+            .and_then(|blocks| blocks.iter().find(|block| block["type"] == "file_reference"))
+            .expect("file_reference block");
         assert_eq!(
-            messages[0]["content_blocks"][1]["content"]["path"],
+            file_block["content"]["path"],
             attachment_path.to_string_lossy().to_string()
         );
         let _ = std::fs::remove_file(attachment_path);
+        crate::daemon_authority::reset_authority_cache().await;
+        if let Some(mode) = previous_daemon_mode {
+            std::env::set_var("NATIVES_DAEMON_MODE", mode);
+        } else {
+            std::env::remove_var("NATIVES_DAEMON_MODE");
+        }
     }
 
     #[tokio::test]
