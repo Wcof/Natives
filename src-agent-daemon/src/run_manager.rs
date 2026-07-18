@@ -110,9 +110,14 @@ impl RunManager {
             "INSERT INTO run (
                 id, conversation_id, status, trigger_message_id, provider_id, model_id,
                 started_at, finished_at, error_code, step_count, max_steps,
-                token_budget, total_input_tokens, total_output_tokens, created_at
+                token_budget, total_input_tokens, total_output_tokens, created_at,
+                parent_run_id, agent_profile_id, key_id, permission_profile,
+                project_path, retry_count, idempotency_key
              )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, 0, 0, ?12)
+             VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, 0, 0, ?12,
+                ?13, ?14, ?15, ?16, ?17, ?18, ?19
+             )
              ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status,
                 trigger_message_id = excluded.trigger_message_id,
@@ -122,7 +127,14 @@ impl RunManager {
                 finished_at = excluded.finished_at,
                 error_code = excluded.error_code,
                 step_count = excluded.step_count,
-                max_steps = excluded.max_steps",
+                max_steps = excluded.max_steps,
+                parent_run_id = excluded.parent_run_id,
+                agent_profile_id = excluded.agent_profile_id,
+                key_id = excluded.key_id,
+                permission_profile = excluded.permission_profile,
+                project_path = excluded.project_path,
+                retry_count = excluded.retry_count,
+                idempotency_key = excluded.idempotency_key",
             rusqlite::params![
                 run.id,
                 run.conversation_id,
@@ -135,7 +147,14 @@ impl RunManager {
                 run.error_code,
                 run.step_count as i64,
                 run.max_steps as i64,
-                run.created_at.unwrap_or_else(chrono::Utc::now).to_rfc3339()
+                run.created_at.unwrap_or_else(chrono::Utc::now).to_rfc3339(),
+                run.parent_run_id,
+                run.agent_profile_id,
+                run.key_id,
+                run.permission_profile,
+                run.project_path,
+                run.retry_count as i64,
+                run.idempotency_key
             ],
         )
         .map_err(|e| format!("PERSISTENCE_FAILED upsert run: {e}"))?;
@@ -975,6 +994,76 @@ mod tests {
                 .replay_after(&run.id, 0);
             assert_eq!(replayed.len(), 1);
             assert!(matches!(replayed[0].payload, RunEventKind::Queued));
+        });
+    }
+
+    #[test]
+    fn create_run_persists_protocol_v2_run_metadata_to_sqlite() {
+        with_env_lock(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let db_path = dir.path().join("natives.db");
+            let store = Arc::new(
+                crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
+            );
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES ('run-meta-conv', 'agent', 'Run Meta', 'openai', 'gpt-4o')",
+                    [],
+                )
+                .unwrap();
+
+            let rm = RunManager::new_with_store(store.clone());
+            let idempotency_key = format!("run-meta-{}", Uuid::new_v4());
+            let run = rm
+                .create_run(CreateRunRequest {
+                    conversation_id: "run-meta-conv".into(),
+                    provider_id: "openai-compatible-provider".into(),
+                    model_id: "deepseek-v4-flash".into(),
+                    key_id: Some("key-123".into()),
+                    agent_profile_id: Some("agent-profile-1".into()),
+                    permission_profile: Some("full_access".into()),
+                    content: Some("persist metadata".into()),
+                    attachments: None,
+                    max_steps: Some(9),
+                    parent_run_id: Some("parent-run-1".into()),
+                    project_path: Some("/tmp/natives-project".into()),
+                    idempotency_key: Some(idempotency_key.clone()),
+                })
+                .unwrap();
+
+            let row: (String, String, String, String, String, String, String, i64) = store
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT parent_run_id, agent_profile_id, key_id, permission_profile,
+                            project_path, idempotency_key, model_id, max_steps
+                     FROM run WHERE id = ?1",
+                    rusqlite::params![run.id],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                            row.get(6)?,
+                            row.get(7)?,
+                        ))
+                    },
+                )
+                .unwrap();
+            assert_eq!(row.0, "parent-run-1");
+            assert_eq!(row.1, "agent-profile-1");
+            assert_eq!(row.2, "key-123");
+            assert_eq!(row.3, "full_access");
+            assert_eq!(row.4, "/tmp/natives-project");
+            assert_eq!(row.5, idempotency_key);
+            assert_eq!(row.6, "deepseek-v4-flash");
+            assert_eq!(row.7, 9);
         });
     }
 

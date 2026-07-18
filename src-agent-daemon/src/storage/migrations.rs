@@ -11,6 +11,7 @@ pub const ALL: &[(i64, &str)] = &[
     (4, MIGRATION_004),
     (5, MIGRATION_005),
     (6, MIGRATION_006),
+    (7, MIGRATION_007),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -310,4 +311,16 @@ CREATE INDEX IF NOT EXISTS idx_run_conversation ON run(conversation_id, created_
 
 PRAGMA legacy_alter_table=OFF;
 PRAGMA foreign_keys=ON;
+";
+
+/// Migration 007: Persist Protocol v2 run metadata in daemon SQLite.
+const MIGRATION_007: &str = "
+ALTER TABLE run ADD COLUMN parent_run_id TEXT;
+ALTER TABLE run ADD COLUMN agent_profile_id TEXT;
+ALTER TABLE run ADD COLUMN key_id TEXT;
+ALTER TABLE run ADD COLUMN permission_profile TEXT NOT NULL DEFAULT 'ask';
+ALTER TABLE run ADD COLUMN project_path TEXT;
+ALTER TABLE run ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE run ADD COLUMN idempotency_key TEXT;
+CREATE INDEX IF NOT EXISTS idx_run_idempotency_key ON run(idempotency_key);
 ";
