@@ -93,14 +93,20 @@ provider_status() {
     [[ -n "${ANTHROPIC_API_KEY:-}${ANTHROPIC_AUTH_TOKEN:-}" ]] && key_present=true
     [[ -n "${ANTHROPIC_BASE_URL:-}" ]] && base_present=true
   fi
-  if [[ "$LIVE" -ne 1 || "$key_present" != true ]]; then
+  if [[ "$LIVE" -ne 1 ]]; then
     write_json "provider-$provider-live.json" "{\"provider\":\"$provider\",\"status\":\"not_run\",\"reason\":\"credential_absent_or_live_not_requested\",\"key_present\":$key_present,\"base_present\":$base_present}"
+    return 0
+  fi
+  if [[ "$key_present" != true ]]; then
+    write_json "provider-$provider-live.json" "{\"provider\":\"$provider\",\"status\":\"not_run\",\"reason\":\"credential_absent\",\"key_present\":$key_present,\"base_present\":$base_present}"
+    overall=1
     return 0
   fi
   local model="${NATIVES_TEST_MODEL:-}"
   [[ "$provider" == "anthropic" ]] && model="${NATIVES_TEST_ANTHROPIC_MODEL:-$model}"
   if [[ -z "$model" ]]; then
     write_json "provider-$provider-live.json" "{\"provider\":\"$provider\",\"status\":\"not_run\",\"reason\":\"model_absent\",\"key_present\":$key_present,\"base_present\":$base_present}"
+    overall=1
     return 0
   fi
 
@@ -132,12 +138,14 @@ provider_status() {
   else
     write_json "provider-$provider-adapter-text.json" "{\"provider\":\"$provider\",\"case\":\"adapter-text\",\"status\":\"not_run\",\"reason\":\"adapter_live_test_not_available\"}"
     write_json "provider-$provider-adapter-tool.json" "{\"provider\":\"$provider\",\"case\":\"adapter-tool\",\"status\":\"not_run\",\"reason\":\"adapter_live_test_not_available\"}"
+    failed=1
   fi
   run_live_test engine-text natives-agent-daemon live_engine_e2e live_engine_text_turn
   run_live_test engine-tool natives-agent-daemon live_engine_e2e live_engine_tool_loop
   run_live_test engine-subagent natives-agent-daemon live_engine_e2e live_subagent_task_completes
   run_live_test engine-cancel natives-agent-daemon live_engine_e2e live_engine_cancel_stream
   write_json "provider-$provider-retry-live.json" "{\"provider\":\"$provider\",\"case\":\"engine-retry\",\"status\":\"not_run\",\"reason\":\"requires_controlled_retryable_provider_endpoint\",\"offline_engine_retry_test\":\"engine::tests::retries_retryable_provider_stream_open_errors\"}"
+  failed=1
 
   if [[ "$failed" -eq 0 ]]; then
     write_json "provider-$provider-live.json" "{\"provider\":\"$provider\",\"status\":\"pass\",\"key_present\":$key_present,\"base_present\":$base_present,\"model\":\"$model\"}"
@@ -149,6 +157,11 @@ provider_status() {
 
 provider_status openai_compatible NATIVES_TEST_OPENAI_KEY NATIVES_TEST_OPENAI_BASE
 provider_status anthropic NATIVES_TEST_ANTHROPIC_KEY NATIVES_TEST_ANTHROPIC_BASE
+
+if [[ "$LIVE" -eq 1 ]]; then
+  write_json cross-provider-subagent-live.json "{\"status\":\"not_run\",\"reason\":\"cross_provider_live_subagent_test_not_implemented\",\"parent\":\"openai_compatible\",\"child\":\"anthropic\"}"
+  overall=1
+fi
 
 git_rev="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 write_json manifest.json "{\"git_rev\":\"$git_rev\",\"live_requested\":$LIVE,\"scratch\":\"$SCRATCH\"}"
