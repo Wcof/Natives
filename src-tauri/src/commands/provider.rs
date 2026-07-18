@@ -493,7 +493,10 @@ fn chat_completions_url(base_url: &str) -> String {
 }
 
 fn is_anthropic_protocol(provider_type: &str) -> bool {
-    matches!(provider_type.trim().to_ascii_lowercase().as_str(), "anthropic" | "claude")
+    matches!(
+        provider_type.trim().to_ascii_lowercase().as_str(),
+        "anthropic" | "claude" | "anthropic_messages" | "anthropic-native"
+    )
 }
 
 fn anthropic_url(base_url: &str, endpoint: &str) -> Result<String> {
@@ -705,9 +708,14 @@ async fn execute_provider_test(
                             if has_content {
                                 ProviderTestResult { success: true, error: None }
                             } else {
+                                let keys = json.as_object()
+                                    .map(|obj| obj.keys().cloned().collect::<Vec<_>>().join(", "))
+                                    .unwrap_or_else(|| json.to_string().chars().take(80).collect());
                                 ProviderTestResult {
                                     success: false,
-                                    error: Some("Model response missing content. Check model name.".to_string()),
+                                    error: Some(format!(
+                                        "Provider returned no assistant text for the selected protocol ({provider_type}). Check protocol/model. Response keys: {keys}"
+                                    )),
                                 }
                             }
                         }
@@ -1051,8 +1059,9 @@ mod tests {
         let anthropic = serde_json::json!({"content": [{"type": "text", "text": "ok"}]});
         assert!(provider_response_has_content("openai_compatible", &openai));
         assert!(provider_response_has_content("anthropic", &anthropic));
+        assert!(provider_response_has_content("anthropic_messages", &anthropic));
         assert_eq!(
-            provider_test_url("anthropic", "https://api.anthropic.com").unwrap(),
+            provider_test_url("anthropic_messages", "https://api.anthropic.com").unwrap(),
             "https://api.anthropic.com/v1/messages"
         );
     }

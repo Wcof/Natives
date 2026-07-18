@@ -1078,9 +1078,7 @@ impl EngineToolRuntime for PermissionGatedTools {
         let class_result =
             capability_gateway::policy::check_permission(perm_class, profile_str);
         let needs_ask = match class_result {
-            capability_gateway::policy::PolicyResult::Allowed => {
-                !matches!(side_effect, SideEffect::ReadOnly)
-            }
+            capability_gateway::policy::PolicyResult::Allowed => false,
             capability_gateway::policy::PolicyResult::NeedsApproval(_)
             | capability_gateway::policy::PolicyResult::Denied(_) => true,
         };

@@ -47,6 +47,19 @@ pub async fn current_authority() -> Result<Arc<dyn ExecutionAuthority>, String> 
     if let Some(a) = guard.as_ref() {
         return Ok(Arc::clone(a));
     }
+    let mode = resolve_run_authority_mode();
+    if let RunAuthorityMode::Uds {
+        socket,
+        bootstrap_token,
+    } = &mode
+    {
+        if bootstrap_token.is_empty() || !socket.exists() {
+            crate::sidecar_supervisor::global_supervisor()
+                .ensure_healthy_or_restart()
+                .map_err(|e| format!("UDS daemon unavailable (no embedded fallback): {e}"))?;
+            *guard = None;
+        }
+    }
     let built = match resolve_run_authority_mode() {
         RunAuthorityMode::Embedded => {
             ensure_embedded_broker();

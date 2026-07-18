@@ -880,44 +880,50 @@ mod tests {
 
     #[tokio::test]
     async fn duplicate_start_detached_is_idempotent_while_active() {
-        std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
-        let rm = Arc::new(RunManager::new());
-        let created = rm
-            .create_run(CreateRunRequest {
-                conversation_id: "c-idem-start".into(),
-                provider_id: "openai".into(),
-                model_id: "gpt-4o".into(),
+        with_env_lock(|| {
+            std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
+            let rm = Arc::new(RunManager::new());
+            let created = rm
+                .create_run(CreateRunRequest {
+                    conversation_id: "c-idem-start".into(),
+                    provider_id: "openai".into(),
+                    model_id: "gpt-4o".into(),
+                    key_id: Some("k".into()),
+                    agent_profile_id: None,
+                    permission_profile: Some("full_access".into()),
+                    content: Some("once".into()),
+                    attachments: None,
+                    max_steps: Some(5),
+                    parent_run_id: None,
+                    project_path: None,
+                    idempotency_key: Some(format!("idem-start-{}", uuid::Uuid::new_v4())),
+                })
+                .unwrap();
+            let req = StartRunRequest {
+                run_id: Some(created.id.clone()),
+                conversation_id: None,
+                provider_id: Some("openai".into()),
+                model_id: Some("gpt-4o".into()),
                 key_id: Some("k".into()),
-                agent_profile_id: None,
-                permission_profile: Some("full_access".into()),
                 content: Some("once".into()),
                 attachments: None,
+                trigger_message_id: None,
+                permission_profile: Some("full_access".into()),
                 max_steps: Some(5),
-                parent_run_id: None,
                 project_path: None,
-                idempotency_key: Some(format!("idem-start-{}", uuid::Uuid::new_v4())),
-            })
-            .unwrap();
-        let req = StartRunRequest {
-            run_id: Some(created.id.clone()),
-            conversation_id: None,
-            provider_id: Some("openai".into()),
-            model_id: Some("gpt-4o".into()),
-            key_id: Some("k".into()),
-            content: Some("once".into()),
-            attachments: None,
-            trigger_message_id: None,
-            permission_profile: Some("full_access".into()),
-            max_steps: Some(5),
-            project_path: None,
-            idempotency_key: None,
-        };
-        let a = rm.start_detached(req.clone()).unwrap();
-        let b = rm.start_detached(req).unwrap();
-        assert_eq!(a.id, b.id);
-        // Second call must not error; active run is returned as-is.
-        assert!(a.status.is_active() || a.status.is_terminal() || a.status == RunStatusV2::Queued);
-        std::env::remove_var("NATIVES_DAEMON_FIXTURE");
+                idempotency_key: None,
+            };
+            let a = rm.start_detached(req.clone()).unwrap();
+            let b = rm.start_detached(req).unwrap();
+            assert_eq!(a.id, b.id);
+            // Second call must not error; active run is returned as-is.
+            assert!(
+                a.status.is_active()
+                    || a.status.is_terminal()
+                    || a.status == RunStatusV2::Queued
+            );
+            std::env::remove_var("NATIVES_DAEMON_FIXTURE");
+        });
     }
 
     #[tokio::test]

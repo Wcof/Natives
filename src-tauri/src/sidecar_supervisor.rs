@@ -88,7 +88,7 @@ impl SupervisorConfig {
                     "uds" | "sidecar" | "remote"
                 )
             })
-            .unwrap_or(false)
+            .unwrap_or_else(|_| !cfg!(test))
             || std::env::var("NATIVES_REQUIRE_UDS")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false);
