@@ -234,6 +234,7 @@ impl ProductionRuntime {
 
     pub async fn set_permission_profile(&self, profile: &str) {
         let p = match profile {
+            "readonly" | "read_only" => PermissionProfile::ReadOnly,
             "full_access" | "autonomous" | "full" => PermissionProfile::Autonomous,
             _ => PermissionProfile::ConfirmEach,
         };
@@ -1019,6 +1020,26 @@ mod permission_bind_tests {
     use tokio::sync::oneshot;
 
     #[tokio::test]
+    async fn runtime_profile_maps_readonly_ask_and_full_access() {
+        let rt = ProductionRuntime::new();
+        rt.set_permission_profile("readonly").await;
+        assert_eq!(
+            rt.permissions.get_profile().await,
+            PermissionProfile::ReadOnly
+        );
+        rt.set_permission_profile("ask").await;
+        assert_eq!(
+            rt.permissions.get_profile().await,
+            PermissionProfile::ConfirmEach
+        );
+        rt.set_permission_profile("full_access").await;
+        assert_eq!(
+            rt.permissions.get_profile().await,
+            PermissionProfile::Autonomous
+        );
+    }
+
+    #[tokio::test]
     async fn rejects_mismatched_run_id() {
         let rt = ProductionRuntime::new();
         let (tx, _rx) = oneshot::channel();
@@ -1276,6 +1297,7 @@ impl PermissionGatedTools {
             .permissions
             .request_permission_for_profile(
                 match self.permission_profile.as_str() {
+                    "readonly" | "read_only" => PermissionProfile::ReadOnly,
                     "full_access" | "autonomous" | "full" => PermissionProfile::Autonomous,
                     _ => PermissionProfile::ConfirmEach,
                 },

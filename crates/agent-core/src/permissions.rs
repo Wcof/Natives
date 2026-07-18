@@ -3,10 +3,10 @@
 //! Manages permission profiles (confirm_all, autonomous), grant persistence,
 //! and recovery of waiting approvals after application and daemon restart.
 
-use assistant_protocol::v1::permission::{
-    PermissionRequest, PermissionStatus, PermissionScope, PermissionResponse,
-};
 use assistant_protocol::error::DaemonError;
+use assistant_protocol::v1::permission::{
+    PermissionRequest, PermissionResponse, PermissionScope, PermissionStatus,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -14,6 +14,8 @@ use tokio::sync::Mutex;
 /// Permission profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionProfile {
+    /// Read-only mode: side-effect permission requests are denied, not asked.
+    ReadOnly,
     /// Every side-effect tool call requires approval.
     ConfirmEach,
     /// Auto-execute within project sandbox and policy.
@@ -86,9 +88,14 @@ impl PermissionManager {
         reason: String,
         input: serde_json::Value,
     ) -> Result<String, DaemonError> {
-
         // Check if profile allows auto-approval
         match profile {
+            PermissionProfile::ReadOnly => Err(DaemonError::new(
+                "permission_denied",
+                assistant_protocol::error::ErrorCategory::PermissionDenied,
+                false,
+                "readonly profile denies side effects",
+            )),
             PermissionProfile::Autonomous => {
                 // Auto-approve for non-hard-policy actions
                 return Ok("auto-approved".to_string());
@@ -115,10 +122,7 @@ impl PermissionManager {
     }
 
     /// Respond to a permission request.
-    pub async fn respond(
-        &self,
-        response: &PermissionResponse,
-    ) -> Result<(), DaemonError> {
+    pub async fn respond(&self, response: &PermissionResponse) -> Result<(), DaemonError> {
         let mut pending = self.pending_requests.lock().await;
         if let Some(mut request) = pending.remove(&response.request_id) {
             request.status = if response.approved {
@@ -191,11 +195,16 @@ mod tests {
     #[tokio::test]
     async fn test_confirm_each_requires_approval() {
         let manager = create_manager(PermissionProfile::ConfirmEach);
-        let id = manager.request_permission(
-            "run-1", "tc-1", "write_file",
-            "Write to /tmp/test.txt".to_string(),
-            serde_json::json!({"path": "/tmp/test.txt"}),
-        ).await.unwrap();
+        let id = manager
+            .request_permission(
+                "run-1",
+                "tc-1",
+                "write_file",
+                "Write to /tmp/test.txt".to_string(),
+                serde_json::json!({"path": "/tmp/test.txt"}),
+            )
+            .await
+            .unwrap();
         // ConfirmEach should NOT auto-approve; it should return a UUID request ID
         assert_ne!(id, "auto-approved", "ConfirmEach should not auto-approve");
         assert!(id.len() > 10, "Should return a UUID, got: {}", id);
@@ -204,23 +213,53 @@ mod tests {
     #[tokio::test]
     async fn test_autonomous_auto_approves() {
         let manager = create_manager(PermissionProfile::Autonomous);
-        let id = manager.request_permission(
-            "run-1", "tc-1", "read_file",
-            "Read /tmp/test.txt".to_string(),
-            serde_json::json!({"path": "/tmp/test.txt"}),
-        ).await.unwrap();
-        assert_eq!(id, "auto-approved", "Autonomous profile should auto-approve");
+        let id = manager
+            .request_permission(
+                "run-1",
+                "tc-1",
+                "read_file",
+                "Read /tmp/test.txt".to_string(),
+                serde_json::json!({"path": "/tmp/test.txt"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            id, "auto-approved",
+            "Autonomous profile should auto-approve"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_readonly_denies_permission_request_without_pending_ask() {
+        let manager = create_manager(PermissionProfile::ReadOnly);
+        let err = manager
+            .request_permission(
+                "run-1",
+                "tc-1",
+                "write_file",
+                "Write to /tmp/test.txt".to_string(),
+                serde_json::json!({"path": "/tmp/test.txt"}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "permission_denied");
+        assert_eq!(manager.pending_count().await, 0);
     }
 
     #[tokio::test]
     async fn test_respond_to_permission() {
         let manager = create_manager(PermissionProfile::ConfirmEach);
         // First, create a pending request
-        let _req_id = manager.request_permission(
-            "run-1", "tc-1", "write_file",
-            "Test".to_string(),
-            serde_json::json!({}),
-        ).await.unwrap();
+        let _req_id = manager
+            .request_permission(
+                "run-1",
+                "tc-1",
+                "write_file",
+                "Test".to_string(),
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap();
 
         // ConfirmEach auto-approves, so we can't test manual response
         // Instead, verify the profile switch works
@@ -237,19 +276,17 @@ mod tests {
     #[tokio::test]
     async fn test_restore_pending() {
         let manager = create_manager(PermissionProfile::ConfirmEach);
-        let requests = vec![
-            PermissionRequest {
-                id: "restored-1".to_string(),
-                run_id: "run-1".to_string(),
-                tool_call_id: "tc-1".to_string(),
-                tool_name: "write_file".to_string(),
-                reason: "Test".to_string(),
-                input: serde_json::json!({}),
-                status: PermissionStatus::Pending,
-                created_at: chrono::Utc::now(),
-                responded_at: None,
-            },
-        ];
+        let requests = vec![PermissionRequest {
+            id: "restored-1".to_string(),
+            run_id: "run-1".to_string(),
+            tool_call_id: "tc-1".to_string(),
+            tool_name: "write_file".to_string(),
+            reason: "Test".to_string(),
+            input: serde_json::json!({}),
+            status: PermissionStatus::Pending,
+            created_at: chrono::Utc::now(),
+            responded_at: None,
+        }];
         manager.restore_pending(requests).await;
         assert_eq!(manager.pending_count().await, 1);
     }
