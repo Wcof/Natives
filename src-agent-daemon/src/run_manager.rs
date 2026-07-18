@@ -75,6 +75,7 @@ impl RunManager {
             data_store: Some(data_store.clone()),
             runtime: Arc::new(ProductionRuntime::new_with_event_store(data_store)),
         };
+        let _ = mgr.interrupt_active_sqlite_runs();
         let _ = mgr.restore_runs_snapshot();
         mgr
     }
@@ -147,6 +148,27 @@ impl RunManager {
                 let _ = conn.execute("DELETE FROM run WHERE id = ?1", rusqlite::params![run_id]);
             }
         }
+    }
+
+    fn interrupt_active_sqlite_runs(&self) -> Result<usize, String> {
+        let Some(store) = &self.data_store else {
+            return Ok(0);
+        };
+        let conn = store.conn()?;
+        let changed = conn
+            .execute(
+                "UPDATE run
+                 SET status = 'interrupted',
+                     error_code = 'daemon_restarted',
+                     finished_at = ?1
+                 WHERE status IN (
+                    'queued', 'preparing', 'running', 'waiting_permission',
+                    'waiting_subagent', 'cancelling'
+                 )",
+                rusqlite::params![chrono::Utc::now().to_rfc3339()],
+            )
+            .map_err(|e| format!("PERSISTENCE_FAILED interrupt active runs: {e}"))?;
+        Ok(changed)
     }
 
     fn store_project_path(&self, run_id: &str, project_path: Option<&str>) {
@@ -1498,6 +1520,72 @@ mod tests {
             assert_eq!(restored.project_path.as_deref(), Some("/tmp/proj"));
             let _ = std::fs::remove_dir_all(&dir);
         }); // with_env_lock
+    }
+
+    #[test]
+    fn sqlite_active_runs_are_interrupted_on_manager_startup() {
+        with_env_lock(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let db_path = dir.path().join("natives.db");
+            let store = Arc::new(
+                crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
+            );
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES ('restart-conv', 'agent', 'Restart', 'openai', 'gpt-4o')",
+                    [],
+                )
+                .unwrap();
+            for (run_id, status) in [
+                ("restart-queued", "queued"),
+                ("restart-running", "running"),
+                ("restart-waiting", "waiting_permission"),
+                ("restart-completed", "completed"),
+            ] {
+                store
+                    .conn()
+                    .unwrap()
+                    .execute(
+                        "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                     VALUES (?1, 'restart-conv', ?2, 'openai', 'gpt-4o')",
+                        rusqlite::params![run_id, status],
+                    )
+                    .unwrap();
+            }
+
+            let _rm = RunManager::new_with_store(store.clone());
+            let rows: Vec<(String, String, Option<String>)> = {
+                let conn = store.conn().unwrap();
+                let mut stmt = conn
+                    .prepare("SELECT id, status, error_code FROM run ORDER BY id")
+                    .unwrap();
+                stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                    .unwrap()
+                    .map(Result::unwrap)
+                    .collect()
+            };
+            assert!(rows.iter().any(|(id, status, code)| {
+                id == "restart-running"
+                    && status == "interrupted"
+                    && code.as_deref() == Some("daemon_restarted")
+            }));
+            assert!(rows.iter().any(|(id, status, code)| {
+                id == "restart-queued"
+                    && status == "interrupted"
+                    && code.as_deref() == Some("daemon_restarted")
+            }));
+            assert!(rows.iter().any(|(id, status, code)| {
+                id == "restart-waiting"
+                    && status == "interrupted"
+                    && code.as_deref() == Some("daemon_restarted")
+            }));
+            assert!(rows.iter().any(|(id, status, code)| {
+                id == "restart-completed" && status == "completed" && code.is_none()
+            }));
+        });
     }
 
     #[tokio::test]
