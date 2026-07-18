@@ -244,6 +244,8 @@ export const zh = {
     keyLabel: '标签',
     remove: '移除',
     tabExecutor: '执行引擎',
+    tabEngineCaps: '引擎能力',
+    engineCapsDesc: '通过 Protocol v2 查看 MCP、调度器、扩展与 Skills（Daemon 权威，非旧 streamChat）。',
     executorTitle: '执行引擎',
     executorDesc: '配置 AI 助理可使用的工具，以及自愈/熔断策略。',
     toolReadFile: '读取文件',

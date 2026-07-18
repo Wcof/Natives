@@ -4,16 +4,21 @@
   "description": "AI Steam Base — Tauri Desktop Application Container",
   "private": true,
   "scripts": {
-    "dev": "NODE_ENV=development next dev -H 127.0.0.1 -p 3000",
+    "web:dev": "NODE_ENV=development next dev -H 127.0.0.1 -p 3000",
+    "daemon:build": "cargo build -p natives-agent-daemon",
+    "daemon:bundle": "bash scripts/daemon/prepare-sidecar.sh",
+    "dev": "npm run daemon:build && tauri dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint src/",
     "test": "tsx --test src/**/*.test.ts",
     "typecheck": "tsc --noEmit",
+    "protocol:check": "node scripts/check-protocol-sync.mjs",
+    "verify:native-engine": "bash scripts/daemon/verify-native-engine.sh",
     "i18n:check": "node scripts/i18n-check.mjs",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:dev": "npm run dev",
+    "tauri:build": "npm run daemon:bundle && tauri build --config src-tauri/tauri.bundle.conf.json"
   },
   "dependencies": {
     "@milkdown/crepe": "^7.21.2",

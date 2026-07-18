@@ -1,48 +1,175 @@
-//! DeepSeek provider adapter.
+//! DeepSeek provider adapter — OpenAI-compatible Chat Completions.
 
 use async_trait::async_trait;
 use crate::capabilities::*;
+use crate::http_stream::stream_chat_completions;
+use crate::stream::ProviderEvent;
 use assistant_protocol::v1::provider::{ProviderType, ModelCapabilities};
+use reqwest::Client;
 
-pub struct DeepSeekAdapter { api_key: Option<String>, base_url: String }
-impl DeepSeekAdapter {
-    pub fn new() -> Self { DeepSeekAdapter { api_key: None, base_url: "https://api.deepseek.com/v1".to_string() } }
-    pub fn with_api_key(mut self, key: String) -> Self { self.api_key = Some(key); self }
+pub struct DeepSeekAdapter {
+    api_key: Option<String>,
+    base_url: String,
+    client: Client,
 }
-impl Default for DeepSeekAdapter { fn default() -> Self { Self::new() } }
+
+impl DeepSeekAdapter {
+    pub fn new() -> Self {
+        DeepSeekAdapter {
+            api_key: None,
+            base_url: "https://api.deepseek.com".to_string(),
+            client: Client::new(),
+        }
+    }
+    pub fn with_api_key(mut self, key: String) -> Self {
+        self.api_key = Some(key);
+        self
+    }
+}
+impl Default for DeepSeekAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[async_trait]
 impl ProviderAdapter for DeepSeekAdapter {
-    fn provider_type(&self) -> ProviderType { ProviderType::Deepseek }
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::Deepseek
+    }
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             provider_type: ProviderType::Deepseek,
-            features: vec!["streaming".into(), "tool_calls".into(), "reasoning".into()],
-            max_context_window: 64_000, streaming: true, tool_calls: true,
-            structured_output: false, image_input: false, file_input: false,
-            reasoning: true, system_prompt: true, function_calling: true,
+            features: vec![
+                "streaming".into(),
+                "tool_calls".into(),
+                "reasoning".into(),
+                "system_prompt".into(),
+            ],
+            max_context_window: 64_000,
+            streaming: true,
+            tool_calls: true,
+            structured_output: false,
+            image_input: false,
+            file_input: false,
+            reasoning: true,
+            system_prompt: true,
+            function_calling: true,
         }
     }
     async fn chat(&self, request: ProviderRequest) -> Result<ProviderResponse, ProviderError> {
+        if self.api_key.is_none() {
+            return Err(ProviderError {
+                code: "missing_key".into(),
+                message: "DeepSeek API key required (offline mock removed)".into(),
+                category: ProviderErrorCategory::Auth,
+                retryable: false,
+            });
+        }
+        let mut text = String::new();
+        let mut usage = ProviderUsage::default();
+        let stream = self
+            .stream(
+                request,
+                Credential {
+                    api_key: self.api_key.clone().unwrap_or_default(),
+                    base_url: Some(self.base_url.clone()),
+                    key_id: None,
+                    provider_type: Some("deepseek".into()),
+                },
+            )
+            .await?;
+        use futures_util::StreamExt;
+        tokio::pin!(stream);
+        while let Some(ev) = stream.next().await {
+            match ev {
+                ProviderEvent::TextDelta(t) => text.push_str(&t),
+                ProviderEvent::Usage(u) => usage = u,
+                ProviderEvent::Error(e) => return Err(e),
+                _ => {}
+            }
+        }
         Ok(ProviderResponse {
-            content: vec![ProviderResponseBlock::Text(format!("DeepSeek response to: {:?}", request.messages.first()))],
-            usage: ProviderUsage { input_tokens: 8, output_tokens: 16, reasoning_tokens: Some(4), cost_usd: Some(0.0005) },
+            content: vec![ProviderResponseBlock::Text(text)],
+            usage,
         })
     }
-    async fn chat_stream(&self, _request: ProviderRequest) -> Result<Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>, ProviderError> {
-        let stream = tokio_stream::iter(vec![
-            ProviderStreamEvent::TextDelta("Hello from DeepSeek!".to_string()),
-            ProviderStreamEvent::Done(ProviderUsage::default()),
-        ]);
-        Ok(Box::new(stream))
+    async fn chat_stream(
+        &self,
+        _request: ProviderRequest,
+    ) -> Result<Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>, ProviderError>
+    {
+        Err(ProviderError {
+            code: "use_stream".into(),
+            message: "Use stream(request, credential) for DeepSeek; offline mock removed".into(),
+            category: ProviderErrorCategory::Auth,
+            retryable: false,
+        })
+    }
+    async fn stream(
+        &self,
+        request: ProviderRequest,
+        credential: Credential,
+    ) -> Result<
+        std::pin::Pin<Box<dyn futures_util::Stream<Item = ProviderEvent> + Send>>,
+        ProviderError,
+    > {
+        let key = if !credential.api_key.is_empty() {
+            credential.api_key
+        } else {
+            self.api_key.clone().ok_or_else(|| ProviderError {
+                code: "missing_key".into(),
+                message: "DeepSeek API key required".into(),
+                category: ProviderErrorCategory::Auth,
+                retryable: false,
+            })?
+        };
+        let base = credential
+            .base_url
+            .unwrap_or_else(|| self.base_url.clone());
+        stream_chat_completions(&self.client, &base, &key, request).await
     }
     async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
         Ok(vec![
-            ModelInfo { id: "deepseek-chat".to_string(), display_name: Some("DeepSeek Chat".to_string()), context_window: 64_000, max_output: 8_192, capabilities: ModelCapabilities { streaming: true, image_input: false, file_input: false, reasoning: true, tool_calling: true, structured_output: false, function_calling: true, system_prompt: true } },
-            ModelInfo { id: "deepseek-reasoner".to_string(), display_name: Some("DeepSeek Reasoner".to_string()), context_window: 64_000, max_output: 8_192, capabilities: ModelCapabilities { streaming: true, image_input: false, file_input: false, reasoning: true, tool_calling: false, structured_output: false, function_calling: false, system_prompt: true } },
+            ModelInfo {
+                id: "deepseek-chat".into(),
+                display_name: Some("DeepSeek Chat".into()),
+                context_window: 64_000,
+                max_output: 8_192,
+                capabilities: ModelCapabilities {
+                    streaming: true,
+                    image_input: false,
+                    file_input: false,
+                    reasoning: false,
+                    tool_calling: true,
+                    structured_output: false,
+                    function_calling: true,
+                    system_prompt: true,
+                },
+            },
+            ModelInfo {
+                id: "deepseek-reasoner".into(),
+                display_name: Some("DeepSeek Reasoner".into()),
+                context_window: 64_000,
+                max_output: 8_192,
+                capabilities: ModelCapabilities {
+                    streaming: true,
+                    image_input: false,
+                    file_input: false,
+                    reasoning: true,
+                    tool_calling: false,
+                    structured_output: false,
+                    function_calling: false,
+                    system_prompt: true,
+                },
+            },
         ])
     }
     async fn test_connection(&self) -> Result<ProviderTestResult, ProviderError> {
-        Ok(ProviderTestResult { success: true, latency_ms: Some(80), message: "DeepSeek connection test passed".to_string() })
+        Ok(ProviderTestResult {
+            success: self.api_key.is_some(),
+            latency_ms: None,
+            message: "DeepSeek adapter ready".into(),
+        })
     }
 }

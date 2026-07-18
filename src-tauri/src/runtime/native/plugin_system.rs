@@ -25,6 +25,9 @@
 //!         SKILL.md
 //!
 
+//!
+//! Residual catalog/compat after Protocol v2 cutover (execution retired).
+#![allow(dead_code)]
 use crate::runtime::native::hook_pipeline::{
     HookGroup, HookPipeline, HookPoint,
 };

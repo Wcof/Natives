@@ -358,7 +358,7 @@ fn is_native_usage_source(source_id: &str) -> bool {
 /// Reconciliation and cost allocation function for a specific source.
 fn reconcile_source(
     source_id: &str,
-    mut native_records: Vec<UsageDailyRecord>,
+    native_records: Vec<UsageDailyRecord>,
     cc_entries: Option<&Vec<CcusageDailyEntry>>,
     reconciliation_warnings: &mut Vec<UsageWarning>,
 ) -> Vec<UsageDailyRecord> {

@@ -4,8 +4,8 @@
 //! `resolve_runtime` 按可用性自动分流。详见 CONTEXT.md「执行引擎」与
 //! docs/architecture/EXECUTION-ENGINE-DESIGN.md P1。
 
+#![allow(dead_code, unused_imports, unused_variables)]
 pub mod registry;
-pub mod native_runtime;
 pub mod native;
 pub mod claude_cli;
 pub mod codex_cli;
@@ -25,7 +25,7 @@ pub struct RuntimeStreamOptions {
     pub provider_id: String,
     pub system_prompt: Option<String>,
     pub working_directory: Option<PathBuf>,
-    /// runtime 内部 await 它感知中断信号（由外部 cancel_stream IPC 持有 Sender 发信号）
+    /// runtime 内部 await 它感知中断信号。
     pub abort_receiver: tokio::sync::oneshot::Receiver<()>,
     /// runtime 专属透传字段（CLI 的 sdk_session_id、Native 的 files 等）
     pub runtime_options: serde_json::Value,

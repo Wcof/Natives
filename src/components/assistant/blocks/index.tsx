@@ -4,15 +4,18 @@
 // file reference, tool call, tool result, citation, error, and legacy.
 
 import React from 'react';
+import { reasoningToggleLabel } from '@/lib/assistant-message-view';
 
 // ─── Block Types ────────────────────────────────────────
 
 export type BlockType =
   | 'text' | 'reasoning' | 'image' | 'file_reference'
-  | 'tool_call' | 'tool_result' | 'citation' | 'error' | 'legacy';
+  | 'tool_call' | 'tool_result' | 'diff' | 'citation' | 'error'
+  | 'permission' | 'ask_user' | 'plan' | 'subagent' | 'artifact'
+  | 'compaction' | 'system_notice' | 'legacy';
 
 export interface ContentBlock {
-  type: BlockType;
+  type: BlockType | string;
   text?: string;
   reasoning?: string;
   signature?: string;
@@ -28,6 +31,9 @@ export interface ContentBlock {
   toolOutput?: unknown;
   isError?: boolean;
   durationMs?: number;
+  /** True while the parent assistant turn is still streaming this reasoning. */
+  live?: boolean;
+  locale?: string;
   citationUri?: string;
   citationTitle?: string;
   errorCode?: string;
@@ -35,6 +41,12 @@ export interface ContentBlock {
   retryable?: boolean;
   raw?: string;
   originalType?: string;
+  diffstat?: string;
+  hunks?: Array<{ header: string; lines: string[] }>;
+  planMarkdown?: string;
+  permissionId?: string;
+  artifactId?: string;
+  subRunId?: string;
 }
 
 // ─── Block Renderers ────────────────────────────────────
@@ -44,19 +56,41 @@ function TextBlock({ block }: { block: ContentBlock }) {
 }
 
 function ReasoningBlock({ block }: { block: ContentBlock }) {
-  const [expanded, setExpanded] = React.useState(false);
-  const duration = block.durationMs == null ? '' : ` · ${(block.durationMs / 1000).toFixed(1)}s`;
+  const live = Boolean(block.live);
+  const [expanded, setExpanded] = React.useState(live);
+
+  // Stream phase auto-expands; completion auto-collapses per design.
+  React.useEffect(() => {
+    setExpanded(live);
+  }, [live]);
+
+  const label = reasoningToggleLabel({
+    reasoning: block.reasoning,
+    live,
+    expanded,
+    durationMs: block.durationMs,
+    locale: block.locale,
+  });
+
   return (
     <div className="my-3 border-y border-[var(--border-subtle)] py-2">
       <button
-        onClick={() => setExpanded(!expanded)}
-        className="text-xs text-[var(--text-disabled)] hover:text-[var(--text-secondary)] transition-colors"
+        type="button"
+        onClick={() => setExpanded(value => !value)}
+        className={`inline-flex items-center gap-1.5 text-xs transition-colors ${
+          live
+            ? 'text-[var(--text-secondary)]'
+            : 'text-[var(--text-disabled)] hover:text-[var(--text-secondary)]'
+        }`}
         aria-expanded={expanded}
       >
-        {expanded ? '隐藏思考过程' : '查看思考过程'}{duration}
+        {live && (
+          <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--primary)]" aria-hidden />
+        )}
+        <span>{label}</span>
       </button>
       {expanded && block.reasoning && (
-        <div className="mt-1 text-sm text-[var(--text-secondary)] italic">
+        <div className="mt-1 text-sm text-[var(--text-secondary)] italic whitespace-pre-wrap">
           {block.reasoning}
         </div>
       )}
@@ -190,6 +224,55 @@ function LegacyBlock({ block }: { block: ContentBlock }) {
 
 // ─── Main Block Renderer ────────────────────────────────
 
+function DiffBlock({ block }: { block: ContentBlock }) {
+  return (
+    <div className="my-2 overflow-hidden rounded-lg border border-[var(--border-subtle)]">
+      <div className="bg-[var(--surface-hover)] px-3 py-1.5 text-xs font-medium">
+        Diff{block.diffstat ? ` · ${block.diffstat}` : ''}{block.filePath ? ` · ${block.filePath}` : ''}
+      </div>
+      <pre className="max-h-64 overflow-auto px-3 py-2 text-xs font-mono">
+        {(block.hunks ?? []).map((h, i) => (
+          <div key={i}>
+            <div className="text-[var(--text-disabled)]">{h.header}</div>
+            {h.lines.map((line, j) => (
+              <div
+                key={j}
+                className={
+                  line.startsWith('+')
+                    ? 'bg-green-500/10 text-green-700 dark:text-green-300'
+                    : line.startsWith('-')
+                      ? 'bg-red-500/10 text-red-700 dark:text-red-300'
+                      : ''
+                }
+              >
+                {line}
+              </div>
+            ))}
+          </div>
+        ))}
+        {!block.hunks?.length && block.raw && <div className="whitespace-pre-wrap">{block.raw}</div>}
+      </pre>
+    </div>
+  );
+}
+
+function PlanBlock({ block }: { block: ContentBlock }) {
+  return (
+    <div className="my-2 rounded-lg border border-[var(--border)] p-3 text-sm">
+      <div className="mb-1 text-xs font-medium text-[var(--text-secondary)]">Plan</div>
+      <div className="whitespace-pre-wrap">{block.planMarkdown ?? block.text}</div>
+    </div>
+  );
+}
+
+function SystemNoticeBlock({ block }: { block: ContentBlock }) {
+  return (
+    <div className="my-2 rounded-md bg-[var(--surface-hover)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+      {block.text ?? block.raw}
+    </div>
+  );
+}
+
 export function renderBlock(block: ContentBlock, index: number): React.ReactNode {
   switch (block.type) {
     case 'text':
@@ -204,14 +287,35 @@ export function renderBlock(block: ContentBlock, index: number): React.ReactNode
       return <ToolCallBlock key={index} block={block} />;
     case 'tool_result':
       return <ToolResultBlock key={index} block={block} />;
+    case 'diff':
+      return <DiffBlock key={index} block={block} />;
     case 'citation':
       return <CitationBlock key={index} block={block} />;
     case 'error':
       return <ErrorBlock key={index} block={block} />;
+    case 'plan':
+      return <PlanBlock key={index} block={block} />;
+    case 'system_notice':
+    case 'compaction':
+    case 'subagent':
+    case 'artifact':
+    case 'permission':
+    case 'ask_user':
+      return <SystemNoticeBlock key={index} block={{ ...block, text: block.text ?? `[${block.type}]` }} />;
     case 'legacy':
       return <LegacyBlock key={index} block={block} />;
     default:
-      return <div key={index} className="text-xs text-[var(--text-disabled)]">Unknown block type</div>;
+      // Unknown types must not crash the timeline
+      return (
+        <LegacyBlock
+          key={index}
+          block={{
+            type: 'legacy',
+            originalType: String(block.type),
+            raw: block.raw ?? JSON.stringify(block, null, 2),
+          }}
+        />
+      );
   }
 }
 

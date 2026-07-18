@@ -3,6 +3,7 @@
 //! 常驻 tokio task 10s 轮询 scheduled_tasks 表找到期任务执行。
 //! 失败按指数退避重试，连续 10 次熔断。
 
+#![allow(dead_code)]
 use crate::Result;
 use serde::{Deserialize, Serialize};
 

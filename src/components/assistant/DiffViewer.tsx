@@ -1,80 +1,160 @@
 'use client';
 
+import { useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
+import { computeLineDiff } from '@/lib/diff-utils';
+
+const MonacoDiffView = dynamic(() => import('@/components/files/MonacoDiffView'), {
+  ssr: false,
+  loading: () => (
+    <div className="grid h-48 place-items-center text-xs text-[var(--text-disabled)]">
+      Loading Monaco…
+    </div>
+  ),
+});
+
 interface DiffViewerProps {
   oldContent: string;
   newContent: string;
   fileName: string;
   onRollback?: () => void;
+  onOpenFile?: () => void;
+  /** Compact timeline mode vs full inspector. */
+  mode?: 'inline' | 'full';
+  locale?: string;
 }
 
-export default function DiffViewer({ oldContent, newContent, fileName, onRollback }: DiffViewerProps) {
-  // Simple line-based diff
-  const oldLines = oldContent.split('\n');
-  const newLines = newContent.split('\n');
-  const maxLines = Math.max(oldLines.length, newLines.length);
-
-  const lines = Array.from({ length: maxLines }, (_, i) => {
-    const oldLine = i < oldLines.length ? oldLines[i] : null;
-    const newLine = i < newLines.length ? newLines[i] : null;
-    const isAdded = oldLine === null && newLine !== null;
-    const isRemoved = oldLine !== null && newLine === null;
-    const isChanged = oldLine !== newLine && oldLine !== null && newLine !== null;
-
-    return {
-      lineNum: i + 1,
-      oldLine,
-      newLine,
-      type: isAdded ? 'added' as const : isRemoved ? 'removed' as const : isChanged ? 'changed' as const : 'unchanged' as const,
-    };
-  });
+/**
+ * Real hunk/diffstat viewer (insert-aware LCS), with optional Monaco full view.
+ * Replaces the old line-index-aligned comparison that broke on inserts.
+ */
+export default function DiffViewer({
+  oldContent,
+  newContent,
+  fileName,
+  onRollback,
+  onOpenFile,
+  mode = 'inline',
+  locale = 'en',
+}: DiffViewerProps) {
+  const zh = locale.startsWith('zh');
+  const [expanded, setExpanded] = useState(mode === 'full');
+  const [useMonaco, setUseMonaco] = useState(mode === 'full');
+  const result = useMemo(
+    () => computeLineDiff(oldContent, newContent),
+    [oldContent, newContent],
+  );
 
   return (
-    <div className="rounded-lg border border-[var(--border-subtle)] overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 bg-[var(--surface)] border-b border-[var(--border-subtle)]">
-        <span className="text-xs font-medium text-[var(--text-secondary)]">{fileName}</span>
-        <div className="flex gap-3 text-[0.625rem]">
-          <span className="text-green-400">+{lines.filter(l => l.type === 'added').length}</span>
-          <span className="text-red-400">-{lines.filter(l => l.type === 'removed').length}</span>
+    <div className="overflow-hidden rounded-lg border border-[var(--border-subtle)]" data-diff-viewer="hunk">
+      <div className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] bg-[var(--surface)] px-3 py-2">
+        <div className="min-w-0">
+          <div className="truncate text-xs font-medium text-[var(--text-secondary)]">{fileName}</div>
+          <div className="text-[10px] text-[var(--text-disabled)]" data-diffstat>
+            {result.diffstat}
+            {result.hunks.length > 0 ? ` · ${result.hunks.length} hunks` : ''}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 text-[0.625rem]">
+          <span className="text-green-500">+{result.additions}</span>
+          <span className="text-red-500">−{result.deletions}</span>
+          <button
+            type="button"
+            className="underline text-[var(--text-secondary)] hover:text-[var(--text)]"
+            onClick={() => {
+              setUseMonaco(true);
+              setExpanded(true);
+            }}
+          >
+            {zh ? '完整查看' : 'Full view'}
+          </button>
+          {onOpenFile && (
+            <button type="button" className="underline" onClick={onOpenFile}>
+              {zh ? '打开' : 'Open'}
+            </button>
+          )}
           {onRollback && (
             <button
+              type="button"
               onClick={onRollback}
-              className="text-amber-400 hover:text-amber-300 underline transition-colors"
+              className="text-amber-500 underline hover:text-amber-400"
             >
               Rollback
             </button>
           )}
+          {mode === 'inline' && (
+            <button type="button" className="underline" onClick={() => setExpanded((v) => !v)}>
+              {expanded ? (zh ? '折叠' : 'Collapse') : (zh ? '展开' : 'Expand')}
+            </button>
+          )}
         </div>
       </div>
-      <div className="overflow-x-auto max-h-[300px] overflow-y-auto">
-        <table className="w-full text-[0.6875rem] font-mono">
-          <tbody>
-            {lines.map((line) => {
-              const bgColor = line.type === 'added' ? 'bg-green-500/5' :
-                line.type === 'removed' ? 'bg-red-500/5' :
-                line.type === 'changed' ? 'bg-amber-500/5' : '';
-              const textColor = line.type === 'added' ? 'text-green-400' :
-                line.type === 'removed' ? 'text-red-400' :
-                line.type === 'changed' ? 'text-amber-400' : 'text-[var(--text-secondary)]';
 
-              return (
-                <tr key={line.lineNum} className={`${bgColor} hover:bg-[var(--surface-hover)]`}>
-                  <td className="px-2 py-0.5 text-right text-[var(--text-disabled)] select-none w-10 border-r border-[var(--border-subtle)]">
-                    {line.lineNum}
-                  </td>
-                  <td className="px-2 py-0.5 text-[var(--text-disabled)] select-none w-6 text-center border-r border-[var(--border-subtle)]">
-                    {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
-                  </td>
-                  <td className={`px-2 py-0.5 whitespace-pre ${textColor}`}>
-                    {line.type === 'added' ? line.newLine :
-                     line.type === 'removed' ? line.oldLine :
-                     line.newLine || line.oldLine || ''}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      {expanded && useMonaco && (
+        <div className="h-[360px]">
+          <MonacoDiffView
+            original={result.original}
+            modified={result.modified}
+            fileName={fileName}
+          />
+        </div>
+      )}
+
+      {expanded && !useMonaco && (
+        <div className="max-h-[300px] overflow-auto font-mono text-[0.6875rem]">
+          {result.hunks.length === 0 ? (
+            <div className="p-3 text-[var(--text-disabled)]">{zh ? '无差异' : 'No changes'}</div>
+          ) : (
+            result.hunks.map((hunk, hi) => (
+              <div key={hi} className="border-b border-[var(--border-subtle)] last:border-0">
+                <div className="bg-[var(--surface-hover)] px-2 py-1 text-[var(--text-disabled)]">
+                  {hunk.header}
+                </div>
+                {hunk.lines.map((line, li) => {
+                  const bg =
+                    line.kind === 'add'
+                      ? 'bg-green-500/10 text-green-700 dark:text-green-300'
+                      : line.kind === 'del'
+                        ? 'bg-red-500/10 text-red-700 dark:text-red-300'
+                        : 'text-[var(--text-secondary)]';
+                  const mark = line.kind === 'add' ? '+' : line.kind === 'del' ? '−' : ' ';
+                  return (
+                    <div key={li} className={`flex ${bg}`}>
+                      <span className="w-10 shrink-0 select-none border-r border-[var(--border-subtle)] px-1 text-right text-[var(--text-disabled)]">
+                        {line.oldNo ?? ''}
+                      </span>
+                      <span className="w-10 shrink-0 select-none border-r border-[var(--border-subtle)] px-1 text-right text-[var(--text-disabled)]">
+                        {line.newNo ?? ''}
+                      </span>
+                      <span className="w-4 shrink-0 select-none text-center">{mark}</span>
+                      <span className="whitespace-pre px-1">{line.text}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ))
+          )}
+          <div className="border-t border-[var(--border-subtle)] p-2 text-right">
+            <button
+              type="button"
+              className="text-[10px] underline text-[var(--primary)]"
+              onClick={() => setUseMonaco(true)}
+            >
+              {zh ? '在 Monaco 中打开' : 'Open in Monaco'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!expanded && (
+        <button
+          type="button"
+          className="w-full px-3 py-2 text-left text-[11px] text-[var(--text-disabled)] hover:bg-[var(--surface-hover)]"
+          onClick={() => setExpanded(true)}
+        >
+          {result.diffstat} · {zh ? '点击查看 hunk' : 'Click to view hunks'}
+        </button>
+      )}
     </div>
   );
 }

@@ -5,6 +5,9 @@
 //! - `CapabilityExecutor` 负责权限、hook、rule、执行、post-hook 的完整链路。
 //! - 旧的 `execute_batch` 仍保留为兼容入口，AgentLoop 可以逐步迁移。
 
+//!
+//! Residual catalog/compat after Protocol v2 cutover (execution retired).
+#![allow(dead_code)]
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

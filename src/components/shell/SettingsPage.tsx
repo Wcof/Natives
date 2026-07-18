@@ -11,6 +11,7 @@ import { Palette, Globe, Package, RefreshCw, Trash, Loader, RotateCcw, Sun, Term
 import RuntimePanel from '@/components/assistant/RuntimePanel';
 import ProviderDetail from '@/components/settings/ProviderDetail';
 import AddProviderDialog from '@/components/settings/AddProviderDialog';
+import EngineCapabilitiesPanel from '@/components/settings/EngineCapabilitiesPanel';
 import type { ProviderSummary, TestKeyResult } from '@/types/provider';
 import {
   type SettingsSection,
@@ -396,6 +397,18 @@ export default function SettingsPage({
     );
   }
 
+  function renderEngineCaps() {
+    return (
+      <>
+        <SettingsPageHeader
+          title={t(locale, 'settings.tabEngineCaps')}
+          description={t(locale, 'settings.engineCapsDesc')}
+        />
+        <EngineCapabilitiesPanel locale={locale} />
+      </>
+    );
+  }
+
   const renderActiveSection = () => {
     switch (activeSection) {
       case 'general':
@@ -406,6 +419,8 @@ export default function SettingsPage({
         return renderProviders();
       case 'runtime':
         return <RuntimePanel locale={locale} />;
+      case 'engine':
+        return renderEngineCaps();
       case 'plugins':
         return renderPlugins();
     }

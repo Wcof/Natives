@@ -17,9 +17,12 @@
 //! with the protocol version, request ID, client ID, and session token.
 
 pub mod v1;
+pub mod v2;
 pub mod error;
 pub mod version;
 
 pub use v1::*;
 pub use error::*;
 pub use version::*;
+// v2 is explicit — call sites import `assistant_protocol::v2::...` to avoid
+// colliding with v1 type names during the migration.

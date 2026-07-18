@@ -1,6 +1,7 @@
 // ── Codex Original Event Log Parser ──
 // Scans ~/.codex/sessions/**/*.jsonl and ~/.codex/archived_sessions/**/*.jsonl.
 
+#![allow(unused_imports, dead_code, unused_variables)]
 use crate::usage::{
     now_ms, UsageActivityBucket, UsageDailyRecord, UsageQuality, UsageSessionRecord,
     UsageSourceState, UsageSourceStatus, UsageWarning, UsageWarningCode, DurationMethod,

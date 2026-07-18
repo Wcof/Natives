@@ -145,6 +145,7 @@ impl DataStore {
                 (6, MIGRATION_006),
                 (7, MIGRATION_007),
                 (8, MIGRATION_008),
+                (11, MIGRATION_011),
             ];
 
             for (version, sql) in migrations {
@@ -395,7 +396,7 @@ impl DataStore {
     /// Also migrates data from old `assistant_sessions` if it exists.
     /// This is idempotent: skips if already renamed or never existed.
     fn migrate_legacy_assistant_messages(&self) -> Result<()> {
-        let mut conn = self
+        let conn = self
             .conn
             .lock()
             .map_err(|e| crate::Error::Internal(e.to_string()))?;
@@ -822,7 +823,9 @@ CREATE TABLE IF NOT EXISTS assistant_message_blocks (
 CREATE TABLE IF NOT EXISTS assistant_runs (
     id TEXT PRIMARY KEY,
     conversation_id TEXT NOT NULL REFERENCES assistant_conversations(id) ON DELETE CASCADE,
-    status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','preparing','running','waiting_permission','cancelling','completed','failed','interrupted')),
+    parent_run_id TEXT REFERENCES assistant_runs(id) ON DELETE CASCADE,
+    subagent_definition_id TEXT,
+    status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','preparing','running','waiting_permission','cancelling','completed','failed','cancelled','interrupted')),
     trigger_message_id TEXT,
     provider_id TEXT NOT NULL,
     model_id TEXT NOT NULL,
@@ -1045,6 +1048,52 @@ CREATE TABLE IF NOT EXISTS assistant_projects (
 );
 ";
 
+/// v10: Add the explicit user-cancelled terminal state to existing databases.
+#[allow(dead_code)]
+const MIGRATION_010: &str = "
+ALTER TABLE assistant_runs RENAME TO assistant_runs_legacy;
+CREATE TABLE assistant_runs (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES assistant_conversations(id) ON DELETE CASCADE,
+    parent_run_id TEXT REFERENCES assistant_runs(id) ON DELETE CASCADE,
+    subagent_definition_id TEXT,
+    status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','preparing','running','waiting_permission','cancelling','completed','failed','cancelled','interrupted')),
+    trigger_message_id TEXT,
+    provider_id TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    runtime_id TEXT,
+    permission_profile TEXT,
+    max_steps INTEGER,
+    max_duration_secs INTEGER,
+    token_budget INTEGER,
+    started_at TEXT,
+    finished_at TEXT,
+    error_code TEXT,
+    step_count INTEGER DEFAULT 0,
+    total_input_tokens INTEGER DEFAULT 0,
+    total_output_tokens INTEGER DEFAULT 0
+);
+INSERT INTO assistant_runs SELECT * FROM assistant_runs_legacy;
+DROP TABLE assistant_runs_legacy;
+CREATE INDEX IF NOT EXISTS idx_runs_conversation ON assistant_runs(conversation_id);
+";
+
+/// v11: Host-owned prompt queue.
+const MIGRATION_011: &str = "
+CREATE TABLE IF NOT EXISTS assistant_prompt_queue (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES assistant_conversations(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'user',
+    attachments TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
+    client_temp_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_queue_conversation ON assistant_prompt_queue(conversation_id, position);
+";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1101,7 +1150,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 9);
+        assert_eq!(version, 11);
     }
 
     #[test]

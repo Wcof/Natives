@@ -58,6 +58,12 @@ struct SnapshotMessageMeta {
     tokens: TokenUsage,
 }
 
+#[derive(Default)]
+struct SnapshotData {
+    usage: HashMap<(String, u64), TokenUsage>,
+    turn_end_messages: HashMap<u64, usize>,
+}
+
 #[derive(Default, Deserialize)]
 struct SessionMeta {
     #[serde(default)]
@@ -68,6 +74,8 @@ struct SessionMeta {
 
 #[derive(Deserialize)]
 struct TurnStat {
+    #[serde(default)]
+    after_message: usize,
     duration_ms: u64,
     #[serde(default)]
     total_tokens: i64,
@@ -263,7 +271,7 @@ fn scan_session_logs(root: &Path, start_ms: i64, end_ms: i64, tz: &chrono_tz::Tz
         } else {
             meta.working_dir
         };
-        let snapshot_usage = read_snapshot_usage(&path.with_extension("snapshot"));
+        let snapshot = read_snapshot_data(&path.with_extension("snapshot"));
         let Ok(content) = fs::read_to_string(path) else {
             continue;
         };
@@ -274,7 +282,8 @@ fn scan_session_logs(root: &Path, start_ms: i64, end_ms: i64, tz: &chrono_tz::Tz
             if record.ts < start_ms || record.ts >= end_ms {
                 continue;
             }
-            let usage = snapshot_usage
+            let usage = snapshot
+                .usage
                 .get(&(record.session_id.clone(), record.turn_id))
                 .unwrap_or(&record.usage);
             let (input_tokens, output_tokens, cached_tokens) = (
@@ -292,9 +301,15 @@ fn scan_session_logs(root: &Path, start_ms: i64, end_ms: i64, tz: &chrono_tz::Tz
                 input_tokens,
                 output_tokens,
                 cached_tokens,
-                active_seconds: meta
-                    .turn_stats
-                    .get(index)
+                active_seconds: snapshot
+                    .turn_end_messages
+                    .get(&record.turn_id)
+                    .and_then(|after_message| {
+                        meta.turn_stats
+                            .iter()
+                            .find(|stat| stat.after_message == *after_message)
+                    })
+                    .or_else(|| meta.turn_stats.get(index))
                     .map(|stat| stat.duration_ms.div_ceil(1000) as i64)
                     .unwrap_or(0),
             });
@@ -303,25 +318,28 @@ fn scan_session_logs(root: &Path, start_ms: i64, end_ms: i64, tz: &chrono_tz::Tz
     turns
 }
 
-fn read_snapshot_usage(path: &Path) -> HashMap<(String, u64), TokenUsage> {
+fn read_snapshot_data(path: &Path) -> SnapshotData {
     let Ok(bytes) = fs::read(path) else {
-        return HashMap::new();
+        return SnapshotData::default();
     };
     let Ok(snapshot) = serde_json::from_slice::<SessionSnapshot>(&bytes) else {
-        return HashMap::new();
+        return SnapshotData::default();
     };
-    let mut usage = HashMap::<(String, u64), TokenUsage>::new();
-    for meta in snapshot
-        .messages
-        .into_iter()
-        .filter_map(|message| message.meta)
-    {
-        let entry = usage.entry((meta.session_id, meta.turn_id)).or_default();
+    let mut data = SnapshotData::default();
+    for (index, message) in snapshot.messages.into_iter().enumerate() {
+        let Some(meta) = message.meta else {
+            continue;
+        };
+        data.turn_end_messages.insert(meta.turn_id, index + 1);
+        let entry = data
+            .usage
+            .entry((meta.session_id, meta.turn_id))
+            .or_default();
         entry.prompt = entry.prompt.saturating_add(meta.tokens.prompt);
         entry.completion = entry.completion.saturating_add(meta.tokens.completion);
         entry.cached = entry.cached.saturating_add(meta.tokens.cached);
     }
-    usage
+    data
 }
 
 fn daily(turns: &[Turn]) -> Vec<UsageDailyRecord> {
@@ -513,6 +531,58 @@ mod tests {
         assert_eq!(daily[0].output_tokens, Some(30));
         assert_eq!(daily[0].cache_read_tokens, Some(140));
         assert_eq!(daily[0].total_tokens, Some(280));
+    }
+
+    #[test]
+    fn aligns_duration_by_turn_id_when_a_turn_has_no_transcript() {
+        let root =
+            std::env::temp_dir().join(format!("natives-atomcode-duration-{}", std::process::id()));
+        let project = root.join("sessions/project-hash");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("session-1.jsonl"),
+            concat!(
+                r#"{"v":1,"ts":1784020263399,"session_id":"session-1","turn_id":2,"usage":{"prompt":100,"completion":20}}"#,
+                "\n",
+                r#"{"v":1,"ts":1784020264399,"session_id":"session-1","turn_id":3,"usage":{"prompt":120,"completion":30}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("session-1.meta"),
+            r#"{"working_dir":"/work/natives","turn_stats":[
+                {"after_message":2,"duration_ms":1000,"total_tokens":0},
+                {"after_message":4,"duration_ms":3000,"total_tokens":120},
+                {"after_message":8,"duration_ms":5000,"total_tokens":150}
+            ]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("session-1.snapshot"),
+            r#"{"messages":[
+                {}, {},
+                {"meta":{"session_id":"session-1","turn_id":2,"tokens":{"prompt":100,"completion":20}}},
+                {"meta":{"session_id":"session-1","turn_id":2,"tokens":{"prompt":0,"completion":0}}},
+                {"meta":{"session_id":"session-1","turn_id":3,"tokens":{"prompt":120,"completion":30}}},
+                {"meta":{"session_id":"session-1","turn_id":3,"tokens":{"prompt":0,"completion":0}}},
+                {"meta":{"session_id":"session-1","turn_id":3,"tokens":{"prompt":0,"completion":0}}},
+                {"meta":{"session_id":"session-1","turn_id":3,"tokens":{"prompt":0,"completion":0}}}
+            ]}"#,
+        )
+        .unwrap();
+
+        let turns = scan_session_logs(
+            &root.join("sessions"),
+            1_784_020_000_000,
+            1_784_030_000_000,
+            &chrono_tz::UTC,
+        );
+        std::fs::remove_dir_all(root).unwrap();
+
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].active_seconds, 3);
+        assert_eq!(turns[1].active_seconds, 5);
     }
 
     #[test]

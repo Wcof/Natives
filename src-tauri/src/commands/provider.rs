@@ -492,8 +492,56 @@ fn chat_completions_url(base_url: &str) -> String {
     format!("{}/chat/completions", base_url.trim_end_matches('/'))
 }
 
-fn models_url(base_url: &str) -> Result<String> {
-    Ok(format!("{}/models", normalize_url(base_url)?.trim_end_matches('/')))
+fn is_anthropic_protocol(provider_type: &str) -> bool {
+    matches!(provider_type.trim().to_ascii_lowercase().as_str(), "anthropic" | "claude")
+}
+
+fn anthropic_url(base_url: &str, endpoint: &str) -> Result<String> {
+    let base = base_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return Err(Error::Internal("Base URL cannot be empty".to_string()));
+    }
+    let base = base.strip_suffix("/v1/messages")
+        .or_else(|| base.strip_suffix("/v1/models"))
+        .unwrap_or(base);
+    if base.ends_with("/v1") {
+        Ok(format!("{base}/{endpoint}"))
+    } else {
+        Ok(format!("{base}/v1/{endpoint}"))
+    }
+}
+
+fn provider_test_url(provider_type: &str, base_url: &str) -> Result<String> {
+    if is_anthropic_protocol(provider_type) {
+        anthropic_url(base_url, "messages")
+    } else {
+        Ok(chat_completions_url(&normalize_url(base_url)?))
+    }
+}
+
+fn models_url(provider_type: &str, base_url: &str) -> Result<String> {
+    if is_anthropic_protocol(provider_type) {
+        anthropic_url(base_url, "models")
+    } else {
+        Ok(format!("{}/models", normalize_url(base_url)?.trim_end_matches('/')))
+    }
+}
+
+fn provider_response_has_content(provider_type: &str, value: &serde_json::Value) -> bool {
+    if is_anthropic_protocol(provider_type) {
+        return value["content"].as_array().is_some_and(|blocks| {
+            blocks.iter().any(|block| {
+                block["text"].as_str().is_some_and(|text| !text.trim().is_empty())
+            })
+        });
+    }
+    let content = &value["choices"][0]["message"]["content"];
+    content.as_str().is_some_and(|text| !text.trim().is_empty())
+        || content.as_array().is_some_and(|blocks| {
+            blocks.iter().any(|block| {
+                block["text"].as_str().is_some_and(|text| !text.trim().is_empty())
+            })
+        })
 }
 
 #[tauri::command]
@@ -501,13 +549,19 @@ pub async fn provider_discover_models(input: ProviderDiscoveryInput) -> Result<V
     if input.api_key.trim().is_empty() {
         return Err(Error::InvalidInput("API key cannot be empty".to_string()));
     }
-    let response = reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| Error::Internal(format!("Failed to build HTTP client: {e}")))?
-        .get(models_url(&input.base_url)?)
-        .header("Authorization", format!("Bearer {}", input.api_key.trim()))
-        .send()
+        .map_err(|e| Error::Internal(format!("Failed to build HTTP client: {e}")))?;
+    let mut request = client.get(models_url(&input.provider_type, &input.base_url)?);
+    if is_anthropic_protocol(&input.provider_type) {
+        request = request
+            .header("x-api-key", input.api_key.trim())
+            .header("anthropic-version", "2023-06-01");
+    } else {
+        request = request.header("Authorization", format!("Bearer {}", input.api_key.trim()));
+    }
+    let response = request.send()
         .await
         .map_err(|e| Error::Internal(if e.is_timeout() { "Model discovery timed out".to_string() } else { format!("Model discovery failed: {e}") }))?;
 
@@ -546,18 +600,18 @@ pub async fn provider_discover_models_saved(
 ) -> Result<Vec<DiscoveredModel>> {
     let provider_id = input.provider_id;
     let key_id = input.key_id;
-    let (base_url, api_key) = {
+    let (provider_type, base_url, api_key) = {
         let pool_conn = state.db.get()
             .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
         let conn: &rusqlite::Connection = &*pool_conn;
-        let (encrypted, dek, base_url): (String, Option<String>, String) = conn
+        let (encrypted, dek, provider_type, base_url): (String, Option<String>, String, String) = conn
             .query_row(
-                "SELECT k.api_key_encrypted, k.dek_encrypted, p.base_url
+                "SELECT k.api_key_encrypted, k.dek_encrypted, p.preset_name, p.base_url
                  FROM provider_api_keys k
                  JOIN user_providers p ON k.provider_id = p.id
                  WHERE k.id = ?1 AND k.provider_id = ?2",
                 params![key_id, provider_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .map_err(|e| Error::Internal(format!("Failed to fetch key: {e}")))?;
         let api_key = if let Some(dek) = &dek {
@@ -571,11 +625,11 @@ pub async fn provider_discover_models_saved(
             let encryption_key = env_manager::get_encryption_key(conn)?;
             env_manager::decrypt(&encrypted, &encryption_key)?
         };
-        (base_url, api_key)
+        (provider_type, base_url, api_key)
     };
 
     let discover_input = ProviderDiscoveryInput {
-        provider_type: "openai_compatible".to_string(),
+        provider_type,
         base_url,
         api_key,
     };
@@ -596,6 +650,7 @@ pub async fn provider_discover_models_saved(
 
 /// Execute the actual provider test request (shared by provider_test and test_provider_raw).
 async fn execute_provider_test(
+    provider_type: &str,
     base_url: &str,
     api_key: &str,
     model: Option<&str>,
@@ -611,8 +666,7 @@ async fn execute_provider_test(
         },
     };
 
-    // Normalize the base URL
-    let normalized = match normalize_url(base_url) {
+    let test_url = match provider_test_url(provider_type, base_url) {
         Ok(url) => url,
         Err(e) => return ProviderTestResult {
             success: false,
@@ -622,7 +676,6 @@ async fn execute_provider_test(
 
     // If a model is provided, test chat completions (OpenAI-compatible)
     if let Some(model) = model {
-        let chat_url = chat_completions_url(&normalized);
         let body = serde_json::json!({
             "model": model,
             "messages": [
@@ -632,13 +685,15 @@ async fn execute_provider_test(
             "stream": false,
         });
 
-        let response = client
-            .post(&chat_url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await;
+        let mut request = client.post(&test_url).header("Content-Type", "application/json");
+        if is_anthropic_protocol(provider_type) {
+            request = request
+                .header("x-api-key", api_key)
+                .header("anthropic-version", "2023-06-01");
+        } else {
+            request = request.header("Authorization", format!("Bearer {}", api_key));
+        }
+        let response = request.json(&body).send().await;
 
         return match response {
             Ok(resp) => {
@@ -646,12 +701,7 @@ async fn execute_provider_test(
                 if status.is_success() {
                     match resp.json::<serde_json::Value>().await {
                         Ok(json) => {
-                            let has_content = json["choices"]
-                                .as_array()
-                                .and_then(|c| c.first())
-                                .and_then(|c| c["message"]["content"].as_str())
-                                .map(|s| !s.is_empty())
-                                .unwrap_or(false);
+                            let has_content = provider_response_has_content(provider_type, &json);
                             if has_content {
                                 ProviderTestResult { success: true, error: None }
                             } else {
@@ -709,13 +759,17 @@ async fn execute_provider_test(
     }
 
     // Legacy test: GET /models on the normalized OpenAI-compatible base URL.
-    let request_url = format!("{}/models", normalized.trim_end_matches('/'));
+    let request_url = models_url(provider_type, base_url).unwrap_or(test_url);
 
-    let response = client
-        .get(&request_url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await;
+    let mut request = client.get(&request_url);
+    if is_anthropic_protocol(provider_type) {
+        request = request
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01");
+    } else {
+        request = request.header("Authorization", format!("Bearer {}", api_key));
+    }
+    let response = request.send().await;
 
     match response {
         Ok(resp) => {
@@ -751,18 +805,18 @@ pub async fn provider_test(
 ) -> Result<ProviderTestResult> {
     let provider_id = input.provider_id;
     let key_id = input.key_id;
-    let (base_url, api_key, default_model) = {
+    let (provider_type, base_url, api_key, default_model) = {
         let pool_conn = state.db.get()
             .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
         let conn: &rusqlite::Connection = &*pool_conn;
-        let (encrypted, dek, base_url, default_model): (String, Option<String>, String, Option<String>) = conn
+        let (encrypted, dek, provider_type, base_url, default_model): (String, Option<String>, String, String, Option<String>) = conn
             .query_row(
-                "SELECT k.api_key_encrypted, k.dek_encrypted, p.base_url, p.default_model
+                "SELECT k.api_key_encrypted, k.dek_encrypted, p.preset_name, p.base_url, p.default_model
                  FROM provider_api_keys k
                  JOIN user_providers p ON k.provider_id = p.id
                  WHERE k.id = ?1 AND k.provider_id = ?2",
                 params![key_id, provider_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
             )
             .map_err(|e| Error::Internal(format!("Failed to fetch key: {e}")))?;
         let api_key = if let Some(dek) = &dek {
@@ -776,11 +830,11 @@ pub async fn provider_test(
             let encryption_key = env_manager::get_encryption_key(conn)?;
             env_manager::decrypt(&encrypted, &encryption_key)?
         };
-        (base_url, api_key, default_model)
+        (provider_type, base_url, api_key, default_model)
     };
 
     let model = input.model.or(default_model);
-    let result = execute_provider_test(&base_url, &api_key, model.as_deref()).await;
+    let result = execute_provider_test(&provider_type, &base_url, &api_key, model.as_deref()).await;
     let now = chrono_now();
     let status = if result.success { "valid" } else { "invalid" };
     state.db.get()
@@ -798,7 +852,7 @@ pub async fn provider_test(
 pub async fn test_provider_raw(
     input: RawProviderTestInput,
 ) -> Result<ProviderTestResult> {
-    Ok(execute_provider_test(&input.base_url, &input.api_key, input.model.as_deref()).await)
+    Ok(execute_provider_test(&input.provider_type, &input.base_url, &input.api_key, input.model.as_deref()).await)
 }
 
 // ── Helpers ──
@@ -988,7 +1042,19 @@ mod tests {
 
     #[test]
     fn test_models_url_does_not_duplicate_v1() {
-        assert_eq!(models_url("https://api.openai.com/v1").unwrap(), "https://api.openai.com/v1/models");
+        assert_eq!(models_url("openai_compatible", "https://api.openai.com/v1").unwrap(), "https://api.openai.com/v1/models");
+    }
+
+    #[test]
+    fn provider_test_supports_openai_and_anthropic_response_shapes() {
+        let openai = serde_json::json!({"choices": [{"message": {"content": "ok"}}]});
+        let anthropic = serde_json::json!({"content": [{"type": "text", "text": "ok"}]});
+        assert!(provider_response_has_content("openai_compatible", &openai));
+        assert!(provider_response_has_content("anthropic", &anthropic));
+        assert_eq!(
+            provider_test_url("anthropic", "https://api.anthropic.com").unwrap(),
+            "https://api.anthropic.com/v1/messages"
+        );
     }
 
     // ── Integration tests (simulate manual validation) ──
@@ -1034,7 +1100,7 @@ mod tests {
         ).unwrap();
 
         // Read back the key and verify masking
-        let (db_key, masked): (String, String) = conn.query_row(
+        let (db_key, _masked): (String, String) = conn.query_row(
             "SELECT k.api_key_encrypted, '' FROM provider_api_keys k WHERE k.id = ?1",
             rusqlite::params![key_id],
             |row| Ok((row.get(0)?, String::new())),

@@ -20,12 +20,9 @@
 //!                           │ 条件匹配策略引擎 │
 //!                           └─────────────────┘
 
-pub mod agent_loop;
 pub mod capability;
 pub mod command_agent_skill;
-pub mod context_assembler;
 pub mod hook_pipeline;
 pub mod plugin_system;
 pub mod rule_engine;
-pub mod stream_provider;
 pub mod subagent;

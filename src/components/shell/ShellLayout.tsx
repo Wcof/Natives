@@ -515,11 +515,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
             try {
               const api = window.nativesAPI;
               if (api?.screenshot?.saveAnnotated) {
-                const result = await api.screenshot.saveAnnotated(dataUrl, annotatingFile.replace(/\.(png|jpg|jpeg|webp)$/, '-annotated.png'));
-                const annotateResult = result as { success?: boolean; path?: string };
-                if (annotateResult.success) {
-                  console.log('[Shell] Annotated image saved:', annotateResult.path);
-                }
+                await api.screenshot.saveAnnotated(dataUrl, annotatingFile.replace(/\.(png|jpg|jpeg|webp)$/, '-annotated.png'));
               }
             } catch (err) {
               console.error('[Shell] Failed to save annotation:', err);

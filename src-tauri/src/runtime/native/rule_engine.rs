@@ -22,6 +22,9 @@
 //!   ⚠️ Warning message body...
 //!
 
+//!
+//! Residual catalog/compat after Protocol v2 cutover (execution retired).
+#![allow(dead_code)]
 use serde::Deserialize;
 use std::path::Path;
 use super::capability::CapabilityRequest;

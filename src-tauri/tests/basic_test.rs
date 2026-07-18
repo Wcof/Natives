@@ -70,7 +70,6 @@ fn test_usage_response_camelcase_serialization() {
 #[test]
 fn test_usage_response_has_source_configured() {
     // Verify UsageResponse includes sourceConfigured and error fields
-    use natives_lib::Error;
     // Just verify the camelCase serialization works correctly
     #[derive(serde::Serialize)]
     #[serde(rename_all = "camelCase")]

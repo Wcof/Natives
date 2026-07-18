@@ -4,7 +4,6 @@
 //! corrupted event, cancelled PTY, malicious MCP, and migration rollback.
 
 use std::sync::Arc;
-use std::path::PathBuf;
 use natives_agent_daemon::storage::DataStore;
 use natives_agent_daemon::event_log::EventLog;
 use assistant_protocol::v1::run_event::{RunEvent, RunEventPayload};

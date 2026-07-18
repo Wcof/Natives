@@ -16,6 +16,7 @@ target/
 
 # Tauri
 src-tauri/target/
+src-tauri/binaries/
 src-tauri/gen/
 
 # Runtime data
@@ -23,6 +24,7 @@ src-tauri/gen/
 *.db-wal
 *.db-shm
 *.lock
+!/Cargo.lock
 
 # Environment
 .env
@@ -40,10 +42,13 @@ Thumbs.db
 ~/.natives/
 
 # Agent / AI 工具配置 (个人配置，非项目代码)
+.atomcode.md
+.codegraph/
 .agents/
 .atomcode-plugin/
 .claude/
 .rtk/
+.superpowers/
 
 # AI 指令文件 (Agent 提示词/术语表/上下文)
 AGENTS.md

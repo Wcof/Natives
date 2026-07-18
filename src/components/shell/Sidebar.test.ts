@@ -15,13 +15,18 @@ test('assistant tree is owned only by the shell sidebar', () => {
   assert.equal(workbench.includes('AssistantSidebarSection'), false);
 });
 
-test('assistant workspace action registration keeps its loader dependency stable', () => {
-  assert.match(workbench, /const loadConversations = useCallback\(async \(\) => \{/);
+test('assistant workbench is a composition layer over Gateway + Store', () => {
+  assert.match(workbench, /AssistantStoreProvider/);
+  assert.match(workbench, /useAssistantGateway/);
+  assert.match(workbench, /data-gateway="1"/);
+  // No direct assistant execution from components
+  assert.equal(workbench.includes('function v2call'), false);
+  assert.equal(/\bstreamChat\s*[:(]/.test(workbench), false);
+  assert.equal(/assistantV2\.request\(/.test(workbench), false);
 });
 
-test('reselecting the active conversation preserves its stream state', () => {
-  assert.match(workbench, /if \(id === activeConversationIdRef\.current\) return;/);
-  assert.match(workbench, /activeConversationIdRef\.current === conversationId/);
+test('reselecting the active conversation is a no-op (state preserved in store)', () => {
+  assert.match(workbench, /if \(id === stateRef\.current\.activeConversationId\) return;/);
 });
 
 test('assistant sidebar does not default to a permanent loading spinner', () => {
@@ -29,7 +34,7 @@ test('assistant sidebar does not default to a permanent loading spinner', () => 
   assert.match(context, /loading:\s*false/);
   assert.equal(/emptyNavigation[\s\S]*loading:\s*true/.test(context), false);
   assert.match(workbench, /setLoadingConversations\(false\)/);
-  assert.match(workbench, /streamState\?\.runId/);
+  assert.match(workbench, /activeRun\?\.id/);
 });
 
 test('assistant and Quick Access use the same first-level heading style', () => {
@@ -70,16 +75,34 @@ test('assistant conversation rows use a neutral selected state and comfortable h
   assert.match(assistantSidebar, /min-h-8/);
   assert.match(assistantSidebar, /bg-\[var\(--surface-active\)\] text-\[var\(--text\)\]/);
   assert.equal(assistantSidebar.includes('bg-[var(--accent)] text-[var(--accent-ink)]'), false);
+  // Unselected session titles use the documented secondary text role (not the undefined tertiary token).
+  assert.match(assistantSidebar, /text-\[var\(--text-secondary\)\] hover:bg-\[var\(--surface-hover\)\] hover:text-\[var\(--primary\)\]/);
+  assert.equal(assistantSidebar.includes('text-[var(--text-tertiary)]'), false);
+});
+
+test('send path uses gateway sendOrQueue (queue while running, no streamChat)', () => {
+  assert.match(workbench, /sendOrQueue/);
+  assert.match(workbench, /startSubscription/);
+  assert.equal(/\bstreamChat\s*[:(]/.test(workbench), false);
+  assert.equal(workbench.includes('createAssistantStreamState'), false);
+});
+
+test('stop uses gateway cancelRun and does not invent terminal run status', () => {
+  assert.match(workbench, /cancelRun/);
+  // Terminal status must come from daemon events, not optimistic interrupted
+  assert.equal(/setStreamState[\s\S]*status: 'interrupted'/.test(workbench), false);
 });
 
 test('assistant composer does not change its border when the textarea focuses', () => {
   assert.equal(messageInput.includes('focus-within:border'), false);
 });
 
-test('assistant sidebar deletion has a mounted-workspace fallback and visible progress', () => {
+test('assistant sidebar deletion goes only through workspace actions (Gateway seam)', () => {
   assert.match(assistantSidebar, /confirmDeleteConversation/);
-  assert.match(assistantSidebar, /assistantV2\?\.request\('conversation\.delete'/);
+  assert.match(assistantSidebar, /actions\?\.deleteConversation/);
   assert.match(assistantSidebar, /deletingConversation/);
+  assert.equal(/\bassistantV2\b/.test(assistantSidebar.replace(/\/\/[^\n]*/g, '')), false);
+  assert.equal(assistantSidebar.includes("request('conversation.delete'"), false);
 });
 
 test('slash commands use composer-local positioning and own Enter before sending', () => {
@@ -87,7 +110,7 @@ test('slash commands use composer-local positioning and own Enter before sending
   assert.equal(messageInput.includes('anchorRect'), false);
   assert.match(slashPopover, /bottom-full left-0/);
   assert.match(slashPopover, /addEventListener\('keydown', handleKeyDown, true\)/);
-  assert.match(messageInput, /!event\.defaultPrevented/);
+  assert.match(messageInput, /event\.defaultPrevented/);
 });
 
 test('locale persistence broadcasts the change consumed by the shell', () => {

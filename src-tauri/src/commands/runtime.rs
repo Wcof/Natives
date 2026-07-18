@@ -30,12 +30,6 @@ pub async fn runtime_detect_cli() -> Result<serde_json::Value> {
 }
 
 #[tauri::command]
-pub async fn runtime_list_catalog() -> Result<crate::runtime::native_runtime::NativeRuntimeCatalog>
-{
-    Ok(crate::runtime::native_runtime::build_native_runtime_catalog())
-}
-
-#[tauri::command]
 pub fn runtime_set_capability_enabled(
     name: String,
     enabled: bool,

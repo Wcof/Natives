@@ -42,8 +42,181 @@ pub struct ProviderMessage {
 pub enum ProviderContentBlock {
     Text { text: String },
     Image { image_url: ImageSource },
-    ToolCall { id: String, name: String, input: serde_json::Value },
-    ToolResult { tool_call_id: String, content: String },
+    ToolCall {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    ToolResult {
+        tool_call_id: String,
+        content: String,
+        /// Tool name when known (required by Gemini functionResponse; optional for OpenAI).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+}
+
+/// One tool call from engine/history (arguments may be a JSON string or object text).
+#[derive(Debug, Clone)]
+pub struct HistoryToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+/// Engine/history message parts used to build a structured [`ProviderMessage`].
+///
+/// Callers (daemon `RealProvider`, Tauri bridge) map their engine types into this
+/// shape so `tool_calls` / `tool_call_id` are never flattened to plain text.
+#[derive(Debug, Clone)]
+pub struct HistoryMessage {
+    pub role: String,
+    pub content: String,
+    pub tool_call_id: Option<String>,
+    pub tool_name: Option<String>,
+    pub tool_calls: Option<Vec<HistoryToolCall>>,
+}
+
+/// Convert a history/engine message into provider wire blocks.
+///
+/// - Assistant with `tool_calls` → optional text + one `ToolCall` block per call
+/// - Tool role (or `tool_call_id` set without assistant tool_calls) → `ToolResult`
+/// - Otherwise → text only
+pub fn history_message_to_provider(msg: HistoryMessage) -> ProviderMessage {
+    if let Some(calls) = msg.tool_calls {
+        if !calls.is_empty() {
+            let mut content = Vec::new();
+            if !msg.content.is_empty() {
+                content.push(ProviderContentBlock::Text {
+                    text: msg.content,
+                });
+            }
+            for call in calls {
+                let input = parse_tool_arguments(&call.arguments);
+                content.push(ProviderContentBlock::ToolCall {
+                    id: call.id,
+                    name: call.name,
+                    input,
+                });
+            }
+            return ProviderMessage {
+                role: if msg.role.is_empty() {
+                    "assistant".into()
+                } else {
+                    msg.role
+                },
+                content,
+            };
+        }
+    }
+
+    if msg.role == "tool" || msg.tool_call_id.is_some() {
+        let tool_call_id = msg
+            .tool_call_id
+            .unwrap_or_else(|| "unknown_tool_call".into());
+        return ProviderMessage {
+            role: "tool".into(),
+            content: vec![ProviderContentBlock::ToolResult {
+                tool_call_id,
+                content: msg.content,
+                name: msg.tool_name,
+            }],
+        };
+    }
+
+    ProviderMessage {
+        role: msg.role,
+        content: vec![ProviderContentBlock::Text { text: msg.content }],
+    }
+}
+
+/// Map a batch of history messages.
+pub fn history_messages_to_provider(messages: impl IntoIterator<Item = HistoryMessage>) -> Vec<ProviderMessage> {
+    messages.into_iter().map(history_message_to_provider).collect()
+}
+
+fn parse_tool_arguments(arguments: &str) -> serde_json::Value {
+    let trimmed = arguments.trim();
+    if trimmed.is_empty() {
+        return serde_json::json!({});
+    }
+    serde_json::from_str(trimmed).unwrap_or_else(|_| serde_json::Value::String(arguments.to_string()))
+}
+
+#[cfg(test)]
+mod history_message_tests {
+    use super::*;
+
+    #[test]
+    fn preserves_assistant_tool_calls_and_tool_results() {
+        let assistant = history_message_to_provider(HistoryMessage {
+            role: "assistant".into(),
+            content: "calling".into(),
+            tool_call_id: None,
+            tool_name: None,
+            tool_calls: Some(vec![
+                HistoryToolCall {
+                    id: "call_1".into(),
+                    name: "read_file".into(),
+                    arguments: r#"{"path":"a.txt"}"#.into(),
+                },
+                HistoryToolCall {
+                    id: "call_2".into(),
+                    name: "echo".into(),
+                    arguments: r#"{"x":1}"#.into(),
+                },
+            ]),
+        });
+        assert_eq!(assistant.role, "assistant");
+        assert_eq!(assistant.content.len(), 3);
+        assert!(matches!(
+            &assistant.content[0],
+            ProviderContentBlock::Text { text } if text == "calling"
+        ));
+        assert!(matches!(
+            &assistant.content[1],
+            ProviderContentBlock::ToolCall { id, name, .. }
+                if id == "call_1" && name == "read_file"
+        ));
+        assert!(matches!(
+            &assistant.content[2],
+            ProviderContentBlock::ToolCall { id, name, .. }
+                if id == "call_2" && name == "echo"
+        ));
+
+        let tool = history_message_to_provider(HistoryMessage {
+            role: "tool".into(),
+            content: r#"{"ok":true}"#.into(),
+            tool_call_id: Some("call_1".into()),
+            tool_name: Some("read_file".into()),
+            tool_calls: None,
+        });
+        assert_eq!(tool.role, "tool");
+        assert!(matches!(
+            &tool.content[0],
+            ProviderContentBlock::ToolResult {
+                tool_call_id,
+                name: Some(n),
+                ..
+            } if tool_call_id == "call_1" && n == "read_file"
+        ));
+    }
+
+    #[test]
+    fn plain_user_stays_text() {
+        let msg = history_message_to_provider(HistoryMessage {
+            role: "user".into(),
+            content: "hi".into(),
+            tool_call_id: None,
+            tool_name: None,
+            tool_calls: None,
+        });
+        assert_eq!(msg.content.len(), 1);
+        assert!(matches!(
+            &msg.content[0],
+            ProviderContentBlock::Text { text } if text == "hi"
+        ));
+    }
 }
 
 /// Image source for provider requests.
@@ -135,6 +308,15 @@ pub enum ProviderErrorCategory {
     Unknown,
 }
 
+/// Runtime credential material for a single request (never logged).
+#[derive(Debug, Clone)]
+pub struct Credential {
+    pub api_key: String,
+    pub base_url: Option<String>,
+    pub key_id: Option<String>,
+    pub provider_type: Option<String>,
+}
+
 /// Provider adapter trait — all providers must implement this.
 #[async_trait]
 pub trait ProviderAdapter: Send + Sync {
@@ -147,17 +329,79 @@ pub trait ProviderAdapter: Send + Sync {
     /// Send a chat completion request (non-streaming).
     async fn chat(&self, request: ProviderRequest) -> Result<ProviderResponse, ProviderError>;
 
-    /// Send a streaming chat completion request.
+    /// Send a streaming chat completion request (legacy mock-friendly path).
     async fn chat_stream(
         &self,
         request: ProviderRequest,
     ) -> Result<Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>, ProviderError>;
 
+    /// Authenticated streaming path used by the Agent Engine.
+    ///
+    /// Default implementation falls back to `chat_stream` and maps events.
+    /// Real adapters override this to perform HTTP SSE with `credential`.
+    async fn stream(
+        &self,
+        request: ProviderRequest,
+        _credential: Credential,
+    ) -> Result<
+        std::pin::Pin<Box<dyn futures_util::Stream<Item = crate::stream::ProviderEvent> + Send>>,
+        ProviderError,
+    > {
+        use crate::stream::ProviderEvent;
+        use futures_util::StreamExt;
+        let legacy = self.chat_stream(request).await?;
+        let mapped = legacy.map(|event| match event {
+            ProviderStreamEvent::TextDelta(t) => ProviderEvent::TextDelta(t),
+            ProviderStreamEvent::ReasoningDelta(t) => ProviderEvent::ReasoningDelta(t),
+            ProviderStreamEvent::ToolCallBegin { id, name } => ProviderEvent::ToolCallDelta {
+                index: 0,
+                id: Some(id),
+                name: Some(name),
+                arguments_delta: String::new(),
+            },
+            ProviderStreamEvent::ToolCallDelta { id, delta } => ProviderEvent::ToolCallDelta {
+                index: 0,
+                id: Some(id),
+                name: None,
+                arguments_delta: delta,
+            },
+            ProviderStreamEvent::ToolCallComplete { id, name, input } => {
+                ProviderEvent::ToolCallDelta {
+                    index: 0,
+                    id: Some(id),
+                    name: Some(name),
+                    arguments_delta: input.to_string(),
+                }
+            }
+            ProviderStreamEvent::Done(usage) => ProviderEvent::Usage(usage),
+            ProviderStreamEvent::Error(err) => ProviderEvent::Error(err),
+        });
+        // Append Completed after legacy Done for engine compatibility.
+        let completed = futures_util::stream::once(async { ProviderEvent::Completed });
+        Ok(Box::pin(mapped.chain(completed)))
+    }
+
     /// List available models from this provider.
     async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError>;
 
+    /// Discover models with credentials (real HTTP when available).
+    async fn discover_models(
+        &self,
+        _credential: Credential,
+    ) -> Result<Vec<ModelInfo>, ProviderError> {
+        self.list_models().await
+    }
+
     /// Test the provider connection.
     async fn test_connection(&self) -> Result<ProviderTestResult, ProviderError>;
+
+    /// Test with credentials.
+    async fn test_connection_with_credential(
+        &self,
+        _credential: Credential,
+    ) -> Result<ProviderTestResult, ProviderError> {
+        self.test_connection().await
+    }
 }
 
 /// Model information from a provider.

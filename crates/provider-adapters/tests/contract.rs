@@ -179,3 +179,26 @@ fn test_provider_capabilities_serialization() {
     assert_eq!(json["provider_type"], "openai");
     assert!(json["streaming"].as_bool().unwrap());
 }
+
+/// Dual-provider path: production registry must expose distinct OpenAI-compatible + Anthropic adapters.
+#[test]
+fn register_all_includes_openai_compatible_and_anthropic() {
+    let adapters = provider_adapters::providers::register_all();
+    let types: Vec<_> = adapters.iter().map(|a| a.provider_type()).collect();
+    assert!(
+        types.contains(&ProviderType::OpenaiCompatible) || types.contains(&ProviderType::Openai),
+        "expected openai path: {types:?}"
+    );
+    assert!(
+        types.contains(&ProviderType::Anthropic),
+        "expected anthropic path: {types:?}"
+    );
+    for a in &adapters {
+        let caps = a.capabilities();
+        assert!(
+            caps.streaming || caps.tool_calls || caps.function_calling,
+            "adapter {:?} should advertise stream or tools",
+            a.provider_type()
+        );
+    }
+}

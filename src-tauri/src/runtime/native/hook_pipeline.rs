@@ -27,7 +27,9 @@
 //!   输入 (stdin JSON): { tool_name, tool_input, hook_event_name, session_id, cwd }
 //!   输出 (stdout JSON): { systemMessage, hookSpecificOutput, metrics, decision }
 
-use std::collections::HashMap;
+//!
+//! Residual catalog/compat after Protocol v2 cutover (execution retired).
+#![allow(dead_code)]
 use std::path::Path;
 use std::time::{Duration, Instant};
 use std::fmt;
@@ -326,7 +328,7 @@ impl ScriptHook {
     }
 
     /// 是否匹配工具（基于 matcher）
-    pub fn matches_tool(&self, tool_name: &str) -> bool {
+    pub fn matches_tool(&self, _tool_name: &str) -> bool {
         // 单个 entry 没有 matcher 字段，matcher 在 HookGroup 层面检查
         true
     }

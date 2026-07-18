@@ -21,7 +21,7 @@ use assistant_protocol::version::{ProtocolVersion, negotiate};
 #[test]
 fn test_handshake_request_roundtrip() {
     let req = HandshakeRequest {
-        client_version: "0.1.0".to_string(),
+        client_version: "2.0.0".to_string(),
         client_id: "test-client".to_string(),
         bootstrap_token: "valid-token".to_string(),
     };
@@ -29,7 +29,7 @@ fn test_handshake_request_roundtrip() {
     let json = serde_json::to_string(&req).unwrap();
     let deserialized: HandshakeRequest = serde_json::from_str(&json).unwrap();
 
-    assert_eq!(deserialized.client_version, "0.1.0");
+    assert_eq!(deserialized.client_version, "2.0.0");
     assert_eq!(deserialized.client_id, "test-client");
     assert_eq!(deserialized.bootstrap_token, "valid-token");
 }
@@ -39,7 +39,7 @@ fn test_handshake_response_roundtrip() {
     let resp = HandshakeResponse {
         session_token: "session-abc".to_string(),
         daemon_version: "0.1.0".to_string(),
-        protocol_version: "0.1.0".to_string(),
+        protocol_version: "2.0.0".to_string(),
         accepted: true,
         upgrade_required: None,
     };
@@ -71,16 +71,16 @@ fn test_bootstrap_token_validation() {
 
 #[test]
 fn test_protocol_version_compatible() {
-    let client = ProtocolVersion::new(0, 2, 0);
-    let daemon = ProtocolVersion::new(0, 1, 0);
+    let client = ProtocolVersion::new(2, 0, 0);
+    let daemon = ProtocolVersion::new(2, 1, 0);
     let result = negotiate(&client, &daemon);
     assert!(result.compatible, "Same major version should be compatible");
 }
 
 #[test]
 fn test_protocol_version_incompatible() {
-    let client = ProtocolVersion::new(1, 0, 0);
-    let daemon = ProtocolVersion::new(0, 1, 0);
+    let client = ProtocolVersion::new(0, 1, 0);
+    let daemon = ProtocolVersion::new(2, 0, 0);
     let result = negotiate(&client, &daemon);
     assert!(!result.compatible, "Different major version should be incompatible");
     assert!(result.upgrade_required.is_some());
@@ -89,11 +89,9 @@ fn test_protocol_version_incompatible() {
 #[test]
 fn test_replayed_bootstrap_token_rejected() {
     // Simulate token reuse detection
-    let bootstrap_token = "bootstrap-abc";
-    let mut used = false;
+    let used = true;
 
     // First use
-    used = true;
     assert!(used);
 
     // Replay attempt
@@ -103,7 +101,7 @@ fn test_replayed_bootstrap_token_rejected() {
 #[test]
 fn test_rpc_request_roundtrip() {
     let req = RpcRequest {
-        protocol_version: "0.1.0".to_string(),
+        protocol_version: "2.0.0".to_string(),
         request_id: "req-001".to_string(),
         client_id: "client-1".to_string(),
         session_token: "session-abc".to_string(),
@@ -121,7 +119,7 @@ fn test_rpc_request_roundtrip() {
 #[test]
 fn test_rpc_response_roundtrip() {
     let resp = RpcResponse {
-        protocol_version: "0.1.0".to_string(),
+        protocol_version: "2.0.0".to_string(),
         request_id: "req-001".to_string(),
         success: true,
         data: Some(serde_json::json!({"status": "ok"})),
@@ -190,7 +188,7 @@ fn test_disconnect_cleanup() {
 fn test_daemon_status_serialization() {
     let status = assistant_protocol::v1::daemon::DaemonStatus {
         version: "0.1.0".to_string(),
-        protocol_version: "0.1.0".to_string(),
+        protocol_version: "2.0.0".to_string(),
         uptime_secs: 42,
         pid: 12345,
         active_runs: 0,

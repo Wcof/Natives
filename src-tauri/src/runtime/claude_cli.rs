@@ -3,6 +3,7 @@
 //! Rust 直接 spawn `claude` 二进制，stdin/stdout 管道通信。
 //! 非 Node SDK，避免引入 Node 运行时依赖。
 
+#![allow(dead_code, unused_imports, unused_variables)]
 use super::{AgentRuntime, EventStream, RuntimeEvent, RuntimeStreamOptions};
 use crate::Result;
 use async_trait::async_trait;

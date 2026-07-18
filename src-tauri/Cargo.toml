@@ -8,6 +8,7 @@ edition = "2021"
 [features]
 default = ["ghostty-vt"]
 ghostty-vt = []
+db-tests = []
 
 [lib]
 name = "natives_lib"
@@ -63,3 +64,7 @@ async-trait = "0.1"
 tokio-stream = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 agent-core = { path = "../crates/agent-core" }
+provider-adapters = { path = "../crates/provider-adapters" }
+capability-gateway = { path = "../crates/capability-gateway" }
+assistant-protocol = { path = "../crates/assistant-protocol" }
+natives-agent-daemon = { path = "../src-agent-daemon" }

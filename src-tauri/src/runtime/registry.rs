@@ -3,6 +3,7 @@
 //! `resolve_runtime` 按优先级 Claude CLI > Codex CLI > Native 自动分流；
 //! 显式 override 不可用时抛错而非静默降级；降级到 Native 时返回 hint 字符串。
 
+#![allow(dead_code, unused_imports, unused_variables)]
 use super::AgentRuntime;
 use crate::Result;
 use std::sync::Arc;

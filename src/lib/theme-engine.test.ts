@@ -1,6 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { THEMES, validateTheme, normalizeThemeId } from './theme-engine';
+import {
+  CHART_VOLUME_DARK,
+  CHART_VOLUME_LIGHT,
+  THEMES,
+  getChartVolumeLevel,
+  normalizeThemeId,
+  validateTheme,
+} from './theme-engine';
 
 // ── AI Natives V1.0 Theme Engine Tests ──
 // V1.0 双主题：light / dark（已废弃 terminal-volt / frosted-jasmine）
@@ -56,7 +63,6 @@ test('normalizes legacy theme aliases to V1 theme ids', () => {
 // applyTheme 需要 DOM 环境，在浏览器集成测试中覆盖
 
 test('chart-volume-0..8 are complete and in correct order', () => {
-  const { CHART_VOLUME_DARK, CHART_VOLUME_LIGHT } = require('./theme-engine');
   for (let i = 0; i <= 8; i++) {
     assert.ok(CHART_VOLUME_DARK[i] !== undefined, `dark chart-volume-${i} should exist`);
     assert.ok(CHART_VOLUME_LIGHT[i] !== undefined, `light chart-volume-${i} should exist`);
@@ -70,7 +76,6 @@ test('chart-volume-0..8 are complete and in correct order', () => {
 });
 
 test('getChartVolumeLevel covers zero and boundary values', () => {
-  const { getChartVolumeLevel } = require('./theme-engine');
   // Zero value → level 0
   assert.equal(getChartVolumeLevel(0, 100), 0);
   // Zero visibleMax → level 0

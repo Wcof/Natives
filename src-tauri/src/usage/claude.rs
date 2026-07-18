@@ -1,6 +1,7 @@
 // ── Claude Code Original Event Log Parser ──
 // Scans ~/.claude/projects/**/*.jsonl for real usage events.
 
+#![allow(unused_imports, dead_code, unused_variables)]
 use crate::usage::{
     now_ms, UsageActivityBucket, UsageDailyRecord, UsageQuality, UsageSessionRecord,
     UsageSourceState, UsageSourceStatus, UsageWarning, UsageWarningCode, DurationMethod,
@@ -298,7 +299,7 @@ fn build_claude_daily(events: &[ParsedEvent]) -> Vec<UsageDailyRecord> {
 fn build_claude_activity(events: &[ParsedEvent]) -> Vec<UsageActivityBucket> {
     let mut groups: HashMap<(i64, String, Option<String>, Option<String>), Vec<i64>> =
         HashMap::new();
-    let mut user_msg_count: HashMap<(i64, String, Option<String>, Option<String>), i64> =
+    let user_msg_count: HashMap<(i64, String, Option<String>, Option<String>), i64> =
         HashMap::new();
     let mut assistant_msg_count: HashMap<(i64, String, Option<String>, Option<String>), i64> =
         HashMap::new();

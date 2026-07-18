@@ -108,18 +108,10 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
         }
         if (cancelled) return;
 
-        // 3. Get conversations list
-        let conversations: any[] = [];
-        try {
-          if (api.assistantV2) {
-            const list = await api.assistantV2.request('conversation.list', { include_archived: false });
-            if (Array.isArray(list)) {
-              conversations = list.filter((c: any) => !c.archived_at);
-            }
-          }
-        } catch (e) {
-          console.error('Failed to list conversations:', e);
-        }
+        // 3. Conversations are owned by AssistantWorkbench + Gateway store.
+        // Sidebar starts empty until the workbench publishes navigation.
+        // Do not call assistantV2 here — keeps a single Gateway seam.
+        const conversations: any[] = [];
         if (cancelled) return;
 
         // 4. Get saved locale

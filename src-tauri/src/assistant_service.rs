@@ -1,4 +1,6 @@
 use crate::daemon::data::DataStore;
+use crate::daemon_authority;
+
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -86,6 +88,8 @@ async fn dispatch_rpc(data_store: &Arc<DataStore>, method: &str, params: &Value)
     match method {
         "conversation.list" => handle_conversation_list(data_store, params).await,
         "conversation.create" => handle_conversation_create(data_store, params).await,
+        "conversation.get" => handle_conversation_get(data_store, params).await,
+        "conversation.fork" => handle_conversation_fork(data_store, params).await,
         "conversation.getMessages" => handle_conversation_get_messages(data_store, params).await,
         "conversation.appendMessage" => {
             handle_conversation_append_message(data_store, params).await
@@ -105,16 +109,28 @@ async fn dispatch_rpc(data_store: &Arc<DataStore>, method: &str, params: &Value)
         "run.listChildren" => handle_run_list_children(data_store, params).await,
         "run.getEvents" => handle_run_get_events(data_store, params).await,
         "permission.respond" => handle_permission_respond(data_store, params).await,
+        "permission.listPending" => handle_permission_list_pending(data_store, params).await,
+        "interaction.listPending" => handle_permission_list_pending(data_store, params).await,
+        "interaction.respond" => handle_permission_respond(data_store, params).await,
+        "promptQueue.list" => handle_prompt_queue_list(data_store, params).await,
+        "promptQueue.enqueue" => handle_prompt_queue_enqueue(data_store, params).await,
+        "promptQueue.update" => handle_prompt_queue_update(data_store, params).await,
+        "promptQueue.remove" => handle_prompt_queue_remove(data_store, params).await,
+        "promptQueue.reorder" => handle_prompt_queue_reorder(data_store, params).await,
+        "promptQueue.sendNow" => handle_prompt_queue_send_now(data_store, params).await,
         "artifact.list" => handle_artifact_list(data_store, params).await,
         "artifact.open" => handle_artifact_open(data_store, params).await,
-        _ => RpcResponse {
-            success: false,
-            data: None,
-            error: Some(RpcError {
-                code: "METHOD_NOT_FOUND".to_string(),
-                message: format!("Unknown RPC method: {}", method),
-            }),
-        },
+        "artifact.reveal" => handle_artifact_open(data_store, params).await,
+        _ if assistant_protocol::v2::is_implemented_method(method) => {
+            match daemon_authority::request(method, params.clone()).await {
+                Ok(data) => success_response(data),
+                Err(error) => error_response("DAEMON_RPC_ERROR", &error),
+            }
+        }
+        _ if assistant_protocol::v2::is_known_method(method) => {
+            error_response("UNSUPPORTED", &format!("RPC method is not implemented: {method}"))
+        }
+        _ => error_response("METHOD_NOT_FOUND", &format!("Unknown RPC method: {method}")),
     }
 }
 
@@ -167,6 +183,95 @@ async fn handle_conversation_list(data_store: &Arc<DataStore>, _params: &Value) 
     };
     let conversations: Vec<Value> = rows.filter_map(|r| r.ok()).collect();
     success_response(serde_json::json!(conversations))
+}
+
+async fn handle_conversation_get(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
+    let id = match params.get("id").or_else(|| params.get("conversation_id")).and_then(Value::as_str) {
+        Some(id) => id,
+        None => return error_response("MISSING_PARAM", "id is required"),
+    };
+    let conn = data_store.conn();
+    match conn.query_row(
+        "SELECT id, mode, project_id, title, provider_id, model_id, permission_profile_id, created_at, updated_at, archived_at
+         FROM assistant_conversations WHERE id = ?1",
+        rusqlite::params![id],
+        |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "mode": row.get::<_, String>(1)?,
+                "project_id": row.get::<_, Option<String>>(2)?,
+                "title": row.get::<_, String>(3)?,
+                "provider_id": row.get::<_, String>(4)?,
+                "model_id": row.get::<_, String>(5)?,
+                "permission_profile_id": row.get::<_, Option<String>>(6)?.unwrap_or_else(|| "ask".into()),
+                "created_at": row.get::<_, String>(7)?,
+                "updated_at": row.get::<_, String>(8)?,
+                "archived_at": row.get::<_, Option<String>>(9)?
+            }))
+        },
+    ) {
+        Ok(conversation) => success_response(conversation),
+        Err(rusqlite::Error::QueryReturnedNoRows) => error_response("NOT_FOUND", "conversation not found"),
+        Err(error) => error_response("DB_QUERY_ERROR", &error.to_string()),
+    }
+}
+
+async fn handle_conversation_fork(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
+    let source_id = match params.get("conversation_id").and_then(Value::as_str) {
+        Some(id) => id,
+        None => return error_response("MISSING_PARAM", "conversation_id is required"),
+    };
+    let source = {
+        let conn = data_store.conn();
+        match conn.query_row(
+            "SELECT mode, project_id, title, provider_id, model_id, permission_profile_id FROM assistant_conversations WHERE id = ?1",
+            rusqlite::params![source_id],
+            |row| Ok(serde_json::json!({
+                "mode": row.get::<_, String>(0)?,
+                "project_id": row.get::<_, Option<String>>(1)?,
+                "title": row.get::<_, String>(2)?,
+                "provider_id": row.get::<_, String>(3)?,
+                "model_id": row.get::<_, String>(4)?,
+                "permission_profile_id": row.get::<_, Option<String>>(5)?.unwrap_or_else(|| "ask".into()),
+            })),
+        ) {
+            Ok(source) => source,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return error_response("NOT_FOUND", "conversation not found"),
+            Err(error) => return error_response("DB_QUERY_ERROR", &error.to_string()),
+        }
+    };
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let title = format!("Fork of {}", source.get("title").and_then(Value::as_str).unwrap_or("Conversation"));
+    let conn = data_store.conn();
+    if let Err(error) = conn.execute(
+        "INSERT INTO assistant_conversations (id, mode, project_id, title, provider_id, model_id, permission_profile_id, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+        rusqlite::params![
+            id,
+            source.get("mode").and_then(Value::as_str).unwrap_or("agent"),
+            source.get("project_id").and_then(Value::as_str),
+            title.clone(),
+            source.get("provider_id").and_then(Value::as_str).unwrap_or_default(),
+            source.get("model_id").and_then(Value::as_str).unwrap_or_default(),
+            source.get("permission_profile_id").and_then(Value::as_str).unwrap_or("ask"),
+            now.clone(),
+        ],
+    ) {
+        return error_response("DB_INSERT_ERROR", &error.to_string());
+    }
+    success_response(serde_json::json!({
+        "id": id,
+        "mode": source.get("mode"),
+        "project_id": source.get("project_id"),
+        "title": title,
+        "provider_id": source.get("provider_id"),
+        "model_id": source.get("model_id"),
+        "permission_profile_id": source.get("permission_profile_id"),
+        "created_at": now,
+        "updated_at": now,
+        "archived_at": null
+    }))
 }
 
 async fn handle_conversation_create(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
@@ -484,7 +589,16 @@ async fn handle_conversation_delete(data_store: &Arc<DataStore>, params: &Value)
         None => return error_response("MISSING_PARAM", "id is required"),
     };
 
-    crate::assistant_stream_proxy::cancel_stream_sync(id);
+    let runs = match daemon_authority::list_runs(Some(id)).await {
+        Ok(runs) => runs,
+        Err(error) => return error_response("DAEMON_DELETE_FAILED", &error),
+    };
+    for run in runs.iter().filter(|run| !run.status.is_terminal()) {
+        if let Err(error) = daemon_authority::cancel_run(&run.id).await {
+            return error_response("DAEMON_DELETE_FAILED", &error);
+        }
+    }
+
     let conn = data_store.conn();
     match conn.execute(
         "DELETE FROM assistant_conversations WHERE id = ?1",
@@ -557,96 +671,252 @@ async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcRes
             "size": metadata.size,
         }));
     }
+    // Validate the execution boundary before reserving a local run row. A
+    // failed preflight must never leave an active-looking ghost run behind.
+    let project_path = params
+        .get("project_path")
+        .or_else(|| params.get("workspace_path"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| std::env::var("NATIVES_PROJECT_PATH").ok())
+        .filter(|path| !path.trim().is_empty());
+    if project_path.is_none()
+        && std::env::var("NATIVES_REQUIRE_PROJECT_PATH")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(true)
+    {
+        return error_response(
+            "PROJECT_PATH_REQUIRED",
+            "project_path must be provided by UI (daemon cwd is not a valid default)",
+        );
+    }
+
     let run_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
-    let conn = data_store.conn();
-    let pair_available = conn.query_row(
-        "SELECT EXISTS(
+    // All DB work in a block so MutexGuard is dropped before any await (Send).
+    let (trigger_message_id, permission_profile) = {
+        let conn = data_store.conn();
+        let pair_available = conn
+            .query_row(
+                "SELECT EXISTS(
             SELECT 1 FROM assistant_model_cache model
             JOIN assistant_provider_keys key ON key.provider_id = model.provider_id AND key.is_active = 1
             WHERE model.provider_id = ?1 AND model.model_id = ?2
         )",
-        rusqlite::params![provider_id, model_id],
-        |row| row.get::<_, bool>(0),
-    ).unwrap_or(false);
-    if !pair_available {
-        return error_response("INVALID_PARAM", "Provider/model pair is not available");
-    }
-    let transaction = match conn.unchecked_transaction() {
-        Ok(transaction) => transaction,
-        Err(e) => return error_response("DB_ERROR", &e.to_string()),
-    };
-    let trigger_message_id = if content.is_some() || !attachments.is_empty() {
-        let message_id = uuid::Uuid::new_v4().to_string();
-        if let Err(e) = transaction.execute(
-            "INSERT INTO assistant_messages (id, conversation_id, role, status, created_at) VALUES (?1, ?2, 'user', 'complete', ?3)",
-            rusqlite::params![message_id, conversation_id, now],
-        ) {
-            return error_response("DB_INSERT_ERROR", &e.to_string());
+                rusqlite::params![provider_id, model_id],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap_or(false);
+        if !pair_available {
+            return error_response("INVALID_PARAM", "Provider/model pair is not available");
         }
-        let mut block_index = 0_i64;
-        if let Some(content) = content {
+        let transaction = match conn.unchecked_transaction() {
+            Ok(transaction) => transaction,
+            Err(e) => return error_response("DB_ERROR", &e.to_string()),
+        };
+        let trigger_message_id = if content.is_some() || !attachments.is_empty() {
+            let message_id = uuid::Uuid::new_v4().to_string();
             if let Err(e) = transaction.execute(
-                "INSERT INTO assistant_message_blocks (id, message_id, block_type, block_index, content) VALUES (?1, ?2, 'text', ?3, ?4)",
-                rusqlite::params![uuid::Uuid::new_v4().to_string(), message_id, block_index, content],
+                "INSERT INTO assistant_messages (id, conversation_id, role, status, created_at) VALUES (?1, ?2, 'user', 'complete', ?3)",
+                rusqlite::params![message_id, conversation_id, now],
             ) {
                 return error_response("DB_INSERT_ERROR", &e.to_string());
             }
-            block_index += 1;
-        }
-        for payload in &normalized_attachments {
-            if let Err(e) = transaction.execute(
-                "INSERT INTO assistant_message_blocks (id, message_id, block_type, block_index, content) VALUES (?1, ?2, 'file_reference', ?3, ?4)",
-                rusqlite::params![uuid::Uuid::new_v4().to_string(), message_id, block_index, payload.to_string()],
-            ) {
-                return error_response("DB_INSERT_ERROR", &e.to_string());
+            let mut block_index = 0_i64;
+            if let Some(content) = content {
+                if let Err(e) = transaction.execute(
+                    "INSERT INTO assistant_message_blocks (id, message_id, block_type, block_index, content) VALUES (?1, ?2, 'text', ?3, ?4)",
+                    rusqlite::params![
+                        uuid::Uuid::new_v4().to_string(),
+                        message_id,
+                        block_index,
+                        content
+                    ],
+                ) {
+                    return error_response("DB_INSERT_ERROR", &e.to_string());
+                }
+                block_index += 1;
             }
-            block_index += 1;
-        }
-        Some(message_id)
-    } else {
-        params
-            .get("trigger_message_id")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    };
-    let permission_profile = transaction.query_row(
-        "SELECT COALESCE(permission_profile_id, 'ask') FROM assistant_conversations WHERE id = ?1",
-        rusqlite::params![conversation_id],
-        |row| row.get::<_, String>(0),
-    ).unwrap_or_else(|_| "ask".to_string());
-    let active_primary: bool = transaction
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM assistant_runs
+            for payload in &normalized_attachments {
+                if let Err(e) = transaction.execute(
+                    "INSERT INTO assistant_message_blocks (id, message_id, block_type, block_index, content) VALUES (?1, ?2, 'file_reference', ?3, ?4)",
+                    rusqlite::params![
+                        uuid::Uuid::new_v4().to_string(),
+                        message_id,
+                        block_index,
+                        payload.to_string()
+                    ],
+                ) {
+                    return error_response("DB_INSERT_ERROR", &e.to_string());
+                }
+                block_index += 1;
+            }
+            Some(message_id)
+        } else {
+            params
+                .get("trigger_message_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        };
+        let permission_profile = transaction
+            .query_row(
+                "SELECT COALESCE(permission_profile_id, 'ask') FROM assistant_conversations WHERE id = ?1",
+                rusqlite::params![conversation_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap_or_else(|_| "ask".to_string());
+        let active_primary: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM assistant_runs
              WHERE conversation_id = ?1 AND parent_run_id IS NULL
                AND status IN ('queued','preparing','running','waiting_permission','cancelling'))",
-            rusqlite::params![conversation_id],
-            |row| row.get(0),
-        )
-        .unwrap_or(false);
-    if active_primary {
-        return error_response("RUN_ALREADY_ACTIVE", "This conversation already has an active run");
-    }
-    if let Err(e) = transaction.execute(
-        "INSERT INTO assistant_runs (id, conversation_id, status, trigger_message_id, provider_id, model_id, permission_profile, started_at)
-         VALUES (?1, ?2, 'running', ?3, ?4, ?5, ?6, ?7)",
-        rusqlite::params![run_id, conversation_id, trigger_message_id, provider_id, model_id, permission_profile, now],
-    ).and_then(|_| transaction.execute(
-        "UPDATE assistant_conversations SET updated_at = ?1 WHERE id = ?2",
-        rusqlite::params![now, conversation_id],
-    )).and_then(|_| transaction.commit()) {
-        return error_response("DB_INSERT_ERROR", &e.to_string());
-    }
+                rusqlite::params![conversation_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if active_primary {
+            return error_response(
+                "RUN_ALREADY_ACTIVE",
+                "This conversation already has an active run",
+            );
+        }
+        if let Err(e) = transaction
+            .execute(
+                "INSERT INTO assistant_runs (id, conversation_id, status, trigger_message_id, provider_id, model_id, permission_profile, started_at)
+         VALUES (?1, ?2, 'queued', ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    run_id,
+                    conversation_id,
+                    trigger_message_id,
+                    provider_id,
+                    model_id,
+                    permission_profile,
+                    now
+                ],
+            )
+            .and_then(|_| {
+                transaction.execute(
+                    "UPDATE assistant_conversations SET updated_at = ?1 WHERE id = ?2",
+                    rusqlite::params![now, conversation_id],
+                )
+            })
+            .and_then(|_| transaction.commit())
+        {
+            return error_response("DB_INSERT_ERROR", &e.to_string());
+        }
+        (trigger_message_id, permission_profile)
+    };
+
+    // Protocol v2: Run Authority via embedded RunManager or UDS sidecar (G4).
+    let user_content = content.unwrap_or("").to_string();
+    let daemon_run = match daemon_authority::create_run(assistant_protocol::v2::CreateRunRequest {
+        conversation_id: conversation_id.to_string(),
+        provider_id: provider_id.to_string(),
+        model_id: model_id.to_string(),
+        key_id: None,
+        agent_profile_id: None,
+        permission_profile: Some(permission_profile.clone()),
+        content: Some(user_content.clone()),
+        attachments: None,
+        max_steps: Some(50),
+        parent_run_id: None,
+        project_path: project_path.clone(),
+        idempotency_key: Some(run_id.clone()),
+    })
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return error_response("DAEMON_CREATE_FAILED", &e),
+    };
+    let start_req = assistant_protocol::v2::StartRunRequest {
+        run_id: Some(daemon_run.id.clone()),
+        conversation_id: Some(conversation_id.to_string()),
+        provider_id: Some(provider_id.to_string()),
+        model_id: Some(model_id.to_string()),
+        key_id: None,
+        content: Some(user_content),
+        attachments: None,
+        trigger_message_id: trigger_message_id.clone(),
+        permission_profile: Some(permission_profile.clone()),
+        max_steps: Some(50),
+        project_path,
+        idempotency_key: None,
+    };
+    let db_run_id = run_id.clone();
+    let daemon_run_id = daemon_run.id.clone();
+    let daemon_run_id_resp = daemon_run.id.clone();
+    let mode_label = daemon_authority::authority_mode_label();
+    let started_daemon = match daemon_authority::start_run(start_req).await {
+        Ok(run) => run,
+        Err(error) => {
+            let conn = data_store.conn();
+            let _ = conn.execute(
+                "UPDATE assistant_runs SET status = 'failed', error_code = ?1, finished_at = ?2 WHERE id = ?3",
+                rusqlite::params![error.to_string(), chrono::Utc::now().to_rfc3339(), run_id],
+            );
+            return error_response("DAEMON_START_FAILED", &error);
+        }
+    };
+    let daemon_status = started_daemon.status.as_str().to_string();
+    let db_status = if started_daemon.status.is_terminal() {
+        daemon_status.clone()
+    } else {
+        "running".to_string()
+    };
+    let conn = data_store.conn();
+    let _ = conn.execute(
+        "UPDATE assistant_runs SET status = ?1 WHERE id = ?2",
+        rusqlite::params![db_status, run_id],
+    );
+    tokio::spawn(async move {
+        // Brief settle so fixture/fast engines finish before first mirror.
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            if let Ok(Some(r)) = daemon_authority::get_run(&daemon_run_id).await {
+                if r.status.is_terminal() {
+                    break;
+                }
+            }
+        }
+        if let Ok(events) = daemon_authority::replay_events(&daemon_run_id, 0).await {
+            if let Ok(conn) = crate::db::get_assistant_db_conn() {
+                for event in events {
+                    let payload =
+                        serde_json::to_string(&event.payload).unwrap_or_else(|_| "{}".into());
+                    let _ = conn.execute(
+                        "INSERT OR IGNORE INTO assistant_run_events (run_id, sequence, timestamp, event_type, payload)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![
+                            db_run_id,
+                            event.sequence as i64,
+                            event.timestamp.to_rfc3339(),
+                            event.payload.type_name(),
+                            payload
+                        ],
+                    );
+                }
+                if let Ok(Some(r)) = daemon_authority::get_run(&daemon_run_id).await {
+                    let _ = conn.execute(
+                        "UPDATE assistant_runs SET status = ?1, finished_at = CASE WHEN ?1 IN ('completed','failed','cancelled','interrupted') THEN ?2 ELSE finished_at END WHERE id = ?3",
+                        rusqlite::params![r.status.as_str(), chrono::Utc::now().to_rfc3339(), db_run_id],
+                    );
+                }
+            }
+        }
+    });
 
     success_response(serde_json::json!({
         "id": run_id,
         "conversation_id": conversation_id,
-        "status": "running",
+        "status": db_status,
         "provider_id": provider_id,
         "model_id": model_id,
         "permission_profile": permission_profile,
-        "started_at": now
+        "started_at": now,
+        "execution": "agent_daemon_run_manager",
+        "authority_mode": mode_label,
+        "daemon_run_id": daemon_run_id_resp,
     }))
 }
 
@@ -657,14 +927,46 @@ async fn handle_run_cancel(data_store: &Arc<DataStore>, params: &Value) -> RpcRe
     };
 
     let now = chrono::Utc::now().to_rfc3339();
+    // The local projection changes only after the Daemon confirms cancellation.
+    let daemon_run = match daemon_authority::cancel_run(run_id).await {
+        Ok(run) => run,
+        Err(error) => return error_response("DAEMON_CANCEL_FAILED", &error),
+    };
+    let status = daemon_run.status.as_str();
+    // Older assistant.db files have no cancelled CHECK value yet; keep their
+    // rebuildable projection compatible while the daemon remains authoritative.
+    let local_status = if status == "cancelled" { "interrupted" } else { status };
+
     let conn = data_store.conn();
-    if let Err(e) = conn.execute(
-        "UPDATE assistant_runs SET status = 'interrupted', finished_at = ?1 WHERE id = ?2 AND status IN ('queued', 'preparing', 'running', 'cancelling')",
-        rusqlite::params![now, run_id],
+    let changed = match conn.execute(
+        "UPDATE assistant_runs SET status = ?1, finished_at = ?2 WHERE id = ?3 AND status IN ('queued', 'preparing', 'running', 'waiting_permission', 'cancelling')",
+        rusqlite::params![local_status, now, run_id],
     ) {
-        return error_response("DB_UPDATE_ERROR", &e.to_string());
+        Ok(changed) => changed,
+        Err(e) => return error_response("DB_UPDATE_ERROR", &e.to_string()),
+    };
+
+    if changed > 0 {
+        let sequence: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(sequence), 0) + 1 FROM assistant_run_events WHERE run_id = ?1",
+                rusqlite::params![run_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(1);
+        let _ = conn.execute(
+            "INSERT INTO assistant_run_events (run_id, sequence, timestamp, event_type, payload) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                run_id,
+                sequence,
+                now,
+                status,
+                serde_json::json!({ "reason": "cancelled" }).to_string()
+            ],
+        );
     }
-    success_response(serde_json::json!({ "id": run_id, "status": "interrupted" }))
+
+    success_response(serde_json::json!({ "id": run_id, "status": status, "cancelled": changed > 0 }))
 }
 
 async fn handle_run_finish(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
@@ -673,13 +975,13 @@ async fn handle_run_finish(data_store: &Arc<DataStore>, params: &Value) -> RpcRe
         None => return error_response("MISSING_PARAM", "run_id is required"),
     };
     let status = match params.get("status").and_then(Value::as_str) {
-        Some("completed" | "failed" | "interrupted") => {
+        Some("completed" | "failed" | "cancelled" | "interrupted") => {
             params.get("status").and_then(Value::as_str).unwrap()
         }
         _ => {
             return error_response(
                 "INVALID_PARAM",
-                "status must be completed, failed, or interrupted",
+                "status must be completed, failed, cancelled, or interrupted",
             )
         }
     };
@@ -695,9 +997,172 @@ async fn handle_run_finish(data_store: &Arc<DataStore>, params: &Value) -> RpcRe
     success_response(serde_json::json!({ "id": run_id, "status": status, "finished_at": now }))
 }
 
-async fn handle_run_retry(_data_store: &Arc<DataStore>, _params: &Value) -> RpcResponse {
-    // For now, return not-implemented — will be wired to assistant_executor
-    error_response("NOT_IMPLEMENTED", "run.retry is not yet implemented")
+async fn handle_run_retry(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
+    let run_id = match params.get("run_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return error_response("MISSING_PARAM", "run_id is required"),
+    };
+
+    // Prefer Daemon memory retry+start; if missing, rehydrate from DB then create+start.
+    let new_run = match daemon_authority::retry_and_start(run_id).await {
+        Ok(r) => r,
+        Err(_) => {
+            let rehydrated = {
+                let conn = data_store.conn();
+                let row = conn.query_row(
+                    "SELECT conversation_id, provider_id, model_id, permission_profile
+                 FROM assistant_runs WHERE id = ?1",
+                    rusqlite::params![run_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                        ))
+                    },
+                );
+                let (conversation_id, provider_id, model_id, perm) = match row {
+                    Ok(r) => r,
+                    Err(_) => return error_response("NOT_FOUND", "run not found"),
+                };
+                let content: Option<String> = conn
+                    .query_row(
+                        "SELECT b.content FROM assistant_messages m
+                     JOIN assistant_message_blocks b ON b.message_id = m.id
+                     WHERE m.conversation_id = ?1 AND m.role = 'user' AND b.block_type = 'text'
+                     ORDER BY m.created_at DESC LIMIT 1",
+                        rusqlite::params![conversation_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .ok()
+                    .and_then(|raw| {
+                        serde_json::from_str::<Value>(&raw)
+                            .ok()
+                            .and_then(|v| {
+                                v.get("text").and_then(|t| t.as_str()).map(str::to_string)
+                            })
+                            .or(Some(raw))
+                    });
+                (conversation_id, provider_id, model_id, perm, content)
+            };
+            let (conversation_id, provider_id, model_id, perm, content) = rehydrated;
+            let created = match daemon_authority::create_run(
+                assistant_protocol::v2::CreateRunRequest {
+                    conversation_id,
+                    provider_id,
+                    model_id,
+                    key_id: None,
+                    agent_profile_id: None,
+                    permission_profile: perm,
+                    content: content.clone(),
+                    attachments: None,
+                    max_steps: Some(50),
+                    parent_run_id: None,
+                    project_path: None,
+                    idempotency_key: None,
+                },
+            )
+            .await
+            {
+                Ok(r) => r,
+                Err(e) => return error_response("DAEMON_RETRY_FAILED", &e),
+            };
+            match daemon_authority::start_run(assistant_protocol::v2::StartRunRequest {
+                run_id: Some(created.id.clone()),
+                conversation_id: Some(created.conversation_id.clone()),
+                provider_id: Some(created.provider_id.clone()),
+                model_id: Some(created.model_id.clone()),
+                key_id: created.key_id.clone(),
+                content,
+                attachments: None,
+                trigger_message_id: None,
+                permission_profile: Some(created.permission_profile.clone()),
+                max_steps: Some(created.max_steps),
+                project_path: None,
+                idempotency_key: None,
+            })
+            .await
+            {
+                Ok(r) => r,
+                Err(e) => return error_response("DAEMON_RETRY_START_FAILED", &e),
+            }
+        }
+    };
+
+    let now = chrono::Utc::now().to_rfc3339();
+    {
+        let conn = data_store.conn();
+        if let Err(e) = conn.execute(
+            "INSERT INTO assistant_runs (id, conversation_id, status, provider_id, model_id, permission_profile, started_at)
+             VALUES (?1, ?2, 'running', ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                new_run.id,
+                new_run.conversation_id,
+                new_run.provider_id,
+                new_run.model_id,
+                new_run.permission_profile,
+                now
+            ],
+        ) {
+            return error_response("DB_INSERT_ERROR", &e.to_string());
+        }
+    }
+
+    let new_id = new_run.id.clone();
+    let db_id = new_run.id.clone();
+    tokio::spawn(async move {
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            if let Ok(Some(r)) = daemon_authority::get_run(&new_id).await {
+                if r.status.is_terminal() {
+                    break;
+                }
+            }
+        }
+        if let Ok(events) = daemon_authority::replay_events(&new_id, 0).await {
+            for event in events {
+                if let Ok(conn) = crate::db::get_assistant_db_conn() {
+                    let payload =
+                        serde_json::to_string(&event.payload).unwrap_or_else(|_| "{}".into());
+                    let _ = conn.execute(
+                        "INSERT OR IGNORE INTO assistant_run_events (run_id, sequence, timestamp, event_type, payload)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![
+                            db_id,
+                            event.sequence as i64,
+                            event.timestamp.to_rfc3339(),
+                            event.payload.type_name(),
+                            payload
+                        ],
+                    );
+                }
+            }
+        }
+        if let Ok(conn) = crate::db::get_assistant_db_conn() {
+            if let Ok(Some(run)) = daemon_authority::get_run(&new_id).await {
+                let status = run.status.as_str().to_string();
+                let _ = conn.execute(
+                    "UPDATE assistant_runs SET status = ?1, finished_at = ?2 WHERE id = ?3",
+                    rusqlite::params![status, chrono::Utc::now().to_rfc3339(), db_id],
+                );
+            }
+        }
+    });
+
+    success_response(serde_json::json!({
+        "id": new_run.id,
+        "conversation_id": new_run.conversation_id,
+        "status": "running",
+        "provider_id": new_run.provider_id,
+        "model_id": new_run.model_id,
+        "permission_profile": new_run.permission_profile,
+        "started_at": now,
+        "execution": "agent_daemon_run_manager",
+        "authority_mode": daemon_authority::authority_mode_label(),
+        "retried_from": run_id,
+        "ids_differ": new_run.id != run_id,
+    }))
 }
 
 async fn handle_run_list(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
@@ -779,6 +1244,49 @@ async fn handle_run_get_events(data_store: &Arc<DataStore>, params: &Value) -> R
         None => return error_response("MISSING_PARAM", "run_id is required"),
     };
 
+    let after_sequence = params
+        .get("after_sequence")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+
+    // Prefer live Run Authority events (embedded or UDS), then durable DB.
+    if let Ok(daemon_events) =
+        daemon_authority::replay_events(run_id, after_sequence as u64).await
+    {
+        if !daemon_events.is_empty() {
+            if let Ok(conn) = crate::db::get_assistant_db_conn() {
+                for event in &daemon_events {
+                    let payload =
+                        serde_json::to_string(&event.payload).unwrap_or_else(|_| "{}".into());
+                    let _ = conn.execute(
+                        "INSERT OR IGNORE INTO assistant_run_events (run_id, sequence, timestamp, event_type, payload)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        rusqlite::params![
+                            run_id,
+                            event.sequence as i64,
+                            event.timestamp.to_rfc3339(),
+                            event.payload.type_name(),
+                            payload
+                        ],
+                    );
+                }
+            }
+            let events: Vec<Value> = daemon_events
+                .into_iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "run_id": e.run_id,
+                        "sequence": e.sequence,
+                        "timestamp": e.timestamp.to_rfc3339(),
+                        "type": e.payload.type_name(),
+                        "payload": e.payload,
+                    })
+                })
+                .collect();
+            return success_response(serde_json::json!(events));
+        }
+    }
+
     let conn = data_store.conn();
     let mut stmt = match conn.prepare(
         "SELECT run_id, sequence, timestamp, event_type, payload
@@ -791,10 +1299,6 @@ async fn handle_run_get_events(data_store: &Arc<DataStore>, params: &Value) -> R
         Err(e) => return error_response("DB_ERROR", &e.to_string()),
     };
 
-    let after_sequence = params
-        .get("after_sequence")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
     let events: Vec<Value> =
         match stmt.query_map(rusqlite::params![run_id, after_sequence], |row| {
             let payload: Value =
@@ -829,6 +1333,16 @@ async fn handle_permission_respond(data_store: &Arc<DataStore>, params: &Value) 
         .get("scope")
         .and_then(Value::as_str)
         .unwrap_or("once");
+    let run_id = params.get("run_id").and_then(|v| v.as_str());
+
+    // Wake the Run Authority permission waiter (embedded or UDS), bound to run_id when provided.
+    if let Err(e) = daemon_authority::respond_permission_for_run(request_id, approved, run_id).await {
+        // A legacy host-only pending row has no daemon waiter. Keep that
+        // migration path, but never hide errors for a run-bound response.
+        if run_id.is_some() {
+            return error_response("DAEMON_PERMISSION_FAILED", &e);
+        }
+    }
 
     let now = chrono::Utc::now().to_rfc3339();
     let conn = data_store.conn();
@@ -839,15 +1353,237 @@ async fn handle_permission_respond(data_store: &Arc<DataStore>, params: &Value) 
         Ok(changed) => changed,
         Err(e) => return error_response("DB_UPDATE_ERROR", &e.to_string()),
     };
-    if changed == 0 {
-        return error_response("NOT_FOUND", "permission request is no longer pending");
+    // Daemon-only permission requests may not have a DB row yet — still OK if
+    // the waiter was resolved above.
+    success_response(serde_json::json!({
+        "request_id": request_id,
+        "approved": approved,
+        "db_updated": changed > 0,
+    }))
+}
+
+async fn handle_permission_list_pending(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
+    let conversation_id = params.get("conversation_id").and_then(Value::as_str);
+    let conn = data_store.conn();
+    let sql = if conversation_id.is_some() {
+        "SELECT p.id, p.run_id, p.tool_call_id, p.tool_name, p.reason, p.input, p.created_at
+         FROM assistant_permission_requests p JOIN assistant_runs r ON r.id = p.run_id
+         WHERE p.status = 'pending' AND r.conversation_id = ?1 ORDER BY p.created_at ASC"
+    } else {
+        "SELECT id, run_id, tool_call_id, tool_name, reason, input, created_at
+         FROM assistant_permission_requests WHERE status = 'pending' ORDER BY created_at ASC"
+    };
+    let mut stmt = match conn.prepare(sql) {
+        Ok(stmt) => stmt,
+        Err(error) => return error_response("DB_ERROR", &error.to_string()),
+    };
+    let rows = match if let Some(cid) = conversation_id {
+        stmt.query_map(rusqlite::params![cid], pending_permission_row)
+    } else {
+        stmt.query_map([], pending_permission_row)
+    } {
+        Ok(rows) => rows.filter_map(|row| row.ok()).collect::<Vec<_>>(),
+        Err(error) => return error_response("DB_QUERY_ERROR", &error.to_string()),
+    };
+    success_response(serde_json::json!(rows))
+}
+
+fn pending_permission_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    let raw_input: String = row.get(5)?;
+    Ok(serde_json::json!({
+        "id": row.get::<_, String>(0)?,
+        "request_id": row.get::<_, String>(0)?,
+        "run_id": row.get::<_, String>(1)?,
+        "tool_call_id": row.get::<_, String>(2)?,
+        "tool_name": row.get::<_, String>(3)?,
+        "reason": row.get::<_, String>(4)?,
+        "input": serde_json::from_str::<Value>(&raw_input).unwrap_or(Value::Null),
+        "created_at": row.get::<_, String>(6)?
+    }))
+}
+
+async fn handle_prompt_queue_list(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
+    let conversation_id = match params.get("conversation_id").or_else(|| params.get("conversationId")).and_then(Value::as_str) {
+        Some(id) => id,
+        None => return error_response("MISSING_PARAM", "conversation_id is required"),
+    };
+    let conn = data_store.conn();
+    let mut stmt = match conn.prepare(
+        "SELECT id, conversation_id, content, source, attachments, position, client_temp_id, created_at
+         FROM assistant_prompt_queue WHERE conversation_id = ?1 ORDER BY position ASC, created_at ASC",
+    ) {
+        Ok(stmt) => stmt,
+        Err(error) => return error_response("DB_ERROR", &error.to_string()),
+    };
+    let rows = stmt.query_map(rusqlite::params![conversation_id], |row| {
+        let attachments: Option<String> = row.get(4)?;
+        Ok(serde_json::json!({
+            "id": row.get::<_, String>(0)?,
+            "conversation_id": row.get::<_, String>(1)?,
+            "content": row.get::<_, String>(2)?,
+            "source": row.get::<_, String>(3)?,
+            "attachments": attachments.and_then(|raw| serde_json::from_str::<Value>(&raw).ok()),
+            "order": row.get::<_, i64>(5)?,
+            "client_temp_id": row.get::<_, Option<String>>(6)?,
+            "created_at": row.get::<_, String>(7)?
+        }))
+    });
+    match rows {
+        Ok(rows) => success_response(serde_json::json!(rows.filter_map(|row| row.ok()).collect::<Vec<_>>())),
+        Err(error) => error_response("DB_QUERY_ERROR", &error.to_string()),
     }
-    success_response(serde_json::json!({ "request_id": request_id, "approved": approved }))
+}
+
+async fn handle_prompt_queue_enqueue(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
+    let conversation_id = match params.get("conversation_id").and_then(Value::as_str) {
+        Some(id) => id,
+        None => return error_response("MISSING_PARAM", "conversation_id is required"),
+    };
+    let content = match params.get("content").and_then(Value::as_str).filter(|s| !s.trim().is_empty()) {
+        Some(content) => content,
+        None => return error_response("MISSING_PARAM", "content is required"),
+    };
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let conn = data_store.conn();
+    let position: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(position), -1) + 1 FROM assistant_prompt_queue WHERE conversation_id = ?1",
+        rusqlite::params![conversation_id],
+        |row| row.get(0),
+    ).unwrap_or(0);
+    if let Err(error) = conn.execute(
+        "INSERT INTO assistant_prompt_queue (id, conversation_id, content, source, attachments, position, client_temp_id, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+        rusqlite::params![id, conversation_id, content, params.get("source").and_then(Value::as_str).unwrap_or("user"), params.get("attachments").map(Value::to_string), position, params.get("client_temp_id").or_else(|| params.get("clientTempId")).and_then(Value::as_str), now],
+    ) {
+        return error_response("DB_INSERT_ERROR", &error.to_string());
+    }
+    success_response(serde_json::json!({"id": id, "conversation_id": conversation_id, "content": content, "order": position, "created_at": now}))
+}
+
+async fn handle_prompt_queue_update(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
+    let id = match params.get("id").and_then(Value::as_str) { Some(id) => id, None => return error_response("MISSING_PARAM", "id is required") };
+    let content = match params.get("content").and_then(Value::as_str) { Some(content) => content, None => return error_response("MISSING_PARAM", "content is required") };
+    let conn = data_store.conn();
+    match conn.execute("UPDATE assistant_prompt_queue SET content = ?1, updated_at = ?2 WHERE id = ?3", rusqlite::params![content, chrono::Utc::now().to_rfc3339(), id]) {
+        Ok(0) => error_response("NOT_FOUND", "prompt queue item not found"),
+        Ok(_) => success_response(serde_json::json!({"id": id, "updated": true})),
+        Err(error) => error_response("DB_UPDATE_ERROR", &error.to_string()),
+    }
+}
+
+async fn handle_prompt_queue_remove(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
+    let id = match params.get("id").and_then(Value::as_str) { Some(id) => id, None => return error_response("MISSING_PARAM", "id is required") };
+    let conn = data_store.conn();
+    match conn.execute("DELETE FROM assistant_prompt_queue WHERE id = ?1", rusqlite::params![id]) {
+        Ok(0) => error_response("NOT_FOUND", "prompt queue item not found"),
+        Ok(_) => success_response(serde_json::json!({"id": id, "removed": true})),
+        Err(error) => error_response("DB_DELETE_ERROR", &error.to_string()),
+    }
+}
+
+async fn handle_prompt_queue_reorder(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
+    let conversation_id = match params.get("conversation_id").and_then(Value::as_str) { Some(id) => id, None => return error_response("MISSING_PARAM", "conversation_id is required") };
+    let ids = match params.get("ids").and_then(Value::as_array) { Some(ids) => ids, None => return error_response("MISSING_PARAM", "ids is required") };
+    let conn = data_store.conn();
+    let tx = match conn.unchecked_transaction() { Ok(tx) => tx, Err(error) => return error_response("DB_ERROR", &error.to_string()) };
+    for (position, id) in ids.iter().filter_map(Value::as_str).enumerate() {
+        if let Err(error) = tx.execute("UPDATE assistant_prompt_queue SET position = ?1, updated_at = ?2 WHERE id = ?3 AND conversation_id = ?4", rusqlite::params![position as i64, chrono::Utc::now().to_rfc3339(), id, conversation_id]) {
+            return error_response("DB_UPDATE_ERROR", &error.to_string());
+        }
+    }
+    if let Err(error) = tx.commit() { return error_response("DB_UPDATE_ERROR", &error.to_string()); }
+    success_response(serde_json::json!({"conversation_id": conversation_id, "reordered": true}))
+}
+
+async fn handle_prompt_queue_send_now(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
+    let id = match params.get("id").and_then(Value::as_str) {
+        Some(id) => id,
+        None => return error_response("MISSING_PARAM", "id is required"),
+    };
+    let (conversation_id, content, attachments, provider_id, model_id, project_path) = {
+        let conn = data_store.conn();
+        match conn.query_row(
+            "SELECT q.conversation_id, q.content, q.attachments, c.provider_id, c.model_id, c.project_id
+             FROM assistant_prompt_queue q
+             JOIN assistant_conversations c ON c.id = q.conversation_id
+             WHERE q.id = ?1",
+            rusqlite::params![id],
+            |row| {
+                let attachments: Option<String> = row.get(2)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    attachments
+                        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                        .unwrap_or_else(|| Value::Array(Vec::new())),
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                ))
+            },
+        ) {
+            Ok(item) => item,
+            Err(_) => return error_response("NOT_FOUND", "prompt queue item not found"),
+        }
+    };
+
+    let runs = match daemon_authority::list_runs(Some(&conversation_id)).await {
+        Ok(runs) => runs,
+        Err(error) => return error_response("DAEMON_CANCEL_FAILED", &error),
+    };
+    for run in runs.iter().filter(|run| !run.status.is_terminal()) {
+        if let Err(error) = daemon_authority::cancel_run(&run.id).await {
+            return error_response("DAEMON_CANCEL_FAILED", &error);
+        }
+        let local_status = if run.status.as_str() == "cancelled" {
+            "interrupted"
+        } else {
+            run.status.as_str()
+        };
+        let conn = data_store.conn();
+        let _ = conn.execute(
+            "UPDATE assistant_runs SET status = ?1, finished_at = ?2 WHERE id = ?3 AND status IN ('queued', 'preparing', 'running', 'waiting_permission', 'cancelling')",
+            rusqlite::params![local_status, chrono::Utc::now().to_rfc3339(), run.id],
+        );
+    }
+
+    let start_response = handle_run_start(
+        data_store,
+        &serde_json::json!({
+            "conversation_id": conversation_id,
+            "provider_id": provider_id,
+            "model_id": model_id,
+            "content": content,
+            "attachments": attachments,
+            "project_path": project_path,
+        }),
+    )
+    .await;
+    if !start_response.success {
+        return start_response;
+    }
+
+    let conn = data_store.conn();
+    if let Err(error) = conn.execute(
+        "DELETE FROM assistant_prompt_queue WHERE id = ?1",
+        rusqlite::params![id],
+    ) {
+        return error_response("DB_DELETE_ERROR", &error.to_string());
+    }
+    start_response
 }
 
 // ─── Artifact handlers ───
 
 async fn handle_artifact_list(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
+    if daemon_authority::authority_mode_label() == "uds" {
+        return match daemon_authority::request("artifact.list", params.clone()).await {
+            Ok(data) => success_response(data),
+            Err(error) => error_response("DAEMON_ARTIFACT_FAILED", &error),
+        };
+    }
+
     let conversation_id = params.get("conversation_id").and_then(|v| v.as_str());
     let run_id = params.get("run_id").and_then(|v| v.as_str());
 
@@ -933,6 +1669,16 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn implemented_daemon_method_is_not_rejected_by_legacy_dispatch() {
+        let store = Arc::new(DataStore::new(":memory:").unwrap());
+        let response = dispatch_rpc(&store, "mcp.list", &serde_json::json!({})).await;
+        assert_ne!(
+            response.error.as_ref().map(|error| error.code.as_str()),
+            Some("METHOD_NOT_FOUND")
+        );
+    }
+
+    #[tokio::test]
     async fn conversation_messages_round_trip_with_current_schema() {
         let store = Arc::new(DataStore::new(":memory:").unwrap());
         let created = dispatch_rpc(
@@ -971,6 +1717,12 @@ mod tests {
 
     #[tokio::test]
     async fn conversation_permission_and_attachments_round_trip() {
+        // `natives-agent-daemon` is a dependency, so its `cfg(test)` default is
+        // not active when this crate runs tests. Select the embedded authority
+        // explicitly; production remains UDS-only by default.
+        let previous_daemon_mode = std::env::var("NATIVES_DAEMON_MODE").ok();
+        std::env::set_var("NATIVES_DAEMON_MODE", "embedded");
+        crate::daemon_authority::reset_authority_cache().await;
         let store = Arc::new(DataStore::new(":memory:").unwrap());
         let attachment_path = std::path::PathBuf::from(format!(
             "/tmp/natives-assistant-test-{}.txt",
@@ -1010,10 +1762,11 @@ mod tests {
             &store,
             "run.start",
             &serde_json::json!({
-                "conversation_id": conversation_id,
-                "provider_id": "provider",
-                "model_id": "model",
-                "content": "Inspect this file",
+        "conversation_id": conversation_id,
+        "provider_id": "provider",
+        "model_id": "model",
+        "project_path": "/tmp",
+        "content": "Inspect this file",
                 "attachments": [{
                     "path": attachment_path.to_string_lossy().to_string(),
                     "name": "example.txt",
@@ -1023,7 +1776,7 @@ mod tests {
             }),
         )
         .await;
-        assert!(started.success);
+        assert!(started.success, "run.start failed: {:?}", started.error);
         let run_id = started.data.as_ref().unwrap()["id"].as_str().unwrap();
         store.conn().execute(
             "INSERT INTO assistant_permission_requests (id, run_id, tool_call_id, tool_name, reason, input, created_at) VALUES ('permission', ?1, 'tool', 'Read', 'test', '{}', ?2)",
@@ -1047,6 +1800,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(permission, ("approved".into(), "this_run".into()));
+
+        crate::daemon_authority::reset_authority_cache().await;
+        if let Some(mode) = previous_daemon_mode {
+            std::env::set_var("NATIVES_DAEMON_MODE", mode);
+        } else {
+            std::env::remove_var("NATIVES_DAEMON_MODE");
+        }
 
         let conversations = dispatch_rpc(&store, "conversation.list", &Value::Null)
             .await

@@ -1,6 +1,7 @@
 // ── Natives (assistant.db) Data Source ──
 // Reads from ~/.natives/assistant.db for real session, message, project, model data.
 
+#![allow(unused_imports, dead_code, unused_variables)]
 use crate::usage::{
     now_ms, UsageActivityBucket, UsageDailyRecord, UsageQuality, UsageSessionRecord,
     UsageSourceState, UsageSourceStatus, UsageWarning, UsageWarningCode, DurationMethod,

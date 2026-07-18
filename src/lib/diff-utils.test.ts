@@ -1,6 +1,31 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseUnifiedDiff, formatSize } from './diff-utils';
+import { parseUnifiedDiff, formatSize, computeLineDiff } from './diff-utils';
+
+describe('computeLineDiff', () => {
+  it('handles insert without shifting subsequent matches (not index-aligned)', () => {
+    const oldContent = 'a\nb\nc\n';
+    const newContent = 'a\nINSERTED\nb\nc\n';
+    const result = computeLineDiff(oldContent, newContent);
+    assert.equal(result.additions, 1);
+    assert.equal(result.deletions, 0);
+    assert.ok(result.hunks.length >= 1);
+    const texts = result.hunks.flatMap((h) => h.lines.map((l) => `${l.kind}:${l.text}`));
+    assert.ok(texts.includes('add:INSERTED'));
+    assert.ok(texts.includes('context:b'));
+    assert.ok(texts.includes('context:c'));
+    // b and c must remain context, not false del+add pairs
+    assert.equal(texts.filter((t) => t === 'del:b' || t === 'add:b').length, 0);
+  });
+
+  it('reports diffstat for pure replacement', () => {
+    const result = computeLineDiff('x\n', 'y\n');
+    assert.equal(result.additions, 1);
+    assert.equal(result.deletions, 1);
+    assert.match(result.diffstat, /\+1/);
+  });
+});
+
 
 describe('DiffUtils', () => {
   describe('parseUnifiedDiff', () => {

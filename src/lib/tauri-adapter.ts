@@ -394,8 +394,12 @@ export interface NativesAPI {
     updateMessageStatus: (params: { messageId: string; status: string; toolResult?: string }) => Promise<void>;
     updateSessionTitle: (params: { sessionId: string; title: string }) => Promise<void>;
     updateSessionModel: (params: { sessionId: string; modelId: string; providerId: string }) => Promise<void>;
-    streamChat: (params: { sessionId: string; runId: string; model?: string; runtimeOverride?: string; messages: Array<{ role: string; content: string }> }) => Promise<void>;
-    cancelStream: (sessionId: string) => Promise<void>;
+  };
+  daemonSupervisor: {
+    status: () => Promise<unknown>;
+    ensure: () => Promise<unknown>;
+    poll: () => Promise<unknown>;
+    shutdown: () => Promise<unknown>;
   };
   /** 执行引擎设置（PRD 3.4） */
   executorSettings: {
@@ -423,7 +427,6 @@ export interface NativesAPI {
   runtime: {
     listAvailable: () => Promise<Array<{ id: string; displayName: string; available: boolean }>>;
     detectCli: () => Promise<{ claude_cli: boolean; codex_cli: boolean }>;
-    listCatalog: () => Promise<unknown>;
     setCapabilityEnabled: (name: string, enabled: boolean) => Promise<void>;
   };
   /** Task Scheduler（Slice J） */
@@ -904,10 +907,14 @@ const nativesAPI: NativesAPI = {
       cmd('assistant_update_session_title', params),
     updateSessionModel: (params: { sessionId: string; modelId: string; providerId: string }) =>
       cmd('assistant_update_session_model', params),
-    streamChat: (params: { sessionId: string; runId: string; model?: string; runtimeOverride?: string; messages: Array<{ role: string; content: string }> }) =>
-      cmd('stream_chat', { input: params }),
-    cancelStream: (sessionId: string) =>
-      cmd('cancel_stream', { sessionId }),
+  },
+
+  // Sidecar supervisor (production UDS health; no silent embedded fallback)
+  daemonSupervisor: {
+    status: () => cmd('daemon_supervisor_status'),
+    ensure: () => cmd('daemon_supervisor_ensure'),
+    poll: () => cmd('daemon_supervisor_poll'),
+    shutdown: () => cmd('daemon_supervisor_shutdown'),
   },
 
   // Execution Engine settings（PRD 3.4）
@@ -921,7 +928,6 @@ const nativesAPI: NativesAPI = {
   runtime: {
     listAvailable: () => cmd('runtime_list_available'),
     detectCli: () => cmd('runtime_detect_cli'),
-    listCatalog: () => cmd('runtime_list_catalog'),
     setCapabilityEnabled: (name: string, enabled: boolean) =>
       cmd('runtime_set_capability_enabled', { name, enabled }),
   },

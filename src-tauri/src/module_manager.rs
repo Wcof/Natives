@@ -64,14 +64,6 @@ fn read_manifest_from_dir(dir: &Path) -> std::result::Result<Manifest, String> {
     validate_manifest(&data)
 }
 
-/// Return the modules root directory (~/.natives/modules).
-pub fn modules_root() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".natives")
-        .join("modules")
-}
-
 /// Scan all modules in the modules directory
 pub fn scan_modules(modules_dir: &Path) -> Vec<ScanResult> {
     let mut results = Vec::new();

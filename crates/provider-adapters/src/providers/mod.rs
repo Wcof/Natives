@@ -7,7 +7,7 @@ pub mod deepseek;
 pub mod openai_compatible;
 pub mod ollama;
 
-use crate::capabilities::{ProviderAdapter, ProviderCapabilities, ProviderError};
+use crate::capabilities::ProviderAdapter;
 
 /// Register all built-in provider adapters.
 pub fn register_all() -> Vec<Box<dyn ProviderAdapter>> {

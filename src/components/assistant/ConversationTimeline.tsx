@@ -59,9 +59,16 @@ export default function ConversationTimeline({ messages, loading, locale, onRetr
           const tokens = (message.inputTokens ?? 0) + (message.outputTokens ?? 0);
           const reasoningStart = message.reasoningStartedAt ? Date.parse(message.reasoningStartedAt) : Number.NaN;
           const reasoningEnd = message.reasoningFinishedAt ? Date.parse(message.reasoningFinishedAt) : (hasActive ? now : Number.NaN);
-          const contentBlocks = [...message.contentBlocks].sort((left, right) => Number(right.type === 'reasoning') - Number(left.type === 'reasoning')).map(block => block.type === 'reasoning' && Number.isFinite(reasoningStart)
-            ? { ...block, durationMs: Math.max(0, reasoningEnd - reasoningStart) }
-            : block);
+          const messageLive = message.status === 'streaming' || message.status === 'running';
+          const contentBlocks = [...message.contentBlocks].sort((left, right) => Number(right.type === 'reasoning') - Number(left.type === 'reasoning')).map(block => {
+            if (block.type !== 'reasoning') return block;
+            const withLocale = { ...block, locale: locale.startsWith('zh') ? 'zh' : 'en', live: messageLive };
+            if (!Number.isFinite(reasoningStart)) return withLocale;
+            return {
+              ...withLocale,
+              durationMs: Math.max(0, (Number.isFinite(reasoningEnd) ? reasoningEnd : (now || Date.now())) - reasoningStart),
+            };
+          });
           const hasReasoning = contentBlocks.some(block => block.type === 'reasoning');
           return (
             <article key={message.id} className={user ? 'ml-auto max-w-[78%]' : 'mr-auto w-full max-w-[760px]'}>

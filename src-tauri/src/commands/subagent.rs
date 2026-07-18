@@ -399,7 +399,7 @@ fn run_subagent_request(
     } else {
         // No preferred key — lease a non-primary secondary key
         let (leased_key_id, _) = crate::key_lease::acquire_secondary_key(conn, provider_id, run_id)?;
-        let label = conn.query_row(
+        let _label = conn.query_row(
             "SELECT label FROM provider_api_keys WHERE id = ?1",
             params![leased_key_id],
             |row| row.get::<_, String>(0),

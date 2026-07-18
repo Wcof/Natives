@@ -3,24 +3,6 @@
 // RED: 每项测试对应一个 Issue 的验收标准
 // ============================================================
 
-// ── Issue #107: 助理外壳 + 流式对话 + Abort ──
-// 测试: StreamPayload 以前端要求的 camelCase 序列化
-#[test] fn i107_stream_payload_camelCase() {
-    let p = natives_lib::assistant_stream_proxy::StreamPayload {
-        session_id: "s1".into(), delta: Some("Hi".into()),
-        tool_call: None, reasoning: None, done: false, error: None,
-    };
-    let j = serde_json::to_value(&p).unwrap();
-    assert_eq!(j["sessionId"], "s1");  // 前端接收 sessionId (camelCase)
-    assert_eq!(j["delta"], "Hi");
-}
-// 测试: cancel_stream 对不存在会话不报错
-#[test] fn i107_cancel_nonexistent_safe() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let r = rt.block_on(natives_lib::assistant_stream_proxy::cancel_stream("nonexistent".into()));
-    assert!(r.is_ok());
-}
-
 // ── Issue #109: KEK-DEK 信封加密 ──
 #[test] fn i109_envelope_roundtrip() {
     use aes_gcm::aead::{Aead, KeyInit};
@@ -44,7 +26,7 @@
 }
 
 // ── Issue #108: 独立 Assistant.db + 会话持久化 ──
-#[test] fn i108_session_camelCase() {
+#[test] #[allow(non_snake_case)] fn i108_session_camelCase() {
     use natives_lib::commands::assistant::AssistantSession;
     let s = AssistantSession {
         id: "s1".into(), project_id: Some("p1".into()),

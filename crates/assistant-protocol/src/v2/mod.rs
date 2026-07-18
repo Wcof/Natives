@@ -1,0 +1,26 @@
+//! Protocol v2 — single production wire protocol for the Agent Daemon.
+//!
+//! v2 replaces the dual execution chains in Tauri (`assistant_stream_proxy` +
+//! `agent_loop`) with one daemon-owned run authority. Types are JSON-serialised
+//! over authenticated UDS / Named Pipe.
+//!
+//! Formal envelopes live in [`envelope`]. Prefer them over legacy v1
+//! `RpcRequest` / `RpcResponse` shells. Servers may still accept v1-shaped JSON
+//! via [`envelope::parse_request_compat`].
+
+pub mod methods;
+pub mod run_event;
+pub mod run;
+pub mod capabilities;
+pub mod credential;
+pub mod envelope;
+
+pub use methods::*;
+pub use run_event::*;
+pub use run::*;
+pub use capabilities::*;
+pub use credential::*;
+pub use envelope::*;
+
+/// Wire protocol major version for v2.
+pub const PROTOCOL_V2: &str = "2.0.0";

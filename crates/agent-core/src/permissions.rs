@@ -64,7 +64,28 @@ impl PermissionManager {
         reason: String,
         input: serde_json::Value,
     ) -> Result<String, DaemonError> {
-        let profile = self.get_profile().await;
+        self.request_permission_for_profile(
+            self.get_profile().await,
+            run_id,
+            tool_call_id,
+            tool_name,
+            reason,
+            input,
+        )
+        .await
+    }
+
+    /// Create a permission request using the immutable profile captured by a
+    /// Run. The legacy process-wide profile remains only for old callers.
+    pub async fn request_permission_for_profile(
+        &self,
+        profile: PermissionProfile,
+        run_id: &str,
+        tool_call_id: &str,
+        tool_name: &str,
+        reason: String,
+        input: serde_json::Value,
+    ) -> Result<String, DaemonError> {
 
         // Check if profile allows auto-approval
         match profile {

@@ -1,0 +1,135 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+
+export interface ProjectFileHit {
+  path: string;
+  name: string;
+}
+
+interface FileMentionPopoverProps {
+  open: boolean;
+  query: string;
+  projectPath: string | null;
+  locale: string;
+  onSelect: (file: ProjectFileHit) => void;
+  onClose: () => void;
+}
+
+/**
+ * `@` project file search for composer — best-effort via nativesAPI.fs when available.
+ */
+export default function FileMentionPopover({
+  open,
+  query,
+  projectPath,
+  locale,
+  onSelect,
+  onClose,
+}: FileMentionPopoverProps) {
+  const zh = locale.startsWith('zh');
+  const [hits, setHits] = useState<ProjectFileHit[]>([]);
+  const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      const q = query.trim().toLowerCase();
+      // Prefer project search API if present
+      const api = typeof window !== 'undefined' ? window.nativesAPI : undefined;
+      try {
+        let results: ProjectFileHit[] = [];
+        if (api && 'search' in api && typeof (api as { search?: { files?: (q: string, root?: string) => Promise<string[]> } }).search?.files === 'function') {
+          const paths = await (api as { search: { files: (q: string, root?: string) => Promise<string[]> } }).search.files(q || '', projectPath ?? undefined);
+          results = (paths ?? []).slice(0, 30).map((path) => ({
+            path,
+            name: path.split('/').pop() || path,
+          }));
+        } else if (projectPath && api?.fs && 'listDir' in (api.fs as object)) {
+          // Fallback: shallow list
+          const entries = (await (api.fs as { listDir?: (p: string) => Promise<Array<{ name: string; path: string; isDir?: boolean }>> }).listDir?.(projectPath)) ?? [];
+          results = entries
+            .filter((e) => !e.isDir)
+            .map((e) => ({ path: e.path, name: e.name }))
+            .filter((e) => !q || e.name.toLowerCase().includes(q) || e.path.toLowerCase().includes(q))
+            .slice(0, 30);
+        } else {
+          // Browser fixture stubs
+          const stubs = ['src/main.ts', 'src/lib/assistant-gateway/gateway.ts', 'README.md', 'package.json'];
+          results = stubs
+            .filter((p) => !q || p.toLowerCase().includes(q))
+            .map((path) => ({ path, name: path.split('/').pop() || path }));
+        }
+        if (!cancelled) {
+          setHits(results);
+          setIndex(0);
+        }
+      } catch {
+        if (!cancelled) setHits([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, query, projectPath]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setIndex((i) => Math.min(i + 1, Math.max(0, hits.length - 1)));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setIndex((i) => Math.max(0, i - 1));
+      } else if (e.key === 'Enter' && hits[index]) {
+        e.preventDefault();
+        e.stopPropagation();
+        onSelect(hits[index]!);
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [open, hits, index, onClose, onSelect]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="absolute bottom-full left-0 z-50 mb-2 w-80 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-popup"
+      role="listbox"
+      aria-label={zh ? '项目文件' : 'Project files'}
+    >
+      <div className="border-b border-[var(--border)] px-3 py-1.5 text-[11px] text-[var(--text-disabled)]">
+        {zh ? '用 @ 引用项目文件' : 'Mention project files with @'}
+      </div>
+      <ul className="max-h-56 overflow-y-auto py-1">
+        {hits.length === 0 && (
+          <li className="px-3 py-4 text-center text-xs text-[var(--text-disabled)]">
+            {zh ? '无匹配文件' : 'No files'}
+          </li>
+        )}
+        {hits.map((hit, i) => (
+          <li key={hit.path}>
+            <button
+              type="button"
+              role="option"
+              aria-selected={i === index}
+              className={`flex w-full flex-col px-3 py-1.5 text-left text-xs ${
+                i === index ? 'bg-[var(--surface-hover)]' : 'hover:bg-[var(--surface-hover)]'
+              }`}
+              onClick={() => onSelect(hit)}
+            >
+              <span className="font-medium">{hit.name}</span>
+              <span className="truncate text-[10px] text-[var(--text-disabled)]">{hit.path}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}

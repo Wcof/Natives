@@ -8,15 +8,17 @@ import {
   normalizeSettingsTarget,
 } from './settings-navigation';
 
-test('settings sections contain only the five supported pages', () => {
+test('settings sections include engine capability admin page', () => {
   assert.deepEqual(SETTINGS_SECTIONS, [
     'general',
     'appearance',
     'providers',
     'runtime',
+    'engine',
     'plugins',
   ]);
   assert.equal(SETTINGS_SECTIONS.includes('env' as never), false);
+  assert.equal(getSettingsSection('settings:engine'), 'engine');
 });
 
 test('settings entry points normalize to general', () => {

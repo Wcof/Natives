@@ -10,9 +10,10 @@ pub struct ProtocolVersion {
 }
 
 impl ProtocolVersion {
+    /// Wire protocol major for Agent Daemon RPC (aligned with `v2::PROTOCOL_V2`).
     pub const CURRENT: ProtocolVersion = ProtocolVersion {
-        major: 0,
-        minor: 1,
+        major: 2,
+        minor: 0,
         patch: 0,
     };
 
@@ -88,29 +89,29 @@ mod tests {
 
     #[test]
     fn test_compatible_versions() {
-        let v1 = ProtocolVersion::new(0, 1, 0);
-        let v2 = ProtocolVersion::new(0, 1, 1);
+        let v1 = ProtocolVersion::new(2, 0, 0);
+        let v2 = ProtocolVersion::new(2, 1, 0);
         assert!(v1.is_compatible_with(&v2));
         assert!(v2.is_compatible_with(&v1));
     }
 
     #[test]
     fn test_incompatible_major_versions() {
-        let v1 = ProtocolVersion::new(0, 1, 0);
+        let v1 = ProtocolVersion::new(2, 0, 0);
         let v2 = ProtocolVersion::new(1, 0, 0);
         assert!(!v1.is_compatible_with(&v2));
     }
 
     #[test]
     fn test_negotiation_compatible() {
-        let result = negotiate(&ProtocolVersion::new(0, 1, 0), &ProtocolVersion::new(0, 1, 0));
+        let result = negotiate(&ProtocolVersion::new(2, 0, 0), &ProtocolVersion::new(2, 0, 0));
         assert!(result.compatible);
         assert!(result.upgrade_required.is_none());
     }
 
     #[test]
     fn test_negotiation_incompatible() {
-        let result = negotiate(&ProtocolVersion::new(0, 1, 0), &ProtocolVersion::new(1, 0, 0));
+        let result = negotiate(&ProtocolVersion::new(0, 1, 0), &ProtocolVersion::new(2, 0, 0));
         assert!(!result.compatible);
         assert!(result.upgrade_required.is_some());
     }
@@ -123,9 +124,14 @@ mod tests {
 
     #[test]
     fn test_from_str() {
-        let v: ProtocolVersion = "0.1.0".into();
-        assert_eq!(v.major, 0);
-        assert_eq!(v.minor, 1);
+        let v: ProtocolVersion = "2.0.0".into();
+        assert_eq!(v.major, 2);
+        assert_eq!(v.minor, 0);
         assert_eq!(v.patch, 0);
+    }
+
+    #[test]
+    fn current_matches_v2_constant() {
+        assert_eq!(ProtocolVersion::CURRENT.to_string(), "2.0.0");
     }
 }

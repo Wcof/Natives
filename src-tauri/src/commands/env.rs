@@ -129,8 +129,6 @@ pub fn env_encrypt(text: String, state: State<'_, AppState>) -> Result<String> {
 #[cfg(test)]
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_env_error_invalid_profile_name() {
         // Verify that empty profile names are rejected at the application level

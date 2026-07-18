@@ -35,10 +35,19 @@ impl EventLog {
             )
             .map_err(|e| format!("Failed to get next sequence: {e}"))?;
 
+        // Normalize payload so replay can always deserialize a tagged RunEventPayload.
+        let stored_payload = normalize_stored_payload(event_type, payload);
+
         conn.execute(
-            "INSERT INTO run_event (run_id, sequence, event_type, payload)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![run_id, next_seq, event_type, payload],
+            "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                run_id,
+                next_seq,
+                event_type,
+                stored_payload,
+                chrono::Utc::now().to_rfc3339()
+            ],
         )
         .map_err(|e| format!("Failed to insert event: {e}"))?;
 
@@ -87,26 +96,29 @@ impl EventLog {
         let mut events = Vec::new();
         while let Some(row) = rows.next().map_err(|e| format!("Failed to read row: {e}"))? {
             let sequence: i64 = row.get(0).map_err(|e| format!("Failed to get sequence: {e}"))?;
-            let _event_type: String = row.get(1).map_err(|e| format!("Failed to get event_type: {e}"))?;
+            let event_type: String = row.get(1).map_err(|e| format!("Failed to get event_type: {e}"))?;
             let payload_str: String = row.get(2).map_err(|e| format!("Failed to get payload: {e}"))?;
             let timestamp: String = row.get(3).map_err(|e| format!("Failed to get timestamp: {e}"))?;
 
-            if let Ok(payload) = serde_json::from_str::<RunEventPayload>(&payload_str) {
-                // SQLite datetime('now') returns "YYYY-MM-DD HH:MM:SS" without timezone.
-                // Parse it as UTC.
-                let dt = chrono::NaiveDateTime::parse_from_str(&timestamp, "%Y-%m-%d %H:%M:%S")
-                    .map(|ndt| ndt.and_utc())
-                    .or_else(|_| chrono::DateTime::parse_from_rfc3339(&timestamp)
-                        .map(|dt| dt.with_timezone(&chrono::Utc)));
-                if let Ok(ts) = dt {
-                    events.push(RunEvent {
-                        run_id: run_id.to_string(),
-                        sequence: sequence as u64,
-                        timestamp: ts,
-                        payload,
-                    });
-                }
-            }
+            let payload = match decode_payload(&event_type, &payload_str) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            // SQLite datetime('now') returns "YYYY-MM-DD HH:MM:SS" without timezone.
+            // Prefer RFC3339 when present.
+            let dt = chrono::DateTime::parse_from_rfc3339(&timestamp)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .or_else(|_| {
+                    chrono::NaiveDateTime::parse_from_str(&timestamp, "%Y-%m-%d %H:%M:%S")
+                        .map(|ndt| ndt.and_utc())
+                })
+                .unwrap_or_else(|_| chrono::Utc::now());
+            events.push(RunEvent {
+                run_id: run_id.to_string(),
+                sequence: sequence as u64,
+                timestamp: dt,
+                payload,
+            });
         }
 
         Ok(events)
@@ -138,6 +150,30 @@ impl EventLog {
         // This method exists for future durability tracking.
         Ok(())
     }
+}
+
+/// Ensure stored payload JSON includes the serde tag for RunEventPayload.
+fn normalize_stored_payload(event_type: &str, payload: &str) -> String {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) {
+        if value.get("type").is_some() {
+            return payload.to_string();
+        }
+        if let serde_json::Value::Object(mut map) = value {
+            map.insert("type".into(), serde_json::Value::String(event_type.to_string()));
+            return serde_json::Value::Object(map).to_string();
+        }
+    }
+    // Unit variants / empty payloads
+    serde_json::json!({ "type": event_type }).to_string()
+}
+
+fn decode_payload(event_type: &str, payload_str: &str) -> Result<RunEventPayload, String> {
+    if let Ok(payload) = serde_json::from_str::<RunEventPayload>(payload_str) {
+        return Ok(payload);
+    }
+    // Recover from untagged historical rows.
+    let normalized = normalize_stored_payload(event_type, payload_str);
+    serde_json::from_str(&normalized).map_err(|e| format!("decode payload: {e}"))
 }
 
 /// Get the event type name from a RunEventPayload.
@@ -215,14 +251,17 @@ mod tests {
         let (log, run_id) = setup_event_log();
         let seq = log.append(&run_id, "started", "{}").unwrap();
         assert_eq!(seq, 1);
-        // Check database directly
-        let conn = log.data_store.conn().unwrap();
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM run_event WHERE run_id = ?1",
-            params![run_id],
-            |row| row.get(0),
-        ).unwrap();
-        assert_eq!(count, 1, "Event should be in database");
+        // Check database directly — drop the conn guard before replay to
+        // avoid re-entrant DataStore mutex deadlock.
+        {
+            let conn = log.data_store.conn().unwrap();
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM run_event WHERE run_id = ?1",
+                params![run_id],
+                |row| row.get(0),
+            ).unwrap();
+            assert_eq!(count, 1, "Event should be in database");
+        }
         // Check replay
         let events = log.replay_all(&run_id).unwrap();
         assert_eq!(events.len(), 1, "Replay should return 1 event");
@@ -296,7 +335,7 @@ mod tests {
         let (log, run_id1) = setup_event_log();
         let run_id2 = "test-run-002".to_string();
 
-        // Create second run
+        // Create second run (drop guard before further EventLog ops)
         {
             let conn = log.data_store.conn().unwrap();
             conn.execute(

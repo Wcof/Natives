@@ -2,6 +2,7 @@
 // Executes `ccusage daily --all --by-agent --json --offline --breakdown --timezone <tz> --since <since> --until <until>`
 // in a single process invocation and parses the response.
 
+#![allow(unused_imports, dead_code, unused_variables)]
 use crate::usage::{
     now_ms, UsageDailyRecord, UsageQuality, UsageSourceState, UsageSourceStatus,
     UsageWarning, UsageWarningCode, SourceCapabilities, DurationMethod, UsageSourceKind,
@@ -153,7 +154,7 @@ async fn run_ccusage_process(
     cmd.stderr(std::process::Stdio::piped());
     cmd.kill_on_drop(true);
 
-    let mut child = cmd.spawn().map_err(|e| format!("spawn error: {}", e))?;
+    let child = cmd.spawn().map_err(|e| format!("spawn error: {}", e))?;
 
     let wait_output = timeout(Duration::from_secs(30), child.wait_with_output()).await;
 

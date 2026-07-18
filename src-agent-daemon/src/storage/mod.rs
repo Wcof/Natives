@@ -24,6 +24,8 @@ use std::sync::Mutex;
 /// The data store — manages SQLite connection and artifact storage.
 pub struct DataStore {
     conn: Mutex<Connection>,
+    /// Original database path (retained for diagnostics / reopen).
+    #[allow(dead_code)]
     db_path: PathBuf,
     artifact_dir: PathBuf,
 }
@@ -113,7 +115,6 @@ impl DataStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn setup_test_store() -> DataStore {
         let tmp = std::env::temp_dir();

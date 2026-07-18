@@ -32,6 +32,7 @@ import {
   Plug,
   SlidersHorizontal,
   Cpu,
+  Server,
   PanelLeftClose,
 } from 'lucide-react';
 import * as LucideIcons from 'lucide-react';
@@ -103,6 +104,7 @@ const SETTINGS_NAV_ITEMS = [
   { id: 'appearance', labelKey: 'settings.tabAppearance', icon: Palette },
   { id: 'providers', labelKey: 'settings.tabProviders', icon: Cpu },
   { id: 'runtime', labelKey: 'settings.tabExecutor', icon: SlidersHorizontal },
+  { id: 'engine', labelKey: 'settings.tabEngineCaps', icon: Server },
   { id: 'plugins', labelKey: 'settings.tabPlugins', icon: Plug },
 ] satisfies ReadonlyArray<{
   id: SettingsSection;

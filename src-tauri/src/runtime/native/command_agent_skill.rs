@@ -45,7 +45,10 @@
 //!   Skill instructions...
 //!   ```
 
-use serde::{Deserialize, Serialize};
+//!
+//! Residual catalog/compat after Protocol v2 cutover (execution retired).
+#![allow(dead_code)]
+use serde::{Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

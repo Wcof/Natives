@@ -1,20 +1,20 @@
 //! Minimal in-process subagent tools for the Native Agent Loop.
 
-use super::agent_loop::{AgentLoop, AgentState, LoopConfig};
+//!
+//! Residual catalog/compat after Protocol v2 cutover (execution retired).
+#![allow(dead_code)]
 use super::capability::{
     AtomicCapability, CancellationToken, CapabilityContext, CapabilityMeta, CapabilityPermission,
-    CapabilityRegistry, CapabilityRequest, CapabilityResult, CapabilitySideEffect,
-    CapabilityStatus, CapabilityVisibility,
+    CapabilityRegistry, CapabilityRequest, CapabilitySideEffect, CapabilityVisibility,
 };
 use super::hook_pipeline::HookPipeline;
 use super::rule_engine::RuleEngine;
-use crate::runtime::RuntimeEvent;
 use agent_core::{SubAgentConfig, SubAgentManager, SubAgentStatus};
 use async_trait::async_trait;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot, Mutex, Notify};
+use tokio::sync::{oneshot, Mutex, Notify};
 
 #[derive(Clone)]
 pub struct SubagentCoordinator {
@@ -85,9 +85,30 @@ impl SubagentCoordinator {
         } else {
             None
         };
+        // Subagent identity is independent: never reuse parent key_id.
+        // Provider/model may come from definition later; key_id is always a
+        // dedicated subagent lease id (not the parent run's credential).
+        let tool_allowlist = allowlist.clone().unwrap_or_default();
+        let key_id = format!(
+            "subagent:{}:{}",
+            definition_id.unwrap_or("ephemeral"),
+            uuid::Uuid::new_v4()
+        );
         let child = self
             .manager
-            .spawn(&ctx.run_id, prompt.clone(), 1)
+            .spawn(
+                &ctx.run_id,
+                prompt.clone(),
+                1,
+                ctx.provider_id.clone(),
+                key_id,
+                ctx.model.clone(),
+                "ask".into(), // never inherit parent permission profile
+                tool_allowlist,
+                definition_id.map(str::to_string),
+                Some("none".into()),
+                None,
+            )
             .await
             .map_err(crate::Error::InvalidInput)?;
         self.manager
@@ -96,6 +117,7 @@ impl SubagentCoordinator {
             .map_err(crate::Error::Internal)?;
 
         let child_id = child.id.clone();
+        let child_run_id = child.run_id.clone();
         let return_id = child_id.clone();
         let notify = Arc::new(Notify::new());
         self.notifications
@@ -116,12 +138,12 @@ impl SubagentCoordinator {
                   subagent_definition_id, started_at)
                  VALUES (?1, ?2, 'running', ?3, ?4, ?5, ?6, ?7)",
                 rusqlite::params![
-                    child_id,
+                    child_run_id,
                     ctx.session_id,
-                    ctx.provider_id,
-                    ctx.model,
+                    child.provider_id,
+                    child.model_id,
                     ctx.run_id,
-                    Option::<String>::None,
+                    definition_id,
                     now
                 ],
             );
@@ -153,58 +175,26 @@ impl SubagentCoordinator {
             for name in ["Task", "TaskOutput", "KillTask"] {
                 registry.set_enabled(name, false);
             }
-            let config = LoopConfig {
-                max_steps: 50,
-                max_self_heal: 3,
-                doom_threshold: 3,
+            // G6: Old in-process AgentLoop subagent path is retired. Real child
+            // runs go through Protocol v2 `task` / RunManager (independent Child Run).
+            let _ = (
                 model,
                 provider_id,
                 base_url,
                 api_key,
-            };
-            let initial = vec![json!({"role": "user", "content": prompt})];
-            let (tx, mut rx) = mpsc::channel::<RuntimeEvent>(64);
-            let collector = tokio::spawn(async move {
-                let mut output = String::new();
-                while let Some(event) = rx.recv().await {
-                    if let RuntimeEvent::AssistantDelta { text } = event {
-                        output.push_str(&text);
-                    }
-                }
-                output
-            });
-            let mut loop_runner = AgentLoop::new(config, initial);
-            let cwd = None;
-            let hooks_guard = hooks.lock().await;
-            let rules_guard = rules.lock().await;
-            let mut abort_rx = cancel_rx;
-            loop_runner
-                .run(
-                    &tx,
-                    &child_run_id,
-                    &child_run_id,
-                    cwd,
-                    &registry,
-                    &hooks_guard,
-                    // Child permissions fail closed until the parent-side approval
-                    // bridge is added; this prevents an invisible child from
-                    // blocking on a permission prompt forever.
-                    &rules_guard,
-                    super::capability::PermissionMode::Deny,
-                    &mut abort_rx,
-                )
-                .await;
-            drop(hooks_guard);
-            drop(rules_guard);
-
-            drop(tx);
-            let output = collector.await.unwrap_or_default();
+                prompt,
+                &registry,
+                &hooks,
+                &rules,
+                &cancel_rx,
+                &child_run_id,
+            );
+            let output =
+                "Native AgentLoop subagent is retired. Use Protocol v2 task tool (Agent Daemon Child Run).".to_string();
             outputs.lock().await.insert(child_id.clone(), output);
-            let status = match loop_runner.state() {
-                AgentState::Done => SubAgentStatus::Completed,
-                AgentState::Failed(error) => SubAgentStatus::Failed(error.clone()),
-                _ => SubAgentStatus::Cancelled,
-            };
+            let status = SubAgentStatus::Failed(
+                "Native AgentLoop subagent retired; use Protocol v2 task".into(),
+            );
             let db_status = match &status {
                 SubAgentStatus::Completed => "completed",
                 SubAgentStatus::Cancelled => "interrupted",

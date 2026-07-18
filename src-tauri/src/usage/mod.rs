@@ -13,7 +13,6 @@ mod natives;
 mod opencode;
 pub mod snapshot;
 
-use crate::db;
 use crate::Error;
 use chrono::{DateTime, Utc, Datelike, Timelike, TimeZone};
 use chrono_tz::Tz;
@@ -292,7 +291,9 @@ pub fn localized_time_metrics(ts_ms: i64, tz: &Tz) -> (String, i64) {
     let local_dt = tz.timestamp_opt(ts_ms / 1000, ((ts_ms % 1000) * 1_000_000) as u32)
         .single()
         .unwrap_or_else(|| {
-            let naive = chrono::NaiveDateTime::from_timestamp_millis(ts_ms).unwrap_or_default();
+            let naive = chrono::DateTime::from_timestamp_millis(ts_ms)
+                .map(|dt| dt.naive_utc())
+                .unwrap_or_default();
             tz.from_utc_datetime(&naive)
         });
     let date_str = local_dt.format("%Y-%m-%d").to_string();

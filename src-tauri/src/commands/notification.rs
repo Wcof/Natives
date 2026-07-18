@@ -55,8 +55,6 @@ pub fn notification_mark_all_read(app_handle: tauri::AppHandle, state: State<'_,
 #[cfg(test)]
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_notification_error_types() {
         // Verify notification error cases are properly categorized

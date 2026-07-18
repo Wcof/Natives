@@ -457,10 +457,6 @@ impl Drop for GhosttyTerminal {
 #[cfg(test)]
 #[cfg(feature = "ghostty-vt")]
 mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
-    use std::sync::Arc;
-
     /// 测试终端创建和写入
     #[test]
     fn test_create_and_write() -> crate::Result<()> {

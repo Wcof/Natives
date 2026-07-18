@@ -13,15 +13,20 @@ import {
 } from '@/lib/assistant-composer';
 import ModelSelectorDropdown, { type ProviderWithModels } from './ModelSelectorDropdown';
 import SlashCommandPopover from './SlashCommandPopover';
+import FileMentionPopover, { type ProjectFileHit } from './FileMentionPopover';
 
 interface SlashCommand { id: string; label: string; description: string; category: 'system' | 'skill' | 'mcp' }
 
 interface MessageInputProps {
   locale: Locale;
   onSend: (draft: AssistantDraft) => Promise<boolean>;
+  /** Cmd/Ctrl+Enter while streaming: cancel current run and send immediately. */
+  onForceSend?: (draft: AssistantDraft) => Promise<boolean>;
   onStop: () => void;
   onBlockedSend?: () => void;
   isStreaming: boolean;
+  /** When true, Enter while streaming queues via onSend instead of blocking. */
+  allowQueueWhileStreaming?: boolean;
   disabled?: boolean;
   inputDisabledReason?: 'no_provider' | 'no_model' | 'creating' | null;
   permissionProfile: AssistantPermissionProfile;
@@ -30,6 +35,11 @@ interface MessageInputProps {
   selectedProviderId: string;
   selectedModel?: string;
   onSelectModel: (providerId: string, model: string) => void;
+  /** Controlled draft text from workspace store (per-conversation). */
+  draftText?: string;
+  onDraftChange?: (text: string) => void;
+  /** Active project root for `@` file search. */
+  projectPath?: string | null;
 }
 
 const permissionLabels = {
@@ -39,18 +49,30 @@ const permissionLabels = {
 } as const;
 
 export default function MessageInput(props: MessageInputProps) {
-  const { locale, onSend, onStop, onBlockedSend, isStreaming, disabled = false, inputDisabledReason = null,
-    permissionProfile, onPermissionChange, providers, selectedProviderId, selectedModel, onSelectModel } = props;
+  const {
+    locale, onSend, onForceSend, onStop, onBlockedSend, isStreaming,
+    allowQueueWhileStreaming = false, disabled = false, inputDisabledReason = null,
+    permissionProfile, onPermissionChange, providers, selectedProviderId, selectedModel, onSelectModel,
+    draftText, onDraftChange, projectPath = null,
+  } = props;
   const zh = locale.startsWith('zh');
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(draftText ?? '');
   const [attachments, setAttachments] = useState<AssistantAttachment[]>([]);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashQuery, setSlashQuery] = useState('');
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState('');
   const [permissionOpen, setPermissionOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastSlashIndex = useRef(-1);
+  const lastAtIndex = useRef(-1);
   const effectiveDisabled = disabled || inputDisabledReason === 'no_provider' || inputDisabledReason === 'no_model' || inputDisabledReason === 'creating';
+
+  useEffect(() => {
+    if (draftText !== undefined && draftText !== input) setInput(draftText);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync from store when conversation draft changes
+  }, [draftText]);
 
   useEffect(() => {
     if (!textareaRef.current) return;
@@ -60,30 +82,62 @@ export default function MessageInput(props: MessageInputProps) {
 
   const handleInputChange = (value: string) => {
     setInput(value);
+    onDraftChange?.(value);
     const slashIndex = value.lastIndexOf('/');
     const atLineStart = slashIndex === 0 || (slashIndex > 0 && value.slice(0, slashIndex).endsWith('\n'));
-    setSlashOpen(atLineStart);
-    if (atLineStart) {
-      setSlashQuery(value.slice(slashIndex + 1));
+    const afterSlash = atLineStart ? value.slice(slashIndex + 1) : '';
+    const slashActive = atLineStart && !afterSlash.includes(' ') && !afterSlash.includes('\n');
+    setSlashOpen(slashActive);
+    if (slashActive) {
+      setSlashQuery(afterSlash);
       lastSlashIndex.current = slashIndex;
+    }
+
+    // `@` file mention: last @ not followed by whitespace boundary end
+    const atIndex = value.lastIndexOf('@');
+    if (atIndex >= 0) {
+      const before = atIndex === 0 || /[\s\n]/.test(value[atIndex - 1] ?? '');
+      const fragment = value.slice(atIndex + 1);
+      const valid = before && !fragment.includes(' ') && !fragment.includes('\n');
+      setMentionOpen(valid && !slashActive);
+      if (valid) {
+        setMentionQuery(fragment);
+        lastAtIndex.current = atIndex;
+      }
+    } else {
+      setMentionOpen(false);
+      setMentionQuery('');
     }
   };
 
-  const handleSend = async () => {
+  const handleMentionSelect = (file: ProjectFileHit) => {
+    const before = input.slice(0, lastAtIndex.current);
+    const afterCursor = input.slice(lastAtIndex.current + 1 + mentionQuery.length);
+    const next = `${before}@${file.path} ${afterCursor}`;
+    setInput(next);
+    onDraftChange?.(next);
+    setMentionOpen(false);
+    textareaRef.current?.focus();
+  };
+
+  const handleSend = async (forceImmediate = false) => {
     if (submitting || effectiveDisabled || !canSendAssistantDraft(input, attachments)) return;
-    if (isStreaming) {
+    if (isStreaming && !allowQueueWhileStreaming && !forceImmediate) {
       onBlockedSend?.();
       return;
     }
     const draft = { content: input.trim(), attachments };
     setSubmitting(true);
     setInput('');
+    onDraftChange?.('');
     setAttachments([]);
     setSlashOpen(false);
     try {
-      const sent = await onSend(draft);
+      const sender = forceImmediate && onForceSend ? onForceSend : onSend;
+      const sent = await sender(draft);
       if (!sent) {
         setInput(current => current || draft.content);
+        onDraftChange?.(draft.content);
         setAttachments(current => current.length ? current : draft.attachments);
       }
     } finally {
@@ -124,6 +178,14 @@ export default function MessageInput(props: MessageInputProps) {
     <div className="mx-auto w-full max-w-[860px] px-5 pb-5 pt-2">
       <div className="relative rounded-[22px] border border-[var(--border)] bg-[var(--surface)] shadow-[0_8px_30px_rgba(0,0,0,0.08)]">
         <SlashCommandPopover isOpen={slashOpen} query={slashQuery} onSelect={handleSlashSelect} onClose={() => setSlashOpen(false)} disabled={false} />
+        <FileMentionPopover
+          open={mentionOpen}
+          query={mentionQuery}
+          projectPath={projectPath}
+          locale={locale}
+          onSelect={handleMentionSelect}
+          onClose={() => setMentionOpen(false)}
+        />
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-2 px-4 pt-3">
             {attachments.map(file => (
@@ -135,8 +197,27 @@ export default function MessageInput(props: MessageInputProps) {
           </div>
         )}
         <textarea ref={textareaRef} value={input} onChange={event => handleInputChange(event.target.value)}
-          onKeyDown={event => { if (!event.defaultPrevented && event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void handleSend(); } }}
-          placeholder={placeholder} disabled={effectiveDisabled} rows={1}
+          onKeyDown={event => {
+            if (event.defaultPrevented) return;
+            // Shift+Enter → newline (default)
+            if (event.key === 'Enter' && event.shiftKey) return;
+            // Cmd/Ctrl+Enter while streaming → cancel & send now
+            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault();
+              void handleSend(true);
+              return;
+            }
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault();
+              void handleSend(false);
+            }
+          }}
+          placeholder={
+            isStreaming && allowQueueWhileStreaming
+              ? (zh ? '运行中：Enter 入队，⌘Enter 取消并立即发送' : 'Running: Enter queues, ⌘Enter cancel & send')
+              : placeholder
+          }
+          disabled={effectiveDisabled} rows={1}
           className="block w-full resize-none bg-transparent px-4 pb-2 pt-4 text-[15px] leading-6 text-[var(--text)] placeholder:text-[var(--text-disabled)] disabled:cursor-not-allowed"
           style={{ outline: 'none', boxShadow: 'none', overflowY: 'auto' }} />
         <div className="flex items-center justify-between gap-3 px-3 pb-3">

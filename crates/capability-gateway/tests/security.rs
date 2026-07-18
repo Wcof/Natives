@@ -4,13 +4,40 @@
 //! oversized output, timeout, and secret redaction.
 
 use capability_gateway::policy::*;
-use capability_gateway::{CapabilityGateway, PermissionClass, PathScope};
+use capability_gateway::{CapabilityGateway, PathScope};
 use capability_gateway::tools::builtin_tools;
 
 #[test]
 fn test_traversal_escape_fails() {
     let result = check_path_traversal("/tmp/../../etc/passwd");
     assert!(result.is_err(), "Path traversal should be detected");
+}
+
+#[tokio::test]
+async fn gateway_execute_denies_traversal_and_etc() {
+    let mut gateway = CapabilityGateway::new().with_project_root("/tmp/safe-project");
+    gateway.register_builtins();
+    let err = gateway
+        .execute(
+            "read_file",
+            serde_json::json!({"path": "../etc/passwd"}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "path_traversal");
+
+    let err2 = gateway
+        .execute(
+            "read_file",
+            serde_json::json!({"path": "/etc/passwd"}),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        err2.code == "path_traversal" || err2.code == "path_scope_denied",
+        "got {}",
+        err2.code
+    );
 }
 
 #[test]
@@ -58,7 +85,23 @@ fn test_gateway_register_and_list() {
     let mut gateway = CapabilityGateway::new();
     gateway.register_builtins();
     let tools = gateway.list_tools();
-    assert_eq!(tools.len(), 4, "Should have 4 built-in tools");
+    // Plan requires a broad built-in catalog (file/edit/search/terminal/web/memory/task/mcp…).
+    assert!(tools.len() >= 15, "Should register the expanded built-in catalog, got {}", tools.len());
+    let names: Vec<&str> = tools.iter().map(|t| t.name).collect();
+    for required in [
+        "read_file",
+        "write_file",
+        "grep",
+        "run_terminal",
+        "web_fetch",
+        "task",
+        "task_output",
+        "kill_task",
+        "mcp_call",
+        "todo_write",
+    ] {
+        assert!(names.contains(&required), "missing built-in tool {required}");
+    }
 }
 
 #[test]

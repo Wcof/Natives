@@ -1,13 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
-use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tokio::sync::Mutex as TokioMutex;
 
 mod agent;
 mod archive;
 pub mod assistant_executor;
-pub mod assistant_stream_proxy;
 pub mod assistant_service;
 pub mod daemon;
 pub mod context_window;
@@ -33,6 +31,9 @@ pub mod log_sanitizer;
 mod module_manager;
 mod permission_center;
 pub mod provider_key_manager;
+pub mod credential_broker;
+pub mod daemon_authority;
+pub mod sidecar_supervisor;
 mod release_wizard;
 mod runtime;
 mod scheduler;
@@ -112,6 +113,15 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir)
                 .map_err(|e| format!("failed to create .natives dir: {e}"))?;
             let db_path = data_dir.join("natives.db");
+            // Production credential path contract (must be absolute).
+            std::env::set_var("NATIVES_DB_PATH", &db_path);
+            let runtime_dir = data_dir.join("runtime");
+            let _ = std::fs::create_dir_all(&runtime_dir);
+            std::env::set_var("NATIVES_RUNTIME_DIR", &runtime_dir);
+            // Production default: UDS. Tests/dev may override with embedded/auto.
+            if std::env::var("NATIVES_DAEMON_MODE").is_err() {
+                std::env::set_var("NATIVES_DAEMON_MODE", "uds");
+            }
             let pool = db::init_db_pool(&db_path)
                 .map_err(|e| format!("failed to init database pool: {e}"))?;
             {
@@ -123,6 +133,54 @@ pub fn run() {
             }
             // 注册主 pool 到全局，供 runtime 等无 State 上下文模块访问
             db::register_main_pool(pool.clone());
+            // Embedded credential inject (when mode falls back to embedded for tests).
+            {
+                use std::sync::Once;
+                static BROKER: Once = std::sync::Once::new();
+                BROKER.call_once(|| {
+                    natives_agent_daemon::install_credential_broker(std::sync::Arc::new(
+                        |provider_id: &str, key_id: Option<&str>, run_id: &str| {
+                            credential_broker::resolve_for_daemon(provider_id, key_id, run_id)
+                        },
+                    ));
+                });
+            }
+            // Sidecar supervisor: try start when UDS required; never silent embedded.
+            {
+                let status = sidecar_supervisor::global_supervisor().status();
+                let require = matches!(
+                    std::env::var("NATIVES_DAEMON_MODE")
+                        .unwrap_or_else(|_| "uds".into())
+                        .to_ascii_lowercase()
+                        .as_str(),
+                    "uds" | "sidecar" | "remote"
+                );
+                if require {
+                    match sidecar_supervisor::global_supervisor().ensure_started() {
+                        Ok(s) => {
+                            eprintln!(
+                                "[natives] sidecar supervisor state={:?} production_ready={}",
+                                s.state, s.production_ready
+                            );
+                            if !s.production_ready {
+                                return Err(format!(
+                                    "UDS required but supervisor is not production-ready: {:?}",
+                                    s.last_error
+                                )
+                                .into());
+                            }
+                        }
+                        Err(e) => {
+                            return Err(format!(
+                                "UDS daemon unavailable (no embedded fallback): {e}"
+                            )
+                            .into());
+                        }
+                    }
+                } else {
+                    let _ = status;
+                }
+            }
 
             // ── Window Vibrancy (macOS Liquid Glass) ──
             // CSS backdrop-filter blur() is configured in globals.css for cross-platform glass effect.
@@ -204,16 +262,13 @@ pub fn run() {
                 assistant_service::AssistantStore::new(assistant_data_store),
             ));
 
-            // ── P1 Runtime 抽象层：注册 Native runtime（兜底永远 available）──
-            // CLI runtime 在各自 Slice 注册；此处先注册 Native 保证降级路径可用
-            // 使用独立 Tokio 运行时，因为 setup 闭包中 tauri::async_runtime::block_on 不可用
+            // ── P1 Runtime 抽象层：仅注册独立 CLI runtime ──
+            // Native Assistant 的生产执行入口是 Protocol v2 Agent Daemon；
+            // 不再把已退役的协调器注册为第二个执行权威。
             {
                 let rt = tokio::runtime::Runtime::new()
                     .map_err(|e| format!("failed to create tokio runtime: {e}"))?;
-                rt.block_on(runtime::registry::register(std::sync::Arc::new(
-                    runtime::native_runtime::NativeRuntime::new(app.handle().clone()),
-                )));
-                // 注册 Claude CLI + Codex CLI runtime（自动检测二进制可用性）
+                // 注册 Claude CLI + Codex CLI runtime（独立产品能力，不承载 Native Assistant）。
                 let _ = rt.block_on(runtime::registry::register(std::sync::Arc::new(
                     runtime::claude_cli::ClaudeCliRuntime::new(),
                 )));
@@ -232,6 +287,8 @@ pub fn run() {
                     state.ghostty_manager.kill_all();
                     state.terminal_manager.kill_all();
                 }
+                // Graceful agent-daemon sidecar shutdown (wipe bootstrap file).
+                let _ = sidecar_supervisor::global_supervisor().shutdown();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -414,13 +471,9 @@ pub fn run() {
             commands::wechat::wechat_set_persona,
             commands::wechat::wechat_detect_agents,
             commands::wechat::wechat_status,
-            // Assistant
-            crate::assistant_stream_proxy::stream_chat,
-            crate::assistant_stream_proxy::cancel_stream,
             // Runtime abstraction (Slice B)
             commands::runtime::runtime_list_available,
             commands::runtime::runtime_detect_cli,
-            commands::runtime::runtime_list_catalog,
             commands::runtime::runtime_set_capability_enabled,
             // Scheduler (Slice J)
             crate::scheduler::scheduler_list_tasks,
@@ -487,6 +540,13 @@ pub fn run() {
             // Assistant Service (in-process RPC, no sidecar)
             crate::assistant_service::assistant_rpc_request,
             crate::assistant_service::assistant_status,
+            // Credential Broker — daemon requests decrypted keys for a single run
+            crate::credential_broker::credential_broker_resolve,
+            // Sidecar Supervisor — production UDS lifecycle (no silent embedded fallback)
+            crate::sidecar_supervisor::daemon_supervisor_status,
+            crate::sidecar_supervisor::daemon_supervisor_ensure,
+            crate::sidecar_supervisor::daemon_supervisor_poll,
+            crate::sidecar_supervisor::daemon_supervisor_shutdown,
         ])
         .run(tauri::generate_context!())
         .expect("error while running natives");

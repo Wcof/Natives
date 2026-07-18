@@ -1,7 +1,7 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Standardized error response for all Daemon API calls.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonError {
     /// Machine-readable error code.
     pub code: String,
@@ -20,7 +20,7 @@ pub struct DaemonError {
 }
 
 /// Error category for routing to appropriate UI handling.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCategory {
     /// Validation error (bad input).

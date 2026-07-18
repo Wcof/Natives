@@ -3,6 +3,7 @@
 //! `~/.natives/modules/` 路径必须走 Rust 注入的 write_module（KI 门禁），
 //! 其他路径放行 CLI 原生 Edit/Bash 工具。
 
+#![allow(dead_code, unused_imports, unused_variables)]
 use std::path::Path;
 
 pub enum WriteKind { ModulePath, GeneralPath }

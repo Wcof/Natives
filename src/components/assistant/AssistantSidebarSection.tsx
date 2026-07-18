@@ -152,22 +152,15 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
 
   const confirmDeleteConversation = useCallback(async () => {
     if (!deleteTarget || deletingConversation) return;
+    // Only through Workspace actions → Gateway (no direct daemon RPC).
+    if (!actions?.deleteConversation) {
+      toast(zh ? '工作台未就绪，无法删除' : 'Workbench not ready — cannot delete', 'error');
+      return;
+    }
     setDeletingConversation(true);
     try {
-      const deleted = actions
-        ? await actions.deleteConversation(deleteTarget.id)
-        : await window.nativesAPI?.assistantV2?.request('conversation.delete', { id: deleteTarget.id }).then(() => true) ?? false;
+      const deleted = await actions.deleteConversation(deleteTarget.id);
       if (!deleted) throw new Error(zh ? '删除会话失败' : 'Failed to delete conversation');
-      if (!actions) {
-        publishNavigation({
-          ...navigation,
-          groups: navigation.groups.map(group => ({
-            ...group,
-            conversations: group.conversations.filter(conversation => conversation.id !== deleteTarget.id),
-          })).filter(group => group.conversations.length > 0 || group.id === 'unassigned'),
-          selectedId: navigation.selectedId === deleteTarget.id ? null : navigation.selectedId,
-        });
-      }
       setDeleteTarget(null);
       toast(zh ? '会话已删除' : 'Conversation deleted', 'success');
     } catch (error) {
@@ -175,7 +168,7 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
     } finally {
       setDeletingConversation(false);
     }
-  }, [actions, deleteTarget, deletingConversation, navigation, publishNavigation, toast, zh]);
+  }, [actions, deleteTarget, deletingConversation, toast, zh]);
 
   return (
     <div className="mb-3">
@@ -270,7 +263,7 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                             ? 'bg-[var(--surface-active)] text-[var(--text)] font-medium'
                         : isFocused
                           ? 'bg-[var(--surface-hover)] text-[var(--text)]'
-                          : 'text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]'
+                          : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
                     }`}
                   >
                     <button

@@ -252,6 +252,9 @@ export const en = {
     keyLabel: 'Label',
     remove: 'Remove',
     tabExecutor: 'Execution Engine',
+    tabEngineCaps: 'Engine capabilities',
+    engineCapsDesc:
+      'MCP, scheduler, extensions and skills via Protocol v2 (Daemon authority — not legacy streamChat).',
     executorTitle: 'Execution Engine',
     executorDesc: 'Configure which tools the AI assistant can use, and set self-heal / circuit-breaker policies.',
     toolReadFile: 'Read File',

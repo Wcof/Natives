@@ -900,53 +900,96 @@ async fn handle_run_start(request: &RpcRequest, data_store: &Arc<DataStore>, eve
     }
     drop(conn);
 
+    // Sole Run Authority: Protocol v2 Daemon RunManager (same crate as the
+    // sidecar). The legacy in-process AgentLoop path is hard-disabled.
     let run_id = id.clone();
     let conversation_id_owned = conversation_id.to_string();
     let provider_id_owned = provider_id.to_string();
     let model_id_owned = model_id.to_string();
     let data_store = data_store.clone();
     let event_bus = event_bus.clone();
+    let content_owned = content.clone();
     tokio::spawn(async move {
-        let mut router = crate::daemon::provider::ProviderRouter::new();
-        let outcome = router.load_from_db(&data_store).and_then(|_| {
-            if router.get(&provider_id_owned).is_none() {
-                Err(crate::Error::NotFound(format!("Provider not configured: {provider_id_owned}")))
-            } else {
-                Ok(())
-            }
-        });
-        if let Err(error) = outcome {
-            let _ = event_bus.publish(&run_id, "failed", serde_json::json!({"code":"provider_unavailable","error":error.to_string()})).await;
+        // G4: same Run Authority façade as assistant_service (embedded or UDS).
+        let create = crate::daemon_authority::create_run(assistant_protocol::v2::CreateRunRequest {
+            conversation_id: conversation_id_owned.clone(),
+            provider_id: provider_id_owned.clone(),
+            model_id: model_id_owned.clone(),
+            key_id: None,
+            agent_profile_id: None,
+            permission_profile: Some("ask".into()),
+            content: Some(content_owned.clone()),
+            attachments: None,
+            max_steps: Some(50),
+            parent_run_id: None,
+            project_path: None,
+            idempotency_key: Some(run_id.clone()),
+        })
+        .await;
+        if let Err(error) = create {
+            let _ = event_bus
+                .publish(
+                    &run_id,
+                    "failed",
+                    serde_json::json!({"code":"daemon_create_failed","error":error}),
+                )
+                .await;
             let conn = data_store.conn();
-            let _ = conn.execute("UPDATE assistant_runs SET status='failed', error_code='provider_unavailable', finished_at=datetime('now') WHERE id=?1", rusqlite::params![run_id]);
+            let _ = conn.execute(
+                "UPDATE assistant_runs SET status='failed', error_code='daemon_create_failed', finished_at=datetime('now') WHERE id=?1",
+                rusqlite::params![run_id],
+            );
             return;
         }
 
-        let config = crate::daemon::engine::agent_loop::LoopConfig {
-            model: model_id_owned,
-            provider_id: provider_id_owned,
-            ..Default::default()
-        };
-        let mut agent = crate::daemon::engine::agent_loop::AgentLoop::new(
-            run_id.clone(), conversation_id_owned, config, data_store.clone(), event_bus.clone(), Arc::new(router),
-        );
-        let result = agent.run(&content).await;
-        let (status, error_code) = match result {
-            Ok(crate::daemon::engine::agent_loop::LoopStatus::Completed) => ("completed", None),
-            Ok(crate::daemon::engine::agent_loop::LoopStatus::Interrupted) => ("interrupted", None),
-            Ok(_) => ("failed", Some("agent_incomplete")),
+        let start_result = crate::daemon_authority::start_run(assistant_protocol::v2::StartRunRequest {
+            run_id: Some(run_id.clone()),
+            conversation_id: Some(conversation_id_owned),
+            provider_id: Some(provider_id_owned),
+            model_id: Some(model_id_owned),
+            key_id: None,
+            content: Some(content_owned),
+            attachments: None,
+            trigger_message_id: None,
+            permission_profile: Some("ask".into()),
+            max_steps: Some(50),
+            project_path: None,
+            idempotency_key: None,
+        })
+        .await;
+
+        let (status, error_code) = match start_result {
+            Ok(run) => (run.status.as_str().to_string(), run.error_code),
             Err(error) => {
-                let _ = event_bus.publish(&run_id, "failed", serde_json::json!({
-                    "code": "agent_error",
-                    "error": error.to_string(),
-                })).await;
-                ("failed", Some("agent_error"))
+                let _ = event_bus
+                    .publish(
+                        &run_id,
+                        "failed",
+                        serde_json::json!({"code":"agent_error","error":error}),
+                    )
+                    .await;
+                ("failed".into(), Some("agent_error".into()))
             }
         };
+
+        // Mirror Protocol v2 events into the legacy event bus for any old subscribers.
+        let events = crate::daemon_authority::replay_events(&run_id, 0)
+            .await
+            .unwrap_or_default();
+        for event in events {
+            let _ = event_bus
+                .publish(
+                    &run_id,
+                    event.payload.type_name(),
+                    serde_json::to_value(&event.payload).unwrap_or_default(),
+                )
+                .await;
+        }
+
         let conn = data_store.conn();
         let _ = conn.execute(
-            "UPDATE assistant_runs SET status=?1, error_code=?2, step_count=?3, finished_at=datetime('now') WHERE id=?4",
-            rusqlite::params![status, error_code, agent.step_count(), run_id],
+            "UPDATE assistant_runs SET status=?1, error_code=?2, finished_at=datetime('now') WHERE id=?3",
+            rusqlite::params![status, error_code, run_id],
         );
     });
 
@@ -955,6 +998,7 @@ async fn handle_run_start(request: &RpcRequest, data_store: &Arc<DataStore>, eve
         "conversation_id": conversation_id,
         "trigger_message_id": message_id,
         "status": "running",
+        "execution": "agent_daemon_run_manager",
     }))
 }
 

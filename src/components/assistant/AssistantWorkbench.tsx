@@ -1,1218 +1,1141 @@
 'use client';
 
-// ─── New Assistant Workbench ─────────────────────────────
-//
-// Center conversation surface. Shell-level navigation and context panels consume
-// the same workspace snapshot through AssistantWorkspaceContext.
+/**
+ * Assistant workbench — composition only.
+ * Protocol I/O and execution state live in AssistantGateway + Workspace Store.
+ * Components never call window.nativesAPI.assistantV2 / streamChat.
+ */
 
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { t, type Locale } from '@/i18n';
-import ConversationTimeline from './ConversationTimeline';
-import type { ContentBlock } from './blocks';
-import MessageInput from './MessageInput';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { PanelRightClose, PanelRightOpen } from 'lucide-react';
+import type { Locale } from '@/i18n';
+import { t } from '@/i18n';
 import { useToast } from '@/components/ui/Toast';
 import { classifyError } from '@/lib/error-classifier';
-import { Loader2, WifiOff } from 'lucide-react';
 import {
   classifyProviderReadiness,
   selectAssistantModel,
   type ProviderReadiness,
 } from '@/lib/provider-model-selection';
-import type { ProviderWithModels } from './ModelSelectorDropdown';
-import { readActiveProject, writeActiveProject } from '@/lib/active-project';
 import {
-  classifyAssistantSurface,
   groupAssistantConversations,
   projectCreationState,
 } from '@/lib/assistant-project-groups';
+import { readActiveProject, writeActiveProject } from '@/lib/active-project';
 import {
-  createAssistantStreamState,
-  reduceAssistantStreamEvent,
-  type AssistantStreamState,
-} from '@/lib/assistant-stream-state';
-import type { AssistantRunEvent } from '@/lib/assistant-types';
-import { useAssistantWorkspace, type AssistantWorkspaceActions } from './AssistantWorkspaceContext';
-import RunInspector from './RunInspector';
+  normalizePermissionProfile,
+  type AssistantDraft,
+  type AssistantPermissionProfile,
+} from '@/lib/assistant-composer';
+import {
+  AssistantStoreProvider,
+  useAssistantDispatch,
+  useAssistantGateway,
+  useAssistantStore,
+  selectActiveRun,
+  selectArtifacts,
+  selectChildRuns,
+  selectComposerDraft,
+  selectConversationMessages,
+  selectFileChanges,
+  selectIsRunActive,
+  selectPendingInteractions,
+  selectPromptQueue,
+  selectRunEvents,
+  type InspectorTab,
+} from '@/lib/assistant-workspace';
+import {
+  cancelRun,
+  connectWorkspace,
+  loadConversations,
+  openConversation,
+  respondPermission,
+  retryRun,
+  sendOrQueue,
+  subscribeRun,
+} from '@/lib/assistant-workspace/controller';
+import { hydrateFileDiffContents } from '@/lib/assistant-workspace/file-diff-contents';
+import { createDefaultGateway, FixtureAssistantAdapter } from '@/lib/assistant-gateway';
+import { goldenTextStream } from '@/lib/assistant-fixtures/golden';
+import { isActiveRunStatus } from '@/lib/assistant-protocol';
+import type { Conversation } from '@/lib/assistant-protocol';
+import ConversationTimeline from './ConversationTimeline';
+import MessageInput from './MessageInput';
 import PermissionRequestCard from './PermissionRequestCard';
-import type { ProjectSummary, ProviderSummary } from '@/lib/tauri-adapter';
-import { assistantRetryPrompt, normalizePermissionProfile, type AssistantDraft, type AssistantPermissionProfile } from '@/lib/assistant-composer';
-import { PanelRightClose, PanelRightOpen } from 'lucide-react';
-
-// ─── Types ───────────────────────────────────────────────
-
-interface Conversation {
-  id: string;
-  mode: 'chat' | 'agent';
-  project_id?: string | null;
-  title: string;
-  provider_id: string;
-  model_id: string;
-  permission_profile_id?: AssistantPermissionProfile;
-  created_at: string;
-  updated_at: string;
-  archived_at?: string | null;
-}
-
-interface MessageBlock {
-  type: string;
-  index: number;
-  content: unknown;
-}
-
-interface Message {
-  id: string;
-  conversation_id: string;
-  parent_message_id?: string | null;
-  role: 'system' | 'user' | 'assistant';
-  status: string;
-  input_tokens?: number;
-  output_tokens?: number;
-  created_at: string;
-  content_blocks: MessageBlock[];
-}
-
-interface RunEvent {
-  sequence: number;
-  timestamp: string;
-  type: string;
-  payload: unknown;
-}
-
-interface Run {
-  id: string;
-  conversation_id: string;
-  status: string;
-  provider_id: string;
-  model_id: string;
-  started_at?: string | null;
-  finished_at?: string | null;
-  error_code?: string | null;
-  step_count?: number;
-}
-
-interface Artifact {
-  id: string;
-  label?: string;
-  path: string;
-  kind: string;
-  size: number;
-}
-
-interface ProviderInfo {
-  id: string;
-  provider_type: string;
-  display_name: string;
-  api_base_url: string;
-  health_status: string;
-  default_model?: string | null;
-  has_active_key?: boolean;
-  models?: ModelInfo[];
-}
-
-interface ModelInfo {
-  id: string;
-  display_name?: string;
-  context_window?: number;
-  capabilities?: {
-    streaming?: boolean;
-    tool_calling?: boolean;
-    image_input?: boolean;
-    reasoning?: boolean;
-  };
-}
-
-// ─── Props ───────────────────────────────────────────────
+import RunStatusBar from './RunStatusBar';
+import PromptQueuePanel from './PromptQueuePanel';
+import ActivityInspector from './ActivityInspector';
+import ConnectionBanner from './ConnectionBanner';
+import CommandPalette, { type AssistantCommand } from './CommandPalette';
+import type { ProviderWithModels } from './ModelSelectorDropdown';
+import {
+  useAssistantWorkspace,
+  type AssistantWorkspaceActions,
+} from './AssistantWorkspaceContext';
+import {
+  ASSISTANT_LOCATE_EVENT,
+  type AssistantLocateTarget,
+} from '@/lib/assistant-notifications';
 
 interface AssistantWorkbenchProps {
   locale: Locale;
+  /** Force fixture adapter (browser / tests). */
+  preferFixture?: boolean;
 }
 
-// ─── Helpers ─────────────────────────────────────────────
-
-function v2call<T = unknown>(method: string, params?: unknown): Promise<T> {
-  if (!window.nativesAPI?.assistantV2) {
-    return Promise.reject(new Error('assistantV2 not available'));
-  }
-  return window.nativesAPI.assistantV2.request(method, params) as Promise<T>;
-}
-
-function mapBlockToContentBlock(block: MessageBlock): ContentBlock {
-  const content = (block.content ?? {}) as Record<string, unknown>;
-
-  switch (block.type) {
-    case 'text':
-      return { type: 'text', text: String(content.text ?? content.content ?? '') };
-    case 'reasoning':
-      return { type: 'reasoning', reasoning: String(content.text ?? content.reasoning ?? content.content ?? ''), signature: content.signature ? String(content.signature) : undefined, durationMs: content.duration_ms == null ? undefined : Number(content.duration_ms) };
-    case 'image':
-      return { type: 'image', mimeType: String(content.mime_type ?? 'image/png'), imageUrl: String(content.data ?? ''), altText: String(content.alt_text ?? '') };
-    case 'file_reference':
-      return { type: 'file_reference', filePath: String(content.path ?? content.file_path ?? ''), mimeType: String(content.mime_type ?? 'application/octet-stream'), fileSize: Number(content.size ?? content.file_size ?? 0) };
-    case 'tool_call':
-      return {
-        type: 'tool_call',
-        toolCallId: String(content.tool_call_id ?? content.id ?? ''),
-        toolName: String(content.tool_name ?? content.name ?? ''),
-        toolInput: (content.input ?? content.arguments ?? {}) as Record<string, unknown>,
-        toolStatus: (content.status ?? 'pending') as 'pending' | 'running' | 'completed' | 'failed' | 'rejected',
-      };
-    case 'tool_result':
-      return {
-        type: 'tool_result',
-        toolCallId: String(content.tool_call_id ?? ''),
-        toolOutput: content.output ?? content.result,
-        isError: Boolean(content.is_error ?? false),
-        durationMs: content.duration_ms == null ? undefined : Number(content.duration_ms),
-      };
-    case 'citation':
-      return {
-        type: 'citation',
-        citationUri: String(content.uri ?? content.url ?? ''),
-        citationTitle: content.title ? String(content.title) : undefined,
-      };
-    case 'error':
-      return {
-        type: 'error',
-        errorCode: String(content.code ?? content.error_code ?? ''),
-        errorMessage: String(content.message ?? content.error_message ?? ''),
-        retryable: Boolean(content.retryable ?? false),
-      };
-    default:
-      return {
-        type: 'legacy',
-        raw: JSON.stringify(content, null, 2),
-        originalType: block.type,
-      };
-  }
-}
-
-function mapMessageToTimeline(msg: Message): import('./ConversationTimeline').Message {
-  return {
-    id: msg.id,
-    role: msg.role,
-    contentBlocks: (msg.content_blocks ?? []).map(mapBlockToContentBlock),
-    status: msg.status,
-    createdAt: msg.created_at,
-    inputTokens: msg.input_tokens,
-    outputTokens: msg.output_tokens,
-  };
-}
-
-// ─── Component ───────────────────────────────────────────
-
-export default function AssistantWorkbench({ locale }: AssistantWorkbenchProps) {
+function WorkbenchInner({ locale }: { locale: Locale }) {
+  const zh = locale.startsWith('zh');
   const { toast } = useToast();
+  const state = useAssistantStore();
+  const dispatch = useAssistantDispatch();
+  const gateway = useAssistantGateway();
   const { publishNavigation, publishRuntime, registerActions, navigation } = useAssistantWorkspace();
 
-  // ── Connection state ──
-  const [daemonConnected, setDaemonConnected] = useState(false);
-  const [daemonError, setDaemonError] = useState<string | null>(null);
-  const [rendererOnly, setRendererOnly] = useState(false);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const subAbortRef = useRef<{ aborted: boolean }>({ aborted: false });
 
-  // ── Data state ──
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(navigation.selectedId);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [providers, setProviders] = useState<ProviderInfo[]>([]);
-  const [providerLoadError, setProviderLoadError] = useState<string | null>(null);
+  const [providers, setProviders] = useState<ProviderWithModels[]>([]);
   const [providerReadiness, setProviderReadiness] = useState<ProviderReadiness>('no_provider');
-  const [loadingConversations, setLoadingConversations] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
-  const [registeredProjects, setRegisteredProjects] = useState<ProjectSummary[]>([]);
-  const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const [registeredProjects, setRegisteredProjects] = useState<Array<{ id: string; path: string }>>([]);
+  const [rightPanelOpen, setRightPanelOpen] = useState(!state.view.rightCollapsed);
+  const [loadingConversations, setLoadingConversations] = useState(true);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [fileContentsByPath, setFileContentsByPath] = useState<
+    Record<string, { before: string; after: string }>
+  >({});
 
-  // ── Run state (unified via AssistantStreamState) ──
-  const [streamState, setStreamState] = useState<AssistantStreamState | null>(null);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
-  const [subAgents, setSubAgents] = useState<Array<{ id: string; task: string; status: string }>>([]);
-  // Derived from streamState, kept for backward compat with RunInspector & publishRuntime
-  const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
-  const [activeRunStartedAt, setActiveRunStartedAt] = useState<string | null>(null);
-  const [activeRunFinishedAt, setActiveRunFinishedAt] = useState<string | null>(null);
+  const activeId = state.activeConversationId;
+  const activeConversation = activeId ? state.conversations[activeId] : null;
+  const messages = useMemo(
+    () => selectConversationMessages(state, activeId),
+    [state, activeId],
+  );
+  const activeRun = selectActiveRun(state, activeId);
+  const activeRunId = activeRun?.id;
+  const activeRunStatus = activeRun?.status;
+  const isStreaming = selectIsRunActive(state, activeId);
+  const interactions = selectPendingInteractions(state, activeId);
+  const promptQueue = selectPromptQueue(state, activeId);
+  const events = selectRunEvents(state, activeRun?.id ?? null);
+  const artifacts = selectArtifacts(state, activeRun?.id ?? null);
+  const children = selectChildRuns(state, activeRun?.id ?? null);
+  const fileChanges = selectFileChanges(state, activeRun?.id ?? null);
+  const contextUsage = activeId ? state.contextUsageByConversation[activeId] ?? null : null;
+  const permission = interactions.find((i) => i.kind === 'permission');
+  const askUser = interactions.find((i) => i.kind === 'ask_user');
+  const planApproval = interactions.find((i) => i.kind === 'plan_approval');
 
-  // ── UI state ──
-  const [inputDisabledReason, setInputDisabledReason] = useState<'no_provider' | 'no_model' | 'creating' | null>(null);
-  const [isCreatingConversation, setIsCreatingConversation] = useState(false);
-  const [pendingUserMessage, setPendingUserMessage] = useState<Message | null>(null);
-
-  // Refs
-  const streamStateRef = useRef<AssistantStreamState | null>(null);
-  const activeConversationIdRef = useRef<string | null>(activeConversationId);
-  const latestRunIdRef = useRef<string | null>(null);
-  const activeRunIdRef = useRef<string | null>(null);
-  const eventsRef = useRef<RunEvent[]>([]);
-  const batchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
+  // Layout breakpoint
   useEffect(() => {
-    activeConversationIdRef.current = activeConversationId;
-  }, [activeConversationId]);
-
-  const checkDaemonStatus = useCallback(async (): Promise<boolean> => {
-    try {
-      const assistantApi = window.nativesAPI?.assistantV2;
-      if (!assistantApi) {
-        setRendererOnly(true);
-        setDaemonConnected(false);
-        setDaemonError(t(locale, 'assistant.desktopEngineRequired'));
-        setLoadingConversations(false);
-        return false;
-      }
-      setRendererOnly(false);
-      // Bound the health check so a hung invoke cannot leave the UI on the connecting spinner forever.
-      const status = await Promise.race([
-        assistantApi.getStatus(),
-        new Promise<never>((_, reject) => {
-          window.setTimeout(() => reject(new Error(t(locale, 'assistant.daemonNotConnected'))), 5_000);
-        }),
-      ]);
-      const connected = status?.connected === true;
-      setDaemonConnected(connected);
-      setDaemonError(connected ? null : (status?.error ?? t(locale, 'assistant.daemonNotConnected')));
-      if (!connected) setLoadingConversations(false);
-      return connected;
-    } catch (error) {
-      setDaemonConnected(false);
-      setDaemonError(classifyError(error).userMessage);
-      setLoadingConversations(false);
-      return false;
-    }
-  }, [locale]);
-
-  // ── Check daemon status on mount ──
-  useEffect(() => {
-    let cancelled = false;
-    let retryTimer: number | undefined;
-    const startupTimer = window.setTimeout(() => {
-      void checkDaemonStatus().then(connected => {
-        if (cancelled || connected) return;
-        // The supervisor may still be completing its startup handshake.
-        retryTimer = window.setTimeout(() => {
-          if (!cancelled) void checkDaemonStatus();
-        }, 750);
-      });
-    }, 0);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(startupTimer);
-      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+    const update = () => {
+      const w = window.innerWidth;
+      const layoutBreakpoint = w >= 1200 ? 'full' : w >= 800 ? 'drawer-right' : 'drawer-both';
+      dispatch({ type: 'view/patch', patch: { layoutBreakpoint } });
+      if (layoutBreakpoint !== 'full') setRightPanelOpen(false);
     };
-  }, [checkDaemonStatus]);
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, [dispatch]);
 
-  // ── Load providers ──
-  const loadProviders = async () => {
-    try {
-      const result = await window.nativesAPI?.provider.list();
-      if (!result) throw new Error('Provider API unavailable');
-      const nextProviders = result.map((provider: ProviderSummary): ProviderInfo => ({
-        id: provider.id,
-        provider_type: provider.providerType,
-        display_name: provider.displayName,
-        api_base_url: provider.baseUrl,
-        health_status: 'unknown',
-        default_model: provider.defaultModel,
-        has_active_key: provider.keys.some(key => key.isActive && (key.status === 'valid' || key.status === 'untested')),
-        models: provider.models?.map(model => ({ id: model.id, displayName: model.displayName ?? undefined })) ?? [],
-      }));
-      const readiness = classifyProviderReadiness(nextProviders);
-      setProviders(nextProviders);
-      setProviderReadiness(readiness);
-      setProviderLoadError(null);
-      setInputDisabledReason(readiness === 'ready' ? null : readiness);
-    } catch (error) {
-      const message = classifyError(error).userMessage;
-      setProviderLoadError(message);
-      toast(message, 'error');
-    }
-  };
-
-  // ── Load conversations ──
-  const loadConversations = useCallback(async () => {
-    setLoadingConversations(true);
-    try {
-      const result = await v2call<Conversation[]>('conversation.list', { include_archived: false });
-      setConversations(result.filter(conversation => !conversation.archived_at));
-    } catch (err) {
-      toast(classifyError(err).userMessage, 'error');
-    } finally {
-      setLoadingConversations(false);
-    }
-  }, [toast]);
-
-  const loadProjects = useCallback(async () => {
-    const projects = await window.nativesAPI?.project.list();
-    setRegisteredProjects(projects ?? []);
-  }, []);
-
-  // ── Load data when connected ──
+  // Populate DiffViewer contents from file_changed events (+ optional fs read)
   useEffect(() => {
-    if (!daemonConnected) return;
     let cancelled = false;
-
-    (async () => {
-      const projPath = await readActiveProject(window.nativesAPI);
-      if (cancelled) return;
-      setActiveProjectPath(projPath);
-      await Promise.all([loadProviders(), loadConversations(), loadProjects()]);
-    })();
-
-    return () => { cancelled = true; };
-    // These loaders intentionally run once for each daemon connection.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [daemonConnected, loadProjects]);
-
-  // ── Load messages ──
-  const loadMessages = useCallback(async (conversationId: string) => {
-    if (conversationId.startsWith('temp-')) {
-      if (activeConversationIdRef.current === conversationId) {
-        setMessages([]);
-        setLoadingMessages(false);
+    void (async () => {
+      if (fileChanges.length === 0 && events.length === 0) {
+        if (!cancelled) setFileContentsByPath({});
+        return;
       }
-      return;
-    }
-    setLoadingMessages(true);
-    try {
-      const result = await v2call<Message[]>('conversation.getMessages', {
-        conversation_id: conversationId,
-      });
-      if (activeConversationIdRef.current === conversationId) setMessages(result);
-    } catch (err) {
-      toast(classifyError(err).userMessage, 'error');
-    } finally {
-      if (activeConversationIdRef.current === conversationId) setLoadingMessages(false);
-    }
-  }, [toast]);
-
-  // ── Load artifacts ──
-  const loadArtifacts = useCallback(async (runId: string, conversationId?: string) => {
-    try {
-      const result = await v2call<Artifact[]>('artifact.list', { run_id: runId });
-      if (!conversationId || activeConversationIdRef.current === conversationId) setArtifacts(result);
-    } catch {
-      if (!conversationId || activeConversationIdRef.current === conversationId) setArtifacts([]);
-    }
-  }, []);
-
-  const loadConversationRun = useCallback(async (conversationId: string) => {
-    if (conversationId.startsWith('temp-')) {
-      latestRunIdRef.current = null;
-      activeRunIdRef.current = null;
-      setActiveRunStartedAt(null);
-      setActiveRunFinishedAt(null);
-      setStreamState(null);
-      setRunEvents([]);
-      setArtifacts([]);
-      setSubAgents([]);
-      return;
-    }
-    try {
-      const result = await v2call<Run[]>('run.list', { conversation_id: conversationId, limit: 1 });
-      const run = result[0];
-      if (!run) return;
-      if (activeConversationIdRef.current !== conversationId) return;
-      latestRunIdRef.current = run.id;
-      activeRunIdRef.current = run.id;
-      setActiveRunStartedAt(run.started_at ?? null);
-      setActiveRunFinishedAt(run.finished_at ?? null);
-      const [eventResult] = await Promise.all([
-        v2call<RunEvent[]>('run.getEvents', { run_id: run.id, after_sequence: 0 }),
-        loadArtifacts(run.id, conversationId),
-      ]);
-      const childRuns = await v2call<Array<{ id: string; status: string }>>('run.listChildren', { parent_run_id: run.id });
-      if (activeConversationIdRef.current !== conversationId) return;
-      const restoredEvents = eventResult;
-      let restored = createAssistantStreamState(run.id);
-      for (const event of restoredEvents) {
-        restored = reduceAssistantStreamEvent(restored, {
-          runId: run.id,
-          sequence: event.sequence,
-          timestamp: event.timestamp,
-          type: event.type as AssistantRunEvent['type'],
-          payload: (event.payload ?? {}) as Record<string, unknown>,
-        });
-      }
-      // Apply the persisted run status as the final state override
-      if (run.status === 'completed' || run.status === 'failed' || run.status === 'interrupted') {
-        restored = { ...restored, status: run.status };
-      }
-      streamStateRef.current = restored;
-      setStreamState(restored);
-      // Rebuild events from the restored state for the RunInspector
-      eventsRef.current = restoredEvents;
-      setRunEvents(restoredEvents);
-      setSubAgents(childRuns.map(child => ({ id: child.id, task: `Subagent ${child.id.slice(0, 8)}`, status: child.status })));
-    } catch {
-      // No run for this conversation — that's fine
-    }
-  }, [loadArtifacts]);
-
-  // ── Handle stream event ──
-  const handleStreamEvent = useCallback((event: { runId: string; sequence: number; timestamp?: string; type: string; payload: unknown }) => {
-    const previous = streamStateRef.current?.runId === event.runId
-      ? streamStateRef.current
-      : createAssistantStreamState(event.runId);
-    const next = reduceAssistantStreamEvent(previous, {
-      runId: event.runId,
-      sequence: event.sequence,
-      timestamp: event.timestamp ?? new Date().toISOString(),
-      type: event.type as AssistantRunEvent['type'],
-      payload: (event.payload ?? {}) as Record<string, unknown>,
-    });
-
-    // Clear streaming on terminal events even if the reducer no-ops (duplicate sequence).
-    if (event.runId === latestRunIdRef.current) {
-      const terminalEvent = event.type === 'completed' || event.type === 'failed' || event.type === 'interrupted';
-      if (terminalEvent) {
-        setIsStreaming(false);
-        setActiveRunFinishedAt(event.timestamp ?? new Date().toISOString());
-      } else if (event.type !== 'usage_updated' && next !== previous) {
-        setIsStreaming(true);
-      }
-    }
-
-    if (next === previous) return;
-    streamStateRef.current = next;
-
-    const runEvent: RunEvent = {
-      sequence: event.sequence,
-      timestamp: event.timestamp ?? new Date().toISOString(),
-      type: event.type,
-      payload: event.payload,
-    };
-
-    // Accumulate events for RunInspector
-    eventsRef.current = [...eventsRef.current, runEvent];
-
-    // Batch update with debounce to avoid thrashing
-    if (batchTimerRef.current) {
-      clearTimeout(batchTimerRef.current);
-    }
-    batchTimerRef.current = setTimeout(() => {
-      setStreamState({ ...streamStateRef.current! });
-      setRunEvents([...eventsRef.current]);
-    }, 30);
-
-    if (event.runId === latestRunIdRef.current) {
-      const terminalEvent = event.type === 'completed' || event.type === 'failed' || event.type === 'interrupted';
-      if (terminalEvent && activeConversationId) {
-        void loadMessages(activeConversationId);
-      }
-    }
-  }, [activeConversationId, loadMessages]);
-
-  // The Tauri boundary intentionally owns the daemon socket. Until it exposes a
-  // push bridge, replay new persisted events with a cursor so no event is lost.
-  useEffect(() => {
-    const runId = activeRunIdRef.current;
-    if (!runId || !isStreaming) return;
-    let cancelled = false;
-    let cursor = eventsRef.current.at(-1)?.sequence ?? 0;
-
-    const poll = async () => {
-      try {
-        const result = await v2call<RunEvent[]>('run.getEvents', {
-          run_id: runId,
-          after_sequence: cursor,
-        });
-        for (const event of result) {
-          if (cancelled || event.sequence <= cursor) continue;
-          cursor = event.sequence;
-          handleStreamEvent({ ...event, runId });
+      const readFile = async (path: string): Promise<string | null> => {
+        try {
+          const api = window.nativesAPI?.fs;
+          if (!api?.readFile) return null;
+          const result = await api.readFile(path);
+          if (result == null) return null;
+          if (typeof result === 'string') return result;
+          const rec = result as Record<string, unknown>;
+          if (typeof rec.content === 'string') return rec.content;
+          return String(result);
+        } catch {
+          return null;
         }
-      } catch {
-        // A transient daemon reconnect is recovered by the next replay poll.
-      }
-    };
-
-    void poll();
-    const timer = window.setInterval(poll, 300);
+      };
+      const next = await hydrateFileDiffContents({
+        fileChanges,
+        events,
+        readFile,
+      });
+      if (!cancelled) setFileContentsByPath(next);
+    })();
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
     };
-  }, [isStreaming, streamState?.runId, handleStreamEvent]);
+  }, [fileChanges, events]);
 
-  // ── Select conversation ──
-  const handleSelectConversation = useCallback((id: string) => {
-    if (id === activeConversationIdRef.current) return;
-    setActiveConversationId(id);
-    activeConversationIdRef.current = id;
-    setLoadingMessages(false);
-    setConversations(prev => prev.filter(c => !c.id.startsWith('temp-') || c.id === id));
-    streamStateRef.current = null;
-    setStreamState(null);
-    setIsStreaming(false);
-    setRunEvents([]);
-    setArtifacts([]);
-    eventsRef.current = [];
-    latestRunIdRef.current = null;
-    activeRunIdRef.current = null;
-  }, []);
+  const startSubscription = useCallback(
+    async (runId: string, afterSequence: number) => {
+      subAbortRef.current.aborted = true;
+      const signal = { aborted: false };
+      subAbortRef.current = signal;
+      try {
+        await subscribeRun(
+          gateway,
+          dispatch,
+          () => stateRef.current,
+          runId,
+          afterSequence,
+          signal,
+        );
+      } catch {
+        // connection soft-fail handled in controller
+      }
+    },
+    [gateway, dispatch],
+  );
 
-  // ── Load messages when active conversation changes or daemon connects ──
+  // Boot: connect + list conversations + providers
   useEffect(() => {
-    if (!daemonConnected || !activeConversationId) return;
-    void loadMessages(activeConversationId);
-    void loadConversationRun(activeConversationId);
-  }, [daemonConnected, activeConversationId, loadMessages, loadConversationRun]);
+    let cancelled = false;
+    (async () => {
+      try {
+        await connectWorkspace(gateway, dispatch);
+        if (cancelled) return;
+        await loadConversations(gateway, dispatch);
+        if (cancelled) return;
 
-  // ── Create conversation ──
-  const handleCreateConversation = useCallback((projectPath = activeProjectPath) => {
-    const cleanId = `temp-${Date.now()}`;
-    const newConv: Conversation = {
-      id: cleanId,
-      mode: 'agent',
-      project_id: projectPath,
-      title: t(locale, 'assistant.newConversation'),
-      provider_id: '',
-      model_id: '',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      archived_at: null,
+        try {
+          const path = await readActiveProject(window.nativesAPI);
+          if (!cancelled) setActiveProjectPath(path);
+        } catch {
+          /* browser */
+        }
+        try {
+          const projects = (await window.nativesAPI?.project?.list?.()) ?? [];
+          if (!cancelled) setRegisteredProjects(projects);
+        } catch {
+          /* */
+        }
+
+        try {
+          const list = await gateway.request<Array<Record<string, unknown>>>('provider.list', {});
+          const mapped: ProviderWithModels[] = (Array.isArray(list) ? list : []).map((p) => {
+            const name = String(p.display_name ?? p.displayName ?? p.name ?? p.id);
+            return {
+              id: String(p.id),
+              name,
+              presetName: String(p.provider_type ?? p.presetName ?? name),
+              baseUrl: String(p.api_base_url ?? p.baseUrl ?? ''),
+              keys: (p.has_active_key ?? p.hasActiveKey ?? true)
+                ? [{ id: 'active', label: 'default', maskedKey: '••••' }]
+                : [],
+              models: Array.isArray(p.models)
+                ? (p.models as Array<Record<string, unknown>>).map((m) => ({
+                    id: String(m.id),
+                    displayName: String(m.display_name ?? m.displayName ?? m.id),
+                  }))
+                : [],
+            };
+          });
+          if (!cancelled) {
+            setProviders(mapped);
+            setProviderReadiness(
+              classifyProviderReadiness(
+                mapped.map((p) => ({
+                  id: p.id,
+                  provider_type: p.presetName,
+                  display_name: p.name,
+                  has_active_key: p.keys.length > 0,
+                  models: (p.models ?? []).map((m) => ({ id: m.id, display_name: m.displayName })),
+                })),
+              ),
+            );
+          }
+        } catch {
+          if (!cancelled) {
+            setProviders([
+              {
+                id: 'openai',
+                name: 'OpenAI',
+                presetName: 'openai',
+                baseUrl: '',
+                keys: [{ id: 'active', label: 'default', maskedKey: '••••' }],
+                models: [{ id: 'gpt-4o', displayName: 'GPT-4o' }],
+              },
+            ]);
+            setProviderReadiness('ready');
+          }
+        }
+      } catch (err) {
+        if (!cancelled) toast(classifyError(err).userMessage, 'error');
+      } finally {
+        if (!cancelled) setLoadingConversations(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      subAbortRef.current.aborted = true;
+      void gateway.disconnect();
     };
+  }, [gateway, dispatch, toast]);
 
-    setConversations(prev => [newConv, ...prev].filter(c => !c.id.startsWith('temp-') || c.id === cleanId));
-    setActiveConversationId(cleanId);
-    setMessages([]);
-    setStreamState(null);
-    streamStateRef.current = null;
-    setIsStreaming(false);
-    setInputDisabledReason(null);
-  }, [activeProjectPath, locale]);
-
-  const handleSelectModel = useCallback(async (providerId: string, modelId: string) => {
-    if (!activeConversationId) return;
-    if (activeConversationId.startsWith('temp-')) {
-      setConversations(previous => previous.map(conversation =>
-        conversation.id === activeConversationId
-          ? {
-              ...conversation,
-              provider_id: providerId,
-              model_id: modelId,
-            }
-          : conversation,
-      ));
-      return;
-    }
-    try {
-      const result = await v2call<{ updated_at?: string }>('conversation.update_model', {
-        id: activeConversationId,
-        provider_id: providerId,
-        model_id: modelId,
-      });
-      setConversations(previous => previous.map(conversation =>
-        conversation.id === activeConversationId
-          ? {
-              ...conversation,
-              provider_id: providerId,
-              model_id: modelId,
-              updated_at: result.updated_at ?? conversation.updated_at,
-            }
-          : conversation,
-      ));
-    } catch (error) {
-      toast(classifyError(error).userMessage, 'error');
-    }
-  }, [activeConversationId, toast]);
-
-  const handlePermissionChange = useCallback(async (profile: AssistantPermissionProfile) => {
-    if (!activeConversationId) return;
-    if (activeConversationId.startsWith('temp-')) {
-      setConversations(current => current.map(conversation => conversation.id === activeConversationId
-        ? { ...conversation, permission_profile_id: profile }
-        : conversation));
-      return;
-    }
-    try {
-      await v2call('conversation.update_permission', { id: activeConversationId, permission_profile_id: profile });
-      setConversations(current => current.map(conversation => conversation.id === activeConversationId
-        ? { ...conversation, permission_profile_id: profile }
-        : conversation));
-    } catch (error) {
-      toast(classifyError(error).userMessage, 'error');
-    }
-  }, [activeConversationId, toast]);
-
-  // ── Archive conversation ──
-  const handleArchiveConversation = useCallback(async (id: string) => {
-    try {
-      await v2call('conversation.archive', { id });
-      setConversations(prev => prev.filter(c => c.id !== id));
-      if (activeConversationId === id) {
-        setActiveConversationId(null);
-        setMessages([]);
-        setStreamState(null);
-        streamStateRef.current = null;
-      }
-    } catch (err) {
-      toast(classifyError(err).userMessage, 'error');
-    }
-  }, [activeConversationId, toast]);
-
-  // ── Delete conversation ──
-  const handleDeleteConversation = useCallback(async (id: string): Promise<boolean> => {
-    try {
-      await v2call('conversation.delete', { id });
-      setConversations(prev => prev.filter(c => c.id !== id));
-      if (activeConversationId === id) {
-        setActiveConversationId(null);
-        setMessages([]);
-        setStreamState(null);
-        streamStateRef.current = null;
-      }
-      return true;
-    } catch (err) {
-      toast(classifyError(err).userMessage, 'error');
-      return false;
-    }
-  }, [activeConversationId, toast]);
-
-  // ── Send message / Start run ──
-  const handleSend = useCallback(async ({ content, attachments }: AssistantDraft): Promise<boolean> => {
-    if (!activeConversationId) return false;
-
-    const conversation = conversations.find(c => c.id === activeConversationId);
-    if (!conversation) return false;
-
-    const selection = selectAssistantModel(providers);
-    const providerId = conversation.provider_id || selection?.providerId || '';
-    const modelId = conversation.model_id || selection?.modelId || '';
-    if (!providerId || !modelId) {
-      setInputDisabledReason(providerReadiness === 'no_model' ? 'no_model' : 'no_provider');
-      return false;
-    }
-
-    setIsStreaming(true);
-    streamStateRef.current = null;
-    setStreamState(null);
-    setRunEvents([]);
-    setArtifacts([]);
-    setActiveRunStartedAt(null);
-    setActiveRunFinishedAt(null);
-    eventsRef.current = [];
-    setPendingUserMessage({
-      id: `pending-user-${Date.now()}`,
-      conversation_id: activeConversationId,
-      role: 'user',
-      status: 'sending',
-      created_at: new Date().toISOString(),
-      content_blocks: [{ type: 'text', index: 0, content: { text: content } }],
-    });
-
-    let targetConvId = activeConversationId;
-    const isTemp = activeConversationId.startsWith('temp-');
-
-    try {
-      if (isTemp) {
-        const title = content.trim()
-          ? (content.trim().length > 30 ? content.trim().slice(0, 30) + '...' : content.trim())
-          : t(locale, 'assistant.newConversation');
-
-        const result = await v2call<Conversation>('conversation.create', {
-          mode: 'agent',
-          title: title,
-          provider_id: providerId,
-          model_id: modelId,
-          project_id: conversation.project_id,
-          permission_profile_id: conversation.permission_profile_id ?? 'ask',
-        });
-
-        // Replace temporary conversation in list with real one
-        setConversations(prev => prev.map(c => c.id === activeConversationId ? { ...result, project_id: conversation.project_id } : c));
-        setActiveConversationId(result.id);
-        targetConvId = result.id;
-      }
-
-      // Start a new run
-      const run = await v2call<Run>('run.start', {
-        conversation_id: targetConvId,
-        provider_id: providerId,
-        model_id: modelId,
-        content,
-        attachments: attachments.map(file => ({ path: file.path, name: file.name, mime_type: file.mimeType, size: file.size })),
-      });
-
-      latestRunIdRef.current = run.id;
-      activeRunIdRef.current = run.id;
-      setActiveRunStartedAt(run.started_at ?? new Date().toISOString());
-      setActiveRunFinishedAt(null);
-      const newState = createAssistantStreamState(run.id);
-      streamStateRef.current = newState;
-      setStreamState(newState);
-
-      // Reload messages to show the user message
-      await loadMessages(targetConvId);
-      setPendingUserMessage(null);
-      const assistantApi = window.nativesAPI?.assistant;
-      if (!assistantApi) throw new Error('Assistant streaming API unavailable');
-      await assistantApi.streamChat({
-        sessionId: targetConvId,
-        runId: run.id,
-        model: modelId,
-        runtimeOverride: 'native',
-        messages: [{ role: 'user', content: [content, ...attachments.map(file => `[Attached file: ${file.path}]`)].filter(Boolean).join('\n') }],
-      });
-      return true;
-    } catch (err) {
-      setIsStreaming(false);
-      setPendingUserMessage(null);
-      toast(classifyError(err).userMessage, 'error');
-      return false;
-    }
-  }, [activeConversationId, conversations, providers, providerReadiness, loadMessages, toast]);
-
-  // ── Stop / Cancel run ──
-  const handleStop = useCallback(async () => {
-    const runId = latestRunIdRef.current;
-    if (!runId) return;
-    const previousState = streamStateRef.current;
-    try {
-      setStreamState(previous => {
-        if (!previous) return previous;
-        const next = { ...previous, status: 'cancelling' as const };
-        streamStateRef.current = next;
-        return next;
-      });
-      await v2call('run.cancel', { run_id: runId });
-      const assistantApi = window.nativesAPI?.assistant;
-      if (assistantApi && activeConversationId) await assistantApi.cancelStream(activeConversationId);
-      // Keep event replay active until the daemon publishes `interrupted`.
-    } catch (error) {
-      if (previousState) {
-        streamStateRef.current = previousState;
-        setStreamState(previousState);
-      }
-      toast(classifyError(error).userMessage, 'error');
-    }
-  }, [activeConversationId, toast]);
-
-  // ── Retry run ──
-  const handleRetry = useCallback(async () => {
-    const runId = latestRunIdRef.current;
-    if (!runId) return;
-    const conversation = conversations.find(item => item.id === activeConversationId);
-    if (!conversation?.provider_id || !conversation.model_id) return;
-    const lastUserMessage = [...messages].reverse().find(message => message.role === 'user');
-    if (!lastUserMessage) return;
-    const prompt = assistantRetryPrompt(lastUserMessage.content_blocks);
-    try {
-      const run = await v2call<Run>('run.start', {
-        conversation_id: activeConversationId,
-        provider_id: conversation.provider_id,
-        model_id: conversation.model_id,
-        trigger_message_id: lastUserMessage.id,
-      });
-      latestRunIdRef.current = run.id;
-      activeRunIdRef.current = run.id;
-      setActiveRunStartedAt(run.started_at ?? new Date().toISOString());
-      setActiveRunFinishedAt(null);
-      setIsStreaming(true);
-      eventsRef.current = [];
-      setRunEvents([]);
-      setArtifacts([]);
-      const newState = createAssistantStreamState(run.id);
-      streamStateRef.current = newState;
-      setStreamState(newState);
-      const assistantApi = window.nativesAPI?.assistant;
-      if (!assistantApi) throw new Error('Assistant streaming API unavailable');
-      await assistantApi.streamChat({
-        sessionId: activeConversationId!,
-        runId: run.id,
-        model: conversation.model_id,
-        runtimeOverride: 'native',
-        messages: [{ role: 'user', content: prompt }],
-      });
-    } catch (err) {
-      toast(classifyError(err).userMessage, 'error');
-    }
-  }, [activeConversationId, conversations, messages, toast]);
-
-  // ── Permission response ──
-  const handlePermissionResponse = useCallback(async (requestId: string, approved: boolean, scope?: string) => {
-    try {
-      await v2call('permission.respond', {
-        request_id: requestId,
-        approved,
-        scope: scope ?? 'once',
-      });
-      setStreamState(previous => previous ? { ...previous, permissionRequest: null, status: approved ? 'running' : previous.status } : previous);
-    } catch (err) {
-      toast(classifyError(err).userMessage, 'error');
-    }
-  }, [toast]);
-
-  // ── Update conversation title ──
-  const handleUpdateTitle = useCallback(async (id: string, title: string) => {
-    try {
-      await v2call('conversation.rename', { id, title });
-      setConversations(prev => prev.map(c =>
-        c.id === id ? { ...c, title } : c
-      ));
-    } catch {
-      // Silently fail
-    }
-  }, []);
-
-  // ── Refresh ──
-  const handleRefresh = useCallback(async () => {
-    const connected = await checkDaemonStatus();
-    if (!connected) return;
-    await loadConversations();
-    await loadProviders();
-    if (activeConversationId) {
-      await loadMessages(activeConversationId);
-    }
-  }, [activeConversationId, checkDaemonStatus, loadMessages]);
-
-  const handleSelectProject = useCallback((projectPath: string | null) => {
-    setActiveProjectPath(projectPath);
-    if (projectPath) {
-      void writeActiveProject(window.nativesAPI, projectPath).catch(error => {
-        toast(classifyError(error).userMessage, 'error');
-      });
-    } else {
-      // Clear active project selection (unclassified context)
-      void writeActiveProject(window.nativesAPI, null).catch(error => {
-        toast(classifyError(error).userMessage, 'error');
-      });
-    }
-  }, [toast]);
-
-  const handlePickProject = useCallback(async () => {
-    try {
-      const projectPath = await window.nativesAPI?.dialog?.pickDirectory();
-      // User cancelled directory selection — no error
-      if (!projectPath) return;
-
-      // Register project with daemon
-      const result = await window.nativesAPI?.project.register(projectPath);
-      if (!result) throw new Error('Project API unavailable');
-      handleSelectProject(result.path);
-      await Promise.all([loadConversations(), loadProjects()]);
-    } catch (error) {
-      const classified = classifyError(error);
-      // Do not show toast for cancellation — it's not an error
-      if (classified.category === 'PROJECT_PATH_REQUIRED') return;
-      toast(classified.userMessage, 'error');
-    }
-  }, [handleSelectProject, loadConversations, loadProjects, toast]);
-
-  const handleRemoveProject = useCallback(async (projectPath: string) => {
-    try {
-      await window.nativesAPI?.project.remove(projectPath);
-      if (activeProjectPath === projectPath) handleSelectProject(null);
-      await Promise.all([loadConversations(), loadProjects()]);
-    } catch (error) {
-      toast(classifyError(error).userMessage, 'error');
-    }
-  }, [activeProjectPath, handleSelectProject, loadConversations, loadProjects, toast]);
-
-  // ── Determine active conversation ──
-  const activeConversation = conversations.find(c => c.id === activeConversationId);
-  const projectGroups = useMemo(() => {
-    const cleanConversations = conversations.filter(c => !c.id.startsWith('temp-'));
+  // Publish navigation snapshot for shell sidebar
+  useEffect(() => {
+    const conversations = state.conversationOrder
+      .map((id) => state.conversations[id])
+      .filter(Boolean) as Conversation[];
     const groups = groupAssistantConversations(
-      cleanConversations.map(conversation => ({
-        id: conversation.id,
-        title: conversation.title,
-        mode: conversation.mode,
-        projectId: conversation.project_id ?? '',
-        updatedAt: conversation.updated_at,
+      conversations.map((c) => ({
+        id: c.id,
+        title: c.title,
+        mode: c.mode,
+        projectId: c.projectId ?? null,
+        updatedAt: c.updatedAt,
       })),
-      registeredProjects.map(project => project.path),
-      t(locale, 'assistant.unassignedProject'),
+      registeredProjects.map((p) => p.path),
+      zh ? '未关联项目' : 'Unassigned',
     );
-    return groups;
-  }, [conversations, locale, registeredProjects]);
-  const creationState = projectCreationState({
-    engine: daemonConnected ? 'ready' : (daemonError ? 'unavailable' : 'connecting'),
-    providerReadiness,
-  });
-  const surfaceState = classifyAssistantSurface({
-    bridge: !rendererOnly,
-    engine: daemonConnected ? 'ready' : (daemonError ? 'failed' : 'connecting'),
-    provider: providerReadiness,
-  });
-  const assistantEvents = useMemo<AssistantRunEvent[]>(() => {
-    const runId = streamState?.runId ?? '';
-    return runEvents.map(event => ({
-      runId,
-      sequence: event.sequence,
-      timestamp: event.timestamp,
-      type: event.type as AssistantRunEvent['type'],
-      payload: (event.payload ?? {}) as Record<string, unknown>,
-    }));
-  }, [streamState?.runId, runEvents]);
-  const fileChanges = useMemo(() => streamState?.fileChanges ?? [], [streamState?.fileChanges]);
-  const workspaceActions = useMemo<AssistantWorkspaceActions>(() => ({
-    selectConversation: id => { void handleSelectConversation(id); },
-    selectProject: handleSelectProject,
-    addProjectFolder: () => { void handlePickProject(); },
-    createConversation: () => { void handleCreateConversation(); },
-    createConversationInProject: path => { handleSelectProject(path); void handleCreateConversation(path); },
-    removeProject: path => { void handleRemoveProject(path); },
-    renameConversation: (id, title) => { void handleUpdateTitle(id, title); },
-    archiveConversation: id => { void handleArchiveConversation(id); },
-    deleteConversation: handleDeleteConversation,
-    retryRun: () => { void handleRetry(); },
-    respondPermission: (requestId, approved) => { void handlePermissionResponse(requestId, approved); },
-  }), [handleArchiveConversation, handleCreateConversation, handleDeleteConversation, handlePermissionResponse, handlePickProject, handleRemoveProject, handleRetry, handleSelectConversation, handleSelectProject, handleUpdateTitle]);
-
-  useEffect(() => {
-    if (navigation.pendingCreateProjectPath !== undefined) {
-      const targetPath = navigation.pendingCreateProjectPath;
-      publishNavigation({
-        ...navigation,
-        pendingCreateProjectPath: undefined,
-      });
-      handleSelectProject(targetPath);
-      handleCreateConversation(targetPath || undefined);
-    }
-  }, [navigation, publishNavigation, handleSelectProject, handleCreateConversation]);
-
-  useEffect(() => {
-    registerActions(workspaceActions);
-    return () => registerActions(null);
-  }, [registerActions, workspaceActions]);
-
-  useEffect(() => {
     publishNavigation({
-      groups: projectGroups,
-      selectedId: activeConversationId,
+      groups,
+      selectedId: activeId,
       activeProjectPath,
       loading: loadingConversations,
-      creationState,
-      isCreatingConversation,
+      creationState: projectCreationState({
+        engine: state.connection === 'connected' ? 'ready' : state.connection === 'connecting' ? 'connecting' : 'unavailable',
+        providerReadiness,
+      }),
+      isCreatingConversation: false,
     });
-    return () => {
-      // Leaving the assistant view unmounts this workbench; keep the sidebar snapshot usable.
-      const cleanConversations = conversations.filter(c => !c.id.startsWith('temp-'));
-      const cleanGroups = groupAssistantConversations(
-        cleanConversations.map(conversation => ({
-          id: conversation.id,
-          title: conversation.title,
-          mode: conversation.mode,
-          projectId: conversation.project_id ?? '',
-          updatedAt: conversation.updated_at,
-        })),
-        registeredProjects.map(project => project.path),
-        t(locale, 'assistant.unassignedProject'),
-      );
+  }, [
+    state.conversations,
+    state.conversationOrder,
+    state.connection,
+    activeId,
+    activeProjectPath,
+    registeredProjects,
+    loadingConversations,
+    providerReadiness,
+    publishNavigation,
+    zh,
+  ]);
 
-      publishNavigation({
-        groups: cleanGroups,
-        selectedId: activeConversationId && activeConversationId.startsWith('temp-') ? null : activeConversationId,
-        activeProjectPath,
-        loading: false,
-        creationState,
-        isCreatingConversation: false,
-      });
-    };
-  }, [activeConversationId, activeProjectPath, isCreatingConversation, creationState, loadingConversations, projectGroups, publishNavigation, conversations, registeredProjects, locale]);
-
+  // Publish runtime for shell
   useEffect(() => {
     publishRuntime({
-      conversationId: activeConversationId,
+      conversationId: activeId,
       conversationTitle: activeConversation?.title ?? null,
-      conversationMode: activeConversation?.mode ?? 'chat',
-      providerId: activeConversation?.provider_id ?? '',
-      modelId: activeConversation?.model_id ?? '',
-      runId: streamState?.runId ?? null,
-      runStatus: streamState?.status ?? 'idle',
-      runStartedAt: activeRunStartedAt,
-      runFinishedAt: activeRunFinishedAt,
-      events: assistantEvents,
-      fileChanges,
-      artifacts,
-      usage: streamState?.usage ?? { inputTokens: null, outputTokens: null, reasoningTokens: null },
+      conversationMode: activeConversation?.mode ?? 'agent',
+      providerId: activeConversation?.providerId ?? '',
+      modelId: activeConversation?.modelId ?? '',
+      runId: activeRun?.id ?? null,
+      runStatus: activeRun?.status ?? 'idle',
+      runStartedAt: activeRun?.startedAt ?? null,
+      runFinishedAt: activeRun?.finishedAt ?? null,
+      events: events.map((e) => ({
+        runId: e.runId,
+        sequence: e.sequence,
+        timestamp: e.timestamp,
+        type: String(e.type),
+        payload: e.payload,
+      })),
+      fileChanges: fileChanges.map((f) => ({ path: f.path, change: f.changeType, changeType: f.changeType })),
+      artifacts: artifacts.map((a) => ({
+        id: a.id,
+        path: a.path,
+        label: a.label,
+        size: a.size,
+        kind: a.kind,
+      })),
+      usage: {
+        inputTokens: contextUsage?.usedTokens ?? null,
+        outputTokens: null,
+        reasoningTokens: null,
+      },
     });
-  }, [activeConversation, activeConversationId, activeRunFinishedAt, activeRunStartedAt, streamState, artifacts, assistantEvents, fileChanges, publishRuntime]);
+  }, [
+    activeId,
+    activeConversation,
+    activeRun,
+    events,
+    fileChanges,
+    artifacts,
+    contextUsage,
+    publishRuntime,
+  ]);
 
-  // ── Map messages to timeline format ──
-  const timelineMessages = [...messages, ...(pendingUserMessage ? [pendingUserMessage] : [])].map(mapMessageToTimeline);
-  const modelSelectorProviders: ProviderWithModels[] = providers.filter(provider => provider.has_active_key && (provider.models?.length ?? 0) > 0).map(provider => ({
-    id: provider.id,
-    name: provider.display_name,
-    presetName: provider.provider_type,
-    baseUrl: provider.api_base_url,
-    keys: [],
-    models: provider.models?.map(model => ({ id: model.id, displayName: model.display_name })),
-  }));
+  const selectConversation = useCallback(
+    async (id: string) => {
+      if (id === stateRef.current.activeConversationId) return;
+      setLoadingMessages(true);
+      try {
+        await openConversation(gateway, dispatch, id);
+        const runId = stateRef.current.activeRunByConversation[id];
+        const run = runId ? stateRef.current.runs[runId] : null;
+        if (run && isActiveRunStatus(run.status)) {
+          void startSubscription(run.id, stateRef.current.lastSequenceByRun[run.id] ?? 0);
+        }
+      } catch (err) {
+        toast(classifyError(err).userMessage, 'error');
+      } finally {
+        setLoadingMessages(false);
+      }
+    },
+    [gateway, dispatch, toast, startSubscription],
+  );
 
-  // Add streaming blocks as a pending message if streaming
-  const streamingBlocks = streamState?.blocks ?? [];
-  const activeRunStatus = streamState?.status ?? 'idle';
-  const timelineWithStreaming = (isStreaming || streamingBlocks.length > 0) && activeRunStatus !== 'completed'
-    ? [
-        ...timelineMessages,
-        {
-          id: 'streaming',
-          role: 'assistant' as const,
-          contentBlocks: streamingBlocks,
-          status: isStreaming ? 'streaming' : activeRunStatus,
-          createdAt: activeRunStartedAt ?? new Date().toISOString(),
-          startedAt: activeRunStartedAt ?? undefined,
-          finishedAt: activeRunFinishedAt ?? undefined,
-          reasoningStartedAt: streamState?.reasoningStartedAt,
-          reasoningFinishedAt: streamState?.reasoningFinishedAt,
+  // Sync external sidebar selection
+  useEffect(() => {
+    if (navigation.selectedId && navigation.selectedId !== activeId) {
+      void selectConversation(navigation.selectedId);
+    }
+  }, [navigation.selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleSend = useCallback(
+    async (draft: AssistantDraft, forceImmediate = false): Promise<boolean> => {
+      let conversationId = activeId;
+      let providerId = activeConversation?.providerId ?? '';
+      let modelId = activeConversation?.modelId ?? '';
+
+      if (!providerId || !modelId) {
+        const pick = selectAssistantModel(
+          providers.map((p) => ({
+            id: p.id,
+            provider_type: p.presetName,
+            display_name: p.name,
+            has_active_key: p.keys.length > 0,
+            models: (p.models ?? []).map((m) => ({ id: m.id, display_name: m.displayName })),
+          })),
+        );
+        if (pick) {
+          providerId = pick.providerId;
+          modelId = pick.modelId;
+        }
+      }
+      if (!providerId || !modelId || providerReadiness !== 'ready') {
+        toast(zh ? '请先配置供应商和模型' : 'Configure provider and model first', 'error');
+        return false;
+      }
+
+      try {
+        if (!conversationId || conversationId.startsWith('temp-')) {
+          const title = draft.content.trim().slice(0, 30) || t(locale, 'assistant.newConversation');
+          const created = await gateway.request<Conversation>('conversation.create', {
+            mode: 'agent',
+            title,
+            provider_id: providerId,
+            model_id: modelId,
+            project_id: activeProjectPath,
+            permission_profile_id: activeConversation?.permissionProfileId ?? 'ask',
+          });
+          dispatch({ type: 'conversations/upsert', conversation: created });
+          dispatch({ type: 'conversations/setActive', id: created.id });
+          conversationId = created.id;
+        }
+
+        const result = await sendOrQueue(gateway, dispatch, stateRef.current, {
+          conversationId,
+          content: draft.content,
+          providerId,
+          modelId,
+          projectPath:
+            activeProjectPath ??
+            stateRef.current.conversations[conversationId]?.projectId ??
+            null,
+          attachments: draft.attachments.map((a) => ({
+            path: a.path,
+            name: a.name,
+            mimeType: a.mimeType,
+            size: a.size,
+          })),
+          forceImmediate,
+        });
+
+        if (!result.queued && result.runId) {
+          void startSubscription(result.runId, 0);
+        }
+        return true;
+      } catch (err) {
+        toast(classifyError(err).userMessage, 'error');
+        return false;
+      }
+    },
+    [
+      activeId,
+      activeConversation,
+      providers,
+      providerReadiness,
+      gateway,
+      dispatch,
+      toast,
+      zh,
+      locale,
+      activeProjectPath,
+      startSubscription,
+    ],
+  );
+
+  const handleStop = useCallback(async () => {
+    if (!activeRunId) return;
+    try {
+      await cancelRun(gateway, dispatch, activeRunId);
+    } catch (err) {
+      toast(classifyError(err).userMessage, 'error');
+    }
+  }, [
+    // React Compiler cannot prove selector results immutable; callback dependencies are intentional.
+    // eslint-disable-next-line react-hooks/preserve-manual-memoization
+    activeRunId, gateway, dispatch, toast,
+  ]);
+
+  const handleRetry = useCallback(async () => {
+    if (!activeRunId) return;
+    try {
+      const newId = await retryRun(gateway, dispatch, activeRunId);
+      void startSubscription(newId, 0);
+    } catch (err) {
+      toast(classifyError(err).userMessage, 'error');
+    }
+  }, [
+    // eslint-disable-next-line react-hooks/preserve-manual-memoization
+    activeRunId, gateway, dispatch, toast, startSubscription,
+  ]);
+
+  const handlePermission = useCallback(
+    async (requestId: string, approved: boolean, scope?: string) => {
+      try {
+        await respondPermission(
+          gateway,
+          dispatch,
+          requestId,
+          approved,
+          scope ?? 'once',
+          activeRunId,
+        );
+      } catch (err) {
+        toast(classifyError(err).userMessage, 'error');
+      }
+    },
+    [
+      gateway, dispatch,
+      // eslint-disable-next-line react-hooks/preserve-manual-memoization
+      activeRunId, toast,
+    ],
+  );
+
+  // Workspace actions for sidebar
+  useEffect(() => {
+    const actions: AssistantWorkspaceActions = {
+      selectConversation: (id) => void selectConversation(id),
+      selectProject: (path) => {
+        setActiveProjectPath(path);
+        if (path) void writeActiveProject(window.nativesAPI, path).catch(() => undefined);
+      },
+      addProjectFolder: () => {
+        void window.nativesAPI?.dialog?.pickDirectory?.().then(async (path) => {
+          if (!path) return;
+          await window.nativesAPI?.project?.register?.(path);
+          const projects = (await window.nativesAPI?.project?.list?.()) ?? [];
+          setRegisteredProjects(projects);
+          setActiveProjectPath(path);
+        });
+      },
+      createConversation: () => {
+        const id = `temp-${Date.now()}`;
+        const now = new Date().toISOString();
+        const pick = selectAssistantModel(
+          providers.map((p) => ({
+            id: p.id,
+            provider_type: p.presetName,
+            display_name: p.name,
+            has_active_key: p.keys.length > 0,
+            models: (p.models ?? []).map((m) => ({ id: m.id, display_name: m.displayName })),
+          })),
+        );
+        dispatch({
+          type: 'conversations/upsert',
+          conversation: {
+            id,
+            mode: 'agent',
+            title: t(locale, 'assistant.newConversation'),
+            providerId: pick?.providerId ?? 'openai',
+            modelId: pick?.modelId ?? 'gpt-4o',
+            projectId: activeProjectPath,
+            permissionProfileId: 'ask',
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+        dispatch({ type: 'conversations/setActive', id });
+      },
+      createConversationInProject: (path) => {
+        setActiveProjectPath(path);
+        actions.createConversation();
+      },
+      removeProject: (path) => {
+        void (async () => {
+          try {
+            const projects = (await window.nativesAPI?.project?.list?.()) ?? [];
+            const match = projects.find((p) => p.path === path);
+            if (match?.id) await window.nativesAPI?.project?.remove?.(match.id);
+          } catch {
+            /* best-effort */
+          }
+          const next = (await window.nativesAPI?.project?.list?.()) ?? [];
+          setRegisteredProjects(next);
+        })();
+      },
+      renameConversation: (id, title) => {
+        void gateway.request('conversation.rename', { id, title }).then(() => {
+          const c = stateRef.current.conversations[id];
+          if (c) dispatch({ type: 'conversations/upsert', conversation: { ...c, title } });
+        });
+      },
+      archiveConversation: (id) => {
+        void gateway.request('conversation.archive', { id }).then(() => {
+          dispatch({ type: 'conversations/remove', id });
+        });
+      },
+      deleteConversation: async (id) => {
+        await gateway.request('conversation.delete', { id });
+        dispatch({ type: 'conversations/remove', id });
+        return true;
+      },
+      retryRun: () => void handleRetry(),
+      respondPermission: (requestId, approved) => void handlePermission(requestId, approved),
+    };
+    registerActions(actions);
+    return () => registerActions(null);
+  }, [
+    selectConversation,
+    providers,
+    locale,
+    activeProjectPath,
+    gateway,
+    dispatch,
+    handleRetry,
+    handlePermission,
+    registerActions,
+  ]);
+
+  // Keyboard shortcuts + notification deep-link
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const meta = e.metaKey || e.ctrlKey;
+      if (meta && e.key === '.') {
+        e.preventDefault();
+        void handleStop();
+      }
+      if (meta && e.shiftKey && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        setPaletteOpen(true);
+      }
+      if (meta && e.shiftKey && e.key.toLowerCase() === 'i') {
+        e.preventDefault();
+        setRightPanelOpen(true);
+        dispatch({ type: 'view/patch', patch: { rightCollapsed: false, inspectorTab: 'run' } });
+      }
+      if (meta && e.shiftKey && e.key.toLowerCase() === 't') {
+        e.preventDefault();
+        setRightPanelOpen(true);
+        dispatch({ type: 'view/patch', patch: { rightCollapsed: false, inspectorTab: 'tasks' } });
+      }
+      if (e.key === 'Escape') {
+        // close popovers only — never cancel run
+        setPaletteOpen(false);
+      }
+    };
+    const onLocate = (ev: Event) => {
+      const detail = (ev as CustomEvent<AssistantLocateTarget>).detail;
+      if (!detail?.conversationId) return;
+      void selectConversation(detail.conversationId);
+      if (detail.interactionId) {
+        // focus interaction by leaving it in queue — card already binds run
+      }
+      setRightPanelOpen(true);
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener(ASSISTANT_LOCATE_EVENT, onLocate as EventListener);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener(ASSISTANT_LOCATE_EVENT, onLocate as EventListener);
+    };
+  }, [handleStop, dispatch, selectConversation]);
+
+  const commands: AssistantCommand[] = useMemo(() => {
+    const busy = isStreaming;
+    return [
+      {
+        id: 'new',
+        label: zh ? '新会话' : 'New conversation',
+        run: () => {
+          const id = `temp-${Date.now()}`;
+          const now = new Date().toISOString();
+          const pick = selectAssistantModel(
+            providers.map((p) => ({
+              id: p.id,
+              provider_type: p.presetName,
+              display_name: p.name,
+              has_active_key: p.keys.length > 0,
+              models: (p.models ?? []).map((m) => ({ id: m.id, display_name: m.displayName })),
+            })),
+          );
+          dispatch({
+            type: 'conversations/upsert',
+            conversation: {
+              id,
+              mode: 'agent',
+              title: t(locale, 'assistant.newConversation'),
+              providerId: pick?.providerId ?? 'openai',
+              modelId: pick?.modelId ?? 'gpt-4o',
+              projectId: activeProjectPath,
+              permissionProfileId: 'ask',
+              createdAt: now,
+              updatedAt: now,
+            },
+          });
+          dispatch({ type: 'conversations/setActive', id });
         },
-      ]
-    : timelineMessages;
+      },
+      {
+        id: 'stop',
+        label: zh ? '停止当前 Run' : 'Stop current run',
+        shortcut: '⌘.',
+        disabledReason: busy ? undefined : zh ? '当前无运行中的任务' : 'No active run',
+        run: () => void handleStop(),
+      },
+      {
+        id: 'retry',
+        label: zh ? '重试' : 'Retry',
+        disabledReason: activeRunStatus === 'failed' || activeRunStatus === 'interrupted'
+          ? undefined
+          : zh
+            ? '仅失败/中断可重试'
+            : 'Only failed/interrupted runs',
+        run: () => void handleRetry(),
+      },
+      {
+        id: 'inspector',
+        label: zh ? '打开 Inspector' : 'Open Inspector',
+        shortcut: '⌘⇧I',
+        run: () => {
+          setRightPanelOpen(true);
+          dispatch({ type: 'view/patch', patch: { rightCollapsed: false } });
+        },
+      },
+      {
+        id: 'tasks',
+        label: zh ? '任务面板' : 'Tasks panel',
+        shortcut: '⌘⇧T',
+        run: () => {
+          setRightPanelOpen(true);
+          dispatch({ type: 'view/patch', patch: { inspectorTab: 'tasks', rightCollapsed: false } });
+        },
+      },
+      {
+        id: 'background',
+        label: zh ? '转后台' : 'Background run',
+        disabledReason: busy ? undefined : zh ? '无活动 Run' : 'No active run',
+        run: () => {
+          // Background mode is represented by the live subscription/event stream;
+          // it is not a separate engine RPC.
+          if (activeRunId) {
+            void startSubscription(
+              activeRunId,
+              stateRef.current.lastSequenceByRun[activeRunId] ?? 0,
+            );
+          }
+        },
+      },
+      {
+        id: 'fork',
+        label: zh ? 'Fork 会话' : 'Fork conversation',
+        disabledReason: activeId && !activeId.startsWith('temp-') ? undefined : zh ? '无会话' : 'No conversation',
+        run: () => {
+          if (!activeId) return;
+          void gateway.request('conversation.fork', { conversation_id: activeId }).then((forked) => {
+            const c = forked as Conversation;
+            if (c?.id) {
+              dispatch({ type: 'conversations/upsert', conversation: c });
+              void selectConversation(c.id);
+            }
+          });
+        },
+      },
+    ];
+  }, [
+    zh,
+    isStreaming,
+    // Selector-derived primitives are immutable for this render.
+    // eslint-disable-next-line react-hooks/preserve-manual-memoization
+    activeRunId,
+    // eslint-disable-next-line react-hooks/preserve-manual-memoization
+    activeRunStatus,
+    handleStop,
+    handleRetry,
+    dispatch,
+    gateway,
+    activeId,
+    selectConversation,
+    providers,
+    locale,
+    activeProjectPath,
+  ]);
 
-  // ── Render: daemon offline ──
-  if (!daemonConnected && !daemonError) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="flex flex-col items-center gap-3 text-[var(--text-disabled)]">
-          <Loader2 size={24} className="animate-spin" />
-          <span className="text-sm">{t(locale, 'assistant.connecting')}</span>
-        </div>
-      </div>
-    );
-  }
+  const timelineMessages = useMemo(
+    () =>
+      messages.map((m) => ({
+        id: m.id,
+        role: m.role as 'system' | 'user' | 'assistant',
+        contentBlocks: m.contentBlocks,
+        status: m.status,
+        createdAt: m.createdAt,
+        inputTokens: m.inputTokens,
+        outputTokens: m.outputTokens,
+        startedAt: m.runId ? state.runs[m.runId]?.startedAt ?? undefined : undefined,
+        finishedAt: m.runId ? state.runs[m.runId]?.finishedAt ?? undefined : undefined,
+        reasoningStartedAt: m.runId ? state.liveByRun[m.runId]?.reasoningStartedAt : null,
+        reasoningFinishedAt: m.runId ? state.liveByRun[m.runId]?.reasoningFinishedAt : null,
+      })),
+    [messages, state.runs, state.liveByRun],
+  );
 
-  if (daemonError) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="flex flex-col items-center gap-3 max-w-sm text-center">
-          <WifiOff size={32} className="text-[var(--text-disabled)]" />
-          <div className="text-sm font-medium text-[var(--text-secondary)]">
-            {surfaceState === 'renderer_only'
-              ? t(locale, 'assistant.desktopEngineRequiredTitle')
-              : t(locale, 'assistant.assistantUnavailable')}
-          </div>
-          <div className="text-xs text-[var(--text-disabled)]">{daemonError}</div>
-          <button
-            onClick={handleRefresh}
-            className="px-4 py-1.5 rounded-lg bg-[var(--primary-soft)] text-[var(--primary)] text-sm font-medium hover:opacity-80 transition-opacity"
-          >
-            {surfaceState === 'renderer_only' ? t(locale, 'assistant.openDesktopApp') : t(locale, 'assistant.retry')}
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const permissionProfile = normalizePermissionProfile(
+    activeConversation?.permissionProfileId ?? 'ask',
+  );
 
-  // ── Render: main layout ──
+  const showRight =
+    rightPanelOpen &&
+    (state.view.layoutBreakpoint === 'full' || state.view.layoutBreakpoint === 'drawer-right');
+
   return (
-    <div className="flex h-full w-full" style={{ fontFamily: 'inherit' }}>
-      {/* ── Center Panel: Conversation Timeline ── */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Header */}
-        {activeConversation && (
-          <div className="shrink-0 border-b border-[var(--border-subtle)] px-4 py-2 flex items-center gap-3">
-            <div className="flex-1 min-w-0">
-              <input
-                type="text"
-                className="w-full bg-transparent text-sm font-medium text-[var(--text-primary)] border-none outline-none placeholder-[var(--text-disabled)]"
-                value={activeConversation.title}
-                placeholder={t(locale, 'assistant.conversationTitle')}
-                onChange={(e) => {
-                  setConversations(prev => prev.map(c =>
-                    c.id === activeConversationId ? { ...c, title: e.target.value } : c
-                  ));
+    <div className="flex h-full min-h-0 flex-col" data-assistant-workbench data-gateway="1">
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        commands={commands}
+        locale={locale}
+      />
+      <ConnectionBanner
+        connection={state.connection}
+        error={state.connectionError}
+        reconnectAttempts={state.reconnectAttempts}
+        locale={locale}
+        onReconnect={() => void connectWorkspace(gateway, dispatch)}
+      />
+
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex items-center justify-end gap-1 border-b border-[var(--border)] px-3 py-1">
+            <button
+              type="button"
+              onClick={() => setPaletteOpen(true)}
+              className="rounded px-2 py-1 text-[11px] text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+              title={zh ? '命令面板 ⌘⇧P' : 'Command palette ⌘⇧P'}
+            >
+              {zh ? '命令' : 'Commands'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setRightPanelOpen((v) => {
+                  const next = !v;
+                  dispatch({ type: 'view/patch', patch: { rightCollapsed: !next } });
+                  return next;
+                });
+              }}
+              className="rounded p-1.5 text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+              title={zh ? '活动面板' : 'Activity panel'}
+              aria-label={zh ? '切换活动面板' : 'Toggle activity panel'}
+            >
+              {showRight ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
+            </button>
+          </div>
+
+          <div className="min-h-0 flex-1">
+            <ConversationTimeline
+              messages={timelineMessages}
+              loading={loadingMessages}
+              locale={locale}
+              onRetry={() => void handleRetry()}
+            />
+          </div>
+
+          {permission && permission.kind === 'permission' && (
+            <div className="px-4 pb-2">
+              <PermissionRequestCard
+                request={{
+                  id: permission.id,
+                  toolName: permission.toolName,
+                  reason: permission.reason,
+                  input: permission.input,
+                  status: 'pending',
+                  createdAt: permission.createdAt,
                 }}
-                onBlur={(e) => {
-                  const title = e.target.value.trim();
-                  if (title && activeConversationId) {
-                    handleUpdateTitle(activeConversationId, title);
+                locale={locale}
+                onApprove={(id, scope) => {
+                  const mapped = scope === 'this_run' ? 'run' : scope === 'project' ? 'project' : 'once';
+                  void handlePermission(id, true, mapped);
+                }}
+                onReject={(id) => void handlePermission(id, false)}
+              />
+            </div>
+          )}
+
+          {askUser && askUser.kind === 'ask_user' && (
+            <div className="mx-4 mb-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-sm">
+              <div className="font-medium">{askUser.question.prompt}</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {(askUser.question.options ?? []).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    className="rounded-lg border border-[var(--border)] px-3 py-1.5 hover:bg-[var(--surface-hover)]"
+                    onClick={() =>
+                      void gateway
+                        .request('interaction.respond', {
+                          id: askUser.id,
+                          answer: opt.id,
+                          run_id: askUser.runId,
+                        })
+                        .then(() => dispatch({ type: 'interaction/remove', id: askUser.id }))
+                    }
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {planApproval && planApproval.kind === 'plan_approval' && (
+            <div className="mx-4 mb-2 max-h-48 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-sm">
+              <div className="font-medium">{planApproval.title}</div>
+              <pre className="mt-2 whitespace-pre-wrap text-xs text-[var(--text-secondary)]">
+                {planApproval.planMarkdown}
+              </pre>
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  className="rounded bg-[var(--primary)] px-3 py-1 text-white"
+                  onClick={() =>
+                    void gateway
+                      .request('interaction.respond', {
+                        id: planApproval.id,
+                        approved: true,
+                        run_id: planApproval.runId,
+                      })
+                      .then(() => dispatch({ type: 'interaction/remove', id: planApproval.id }))
                   }
-                }}
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Empty state when no conversation selected */}
-        {!activeConversationId && (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center">
-              <div className="text-sm text-[var(--text-disabled)] mb-2">
-                {t(locale, 'assistant.selectConversation')}
+                >
+                  {zh ? '批准计划' : 'Approve plan'}
+                </button>
+                <button
+                  type="button"
+                  className="rounded border border-[var(--border)] px-3 py-1"
+                  onClick={() =>
+                    void gateway
+                      .request('interaction.respond', {
+                        id: planApproval.id,
+                        approved: false,
+                        run_id: planApproval.runId,
+                      })
+                      .then(() => dispatch({ type: 'interaction/remove', id: planApproval.id }))
+                  }
+                >
+                  {zh ? '拒绝' : 'Reject'}
+                </button>
               </div>
-              {creationState !== 'ready' && (
-                <div className="mt-3 text-xs text-[var(--text-disabled)]">
-                  {providerLoadError ?? (providerReadiness === 'no_model'
-                  ? t(locale, 'assistant.noModelHint')
-                  : t(locale, 'assistant.configureProvider'))}
-                </div>
-              )}
             </div>
+          )}
+
+          <RunStatusBar
+            run={activeRun}
+            locale={locale}
+            queueCount={promptQueue.length}
+            tokenLabel={
+              contextUsage ? `${contextUsage.usedTokens} tokens` : undefined
+            }
+            connectionHint={
+              state.connection === 'recovering'
+                ? zh
+                  ? '恢复中…'
+                  : 'Recovering…'
+                : state.connection === 'reconnecting'
+                  ? zh
+                    ? '重连中…'
+                    : 'Reconnecting…'
+                  : null
+            }
+            onStop={() => void handleStop()}
+            onBackground={
+              activeRun
+                ? () => {
+                    // Background mode is represented by the live subscription/event stream.
+                    void startSubscription(
+                      activeRun.id,
+                      stateRef.current.lastSequenceByRun[activeRun.id] ?? 0,
+                    );
+                  }
+                : undefined
+            }
+          />
+
+          <PromptQueuePanel
+            items={promptQueue}
+            locale={locale}
+            onEdit={(id, content) =>
+              void gateway
+                .request('promptQueue.update', {
+                  id,
+                  conversation_id: activeId,
+                  content,
+                })
+                .then(() =>
+                  gateway
+                    .request('promptQueue.list', { conversation_id: activeId })
+                    .then((items) =>
+                      dispatch({
+                        type: 'promptQueue/set',
+                        conversationId: activeId!,
+                        items: items as typeof promptQueue,
+                      }),
+                    ),
+                )
+            }
+            onRemove={(id) =>
+              void gateway.request('promptQueue.remove', { id }).then(() =>
+                dispatch({
+                  type: 'promptQueue/set',
+                  conversationId: activeId!,
+                  items: promptQueue.filter((i) => i.id !== id),
+                }),
+              )
+            }
+            onSendNow={(id) => void gateway.request('promptQueue.sendNow', { id })}
+            onReorder={(ids) =>
+              void gateway.request('promptQueue.reorder', {
+                conversation_id: activeId,
+                ids,
+              })
+            }
+          />
+
+          <MessageInput
+            locale={locale}
+            onSend={(draft) => handleSend(draft, false)}
+            onForceSend={(draft) => handleSend(draft, true)}
+            onStop={() => void handleStop()}
+            isStreaming={isStreaming}
+            allowQueueWhileStreaming
+            inputDisabledReason={
+              providerReadiness === 'no_provider'
+                ? 'no_provider'
+                : providerReadiness === 'no_model'
+                  ? 'no_model'
+                  : null
+            }
+            permissionProfile={permissionProfile}
+            onPermissionChange={async (profile: AssistantPermissionProfile) => {
+              if (!activeId || activeId.startsWith('temp-')) return;
+              await gateway.request('conversation.update_permission', {
+                id: activeId,
+                permission_profile_id: profile,
+              });
+              if (activeConversation) {
+                dispatch({
+                  type: 'conversations/upsert',
+                  conversation: { ...activeConversation, permissionProfileId: profile },
+                });
+              }
+            }}
+            providers={providers}
+            selectedProviderId={activeConversation?.providerId ?? providers[0]?.id ?? ''}
+            selectedModel={activeConversation?.modelId}
+            onSelectModel={(providerId, modelId) => {
+              if (!activeConversation) return;
+              dispatch({
+                type: 'conversations/upsert',
+                conversation: { ...activeConversation, providerId, modelId },
+              });
+              if (!activeId?.startsWith('temp-') && activeId) {
+                void gateway.request('conversation.update_model', {
+                  id: activeId,
+                  provider_id: providerId,
+                  model_id: modelId,
+                });
+              }
+            }}
+            draftText={selectComposerDraft(state, activeId).text}
+            onDraftChange={(text) => {
+              if (activeId) {
+                dispatch({ type: 'composer/set', conversationId: activeId, draft: { text } });
+              }
+            }}
+            projectPath={activeProjectPath}
+          />
+        </div>
+
+        {showRight && (
+          <div
+            className="shrink-0"
+            style={{ width: state.view.rightWidth || 320 }}
+          >
+            <ActivityInspector
+              run={activeRun}
+              events={events}
+              artifacts={artifacts}
+              children={children}
+              fileChanges={fileChanges}
+              contextUsage={contextUsage}
+              locale={locale}
+              activeTab={state.view.inspectorTab}
+              onTabChange={(tab: InspectorTab) =>
+                dispatch({ type: 'view/patch', patch: { inspectorTab: tab } })
+              }
+              onRetry={() => void handleRetry()}
+              onOpenArtifact={(a) =>
+                void gateway.request('artifact.open', { id: a.id, path: a.path })
+              }
+              onRevealArtifact={(a) =>
+                void gateway.request('artifact.reveal', { id: a.id, path: a.path })
+              }
+              fileContentsByPath={fileContentsByPath}
+              onOpenFile={(path) => void gateway.request('artifact.open', { path })}
+              onRollbackFile={(path) => {
+                // Rollback must go through engine permission/events — intent only.
+                void gateway.request('run.rewind', { path, run_id: activeRun?.id }).catch((err) => {
+                  toast(classifyError(err).userMessage, 'error');
+                });
+              }}
+            />
           </div>
-        )}
-
-        {/* Timeline */}
-        {activeConversationId && (
-          <>
-            <div className="flex-1 overflow-y-auto">
-              <ConversationTimeline
-                messages={timelineWithStreaming}
-                loading={loadingMessages}
-                locale={locale}
-                onRetry={handleRetry}
-              />
-            </div>
-
-            {streamState?.permissionRequest && (
-              <div className="mx-auto w-full max-w-[860px] px-5">
-                <PermissionRequestCard
-                  request={{ ...streamState.permissionRequest, status: 'pending', createdAt: new Date().toISOString() }}
-                  onApprove={(id, scope) => { void handlePermissionResponse(id, true, scope); }}
-                  onReject={id => { void handlePermissionResponse(id, false); }}
-                  locale={locale}
-                />
-              </div>
-            )}
-
-            {/* Input area */}
-            <div className="shrink-0">
-              <MessageInput
-                locale={locale}
-                onSend={handleSend}
-                onStop={handleStop}
-                onBlockedSend={() => toast(locale.startsWith('zh') ? '当前回答仍在生成，请等待或先停止' : 'The current response is still generating. Wait or stop it first.', 'warning')}
-                isStreaming={isStreaming}
-                disabled={!activeConversationId}
-                inputDisabledReason={inputDisabledReason}
-                permissionProfile={normalizePermissionProfile(activeConversation?.permission_profile_id)}
-                onPermissionChange={handlePermissionChange}
-                providers={modelSelectorProviders}
-                selectedProviderId={activeConversation?.provider_id ?? ''}
-                selectedModel={activeConversation?.model_id}
-                onSelectModel={handleSelectModel}
-              />
-            </div>
-          </>
         )}
       </div>
-
-      {rightPanelOpen ? (
-        <aside className="flex w-80 shrink-0 flex-col border-l border-[var(--border-subtle)] bg-[var(--surface)]">
-          <div className="flex h-11 items-center justify-between border-b border-[var(--border-subtle)] px-3">
-            <span className="text-sm font-medium text-[var(--text-secondary)]">{activeConversation?.model_id || t(locale, 'assistant.selectConversation')}</span>
-            <button type="button" onClick={() => setRightPanelOpen(false)} className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]" aria-label={t(locale, 'common.collapse')} title={t(locale, 'common.collapse')}><PanelRightClose size={15} /></button>
-          </div>
-          <div className="border-b border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-disabled)]">
-            <div className="truncate">{activeConversation?.provider_id || '—'}</div>
-            <div className="mt-1">{streamState?.usage.inputTokens ?? 0} / {streamState?.usage.outputTokens ?? 0} tokens</div>
-          </div>
-          <RunInspector
-            runId={streamState?.runId ?? null}
-            status={streamState?.status ?? 'idle'}
-            events={runEvents.map(event => ({ sequence: event.sequence, type: event.type, timestamp: event.timestamp }))}
-            artifacts={artifacts}
-            subAgents={subAgents}
-            locale={locale}
-          />
-        </aside>
-      ) : (
-        <div className="w-9 shrink-0 border-l border-[var(--border-subtle)] bg-[var(--surface)] pt-2">
-          <button type="button" onClick={() => setRightPanelOpen(true)} className="m-1 rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]" aria-label={t(locale, 'common.expand')} title={t(locale, 'common.expand')}><PanelRightOpen size={15} /></button>
-        </div>
-      )}
-
     </div>
+  );
+}
+
+export default function AssistantWorkbench({
+  locale,
+  preferFixture,
+}: AssistantWorkbenchProps) {
+  const gateway = useMemo(() => {
+    if (preferFixture) {
+      const adapter = new FixtureAssistantAdapter(goldenTextStream);
+      return adapter;
+    }
+    // Browser without Tauri → fixture so UI is demoable
+    if (typeof window !== 'undefined' && !window.nativesAPI?.assistantV2) {
+      return new FixtureAssistantAdapter(goldenTextStream);
+    }
+    return createDefaultGateway(false);
+  }, [preferFixture]);
+
+  return (
+    <AssistantStoreProvider gateway={gateway} preferFixture={preferFixture}>
+      <WorkbenchInner locale={locale} />
+    </AssistantStoreProvider>
   );
 }
