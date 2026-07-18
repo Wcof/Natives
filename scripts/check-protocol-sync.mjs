@@ -68,6 +68,7 @@ const eventTypes = [
   'generation_attempt_started',
   'generation_attempt_failed',
   'generation_attempt_discarded',
+  'generation_attempt_committed',
 ];
 for (const t of eventTypes) {
   if (!eventsSrc.includes(`"${t}"`) && !eventsSrc.includes(`=> "${t}"`)) {

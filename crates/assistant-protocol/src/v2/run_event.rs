@@ -112,6 +112,9 @@ pub enum RunEventKind {
         attempt: u32,
         reason: String,
     },
+    GenerationAttemptCommitted {
+        attempt: u32,
+    },
     Completed {
         reason: String,
     },
@@ -155,6 +158,7 @@ impl RunEventKind {
             Self::GenerationAttemptStarted { .. } => "generation_attempt_started",
             Self::GenerationAttemptFailed { .. } => "generation_attempt_failed",
             Self::GenerationAttemptDiscarded { .. } => "generation_attempt_discarded",
+            Self::GenerationAttemptCommitted { .. } => "generation_attempt_committed",
             Self::Completed { .. } => "completed",
             Self::Failed { .. } => "failed",
             Self::Cancelled { .. } => "cancelled",
@@ -278,6 +282,7 @@ mod tests {
                 attempt: 1,
                 reason: "partial_stream_failed".into(),
             },
+            RunEventKind::GenerationAttemptCommitted { attempt: 2 },
             RunEventKind::Completed {
                 reason: "ok".into(),
             },

@@ -490,6 +490,10 @@ impl AgentEngine {
                     });
                 }
 
+                self.events.append(
+                    run_id,
+                    RunEventKind::GenerationAttemptCommitted { attempt },
+                );
                 break (text_acc, tool_acc);
             };
 
@@ -1226,6 +1230,12 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e.payload, RunEventKind::Completed { .. })));
+        assert!(events.iter().any(|e| {
+            matches!(
+                e.payload,
+                RunEventKind::GenerationAttemptCommitted { attempt: 3 }
+            )
+        }));
     }
 
     #[tokio::test]
@@ -1277,6 +1287,12 @@ mod tests {
                 .count(),
             2
         );
+        assert!(events.iter().any(|e| {
+            matches!(
+                e.payload,
+                RunEventKind::GenerationAttemptCommitted { attempt: 2 }
+            )
+        }));
     }
 
     #[tokio::test]
