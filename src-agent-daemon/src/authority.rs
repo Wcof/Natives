@@ -16,7 +16,6 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use crate::client::{
     client_protocol_version, resolve_run_authority_mode, DaemonClient, DaemonClientError,
@@ -113,7 +112,9 @@ impl ExecutionAuthority for EmbeddedAuthority {
     async fn request(&self, method: &str, params: Value) -> Result<Value, AuthorityError> {
         match method {
             "daemon.ping" => Ok(serde_json::json!({"pong": true})),
-            "daemon.getCapabilities" => Ok(serde_json::to_value(RunManager::capabilities()).unwrap_or_default()),
+            "daemon.getCapabilities" => {
+                Ok(serde_json::to_value(RunManager::capabilities()).unwrap_or_default())
+            }
             m if m.starts_with("conversation.") => crate::conversation_store::request(m, params)
                 .await
                 .map_err(AuthorityError::Message),
@@ -286,7 +287,6 @@ impl ExecutionAuthority for EmbeddedAuthority {
 pub struct UdsAuthority {
     socket: PathBuf,
     bootstrap_token: String,
-    client: Arc<Mutex<Option<DaemonClient>>>,
 }
 
 impl UdsAuthority {
@@ -294,7 +294,6 @@ impl UdsAuthority {
         Self {
             socket,
             bootstrap_token,
-            client: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -308,24 +307,13 @@ impl UdsAuthority {
     }
 
     async fn call(&self, method: &str, params: Value) -> Result<Value, AuthorityError> {
-        let mut guard = self.client.lock().await;
-        if guard.is_none() {
-            let client = DaemonClient::connect(
-                &self.socket,
-                &self.bootstrap_token,
-                client_protocol_version(),
-            )
-            .await?;
-            *guard = Some(client);
-        }
-        let client = guard.as_mut().expect("client inserted");
-        match client.call(method, params).await {
-            Ok(v) => Ok(v),
-            Err(e) => {
-                *guard = None;
-                Err(AuthorityError::from(e))
-            }
-        }
+        let mut client = DaemonClient::connect(
+            &self.socket,
+            &self.bootstrap_token,
+            client_protocol_version(),
+        )
+        .await?;
+        client.call(method, params).await.map_err(Into::into)
     }
 }
 
@@ -395,10 +383,7 @@ impl ExecutionAuthority for UdsAuthority {
                 }),
             )
             .await?;
-        let events = data
-            .get("events")
-            .cloned()
-            .unwrap_or_else(|| data.clone());
+        let events = data.get("events").cloned().unwrap_or_else(|| data.clone());
         serde_json::from_value(events).map_err(|e| AuthorityError::Message(e.to_string()))
     }
 
@@ -416,10 +401,7 @@ impl ExecutionAuthority for UdsAuthority {
                 }),
             )
             .await?;
-        let events = data
-            .get("events")
-            .cloned()
-            .unwrap_or_else(|| data.clone());
+        let events = data.get("events").cloned().unwrap_or_else(|| data.clone());
         serde_json::from_value(events).map_err(|e| AuthorityError::Message(e.to_string()))
     }
 

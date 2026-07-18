@@ -125,6 +125,14 @@ else
   fail=1
 fi
 
+# 6) UDS ordinary RPCs must not share one cached client; subscribe/slow RPC must not block cancel.
+if rg -n 'Mutex<.*DaemonClient|Option<DaemonClient>' src-agent-daemon/src/authority.rs 2>/dev/null; then
+  report "FAIL: UDS authority caches a DaemonClient"
+  fail=1
+else
+  report "OK: UDS authority uses per-RPC authenticated clients"
+fi
+
 echo "----"
 if [[ "$fail" -ne 0 ]]; then
   report "RESULT=FAIL"
