@@ -116,8 +116,10 @@ fn resolve_bundled_daemon_bin() -> PathBuf {
     };
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            for candidate in [dir.join(name), dir.parent().map(|p| p.join(name)).unwrap_or_default()]
-            {
+            for candidate in [
+                dir.join(name),
+                dir.parent().map(|p| p.join(name)).unwrap_or_default(),
+            ] {
                 if candidate.is_file() {
                     return candidate;
                 }
@@ -156,11 +158,7 @@ struct InnerState {
 
 impl SidecarSupervisor {
     pub fn new(config: SupervisorConfig) -> Self {
-        let mode = if config.require_uds {
-            "uds"
-        } else {
-            "auto"
-        };
+        let mode = if config.require_uds { "uds" } else { "auto" };
         Self {
             state: Mutex::new(InnerState {
                 status: SupervisorStatus {
@@ -210,6 +208,7 @@ impl SidecarSupervisor {
     /// Start sidecar if not running. On require_uds, failures become Faulted.
     pub fn ensure_started(&self) -> Result<SupervisorStatus, String> {
         self.prepare_runtime_dir()?;
+        validate_natives_db_path(&self.config.natives_db_path)?;
         {
             let mut inner = self.state.lock().map_err(|e| e.to_string())?;
             if matches!(
@@ -238,11 +237,11 @@ impl SidecarSupervisor {
                     );
                 }
 
-                let healthy = self.wait_for_socket(self.config.health_timeout);
+                let readiness = self.wait_for_readiness(&bootstrap, self.config.health_timeout);
                 let mut inner = self.state.lock().map_err(|e| e.to_string())?;
                 inner.child = Some(child);
                 inner.bootstrap_token = Some(bootstrap.clone());
-                if healthy {
+                if readiness.is_ok() {
                     // Export for UDS client resolution in this process.
                     std::env::set_var("NATIVES_DAEMON_SOCKET", &self.config.socket_path);
                     std::env::set_var("NATIVES_DAEMON_BOOTSTRAP", &bootstrap);
@@ -260,7 +259,7 @@ impl SidecarSupervisor {
                     // (RunManager::new → restore_runs_snapshot). Active runs become
                     // Interrupted for safe UI retry — no silent re-exec.
                 } else {
-                    let reason = "daemon socket not ready within health timeout".to_string();
+                    let reason = readiness.unwrap_err();
                     inner.status.state = SupervisorState::Faulted {
                         reason: reason.clone(),
                     };
@@ -276,9 +275,7 @@ impl SidecarSupervisor {
             }
             Err(e) => {
                 let mut inner = self.state.lock().map_err(|err| err.to_string())?;
-                inner.status.state = SupervisorState::Faulted {
-                    reason: e.clone(),
-                };
+                inner.status.state = SupervisorState::Faulted { reason: e.clone() };
                 inner.status.production_ready = false;
                 inner.status.last_error = Some(e.clone());
                 if self.config.require_uds {
@@ -315,15 +312,68 @@ impl SidecarSupervisor {
         Ok((child, bootstrap))
     }
 
-    fn wait_for_socket(&self, timeout: Duration) -> bool {
+    fn wait_for_readiness(&self, bootstrap: &str, timeout: Duration) -> Result<(), String> {
         let start = Instant::now();
+        let mut last_error = "daemon not ready".to_string();
         while start.elapsed() < timeout {
             if self.config.socket_path.exists() {
-                return true;
+                match self.readiness_probe(bootstrap) {
+                    Ok(()) => return Ok(()),
+                    Err(error) => last_error = error,
+                }
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        false
+        Err(format!(
+            "daemon readiness failed within {:?}: {last_error}",
+            timeout
+        ))
+    }
+
+    fn readiness_probe(&self, bootstrap: &str) -> Result<(), String> {
+        let socket = self.config.socket_path.clone();
+        let bootstrap = bootstrap.to_string();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("readiness runtime: {e}"))?;
+            rt.block_on(async move {
+                let mut client = natives_agent_daemon::DaemonClient::connect(
+                    socket,
+                    &bootstrap,
+                    natives_agent_daemon::client_protocol_version(),
+                )
+                .await
+                .map_err(|e| format!("handshake/ping connect: {e}"))?;
+                if client.protocol_version() != natives_agent_daemon::client_protocol_version() {
+                    return Err(format!(
+                        "protocol mismatch: daemon={} client={}",
+                        client.protocol_version(),
+                        natives_agent_daemon::client_protocol_version()
+                    ));
+                }
+                let ping = client
+                    .call("daemon.ping", serde_json::json!({}))
+                    .await
+                    .map_err(|e| format!("daemon.ping: {e}"))?;
+                if ping.get("pong").and_then(|v| v.as_bool()) != Some(true) {
+                    return Err(format!("daemon.ping missing pong: {ping}"));
+                }
+                let status = client
+                    .call("daemon.getStatus", serde_json::json!({}))
+                    .await
+                    .map_err(|e| format!("daemon.getStatus: {e}"))?;
+                if status.get("protocol_version").and_then(|v| v.as_str())
+                    != Some(natives_agent_daemon::client_protocol_version())
+                {
+                    return Err(format!("daemon.getStatus protocol mismatch: {status}"));
+                }
+                Ok(())
+            })
+        })
+        .join()
+        .map_err(|_| "readiness probe panicked".to_string())?
     }
 
     /// Poll child health; if exited while require_uds, mark Faulted (caller may re-ensure).
@@ -362,7 +412,10 @@ impl SidecarSupervisor {
     /// If child died, attempt one restart (bounded by max_restarts).
     pub fn ensure_healthy_or_restart(&self) -> Result<SupervisorStatus, String> {
         let st = self.poll_child_health();
-        if matches!(st.state, SupervisorState::Healthy | SupervisorState::Starting) {
+        if matches!(
+            st.state,
+            SupervisorState::Healthy | SupervisorState::Starting
+        ) {
             return Ok(st);
         }
         if st.restart_count >= self.config.max_restarts {
@@ -573,6 +626,29 @@ mod tests {
     #[test]
     fn validate_db_path_empty() {
         assert!(validate_natives_db_path(Path::new("")).is_err());
+    }
+
+    #[test]
+    fn readiness_requires_rpc_handshake_not_just_missing_socket() {
+        let dir = tempfile_path();
+        let _ = std::fs::create_dir_all(&dir);
+        let cfg = SupervisorConfig {
+            runtime_dir: dir.clone(),
+            socket_path: dir.join("t.sock"),
+            pid_path: dir.join("t.pid"),
+            lock_path: dir.join("t.lock"),
+            bootstrap_path: dir.join("boot"),
+            daemon_bin: PathBuf::from("/unused"),
+            natives_db_path: dir.join("natives.db"),
+            require_uds: true,
+            health_timeout: Duration::from_millis(1),
+            max_restarts: 1,
+        };
+        let err = SidecarSupervisor::new(cfg)
+            .wait_for_readiness("bootstrap", Duration::from_millis(1))
+            .unwrap_err();
+        assert!(err.contains("daemon readiness failed"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn tempfile_path() -> PathBuf {
