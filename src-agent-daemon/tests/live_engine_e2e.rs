@@ -72,6 +72,7 @@ async fn live_engine_text_turn() {
                 conversation_id: "live-c1".into(),
                 model: model.clone(),
                 system_prompt: Some("Reply briefly.".into()),
+                messages: Vec::new(),
                 user_content: "Say the single word: ready".into(),
                 max_steps: 3,
             },
@@ -167,6 +168,7 @@ async fn live_engine_tool_loop() {
                     "You are a tool-using assistant. You MUST call the list_dir tool with path \".\" before answering."
                         .into(),
                 ),
+                messages: Vec::new(),
                 user_content:
                     "Use list_dir on path \".\" then reply with one short sentence that includes the word listed."
                         .into(),
@@ -448,6 +450,7 @@ async fn live_engine_cancel_stream() {
                     conversation_id: conversation_id_for_task,
                     model: model_for_task,
                     system_prompt: Some("Stream a long answer. Do not use tools.".into()),
+                    messages: Vec::new(),
                     user_content: "Write 80 short numbered facts about ocean waves.".into(),
                     max_steps: 3,
                 },
@@ -538,6 +541,7 @@ async fn dual_provider_engine_fixture_subagent() {
                 conversation_id: "fixture-parent-conversation".into(),
                 model: "fixture-parent-model".into(),
                 system_prompt: None,
+                messages: Vec::new(),
                 user_content: "parent fixture turn".into(),
                 max_steps: 3,
             },
@@ -618,6 +622,7 @@ async fn fixture_engine_still_works_without_live() {
                 conversation_id: "c".into(),
                 model: "m".into(),
                 system_prompt: None,
+                messages: Vec::new(),
                 user_content: "hi".into(),
                 max_steps: 3,
             },

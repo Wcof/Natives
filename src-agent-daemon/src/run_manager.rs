@@ -502,6 +502,8 @@ impl RunManager {
                 conversation_id: run.conversation_id.clone(),
                 model: model_id.clone(),
                 system_prompt: None,
+                messages: crate::conversation_store::engine_history(&run.conversation_id)
+                    .unwrap_or_default(),
                 user_content: content,
                 max_steps,
             };
@@ -621,6 +623,8 @@ impl RunManager {
             conversation_id: run.conversation_id.clone(),
             model: req.model_id.unwrap_or_else(|| run.model_id.clone()),
             system_prompt: None,
+            messages: crate::conversation_store::engine_history(&run.conversation_id)
+                .unwrap_or_default(),
             user_content: content,
             max_steps: req.max_steps.unwrap_or(run.max_steps),
         };
@@ -809,6 +813,130 @@ mod tests {
             } else {
                 std::env::remove_var("NATIVES_RUNTIME_DIR");
             }
+        });
+    }
+
+    #[test]
+    fn start_with_seams_loads_daemon_conversation_history() {
+        with_env_lock(|| {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let dir = tempfile::tempdir().unwrap();
+                let previous_db = std::env::var("NATIVES_DB_PATH").ok();
+                let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
+                let db_path = dir.path().join("natives.db");
+                std::env::set_var("NATIVES_DB_PATH", &db_path);
+                std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+
+                let store =
+                    crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts"))
+                        .unwrap();
+                store.conn().unwrap().execute(
+                    "INSERT INTO conversation (id, mode, title, provider_id, model_id, permission_profile_id)
+                     VALUES ('history-conv', 'agent', 'History', 'openai', 'gpt-4o', 'readonly')",
+                    [],
+                ).unwrap();
+                crate::conversation_store::append_trigger_message(
+                    "history-conv",
+                    Some("remember alpha"),
+                    None,
+                ).unwrap();
+                crate::conversation_store::append_trigger_message(
+                    "history-conv",
+                    Some("now beta"),
+                    None,
+                ).unwrap();
+
+                struct EmptyTools;
+                #[async_trait::async_trait]
+                impl agent_core::EngineToolRuntime for EmptyTools {
+                    async fn list_tool_schemas(&self) -> Vec<agent_core::ToolSchema> {
+                        Vec::new()
+                    }
+                    async fn execute_tool(
+                        &self,
+                        _name: &str,
+                        _input: serde_json::Value,
+                        _cancel: &std::sync::atomic::AtomicBool,
+                    ) -> agent_core::ToolExecutionResult {
+                        agent_core::ToolExecutionResult {
+                            output: serde_json::json!({}),
+                            is_error: false,
+                            duration_ms: 0,
+                        }
+                    }
+                }
+                struct CaptureProvider(std::sync::Arc<StdMutex<Vec<agent_core::EngineMessage>>>);
+                #[async_trait::async_trait]
+                impl agent_core::EngineProvider for CaptureProvider {
+                    async fn stream(
+                        &self,
+                        _model: &str,
+                        messages: Vec<agent_core::EngineMessage>,
+                        _tools: &[agent_core::ToolSchema],
+                        _system_prompt: Option<&str>,
+                        _cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+                    ) -> Result<agent_core::EngineProviderEventStream, agent_core::EngineError>
+                    {
+                        *self.0.lock().unwrap() = messages;
+                        Ok(Box::pin(futures_util::stream::iter(vec![
+                            agent_core::EngineProviderEvent::TextDelta("ok".into()),
+                            agent_core::EngineProviderEvent::Completed,
+                        ])))
+                    }
+                }
+
+                let seen = std::sync::Arc::new(StdMutex::new(Vec::new()));
+                let provider = CaptureProvider(seen.clone());
+                let rm = RunManager::new();
+                let run = rm.ensure_run_for_start(&StartRunRequest {
+                    run_id: None,
+                    conversation_id: Some("history-conv".into()),
+                    provider_id: Some("openai".into()),
+                    model_id: Some("gpt-4o".into()),
+                    key_id: None,
+                    content: None,
+                    attachments: None,
+                    trigger_message_id: None,
+                    permission_profile: None,
+                    max_steps: Some(3),
+                    project_path: None,
+                    idempotency_key: Some("history-run".into()),
+                }).unwrap();
+                rm.start_with_seams(
+                    StartRunRequest {
+                        run_id: Some(run.id),
+                        conversation_id: None,
+                        provider_id: None,
+                        model_id: None,
+                        key_id: None,
+                        content: None,
+                        attachments: None,
+                        trigger_message_id: None,
+                        permission_profile: None,
+                        max_steps: Some(3),
+                        project_path: None,
+                        idempotency_key: None,
+                    },
+                    &provider,
+                    &EmptyTools,
+                ).await.unwrap();
+                let seen = seen.lock().unwrap();
+                assert_eq!(seen.len(), 2);
+                assert_eq!(seen[0].content, "remember alpha");
+                assert_eq!(seen[1].content, "now beta");
+
+                if let Some(value) = previous_db {
+                    std::env::set_var("NATIVES_DB_PATH", value);
+                } else {
+                    std::env::remove_var("NATIVES_DB_PATH");
+                }
+                if let Some(value) = previous_runtime {
+                    std::env::set_var("NATIVES_RUNTIME_DIR", value);
+                } else {
+                    std::env::remove_var("NATIVES_RUNTIME_DIR");
+                }
+            });
         });
     }
 

@@ -1,4 +1,5 @@
 use crate::storage::DataStore;
+use agent_core::EngineMessage;
 use assistant_protocol::v2::methods::names;
 use assistant_protocol::v2::AttachmentRef;
 use rusqlite::{params, OptionalExtension};
@@ -217,6 +218,57 @@ fn get_messages(params: Value) -> Result<Value, String> {
         message["content_blocks"] = serde_json::json!(by_message.remove(id).unwrap_or_default());
     }
     Ok(Value::Array(messages))
+}
+
+pub fn engine_history(conversation_id: &str) -> Result<Vec<EngineMessage>, String> {
+    let messages = get_messages(serde_json::json!({ "conversation_id": conversation_id }))?;
+    let Some(rows) = messages.as_array() else {
+        return Ok(Vec::new());
+    };
+    Ok(rows
+        .iter()
+        .filter_map(|message| {
+            let role = message.get("role")?.as_str()?.to_string();
+            let content = message
+                .get("content_blocks")
+                .and_then(Value::as_array)
+                .map(|blocks| {
+                    blocks
+                        .iter()
+                        .filter_map(block_text)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default();
+            if content.trim().is_empty() {
+                return None;
+            }
+            Some(EngineMessage {
+                role,
+                content,
+                tool_call_id: None,
+                tool_name: None,
+                tool_calls: None,
+            })
+        })
+        .collect())
+}
+
+fn block_text(block: &Value) -> Option<String> {
+    match block.get("type").and_then(Value::as_str)? {
+        "text" => block
+            .get("content")
+            .and_then(|c| c.get("text"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        "file_reference" => {
+            let content = block.get("content").unwrap_or(block);
+            let path = content.get("path").and_then(Value::as_str).unwrap_or("");
+            let name = content.get("name").and_then(Value::as_str).unwrap_or(path);
+            Some(format!("[attachment: {name} at {path}]"))
+        }
+        _ => None,
+    }
 }
 
 fn append_message(params: Value) -> Result<Value, String> {
@@ -451,6 +503,8 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(messages[0]["content_blocks"][0]["content"]["text"], "hello");
+        let history = engine_history(id).unwrap();
+        assert_eq!(history[0].content, "hello");
 
         if let Some(value) = previous_db {
             std::env::set_var("NATIVES_DB_PATH", value);

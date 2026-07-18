@@ -304,13 +304,15 @@ impl ProductionRuntime {
         let assembled = assemble_context(None, Some(&project_root), None);
         let config = EngineRunConfig {
             run_id: run_id.clone(),
-            conversation_id,
+            conversation_id: conversation_id.clone(),
             model: model_id,
             system_prompt: if assembled.system_prompt.is_empty() {
                 None
             } else {
                 Some(assembled.system_prompt)
             },
+            messages: crate::conversation_store::engine_history(&conversation_id)
+                .unwrap_or_default(),
             user_content,
             max_steps,
         };
@@ -489,6 +491,7 @@ impl ProductionRuntime {
                     "You are a subagent with independent credentials. Complete the task."
                         .into(),
                 ),
+                messages: Vec::new(),
                 user_content: prompt,
                 max_steps: 20,
             };
@@ -1587,6 +1590,7 @@ impl PermissionGatedTools {
                 system_prompt: Some(
                     "Independent subagent. Do not assume parent permissions.".into(),
                 ),
+                messages: Vec::new(),
                 user_content: prompt_bg,
                 max_steps: 15,
             };

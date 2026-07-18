@@ -145,6 +145,7 @@ pub struct EngineRunConfig {
     pub conversation_id: String,
     pub model: String,
     pub system_prompt: Option<String>,
+    pub messages: Vec<EngineMessage>,
     pub user_content: String,
     pub max_steps: u32,
 }
@@ -209,13 +210,17 @@ impl AgentEngine {
         status = self.transition_emit(run_id, status, RunStatus::Running, RunEventKind::Started)?;
 
         let tool_schemas = tools.list_tool_schemas().await;
-        let mut messages = vec![EngineMessage {
-            role: "user".into(),
-            content: config.user_content.clone(),
-            tool_call_id: None,
-            tool_name: None,
-            tool_calls: None,
-        }];
+        let mut messages = if config.messages.is_empty() {
+            vec![EngineMessage {
+                role: "user".into(),
+                content: config.user_content.clone(),
+                tool_call_id: None,
+                tool_name: None,
+                tool_calls: None,
+            }]
+        } else {
+            config.messages.clone()
+        };
         let mut doom = DoomLoopDetector::new();
         let mut step = 0u32;
 
@@ -920,6 +925,7 @@ mod tests {
                     conversation_id: "c1".into(),
                     model: "m".into(),
                     system_prompt: None,
+                    messages: Vec::new(),
                     user_content: "hi".into(),
                     max_steps: 5,
                 },
@@ -937,6 +943,69 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e.payload, RunEventKind::Completed { .. })));
+    }
+
+    #[tokio::test]
+    async fn provider_receives_configured_history_messages() {
+        struct CapturingProvider {
+            seen: Mutex<Vec<EngineMessage>>,
+        }
+        #[async_trait::async_trait]
+        impl EngineProvider for CapturingProvider {
+            async fn stream(
+                &self,
+                _model: &str,
+                messages: Vec<EngineMessage>,
+                _tools: &[ToolSchema],
+                _system_prompt: Option<&str>,
+                _cancel: Arc<AtomicBool>,
+            ) -> Result<EngineProviderEventStream, EngineError> {
+                *self.seen.lock().unwrap() = messages;
+                Ok(Box::pin(futures_util::stream::iter(vec![
+                    EngineProviderEvent::TextDelta("ok".into()),
+                    EngineProviderEvent::Completed,
+                ])))
+            }
+        }
+
+        let engine = AgentEngine::new(EventSequencer::new());
+        let provider = CapturingProvider {
+            seen: Mutex::new(Vec::new()),
+        };
+        engine
+            .run(
+                EngineRunConfig {
+                    run_id: "history-run".into(),
+                    conversation_id: "c1".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    messages: vec![
+                        EngineMessage {
+                            role: "user".into(),
+                            content: "first fact".into(),
+                            tool_call_id: None,
+                            tool_name: None,
+                            tool_calls: None,
+                        },
+                        EngineMessage {
+                            role: "assistant".into(),
+                            content: "ack".into(),
+                            tool_call_id: None,
+                            tool_name: None,
+                            tool_calls: None,
+                        },
+                    ],
+                    user_content: "fallback should not be used".into(),
+                    max_steps: 5,
+                },
+                &provider,
+                &FakeTools,
+            )
+            .await
+            .unwrap();
+        let seen = provider.seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0].content, "first fact");
     }
 
     #[tokio::test]
@@ -966,6 +1035,7 @@ mod tests {
                     conversation_id: "c1".into(),
                     model: "m".into(),
                     system_prompt: None,
+                    messages: Vec::new(),
                     user_content: "use tool".into(),
                     max_steps: 5,
                 },
@@ -1019,6 +1089,7 @@ mod tests {
                         conversation_id: "c1".into(),
                         model: "m".into(),
                         system_prompt: None,
+                        messages: Vec::new(),
                         user_content: "hi".into(),
                         max_steps: 5,
                     },
@@ -1103,6 +1174,7 @@ mod tests {
                         conversation_id: "c1".into(),
                         model: "m".into(),
                         system_prompt: None,
+                        messages: Vec::new(),
                         user_content: "hi".into(),
                         max_steps: 5,
                     },
@@ -1192,6 +1264,7 @@ mod tests {
                     conversation_id: "c1".into(),
                     model: "m".into(),
                     system_prompt: None,
+                    messages: Vec::new(),
                     user_content: "hi".into(),
                     max_steps: 5,
                 },
@@ -1259,6 +1332,7 @@ mod tests {
                     conversation_id: "c1".into(),
                     model: "m".into(),
                     system_prompt: None,
+                    messages: Vec::new(),
                     user_content: "hi".into(),
                     max_steps: 5,
                 },
@@ -1320,6 +1394,7 @@ mod tests {
                     conversation_id: "c1".into(),
                     model: "m".into(),
                     system_prompt: None,
+                    messages: Vec::new(),
                     user_content: "hi".into(),
                     max_steps: 5,
                 },
@@ -1365,6 +1440,7 @@ mod tests {
                     conversation_id: "c1".into(),
                     model: "m".into(),
                     system_prompt: None,
+                    messages: Vec::new(),
                     user_content: "hi".into(),
                     max_steps: 5,
                 },
