@@ -9,17 +9,16 @@
 //!
 //! Messages are newline-delimited JSON (one JSON object per line, terminated by \n).
 
-use crate::Result;
 use crate::daemon::data::DataStore;
 use crate::daemon::event_bus::EventBus;
 use crate::daemon::provider::provider_service::ProviderService;
+use crate::Result;
 use assistant_protocol::error::{DaemonError, ErrorCategory};
 use assistant_protocol::v1::daemon::{
-    DaemonStatus, DaemonCapabilities, DaemonHealth,
-    HandshakeRequest, HandshakeResponse,
+    DaemonCapabilities, DaemonHealth, DaemonStatus, HandshakeRequest, HandshakeResponse,
     RpcRequest, RpcResponse,
 };
-use assistant_protocol::version::{ProtocolVersion, negotiate};
+use assistant_protocol::version::{negotiate, ProtocolVersion};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -104,7 +103,9 @@ impl RpcServer {
                                 &data_store,
                                 &event_bus,
                                 &sessions,
-                            ).await {
+                            )
+                            .await
+                            {
                                 eprintln!("RPC connection error: {e}");
                             }
                         });
@@ -142,7 +143,9 @@ async fn handle_connection(
 
     // ── Step 1: Read handshake ──────────────────────────────────
     line.clear();
-    reader.read_line(&mut line).await
+    reader
+        .read_line(&mut line)
+        .await
         .map_err(|e| crate::Error::Internal(format!("Failed to read handshake: {e}")))?;
 
     // The supervisor performs bootstrap authentication once and keeps that
@@ -158,10 +161,12 @@ async fn handle_connection(
         } else {
             error_response(&request, "UNAUTHORIZED", "Invalid or expired session token")
         };
-        let mut json = serde_json::to_string(&response)
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+        let mut json =
+            serde_json::to_string(&response).map_err(|e| crate::Error::Internal(e.to_string()))?;
         json.push('\n');
-        writer.write_all(json.as_bytes()).await
+        writer
+            .write_all(json.as_bytes())
+            .await
             .map_err(|e| crate::Error::Internal(format!("Failed to write response: {e}")))?;
         return Ok(());
     }
@@ -178,11 +183,13 @@ async fn handle_connection(
             accepted: false,
             upgrade_required: Some("Invalid bootstrap token".to_string()),
         };
-        let mut json = serde_json::to_string(&response)
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+        let mut json =
+            serde_json::to_string(&response).map_err(|e| crate::Error::Internal(e.to_string()))?;
         json.push('\n');
         writer.write_all(json.as_bytes()).await.ok();
-        return Err(crate::Error::Internal("Invalid bootstrap token".to_string()));
+        return Err(crate::Error::Internal(
+            "Invalid bootstrap token".to_string(),
+        ));
     }
 
     // ── Step 3: Version negotiation ─────────────────────────────
@@ -204,21 +211,26 @@ async fn handle_connection(
         upgrade_required: negotiation.upgrade_required,
     };
     {
-        let mut json = serde_json::to_string(&response)
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+        let mut json =
+            serde_json::to_string(&response).map_err(|e| crate::Error::Internal(e.to_string()))?;
         json.push('\n');
-        writer.write_all(json.as_bytes()).await
-            .map_err(|e| crate::Error::Internal(format!("Failed to send handshake response: {e}")))?;
+        writer.write_all(json.as_bytes()).await.map_err(|e| {
+            crate::Error::Internal(format!("Failed to send handshake response: {e}"))
+        })?;
     }
 
     if !negotiation.compatible {
-        return Err(crate::Error::Internal("Protocol version incompatible".to_string()));
+        return Err(crate::Error::Internal(
+            "Protocol version incompatible".to_string(),
+        ));
     }
 
     // ── Step 5: Handle RPC requests ─────────────────────────────
     loop {
         line.clear();
-        let bytes_read = reader.read_line(&mut line).await
+        let bytes_read = reader
+            .read_line(&mut line)
+            .await
             .map_err(|e| crate::Error::Internal(format!("Failed to read request: {e}")))?;
 
         if bytes_read == 0 {
@@ -281,15 +293,10 @@ async fn handle_connection(
         }
 
         // Dispatch to handler
-        let response = dispatch_request(
-            &request,
-            data_store,
-            event_bus,
-            &session_token,
-        ).await;
+        let response = dispatch_request(&request, data_store, event_bus, &session_token).await;
 
-        let mut json = serde_json::to_string(&response)
-            .map_err(|e| crate::Error::Internal(e.to_string()))?;
+        let mut json =
+            serde_json::to_string(&response).map_err(|e| crate::Error::Internal(e.to_string()))?;
         json.push('\n');
         if let Err(e) = writer.write_all(json.as_bytes()).await {
             eprintln!("Failed to write response: {e}");
@@ -308,6 +315,18 @@ async fn dispatch_request(
     _session_token: &str,
 ) -> RpcResponse {
     let start = std::time::Instant::now();
+
+    if production_daemon_owned_method(&request.method) {
+        return match crate::daemon_authority::request(&request.method, request.params.clone()).await
+        {
+            Ok(data) => success_response(request, data),
+            Err(error) => error_response(
+                request,
+                "DAEMON_RPC_ERROR",
+                &format!("Daemon RPC failed for {}: {error}", request.method),
+            ),
+        };
+    }
 
     let result = match request.method.as_str() {
         // ── Daemon ──
@@ -369,35 +388,45 @@ async fn dispatch_request(
         _ if assistant_protocol::v2::is_known_method(&request.method) => error_response(
             request,
             "METHOD_UNSUPPORTED",
-            &format!("RPC method is not implemented by this server: {}", request.method),
+            &format!(
+                "RPC method is not implemented by this server: {}",
+                request.method
+            ),
         ),
 
         // ── Unknown ──
-        _ => {
-            RpcResponse {
-                protocol_version: request.protocol_version.clone(),
-                request_id: request.request_id.clone(),
-                success: false,
-                data: None,
-                error: Some(serde_json::json!({
-                    "code": "METHOD_NOT_FOUND",
-                    "category": "protocol",
-                    "retryable": false,
-                    "user_message_key": "error.method_not_found",
-                    "technical_message": format!("Unknown method: {}", request.method),
-                    "correlation_id": String::new(),
-                })),
-            }
-        }
+        _ => RpcResponse {
+            protocol_version: request.protocol_version.clone(),
+            request_id: request.request_id.clone(),
+            success: false,
+            data: None,
+            error: Some(serde_json::json!({
+                "code": "METHOD_NOT_FOUND",
+                "category": "protocol",
+                "retryable": false,
+                "user_message_key": "error.method_not_found",
+                "technical_message": format!("Unknown method: {}", request.method),
+                "correlation_id": String::new(),
+            })),
+        },
     };
 
     // Log slow requests (>500ms)
     let elapsed = start.elapsed();
     if elapsed.as_millis() > 500 {
-        eprintln!("Slow RPC: {} took {}ms", request.method, elapsed.as_millis());
+        eprintln!(
+            "Slow RPC: {} took {}ms",
+            request.method,
+            elapsed.as_millis()
+        );
     }
 
     result
+}
+
+fn production_daemon_owned_method(method: &str) -> bool {
+    crate::daemon_authority::authority_mode_label() == "uds"
+        && assistant_protocol::v2::is_implemented_method(method)
 }
 
 // ─── Handler Implementations ─────────────────────────────────
@@ -453,11 +482,18 @@ async fn handle_get_capabilities(request: &RpcRequest, _event_bus: &Arc<EventBus
     }
 }
 
-async fn handle_conversation_list(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
+async fn handle_conversation_list(
+    request: &RpcRequest,
+    data_store: &Arc<DataStore>,
+) -> RpcResponse {
     let conn = data_store.conn();
     let project_id = request.params.get("project_id").and_then(|v| v.as_str());
     let mode = request.params.get("mode").and_then(|v| v.as_str());
-    let include_archived = request.params.get("include_archived").and_then(|v| v.as_bool()).unwrap_or(false);
+    let include_archived = request
+        .params
+        .get("include_archived")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let mut sql = "SELECT id, mode, COALESCE(project_id,''), title, provider_id, model_id, permission_profile_id, created_at, updated_at, archived_at FROM assistant_conversations WHERE 1=1".to_string();
     let mut param_values: Vec<String> = Vec::new();
@@ -480,7 +516,10 @@ async fn handle_conversation_list(request: &RpcRequest, data_store: &Arc<DataSto
         Err(e) => return error_response(request, "INTERNAL_ERROR", &e.to_string()),
     };
 
-    let params: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+    let params: Vec<&dyn rusqlite::types::ToSql> = param_values
+        .iter()
+        .map(|s| s as &dyn rusqlite::types::ToSql)
+        .collect();
 
     let rows: Vec<serde_json::Value> = match stmt.query_map(params.as_slice(), |row| {
         Ok(serde_json::json!({
@@ -501,28 +540,51 @@ async fn handle_conversation_list(request: &RpcRequest, data_store: &Arc<DataSto
     success_response(request, serde_json::json!({ "conversations": rows }))
 }
 
-async fn handle_conversation_create(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
+async fn handle_conversation_create(
+    request: &RpcRequest,
+    data_store: &Arc<DataStore>,
+) -> RpcResponse {
     let mode = match request.params.get("mode").and_then(|value| value.as_str()) {
         Some("chat") => "chat",
         Some("agent") => "agent",
         _ => return error_response(request, "INVALID_INPUT", "Mode must be 'chat' or 'agent'"),
     };
-    let title = match request.params.get("title").and_then(|value| value.as_str()).map(str::trim).filter(|value| !value.is_empty()) {
+    let title = match request
+        .params
+        .get("title")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         Some(value) => value,
         None => return error_response(request, "INVALID_INPUT", "Missing 'title' parameter"),
     };
-    let provider_id = match request.params.get("provider_id").and_then(|value| value.as_str()).map(str::trim).filter(|value| !value.is_empty()) {
+    let provider_id = match request
+        .params
+        .get("provider_id")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         Some(value) => value,
         None => return error_response(request, "INVALID_INPUT", "Missing 'provider_id' parameter"),
     };
-    let model_id = match request.params.get("model_id").and_then(|value| value.as_str()).map(str::trim).filter(|value| !value.is_empty()) {
+    let model_id = match request
+        .params
+        .get("model_id")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         Some(value) => value,
         None => return error_response(request, "INVALID_INPUT", "Missing 'model_id' parameter"),
     };
 
     // Allow project_id to be null/absent/empty → SQL NULL
     // Only validate directory existence when a non-empty value is provided
-    let project_id_value: Option<String> = match request.params.get("project_id")
+    let project_id_value: Option<String> = match request
+        .params
+        .get("project_id")
         .and_then(|value| value.as_str())
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -530,10 +592,18 @@ async fn handle_conversation_create(request: &RpcRequest, data_store: &Arc<DataS
         Some(value) => {
             let path = std::path::Path::new(value);
             if !path.exists() {
-                return error_response(request, "PROJECT_NOT_FOUND", &format!("Project directory not found: {value}"));
+                return error_response(
+                    request,
+                    "PROJECT_NOT_FOUND",
+                    &format!("Project directory not found: {value}"),
+                );
             }
             if !path.is_dir() {
-                return error_response(request, "PROJECT_NOT_DIRECTORY", &format!("Not a directory: {value}"));
+                return error_response(
+                    request,
+                    "PROJECT_NOT_DIRECTORY",
+                    &format!("Not a directory: {value}"),
+                );
             }
             Some(value.to_string())
         }
@@ -544,8 +614,9 @@ async fn handle_conversation_create(request: &RpcRequest, data_store: &Arc<DataS
     let now = chrono::Utc::now().to_rfc3339();
 
     let conn = data_store.conn();
-    let pair_is_available = conn.query_row(
-        "SELECT EXISTS(
+    let pair_is_available = conn
+        .query_row(
+            "SELECT EXISTS(
             SELECT 1 FROM assistant_provider_configs provider
             JOIN assistant_model_cache model ON model.provider_id = provider.id
             WHERE provider.id = ?1 AND model.model_id = ?2
@@ -554,11 +625,16 @@ async fn handle_conversation_create(request: &RpcRequest, data_store: &Arc<DataS
                 WHERE key.provider_id = provider.id AND key.is_active = 1
               )
          )",
-        rusqlite::params![provider_id, model_id],
-        |row| row.get::<_, bool>(0),
-    ).unwrap_or(false);
+            rusqlite::params![provider_id, model_id],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap_or(false);
     if !pair_is_available {
-        return error_response(request, "INVALID_INPUT", "Provider/model pair is not available");
+        return error_response(
+            request,
+            "INVALID_INPUT",
+            "Provider/model pair is not available",
+        );
     }
 
     // Insert with optional project_id (NULL if no project selected)
@@ -570,16 +646,19 @@ async fn handle_conversation_create(request: &RpcRequest, data_store: &Arc<DataS
         return error_response(request, "INTERNAL_ERROR", &e.to_string());
     }
 
-    success_response(request, serde_json::json!({
-        "id": id,
-        "mode": mode,
-        "project_id": project_id_value,
-        "title": title,
-        "provider_id": provider_id,
-        "model_id": model_id,
-        "created_at": now,
-        "updated_at": now,
-    }))
+    success_response(
+        request,
+        serde_json::json!({
+            "id": id,
+            "mode": mode,
+            "project_id": project_id_value,
+            "title": title,
+            "provider_id": provider_id,
+            "model_id": model_id,
+            "created_at": now,
+            "updated_at": now,
+        }),
+    )
 }
 
 async fn handle_conversation_get(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
@@ -614,7 +693,10 @@ async fn handle_conversation_get(request: &RpcRequest, data_store: &Arc<DataStor
     }
 }
 
-async fn handle_conversation_update(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
+async fn handle_conversation_update(
+    request: &RpcRequest,
+    data_store: &Arc<DataStore>,
+) -> RpcResponse {
     let id = match request.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return error_response(request, "INVALID_INPUT", "Missing 'id' parameter"),
@@ -636,23 +718,45 @@ async fn handle_conversation_update(request: &RpcRequest, data_store: &Arc<DataS
     success_response(request, serde_json::json!({ "updated": true }))
 }
 
-async fn handle_conversation_update_model(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
-    let id = match request.params.get("id").and_then(|value| value.as_str()).map(str::trim).filter(|value| !value.is_empty()) {
+async fn handle_conversation_update_model(
+    request: &RpcRequest,
+    data_store: &Arc<DataStore>,
+) -> RpcResponse {
+    let id = match request
+        .params
+        .get("id")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         Some(value) => value,
         None => return error_response(request, "INVALID_INPUT", "Missing 'id' parameter"),
     };
-    let provider_id = match request.params.get("provider_id").and_then(|value| value.as_str()).map(str::trim).filter(|value| !value.is_empty()) {
+    let provider_id = match request
+        .params
+        .get("provider_id")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         Some(value) => value,
         None => return error_response(request, "INVALID_INPUT", "Missing 'provider_id' parameter"),
     };
-    let model_id = match request.params.get("model_id").and_then(|value| value.as_str()).map(str::trim).filter(|value| !value.is_empty()) {
+    let model_id = match request
+        .params
+        .get("model_id")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         Some(value) => value,
         None => return error_response(request, "INVALID_INPUT", "Missing 'model_id' parameter"),
     };
 
     let conn = data_store.conn();
-    let pair_is_available = conn.query_row(
-        "SELECT EXISTS(
+    let pair_is_available = conn
+        .query_row(
+            "SELECT EXISTS(
             SELECT 1
             FROM assistant_provider_configs provider
             JOIN assistant_model_cache model ON model.provider_id = provider.id
@@ -663,11 +767,16 @@ async fn handle_conversation_update_model(request: &RpcRequest, data_store: &Arc
                 WHERE key.provider_id = provider.id AND key.is_active = 1
               )
          )",
-        rusqlite::params![provider_id, model_id],
-        |row| row.get::<_, bool>(0),
-    ).unwrap_or(false);
+            rusqlite::params![provider_id, model_id],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap_or(false);
     if !pair_is_available {
-        return error_response(request, "INVALID_INPUT", "Provider/model pair is not available");
+        return error_response(
+            request,
+            "INVALID_INPUT",
+            "Provider/model pair is not available",
+        );
     }
 
     let now = chrono::Utc::now().to_rfc3339();
@@ -678,17 +787,23 @@ async fn handle_conversation_update_model(request: &RpcRequest, data_store: &Arc
         rusqlite::params![provider_id, model_id, now, id],
     ) {
         Ok(0) => error_response(request, "NOT_FOUND", "Conversation not found"),
-        Ok(_) => success_response(request, serde_json::json!({
-            "updated": true,
-            "provider_id": provider_id,
-            "model_id": model_id,
-            "updated_at": now,
-        })),
+        Ok(_) => success_response(
+            request,
+            serde_json::json!({
+                "updated": true,
+                "provider_id": provider_id,
+                "model_id": model_id,
+                "updated_at": now,
+            }),
+        ),
         Err(error) => error_response(request, "INTERNAL_ERROR", &error.to_string()),
     }
 }
 
-async fn handle_conversation_archive(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
+async fn handle_conversation_archive(
+    request: &RpcRequest,
+    data_store: &Arc<DataStore>,
+) -> RpcResponse {
     let id = match request.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return error_response(request, "INVALID_INPUT", "Missing 'id' parameter"),
@@ -706,24 +821,43 @@ async fn handle_conversation_archive(request: &RpcRequest, data_store: &Arc<Data
     success_response(request, serde_json::json!({ "archived": true }))
 }
 
-async fn handle_conversation_delete(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
+async fn handle_conversation_delete(
+    request: &RpcRequest,
+    data_store: &Arc<DataStore>,
+) -> RpcResponse {
     let id = match request.params.get("id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return error_response(request, "INVALID_INPUT", "Missing 'id' parameter"),
     };
 
     let conn = data_store.conn();
-    if let Err(e) = conn.execute("DELETE FROM assistant_conversations WHERE id = ?1", rusqlite::params![id]) {
+    if let Err(e) = conn.execute(
+        "DELETE FROM assistant_conversations WHERE id = ?1",
+        rusqlite::params![id],
+    ) {
         return error_response(request, "INTERNAL_ERROR", &e.to_string());
     }
 
     success_response(request, serde_json::json!({ "deleted": true }))
 }
 
-async fn handle_conversation_get_messages(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
-    let conversation_id = match request.params.get("conversation_id").and_then(|v| v.as_str()) {
+async fn handle_conversation_get_messages(
+    request: &RpcRequest,
+    data_store: &Arc<DataStore>,
+) -> RpcResponse {
+    let conversation_id = match request
+        .params
+        .get("conversation_id")
+        .and_then(|v| v.as_str())
+    {
         Some(id) => id,
-        None => return error_response(request, "INVALID_INPUT", "Missing 'conversation_id' parameter"),
+        None => {
+            return error_response(
+                request,
+                "INVALID_INPUT",
+                "Missing 'conversation_id' parameter",
+            )
+        }
     };
 
     let conn = data_store.conn();
@@ -737,22 +871,23 @@ async fn handle_conversation_get_messages(request: &RpcRequest, data_store: &Arc
         Err(e) => return error_response(request, "INTERNAL_ERROR", &e.to_string()),
     };
 
-    let rows: Vec<serde_json::Value> = match stmt.query_map(rusqlite::params![conversation_id], |row| {
-        Ok(serde_json::json!({
-            "id": row.get::<_, String>(0)?,
-            "conversation_id": row.get::<_, String>(1)?,
-            "parent_message_id": row.get::<_, Option<String>>(2)?,
-            "role": row.get::<_, String>(3)?,
-            "status": row.get::<_, String>(4)?,
-            "input_tokens": row.get::<_, Option<i64>>(5)?,
-            "output_tokens": row.get::<_, Option<i64>>(6)?,
-            "reasoning_tokens": row.get::<_, Option<i64>>(7)?,
-            "created_at": row.get::<_, String>(8)?,
-        }))
-    }) {
-        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-        Err(e) => return error_response(request, "INTERNAL_ERROR", &e.to_string()),
-    };
+    let rows: Vec<serde_json::Value> =
+        match stmt.query_map(rusqlite::params![conversation_id], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "conversation_id": row.get::<_, String>(1)?,
+                "parent_message_id": row.get::<_, Option<String>>(2)?,
+                "role": row.get::<_, String>(3)?,
+                "status": row.get::<_, String>(4)?,
+                "input_tokens": row.get::<_, Option<i64>>(5)?,
+                "output_tokens": row.get::<_, Option<i64>>(6)?,
+                "reasoning_tokens": row.get::<_, Option<i64>>(7)?,
+                "created_at": row.get::<_, String>(8)?,
+            }))
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => return error_response(request, "INTERNAL_ERROR", &e.to_string()),
+        };
 
     // Get content blocks for each message
     let mut messages_with_blocks: Vec<serde_json::Value> = Vec::new();
@@ -765,43 +900,76 @@ async fn handle_conversation_get_messages(request: &RpcRequest, data_store: &Arc
             Err(_) => continue,
         };
 
-        let blocks: Vec<serde_json::Value> = match stmt_blocks.query_map(rusqlite::params![msg_id], |row| {
-            let content_str: String = row.get::<_, String>(2)?;
-            let content: serde_json::Value = serde_json::from_str(&content_str).unwrap_or(serde_json::Value::Null);
-            Ok(serde_json::json!({
-                "type": row.get::<_, String>(0)?,
-                "index": row.get::<_, i32>(1)?,
-                "content": content,
-            }))
-        }) {
-            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-            Err(_) => vec![],
-        };
+        let blocks: Vec<serde_json::Value> =
+            match stmt_blocks.query_map(rusqlite::params![msg_id], |row| {
+                let content_str: String = row.get::<_, String>(2)?;
+                let content: serde_json::Value =
+                    serde_json::from_str(&content_str).unwrap_or(serde_json::Value::Null);
+                Ok(serde_json::json!({
+                    "type": row.get::<_, String>(0)?,
+                    "index": row.get::<_, i32>(1)?,
+                    "content": content,
+                }))
+            }) {
+                Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+                Err(_) => vec![],
+            };
 
         let mut m = msg.clone();
         m["content_blocks"] = serde_json::Value::Array(blocks);
         messages_with_blocks.push(m);
     }
 
-    success_response(request, serde_json::json!({ "messages": messages_with_blocks }))
+    success_response(
+        request,
+        serde_json::json!({ "messages": messages_with_blocks }),
+    )
 }
 
-async fn handle_run_start(request: &RpcRequest, data_store: &Arc<DataStore>, event_bus: &Arc<EventBus>) -> RpcResponse {
+async fn handle_run_start(
+    request: &RpcRequest,
+    data_store: &Arc<DataStore>,
+    event_bus: &Arc<EventBus>,
+) -> RpcResponse {
     let _ = data_store.migrate_legacy_provider_keys();
-    let conversation_id = match request.params.get("conversation_id").and_then(|v| v.as_str()) {
+    let conversation_id = match request
+        .params
+        .get("conversation_id")
+        .and_then(|v| v.as_str())
+    {
         Some(id) => id,
-        None => return error_response(request, "INVALID_INPUT", "Missing 'conversation_id' parameter"),
+        None => {
+            return error_response(
+                request,
+                "INVALID_INPUT",
+                "Missing 'conversation_id' parameter",
+            )
+        }
     };
 
-    let provider_id = match request.params.get("provider_id").and_then(|value| value.as_str()).map(str::trim).filter(|value| !value.is_empty()) {
+    let provider_id = match request
+        .params
+        .get("provider_id")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         Some(value) => value,
         None => return error_response(request, "INVALID_INPUT", "Missing 'provider_id' parameter"),
     };
-    let model_id = match request.params.get("model_id").and_then(|value| value.as_str()).map(str::trim).filter(|value| !value.is_empty()) {
+    let model_id = match request
+        .params
+        .get("model_id")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         Some(value) => value,
         None => return error_response(request, "INVALID_INPUT", "Missing 'model_id' parameter"),
     };
-    let trigger_message_id = request.params.get("trigger_message_id")
+    let trigger_message_id = request
+        .params
+        .get("trigger_message_id")
         .and_then(|value| value.as_str())
         .map(str::trim)
         .filter(|value| !value.is_empty());
@@ -819,11 +987,16 @@ async fn handle_run_start(request: &RpcRequest, data_store: &Arc<DataStore>, eve
         Err(_) => return error_response(request, "NOT_FOUND", "Conversation not found"),
     };
     if stored_provider_id != provider_id || stored_model_id != model_id {
-        return error_response(request, "INVALID_INPUT", "Provider/model selection is not persisted on the conversation");
+        return error_response(
+            request,
+            "INVALID_INPUT",
+            "Provider/model selection is not persisted on the conversation",
+        );
     }
 
-    let pair_is_available = conn.query_row(
-        "SELECT EXISTS(
+    let pair_is_available = conn
+        .query_row(
+            "SELECT EXISTS(
             SELECT 1 FROM assistant_provider_configs provider
             JOIN assistant_model_cache model ON model.provider_id = provider.id
             WHERE provider.id = ?1 AND model.model_id = ?2
@@ -832,24 +1005,35 @@ async fn handle_run_start(request: &RpcRequest, data_store: &Arc<DataStore>, eve
                 WHERE key.provider_id = provider.id AND key.is_active = 1
               )
          )",
-        rusqlite::params![provider_id, model_id],
-        |row| row.get::<_, bool>(0),
-    ).unwrap_or(false);
+            rusqlite::params![provider_id, model_id],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap_or(false);
     if !pair_is_available {
-        return error_response(request, "INVALID_INPUT", "Provider/model pair is not available");
+        return error_response(
+            request,
+            "INVALID_INPUT",
+            "Provider/model pair is not available",
+        );
     }
 
     let (message_id, content, insert_message) = if let Some(trigger_id) = trigger_message_id {
-        let belongs_to_conversation = conn.query_row(
-            "SELECT EXISTS(
+        let belongs_to_conversation = conn
+            .query_row(
+                "SELECT EXISTS(
                 SELECT 1 FROM assistant_messages
                 WHERE id = ?1 AND conversation_id = ?2 AND role = 'user'
              )",
-            rusqlite::params![trigger_id, conversation_id],
-            |row| row.get::<_, bool>(0),
-        ).unwrap_or(false);
+                rusqlite::params![trigger_id, conversation_id],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap_or(false);
         if !belongs_to_conversation {
-            return error_response(request, "INVALID_INPUT", "Retry trigger message is not a user message in this conversation");
+            return error_response(
+                request,
+                "INVALID_INPUT",
+                "Retry trigger message is not a user message in this conversation",
+            );
         }
         let mut statement = match conn.prepare(
             "SELECT content FROM assistant_message_blocks
@@ -859,20 +1043,41 @@ async fn handle_run_start(request: &RpcRequest, data_store: &Arc<DataStore>, eve
             Ok(statement) => statement,
             Err(error) => return error_response(request, "INTERNAL_ERROR", &error.to_string()),
         };
-        let text_parts = match statement.query_map(rusqlite::params![trigger_id], |row| row.get::<_, String>(0)) {
-            Ok(rows) => rows.filter_map(|row| row.ok()).filter_map(|raw| {
-                serde_json::from_str::<serde_json::Value>(&raw).ok()
-                    .and_then(|value| value.get("text").and_then(|text| text.as_str()).map(ToOwned::to_owned))
-            }).collect::<Vec<_>>(),
+        let text_parts = match statement
+            .query_map(rusqlite::params![trigger_id], |row| row.get::<_, String>(0))
+        {
+            Ok(rows) => rows
+                .filter_map(|row| row.ok())
+                .filter_map(|raw| {
+                    serde_json::from_str::<serde_json::Value>(&raw)
+                        .ok()
+                        .and_then(|value| {
+                            value
+                                .get("text")
+                                .and_then(|text| text.as_str())
+                                .map(ToOwned::to_owned)
+                        })
+                })
+                .collect::<Vec<_>>(),
             Err(error) => return error_response(request, "INTERNAL_ERROR", &error.to_string()),
         };
         let content = text_parts.join("").trim().to_string();
         if content.is_empty() {
-            return error_response(request, "INVALID_INPUT", "Retry trigger message has no text content");
+            return error_response(
+                request,
+                "INVALID_INPUT",
+                "Retry trigger message has no text content",
+            );
         }
         (trigger_id.to_string(), content, false)
     } else {
-        let content = match request.params.get("content").and_then(|value| value.as_str()).map(str::trim).filter(|value| !value.is_empty()) {
+        let content = match request
+            .params
+            .get("content")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             Some(value) => value.to_string(),
             None => return error_response(request, "INVALID_INPUT", "Missing 'content' parameter"),
         };
@@ -927,21 +1132,22 @@ async fn handle_run_start(request: &RpcRequest, data_store: &Arc<DataStore>, eve
     let content_owned = content.clone();
     tokio::spawn(async move {
         // G4: same Run Authority façade as assistant_service (embedded or UDS).
-        let create = crate::daemon_authority::create_run(assistant_protocol::v2::CreateRunRequest {
-            conversation_id: conversation_id_owned.clone(),
-            provider_id: provider_id_owned.clone(),
-            model_id: model_id_owned.clone(),
-            key_id: None,
-            agent_profile_id: None,
-            permission_profile: Some("ask".into()),
-            content: Some(content_owned.clone()),
-            attachments: None,
-            max_steps: Some(50),
-            parent_run_id: None,
-            project_path: None,
-            idempotency_key: Some(run_id.clone()),
-        })
-        .await;
+        let create =
+            crate::daemon_authority::create_run(assistant_protocol::v2::CreateRunRequest {
+                conversation_id: conversation_id_owned.clone(),
+                provider_id: provider_id_owned.clone(),
+                model_id: model_id_owned.clone(),
+                key_id: None,
+                agent_profile_id: None,
+                permission_profile: Some("ask".into()),
+                content: Some(content_owned.clone()),
+                attachments: None,
+                max_steps: Some(50),
+                parent_run_id: None,
+                project_path: None,
+                idempotency_key: Some(run_id.clone()),
+            })
+            .await;
         if let Err(error) = create {
             let _ = event_bus
                 .publish(
@@ -958,21 +1164,22 @@ async fn handle_run_start(request: &RpcRequest, data_store: &Arc<DataStore>, eve
             return;
         }
 
-        let start_result = crate::daemon_authority::start_run(assistant_protocol::v2::StartRunRequest {
-            run_id: Some(run_id.clone()),
-            conversation_id: Some(conversation_id_owned),
-            provider_id: Some(provider_id_owned),
-            model_id: Some(model_id_owned),
-            key_id: None,
-            content: Some(content_owned),
-            attachments: None,
-            trigger_message_id: None,
-            permission_profile: Some("ask".into()),
-            max_steps: Some(50),
-            project_path: None,
-            idempotency_key: None,
-        })
-        .await;
+        let start_result =
+            crate::daemon_authority::start_run(assistant_protocol::v2::StartRunRequest {
+                run_id: Some(run_id.clone()),
+                conversation_id: Some(conversation_id_owned),
+                provider_id: Some(provider_id_owned),
+                model_id: Some(model_id_owned),
+                key_id: None,
+                content: Some(content_owned),
+                attachments: None,
+                trigger_message_id: None,
+                permission_profile: Some("ask".into()),
+                max_steps: Some(50),
+                project_path: None,
+                idempotency_key: None,
+            })
+            .await;
 
         let (status, error_code) = match start_result {
             Ok(run) => (run.status.as_str().to_string(), run.error_code),
@@ -1009,13 +1216,16 @@ async fn handle_run_start(request: &RpcRequest, data_store: &Arc<DataStore>, eve
         );
     });
 
-    success_response(request, serde_json::json!({
-        "id": id,
-        "conversation_id": conversation_id,
-        "trigger_message_id": message_id,
-        "status": "running",
-        "execution": "agent_daemon_run_manager",
-    }))
+    success_response(
+        request,
+        serde_json::json!({
+            "id": id,
+            "conversation_id": conversation_id,
+            "trigger_message_id": message_id,
+            "status": "running",
+            "execution": "agent_daemon_run_manager",
+        }),
+    )
 }
 
 async fn handle_run_cancel(
@@ -1043,16 +1253,22 @@ async fn handle_run_cancel(
         return error_response(request, "NOT_FOUND", "Active run not found");
     }
 
-    let event_published = event_bus.publish(
-        id,
-        "interrupted",
-        serde_json::json!({ "reason": "cancelled" }),
-    ).await.is_ok();
+    let event_published = event_bus
+        .publish(
+            id,
+            "interrupted",
+            serde_json::json!({ "reason": "cancelled" }),
+        )
+        .await
+        .is_ok();
 
-    success_response(request, serde_json::json!({
-        "cancelled": true,
-        "event_published": event_published,
-    }))
+    success_response(
+        request,
+        serde_json::json!({
+            "cancelled": true,
+            "event_published": event_published,
+        }),
+    )
 }
 
 async fn handle_run_get_status(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
@@ -1086,11 +1302,26 @@ async fn handle_run_get_status(request: &RpcRequest, data_store: &Arc<DataStore>
 }
 
 async fn handle_run_list(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
-    let conversation_id = match request.params.get("conversation_id").and_then(|v| v.as_str()) {
+    let conversation_id = match request
+        .params
+        .get("conversation_id")
+        .and_then(|v| v.as_str())
+    {
         Some(id) => id,
-        None => return error_response(request, "INVALID_INPUT", "Missing 'conversation_id' parameter"),
+        None => {
+            return error_response(
+                request,
+                "INVALID_INPUT",
+                "Missing 'conversation_id' parameter",
+            )
+        }
     };
-    let limit = request.params.get("limit").and_then(|v| v.as_u64()).unwrap_or(20).clamp(1, 100) as i64;
+    let limit = request
+        .params
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(20)
+        .clamp(1, 100) as i64;
     let conn = data_store.conn();
     let mut stmt = match conn.prepare(
         "SELECT id, conversation_id, status, provider_id, model_id, started_at, finished_at,
@@ -1098,7 +1329,7 @@ async fn handle_run_list(request: &RpcRequest, data_store: &Arc<DataStore>) -> R
          FROM assistant_runs
          WHERE conversation_id = ?1
          ORDER BY COALESCE(started_at, '') DESC, rowid DESC
-         LIMIT ?2"
+         LIMIT ?2",
     ) {
         Ok(stmt) => stmt,
         Err(error) => return error_response(request, "INTERNAL_ERROR", &error.to_string()),
@@ -1129,43 +1360,60 @@ async fn handle_run_get_events(request: &RpcRequest, data_store: &Arc<DataStore>
         Some(id) => id,
         None => return error_response(request, "INVALID_INPUT", "Missing 'run_id' parameter"),
     };
-    let after_sequence = request.params.get("after_sequence").and_then(|v| v.as_u64()).unwrap_or(0);
+    let after_sequence = request
+        .params
+        .get("after_sequence")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
 
     let conn = data_store.conn();
     let mut stmt = match conn.prepare(
         "SELECT sequence, timestamp, event_type, payload
          FROM assistant_run_events
          WHERE run_id = ?1 AND sequence > ?2
-         ORDER BY sequence ASC"
+         ORDER BY sequence ASC",
     ) {
         Ok(s) => s,
         Err(e) => return error_response(request, "INTERNAL_ERROR", &e.to_string()),
     };
 
-    let events: Vec<serde_json::Value> = match stmt.query_map(rusqlite::params![run_id, after_sequence], |row| {
-        let payload_str: String = row.get::<_, String>(3)?;
-        let payload: serde_json::Value = serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null);
-        Ok(serde_json::json!({
-            "sequence": row.get::<_, i64>(0)?,
-            "timestamp": row.get::<_, String>(1)?,
-            "type": row.get::<_, String>(2)?,
-            "payload": payload,
-        }))
-    }) {
-        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-        Err(e) => return error_response(request, "INTERNAL_ERROR", &e.to_string()),
-    };
+    let events: Vec<serde_json::Value> =
+        match stmt.query_map(rusqlite::params![run_id, after_sequence], |row| {
+            let payload_str: String = row.get::<_, String>(3)?;
+            let payload: serde_json::Value =
+                serde_json::from_str(&payload_str).unwrap_or(serde_json::Value::Null);
+            Ok(serde_json::json!({
+                "sequence": row.get::<_, i64>(0)?,
+                "timestamp": row.get::<_, String>(1)?,
+                "type": row.get::<_, String>(2)?,
+                "payload": payload,
+            }))
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(e) => return error_response(request, "INTERNAL_ERROR", &e.to_string()),
+        };
 
     success_response(request, serde_json::json!({ "events": events }))
 }
 
-async fn handle_permission_respond(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
+async fn handle_permission_respond(
+    request: &RpcRequest,
+    data_store: &Arc<DataStore>,
+) -> RpcResponse {
     let request_id = match request.params.get("request_id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return error_response(request, "INVALID_INPUT", "Missing 'request_id' parameter"),
     };
-    let approved = request.params.get("approved").and_then(|v| v.as_bool()).unwrap_or(false);
-    let scope = request.params.get("scope").and_then(|v| v.as_str()).unwrap_or("once");
+    let approved = request
+        .params
+        .get("approved")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let scope = request
+        .params
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("once");
 
     let conn = data_store.conn();
     if let Err(e) = conn.execute(
@@ -1189,10 +1437,25 @@ async fn handle_provider_list(request: &RpcRequest, data_store: &Arc<DataStore>)
         Err(e) => return error_response(request, "INTERNAL_ERROR", &e.to_string()),
     };
 
-    let provider_rows: Vec<(String, String, String, String, String, Option<String>, String, String)> = match stmt.query_map([], |row| {
+    let provider_rows: Vec<(
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        String,
+        String,
+    )> = match stmt.query_map([], |row| {
         Ok((
-            row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
-            row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?,
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+            row.get(6)?,
+            row.get(7)?,
         ))
     }) {
         Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
@@ -1200,7 +1463,17 @@ async fn handle_provider_list(request: &RpcRequest, data_store: &Arc<DataStore>)
     };
 
     let mut providers = Vec::with_capacity(provider_rows.len());
-    for (id, provider_type, display_name, api_base_url, health_status, default_model, created_at, updated_at) in provider_rows {
+    for (
+        id,
+        provider_type,
+        display_name,
+        api_base_url,
+        health_status,
+        default_model,
+        created_at,
+        updated_at,
+    ) in provider_rows
+    {
         let mut model_stmt = match conn.prepare(
             "SELECT model_id, display_name, capabilities, context_window, max_output, source, discovered_at
              FROM assistant_model_cache
@@ -1209,9 +1482,8 @@ async fn handle_provider_list(request: &RpcRequest, data_store: &Arc<DataStore>)
             Ok(stmt) => stmt,
             Err(e) => return error_response(request, "INTERNAL_ERROR", &e.to_string()),
         };
-        let models: Vec<serde_json::Value> = match model_stmt.query_map(
-            rusqlite::params![id],
-            |row| {
+        let models: Vec<serde_json::Value> =
+            match model_stmt.query_map(rusqlite::params![id], |row| {
                 let capabilities = row.get::<_, String>(2)?;
                 Ok(serde_json::json!({
                     "id": row.get::<_, String>(0)?,
@@ -1223,11 +1495,10 @@ async fn handle_provider_list(request: &RpcRequest, data_store: &Arc<DataStore>)
                     "source": row.get::<_, String>(5)?,
                     "discovered_at": row.get::<_, String>(6)?,
                 }))
-            },
-        ) {
-            Ok(rows) => rows.filter_map(|row| row.ok()).collect(),
-            Err(e) => return error_response(request, "INTERNAL_ERROR", &e.to_string()),
-        };
+            }) {
+                Ok(rows) => rows.filter_map(|row| row.ok()).collect(),
+                Err(e) => return error_response(request, "INTERNAL_ERROR", &e.to_string()),
+            };
         let has_active_key = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM assistant_provider_keys WHERE provider_id = ?1 AND is_active = 1)",
             rusqlite::params![id],
@@ -1254,25 +1525,50 @@ async fn handle_provider_list(request: &RpcRequest, data_store: &Arc<DataStore>)
 async fn handle_provider_create(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
     let provider_type = match request.params.get("provider_type").and_then(|v| v.as_str()) {
         Some(t) => t,
-        None => return error_response(request, "INVALID_INPUT", "Missing 'provider_type' parameter"),
+        None => {
+            return error_response(
+                request,
+                "INVALID_INPUT",
+                "Missing 'provider_type' parameter",
+            )
+        }
     };
     let display_name = match request.params.get("display_name").and_then(|v| v.as_str()) {
         Some(n) => n,
-        None => return error_response(request, "INVALID_INPUT", "Missing 'display_name' parameter"),
+        None => {
+            return error_response(request, "INVALID_INPUT", "Missing 'display_name' parameter")
+        }
     };
-    let api_base_url = request.params.get("api_base_url").and_then(|v| v.as_str()).unwrap_or("");
+    let api_base_url = request
+        .params
+        .get("api_base_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
-    let id = request.params.get("id").and_then(|v| v.as_str())
-        .map(ToOwned::to_owned).unwrap_or_else(|| Uuid::new_v4().to_string());
-    let default_model = request.params.get("default_model").and_then(|v| v.as_str()).map(str::trim);
-    let mut models: Vec<(String, Option<String>)> = request.params.get("models")
+    let id = request
+        .params
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let default_model = request
+        .params
+        .get("default_model")
+        .and_then(|v| v.as_str())
+        .map(str::trim);
+    let mut models: Vec<(String, Option<String>)> = request
+        .params
+        .get("models")
         .and_then(|value| value.as_array())
         .into_iter()
         .flatten()
         .filter_map(|model| {
             let id = model.get("id")?.as_str()?.trim();
-            if id.is_empty() { return None; }
-            let display_name = model.get("display_name")
+            if id.is_empty() {
+                return None;
+            }
+            let display_name = model
+                .get("display_name")
                 .and_then(|value| value.as_str())
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -1284,7 +1580,13 @@ async fn handle_provider_create(request: &RpcRequest, data_store: &Arc<DataStore
     models.dedup_by(|left, right| left.0 == right.0);
     let default_model = match default_model {
         Some(model) if !model.is_empty() && models.iter().any(|(id, _)| id == model) => model,
-        _ => return error_response(request, "INVALID_INPUT", "Default model must be present in discovered models"),
+        _ => {
+            return error_response(
+                request,
+                "INVALID_INPUT",
+                "Default model must be present in discovered models",
+            )
+        }
     };
     let now = chrono::Utc::now().to_rfc3339();
 
@@ -1304,7 +1606,13 @@ async fn handle_provider_create(request: &RpcRequest, data_store: &Arc<DataStore
     if let Some(keys) = request.params.get("keys").and_then(|v| v.as_array()) {
         let encryption_key = match crate::env_manager::get_encryption_key(&transaction) {
             Ok(key) => key,
-            Err(e) => return error_response(request, "INTERNAL_ERROR", &format!("Credential encryption unavailable: {e}")),
+            Err(e) => {
+                return error_response(
+                    request,
+                    "INTERNAL_ERROR",
+                    &format!("Credential encryption unavailable: {e}"),
+                )
+            }
         };
         for (index, key) in keys.iter().enumerate() {
             let plaintext = match key.get("api_key").and_then(|v| v.as_str()) {
@@ -1313,14 +1621,29 @@ async fn handle_provider_create(request: &RpcRequest, data_store: &Arc<DataStore
             };
             let encrypted = match crate::env_manager::encrypt(plaintext, &encryption_key) {
                 Ok(value) => value,
-                Err(e) => return error_response(request, "INTERNAL_ERROR", &format!("Credential encryption failed: {e}")),
+                Err(e) => {
+                    return error_response(
+                        request,
+                        "INTERNAL_ERROR",
+                        &format!("Credential encryption failed: {e}"),
+                    )
+                }
             };
             let chars: Vec<char> = plaintext.chars().collect();
             let masked = if chars.len() > 8 {
-                format!("{}…{}", chars[..4].iter().collect::<String>(), chars[chars.len() - 4..].iter().collect::<String>())
-            } else { "***".to_string() };
+                format!(
+                    "{}…{}",
+                    chars[..4].iter().collect::<String>(),
+                    chars[chars.len() - 4..].iter().collect::<String>()
+                )
+            } else {
+                "***".to_string()
+            };
             let key_id = Uuid::new_v4().to_string();
-            let label = key.get("label").and_then(|v| v.as_str()).unwrap_or("API Key");
+            let label = key
+                .get("label")
+                .and_then(|v| v.as_str())
+                .unwrap_or("API Key");
             if let Err(e) = transaction.execute(
                 "INSERT INTO assistant_provider_keys (id, provider_id, encrypted_key, masked_key, label, is_active, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -1361,18 +1684,40 @@ async fn handle_provider_add_key(request: &RpcRequest, data_store: &Arc<DataStor
     let conn = data_store.conn();
     let encryption_key = match crate::env_manager::get_encryption_key(&conn) {
         Ok(key) => key,
-        Err(e) => return error_response(request, "INTERNAL_ERROR", &format!("Credential encryption unavailable: {e}")),
+        Err(e) => {
+            return error_response(
+                request,
+                "INTERNAL_ERROR",
+                &format!("Credential encryption unavailable: {e}"),
+            )
+        }
     };
     let encrypted = match crate::env_manager::encrypt(plaintext, &encryption_key) {
         Ok(value) => value,
-        Err(e) => return error_response(request, "INTERNAL_ERROR", &format!("Credential encryption failed: {e}")),
+        Err(e) => {
+            return error_response(
+                request,
+                "INTERNAL_ERROR",
+                &format!("Credential encryption failed: {e}"),
+            )
+        }
     };
     let chars: Vec<char> = plaintext.chars().collect();
     let masked = if chars.len() > 8 {
-        format!("{}…{}", chars[..4].iter().collect::<String>(), chars[chars.len() - 4..].iter().collect::<String>())
-    } else { "***".to_string() };
+        format!(
+            "{}…{}",
+            chars[..4].iter().collect::<String>(),
+            chars[chars.len() - 4..].iter().collect::<String>()
+        )
+    } else {
+        "***".to_string()
+    };
     let id = Uuid::new_v4().to_string();
-    let label = request.params.get("label").and_then(|v| v.as_str()).unwrap_or("API Key");
+    let label = request
+        .params
+        .get("label")
+        .and_then(|v| v.as_str())
+        .unwrap_or("API Key");
     let now = chrono::Utc::now().to_rfc3339();
     if let Err(e) = conn.execute(
         "INSERT INTO assistant_provider_keys (id, provider_id, encrypted_key, masked_key, label, is_active, created_at)
@@ -1381,7 +1726,10 @@ async fn handle_provider_add_key(request: &RpcRequest, data_store: &Arc<DataStor
     ) {
         return error_response(request, "INTERNAL_ERROR", &e.to_string());
     }
-    success_response(request, serde_json::json!({ "id": id, "masked_key": masked }))
+    success_response(
+        request,
+        serde_json::json!({ "id": id, "masked_key": masked }),
+    )
 }
 
 async fn handle_provider_delete(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
@@ -1393,19 +1741,25 @@ async fn handle_provider_delete(request: &RpcRequest, data_store: &Arc<DataStore
     let mut conn = data_store.conn();
 
     // Check for conversations using this provider
-    let conv_count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM assistant_conversations WHERE provider_id = ?1",
-        rusqlite::params![id],
-        |row| row.get(0),
-    ).unwrap_or(0);
+    let conv_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM assistant_conversations WHERE provider_id = ?1",
+            rusqlite::params![id],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
 
-    let force = request.params.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+    let force = request
+        .params
+        .get("force")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     if conv_count > 0 && !force {
         // Get the affected conversation titles for the impact report
-        let mut stmt = conn.prepare(
-            "SELECT id, title FROM assistant_conversations WHERE provider_id = ?1 LIMIT 5"
-        ).map_err(|e| crate::Error::Internal(e.to_string()));
+        let mut stmt = conn
+            .prepare("SELECT id, title FROM assistant_conversations WHERE provider_id = ?1 LIMIT 5")
+            .map_err(|e| crate::Error::Internal(e.to_string()));
 
         let conversations: Vec<serde_json::Value> = if let Ok(mut stmt) = stmt {
             stmt.query_map(rusqlite::params![id], |row| {
@@ -1413,17 +1767,22 @@ async fn handle_provider_delete(request: &RpcRequest, data_store: &Arc<DataStore
                     "id": row.get::<_, String>(0)?,
                     "title": row.get::<_, String>(1)?,
                 }))
-            }).map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default()
+            })
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default()
         } else {
             vec![]
         };
 
-        return success_response(request, serde_json::json!({
-            "requires_confirmation": true,
-            "conversation_count": conv_count,
-            "conversations": conversations,
-            "message": format!("This provider is used by {conv_count} conversation(s). Use 'force: true' to delete anyway."),
-        }));
+        return success_response(
+            request,
+            serde_json::json!({
+                "requires_confirmation": true,
+                "conversation_count": conv_count,
+                "conversations": conversations,
+                "message": format!("This provider is used by {conv_count} conversation(s). Use 'force: true' to delete anyway."),
+            }),
+        );
     }
 
     let transaction = match conn.transaction() {
@@ -1436,20 +1795,29 @@ async fn handle_provider_delete(request: &RpcRequest, data_store: &Arc<DataStore
     ) {
         return error_response(request, "INTERNAL_ERROR", &e.to_string());
     }
-    if let Err(e) = transaction.execute("DELETE FROM assistant_provider_configs WHERE id = ?1", rusqlite::params![id]) {
+    if let Err(e) = transaction.execute(
+        "DELETE FROM assistant_provider_configs WHERE id = ?1",
+        rusqlite::params![id],
+    ) {
         return error_response(request, "INTERNAL_ERROR", &e.to_string());
     }
     if let Err(e) = transaction.commit() {
         return error_response(request, "INTERNAL_ERROR", &e.to_string());
     }
 
-    success_response(request, serde_json::json!({ "deleted": true, "affected_conversations": conv_count }))
+    success_response(
+        request,
+        serde_json::json!({ "deleted": true, "affected_conversations": conv_count }),
+    )
 }
 
 /// Test a provider key via RPC.
 /// Uses ProviderService to prepare, execute, and save the test result.
 /// Never exposes the plaintext key.
-async fn handle_provider_test_key(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
+async fn handle_provider_test_key(
+    request: &RpcRequest,
+    data_store: &Arc<DataStore>,
+) -> RpcResponse {
     let provider_id = match request.params.get("provider_id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return error_response(request, "INVALID_INPUT", "Missing 'provider_id' parameter"),
@@ -1482,7 +1850,11 @@ async fn handle_provider_test_key(request: &RpcRequest, data_store: &Arc<DataSto
             }
             err_result
         }
-        Ok(crate::daemon::provider::provider_service::KeyTestPreparation::Ready { base_url, api_key, model }) => {
+        Ok(crate::daemon::provider::provider_service::KeyTestPreparation::Ready {
+            base_url,
+            api_key,
+            model,
+        }) => {
             // Phase 2: execute async
             let test_result = ProviderService::execute_key_test(&base_url, &api_key, &model).await;
             // Phase 3: save
@@ -1497,17 +1869,23 @@ async fn handle_provider_test_key(request: &RpcRequest, data_store: &Arc<DataSto
         }
     };
 
-    success_response(request, serde_json::json!({
-        "success": result.success,
-        "status": result.status,
-        "tested_at": result.tested_at,
-        "error_code": result.error_code,
-        "user_message": result.user_message,
-    }))
+    success_response(
+        request,
+        serde_json::json!({
+            "success": result.success,
+            "status": result.status,
+            "tested_at": result.tested_at,
+            "error_code": result.error_code,
+            "user_message": result.user_message,
+        }),
+    )
 }
 
 /// Set a key as the primary key for its provider.
-async fn handle_provider_set_primary_key(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
+async fn handle_provider_set_primary_key(
+    request: &RpcRequest,
+    data_store: &Arc<DataStore>,
+) -> RpcResponse {
     let key_id = match request.params.get("key_id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return error_response(request, "INVALID_INPUT", "Missing 'key_id' parameter"),
@@ -1515,13 +1893,18 @@ async fn handle_provider_set_primary_key(request: &RpcRequest, data_store: &Arc<
 
     let conn = data_store.conn();
     match ProviderService::set_primary_key(&conn, key_id) {
-        Ok(summary) => success_response(request, serde_json::to_value(&summary).unwrap_or_default()),
+        Ok(summary) => {
+            success_response(request, serde_json::to_value(&summary).unwrap_or_default())
+        }
         Err(e) => error_response(request, "INTERNAL_ERROR", &e.to_string()),
     }
 }
 
 /// Delete a key. Primary keys cannot be deleted.
-async fn handle_provider_delete_key(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
+async fn handle_provider_delete_key(
+    request: &RpcRequest,
+    data_store: &Arc<DataStore>,
+) -> RpcResponse {
     let key_id = match request.params.get("key_id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return error_response(request, "INVALID_INPUT", "Missing 'key_id' parameter"),
@@ -1535,12 +1918,19 @@ async fn handle_provider_delete_key(request: &RpcRequest, data_store: &Arc<DataS
 }
 
 /// Update provider defaults (default_model).
-async fn handle_provider_update_defaults(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
+async fn handle_provider_update_defaults(
+    request: &RpcRequest,
+    data_store: &Arc<DataStore>,
+) -> RpcResponse {
     let provider_id = match request.params.get("provider_id").and_then(|v| v.as_str()) {
         Some(id) => id,
         None => return error_response(request, "INVALID_INPUT", "Missing 'provider_id' parameter"),
     };
-    let default_model = request.params.get("default_model").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let default_model = request
+        .params
+        .get("default_model")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     let conn = data_store.conn();
     let input = crate::daemon::provider::provider_service::UpdateDefaultsInput {
@@ -1549,14 +1939,19 @@ async fn handle_provider_update_defaults(request: &RpcRequest, data_store: &Arc<
     };
 
     match ProviderService::update_defaults(&conn, &input) {
-        Ok(summary) => success_response(request, serde_json::to_value(&summary).unwrap_or_default()),
+        Ok(summary) => {
+            success_response(request, serde_json::to_value(&summary).unwrap_or_default())
+        }
         Err(e) => error_response(request, "INTERNAL_ERROR", &e.to_string()),
     }
 }
 
 async fn handle_artifact_list(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
     let run_id = request.params.get("run_id").and_then(|v| v.as_str());
-    let conversation_id = request.params.get("conversation_id").and_then(|v| v.as_str());
+    let conversation_id = request
+        .params
+        .get("conversation_id")
+        .and_then(|v| v.as_str());
 
     let conn = data_store.conn();
     let sql = if run_id.is_some() {
@@ -1576,19 +1971,19 @@ async fn handle_artifact_list(request: &RpcRequest, data_store: &Arc<DataStore>)
     };
 
     let map_row = |row: &rusqlite::Row<'_>| {
-            Ok(serde_json::json!({
-                "id": row.get::<_, String>(0)?,
-                "run_id": row.get::<_, String>(1)?,
-                "conversation_id": row.get::<_, String>(2)?,
-                "source_tool": row.get::<_, String>(3)?,
-                "path": row.get::<_, String>(4)?,
-                "sha256": row.get::<_, String>(5)?,
-                "size": row.get::<_, i64>(6)?,
-                "mime_type": row.get::<_, String>(7)?,
-                "label": row.get::<_, Option<String>>(8)?,
-                "kind": row.get::<_, String>(9)?,
-                "created_at": row.get::<_, String>(10)?,
-            }))
+        Ok(serde_json::json!({
+            "id": row.get::<_, String>(0)?,
+            "run_id": row.get::<_, String>(1)?,
+            "conversation_id": row.get::<_, String>(2)?,
+            "source_tool": row.get::<_, String>(3)?,
+            "path": row.get::<_, String>(4)?,
+            "sha256": row.get::<_, String>(5)?,
+            "size": row.get::<_, i64>(6)?,
+            "mime_type": row.get::<_, String>(7)?,
+            "label": row.get::<_, Option<String>>(8)?,
+            "kind": row.get::<_, String>(9)?,
+            "created_at": row.get::<_, String>(10)?,
+        }))
     };
     let artifacts: Vec<serde_json::Value> = if let Some(rid) = run_id {
         match stmt.query_map(rusqlite::params![rid], map_row) {
@@ -1625,10 +2020,13 @@ async fn handle_workspace_inspect(request: &RpcRequest) -> RpcResponse {
         Ok(path) if path.is_dir() => path,
         _ => return error_response(request, "NOT_FOUND", "Project directory not found"),
     };
-    success_response(request, serde_json::json!({
-        "project_path": canonical.to_string_lossy(),
-        "repository_root": canonical.to_string_lossy(),
-    }))
+    success_response(
+        request,
+        serde_json::json!({
+            "project_path": canonical.to_string_lossy(),
+            "repository_root": canonical.to_string_lossy(),
+        }),
+    )
 }
 
 async fn handle_artifact_open(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
@@ -1664,27 +2062,54 @@ async fn handle_context_preview(request: &RpcRequest, _data_store: &Arc<DataStor
 // ─── Project Handlers ─────────────────────────────────────
 
 async fn handle_project_register(request: &RpcRequest) -> RpcResponse {
-    let path_str = match request.params.get("path").and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty()) {
+    let path_str = match request
+        .params
+        .get("path")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
         Some(p) => p,
-        None => return error_response(request, "PROJECT_PATH_REQUIRED", "Project path is required"),
+        None => {
+            return error_response(request, "PROJECT_PATH_REQUIRED", "Project path is required")
+        }
     };
 
     let path = std::path::Path::new(path_str);
     if !path.exists() {
-        return error_response(request, "PROJECT_NOT_FOUND", &format!("Project directory not found: {path_str}"));
+        return error_response(
+            request,
+            "PROJECT_NOT_FOUND",
+            &format!("Project directory not found: {path_str}"),
+        );
     }
     let canonical = match std::fs::canonicalize(path) {
         Ok(c) if c.is_dir() => c,
-        Ok(_) => return error_response(request, "PROJECT_NOT_DIRECTORY", &format!("Not a directory: {path_str}")),
-        Err(_) => return error_response(request, "PROJECT_NOT_FOUND", &format!("Cannot resolve path: {path_str}")),
+        Ok(_) => {
+            return error_response(
+                request,
+                "PROJECT_NOT_DIRECTORY",
+                &format!("Not a directory: {path_str}"),
+            )
+        }
+        Err(_) => {
+            return error_response(
+                request,
+                "PROJECT_NOT_FOUND",
+                &format!("Cannot resolve path: {path_str}"),
+            )
+        }
     };
 
     let canonical_str = canonical.to_string_lossy().to_string();
 
-    success_response(request, serde_json::json!({
-        "canonical_path": canonical_str,
-        "name": canonical.file_name().and_then(|n| n.to_str()).unwrap_or("Project"),
-    }))
+    success_response(
+        request,
+        serde_json::json!({
+            "canonical_path": canonical_str,
+            "name": canonical.file_name().and_then(|n| n.to_str()).unwrap_or("Project"),
+        }),
+    )
 }
 
 async fn handle_project_list(request: &RpcRequest, data_store: &Arc<DataStore>) -> RpcResponse {
@@ -1725,21 +2150,33 @@ fn error_response(request: &RpcRequest, code: &str, message: &str) -> RpcRespons
         "RATE_LIMITED" => ErrorCategory::RateLimited,
         "TIMEOUT" => ErrorCategory::Timeout,
         "METHOD_NOT_FOUND" | "METHOD_UNSUPPORTED" => ErrorCategory::Unsupported,
-        "PROJECT_PATH_REQUIRED" | "PROJECT_NOT_FOUND" | "PROJECT_NOT_DIRECTORY" | "PROJECT_REGISTER_FAILED" => ErrorCategory::Validation,
+        "PROJECT_PATH_REQUIRED"
+        | "PROJECT_NOT_FOUND"
+        | "PROJECT_NOT_DIRECTORY"
+        | "PROJECT_REGISTER_FAILED" => ErrorCategory::Validation,
         _ => ErrorCategory::Internal,
     };
 
-    let retryable = matches!(code, "INTERNAL_ERROR" | "TIMEOUT" | "RATE_LIMITED" | "PROJECT_REGISTER_FAILED");
+    let retryable = matches!(
+        code,
+        "INTERNAL_ERROR" | "TIMEOUT" | "RATE_LIMITED" | "PROJECT_REGISTER_FAILED"
+    );
 
-    let daemon_error = DaemonError::new(code, category, retryable, message)
-        .with_recovery(match code {
+    let daemon_error =
+        DaemonError::new(code, category, retryable, message).with_recovery(match code {
             "INVALID_INPUT" => vec!["Check the request parameters and try again".to_string()],
             "NOT_FOUND" => vec!["Verify the resource ID is correct".to_string()],
-            "INTERNAL_ERROR" => vec!["Retry the request. If the problem persists, restart the daemon.".to_string()],
+            "INTERNAL_ERROR" => {
+                vec!["Retry the request. If the problem persists, restart the daemon.".to_string()]
+            }
             "UNAUTHORIZED" => vec!["Re-authenticate by restarting the client".to_string()],
-            "METHOD_NOT_FOUND" | "METHOD_UNSUPPORTED" => vec!["Check the API version compatibility".to_string()],
+            "METHOD_NOT_FOUND" | "METHOD_UNSUPPORTED" => {
+                vec!["Check the API version compatibility".to_string()]
+            }
             "PROJECT_PATH_REQUIRED" => vec!["Provide a valid project folder path".to_string()],
-            "PROJECT_NOT_FOUND" => vec!["The project folder may have been moved or deleted".to_string()],
+            "PROJECT_NOT_FOUND" => {
+                vec!["The project folder may have been moved or deleted".to_string()]
+            }
             "PROJECT_NOT_DIRECTORY" => vec!["Select a folder, not a file".to_string()],
             "PROJECT_REGISTER_FAILED" => vec!["Retry registering the project".to_string()],
             _ => vec!["Retry the request".to_string()],
@@ -1764,14 +2201,17 @@ mod tests {
     fn setup() -> (Arc<DataStore>, Arc<EventBus>) {
         let store = Arc::new(DataStore::new(":memory:").unwrap());
         // Ensure legacy table exists before migration v7 references it
-        store.conn().execute_batch(
-            "CREATE TABLE IF NOT EXISTS user_providers (
+        store
+            .conn()
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS user_providers (
                 id TEXT PRIMARY KEY, name TEXT, preset_name TEXT,
                 base_url TEXT, website_url TEXT, api_key TEXT,
                 default_model TEXT, is_primary INTEGER, is_active INTEGER,
                 created_at TEXT, updated_at TEXT
-            );"
-        ).ok();
+            );",
+            )
+            .ok();
         store.run_migrations().unwrap();
         let bus = Arc::new(EventBus::new(store.clone()));
         (store, bus)
@@ -1788,67 +2228,109 @@ mod tests {
         }
     }
 
+    #[test]
+    fn uds_mode_forwards_implemented_methods_to_agent_daemon_before_legacy_handlers() {
+        let previous_mode = std::env::var("NATIVES_DAEMON_MODE").ok();
+        std::env::set_var("NATIVES_DAEMON_MODE", "uds");
+
+        assert!(production_daemon_owned_method("mcp.list"));
+        assert!(production_daemon_owned_method("run.start"));
+        assert!(production_daemon_owned_method("provider.test"));
+        assert!(!production_daemon_owned_method("provider.create"));
+
+        if let Some(value) = previous_mode {
+            std::env::set_var("NATIVES_DAEMON_MODE", value);
+        } else {
+            std::env::remove_var("NATIVES_DAEMON_MODE");
+        }
+    }
+
     #[tokio::test]
     async fn provider_models_are_persisted_and_listed_from_discovery_cache() {
         let (store, _) = setup();
-        let create = provider_request("provider.create", serde_json::json!({
-            "id": "provider-1",
-            "provider_type": "openai_compatible",
-            "display_name": "Custom",
-            "api_base_url": "https://example.com/v1",
-            "default_model": "model-b",
-            "models": [
-                { "id": "model-b" },
-                { "id": "" },
-                { "id": "model-a", "display_name": "Model A" },
-                { "id": "model-a" }
-            ]
-        }));
+        let create = provider_request(
+            "provider.create",
+            serde_json::json!({
+                "id": "provider-1",
+                "provider_type": "openai_compatible",
+                "display_name": "Custom",
+                "api_base_url": "https://example.com/v1",
+                "default_model": "model-b",
+                "models": [
+                    { "id": "model-b" },
+                    { "id": "" },
+                    { "id": "model-a", "display_name": "Model A" },
+                    { "id": "model-a" }
+                ]
+            }),
+        );
 
         let created = handle_provider_create(&create, &store).await;
-        assert!(created.success, "provider create failed: {:?}", created.error);
+        assert!(
+            created.success,
+            "provider create failed: {:?}",
+            created.error
+        );
 
-        store.conn().execute(
-            "INSERT INTO assistant_provider_keys
+        store
+            .conn()
+            .execute(
+                "INSERT INTO assistant_provider_keys
              (id, provider_id, encrypted_key, masked_key, label, is_active, created_at)
              VALUES ('key-1', 'provider-1', 'encrypted', '***', 'API Key', 1, 'now')",
-            [],
-        ).unwrap();
+                [],
+            )
+            .unwrap();
 
         let listed = handle_provider_list(
             &provider_request("provider.list", serde_json::json!({})),
             &store,
-        ).await;
+        )
+        .await;
         assert!(listed.success, "provider list failed: {:?}", listed.error);
         let provider = &listed.data.unwrap()["providers"][0];
         assert_eq!(provider["default_model"], "model-b");
         assert_eq!(provider["has_active_key"], true);
-        assert_eq!(provider["models"], serde_json::json!([
-            {
-                "id": "model-a", "display_name": "Model A", "capabilities": {},
-                "context_window": 0, "max_output": 0, "source": "api_discovery",
-                "discovered_at": provider["models"][0]["discovered_at"]
-            },
-            {
-                "id": "model-b", "display_name": null, "capabilities": {},
-                "context_window": 0, "max_output": 0, "source": "api_discovery",
-                "discovered_at": provider["models"][1]["discovered_at"]
-            }
-        ]));
+        assert_eq!(
+            provider["models"],
+            serde_json::json!([
+                {
+                    "id": "model-a", "display_name": "Model A", "capabilities": {},
+                    "context_window": 0, "max_output": 0, "source": "api_discovery",
+                    "discovered_at": provider["models"][0]["discovered_at"]
+                },
+                {
+                    "id": "model-b", "display_name": null, "capabilities": {},
+                    "context_window": 0, "max_output": 0, "source": "api_discovery",
+                    "discovered_at": provider["models"][1]["discovered_at"]
+                }
+            ])
+        );
 
         let deleted = handle_provider_delete(
-            &provider_request("provider.delete", serde_json::json!({
-                "id": "provider-1",
-                "force": true
-            })),
+            &provider_request(
+                "provider.delete",
+                serde_json::json!({
+                    "id": "provider-1",
+                    "force": true
+                }),
+            ),
             &store,
-        ).await;
-        assert!(deleted.success, "provider delete failed: {:?}", deleted.error);
-        let cached_models: i64 = store.conn().query_row(
-            "SELECT COUNT(*) FROM assistant_model_cache WHERE provider_id = 'provider-1'",
-            [],
-            |row| row.get(0),
-        ).unwrap();
+        )
+        .await;
+        assert!(
+            deleted.success,
+            "provider delete failed: {:?}",
+            deleted.error
+        );
+        let cached_models: i64 = store
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM assistant_model_cache WHERE provider_id = 'provider-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(cached_models, 0);
     }
 
@@ -1868,43 +2350,83 @@ mod tests {
         ).unwrap();
         let now = "2026-07-12T12:00:00Z";
         for index in 0..51 {
-            let project = if index % 2 == 0 { "/work/alpha" } else { "/work/beta" };
-            store.conn().execute(
-                "INSERT INTO assistant_conversations
+            let project = if index % 2 == 0 {
+                "/work/alpha"
+            } else {
+                "/work/beta"
+            };
+            store
+                .conn()
+                .execute(
+                    "INSERT INTO assistant_conversations
                  (id, mode, project_id, title, provider_id, model_id, created_at, updated_at)
                  VALUES (?1, 'chat', ?2, ?3, 'provider', 'model', ?4, ?4)",
-                rusqlite::params![format!("project-{index}"), project, format!("Conversation {index}"), now],
-            ).unwrap();
+                    rusqlite::params![
+                        format!("project-{index}"),
+                        project,
+                        format!("Conversation {index}"),
+                        now
+                    ],
+                )
+                .unwrap();
         }
-        store.conn().execute(
-            "INSERT INTO assistant_conversations
+        store
+            .conn()
+            .execute(
+                "INSERT INTO assistant_conversations
              (id, mode, project_id, title, provider_id, model_id, created_at, updated_at)
              VALUES ('unassigned', 'chat', NULL, 'Unassigned', 'provider', 'model', ?1, ?1)",
-            rusqlite::params![now],
-        ).unwrap();
+                rusqlite::params![now],
+            )
+            .unwrap();
 
         let listed = handle_conversation_list(
-            &provider_request("conversation.list", serde_json::json!({ "include_archived": false })),
+            &provider_request(
+                "conversation.list",
+                serde_json::json!({ "include_archived": false }),
+            ),
             &store,
-        ).await;
-        assert!(listed.success, "conversation list failed: {:?}", listed.error);
-        let conversations = listed.data.unwrap()["conversations"].as_array().unwrap().to_vec();
+        )
+        .await;
+        assert!(
+            listed.success,
+            "conversation list failed: {:?}",
+            listed.error
+        );
+        let conversations = listed.data.unwrap()["conversations"]
+            .as_array()
+            .unwrap()
+            .to_vec();
         assert_eq!(conversations.len(), 52);
-        assert!(conversations.iter().any(|conversation| conversation["project_id"] == "/work/alpha"));
-        assert!(conversations.iter().any(|conversation| conversation["project_id"] == "/work/beta"));
-        assert!(conversations.iter().any(|conversation| conversation["project_id"] == ""));
+        assert!(conversations
+            .iter()
+            .any(|conversation| conversation["project_id"] == "/work/alpha"));
+        assert!(conversations
+            .iter()
+            .any(|conversation| conversation["project_id"] == "/work/beta"));
+        assert!(conversations
+            .iter()
+            .any(|conversation| conversation["project_id"] == ""));
 
         let created = handle_conversation_create(
-            &provider_request("conversation.create", serde_json::json!({
-                "mode": "agent",
-                "title": "Project agent",
-                "provider_id": "provider",
-                "model_id": "model",
-                "project_id": "/tmp"
-            })),
+            &provider_request(
+                "conversation.create",
+                serde_json::json!({
+                    "mode": "agent",
+                    "title": "Project agent",
+                    "provider_id": "provider",
+                    "model_id": "model",
+                    "project_id": "/tmp"
+                }),
+            ),
             &store,
-        ).await;
-        assert!(created.success, "conversation create failed: {:?}", created.error);
+        )
+        .await;
+        assert!(
+            created.success,
+            "conversation create failed: {:?}",
+            created.error
+        );
         assert_eq!(created.data.unwrap()["project_id"], "/tmp");
     }
 
@@ -1926,100 +2448,164 @@ mod tests {
 
         // Creating conversation without project_id should succeed with NULL in DB
         let no_project = handle_conversation_create(
-            &provider_request("conversation.create", serde_json::json!({
-                "mode": "chat", "title": "No Project", "provider_id": "provider",
-                "model_id": "model"
-            })),
+            &provider_request(
+                "conversation.create",
+                serde_json::json!({
+                    "mode": "chat", "title": "No Project", "provider_id": "provider",
+                    "model_id": "model"
+                }),
+            ),
             &store,
-        ).await;
-        assert!(no_project.success, "create without project_id should succeed: {:?}", no_project.error);
-        assert_eq!(no_project.data.as_ref().unwrap()["project_id"], serde_json::Value::Null);
+        )
+        .await;
+        assert!(
+            no_project.success,
+            "create without project_id should succeed: {:?}",
+            no_project.error
+        );
+        assert_eq!(
+            no_project.data.as_ref().unwrap()["project_id"],
+            serde_json::Value::Null
+        );
         // Verify DB has NULL
-        let db_project_id: Option<String> = store.conn().query_row(
-            "SELECT project_id FROM assistant_conversations WHERE id = ?1",
-            rusqlite::params![no_project.data.as_ref().unwrap()["id"].as_str().unwrap()],
-            |row| row.get(0),
-        ).unwrap();
+        let db_project_id: Option<String> = store
+            .conn()
+            .query_row(
+                "SELECT project_id FROM assistant_conversations WHERE id = ?1",
+                rusqlite::params![no_project.data.as_ref().unwrap()["id"].as_str().unwrap()],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(db_project_id, None);
 
         // Creating conversation with empty project_id should also work (NULL in DB)
         let empty_project = handle_conversation_create(
-            &provider_request("conversation.create", serde_json::json!({
-                "mode": "chat", "title": "Empty Project", "provider_id": "provider",
-                "model_id": "model", "project_id": ""
-            })),
+            &provider_request(
+                "conversation.create",
+                serde_json::json!({
+                    "mode": "chat", "title": "Empty Project", "provider_id": "provider",
+                    "model_id": "model", "project_id": ""
+                }),
+            ),
             &store,
-        ).await;
-        assert!(empty_project.success, "create with empty project_id should succeed: {:?}", empty_project.error);
-        assert_eq!(empty_project.data.as_ref().unwrap()["project_id"], serde_json::Value::Null);
+        )
+        .await;
+        assert!(
+            empty_project.success,
+            "create with empty project_id should succeed: {:?}",
+            empty_project.error
+        );
+        assert_eq!(
+            empty_project.data.as_ref().unwrap()["project_id"],
+            serde_json::Value::Null
+        );
 
         // Creating conversation with null project_id should also work
         let null_project = handle_conversation_create(
-            &provider_request("conversation.create", serde_json::json!({
-                "mode": "chat", "title": "Null Project", "provider_id": "provider",
-                "model_id": "model", "project_id": null
-            })),
+            &provider_request(
+                "conversation.create",
+                serde_json::json!({
+                    "mode": "chat", "title": "Null Project", "provider_id": "provider",
+                    "model_id": "model", "project_id": null
+                }),
+            ),
             &store,
-        ).await;
-        assert!(null_project.success, "create with null project_id should succeed: {:?}", null_project.error);
-        assert_eq!(null_project.data.as_ref().unwrap()["project_id"], serde_json::Value::Null);
+        )
+        .await;
+        assert!(
+            null_project.success,
+            "create with null project_id should succeed: {:?}",
+            null_project.error
+        );
+        assert_eq!(
+            null_project.data.as_ref().unwrap()["project_id"],
+            serde_json::Value::Null
+        );
 
         // Unavailable model pair should still fail
         let unavailable_pair = handle_conversation_create(
-            &provider_request("conversation.create", serde_json::json!({
-                "mode": "chat", "title": "Invalid", "provider_id": "provider",
-                "model_id": "invented", "project_id": "/tmp"
-            })),
+            &provider_request(
+                "conversation.create",
+                serde_json::json!({
+                    "mode": "chat", "title": "Invalid", "provider_id": "provider",
+                    "model_id": "invented", "project_id": "/tmp"
+                }),
+            ),
             &store,
-        ).await;
+        )
+        .await;
         assert!(!unavailable_pair.success);
 
         // Verify total count: 3 successful + 0 failed
-        assert_eq!(store.conn().query_row(
-            "SELECT COUNT(*) FROM assistant_conversations",
-            [],
-            |row| row.get::<_, i64>(0),
-        ).unwrap(), 3);
+        assert_eq!(
+            store
+                .conn()
+                .query_row("SELECT COUNT(*) FROM assistant_conversations", [], |row| {
+                    row.get::<_, i64>(0)
+                },)
+                .unwrap(),
+            3
+        );
     }
 
     #[tokio::test]
     async fn project_register_returns_canonical_path() {
         let (store, bus) = setup();
         // /tmp exists on all Unix systems — use it as a valid directory
-        let result = handle_project_register(
-            &provider_request("project.register", serde_json::json!({ "path": "/tmp" })),
-        ).await;
-        assert!(result.success, "project.register should succeed: {:?}", result.error);
-        let canonical = result.data.as_ref().unwrap()["canonical_path"].as_str().unwrap().to_string();
+        let result = handle_project_register(&provider_request(
+            "project.register",
+            serde_json::json!({ "path": "/tmp" }),
+        ))
+        .await;
+        assert!(
+            result.success,
+            "project.register should succeed: {:?}",
+            result.error
+        );
+        let canonical = result.data.as_ref().unwrap()["canonical_path"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(canonical.ends_with("/tmp") || canonical.ends_with("/private/tmp"));
 
         // Missing path should fail
-        let missing = handle_project_register(
-            &provider_request("project.register", serde_json::json!({ "path": "/definitely/does/not/exist" })),
-        ).await;
+        let missing = handle_project_register(&provider_request(
+            "project.register",
+            serde_json::json!({ "path": "/definitely/does/not/exist" }),
+        ))
+        .await;
         assert!(!missing.success);
-        assert!(missing.error.as_ref().unwrap()["code"].as_str().unwrap().contains("PROJECT_NOT_FOUND"));
+        assert!(missing.error.as_ref().unwrap()["code"]
+            .as_str()
+            .unwrap()
+            .contains("PROJECT_NOT_FOUND"));
 
         // Empty path should fail
-        let empty = handle_project_register(
-            &provider_request("project.register", serde_json::json!({})),
-        ).await;
+        let empty =
+            handle_project_register(&provider_request("project.register", serde_json::json!({})))
+                .await;
         assert!(!empty.success);
 
         // File path should fail (not a directory)
-        let file_path = handle_project_register(
-            &provider_request("project.register", serde_json::json!({ "path": "/tmp" })),
-        ).await;
+        let file_path = handle_project_register(&provider_request(
+            "project.register",
+            serde_json::json!({ "path": "/tmp" }),
+        ))
+        .await;
         // /tmp is a dir so this succeeds; we test with a known file via /dev/null
-        let dev_null = handle_project_register(
-            &provider_request("project.register", serde_json::json!({ "path": "/dev/null" })),
-        ).await;
+        let dev_null = handle_project_register(&provider_request(
+            "project.register",
+            serde_json::json!({ "path": "/dev/null" }),
+        ))
+        .await;
         // /dev/null is a file, not a directory
         if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
             // /dev/null exists but is not a directory
             let code = dev_null.error.as_ref().unwrap()["code"].as_str().unwrap();
-            assert!(code.contains("PROJECT_NOT_DIRECTORY") || code.contains("PROJECT_NOT_FOUND"),
-                "Expected directory error for /dev/null, got: {code}");
+            assert!(
+                code.contains("PROJECT_NOT_DIRECTORY") || code.contains("PROJECT_NOT_FOUND"),
+                "Expected directory error for /dev/null, got: {code}"
+            );
             assert!(!dev_null.success);
         }
     }
@@ -2048,9 +2634,17 @@ mod tests {
         let result = handle_project_list(
             &provider_request("project.list", serde_json::json!({})),
             &store,
-        ).await;
-        assert!(result.success, "project.list should succeed: {:?}", result.error);
-        let projects = result.data.unwrap()["projects"].as_array().unwrap().to_vec();
+        )
+        .await;
+        assert!(
+            result.success,
+            "project.list should succeed: {:?}",
+            result.error
+        );
+        let projects = result.data.unwrap()["projects"]
+            .as_array()
+            .unwrap()
+            .to_vec();
         assert_eq!(projects.len(), 2);
         let paths: Vec<&str> = projects.iter().map(|p| p.as_str().unwrap()).collect();
         assert!(paths.contains(&"/work/alpha"));
@@ -2080,9 +2674,13 @@ mod tests {
         ).unwrap();
 
         let runs = handle_run_list(
-            &provider_request("run.list", serde_json::json!({ "conversation_id": "conv-workspace", "limit": 1 })),
+            &provider_request(
+                "run.list",
+                serde_json::json!({ "conversation_id": "conv-workspace", "limit": 1 }),
+            ),
             &store,
-        ).await;
+        )
+        .await;
         assert!(runs.success, "run.list failed: {:?}", runs.error);
         let runs_data = runs.data.unwrap();
         let listed_runs = runs_data["runs"].as_array().unwrap();
@@ -2090,9 +2688,13 @@ mod tests {
         assert_eq!(listed_runs[0]["id"], "run-new");
 
         let messages = handle_conversation_get_messages(
-            &provider_request("conversation.getMessages", serde_json::json!({ "conversation_id": "conv-workspace" })),
+            &provider_request(
+                "conversation.getMessages",
+                serde_json::json!({ "conversation_id": "conv-workspace" }),
+            ),
             &store,
-        ).await;
+        )
+        .await;
         let messages_data = messages.data.unwrap();
         let message = &messages_data["messages"][0];
         assert_eq!(message["reasoning_tokens"], 17);
@@ -2100,18 +2702,37 @@ mod tests {
         assert_eq!(message["content_blocks"][0]["content"]["text"], "真实思考");
 
         let artifacts = handle_artifact_list(
-            &provider_request("artifact.list", serde_json::json!({ "conversation_id": "conv-workspace" })),
+            &provider_request(
+                "artifact.list",
+                serde_json::json!({ "conversation_id": "conv-workspace" }),
+            ),
             &store,
-        ).await;
-        assert_eq!(artifacts.data.unwrap()["artifacts"].as_array().unwrap().len(), 1);
+        )
+        .await;
+        assert_eq!(
+            artifacts.data.unwrap()["artifacts"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
 
-        let environment = handle_workspace_inspect(
-            &provider_request("workspace.inspect", serde_json::json!({ "project_path": "/tmp" })),
-        ).await;
-        assert!(environment.success, "workspace.inspect failed: {:?}", environment.error);
+        let environment = handle_workspace_inspect(&provider_request(
+            "workspace.inspect",
+            serde_json::json!({ "project_path": "/tmp" }),
+        ))
+        .await;
+        assert!(
+            environment.success,
+            "workspace.inspect failed: {:?}",
+            environment.error
+        );
         assert_eq!(
             environment.data.unwrap()["project_path"],
-            std::fs::canonicalize("/tmp").unwrap().to_string_lossy().as_ref(),
+            std::fs::canonicalize("/tmp")
+                .unwrap()
+                .to_string_lossy()
+                .as_ref(),
         );
     }
 
@@ -2133,47 +2754,74 @@ mod tests {
              VALUES ('conv-model', 'chat', '/tmp', 'Test', 'provider-real', 'model-real', 'now', 'now');",
         ).unwrap();
 
-        let update = provider_request("conversation.update_model", serde_json::json!({
-            "id": "conv-model",
-            "provider_id": "provider-real",
-            "model_id": "model-real"
-        }));
+        let update = provider_request(
+            "conversation.update_model",
+            serde_json::json!({
+                "id": "conv-model",
+                "provider_id": "provider-real",
+                "model_id": "model-real"
+            }),
+        );
         let response = handle_conversation_update_model(&update, &store).await;
-        assert!(response.success, "model update failed: {:?}", response.error);
+        assert!(
+            response.success,
+            "model update failed: {:?}",
+            response.error
+        );
 
-        let pair = store.conn().query_row(
-            "SELECT provider_id, model_id FROM assistant_conversations WHERE id='conv-model'",
-            [],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-        ).unwrap();
-        assert_eq!(pair, ("provider-real".to_string(), "model-real".to_string()));
+        let pair = store
+            .conn()
+            .query_row(
+                "SELECT provider_id, model_id FROM assistant_conversations WHERE id='conv-model'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            pair,
+            ("provider-real".to_string(), "model-real".to_string())
+        );
 
-        let invalid = provider_request("conversation.update_model", serde_json::json!({
-            "id": "conv-model",
-            "provider_id": "provider-real",
-            "model_id": "invented-model"
-        }));
-        assert!(!handle_conversation_update_model(&invalid, &store).await.success);
+        let invalid = provider_request(
+            "conversation.update_model",
+            serde_json::json!({
+                "id": "conv-model",
+                "provider_id": "provider-real",
+                "model_id": "invented-model"
+            }),
+        );
+        assert!(
+            !handle_conversation_update_model(&invalid, &store)
+                .await
+                .success
+        );
     }
 
     #[tokio::test]
     async fn run_start_rejects_missing_provider_and_model_instead_of_inventing_defaults() {
         let (store, bus) = setup();
-        store.conn().execute(
-            "INSERT INTO assistant_conversations
+        store
+            .conn()
+            .execute(
+                "INSERT INTO assistant_conversations
              (id, mode, project_id, title, provider_id, model_id, created_at, updated_at)
              VALUES ('conv-no-default', 'chat', '/tmp', 'Test', '', '', 'now', 'now')",
-            [],
-        ).unwrap();
+                [],
+            )
+            .unwrap();
 
         let response = handle_run_start(
-            &provider_request("run.start", serde_json::json!({
-                "conversation_id": "conv-no-default",
-                "content": "hello"
-            })),
+            &provider_request(
+                "run.start",
+                serde_json::json!({
+                    "conversation_id": "conv-no-default",
+                    "content": "hello"
+                }),
+            ),
             &store,
             &bus,
-        ).await;
+        )
+        .await;
 
         assert!(!response.success);
         assert_eq!(store.conn().query_row(
@@ -2208,15 +2856,19 @@ mod tests {
         ).unwrap();
 
         let response = handle_run_start(
-            &provider_request("run.start", serde_json::json!({
-                "conversation_id": "conv-retry",
-                "provider_id": "provider-real",
-                "model_id": "model-real",
-                "trigger_message_id": "message-original"
-            })),
+            &provider_request(
+                "run.start",
+                serde_json::json!({
+                    "conversation_id": "conv-retry",
+                    "provider_id": "provider-real",
+                    "model_id": "model-real",
+                    "trigger_message_id": "message-original"
+                }),
+            ),
             &store,
             &bus,
-        ).await;
+        )
+        .await;
         assert!(response.success, "retry start failed: {:?}", response.error);
 
         assert_eq!(store.conn().query_row(
@@ -2224,23 +2876,36 @@ mod tests {
             [],
             |row| row.get::<_, i64>(0),
         ).unwrap(), 1);
-        assert_eq!(response.data.unwrap()["trigger_message_id"], "message-original");
-        assert_ne!(store.conn().query_row(
-            "SELECT updated_at FROM assistant_conversations WHERE id='conv-retry'",
-            [],
-            |row| row.get::<_, String>(0),
-        ).unwrap(), "2000-01-01T00:00:00Z");
+        assert_eq!(
+            response.data.unwrap()["trigger_message_id"],
+            "message-original"
+        );
+        assert_ne!(
+            store
+                .conn()
+                .query_row(
+                    "SELECT updated_at FROM assistant_conversations WHERE id='conv-retry'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "2000-01-01T00:00:00Z"
+        );
     }
 
     #[tokio::test]
     async fn context_preview_never_returns_fabricated_token_sections() {
         let (store, _) = setup();
         let response = handle_context_preview(
-            &provider_request("context.preview", serde_json::json!({
-                "conversation_id": "missing"
-            })),
+            &provider_request(
+                "context.preview",
+                serde_json::json!({
+                    "conversation_id": "missing"
+                }),
+            ),
             &store,
-        ).await;
+        )
+        .await;
 
         assert!(!response.success);
         assert!(response.data.is_none());
@@ -2249,20 +2914,24 @@ mod tests {
     #[tokio::test]
     async fn run_cancel_publishes_an_interrupted_event_for_the_active_run() {
         let (store, bus) = setup();
-        store.conn().execute_batch(
-            "INSERT INTO assistant_conversations
+        store
+            .conn()
+            .execute_batch(
+                "INSERT INTO assistant_conversations
              (id, mode, project_id, title, provider_id, model_id, created_at, updated_at)
              VALUES ('conv-cancel', 'chat', '/tmp', 'Cancel', 'provider', 'model', 'now', 'now');
              INSERT INTO assistant_runs
              (id, conversation_id, status, provider_id, model_id, started_at)
              VALUES ('run-cancel', 'conv-cancel', 'running', 'provider', 'model', 'now');",
-        ).unwrap();
+            )
+            .unwrap();
 
         let response = handle_run_cancel(
             &provider_request("run.cancel", serde_json::json!({ "id": "run-cancel" })),
             &store,
             &bus,
-        ).await;
+        )
+        .await;
         assert!(response.success, "cancel failed: {:?}", response.error);
         let events = bus.replay("run-cancel", 0).unwrap();
         assert_eq!(events.len(), 1);
@@ -2272,18 +2941,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_handshake_rejects_bad_token() {
-        let sock_path = format!("/tmp/test_natives_rpc_bad_token_{}.sock", std::process::id());
+        let sock_path = format!(
+            "/tmp/test_natives_rpc_bad_token_{}.sock",
+            std::process::id()
+        );
         let _ = std::fs::remove_file(&sock_path);
 
         let (store, bus) = setup();
-        let server = RpcServer::new(
-            &sock_path,
-            "correct-token",
-            "0.1.0",
-            "1.0.0",
-            store,
-            bus,
-        );
+        let server = RpcServer::new(&sock_path, "correct-token", "0.1.0", "1.0.0", store, bus);
 
         let server_handle = server.start().await.unwrap();
 
@@ -2321,14 +2986,7 @@ mod tests {
         let _ = std::fs::remove_file(&sock_path);
 
         let (store, bus) = setup();
-        let server = RpcServer::new(
-            &sock_path,
-            "correct-token",
-            "0.1.0",
-            "1.0.0",
-            store,
-            bus,
-        );
+        let server = RpcServer::new(&sock_path, "correct-token", "0.1.0", "1.0.0", store, bus);
 
         let server_handle = server.start().await.unwrap();
 
