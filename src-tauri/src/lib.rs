@@ -5,11 +5,11 @@ use tokio::sync::Mutex as TokioMutex;
 
 mod agent;
 mod archive;
-pub mod assistant_executor;
 pub mod assistant_service;
 pub mod daemon;
 pub mod context_window;
 pub mod contract_linter;
+pub mod executor_catalog;
 pub mod sequence_id;
 pub mod vendor_whitelist;
 pub mod commands;

@@ -36,6 +36,7 @@ assert_no_production_match() {
 # authority and is audited separately by the call-site checks below.
 for retired in \
   src-tauri/src/assistant_stream_proxy.rs \
+  src-tauri/src/assistant_executor.rs \
   src-tauri/src/agent_engine_bridge.rs \
   src-tauri/src/runtime/native_runtime.rs \
   src-tauri/src/runtime/native/agent_loop.rs \
@@ -87,8 +88,9 @@ else
   report "OK: no old engine execution call sites found"
 fi
 
-# 3) Old executor definitions may remain only as settings/catalog data; they
-# must not be wired as a run authority.
+# 3) Old executor definitions may remain only as capability implementation
+# shims during migration; they must not be wired as a run authority or settings
+# catalog source.
 if rg -n --glob '!**/*.test.*' --glob '!**/tests/**' \
   'assistant_executor::(execute_tool|run_agentic_loop)|crate::assistant_executor::(execute_tool|run_agentic_loop)' \
   src-tauri/src 2>/dev/null; then
@@ -96,6 +98,15 @@ if rg -n --glob '!**/*.test.*' --glob '!**/tests/**' \
   fail=1
 else
   report "OK: assistant_executor has no production run call site"
+fi
+
+if rg -n --glob '!**/*.test.*' --glob '!**/tests/**' \
+  'assistant_executor::default_enabled_tools|crate::assistant_executor::default_enabled_tools' \
+  src-tauri/src 2>/dev/null; then
+  report "FAIL: settings/catalog still sourced from assistant_executor"
+  fail=1
+else
+  report "OK: settings/catalog do not depend on assistant_executor"
 fi
 
 # 4) Capability flags honesty — mcp/extensions/scheduler must not be false if methods exist

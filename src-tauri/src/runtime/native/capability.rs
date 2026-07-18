@@ -16,8 +16,9 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::Notify;
+use tokio::time::timeout;
 
 #[derive(Clone, Debug)]
 pub struct CancellationToken {
@@ -411,13 +412,15 @@ impl PermissionEngine {
                 "settings.deny",
             );
         }
-        let mutates = meta.side_effects.iter().any(|effect| matches!(
-            effect,
-            CapabilitySideEffect::WriteFs
-                | CapabilitySideEffect::ExecuteProcess
-                | CapabilitySideEffect::Network
-                | CapabilitySideEffect::ModuleWrite
-        ));
+        let mutates = meta.side_effects.iter().any(|effect| {
+            matches!(
+                effect,
+                CapabilitySideEffect::WriteFs
+                    | CapabilitySideEffect::ExecuteProcess
+                    | CapabilitySideEffect::Network
+                    | CapabilitySideEffect::ModuleWrite
+            )
+        });
         if mutates && context.permission_mode == PermissionMode::Deny {
             return PermissionDecision::deny("Read-only mode blocks changes", "context");
         }
@@ -640,7 +643,8 @@ impl<'a> CapabilityExecutor<'a> {
         let Some(capability) = self.registry.get(&canonical) else {
             return PermissionDecision::deny("Unknown capability", "registry");
         };
-        self.permission_engine.evaluate(request, &capability.meta(), context)
+        self.permission_engine
+            .evaluate(request, &capability.meta(), context)
     }
 
     pub async fn execute(
@@ -871,20 +875,386 @@ pub fn legacy_to_claude_tool_name(name: &str) -> &str {
     }
 }
 
+fn read_file_tool(args: &serde_json::Value) -> Result<serde_json::Value> {
+    let path = args["path"]
+        .as_str()
+        .or_else(|| args["file_path"].as_str())
+        .ok_or_else(|| Error::InvalidInput("missing path".into()))?;
+    let result = crate::file_manager::read_file(path)?;
+    serde_json::to_value(result).map_err(|e| Error::Internal(e.to_string()))
+}
+
+fn list_dir_tool(args: &serde_json::Value) -> Result<serde_json::Value> {
+    let path = args["path"]
+        .as_str()
+        .ok_or_else(|| Error::InvalidInput("missing path".into()))?;
+    let entries = crate::file_manager::list_dir(path, &Default::default())?;
+    serde_json::to_value(entries).map_err(|e| Error::Internal(e.to_string()))
+}
+
+fn write_file_tool(args: &serde_json::Value) -> Result<serde_json::Value> {
+    let path = args["path"]
+        .as_str()
+        .or_else(|| args["file_path"].as_str())
+        .ok_or_else(|| Error::InvalidInput("missing path".into()))?;
+    let content = args["content"]
+        .as_str()
+        .ok_or_else(|| Error::InvalidInput("missing content".into()))?;
+    crate::module_manager::atomic_write(Path::new(path), content)?;
+    Ok(serde_json::json!({ "path": path, "bytes": content.len() }))
+}
+
+fn write_module_tool(args: &serde_json::Value, modules_dir: &Path) -> Result<serde_json::Value> {
+    let module_id = args["moduleId"]
+        .as_str()
+        .ok_or_else(|| Error::InvalidInput("missing moduleId".into()))?;
+    let name = args["name"]
+        .as_str()
+        .ok_or_else(|| Error::InvalidInput("missing name".into()))?;
+    let html = args["htmlContent"]
+        .as_str()
+        .ok_or_else(|| Error::InvalidInput("missing htmlContent".into()))?;
+    let perms: Vec<String> = args["permissions"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let pool_conn = crate::db::get_assistant_db_conn()?;
+    let conn: &rusqlite::Connection = &*pool_conn;
+    let outcome = crate::module_manager::write_generated_module(
+        conn,
+        modules_dir,
+        module_id,
+        name,
+        html,
+        &perms,
+    )?;
+
+    Ok(serde_json::json!({
+        "moduleId": module_id,
+        "written": true,
+        "lintPassed": true,
+        "contractId": outcome.contract_id,
+        "contentHash": outcome.content_hash,
+        "oldContent": outcome.old_content,
+        "newContent": outcome.new_content,
+        "fileName": format!("{module_id}/index.html")
+    }))
+}
+
+fn run_terminal_tool(args: &serde_json::Value) -> Result<serde_json::Value> {
+    let command = args["command"]
+        .as_str()
+        .ok_or_else(|| Error::InvalidInput("missing command".into()))?;
+    let cwd = args["cwd"].as_str().unwrap_or(".").to_string();
+    let timeout_ms = args["timeoutMs"].as_u64().unwrap_or(30_000);
+
+    if command.contains('&')
+        || command.contains('|')
+        || command.contains(';')
+        || command.contains('$')
+    {
+        return Err(Error::InvalidInput("shell metacharacters forbidden".into()));
+    }
+
+    let parts = command
+        .split_whitespace()
+        .map(String::from)
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        return Err(Error::InvalidInput("empty command".into()));
+    }
+    let (cmd, cmd_args) = parts.split_first().expect("parts is not empty");
+    let cmd = cmd.clone();
+    let cmd_args = cmd_args.to_vec();
+
+    let rt_handle = tokio::runtime::Handle::try_current()
+        .map_err(|e| Error::Internal(format!("no tokio runtime: {e}")))?;
+    let join = rt_handle.spawn_blocking(move || {
+        std::process::Command::new(&cmd)
+            .args(&cmd_args)
+            .current_dir(&cwd)
+            .output()
+    });
+    let output_fut = async {
+        match timeout(Duration::from_millis(timeout_ms), join).await {
+            Ok(Ok(output)) => Ok(output),
+            Ok(Err(e)) => Err(Error::Internal(format!("join error: {e}"))),
+            Err(_) => Err(Error::Internal("command timed out".into())),
+        }
+    };
+    let output = rt_handle.block_on(output_fut)?;
+    let output = output.map_err(|e| Error::Internal(format!("command failed: {e}")))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let exit_code = output.status.code().unwrap_or(-1);
+
+    Ok(serde_json::json!({
+        "exitCode": exit_code,
+        "stdout": stdout,
+        "stderr": stderr
+    }))
+}
+
+fn lint_module_tool(args: &serde_json::Value) -> Result<serde_json::Value> {
+    let html = args["htmlContent"]
+        .as_str()
+        .ok_or_else(|| Error::InvalidInput("missing htmlContent".into()))?;
+    let result = crate::contract_linter::lint_html(html);
+    Ok(serde_json::json!({
+        "passed": result.passed,
+        "errors": result.errors
+    }))
+}
+
+pub struct ReadFileCapability;
+
+impl ReadFileCapability {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait::async_trait]
+impl AtomicCapability for ReadFileCapability {
+    fn meta(&self) -> CapabilityMeta {
+        CapabilityMeta::new(
+            "Read",
+            "Read a local file's content (UTF-8, with truncation above 1MB).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "file_path": { "type": "string", "description": "Absolute, relative, or ~-prefixed file path." },
+                    "path": { "type": "string", "description": "Legacy alias for file_path." }
+                },
+                "required": ["file_path"]
+            }),
+            "file",
+        )
+        .with_side_effects(vec![CapabilitySideEffect::ReadFs])
+    }
+
+    async fn execute(
+        &self,
+        request: &CapabilityRequest,
+        _context: &CapabilityContext,
+        _cancellation: &CancellationToken,
+    ) -> Result<serde_json::Value> {
+        read_file_tool(&request.arguments)
+    }
+}
+
+pub struct ListDirCapability;
+
+impl ListDirCapability {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait::async_trait]
+impl AtomicCapability for ListDirCapability {
+    fn meta(&self) -> CapabilityMeta {
+        CapabilityMeta::new(
+            "LS",
+            "List entries of a directory.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" }
+                },
+                "required": ["path"]
+            }),
+            "file",
+        )
+        .with_side_effects(vec![CapabilitySideEffect::ReadFs])
+    }
+
+    async fn execute(
+        &self,
+        request: &CapabilityRequest,
+        _context: &CapabilityContext,
+        _cancellation: &CancellationToken,
+    ) -> Result<serde_json::Value> {
+        list_dir_tool(&request.arguments)
+    }
+}
+
+pub struct WriteFileCapability;
+
+impl WriteFileCapability {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait::async_trait]
+impl AtomicCapability for WriteFileCapability {
+    fn meta(&self) -> CapabilityMeta {
+        CapabilityMeta::new(
+            "Write",
+            "Atomically write content to a local file.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "file_path": { "type": "string" },
+                    "path": { "type": "string", "description": "Legacy alias for file_path." },
+                    "content": { "type": "string" }
+                },
+                "required": ["file_path", "content"]
+            }),
+            "file",
+        )
+        .with_side_effects(vec![CapabilitySideEffect::WriteFs])
+        .with_permission(CapabilityPermission::Ask)
+        .with_rule_event("file")
+    }
+
+    async fn execute(
+        &self,
+        request: &CapabilityRequest,
+        _context: &CapabilityContext,
+        _cancellation: &CancellationToken,
+    ) -> Result<serde_json::Value> {
+        write_file_tool(&request.arguments)
+    }
+}
+
+pub struct WriteModuleCapability {
+    modules_dir: PathBuf,
+}
+
+impl WriteModuleCapability {
+    pub fn new(modules_dir: PathBuf) -> Self {
+        Self { modules_dir }
+    }
+}
+
+#[async_trait::async_trait]
+impl AtomicCapability for WriteModuleCapability {
+    fn meta(&self) -> CapabilityMeta {
+        CapabilityMeta::new(
+            "write_module",
+            "Write an AI-generated SPA module to ~/.natives/modules/, with Contract Linter gate (KI-3) + contract_id audit (KI-1).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "moduleId": { "type": "string" },
+                    "name": { "type": "string" },
+                    "htmlContent": { "type": "string" },
+                    "permissions": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["moduleId", "name", "htmlContent", "permissions"]
+            }),
+            "module",
+        )
+        .with_side_effects(vec![CapabilitySideEffect::ModuleWrite])
+        .with_permission(CapabilityPermission::Ask)
+        .with_rule_event("file")
+    }
+
+    async fn execute(
+        &self,
+        request: &CapabilityRequest,
+        _context: &CapabilityContext,
+        _cancellation: &CancellationToken,
+    ) -> Result<serde_json::Value> {
+        write_module_tool(&request.arguments, &self.modules_dir)
+    }
+}
+
+pub struct RunTerminalCapability;
+
+impl RunTerminalCapability {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait::async_trait]
+impl AtomicCapability for RunTerminalCapability {
+    fn meta(&self) -> CapabilityMeta {
+        CapabilityMeta::new(
+            "Bash",
+            "Execute a terminal command with timeout, cwd, permission, hook, and rule checks.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "Command line to execute." },
+                    "cwd": { "type": "string" },
+                    "timeoutMs": { "type": "integer", "default": 30000 }
+                },
+                "required": ["command"]
+            }),
+            "terminal",
+        )
+        .with_side_effects(vec![CapabilitySideEffect::ExecuteProcess])
+        .with_permission(CapabilityPermission::Ask)
+        .with_visibility(CapabilityVisibility::RequiresApproval)
+        .with_rule_event("bash")
+    }
+
+    async fn execute(
+        &self,
+        request: &CapabilityRequest,
+        _context: &CapabilityContext,
+        _cancellation: &CancellationToken,
+    ) -> Result<serde_json::Value> {
+        run_terminal_tool(&request.arguments)
+    }
+}
+
+pub struct LintModuleCapability;
+
+impl LintModuleCapability {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait::async_trait]
+impl AtomicCapability for LintModuleCapability {
+    fn meta(&self) -> CapabilityMeta {
+        CapabilityMeta::new(
+            "lint_module",
+            "Run Contract Linter on HTML content without writing to disk.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "htmlContent": { "type": "string" }
+                },
+                "required": ["htmlContent"]
+            }),
+            "quality",
+        )
+    }
+
+    async fn execute(
+        &self,
+        request: &CapabilityRequest,
+        _context: &CapabilityContext,
+        _cancellation: &CancellationToken,
+    ) -> Result<serde_json::Value> {
+        lint_module_tool(&request.arguments)
+    }
+}
+
 pub fn create_default_capabilities(modules_dir: &Path) -> Vec<Arc<dyn AtomicCapability>> {
     vec![
-        Arc::new(crate::assistant_executor::ReadFileCapability::new()),
-        Arc::new(crate::assistant_executor::ListDirCapability::new()),
-        Arc::new(crate::assistant_executor::WriteFileCapability::new()),
+        Arc::new(ReadFileCapability::new()),
+        Arc::new(ListDirCapability::new()),
+        Arc::new(WriteFileCapability::new()),
         Arc::new(EditCapability),
         Arc::new(MultiEditCapability),
         Arc::new(GlobCapability),
         Arc::new(GrepCapability),
-        Arc::new(crate::assistant_executor::WriteModuleCapability::new(
-            modules_dir.to_path_buf(),
-        )),
-        Arc::new(crate::assistant_executor::RunTerminalCapability::new()),
-        Arc::new(crate::assistant_executor::LintModuleCapability::new()),
+        Arc::new(WriteModuleCapability::new(modules_dir.to_path_buf())),
+        Arc::new(RunTerminalCapability::new()),
+        Arc::new(LintModuleCapability::new()),
         Arc::new(UnsupportedManifestCapability::new(
             "TodoWrite",
             "Workflow todo tracking is exposed in the catalog but not executable yet.",
@@ -1323,24 +1693,52 @@ mod tests {
         let engine = PermissionEngine::default();
         let meta = CapabilityMeta::new("Bash", "Run command", serde_json::json!({}), "terminal")
             .with_permission(CapabilityPermission::Ask);
-        let request = CapabilityRequest { call_id: "1".into(), name: "Bash".into(), arguments: serde_json::json!({}), working_dir: None };
+        let request = CapabilityRequest {
+            call_id: "1".into(),
+            name: "Bash".into(),
+            arguments: serde_json::json!({}),
+            working_dir: None,
+        };
         let mut context = CapabilityContext::for_session("s", None);
         context.permission_mode = PermissionMode::Allow;
 
-        assert_eq!(engine.evaluate(&request, &meta, &context).action, PermissionAction::Allow);
+        assert_eq!(
+            engine.evaluate(&request, &meta, &context).action,
+            PermissionAction::Allow
+        );
     }
 
     #[test]
     fn ask_mode_allows_reads_but_requests_mutations() {
         let engine = PermissionEngine::default();
-        let request = CapabilityRequest { call_id: "1".into(), name: "Read".into(), arguments: serde_json::json!({}), working_dir: None };
+        let request = CapabilityRequest {
+            call_id: "1".into(),
+            name: "Read".into(),
+            arguments: serde_json::json!({}),
+            working_dir: None,
+        };
         let read = CapabilityMeta::new("Read", "Read file", serde_json::json!({}), "filesystem")
             .with_side_effects(vec![CapabilitySideEffect::ReadFs]);
         let write = CapabilityMeta::new("Write", "Write file", serde_json::json!({}), "filesystem")
             .with_side_effects(vec![CapabilitySideEffect::WriteFs]);
         let context = CapabilityContext::for_session("s", None);
-        assert_eq!(engine.evaluate(&request, &read, &context).action, PermissionAction::Allow);
-        assert_eq!(engine.evaluate(&CapabilityRequest { name: "Write".into(), ..request }, &write, &context).action, PermissionAction::Ask);
+        assert_eq!(
+            engine.evaluate(&request, &read, &context).action,
+            PermissionAction::Allow
+        );
+        assert_eq!(
+            engine
+                .evaluate(
+                    &CapabilityRequest {
+                        name: "Write".into(),
+                        ..request
+                    },
+                    &write,
+                    &context
+                )
+                .action,
+            PermissionAction::Ask
+        );
     }
 
     #[test]

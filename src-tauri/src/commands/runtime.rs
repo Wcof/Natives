@@ -45,7 +45,7 @@ pub fn runtime_set_capability_enabled(
     let mut settings: ExecutorSettings = db::get_setting(conn, EXECUTOR_KEY)?
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_else(|| ExecutorSettings {
-            enabled_tools: crate::assistant_executor::default_enabled_tools(),
+            enabled_tools: crate::executor_catalog::default_enabled_tools(),
             max_self_heal: 3,
             max_steps: None,
         });

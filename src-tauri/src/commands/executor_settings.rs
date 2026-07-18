@@ -3,8 +3,9 @@
 // 复用 natives.db 的 KV `settings` 表，键 `executor:settings`，值 JSON：
 //   { "enabledTools": { "read_file": true, ... }, "maxSelfHeal": 3 }
 //
-// `stream_chat` 启动时读取本配置，覆盖 `default_enabled_tools()` 与硬编码上限 3，
-// 让用户在 Settings → 执行引擎里的开关真正生效。
+// Daemon-native run start reads this configuration, overriding catalog defaults
+// and the hard-coded self-heal limit so Settings → Execution Engine takes
+// effect without depending on the retired executor run path.
 
 use crate::{db, emit_db_state_changed, Error, Result};
 use serde::{Deserialize, Serialize};
@@ -14,7 +15,7 @@ use crate::AppState;
 
 pub const EXECUTOR_KEY: &str = "executor:settings";
 
-/// 持久化的执行引擎配置。前端 Settings ↔ Rust stream_chat 共用。
+/// 持久化的执行引擎配置。前端 Settings ↔ Daemon-native run start 共用。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecutorSettings {
@@ -33,10 +34,10 @@ fn default_max_self_heal() -> u32 {
     3
 }
 
-/// 读 DB 覆盖默认值。未配置时返回 `default_enabled_tools()` + 3。
+/// 读 DB 覆盖默认值。未配置时返回 catalog 默认工具 + 3。
 pub fn load_executor_settings() -> ExecutorSettings {
     let defaults = ExecutorSettings {
-        enabled_tools: crate::assistant_executor::default_enabled_tools(),
+        enabled_tools: crate::executor_catalog::default_enabled_tools(),
         max_self_heal: 3,
         max_steps: None,
     };
@@ -60,7 +61,7 @@ pub fn executor_get_settings(state: State<'_, AppState>) -> Result<ExecutorSetti
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     let defaults = ExecutorSettings {
-        enabled_tools: crate::assistant_executor::default_enabled_tools(),
+        enabled_tools: crate::executor_catalog::default_enabled_tools(),
         max_self_heal: 3,
         max_steps: None,
     };
