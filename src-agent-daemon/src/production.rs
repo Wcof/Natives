@@ -3,19 +3,19 @@
 //! Real providers (no Echo mock on production path), capability-gateway tools,
 //! permission Ask/Allow/Deny, hooks, and subagent child runs.
 
-use agent_core::{
-    AgentEngine, EngineError, EngineMessage, EngineProvider, EngineProviderEvent,
-    EngineProviderEventStream, EngineRunConfig, EngineToolRuntime, EventSequencer, HookEvent, HookRegistry,
-    PermissionManager, PermissionProfile, SubAgentConfig, SubAgentManager, SubAgentStatus,
-    ToolExecutionResult, ToolSchema, AllowAllHook, CommandHook, HttpHook,
-};
 use agent_core::assemble_context;
+use agent_core::{
+    AgentEngine, AllowAllHook, CommandHook, EngineError, EngineMessage, EngineProvider,
+    EngineProviderEvent, EngineProviderEventStream, EngineRunConfig, EngineToolRuntime,
+    EventSequencer, HookEvent, HookRegistry, HttpHook, PermissionManager, PermissionProfile,
+    SubAgentConfig, SubAgentManager, SubAgentStatus, ToolExecutionResult, ToolSchema,
+};
 use assistant_protocol::v2::RunEventKind;
 use capability_gateway::{CapabilityGateway, SideEffect};
 use futures_util::StreamExt;
 use provider_adapters::capabilities::{
     history_message_to_provider, Credential, HistoryMessage, HistoryToolCall, ProviderAdapter,
-    ProviderRequest, ProviderTool,
+    ProviderError, ProviderRequest, ProviderTool,
 };
 use provider_adapters::stream::ProviderEvent;
 use serde_json::Value;
@@ -274,7 +274,10 @@ impl ProductionRuntime {
         // Full production hook set + project hooks for this workspace.
         let hooks = build_production_hooks_for_project(Some(&project_root));
         let engine = Arc::new(AgentEngine::new(self.events.clone()).with_hooks(hooks));
-        self.engines.lock().await.insert(run_id.clone(), engine.clone());
+        self.engines
+            .lock()
+            .await
+            .insert(run_id.clone(), engine.clone());
 
         let provider = RealProvider {
             provider_id: provider_id.clone(),
@@ -389,7 +392,7 @@ impl ProductionRuntime {
         let _ = self.subagents.cascade_cancel_metadata(run_id).await;
 
         for rid in &run_ids {
-        self.events.append(
+            self.events.append(
                 rid,
                 RunEventKind::Cancelled {
                     reason: "cancelled".into(),
@@ -495,8 +498,7 @@ impl ProductionRuntime {
                 conversation_id: format!("subagent-{}", child_run_id),
                 model: model_id,
                 system_prompt: Some(
-                    "You are a subagent with independent credentials. Complete the task."
-                        .into(),
+                    "You are a subagent with independent credentials. Complete the task.".into(),
                 ),
                 messages: Vec::new(),
                 user_content: prompt,
@@ -606,12 +608,19 @@ impl EngineProvider for RealProvider {
         system_prompt: Option<&str>,
         cancel: Arc<AtomicBool>,
     ) -> Result<EngineProviderEventStream, EngineError> {
-        let credential =
-            resolve_credential_for_run(&self.provider_id, self.key_id.as_deref(), "provider-stream")
-                .map_err(EngineError::Message)?;
-        let adapter = resolve_adapter(
-            credential.provider_type.as_deref().unwrap_or(&self.provider_id),
-        );
+        let credential = resolve_credential_for_run(
+            &self.provider_id,
+            self.key_id.as_deref(),
+            "provider-stream",
+        )
+        .map_err(EngineError::Message)?;
+        let protocol = credential
+            .provider_type
+            .clone()
+            .unwrap_or_else(|| self.provider_id.clone());
+        let key_id = credential.key_id.clone();
+        let base_url = credential.base_url.clone();
+        let adapter = resolve_adapter(&protocol);
 
         let provider_messages: Vec<_> = messages
             .into_iter()
@@ -642,57 +651,99 @@ impl EngineProvider for RealProvider {
             structured_output: None,
         };
 
-        let stream = adapter
-            .stream(request, credential)
-            .await
-            .map_err(|e| EngineError::Provider {
-                message: e.message,
+        let stream = adapter.stream(request, credential).await.map_err(|e| {
+            let message = provider_error_message(
+                &e,
+                &self.provider_id,
+                &protocol,
+                model,
+                key_id.as_deref(),
+                base_url.as_deref(),
+            );
+            EngineError::Provider {
+                message,
                 code: e.code,
                 retryable: e.retryable,
-            })?;
-        let mapped = futures_util::stream::unfold((stream, cancel), |(mut stream, cancel)| async move {
-            loop {
-                if cancel.load(Ordering::SeqCst) {
-                    return None;
-                }
-                tokio::select! {
-                    ev = stream.next() => {
-                        return ev.map(|ev| {
-                            let event = match ev {
-                                ProviderEvent::TextDelta(t) => EngineProviderEvent::TextDelta(t),
-                                ProviderEvent::ReasoningDelta(t) => EngineProviderEvent::ReasoningDelta(t),
-                                ProviderEvent::ToolCallDelta {
-                                    index,
-                                    id,
-                                    name,
-                                    arguments_delta,
-                                } => EngineProviderEvent::ToolCallDelta {
-                                    index,
-                                    id,
-                                    name,
-                                    arguments_delta,
-                                },
-                                ProviderEvent::Usage(u) => EngineProviderEvent::Usage {
-                                    input_tokens: u.input_tokens,
-                                    output_tokens: u.output_tokens,
-                                    reasoning_tokens: u.reasoning_tokens,
-                                },
-                                ProviderEvent::Completed => EngineProviderEvent::Completed,
-                                ProviderEvent::Error(e) => EngineProviderEvent::Error {
-                                    message: e.message,
-                                    code: e.code,
-                                    retryable: e.retryable,
-                                },
-                            };
-                            (event, (stream, cancel))
-                        });
+            }
+        })?;
+        let provider_id = self.provider_id.clone();
+        let model = model.to_string();
+        let mapped = futures_util::stream::unfold((stream, cancel), move |(mut stream, cancel)| {
+            let provider_id = provider_id.clone();
+            let protocol = protocol.clone();
+            let model = model.clone();
+            let key_id = key_id.clone();
+            let base_url = base_url.clone();
+            async move {
+                loop {
+                    if cancel.load(Ordering::SeqCst) {
+                        return None;
                     }
-                    _ = tokio::time::sleep(Duration::from_millis(25)) => {}
+                    tokio::select! {
+                        ev = stream.next() => {
+                            return ev.map(|ev| {
+                                let event = match ev {
+                                    ProviderEvent::TextDelta(t) => EngineProviderEvent::TextDelta(t),
+                                    ProviderEvent::ReasoningDelta(t) => EngineProviderEvent::ReasoningDelta(t),
+                                    ProviderEvent::ToolCallDelta {
+                                        index,
+                                        id,
+                                        name,
+                                        arguments_delta,
+                                    } => EngineProviderEvent::ToolCallDelta {
+                                        index,
+                                        id,
+                                        name,
+                                        arguments_delta,
+                                    },
+                                    ProviderEvent::Usage(u) => EngineProviderEvent::Usage {
+                                        input_tokens: u.input_tokens,
+                                        output_tokens: u.output_tokens,
+                                        reasoning_tokens: u.reasoning_tokens,
+                                    },
+                                    ProviderEvent::Completed => EngineProviderEvent::Completed,
+                                    ProviderEvent::Error(e) => EngineProviderEvent::Error {
+                                        message: provider_error_message(
+                                            &e,
+                                            &provider_id,
+                                            &protocol,
+                                            &model,
+                                            key_id.as_deref(),
+                                            base_url.as_deref(),
+                                        ),
+                                        code: e.code,
+                                        retryable: e.retryable,
+                                    },
+                                };
+                                (event, (stream, cancel))
+                            });
+                        }
+                        _ = tokio::time::sleep(Duration::from_millis(25)) => {}
+                    }
                 }
             }
         });
         Ok(Box::pin(mapped))
     }
+}
+
+fn provider_error_message(
+    error: &ProviderError,
+    provider_id: &str,
+    protocol: &str,
+    model: &str,
+    key_id: Option<&str>,
+    base_url: Option<&str>,
+) -> String {
+    format!(
+        "provider={provider_id} protocol={protocol} model={model} key_id={} base_url={} code={} category={:?} retryable={} message={}",
+        key_id.unwrap_or("default"),
+        base_url.map(assistant_protocol::v2::redact_secrets).unwrap_or_else(|| "default".into()),
+        error.code,
+        error.category,
+        error.retryable,
+        assistant_protocol::v2::redact_secrets(&error.message),
+    )
 }
 
 /// Map engine history into provider history parts (preserves tool_calls / tool_call_id).
@@ -738,9 +789,8 @@ fn resolve_adapter(provider_id: &str) -> Box<dyn ProviderAdapter> {
 
 /// Injected by Tauri host: decrypt from natives.db via Credential Broker.
 /// Signature: (provider_id, key_id, run_id) → Credential (memory only).
-pub type CredentialBrokerFn = Arc<
-    dyn Fn(&str, Option<&str>, &str) -> Result<Credential, String> + Send + Sync,
->;
+pub type CredentialBrokerFn =
+    Arc<dyn Fn(&str, Option<&str>, &str) -> Result<Credential, String> + Send + Sync>;
 
 static CREDENTIAL_BROKER: std::sync::Mutex<Option<CredentialBrokerFn>> =
     std::sync::Mutex::new(None);
@@ -779,10 +829,7 @@ pub fn resolve_credential_for_run(
     }
     // 1. Authenticated broker path (production): Tauri decrypts natives.db.
     //    Child agents must pass their own run_id — never inherit parent lease.
-    let broker = CREDENTIAL_BROKER
-        .lock()
-        .ok()
-        .and_then(|g| g.clone());
+    let broker = CREDENTIAL_BROKER.lock().ok().and_then(|g| g.clone());
     if let Some(broker) = broker {
         match broker(provider_id, key_id, run_id) {
             Ok(cred) if !cred.api_key.trim().is_empty() => {
@@ -848,10 +895,7 @@ pub fn resolve_credential_for_run(
             Some("NATIVES_TEST_DEEPSEEK_BASE"),
         )
     } else if lower.contains("compatible") || lower.contains("sensenova") {
-        (
-            "NATIVES_TEST_OPENAI_KEY",
-            Some("NATIVES_TEST_OPENAI_BASE"),
-        )
+        ("NATIVES_TEST_OPENAI_KEY", Some("NATIVES_TEST_OPENAI_BASE"))
     } else if lower.contains("ollama") {
         return Ok(Credential {
             api_key: "ollama".into(),
@@ -902,13 +946,16 @@ pub fn resolve_credential_for_run(
                 api_key,
                 base_url: raw_base.map(normalize_openai_compatible_base),
                 key_id: key_id.map(str::to_string),
-                provider_type: Some(if lower.contains("deepseek") {
-                    "deepseek"
-                } else if lower.contains("gemini") {
-                    "gemini"
-                } else {
-                    "openai_compatible"
-                }.into()),
+                provider_type: Some(
+                    if lower.contains("deepseek") {
+                        "deepseek"
+                    } else if lower.contains("gemini") {
+                        "gemini"
+                    } else {
+                        "openai_compatible"
+                    }
+                    .into(),
+                ),
             })
         }
         None => Err(format!(
@@ -976,11 +1023,38 @@ mod permission_bind_tests {
         assert!(err.contains("mismatch"), "{err}");
         // Still present for correct owner
         assert!(rt.permission_waiters.lock().await.contains_key("p1"));
-        let ok = rt
-            .respond_permission("p1", false, Some("run-a"))
-            .await;
+        let ok = rt.respond_permission("p1", false, Some("run-a")).await;
         assert!(ok.is_ok());
         assert!(!rt.permission_waiters.lock().await.contains_key("p1"));
+    }
+}
+
+#[cfg(test)]
+mod provider_error_message_tests {
+    use super::*;
+    use provider_adapters::capabilities::ProviderErrorCategory;
+
+    #[test]
+    fn provider_error_message_includes_context_and_redacts_secrets() {
+        let msg = provider_error_message(
+            &ProviderError {
+                code: "http_401".into(),
+                message: "bad key sk-secret123".into(),
+                category: ProviderErrorCategory::Auth,
+                retryable: false,
+            },
+            "p1",
+            "openai_chat_completions",
+            "deepseek-v4-flash",
+            Some("k1"),
+            Some("https://token.sensenova.cn/v1"),
+        );
+
+        assert!(msg.contains("provider=p1"));
+        assert!(msg.contains("protocol=openai_chat_completions"));
+        assert!(msg.contains("model=deepseek-v4-flash"));
+        assert!(msg.contains("retryable=false"));
+        assert!(!msg.contains("sk-secret123"));
     }
 }
 
@@ -1096,8 +1170,7 @@ impl EngineToolRuntime for PermissionGatedTools {
                 ),
             }
         };
-        let class_result =
-            capability_gateway::policy::check_permission(perm_class, profile_str);
+        let class_result = capability_gateway::policy::check_permission(perm_class, profile_str);
         let needs_ask = match class_result {
             capability_gateway::policy::PolicyResult::Allowed => false,
             capability_gateway::policy::PolicyResult::NeedsApproval(_)
@@ -1212,10 +1285,10 @@ impl PermissionGatedTools {
         // (or test responder) can observe PermissionRequested, respond, and
         // lose the race before the channel exists, leaving the engine blocked.
         let (tx, rx) = oneshot::channel();
-        self.waiters.lock().await.insert(
-            permission_id.clone(),
-            (self.parent_run_id.clone(), tx),
-        );
+        self.waiters
+            .lock()
+            .await
+            .insert(permission_id.clone(), (self.parent_run_id.clone(), tx));
         self.events.append(
             &self.parent_run_id,
             RunEventKind::PermissionRequested {
@@ -1704,11 +1777,7 @@ impl EngineProvider for FixtureProvider {
         _cancel: Arc<AtomicBool>,
     ) -> Result<EngineProviderEventStream, EngineError> {
         // If last message is a tool result, complete with text.
-        if messages
-            .last()
-            .map(|m| m.role == "tool")
-            .unwrap_or(false)
-        {
+        if messages.last().map(|m| m.role == "tool").unwrap_or(false) {
             return Ok(Box::pin(futures_util::stream::iter(vec![
                 EngineProviderEvent::TextDelta("tool path complete".into()),
                 EngineProviderEvent::Completed,
@@ -1734,7 +1803,8 @@ impl EngineProvider for FixtureProvider {
                     index: 0,
                     id: Some("call_perm".into()),
                     name: Some("write_file".into()),
-                    arguments_delta: r#"{"path":"/tmp/natives-perm-test.txt","content":"x"}"#.into(),
+                    arguments_delta: r#"{"path":"/tmp/natives-perm-test.txt","content":"x"}"#
+                        .into(),
                 },
                 EngineProviderEvent::Completed,
             ],
