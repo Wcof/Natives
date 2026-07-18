@@ -17,7 +17,7 @@
 
 pub mod migrations;
 
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -36,15 +36,16 @@ impl DataStore {
         std::fs::create_dir_all(artifact_dir)
             .map_err(|e| format!("Failed to create artifact dir: {e}"))?;
 
-        let conn = Connection::open(db_path)
-            .map_err(|e| format!("Failed to open database: {e}"))?;
+        let conn =
+            Connection::open(db_path).map_err(|e| format!("Failed to open database: {e}"))?;
 
         // Enable WAL mode, foreign keys, and busy timeout
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA foreign_keys=ON;
-             PRAGMA busy_timeout=5000;"
-        ).map_err(|e| format!("Failed to set pragmas: {e}"))?;
+             PRAGMA busy_timeout=5000;",
+        )
+        .map_err(|e| format!("Failed to set pragmas: {e}"))?;
 
         let store = DataStore {
             conn: Mutex::new(conn),
@@ -60,8 +61,7 @@ impl DataStore {
 
     /// Run all pending migrations.
     fn run_migrations(&self) -> Result<(), String> {
-        let conn = self.conn.lock()
-            .map_err(|e| format!("Lock error: {e}"))?;
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {e}"))?;
 
         let current_version: i64 = conn
             .query_row(
@@ -99,16 +99,14 @@ impl DataStore {
     /// Store artifact content by hash, return the file path.
     pub fn store_artifact_content(&self, sha256: &str, content: &[u8]) -> Result<PathBuf, String> {
         let path = self.artifact_dir.join(sha256);
-        std::fs::write(&path, content)
-            .map_err(|e| format!("Failed to write artifact: {e}"))?;
+        std::fs::write(&path, content).map_err(|e| format!("Failed to write artifact: {e}"))?;
         Ok(path)
     }
 
     /// Read artifact content by hash.
     pub fn read_artifact_content(&self, sha256: &str) -> Result<Vec<u8>, String> {
         let path = self.artifact_dir.join(sha256);
-        std::fs::read(&path)
-            .map_err(|e| format!("Failed to read artifact: {e}"))
+        std::fs::read(&path).map_err(|e| format!("Failed to read artifact: {e}"))
     }
 }
 
@@ -159,7 +157,11 @@ mod tests {
         let store = setup_test_store();
         let conn = store.conn().unwrap();
         let max_version: i64 = conn
-            .query_row("SELECT COALESCE(MAX(version), 0) FROM _schema_version", [], |row| row.get(0))
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM _schema_version",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert!(max_version > 0, "Migrations should have run");
     }
@@ -169,11 +171,20 @@ mod tests {
         let store = setup_test_store();
         let conn = store.conn().unwrap();
         let required_tables = [
-            "conversation", "message", "message_block",
-            "run", "run_event", "tool_call",
-            "permission_request", "artifact",
-            "context_snapshot", "provider", "provider_key",
-            "model_cache", "extension", "extension_permission",
+            "conversation",
+            "message",
+            "message_block",
+            "run",
+            "run_event",
+            "tool_call",
+            "permission_request",
+            "artifact",
+            "context_snapshot",
+            "provider",
+            "provider_key",
+            "model_cache",
+            "extension",
+            "extension_permission",
         ];
         for table in &required_tables {
             let count: i32 = conn
@@ -184,6 +195,38 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(count, 1, "Table '{}' should exist after migration", table);
+        }
+    }
+
+    #[test]
+    fn test_run_status_check_matches_protocol_v2_statuses() {
+        let store = setup_test_store();
+        let conn = store.conn().unwrap();
+        conn.execute(
+            "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+             VALUES ('status-conv', 'agent', 'Status', 'openai', 'gpt-4o')",
+            [],
+        )
+        .unwrap();
+        for status in [
+            "created",
+            "queued",
+            "preparing",
+            "running",
+            "waiting_permission",
+            "waiting_subagent",
+            "cancelling",
+            "completed",
+            "failed",
+            "cancelled",
+            "interrupted",
+        ] {
+            conn.execute(
+                "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                 VALUES (?1, 'status-conv', ?2, 'openai', 'gpt-4o')",
+                params![format!("run-{status}"), status],
+            )
+            .unwrap_or_else(|e| panic!("status {status} rejected by run CHECK: {e}"));
         }
     }
 }

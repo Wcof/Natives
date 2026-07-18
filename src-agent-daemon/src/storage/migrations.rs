@@ -10,6 +10,7 @@ pub const ALL: &[(i64, &str)] = &[
     (3, MIGRATION_003),
     (4, MIGRATION_004),
     (5, MIGRATION_005),
+    (6, MIGRATION_006),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -262,4 +263,51 @@ CREATE INDEX IF NOT EXISTS idx_provider_key_provider ON provider_key(provider_id
 CREATE INDEX IF NOT EXISTS idx_model_cache_provider ON model_cache(provider_id);
 CREATE INDEX IF NOT EXISTS idx_extension_kind ON extension(kind);
 CREATE INDEX IF NOT EXISTS idx_hook_registration_point ON hook_registration(hook_point);
+";
+
+/// Migration 006: Align persisted run status CHECK with Protocol v2.
+const MIGRATION_006: &str = "
+PRAGMA foreign_keys=OFF;
+PRAGMA legacy_alter_table=ON;
+
+ALTER TABLE run RENAME TO run_old_v005;
+
+CREATE TABLE run (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
+        'created', 'queued', 'preparing', 'running', 'waiting_permission',
+        'waiting_subagent', 'cancelling', 'completed', 'failed', 'cancelled', 'interrupted'
+    )),
+    trigger_message_id TEXT REFERENCES message(id) ON DELETE SET NULL,
+    provider_id TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    error_code TEXT,
+    step_count INTEGER DEFAULT 0,
+    max_steps INTEGER DEFAULT 50,
+    token_budget INTEGER,
+    total_input_tokens INTEGER DEFAULT 0,
+    total_output_tokens INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+INSERT INTO run (
+    id, conversation_id, status, trigger_message_id, provider_id, model_id,
+    started_at, finished_at, error_code, step_count, max_steps,
+    token_budget, total_input_tokens, total_output_tokens, created_at
+)
+SELECT
+    id, conversation_id, status, trigger_message_id, provider_id, model_id,
+    started_at, finished_at, error_code, step_count, max_steps,
+    token_budget, total_input_tokens, total_output_tokens, created_at
+FROM run_old_v005;
+
+DROP TABLE run_old_v005;
+
+CREATE INDEX IF NOT EXISTS idx_run_conversation ON run(conversation_id, created_at);
+
+PRAGMA legacy_alter_table=OFF;
+PRAGMA foreign_keys=ON;
 ";

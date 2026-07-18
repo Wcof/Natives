@@ -1,6 +1,7 @@
 //! RunManager — Daemon-side sole Run Authority (production path).
 
 use crate::production::{FixtureMode, FixtureProvider, ProductionRuntime};
+use crate::storage::DataStore;
 use agent_core::{AgentEngine, EngineRunConfig, EventSequencer};
 use assistant_protocol::v2::{
     CancelRunRequest, CreateRunRequest, DaemonCapabilities, ReplayRunRequest, RetryRunRequest,
@@ -19,6 +20,7 @@ pub struct RunManager {
     /// Explicit project/workspace root per run (hooks + tool sandbox).
     project_paths: Mutex<HashMap<String, std::path::PathBuf>>,
     snapshot_path_override: Option<std::path::PathBuf>,
+    data_store: Option<Arc<DataStore>>,
     pub runtime: Arc<ProductionRuntime>,
 }
 
@@ -43,16 +45,100 @@ impl Default for RunManager {
 
 impl RunManager {
     pub fn new() -> Self {
+        if let Some(store) = Self::store_from_env() {
+            return Self::new_with_store(store);
+        }
+        Self::new_memory()
+    }
+
+    fn new_memory() -> Self {
         let mgr = Self {
             runs: Mutex::new(HashMap::new()),
             idempotency: Mutex::new(HashMap::new()),
             last_content: Mutex::new(HashMap::new()),
             project_paths: Mutex::new(HashMap::new()),
             snapshot_path_override: None,
+            data_store: None,
             runtime: Arc::new(ProductionRuntime::new()),
         };
         let _ = mgr.restore_runs_snapshot();
         mgr
+    }
+
+    pub fn new_with_store(data_store: Arc<DataStore>) -> Self {
+        let mgr = Self {
+            runs: Mutex::new(HashMap::new()),
+            idempotency: Mutex::new(HashMap::new()),
+            last_content: Mutex::new(HashMap::new()),
+            project_paths: Mutex::new(HashMap::new()),
+            snapshot_path_override: None,
+            data_store: Some(data_store.clone()),
+            runtime: Arc::new(ProductionRuntime::new_with_event_store(data_store)),
+        };
+        let _ = mgr.restore_runs_snapshot();
+        mgr
+    }
+
+    fn store_from_env() -> Option<Arc<DataStore>> {
+        let db_path = std::env::var("NATIVES_DB_PATH").ok()?;
+        if db_path.trim().is_empty() {
+            return None;
+        }
+        let db_path = std::path::PathBuf::from(db_path);
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let artifact_dir = std::env::var("NATIVES_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::env::var_os("HOME")
+                    .or_else(|| std::env::var_os("USERPROFILE"))
+                    .map(|h| std::path::PathBuf::from(h).join(".natives").join("runtime"))
+                    .unwrap_or_else(std::env::temp_dir)
+            })
+            .join("artifacts");
+        DataStore::new(&db_path, &artifact_dir).ok().map(Arc::new)
+    }
+
+    fn persist_run_row(&self, run: &RunV2) -> Result<(), String> {
+        let Some(store) = &self.data_store else {
+            return Ok(());
+        };
+        let conn = store.conn()?;
+        conn.execute(
+            "INSERT INTO run (
+                id, conversation_id, status, trigger_message_id, provider_id, model_id,
+                started_at, finished_at, error_code, step_count, max_steps,
+                token_budget, total_input_tokens, total_output_tokens, created_at
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, 0, 0, ?12)
+             ON CONFLICT(id) DO UPDATE SET
+                status = excluded.status,
+                trigger_message_id = excluded.trigger_message_id,
+                provider_id = excluded.provider_id,
+                model_id = excluded.model_id,
+                started_at = excluded.started_at,
+                finished_at = excluded.finished_at,
+                error_code = excluded.error_code,
+                step_count = excluded.step_count,
+                max_steps = excluded.max_steps",
+            rusqlite::params![
+                run.id,
+                run.conversation_id,
+                run.status.as_str(),
+                run.trigger_message_id,
+                run.provider_id,
+                run.model_id,
+                run.started_at.map(|dt| dt.to_rfc3339()),
+                run.finished_at.map(|dt| dt.to_rfc3339()),
+                run.error_code,
+                run.step_count as i64,
+                run.max_steps as i64,
+                run.created_at.unwrap_or_else(chrono::Utc::now).to_rfc3339()
+            ],
+        )
+        .map_err(|e| format!("PERSISTENCE_FAILED upsert run: {e}"))?;
+        Ok(())
     }
 
     fn store_project_path(&self, run_id: &str, project_path: Option<&str>) {
@@ -171,9 +257,7 @@ impl RunManager {
             provider_id: req.provider_id,
             key_id: req.key_id,
             model_id: req.model_id,
-            permission_profile: req
-                .permission_profile
-                .unwrap_or_else(|| "ask".into()),
+            permission_profile: req.permission_profile.unwrap_or_else(|| "ask".into()),
             trigger_message_id: None,
             started_at: None,
             finished_at: None,
@@ -190,6 +274,7 @@ impl RunManager {
             let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
             runs.insert(id.clone(), run.clone());
         }
+        self.persist_run_row(&run)?;
         let _ = self.persist_runs_snapshot();
         if let Some(key) = req.idempotency_key {
             self.idempotency
@@ -204,9 +289,12 @@ impl RunManager {
                 .insert(run.id.clone(), content);
         }
         self.store_project_path(&run.id, req.project_path.as_deref());
-        self.runtime
-            .events
-            .append(&run.id, RunEventKind::Queued);
+        let queued = self.runtime.events.append(&run.id, RunEventKind::Queued);
+        if let RunEventKind::Failed { error, code } = queued.payload {
+            if code == "PERSISTENCE_FAILED" {
+                return Err(error);
+            }
+        }
         Ok(run)
     }
 
@@ -220,13 +308,19 @@ impl RunManager {
             Err(_) => return Vec::new(),
         };
         runs.values()
-            .filter(|r| conversation_id.map(|c| r.conversation_id == c).unwrap_or(true))
+            .filter(|r| {
+                conversation_id
+                    .map(|c| r.conversation_id == c)
+                    .unwrap_or(true)
+            })
             .cloned()
             .collect()
     }
 
     pub fn replay(&self, req: ReplayRunRequest) -> Vec<RunEventV2> {
-        self.runtime.events.replay_after(&req.run_id, req.after_sequence)
+        self.runtime
+            .events
+            .replay_after(&req.run_id, req.after_sequence)
     }
 
     pub async fn cancel(&self, req: CancelRunRequest) -> Result<RunV2, String> {
@@ -244,6 +338,7 @@ impl RunManager {
                 run.clone()
             }
         };
+        self.persist_run_row(&result)?;
         self.persist_runs_snapshot()?;
         Ok(result)
     }
@@ -302,23 +397,28 @@ impl RunManager {
                     run = stored.clone();
                 }
             }
+            self.persist_run_row(&run)?;
             self.persist_runs_snapshot()?;
         }
         Ok(run)
     }
 
     fn mark_preparing(&self, run_id: &str) -> Result<RunV2, String> {
-        let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
-        let run = runs
-            .get_mut(run_id)
-            .ok_or_else(|| "run not found".to_string())?;
-        if !run.status.is_terminal() {
-            run.status = RunStatusV2::Preparing;
-            if run.started_at.is_none() {
-                run.started_at = Some(chrono::Utc::now());
+        let result = {
+            let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
+            let run = runs
+                .get_mut(run_id)
+                .ok_or_else(|| "run not found".to_string())?;
+            if !run.status.is_terminal() {
+                run.status = RunStatusV2::Preparing;
+                if run.started_at.is_none() {
+                    run.started_at = Some(chrono::Utc::now());
+                }
             }
-        }
-        Ok(run.clone())
+            run.clone()
+        };
+        self.persist_run_row(&result)?;
+        Ok(result)
     }
 
     /// Non-blocking start for RPC / UI: returns immediately with Preparing status.
@@ -420,6 +520,7 @@ impl RunManager {
             if let Some(r) = runs.get_mut(&run.id) {
                 r.status = RunStatusV2::Preparing;
                 r.started_at = Some(chrono::Utc::now());
+                self.persist_run_row(r)?;
             }
         }
 
@@ -440,7 +541,11 @@ impl RunManager {
 
         if use_fixture && std::env::var("NATIVES_DAEMON_FIXTURE").is_err() {
             // Production without keys fails clearly rather than Echo mock success.
-            if std::env::var("NATIVES_ALLOW_FIXTURE_FALLBACK").ok().as_deref() != Some("1") {
+            if std::env::var("NATIVES_ALLOW_FIXTURE_FALLBACK")
+                .ok()
+                .as_deref()
+                != Some("1")
+            {
                 // Still allow fixture for unit tests via explicit flag only.
                 // For daemon tests we set NATIVES_DAEMON_FIXTURE=1.
                 if cfg!(test) {
@@ -453,9 +558,8 @@ impl RunManager {
             }
         }
 
-        let use_fixture_engine = std::env::var("NATIVES_DAEMON_FIXTURE").ok().as_deref()
-            == Some("1")
-            || cfg!(test);
+        let use_fixture_engine =
+            std::env::var("NATIVES_DAEMON_FIXTURE").ok().as_deref() == Some("1") || cfg!(test);
 
         let final_status = if use_fixture_engine {
             // Deterministic offline path for tests — real engine + permission tools,
@@ -525,8 +629,7 @@ impl RunManager {
             self.runtime.engines.lock().await.remove(&run.id);
             status
         } else {
-            let project_path =
-                self.resolve_project_path(&run.id, request_project_path.as_deref());
+            let project_path = self.resolve_project_path(&run.id, request_project_path.as_deref());
             self.store_project_path(
                 &run.id,
                 project_path
@@ -549,11 +652,16 @@ impl RunManager {
                 .await?;
             // Infer terminal from last event
             let events = self.runtime.events.replay_after(&run.id, 0);
-            if events
-                .iter()
-                .any(|e| matches!(e.payload, RunEventKind::Cancelled { .. } | RunEventKind::Interrupted { .. }))
-            {
-                if events.iter().any(|e| matches!(e.payload, RunEventKind::Cancelled { .. })) {
+            if events.iter().any(|e| {
+                matches!(
+                    e.payload,
+                    RunEventKind::Cancelled { .. } | RunEventKind::Interrupted { .. }
+                )
+            }) {
+                if events
+                    .iter()
+                    .any(|e| matches!(e.payload, RunEventKind::Cancelled { .. }))
+                {
                     RunStatusV2::Cancelled
                 } else {
                     RunStatusV2::Interrupted
@@ -577,6 +685,7 @@ impl RunManager {
             }
             let result = r.clone();
             drop(runs);
+            self.persist_run_row(&result)?;
             self.persist_runs_snapshot()?;
             return Ok(result);
         }
@@ -627,6 +736,7 @@ impl RunManager {
             if let Some(r) = runs.get_mut(&run.id) {
                 r.status = RunStatusV2::Preparing;
                 r.started_at = Some(chrono::Utc::now());
+                self.persist_run_row(r)?;
             }
         }
         let config = EngineRunConfig {
@@ -662,6 +772,7 @@ impl RunManager {
             r.finished_at = Some(chrono::Utc::now());
             let result = r.clone();
             drop(runs);
+            self.persist_run_row(&result)?;
             self.persist_runs_snapshot()?;
             return Ok(result);
         }
@@ -705,11 +816,7 @@ impl RunManager {
         Ok(new_run)
     }
 
-    pub async fn respond_permission(
-        &self,
-        request_id: &str,
-        approved: bool,
-    ) -> Result<(), String> {
+    pub async fn respond_permission(&self, request_id: &str, approved: bool) -> Result<(), String> {
         self.respond_permission_for_run(request_id, approved, None)
             .await
     }
@@ -734,7 +841,9 @@ pub fn protocol_version() -> &'static str {
 mod tests {
     use super::*;
     use agent_core::EngineToolRuntime;
-    use assistant_protocol::v2::{CreateRunRequest, ReplayRunRequest, RetryRunRequest, StartRunRequest};
+    use assistant_protocol::v2::{
+        CreateRunRequest, ReplayRunRequest, RetryRunRequest, StartRunRequest,
+    };
     use std::sync::{Mutex as StdMutex, OnceLock};
 
     /// Process-global lock for tests that mutate NATIVES_* env (fixture, runtime dir, keys).
@@ -767,6 +876,62 @@ mod tests {
         let a = rm.create_run(req.clone()).unwrap();
         let b = rm.create_run(req).unwrap();
         assert_eq!(a.id, b.id);
+    }
+
+    #[test]
+    fn create_run_persists_queued_event_to_sqlite_run_event() {
+        with_env_lock(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let db_path = dir.path().join("natives.db");
+            let store = Arc::new(
+                crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
+            );
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES ('sqlite-events-conv', 'agent', 'SQLite Events', 'openai', 'gpt-4o')",
+                    [],
+                )
+                .unwrap();
+
+            let rm = RunManager::new_with_store(store.clone());
+            let run = rm
+                .create_run(CreateRunRequest {
+                    conversation_id: "sqlite-events-conv".into(),
+                    provider_id: "openai".into(),
+                    model_id: "gpt-4o".into(),
+                    key_id: None,
+                    agent_profile_id: None,
+                    permission_profile: Some("ask".into()),
+                    content: Some("persist me".into()),
+                    attachments: None,
+                    max_steps: Some(3),
+                    parent_run_id: None,
+                    project_path: None,
+                    idempotency_key: Some(format!("sqlite-event-{}", Uuid::new_v4())),
+                })
+                .unwrap();
+
+            let (count, event_type): (i64, String) = store
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*), MAX(event_type) FROM run_event WHERE run_id = ?1",
+                    rusqlite::params![run.id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(count, 1);
+            assert_eq!(event_type, "queued");
+
+            let replayed = crate::production::ProductionRuntime::new_with_event_store(store)
+                .events
+                .replay_after(&run.id, 0);
+            assert_eq!(replayed.len(), 1);
+            assert!(matches!(replayed[0].payload, RunEventKind::Queued));
+        });
     }
 
     #[test]
@@ -818,13 +983,19 @@ mod tests {
                 rusqlite::params![trigger_message_id],
                 |row| row.get(0),
             ).unwrap();
-            assert_eq!(serde_json::from_str::<serde_json::Value>(&text).unwrap()["text"], "inspect");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&text).unwrap()["text"],
+                "inspect"
+            );
             let file: String = store.conn().unwrap().query_row(
                 "SELECT block_json FROM message_block WHERE message_id = ?1 AND block_type = 'file_reference'",
                 rusqlite::params![trigger_message_id],
                 |row| row.get(0),
             ).unwrap();
-            assert_eq!(serde_json::from_str::<serde_json::Value>(&file).unwrap()["path"], "/tmp/a.txt");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&file).unwrap()["path"],
+                "/tmp/a.txt"
+            );
 
             if let Some(value) = previous_db {
                 std::env::set_var("NATIVES_DB_PATH", value);
@@ -1124,62 +1295,60 @@ mod tests {
     #[test]
     fn persist_and_restore_marks_active_as_interrupted() {
         with_env_lock(|| {
-        let dir = std::env::temp_dir().join(format!("natives-runs-{}", Uuid::new_v4()));
-        let _ = std::fs::create_dir_all(dir.join("runs"));
-        let snapshot_path = dir.join("runs").join("snapshot.json");
-        let rm = RunManager {
-            runs: Mutex::new(HashMap::new()),
-            idempotency: Mutex::new(HashMap::new()),
-            last_content: Mutex::new(HashMap::new()),
-            project_paths: Mutex::new(HashMap::new()),
-            snapshot_path_override: Some(snapshot_path.clone()),
-            runtime: Arc::new(crate::production::ProductionRuntime::new()),
-        };
-        let run = rm
-            .create_run(CreateRunRequest {
-                conversation_id: "c-restore".into(),
-                provider_id: "openai".into(),
-                model_id: "m".into(),
-                key_id: None,
-                agent_profile_id: None,
-                permission_profile: None,
-                content: Some("x".into()),
-                attachments: None,
-                max_steps: Some(3),
-                parent_run_id: None,
-                project_path: Some("/tmp/proj".into()),
-                idempotency_key: Some(format!("restore-{}", Uuid::new_v4())),
-            })
-            .unwrap();
-        // Force active status then snapshot.
-        {
-            let mut runs = rm.runs.lock().unwrap();
-            if let Some(r) = runs.get_mut(&run.id) {
-                r.status = RunStatusV2::Running;
+            let dir = std::env::temp_dir().join(format!("natives-runs-{}", Uuid::new_v4()));
+            let _ = std::fs::create_dir_all(dir.join("runs"));
+            let snapshot_path = dir.join("runs").join("snapshot.json");
+            let rm = RunManager {
+                runs: Mutex::new(HashMap::new()),
+                idempotency: Mutex::new(HashMap::new()),
+                last_content: Mutex::new(HashMap::new()),
+                project_paths: Mutex::new(HashMap::new()),
+                snapshot_path_override: Some(snapshot_path.clone()),
+                data_store: None,
+                runtime: Arc::new(crate::production::ProductionRuntime::new()),
+            };
+            let run = rm
+                .create_run(CreateRunRequest {
+                    conversation_id: "c-restore".into(),
+                    provider_id: "openai".into(),
+                    model_id: "m".into(),
+                    key_id: None,
+                    agent_profile_id: None,
+                    permission_profile: None,
+                    content: Some("x".into()),
+                    attachments: None,
+                    max_steps: Some(3),
+                    parent_run_id: None,
+                    project_path: Some("/tmp/proj".into()),
+                    idempotency_key: Some(format!("restore-{}", Uuid::new_v4())),
+                })
+                .unwrap();
+            // Force active status then snapshot.
+            {
+                let mut runs = rm.runs.lock().unwrap();
+                if let Some(r) = runs.get_mut(&run.id) {
+                    r.status = RunStatusV2::Running;
+                }
             }
-        }
-        rm.persist_runs_snapshot().unwrap();
-        let snap = RunManager::runs_snapshot_path();
-        assert!(
-            snap.exists(),
-            "snapshot file missing at {}",
-            snap.display()
-        );
-        let rm2 = RunManager {
-            runs: Mutex::new(HashMap::new()),
-            idempotency: Mutex::new(HashMap::new()),
-            last_content: Mutex::new(HashMap::new()),
-            project_paths: Mutex::new(HashMap::new()),
-            snapshot_path_override: Some(snapshot_path),
-            runtime: Arc::new(crate::production::ProductionRuntime::new()),
-        };
-        let n = rm2.restore_runs_snapshot().unwrap();
-        assert!(n >= 1, "expected restored runs from {}", snap.display());
-        let restored = rm2.get_run(&run.id).expect("restored");
-        assert_eq!(restored.status, RunStatusV2::Interrupted);
-        assert_eq!(restored.error_code.as_deref(), Some("daemon_restarted"));
-        assert_eq!(restored.project_path.as_deref(), Some("/tmp/proj"));
-        let _ = std::fs::remove_dir_all(&dir);
+            rm.persist_runs_snapshot().unwrap();
+            let snap = RunManager::runs_snapshot_path();
+            assert!(snap.exists(), "snapshot file missing at {}", snap.display());
+            let rm2 = RunManager {
+                runs: Mutex::new(HashMap::new()),
+                idempotency: Mutex::new(HashMap::new()),
+                last_content: Mutex::new(HashMap::new()),
+                project_paths: Mutex::new(HashMap::new()),
+                snapshot_path_override: Some(snapshot_path),
+                data_store: None,
+                runtime: Arc::new(crate::production::ProductionRuntime::new()),
+            };
+            let n = rm2.restore_runs_snapshot().unwrap();
+            assert!(n >= 1, "expected restored runs from {}", snap.display());
+            let restored = rm2.get_run(&run.id).expect("restored");
+            assert_eq!(restored.status, RunStatusV2::Interrupted);
+            assert_eq!(restored.error_code.as_deref(), Some("daemon_restarted"));
+            assert_eq!(restored.project_path.as_deref(), Some("/tmp/proj"));
+            let _ = std::fs::remove_dir_all(&dir);
         }); // with_env_lock
     }
 
@@ -1223,9 +1392,7 @@ mod tests {
             assert_eq!(a.id, b.id);
             // Second call must not error; active run is returned as-is.
             assert!(
-                a.status.is_active()
-                    || a.status.is_terminal()
-                    || a.status == RunStatusV2::Queued
+                a.status.is_active() || a.status.is_terminal() || a.status == RunStatusV2::Queued
             );
             std::env::remove_var("NATIVES_DAEMON_FIXTURE");
         });
@@ -1270,7 +1437,9 @@ mod tests {
             run_id: run.id.clone(),
             after_sequence: 0,
         });
-        assert!(events.iter().any(|e| matches!(e.payload, RunEventKind::Started)));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e.payload, RunEventKind::Started)));
         assert!(events
             .iter()
             .any(|e| matches!(e.payload, RunEventKind::TextDelta { .. })));
@@ -1547,7 +1716,8 @@ mod tests {
                 }
             }
             struct CancelAwareTools {
-                engines: Arc<tokio::sync::Mutex<std::collections::HashMap<String, Arc<AgentEngine>>>>,
+                engines:
+                    Arc<tokio::sync::Mutex<std::collections::HashMap<String, Arc<AgentEngine>>>>,
                 run_id: String,
                 seen: Arc<std::sync::atomic::AtomicBool>,
             }
@@ -1753,9 +1923,7 @@ mod tests {
             mode: FixtureMode::RequestPermissionPath,
         };
         // Ensure ConfirmEach profile so side-effect tools ask.
-        rm.runtime
-            .set_permission_profile("ask")
-            .await;
+        rm.runtime.set_permission_profile("ask").await;
 
         let rm_bg = rm.clone();
         let rid = run.id.clone();
@@ -1795,7 +1963,7 @@ mod tests {
                 },
                 &provider,
                 &tools,
-            )
+            ),
         )
         .await
         .expect("permission-gated fixture run must terminate")
@@ -1867,7 +2035,9 @@ mod tests {
             std::env::remove_var("ANTHROPIC_API_KEY");
             let err = crate::production::resolve_credential("openai", Some("k1")).unwrap_err();
             assert!(
-                err.contains("No credential") || err.contains("broker") || err.contains("unavailable"),
+                err.contains("No credential")
+                    || err.contains("broker")
+                    || err.contains("unavailable"),
                 "unexpected err: {err}"
             );
             assert!(!err.contains("sk-"));
@@ -1901,9 +2071,8 @@ mod tests {
                 },
             ));
             std::env::remove_var("NATIVES_TEST_OPENAI_KEY");
-            let cred =
-                crate::production::resolve_credential_for_run("openai", Some("k1"), "run-1")
-                    .expect("broker must win over missing env");
+            let cred = crate::production::resolve_credential_for_run("openai", Some("k1"), "run-1")
+                .expect("broker must win over missing env");
             assert_eq!(cred.key_id.as_deref(), Some("k1"));
             assert_eq!(cred.api_key, "broker-secret-not-for-logs");
             let event_payload = serde_json::json!({"error": "auth failed"});
@@ -1963,8 +2132,16 @@ mod tests {
             )
             .await;
         assert!(!result.is_error, "task error: {:?}", result.output);
-        let task_id = result.output.get("task_id").and_then(|v| v.as_str()).unwrap();
-        let child_key = result.output.get("key_id").and_then(|v| v.as_str()).unwrap();
+        let task_id = result
+            .output
+            .get("task_id")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        let child_key = result
+            .output
+            .get("key_id")
+            .and_then(|v| v.as_str())
+            .unwrap();
         assert_eq!(child_key, "child-key-from-broker");
         assert_ne!(child_key, "parent-key");
         assert_eq!(
@@ -1994,7 +2171,11 @@ mod tests {
                 &std::sync::atomic::AtomicBool::new(false),
             )
             .await;
-        assert!(kill.output.get("cancelled").and_then(|v| v.as_bool()).unwrap_or(false));
+        assert!(kill
+            .output
+            .get("cancelled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false));
 
         if let Ok(dir) = std::env::var("NATIVES_TEST_SCRATCH") {
             let _ = std::fs::write(
@@ -2103,9 +2284,11 @@ mod tests {
                     final_status, "completed",
                     "fixture child should complete with independent identity"
                 );
-                let parent_done = prt.events.replay_after(&parent_id, 0).iter().any(|e| {
-                    matches!(e.payload, RunEventKind::SubagentCompleted { .. })
-                });
+                let parent_done = prt
+                    .events
+                    .replay_after(&parent_id, 0)
+                    .iter()
+                    .any(|e| matches!(e.payload, RunEventKind::SubagentCompleted { .. }));
                 assert!(parent_done, "parent must observe SubagentCompleted");
                 assert!(!prt.events.replay_after(&parent_id, 0).is_empty());
 
@@ -2142,8 +2325,8 @@ mod tests {
                 args: None,
                 url: None,
                 trusted: true,
-            auth_token: None,
-            headers: None,
+                auth_token: None,
+                headers: None,
             })
             .unwrap();
         crate::mcp_runtime::global_mcp()

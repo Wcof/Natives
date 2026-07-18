@@ -210,8 +210,18 @@ fn load_hooks_file(path: &std::path::Path, hooks: &mut HookRegistry) {
 
 impl ProductionRuntime {
     pub fn new() -> Self {
+        Self::new_with_events(EventSequencer::new())
+    }
+
+    pub fn new_with_event_store(data_store: Arc<crate::storage::DataStore>) -> Self {
+        Self::new_with_events(EventSequencer::with_persistence(Arc::new(
+            crate::event_log::EventLog::new(data_store),
+        )))
+    }
+
+    fn new_with_events(events: EventSequencer) -> Self {
         Self {
-            events: EventSequencer::new(),
+            events,
             permissions: Arc::new(PermissionManager::new(PermissionProfile::ConfirmEach)),
             subagents: Arc::new(SubAgentManager::new(SubAgentConfig::default())),
             hooks: Arc::new(Mutex::new(build_production_hooks())),

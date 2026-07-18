@@ -7,7 +7,9 @@
 //! clients to replay from the last acknowledged sequence after reconnection.
 
 use crate::storage::DataStore;
+use agent_core::EventPersistence;
 use assistant_protocol::v1::run_event::{RunEvent, RunEventPayload};
+use assistant_protocol::v2::{RunEventKind, RunEventV2};
 use rusqlite::params;
 
 /// The event log for a single run.
@@ -62,6 +64,26 @@ impl EventLog {
         self.append(&event.run_id, &event_type, &payload)
     }
 
+    /// Append a Protocol v2 event with the already assigned sequence.
+    pub fn append_event_v2(&self, event: &RunEventV2) -> Result<(), String> {
+        let conn = self.data_store.conn()?;
+        let payload =
+            serde_json::to_string(event).map_err(|e| format!("Failed to serialize event: {e}"))?;
+        conn.execute(
+            "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                event.run_id,
+                event.sequence as i64,
+                event.payload.type_name(),
+                payload,
+                event.timestamp.to_rfc3339()
+            ],
+        )
+        .map_err(|e| format!("PERSISTENCE_FAILED insert run_event: {e}"))?;
+        Ok(())
+    }
+
     /// Replay events for a run starting after the given sequence number.
     /// Returns all events with sequence > last_sequence.
     pub fn replay_after(&self, run_id: &str, last_sequence: i64) -> Result<Vec<RunEvent>, String> {
@@ -94,11 +116,22 @@ impl EventLog {
             .map_err(|e| format!("Failed to query replay: {e}"))?;
 
         let mut events = Vec::new();
-        while let Some(row) = rows.next().map_err(|e| format!("Failed to read row: {e}"))? {
-            let sequence: i64 = row.get(0).map_err(|e| format!("Failed to get sequence: {e}"))?;
-            let event_type: String = row.get(1).map_err(|e| format!("Failed to get event_type: {e}"))?;
-            let payload_str: String = row.get(2).map_err(|e| format!("Failed to get payload: {e}"))?;
-            let timestamp: String = row.get(3).map_err(|e| format!("Failed to get timestamp: {e}"))?;
+        while let Some(row) = rows
+            .next()
+            .map_err(|e| format!("Failed to read row: {e}"))?
+        {
+            let sequence: i64 = row
+                .get(0)
+                .map_err(|e| format!("Failed to get sequence: {e}"))?;
+            let event_type: String = row
+                .get(1)
+                .map_err(|e| format!("Failed to get event_type: {e}"))?;
+            let payload_str: String = row
+                .get(2)
+                .map_err(|e| format!("Failed to get payload: {e}"))?;
+            let timestamp: String = row
+                .get(3)
+                .map_err(|e| format!("Failed to get timestamp: {e}"))?;
 
             let payload = match decode_payload(&event_type, &payload_str) {
                 Ok(p) => p,
@@ -143,12 +176,73 @@ impl EventLog {
         Ok(seq)
     }
 
+    pub fn replay_after_v2(
+        &self,
+        run_id: &str,
+        last_sequence: u64,
+    ) -> Result<Vec<RunEventV2>, String> {
+        let conn = self.data_store.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT sequence, event_type, payload, timestamp
+                 FROM run_event
+                 WHERE run_id = ?1 AND sequence > ?2
+                 ORDER BY sequence ASC",
+            )
+            .map_err(|e| format!("Failed to prepare v2 replay query: {e}"))?;
+
+        let mut rows = stmt
+            .query(params![run_id, last_sequence as i64])
+            .map_err(|e| format!("Failed to query v2 replay: {e}"))?;
+
+        let mut events = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .map_err(|e| format!("Failed to read row: {e}"))?
+        {
+            let sequence: i64 = row
+                .get(0)
+                .map_err(|e| format!("Failed to get sequence: {e}"))?;
+            let event_type: String = row
+                .get(1)
+                .map_err(|e| format!("Failed to get event_type: {e}"))?;
+            let payload_str: String = row
+                .get(2)
+                .map_err(|e| format!("Failed to get payload: {e}"))?;
+            let timestamp: String = row
+                .get(3)
+                .map_err(|e| format!("Failed to get timestamp: {e}"))?;
+            events.push(decode_event_v2(
+                run_id,
+                sequence as u64,
+                &event_type,
+                &payload_str,
+                &timestamp,
+            )?);
+        }
+        Ok(events)
+    }
+
     /// Acknowledge receipt of events up to the given sequence.
     /// This is a no-op for the log itself (acknowledgements are tracked client-side).
     pub fn acknowledge(&self, _run_id: &str, _sequence: i64) -> Result<(), String> {
         // Acknowledgements are tracked by the client; the log is append-only.
         // This method exists for future durability tracking.
         Ok(())
+    }
+}
+
+impl EventPersistence for EventLog {
+    fn append(&self, event: &RunEventV2) -> Result<(), String> {
+        self.append_event_v2(event)
+    }
+
+    fn replay_after(&self, run_id: &str, after_sequence: u64) -> Result<Vec<RunEventV2>, String> {
+        self.replay_after_v2(run_id, after_sequence)
+    }
+
+    fn last_sequence(&self, run_id: &str) -> Result<u64, String> {
+        EventLog::last_sequence(self, run_id).map(|seq| seq as u64)
     }
 }
 
@@ -159,7 +253,10 @@ fn normalize_stored_payload(event_type: &str, payload: &str) -> String {
             return payload.to_string();
         }
         if let serde_json::Value::Object(mut map) = value {
-            map.insert("type".into(), serde_json::Value::String(event_type.to_string()));
+            map.insert(
+                "type".into(),
+                serde_json::Value::String(event_type.to_string()),
+            );
             return serde_json::Value::Object(map).to_string();
         }
     }
@@ -174,6 +271,42 @@ fn decode_payload(event_type: &str, payload_str: &str) -> Result<RunEventPayload
     // Recover from untagged historical rows.
     let normalized = normalize_stored_payload(event_type, payload_str);
     serde_json::from_str(&normalized).map_err(|e| format!("decode payload: {e}"))
+}
+
+fn decode_event_v2(
+    run_id: &str,
+    sequence: u64,
+    event_type: &str,
+    payload_str: &str,
+    timestamp: &str,
+) -> Result<RunEventV2, String> {
+    if let Ok(mut event) = serde_json::from_str::<RunEventV2>(payload_str) {
+        event.run_id = run_id.to_string();
+        event.sequence = sequence;
+        return Ok(event);
+    }
+    let payload = decode_payload_v2(event_type, payload_str)?;
+    let dt = chrono::DateTime::parse_from_rfc3339(timestamp)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .or_else(|_| {
+            chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S")
+                .map(|ndt| ndt.and_utc())
+        })
+        .unwrap_or_else(|_| chrono::Utc::now());
+    Ok(RunEventV2 {
+        run_id: run_id.to_string(),
+        sequence,
+        timestamp: dt,
+        payload,
+    })
+}
+
+fn decode_payload_v2(event_type: &str, payload_str: &str) -> Result<RunEventKind, String> {
+    if let Ok(payload) = serde_json::from_str::<RunEventKind>(payload_str) {
+        return Ok(payload);
+    }
+    let normalized = normalize_stored_payload(event_type, payload_str);
+    serde_json::from_str(&normalized).map_err(|e| format!("decode v2 payload: {e}"))
 }
 
 /// Get the event type name from a RunEventPayload.
@@ -240,9 +373,13 @@ mod tests {
         let (log, run_id) = setup_event_log();
         let seq1 = log.append(&run_id, "started", "{}").unwrap();
         assert_eq!(seq1, 1, "First event should be sequence 1");
-        let seq2 = log.append(&run_id, "text_delta", r#"{"text":"hello"}"#).unwrap();
+        let seq2 = log
+            .append(&run_id, "text_delta", r#"{"text":"hello"}"#)
+            .unwrap();
         assert_eq!(seq2, 2, "Second event should be sequence 2");
-        let seq3 = log.append(&run_id, "completed", r#"{"reason":"done"}"#).unwrap();
+        let seq3 = log
+            .append(&run_id, "completed", r#"{"reason":"done"}"#)
+            .unwrap();
         assert_eq!(seq3, 3, "Third event should be sequence 3");
     }
 
@@ -255,11 +392,13 @@ mod tests {
         // avoid re-entrant DataStore mutex deadlock.
         {
             let conn = log.data_store.conn().unwrap();
-            let count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM run_event WHERE run_id = ?1",
-                params![run_id],
-                |row| row.get(0),
-            ).unwrap();
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM run_event WHERE run_id = ?1",
+                    params![run_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
             assert_eq!(count, 1, "Event should be in database");
         }
         // Check replay
@@ -283,8 +422,10 @@ mod tests {
     fn test_replay_after_sequence() {
         let (log, run_id) = setup_event_log();
         log.append(&run_id, "started", "{}").unwrap();
-        log.append(&run_id, "text_delta", r#"{"text":"hi"}"#).unwrap();
-        log.append(&run_id, "completed", r#"{"reason":"ok"}"#).unwrap();
+        log.append(&run_id, "text_delta", r#"{"text":"hi"}"#)
+            .unwrap();
+        log.append(&run_id, "completed", r#"{"reason":"ok"}"#)
+            .unwrap();
 
         // Replay after sequence 1 should return events 2 and 3
         let events = log.replay_after(&run_id, 1).unwrap();
@@ -297,7 +438,8 @@ mod tests {
     fn test_replay_all() {
         let (log, run_id) = setup_event_log();
         log.append(&run_id, "started", "{}").unwrap();
-        log.append(&run_id, "completed", r#"{"reason":"ok"}"#).unwrap();
+        log.append(&run_id, "completed", r#"{"reason":"ok"}"#)
+            .unwrap();
 
         let events = log.replay_all(&run_id).unwrap();
         assert_eq!(events.len(), 2);
@@ -318,7 +460,8 @@ mod tests {
         log.append(&run_id, "started", "{}").unwrap();
         assert_eq!(log.last_sequence(&run_id).unwrap(), 1);
 
-        log.append(&run_id, "completed", r#"{"reason":"ok"}"#).unwrap();
+        log.append(&run_id, "completed", r#"{"reason":"ok"}"#)
+            .unwrap();
         assert_eq!(log.last_sequence(&run_id).unwrap(), 2);
     }
 
@@ -346,7 +489,8 @@ mod tests {
 
         log.append(&run_id1, "started", "{}").unwrap();
         log.append(&run_id2, "started", "{}").unwrap();
-        log.append(&run_id1, "completed", r#"{"reason":"ok"}"#).unwrap();
+        log.append(&run_id1, "completed", r#"{"reason":"ok"}"#)
+            .unwrap();
 
         let events1 = log.replay_all(&run_id1).unwrap();
         assert_eq!(events1.len(), 2, "Run 1 should have 2 events");

@@ -12,6 +12,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 
+pub trait EventPersistence: Send + Sync {
+    fn append(&self, event: &RunEventV2) -> Result<(), String>;
+    fn replay_after(&self, run_id: &str, after_sequence: u64) -> Result<Vec<RunEventV2>, String>;
+    fn last_sequence(&self, run_id: &str) -> Result<u64, String>;
+}
+
 /// Append-only event log with fan-out subscribers.
 ///
 /// Default durability: JSONL under the resolved event log dir; reloaded on first
@@ -19,6 +25,7 @@ use tokio::sync::broadcast;
 #[derive(Clone, Default)]
 pub struct EventSequencer {
     inner: Arc<Mutex<Inner>>,
+    persistence: Option<Arc<dyn EventPersistence>>,
 }
 
 struct Inner {
@@ -70,11 +77,34 @@ impl EventSequencer {
         Self::default()
     }
 
-    fn ensure_loaded(inner: &mut Inner, run_id: &str) {
+    pub fn with_persistence(persistence: Arc<dyn EventPersistence>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Inner::default())),
+            persistence: Some(persistence),
+        }
+    }
+
+    fn ensure_loaded(&self, inner: &mut Inner, run_id: &str) {
         if inner.loaded.get(run_id).copied().unwrap_or(false) {
             return;
         }
         inner.loaded.insert(run_id.to_string(), true);
+        if let Some(persistence) = &self.persistence {
+            if let Ok(loaded) = persistence.replay_after(run_id, 0) {
+                if !loaded.is_empty() {
+                    let max_seq = loaded.iter().map(|ev| ev.sequence).max().unwrap_or(0);
+                    inner.sequences.insert(run_id.to_string(), max_seq);
+                    inner.events.insert(run_id.to_string(), loaded);
+                    return;
+                }
+            }
+            if let Ok(max_seq) = persistence.last_sequence(run_id) {
+                if max_seq > 0 {
+                    inner.sequences.insert(run_id.to_string(), max_seq);
+                }
+            }
+            return;
+        }
         let Some(dir) = event_log_dir() else {
             return;
         };
@@ -99,7 +129,10 @@ impl EventSequencer {
         }
     }
 
-    fn persist_event(run_id: &str, event: &RunEventV2) -> Result<(), String> {
+    fn persist_event(&self, run_id: &str, event: &RunEventV2) -> Result<(), String> {
+        if let Some(persistence) = &self.persistence {
+            return persistence.append(event);
+        }
         let Some(dir) = event_log_dir() else {
             return Ok(());
         };
@@ -123,14 +156,14 @@ impl EventSequencer {
         // Never let secrets leak into the event bus.
         payload = sanitize_payload(payload);
         let mut inner = self.inner.lock().expect("event sequencer lock");
-        Self::ensure_loaded(&mut inner, run_id);
+        self.ensure_loaded(&mut inner, run_id);
         let next = inner.sequences.entry(run_id.to_string()).or_insert(0);
         *next += 1;
         let sequence = *next;
         let event = RunEventV2::new(run_id, sequence, payload);
         // Persist-first: disk before memory/broadcast. If persistence fails,
         // do not publish a fake-success event.
-        if let Err(error) = Self::persist_event(run_id, &event) {
+        if let Err(error) = self.persist_event(run_id, &event) {
             *next -= 1;
             return RunEventV2::new(
                 run_id,
@@ -156,7 +189,7 @@ impl EventSequencer {
 
     pub fn replay_after(&self, run_id: &str, after_sequence: u64) -> Vec<RunEventV2> {
         let mut inner = self.inner.lock().expect("event sequencer lock");
-        Self::ensure_loaded(&mut inner, run_id);
+        self.ensure_loaded(&mut inner, run_id);
         inner
             .events
             .get(run_id)
@@ -172,7 +205,7 @@ impl EventSequencer {
 
     pub fn subscribe(&self, run_id: &str) -> broadcast::Receiver<RunEventV2> {
         let mut inner = self.inner.lock().expect("event sequencer lock");
-        Self::ensure_loaded(&mut inner, run_id);
+        self.ensure_loaded(&mut inner, run_id);
         let sender = inner
             .buses
             .entry(run_id.to_string())
@@ -182,7 +215,7 @@ impl EventSequencer {
 
     pub fn last_sequence(&self, run_id: &str) -> u64 {
         let mut inner = self.inner.lock().expect("event sequencer lock");
-        Self::ensure_loaded(&mut inner, run_id);
+        self.ensure_loaded(&mut inner, run_id);
         inner.sequences.get(run_id).copied().unwrap_or(0)
     }
 }
