@@ -601,9 +601,9 @@ impl AgentEngine {
         for attempt in 1..=MAX_PROVIDER_ATTEMPTS {
             self.events.append(
                 run_id,
-                RunEventKind::Progress {
-                    message: format!("provider_attempt:{attempt}"),
-                    percentage: None,
+                RunEventKind::GenerationAttemptStarted {
+                    attempt,
+                    max_attempts: MAX_PROVIDER_ATTEMPTS,
                 },
             );
             match provider
@@ -621,18 +621,30 @@ impl AgentEngine {
                 Err(e) if e.retryable() && attempt < MAX_PROVIDER_ATTEMPTS => {
                     self.events.append(
                         run_id,
-                        RunEventKind::Progress {
-                            message: format!(
-                                "provider_attempt_failed:{attempt}:{}:retrying",
-                                e.code()
-                            ),
-                            percentage: None,
+                        RunEventKind::GenerationAttemptFailed {
+                            attempt,
+                            code: e.code().into(),
+                            retryable: true,
+                            retrying: true,
                         },
                     );
-                    tokio::time::sleep(std::time::Duration::from_millis(150 * attempt as u64))
-                        .await;
+                    let backoff_ms = match attempt {
+                        1 => 500,
+                        2 => 1_000,
+                        _ => 2_000,
+                    };
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                 }
                 Err(e) => {
+                    self.events.append(
+                        run_id,
+                        RunEventKind::GenerationAttemptFailed {
+                            attempt,
+                            code: e.code().into(),
+                            retryable: e.retryable(),
+                            retrying: false,
+                        },
+                    );
                     self.events.append(
                         run_id,
                         RunEventKind::Failed {
@@ -1118,8 +1130,7 @@ mod tests {
             .filter(|e| {
                 matches!(
                     &e.payload,
-                    RunEventKind::Progress { message, .. }
-                        if message.starts_with("provider_attempt:")
+                    RunEventKind::GenerationAttemptStarted { .. }
                 )
             })
             .count();
@@ -1127,8 +1138,12 @@ mod tests {
         assert!(events.iter().any(|e| {
             matches!(
                 &e.payload,
-                RunEventKind::Progress { message, .. }
-                    if message == "provider_attempt_failed:1:http_503:retrying"
+                RunEventKind::GenerationAttemptFailed {
+                    attempt: 1,
+                    code,
+                    retryable: true,
+                    retrying: true,
+                } if code == "http_503"
             )
         }));
         assert!(events

@@ -98,6 +98,20 @@ pub enum RunEventKind {
         message: String,
         percentage: Option<f64>,
     },
+    GenerationAttemptStarted {
+        attempt: u32,
+        max_attempts: u32,
+    },
+    GenerationAttemptFailed {
+        attempt: u32,
+        code: String,
+        retryable: bool,
+        retrying: bool,
+    },
+    GenerationAttemptDiscarded {
+        attempt: u32,
+        reason: String,
+    },
     Completed {
         reason: String,
     },
@@ -138,6 +152,9 @@ impl RunEventKind {
             Self::SubagentCompleted { .. } => "subagent_completed",
             Self::SubagentFailed { .. } => "subagent_failed",
             Self::Progress { .. } => "progress",
+            Self::GenerationAttemptStarted { .. } => "generation_attempt_started",
+            Self::GenerationAttemptFailed { .. } => "generation_attempt_failed",
+            Self::GenerationAttemptDiscarded { .. } => "generation_attempt_discarded",
             Self::Completed { .. } => "completed",
             Self::Failed { .. } => "failed",
             Self::Cancelled { .. } => "cancelled",
@@ -246,6 +263,20 @@ mod tests {
                 input_tokens: 1,
                 output_tokens: 2,
                 reasoning_tokens: Some(3),
+            },
+            RunEventKind::GenerationAttemptStarted {
+                attempt: 1,
+                max_attempts: 3,
+            },
+            RunEventKind::GenerationAttemptFailed {
+                attempt: 1,
+                code: "http_503".into(),
+                retryable: true,
+                retrying: true,
+            },
+            RunEventKind::GenerationAttemptDiscarded {
+                attempt: 1,
+                reason: "partial_stream_failed".into(),
             },
             RunEventKind::Completed {
                 reason: "ok".into(),

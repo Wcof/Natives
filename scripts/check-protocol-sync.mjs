@@ -65,6 +65,9 @@ const eventTypes = [
   'interrupted',
   'cancelled',
   'subagent_created',
+  'generation_attempt_started',
+  'generation_attempt_failed',
+  'generation_attempt_discarded',
 ];
 for (const t of eventTypes) {
   if (!eventsSrc.includes(`"${t}"`) && !eventsSrc.includes(`=> "${t}"`)) {
