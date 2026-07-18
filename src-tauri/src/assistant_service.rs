@@ -142,10 +142,9 @@ async fn dispatch_rpc(data_store: &Arc<DataStore>, method: &str, params: &Value)
 }
 
 fn daemon_owned_method(method: &str) -> bool {
-    // ponytail: run.start still writes local conversation/message/attachment rows until daemon
-    // conversation RPC owns them; forwarding it here loses GUI-visible message attachments.
     (method.starts_with("conversation.") && daemon_authority::authority_mode_label() == "uds")
-        || (method.starts_with("run.") && method != "run.start")
+        || (method.starts_with("run.")
+            && (method != "run.start" || daemon_authority::authority_mode_label() == "uds"))
         || method.starts_with("daemon.")
         || method.starts_with("provider.")
         || method.starts_with("tool.")
@@ -1691,8 +1690,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn run_start_stays_on_hybrid_path_until_daemon_owns_conversations() {
+    fn run_start_is_daemon_owned_only_in_uds_mode() {
+        let previous = std::env::var("NATIVES_DAEMON_MODE").ok();
+        std::env::set_var("NATIVES_DAEMON_MODE", "embedded");
         assert!(!daemon_owned_method("run.start"));
+        std::env::set_var("NATIVES_DAEMON_MODE", "uds");
+        assert!(daemon_owned_method("run.start"));
+        if let Some(value) = previous {
+            std::env::set_var("NATIVES_DAEMON_MODE", value);
+        } else {
+            std::env::remove_var("NATIVES_DAEMON_MODE");
+        }
         assert!(daemon_owned_method("run.list"));
         assert!(daemon_owned_method("run.cancel"));
         assert!(daemon_owned_method("provider.test"));

@@ -255,24 +255,56 @@ impl RunManager {
                 .get_run(run_id)
                 .ok_or_else(|| "run not found".to_string());
         }
+        if let Some(key) = &req.idempotency_key {
+            let map = self.idempotency.lock().map_err(|e| e.to_string())?;
+            if let Some(existing) = map.get(key) {
+                let runs = self.runs.lock().map_err(|e| e.to_string())?;
+                if let Some(run) = runs.get(existing) {
+                    return Ok(run.clone());
+                }
+            }
+        }
         let conversation_id = req
             .conversation_id
             .clone()
             .ok_or_else(|| "conversation_id required".to_string())?;
-        self.create_run(CreateRunRequest {
+        let trigger_message_id = match req.trigger_message_id.clone() {
+            Some(id) => Some(id),
+            None => crate::conversation_store::append_trigger_message(
+                &conversation_id,
+                req.content.as_deref(),
+                req.attachments.as_deref(),
+            )?,
+        };
+        let mut run = self.create_run(CreateRunRequest {
             conversation_id,
             provider_id: req.provider_id.clone().unwrap_or_default(),
             model_id: req.model_id.clone().unwrap_or_default(),
             key_id: req.key_id.clone(),
             agent_profile_id: None,
-            permission_profile: req.permission_profile.clone(),
+            permission_profile: req.permission_profile.clone().or_else(|| {
+                req.conversation_id
+                    .as_deref()
+                    .and_then(|id| crate::conversation_store::permission_profile(id).ok())
+            }),
             content: req.content.clone(),
             attachments: req.attachments.clone(),
             max_steps: req.max_steps,
             parent_run_id: None,
             project_path: req.project_path.clone(),
             idempotency_key: req.idempotency_key.clone(),
-        })
+        })?;
+        if let Some(trigger_message_id) = trigger_message_id {
+            {
+                let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
+                if let Some(stored) = runs.get_mut(&run.id) {
+                    stored.trigger_message_id = Some(trigger_message_id.clone());
+                    run = stored.clone();
+                }
+            }
+            self.persist_runs_snapshot()?;
+        }
+        Ok(run)
     }
 
     fn mark_preparing(&self, run_id: &str) -> Result<RunV2, String> {
@@ -711,6 +743,76 @@ mod tests {
     }
 
     #[test]
+    fn start_without_run_id_appends_trigger_message_in_daemon_store() {
+        with_env_lock(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let previous_db = std::env::var("NATIVES_DB_PATH").ok();
+            let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
+            let db_path = dir.path().join("natives.db");
+            std::env::set_var("NATIVES_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+
+            let store =
+                crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap();
+            let conversation_id = "trigger-conversation";
+            store.conn().unwrap().execute(
+                "INSERT INTO conversation (id, mode, title, provider_id, model_id, permission_profile_id)
+                 VALUES (?1, 'agent', 'Trigger', 'openai', 'gpt-4o', 'readonly')",
+                rusqlite::params![conversation_id],
+            ).unwrap();
+            let rm = RunManager::new();
+            let run = rm
+                .ensure_run_for_start(&StartRunRequest {
+                    run_id: None,
+                    conversation_id: Some(conversation_id.to_string()),
+                    provider_id: Some("openai".into()),
+                    model_id: Some("gpt-4o".into()),
+                    key_id: None,
+                    content: Some("inspect".into()),
+                    attachments: Some(vec![assistant_protocol::v2::AttachmentRef {
+                        path: "/tmp/a.txt".into(),
+                        name: Some("a.txt".into()),
+                        mime_type: Some("text/plain".into()),
+                        size: Some(3),
+                    }]),
+                    trigger_message_id: None,
+                    permission_profile: None,
+                    max_steps: None,
+                    project_path: None,
+                    idempotency_key: Some("trigger-idem".into()),
+                })
+                .unwrap();
+            assert_eq!(run.permission_profile, "readonly");
+            assert!(run.trigger_message_id.is_some());
+            let trigger_message_id = run.trigger_message_id.as_deref().unwrap();
+
+            let text: String = store.conn().unwrap().query_row(
+                "SELECT block_json FROM message_block WHERE message_id = ?1 AND block_type = 'text'",
+                rusqlite::params![trigger_message_id],
+                |row| row.get(0),
+            ).unwrap();
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&text).unwrap()["text"], "inspect");
+            let file: String = store.conn().unwrap().query_row(
+                "SELECT block_json FROM message_block WHERE message_id = ?1 AND block_type = 'file_reference'",
+                rusqlite::params![trigger_message_id],
+                |row| row.get(0),
+            ).unwrap();
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&file).unwrap()["path"], "/tmp/a.txt");
+
+            if let Some(value) = previous_db {
+                std::env::set_var("NATIVES_DB_PATH", value);
+            } else {
+                std::env::remove_var("NATIVES_DB_PATH");
+            }
+            if let Some(value) = previous_runtime {
+                std::env::set_var("NATIVES_RUNTIME_DIR", value);
+            } else {
+                std::env::remove_var("NATIVES_RUNTIME_DIR");
+            }
+        });
+    }
+
+    #[test]
     fn retry_creates_new_run_id() {
         let rm = RunManager::new();
         let original = rm
@@ -933,6 +1035,19 @@ mod tests {
     #[tokio::test]
     async fn start_cancel_retry_lifecycle_with_fixture() {
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
+        let dir = tempfile::tempdir().unwrap();
+        let previous_db = std::env::var("NATIVES_DB_PATH").ok();
+        let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
+        let db_path = dir.path().join("natives.db");
+        std::env::set_var("NATIVES_DB_PATH", &db_path);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        let store =
+            crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap();
+        store.conn().unwrap().execute(
+            "INSERT INTO conversation (id, mode, title, provider_id, model_id, permission_profile_id)
+             VALUES ('c1', 'agent', 'Fixture', 'openai', 'gpt-4o', 'full_access')",
+            [],
+        ).unwrap();
         let rm = RunManager::new();
         let run = rm
             .start(StartRunRequest {
@@ -1028,6 +1143,16 @@ mod tests {
                 std::path::Path::new(&dir).join("daemon-cancel-retry.json"),
                 serde_json::to_string_pretty(&evidence).unwrap_or_default(),
             );
+        }
+        if let Some(value) = previous_db {
+            std::env::set_var("NATIVES_DB_PATH", value);
+        } else {
+            std::env::remove_var("NATIVES_DB_PATH");
+        }
+        if let Some(value) = previous_runtime {
+            std::env::set_var("NATIVES_RUNTIME_DIR", value);
+        } else {
+            std::env::remove_var("NATIVES_RUNTIME_DIR");
         }
         std::env::remove_var("NATIVES_DAEMON_FIXTURE");
     }

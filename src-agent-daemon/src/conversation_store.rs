@@ -1,5 +1,6 @@
 use crate::storage::DataStore;
 use assistant_protocol::v2::methods::names;
+use assistant_protocol::v2::AttachmentRef;
 use rusqlite::{params, OptionalExtension};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -77,6 +78,19 @@ fn get(params: Value) -> Result<Value, String> {
          FROM conversation WHERE id = ?1",
         params![id],
         row_to_conversation,
+    )
+    .optional()
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "conversation not found".into())
+}
+
+pub fn permission_profile(conversation_id: &str) -> Result<String, String> {
+    let store = store()?;
+    let conn = store.conn()?;
+    conn.query_row(
+        "SELECT COALESCE(permission_profile_id, 'ask') FROM conversation WHERE id = ?1",
+        params![conversation_id],
+        |row| row.get(0),
     )
     .optional()
     .map_err(|e| e.to_string())?
@@ -263,6 +277,45 @@ fn append_message(params: Value) -> Result<Value, String> {
     .and_then(|_| tx.commit())
     .map_err(|e| e.to_string())?;
     Ok(serde_json::json!({ "id": id, "created_at": now }))
+}
+
+pub fn append_trigger_message(
+    conversation_id: &str,
+    content: Option<&str>,
+    attachments: Option<&[AttachmentRef]>,
+) -> Result<Option<String>, String> {
+    let mut blocks = Vec::new();
+    if let Some(content) = content.filter(|s| !s.trim().is_empty()) {
+        blocks.push(serde_json::json!({ "type": "text", "text": content }));
+    }
+    let attachments = attachments.unwrap_or(&[]);
+    if attachments.len() > 10 {
+        return Err("At most 10 attachments are allowed".into());
+    }
+    for attachment in attachments {
+        if attachment.path.trim().is_empty() {
+            return Err("attachment path is required".into());
+        }
+        blocks.push(serde_json::json!({
+            "type": "file_reference",
+            "path": attachment.path,
+            "name": attachment.name.clone(),
+            "mime_type": attachment.mime_type.clone(),
+            "size": attachment.size,
+        }));
+    }
+    if blocks.is_empty() {
+        return Ok(None);
+    }
+    let appended = append_message(serde_json::json!({
+        "conversation_id": conversation_id,
+        "role": "user",
+        "blocks": blocks,
+    }))?;
+    Ok(appended
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string))
 }
 
 fn rename(params: Value) -> Result<Value, String> {
