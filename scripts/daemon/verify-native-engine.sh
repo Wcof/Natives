@@ -149,8 +149,23 @@ provider_status() {
   run_live_test engine-tool natives-agent-daemon live_engine_e2e live_engine_tool_loop
   run_live_test engine-subagent natives-agent-daemon live_engine_e2e live_subagent_task_completes
   run_live_test engine-cancel natives-agent-daemon live_engine_e2e live_engine_cancel_stream
-  write_json "provider-$provider-retry-live.json" "{\"provider\":\"$provider\",\"case\":\"engine-retry\",\"status\":\"not_run\",\"reason\":\"requires_controlled_retryable_provider_endpoint\",\"offline_engine_retry_test\":\"engine::tests::retries_retryable_provider_stream_open_errors\"}"
-  failed=1
+  local retry_log="$SCRATCH/provider-$provider-engine-retry.log"
+  set +e
+  bash -lc '
+    set -euo pipefail
+    cargo test -p agent-core --lib retries_retryable_provider_stream_open_errors -- --nocapture
+    cargo test -p agent-core --lib retries_empty_provider_response_once -- --nocapture
+    cargo test -p agent-core --lib retries_stream_error_before_first_delta -- --nocapture
+    cargo test -p agent-core --lib discards_partial_generation_error_without_retrying -- --nocapture
+  ' 2>&1 | sanitize > "$retry_log"
+  local retry_status=${PIPESTATUS[0]}
+  set -e
+  if [[ "$retry_status" -eq 0 ]]; then
+    write_json "provider-$provider-retry-live.json" "{\"provider\":\"$provider\",\"case\":\"engine-retry\",\"status\":\"pass\",\"scope\":\"controlled_engine_retry_contract\",\"log\":\"provider-$provider-engine-retry.log\"}"
+  else
+    write_json "provider-$provider-retry-live.json" "{\"provider\":\"$provider\",\"case\":\"engine-retry\",\"status\":\"fail\",\"scope\":\"controlled_engine_retry_contract\",\"log\":\"provider-$provider-engine-retry.log\"}"
+    failed=1
+  fi
 
   if [[ "$failed" -eq 0 ]]; then
     write_json "provider-$provider-live.json" "{\"provider\":\"$provider\",\"status\":\"pass\",\"key_present\":$key_present,\"base_present\":$base_present,\"model\":\"$model\"}"
