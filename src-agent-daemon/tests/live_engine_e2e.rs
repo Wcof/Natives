@@ -35,7 +35,7 @@ async fn live_engine_text_turn() {
         std::env::var("NATIVES_LIVE_PROVIDER_ID").unwrap_or_else(|_| "openai_compatible".into());
     let model = std::env::var("NATIVES_TEST_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".into());
 
-    let rt = ProductionRuntime::new();
+    let rt = Arc::new(ProductionRuntime::new());
     rt.set_permission_profile("full_access").await;
     let engine = AgentEngine::new(rt.events.clone());
     let provider = RealProvider {
@@ -126,7 +126,7 @@ async fn live_engine_tool_loop() {
         std::env::var("NATIVES_LIVE_PROVIDER_ID").unwrap_or_else(|_| "openai_compatible".into());
     let model = std::env::var("NATIVES_TEST_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".into());
 
-    let rt = ProductionRuntime::new();
+    let rt = Arc::new(ProductionRuntime::new());
     rt.set_permission_profile("full_access").await;
     let engine = AgentEngine::new(rt.events.clone());
     let provider = RealProvider {
@@ -243,7 +243,7 @@ async fn live_subagent_task_completes() {
         std::env::var("NATIVES_LIVE_PROVIDER_ID").unwrap_or_else(|_| "openai_compatible".into());
     let model = std::env::var("NATIVES_TEST_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".into());
 
-    let rt = ProductionRuntime::new();
+    let rt = Arc::new(ProductionRuntime::new());
     rt.set_permission_profile("full_access").await;
     let tools = PermissionGatedTools {
         gateway: {
@@ -382,6 +382,121 @@ async fn live_subagent_task_completes() {
                 "subagent_created": true,
                 "subagent_completed": true,
                 "independent_key_id": true,
+            }))
+            .unwrap_or_default(),
+        );
+    }
+}
+
+/// Live cancel: provider stream starts, GUI-equivalent cancel flag interrupts run promptly.
+#[tokio::test]
+#[ignore = "live network; set NATIVES_LIVE_E2E=1"]
+async fn live_engine_cancel_stream() {
+    if !live_enabled() {
+        return;
+    }
+    std::env::remove_var("NATIVES_DAEMON_FIXTURE");
+
+    let provider_id =
+        std::env::var("NATIVES_LIVE_PROVIDER_ID").unwrap_or_else(|_| "openai_compatible".into());
+    let model = std::env::var("NATIVES_TEST_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".into());
+    let run_id = format!("live-engine-cancel-{}", uuid::Uuid::new_v4());
+    let conversation_id = format!("live-c-cancel-{}", uuid::Uuid::new_v4());
+
+    let rt = Arc::new(ProductionRuntime::new());
+    rt.set_permission_profile("full_access").await;
+    let engine = AgentEngine::new(rt.events.clone());
+    let cancel = engine.cancel_flag();
+    let events = engine.events.clone();
+    let run_id_for_task = run_id.clone();
+    let conversation_id_for_task = conversation_id.clone();
+    let provider_id_for_task = provider_id.clone();
+    let model_for_task = model.clone();
+    let rt_for_task = rt.clone();
+
+    let handle = tokio::spawn(async move {
+        let provider = RealProvider {
+            provider_id: provider_id_for_task.clone(),
+            key_id: Some("live".into()),
+        };
+        let tools = PermissionGatedTools {
+            gateway: {
+                let mut g = capability_gateway::CapabilityGateway::new();
+                if let Ok(cwd) = std::env::current_dir() {
+                    g.set_project_root(cwd.to_string_lossy().to_string());
+                }
+                g.register_builtins();
+                Arc::new(g)
+            },
+            permissions: rt_for_task.permissions.clone(),
+            events: rt_for_task.events.clone(),
+            waiters: rt_for_task.permission_waiters.clone(),
+            subagents: rt_for_task.subagents.clone(),
+            task_outputs: rt_for_task.task_outputs.clone(),
+            engines: rt_for_task.engines.clone(),
+            runtime: None,
+            provider_id: provider_id_for_task,
+            parent_run_id: run_id_for_task.clone(),
+            conversation_id: conversation_id_for_task.clone(),
+            model_id: model_for_task.clone(),
+            permission_profile: "full_access".into(),
+        };
+        engine
+            .run(
+                EngineRunConfig {
+                    run_id: run_id_for_task,
+                    conversation_id: conversation_id_for_task,
+                    model: model_for_task,
+                    system_prompt: Some("Stream a long answer. Do not use tools.".into()),
+                    user_content: "Write 80 short numbered facts about ocean waves.".into(),
+                    max_steps: 3,
+                },
+                &provider,
+                &tools,
+            )
+            .await
+    });
+
+    let mut saw_text = false;
+    for _ in 0..120 {
+        if events
+            .replay_after(&run_id, 0)
+            .iter()
+            .any(|e| matches!(e.payload, assistant_protocol::v2::RunEventKind::TextDelta { .. }))
+        {
+            saw_text = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    assert!(saw_text, "expected live stream text before cancelling");
+    cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let status = tokio::time::timeout(std::time::Duration::from_secs(3), handle)
+        .await
+        .expect("cancelled live run should stop promptly")
+        .expect("join")
+        .expect("run");
+    assert_eq!(status, assistant_protocol::v2::RunStatusV2::Interrupted);
+    let interrupted = events.replay_after(&run_id, 0).iter().any(|e| {
+        matches!(
+            e.payload,
+            assistant_protocol::v2::RunEventKind::Interrupted { .. }
+        )
+    });
+    assert!(interrupted, "expected Interrupted event after live cancel");
+
+    if let Ok(dir) = std::env::var("NATIVES_TEST_SCRATCH") {
+        let _ = std::fs::write(
+            std::path::Path::new(&dir).join("live-engine-cancel.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "ok": true,
+                "provider_id": provider_id,
+                "model": model,
+                "status": format!("{status:?}"),
+                "saw_text_before_cancel": true,
+                "interrupted": true,
+                "event_count": events.replay_after(&run_id, 0).len(),
             }))
             .unwrap_or_default(),
         );

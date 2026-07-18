@@ -103,14 +103,40 @@ provider_status() {
     write_json "provider-$provider-live.json" "{\"provider\":\"$provider\",\"status\":\"not_run\",\"reason\":\"model_absent\",\"key_present\":$key_present,\"base_present\":$base_present}"
     return 0
   fi
-  set +e
-  NATIVES_LIVE_E2E=1 NATIVES_LIVE_PROVIDER_ID="$provider" NATIVES_TEST_MODEL="$model" \
-    NATIVES_TEST_SCRATCH="$SCRATCH" \
-    cargo test -p natives-agent-daemon --test live_engine_e2e live_engine_text_turn -- --nocapture --ignored \
-    2>&1 | sanitize > "$SCRATCH/provider-$provider-live.log"
-  local status=${PIPESTATUS[0]}
-  set -e
-  if [[ "$status" -eq 0 ]]; then
+
+  local failed=0
+  run_live_test() {
+    local name="$1" package="$2" test_target="$3" test_name="$4"
+    local log="$SCRATCH/provider-$provider-$name.log"
+    set +e
+    NATIVES_LIVE_E2E=1 NATIVES_LIVE_PROVIDER_ID="$provider" NATIVES_TEST_MODEL="$model" \
+      NATIVES_TEST_SCRATCH="$SCRATCH" \
+      cargo test -p "$package" --test "$test_target" "$test_name" -- --nocapture --ignored \
+      2>&1 | sanitize > "$log"
+    local status=${PIPESTATUS[0]}
+    set -e
+    if [[ "$status" -eq 0 ]]; then
+      write_json "provider-$provider-$name.json" "{\"provider\":\"$provider\",\"case\":\"$name\",\"status\":\"pass\",\"model\":\"$model\",\"log\":\"provider-$provider-$name.log\"}"
+    else
+      write_json "provider-$provider-$name.json" "{\"provider\":\"$provider\",\"case\":\"$name\",\"status\":\"fail\",\"model\":\"$model\",\"log\":\"provider-$provider-$name.log\"}"
+      failed=1
+    fi
+  }
+
+  if [[ "$provider" == "openai_compatible" ]]; then
+    run_live_test adapter-text provider-adapters live_openai_compatible_e2e live_text_stream_completes
+    run_live_test adapter-tool provider-adapters live_openai_compatible_e2e live_tool_roundtrip_body_and_second_turn
+  else
+    write_json "provider-$provider-adapter-text.json" "{\"provider\":\"$provider\",\"case\":\"adapter-text\",\"status\":\"not_run\",\"reason\":\"adapter_live_test_not_available\"}"
+    write_json "provider-$provider-adapter-tool.json" "{\"provider\":\"$provider\",\"case\":\"adapter-tool\",\"status\":\"not_run\",\"reason\":\"adapter_live_test_not_available\"}"
+  fi
+  run_live_test engine-text natives-agent-daemon live_engine_e2e live_engine_text_turn
+  run_live_test engine-tool natives-agent-daemon live_engine_e2e live_engine_tool_loop
+  run_live_test engine-subagent natives-agent-daemon live_engine_e2e live_subagent_task_completes
+  run_live_test engine-cancel natives-agent-daemon live_engine_e2e live_engine_cancel_stream
+  write_json "provider-$provider-retry-live.json" "{\"provider\":\"$provider\",\"case\":\"engine-retry\",\"status\":\"not_run\",\"reason\":\"requires_controlled_retryable_provider_endpoint\",\"offline_engine_retry_test\":\"engine::tests::retries_retryable_provider_stream_open_errors\"}"
+
+  if [[ "$failed" -eq 0 ]]; then
     write_json "provider-$provider-live.json" "{\"provider\":\"$provider\",\"status\":\"pass\",\"key_present\":$key_present,\"base_present\":$base_present,\"model\":\"$model\"}"
   else
     write_json "provider-$provider-live.json" "{\"provider\":\"$provider\",\"status\":\"fail\",\"key_present\":$key_present,\"base_present\":$base_present,\"model\":\"$model\"}"
