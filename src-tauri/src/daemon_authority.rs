@@ -76,9 +76,8 @@ pub async fn current_authority() -> Result<Arc<dyn ExecutionAuthority>, String> 
                     "NATIVES_DAEMON_BOOTSTRAP required for UDS mode (no embedded fallback)".into(),
                 );
             }
-            Arc::new(
-                UdsAuthority::from_mode(socket, bootstrap_token).map_err(map_err)?,
-            ) as Arc<dyn ExecutionAuthority>
+            Arc::new(UdsAuthority::from_mode(socket, bootstrap_token).map_err(map_err)?)
+                as Arc<dyn ExecutionAuthority>
         }
     };
     *guard = Some(Arc::clone(&built));
@@ -91,6 +90,27 @@ pub async fn reset_authority_cache() {
     *guard = None;
 }
 
+async fn recover_uds_authority(first_error: String) -> Result<(), String> {
+    if authority_mode_label() != "uds" {
+        return Err(first_error);
+    }
+    reset_authority_cache().await;
+    crate::sidecar_supervisor::global_supervisor()
+        .ensure_healthy_or_restart()
+        .map_err(|restart_error| {
+            format!("{first_error}; UDS reconnect failed: {restart_error} (no embedded fallback)")
+        })?;
+    reset_authority_cache().await;
+    Ok(())
+}
+
+fn retry_error(first_error: String, second_error: AuthorityError) -> String {
+    format!(
+        "{} (after UDS reconnect; first error: {first_error})",
+        second_error.message()
+    )
+}
+
 pub fn authority_mode_label() -> &'static str {
     match resolve_run_authority_mode() {
         RunAuthorityMode::Embedded => "embedded",
@@ -99,48 +119,88 @@ pub fn authority_mode_label() -> &'static str {
 }
 
 pub async fn request(method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
-    current_authority()
-        .await?
-        .request(method, params)
-        .await
-        .map_err(map_err)
+    let authority = current_authority().await?;
+    match authority.request(method, params.clone()).await {
+        Ok(value) => Ok(value),
+        Err(first) => {
+            let first_error = map_err(first);
+            recover_uds_authority(first_error.clone()).await?;
+            current_authority()
+                .await?
+                .request(method, params)
+                .await
+                .map_err(|second| retry_error(first_error, second))
+        }
+    }
 }
 
 pub async fn create_run(
     req: assistant_protocol::v2::CreateRunRequest,
 ) -> Result<assistant_protocol::v2::RunV2, String> {
-    current_authority()
-        .await?
-        .create_run(req)
-        .await
-        .map_err(map_err)
+    let authority = current_authority().await?;
+    match authority.create_run(req.clone()).await {
+        Ok(run) => Ok(run),
+        Err(first) => {
+            let first_error = map_err(first);
+            recover_uds_authority(first_error.clone()).await?;
+            current_authority()
+                .await?
+                .create_run(req)
+                .await
+                .map_err(|second| retry_error(first_error, second))
+        }
+    }
 }
 
 /// Non-blocking start.
 pub async fn start_run(
     req: assistant_protocol::v2::StartRunRequest,
 ) -> Result<assistant_protocol::v2::RunV2, String> {
-    current_authority()
-        .await?
-        .start_run(req)
-        .await
-        .map_err(map_err)
+    let authority = current_authority().await?;
+    match authority.start_run(req.clone()).await {
+        Ok(run) => Ok(run),
+        Err(first) => {
+            let first_error = map_err(first);
+            recover_uds_authority(first_error.clone()).await?;
+            current_authority()
+                .await?
+                .start_run(req)
+                .await
+                .map_err(|second| retry_error(first_error, second))
+        }
+    }
 }
 
 pub async fn cancel_run(run_id: &str) -> Result<assistant_protocol::v2::RunV2, String> {
-    current_authority()
-        .await?
-        .cancel_run(run_id)
-        .await
-        .map_err(map_err)
+    let authority = current_authority().await?;
+    match authority.cancel_run(run_id).await {
+        Ok(run) => Ok(run),
+        Err(first) => {
+            let first_error = map_err(first);
+            recover_uds_authority(first_error.clone()).await?;
+            current_authority()
+                .await?
+                .cancel_run(run_id)
+                .await
+                .map_err(|second| retry_error(first_error, second))
+        }
+    }
 }
 
 pub async fn retry_run(run_id: &str) -> Result<assistant_protocol::v2::RunV2, String> {
-    current_authority()
-        .await?
-        .retry_run(run_id)
-        .await
-        .map_err(map_err)
+    let authority = current_authority().await?;
+    match authority.retry_run(run_id).await {
+        Ok(run) => Ok(run),
+        Err(first) => {
+            let first_error = map_err(first);
+            recover_uds_authority(first_error.clone()).await?;
+            current_authority()
+                .await?
+                .retry_run(run_id)
+                .await
+                .map_err(|second| retry_error(first_error, second))
+        }
+    }
 }
 
 /// Retry then start when needed (UDS: single RPC; Embedded: create+start once).
