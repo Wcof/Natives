@@ -99,22 +99,23 @@ impl EventSequencer {
         }
     }
 
-    fn persist_event(run_id: &str, event: &RunEventV2) {
+    fn persist_event(run_id: &str, event: &RunEventV2) -> Result<(), String> {
         let Some(dir) = event_log_dir() else {
-            return;
+            return Ok(());
         };
-        let _ = std::fs::create_dir_all(&dir);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("PERSISTENCE_FAILED create event dir: {e}"))?;
         let path = dir.join(format!("{run_id}.jsonl"));
-        if let Ok(line) = serde_json::to_string(event) {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-            {
-                let _ = writeln!(f, "{line}");
-            }
-        }
+        let line = serde_json::to_string(event)
+            .map_err(|e| format!("PERSISTENCE_FAILED serialize event: {e}"))?;
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| format!("PERSISTENCE_FAILED open event log: {e}"))?;
+        writeln!(f, "{line}").map_err(|e| format!("PERSISTENCE_FAILED write event log: {e}"))?;
+        Ok(())
     }
 
     /// Persist (memory + default disk) then broadcast. Returns the assigned sequence.
@@ -127,13 +128,24 @@ impl EventSequencer {
         *next += 1;
         let sequence = *next;
         let event = RunEventV2::new(run_id, sequence, payload);
-        // Persist-first: memory + disk before broadcast (never reverse this order).
+        // Persist-first: disk before memory/broadcast. If persistence fails,
+        // do not publish a fake-success event.
+        if let Err(error) = Self::persist_event(run_id, &event) {
+            *next -= 1;
+            return RunEventV2::new(
+                run_id,
+                sequence,
+                RunEventKind::Failed {
+                    error: redact_secrets(&error),
+                    code: "PERSISTENCE_FAILED".into(),
+                },
+            );
+        }
         inner
             .events
             .entry(run_id.to_string())
             .or_default()
             .push(event.clone());
-        Self::persist_event(run_id, &event);
         let sender = inner
             .buses
             .entry(run_id.to_string())
@@ -184,7 +196,10 @@ fn sanitize_payload(payload: RunEventKind) -> RunEventKind {
         RunEventKind::Interrupted { reason } => RunEventKind::Interrupted {
             reason: redact_secrets(&reason),
         },
-        RunEventKind::Progress { message, percentage } => RunEventKind::Progress {
+        RunEventKind::Progress {
+            message,
+            percentage,
+        } => RunEventKind::Progress {
             message: redact_secrets(&message),
             percentage,
         },
@@ -195,9 +210,20 @@ fn sanitize_payload(payload: RunEventKind) -> RunEventKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("event env lock")
+    }
 
     #[test]
     fn sequences_are_monotonic_and_replayable() {
+        let _guard = env_lock();
+        std::env::remove_var("NATIVES_EVENT_LOG_DIR");
+        std::env::remove_var("NATIVES_EVENT_LOG_DISABLE");
         // Unique run_id: default disk persistence may retain prior "r1" fixtures.
         let run_id = format!("r-seq-{}", uuid::Uuid::new_v4());
         let log = EventSequencer::new();
@@ -212,6 +238,9 @@ mod tests {
 
     #[test]
     fn redacts_failed_errors() {
+        let _guard = env_lock();
+        std::env::remove_var("NATIVES_EVENT_LOG_DIR");
+        std::env::remove_var("NATIVES_EVENT_LOG_DISABLE");
         let log = EventSequencer::new();
         let run_id = format!("r-redact-{}", uuid::Uuid::new_v4());
         let event = log.append(
@@ -232,6 +261,8 @@ mod tests {
 
     #[test]
     fn default_event_log_dir_is_some_unless_disabled() {
+        let _guard = env_lock();
+        std::env::remove_var("NATIVES_EVENT_LOG_DIR");
         std::env::remove_var("NATIVES_EVENT_LOG_DISABLE");
         assert!(event_log_dir().is_some());
         std::env::set_var("NATIVES_EVENT_LOG_DISABLE", "1");
@@ -241,6 +272,7 @@ mod tests {
 
     #[test]
     fn persists_and_reloads_when_dir_set() {
+        let _guard = env_lock();
         let dir = std::env::temp_dir().join(format!(
             "natives-ev-{}",
             std::time::SystemTime::now()
@@ -269,6 +301,31 @@ mod tests {
         assert_eq!(replay[0].sequence, 1);
         assert_eq!(replay[1].sequence, 2);
         let _ = std::fs::remove_dir_all(&dir);
+        std::env::remove_var("NATIVES_EVENT_LOG_DIR");
+    }
+
+    #[test]
+    fn persistence_failure_is_not_replayed_or_broadcast() {
+        let _guard = env_lock();
+        let path = std::env::temp_dir().join(format!("natives-ev-file-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"not a dir").unwrap();
+        std::env::set_var("NATIVES_EVENT_LOG_DIR", &path);
+        std::env::remove_var("NATIVES_EVENT_LOG_DISABLE");
+
+        let log = EventSequencer::new();
+        let run_id = format!("run-{}", uuid::Uuid::new_v4());
+        let mut rx = log.subscribe(&run_id);
+        let event = log.append(&run_id, RunEventKind::Started);
+
+        assert_eq!(event.sequence, 1);
+        assert!(matches!(
+            event.payload,
+            RunEventKind::Failed { ref code, .. } if code == "PERSISTENCE_FAILED"
+        ));
+        assert!(log.replay_after(&run_id, 0).is_empty());
+        assert!(rx.try_recv().is_err());
+
+        let _ = std::fs::remove_file(&path);
         std::env::remove_var("NATIVES_EVENT_LOG_DIR");
     }
 }
