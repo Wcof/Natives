@@ -4,7 +4,7 @@
 //! symlink escape prevention, command injection checks,
 //! and output size limits.
 
-use crate::{PermissionClass, PathScope, ToolError};
+use crate::{PathScope, PermissionClass, ToolError};
 
 /// Policy enforcement result.
 #[derive(Debug)]
@@ -33,7 +33,10 @@ pub fn check_path_scope(path: &str, scope: &PathScope) -> PolicyResult {
             if glob_matches(path, pattern) {
                 PolicyResult::Allowed
             } else {
-                PolicyResult::Denied(format!("Path '{}' does not match pattern '{}'", path, pattern))
+                PolicyResult::Denied(format!(
+                    "Path '{}' does not match pattern '{}'",
+                    path, pattern
+                ))
             }
         }
     }
@@ -44,17 +47,15 @@ fn resolve_under_project(path: &str, project_path: &str) -> Result<bool, String>
     use std::path::{Component, Path, PathBuf};
 
     let project = Path::new(project_path);
-    let abs_project = project
-        .canonicalize()
-        .unwrap_or_else(|_| {
-            if project.is_absolute() {
-                project.to_path_buf()
-            } else {
-                std::env::current_dir()
-                    .unwrap_or_else(|_| PathBuf::from("."))
-                    .join(project)
-            }
-        });
+    let abs_project = project.canonicalize().unwrap_or_else(|_| {
+        if project.is_absolute() {
+            project.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(project)
+        }
+    });
 
     let candidate = Path::new(path);
     let joined = if candidate.is_relative() {
@@ -79,13 +80,9 @@ fn resolve_under_project(path: &str, project_path: &str) -> Result<bool, String>
         candidate.to_path_buf()
     };
 
-    let abs_candidate = joined
-        .canonicalize()
-        .unwrap_or(joined);
+    let abs_candidate = joined.canonicalize().unwrap_or(joined);
 
-    let abs_project = abs_project
-        .canonicalize()
-        .unwrap_or(abs_project);
+    let abs_project = abs_project.canonicalize().unwrap_or(abs_project);
 
     Ok(abs_candidate.starts_with(&abs_project))
 }
@@ -136,21 +133,14 @@ pub fn check_output_limit(output: &[u8], limit: u64) -> bool {
 
 /// Check permission class for a tool.
 pub fn check_permission(class: PermissionClass, profile: &str) -> PolicyResult {
+    if profile == "autonomous" {
+        return PolicyResult::Allowed;
+    }
     match class {
         PermissionClass::AlwaysAllowed => PolicyResult::Allowed,
-        PermissionClass::ProjectRead => {
-            if profile == "autonomous" {
-                PolicyResult::Allowed
-            } else {
-                PolicyResult::NeedsApproval("Project read requires approval".to_string())
-            }
-        }
+        PermissionClass::ProjectRead => PolicyResult::Allowed,
         PermissionClass::ProjectWrite => {
-            if profile == "autonomous" {
-                PolicyResult::Allowed
-            } else {
-                PolicyResult::NeedsApproval("Project write requires approval".to_string())
-            }
+            PolicyResult::NeedsApproval("Project write requires approval".to_string())
         }
         PermissionClass::ExternalWrite
         | PermissionClass::Credentials
@@ -222,7 +212,10 @@ mod tests {
 
     #[test]
     fn test_path_scope_allowed() {
-        let result = check_path_scope("/project/src/main.rs", &PathScope::Project("/project".to_string()));
+        let result = check_path_scope(
+            "/project/src/main.rs",
+            &PathScope::Project("/project".to_string()),
+        );
         assert!(matches!(result, PolicyResult::Allowed));
     }
 
@@ -240,7 +233,10 @@ mod tests {
             &PathScope::Project("/tmp/app".to_string()),
         );
         assert!(
-            matches!(result, PolicyResult::NeedsApproval(_) | PolicyResult::Denied(_)),
+            matches!(
+                result,
+                PolicyResult::NeedsApproval(_) | PolicyResult::Denied(_)
+            ),
             "prefix bypass must fail, got {result:?}"
         );
     }
@@ -253,18 +249,46 @@ mod tests {
 
     #[test]
     fn test_relative_parent_escape_denied() {
-        let result = check_path_scope("../../etc/passwd", &PathScope::Project("/project".to_string()));
-        assert!(matches!(result, PolicyResult::Denied(_) | PolicyResult::NeedsApproval(_)));
+        let result = check_path_scope(
+            "../../etc/passwd",
+            &PathScope::Project("/project".to_string()),
+        );
+        assert!(matches!(
+            result,
+            PolicyResult::Denied(_) | PolicyResult::NeedsApproval(_)
+        ));
     }
 
     #[test]
     fn test_permission_autonomous() {
-        let result = check_permission(PermissionClass::ProjectWrite, "autonomous");
-        assert!(matches!(result, PolicyResult::Allowed));
+        for class in [
+            PermissionClass::ProjectRead,
+            PermissionClass::ProjectWrite,
+            PermissionClass::ExternalWrite,
+            PermissionClass::Credentials,
+            PermissionClass::Elevation,
+            PermissionClass::DestructiveCommand,
+            PermissionClass::PrivacyResource,
+        ] {
+            let result = check_permission(class, "autonomous");
+            assert!(matches!(result, PolicyResult::Allowed), "{class:?}");
+        }
     }
 
     #[test]
-    fn test_permission_confirm_each() {
+    fn test_permission_profiles_match_native_engine_contract() {
+        assert!(matches!(
+            check_permission(PermissionClass::ProjectRead, "readonly"),
+            PolicyResult::Allowed
+        ));
+        assert!(matches!(
+            check_permission(PermissionClass::ProjectRead, "ask"),
+            PolicyResult::Allowed
+        ));
+        assert!(matches!(
+            check_permission(PermissionClass::ProjectWrite, "ask"),
+            PolicyResult::NeedsApproval(_)
+        ));
         let result = check_permission(PermissionClass::ExternalWrite, "confirm_each");
         assert!(matches!(result, PolicyResult::NeedsApproval(_)));
     }

@@ -76,6 +76,7 @@ run_step rust-check-strict env 'RUSTFLAGS=-D warnings' cargo check \
   -p provider-adapters -p capability-gateway || overall=1
 run_step protocol-tests cargo test -p assistant-protocol --lib || overall=1
 run_step provider-contract cargo test -p provider-adapters --test contract -- --nocapture || overall=1
+run_step permission-matrix cargo test -p capability-gateway -- --nocapture || overall=1
 run_step engine-core-tests cargo test -p agent-core --lib || overall=1
 run_step daemon-tests cargo test -p natives-agent-daemon --lib -- --test-threads=1 || overall=1
 run_step uds-lifecycle cargo test -p natives-agent-daemon --test uds_run_lifecycle -- --nocapture || overall=1
