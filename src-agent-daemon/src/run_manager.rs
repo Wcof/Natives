@@ -161,6 +161,63 @@ impl RunManager {
         Ok(())
     }
 
+    fn run_from_store_by_idempotency_key(&self, key: &str) -> Result<Option<RunV2>, String> {
+        let Some(store) = &self.data_store else {
+            return Ok(None);
+        };
+        if key.trim().is_empty() {
+            return Ok(None);
+        }
+        let conn = store.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, conversation_id, status, parent_run_id, agent_profile_id,
+                        provider_id, key_id, model_id, permission_profile,
+                        trigger_message_id, started_at, finished_at, error_code,
+                        step_count, max_steps, project_path, retry_count,
+                        created_at, idempotency_key
+                 FROM run WHERE idempotency_key = ?1 OR id = ?1 LIMIT 1",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query(rusqlite::params![key])
+            .map_err(|e| e.to_string())?;
+        let Some(row) = rows.next().map_err(|e| e.to_string())? else {
+            return Ok(None);
+        };
+        Ok(Some(RunV2 {
+            id: row.get(0).map_err(|e| e.to_string())?,
+            conversation_id: row.get(1).map_err(|e| e.to_string())?,
+            status: run_status_from_db(&row.get::<_, String>(2).map_err(|e| e.to_string())?),
+            parent_run_id: row.get(3).map_err(|e| e.to_string())?,
+            agent_profile_id: row.get(4).map_err(|e| e.to_string())?,
+            provider_id: row.get(5).map_err(|e| e.to_string())?,
+            key_id: row.get(6).map_err(|e| e.to_string())?,
+            model_id: row.get(7).map_err(|e| e.to_string())?,
+            permission_profile: row.get(8).map_err(|e| e.to_string())?,
+            trigger_message_id: row.get(9).map_err(|e| e.to_string())?,
+            started_at: parse_db_time(
+                row.get::<_, Option<String>>(10)
+                    .map_err(|e| e.to_string())?,
+            ),
+            finished_at: parse_db_time(
+                row.get::<_, Option<String>>(11)
+                    .map_err(|e| e.to_string())?,
+            ),
+            error_code: row.get(12).map_err(|e| e.to_string())?,
+            step_count: row.get::<_, i64>(13).map_err(|e| e.to_string())? as u32,
+            max_steps: row.get::<_, i64>(14).map_err(|e| e.to_string())? as u32,
+            project_path: row.get(15).map_err(|e| e.to_string())?,
+            retry_count: row.get::<_, i64>(16).map_err(|e| e.to_string())? as u32,
+            created_at: parse_db_time(
+                row.get::<_, Option<String>>(17)
+                    .map_err(|e| e.to_string())?,
+            ),
+            last_event_sequence: 0,
+            idempotency_key: row.get(18).map_err(|e| e.to_string())?,
+        }))
+    }
+
     fn delete_run_row(&self, run_id: &str) {
         if let Some(store) = &self.data_store {
             if let Ok(conn) = store.conn() {
@@ -281,12 +338,26 @@ impl RunManager {
 
     pub fn create_run(&self, req: CreateRunRequest) -> Result<RunV2, String> {
         if let Some(key) = &req.idempotency_key {
-            let map = self.idempotency.lock().map_err(|e| e.to_string())?;
-            if let Some(existing) = map.get(key) {
-                let runs = self.runs.lock().map_err(|e| e.to_string())?;
-                if let Some(run) = runs.get(existing) {
-                    return Ok(run.clone());
+            {
+                let map = self.idempotency.lock().map_err(|e| e.to_string())?;
+                if let Some(existing) = map.get(key) {
+                    let runs = self.runs.lock().map_err(|e| e.to_string())?;
+                    if let Some(run) = runs.get(existing) {
+                        return Ok(run.clone());
+                    }
                 }
+            }
+            if let Some(run) = self.run_from_store_by_idempotency_key(key)? {
+                self.runs
+                    .lock()
+                    .map_err(|e| e.to_string())?
+                    .insert(run.id.clone(), run.clone());
+                self.idempotency
+                    .lock()
+                    .map_err(|e| e.to_string())?
+                    .insert(key.clone(), run.id.clone());
+                self.store_project_path(&run.id, run.project_path.as_deref());
+                return Ok(run);
             }
         }
 
@@ -900,6 +971,29 @@ pub fn protocol_version() -> &'static str {
     PROTOCOL_V2
 }
 
+fn run_status_from_db(status: &str) -> RunStatusV2 {
+    match status {
+        "created" => RunStatusV2::Created,
+        "queued" => RunStatusV2::Queued,
+        "preparing" => RunStatusV2::Preparing,
+        "running" => RunStatusV2::Running,
+        "waiting_permission" => RunStatusV2::WaitingPermission,
+        "waiting_subagent" => RunStatusV2::WaitingSubagent,
+        "cancelling" => RunStatusV2::Cancelling,
+        "completed" => RunStatusV2::Completed,
+        "failed" => RunStatusV2::Failed,
+        "cancelled" => RunStatusV2::Cancelled,
+        "interrupted" => RunStatusV2::Interrupted,
+        _ => RunStatusV2::Interrupted,
+    }
+}
+
+fn parse_db_time(value: Option<String>) -> Option<chrono::DateTime<chrono::Utc>> {
+    value
+        .and_then(|raw| chrono::DateTime::parse_from_rfc3339(&raw).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1064,6 +1158,67 @@ mod tests {
             assert_eq!(row.5, idempotency_key);
             assert_eq!(row.6, "deepseek-v4-flash");
             assert_eq!(row.7, 9);
+        });
+    }
+
+    #[test]
+    fn create_run_idempotency_survives_sqlite_backed_restart() {
+        with_env_lock(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let db_path = dir.path().join("natives.db");
+            let store = Arc::new(
+                crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
+            );
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES ('sqlite-idem-conv', 'agent', 'SQLite Idem', 'openai', 'gpt-4o')",
+                    [],
+                )
+                .unwrap();
+
+            let idempotency_key = format!("sqlite-idem-{}", Uuid::new_v4());
+            let req = CreateRunRequest {
+                conversation_id: "sqlite-idem-conv".into(),
+                provider_id: "openai".into(),
+                model_id: "gpt-4o".into(),
+                key_id: Some("key-A".into()),
+                agent_profile_id: Some("agent-A".into()),
+                permission_profile: Some("ask".into()),
+                content: Some("only queue once".into()),
+                attachments: None,
+                max_steps: Some(7),
+                parent_run_id: None,
+                project_path: Some("/tmp/sqlite-idem".into()),
+                idempotency_key: Some(idempotency_key.clone()),
+            };
+
+            let first = RunManager::new_with_store(store.clone())
+                .create_run(req.clone())
+                .unwrap();
+            let second = RunManager::new_with_store(store.clone())
+                .create_run(req)
+                .unwrap();
+
+            assert_eq!(first.id, second.id);
+            assert_eq!(
+                second.idempotency_key.as_deref(),
+                Some(idempotency_key.as_str())
+            );
+            assert_eq!(second.project_path.as_deref(), Some("/tmp/sqlite-idem"));
+
+            let event_count: i64 = store
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM run_event WHERE run_id = ?1 AND event_type = 'queued'",
+                    rusqlite::params![first.id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(event_count, 1);
         });
     }
 
