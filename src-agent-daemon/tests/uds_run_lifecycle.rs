@@ -59,11 +59,22 @@ async fn uds_create_start_replay_cancel_lifecycle() {
         .expect("connect+handshake");
 
     // ping
-    let pong = client
-        .call("daemon.ping", json!({}))
-        .await
-        .expect("ping");
+    let pong = client.call("daemon.ping", json!({})).await.expect("ping");
     assert!(pong.get("pong").is_some() || pong.get("ok").is_some() || !pong.is_null());
+    let daemon_status = client
+        .call("daemon.getStatus", json!({}))
+        .await
+        .expect("daemon.getStatus");
+    assert_eq!(
+        daemon_status
+            .get("natives_db_path")
+            .and_then(|v| v.as_str()),
+        Some(
+            natives_agent_daemon::default_natives_db_path()
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
 
     // create
     let created = client
@@ -106,10 +117,7 @@ async fn uds_create_start_replay_cancel_lifecycle() {
         )
         .await
         .expect("run.start");
-    let status = started
-        .get("status")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let status = started.get("status").and_then(|v| v.as_str()).unwrap_or("");
     assert!(
         status == "preparing" || status == "running" || status == "queued",
         "expected non-terminal immediate status, got {status}"
@@ -163,9 +171,7 @@ async fn uds_create_start_replay_cancel_lifecycle() {
         }
         // cancel mid-flight if still running after a bit
         if last_seq > 0 {
-            let _ = client
-                .call("run.cancel", json!({ "run_id": run_id }))
-                .await;
+            let _ = client.call("run.cancel", json!({ "run_id": run_id })).await;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -212,7 +218,8 @@ async fn uds_create_start_replay_cancel_lifecycle() {
         .cloned()
         .unwrap_or_default();
     assert!(
-        runs.iter().any(|r| r.get("id").and_then(|i| i.as_str()) == Some(run_id.as_str())),
+        runs.iter()
+            .any(|r| r.get("id").and_then(|i| i.as_str()) == Some(run_id.as_str())),
         "run should still be listed after reconnect"
     );
 
@@ -221,7 +228,10 @@ async fn uds_create_start_replay_cancel_lifecycle() {
         .call("daemon.getCapabilities", json!({}))
         .await
         .expect("capabilities");
-    assert_eq!(caps.get("protocol_version").and_then(|v| v.as_str()), Some("2.0.0"));
+    assert_eq!(
+        caps.get("protocol_version").and_then(|v| v.as_str()),
+        Some("2.0.0")
+    );
     let methods = caps
         .get("methods")
         .and_then(|m| m.as_array())
@@ -229,7 +239,9 @@ async fn uds_create_start_replay_cancel_lifecycle() {
         .unwrap_or_default();
     assert!(methods.iter().any(|m| m.as_str() == Some("run.start")));
     assert!(
-        !methods.iter().any(|m| m.as_str() == Some("not.a.real.method")),
+        !methods
+            .iter()
+            .any(|m| m.as_str() == Some("not.a.real.method")),
         "must not invent methods"
     );
 

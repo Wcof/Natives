@@ -332,6 +332,7 @@ impl SidecarSupervisor {
 
     fn readiness_probe(&self, bootstrap: &str) -> Result<(), String> {
         let socket = self.config.socket_path.clone();
+        let expected_db_path = self.config.natives_db_path.to_string_lossy().to_string();
         let bootstrap = bootstrap.to_string();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
@@ -368,6 +369,14 @@ impl SidecarSupervisor {
                     != Some(natives_agent_daemon::client_protocol_version())
                 {
                     return Err(format!("daemon.getStatus protocol mismatch: {status}"));
+                }
+                if status.get("natives_db_path").and_then(|v| v.as_str())
+                    != Some(expected_db_path.as_str())
+                {
+                    return Err(format!(
+                        "daemon.getStatus NATIVES_DB_PATH mismatch: expected={} status={status}",
+                        expected_db_path
+                    ));
                 }
                 Ok(())
             })

@@ -10,13 +10,11 @@
 //!
 //! Messages are newline-delimited JSON (one JSON object per line, terminated by `\n`).
 
+use assistant_protocol::error::{error_codes, DaemonError, ErrorCategory};
 use assistant_protocol::v1::daemon::{
-    DaemonStatus, DaemonHealth,
-    HandshakeRequest, HandshakeResponse,
-    RpcRequest, RpcResponse,
+    DaemonHealth, DaemonStatus, HandshakeRequest, HandshakeResponse, RpcRequest, RpcResponse,
 };
-use assistant_protocol::version::{ProtocolVersion, negotiate};
-use assistant_protocol::error::{DaemonError, ErrorCategory, error_codes};
+use assistant_protocol::version::{negotiate, ProtocolVersion};
 use futures_util::StreamExt;
 use provider_adapters::capabilities::{
     Credential, ProviderContentBlock, ProviderMessage, ProviderRequest, ProviderTestResult,
@@ -97,7 +95,9 @@ impl RpcServer {
                     let sa = started_at;
 
                     tokio::spawn(async move {
-                        if let Err(e) = handle_connection(stream, sessions, bt, bu, pv, dv, sa).await {
+                        if let Err(e) =
+                            handle_connection(stream, sessions, bt, bu, pv, dv, sa).await
+                        {
                             eprintln!("Connection error: {}", e);
                         }
                     });
@@ -281,7 +281,14 @@ async fn handle_connection(
         }
 
         // Dispatch method
-        handle_rpc(&mut writer, &request, &protocol_version, &daemon_version, &started_at).await;
+        handle_rpc(
+            &mut writer,
+            &request,
+            &protocol_version,
+            &daemon_version,
+            &started_at,
+        )
+        .await;
     }
 
     // Cleanup: remove session
@@ -396,12 +403,35 @@ async fn handle_rpc(
                 memory_usage_mb: 0,
                 health: DaemonHealth::Healthy,
             };
-            send_success(writer, &request.request_id, &request.client_id, &request.session_token,
-                serde_json::to_value(&status).unwrap_or_default()).await;
+            let mut value = serde_json::to_value(&status).unwrap_or_default();
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert(
+                    "natives_db_path".into(),
+                    serde_json::Value::String(
+                        crate::default_natives_db_path()
+                            .to_string_lossy()
+                            .to_string(),
+                    ),
+                );
+            }
+            send_success(
+                writer,
+                &request.request_id,
+                &request.client_id,
+                &request.session_token,
+                value,
+            )
+            .await;
         }
         names::DAEMON_PING => {
-            send_success(writer, &request.request_id, &request.client_id, &request.session_token,
-                serde_json::json!({"pong": true, "timestamp": chrono::Utc::now().to_rfc3339()})).await;
+            send_success(
+                writer,
+                &request.request_id,
+                &request.client_id,
+                &request.session_token,
+                serde_json::json!({"pong": true, "timestamp": chrono::Utc::now().to_rfc3339()}),
+            )
+            .await;
         }
         names::DAEMON_GET_CAPABILITIES => {
             let caps = crate::run_manager::RunManager::capabilities();
@@ -551,7 +581,12 @@ async fn handle_rpc(
                     Err(e) => {
                         send_error(
                             writer,
-                            &DaemonError::new("run_cancel_failed", ErrorCategory::NotFound, false, e),
+                            &DaemonError::new(
+                                "run_cancel_failed",
+                                ErrorCategory::NotFound,
+                                false,
+                                e,
+                            ),
                         )
                         .await
                     }
@@ -582,10 +617,7 @@ async fn handle_rpc(
                 .get("approved")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            let run_id = request
-                .params
-                .get("run_id")
-                .and_then(|v| v.as_str());
+            let run_id = request.params.get("run_id").and_then(|v| v.as_str());
             if request_id.is_empty() {
                 send_error(
                     writer,
@@ -652,8 +684,7 @@ async fn handle_rpc(
                                 project_path: new_run.project_path.clone(),
                                 idempotency_key: None,
                             };
-                            match crate::run_manager::RunManager::start_detached_global(start_req)
-                            {
+                            match crate::run_manager::RunManager::start_detached_global(start_req) {
                                 Ok(run) => {
                                     send_success(
                                         writer,
@@ -1165,8 +1196,7 @@ async fn handle_rpc(
                 )
                 .await;
             } else {
-                match crate::mcp_runtime::global_mcp().call_tool(server_id, tool_name, arguments)
-                {
+                match crate::mcp_runtime::global_mcp().call_tool(server_id, tool_name, arguments) {
                     Ok(v) => {
                         send_success(
                             writer,
@@ -1278,10 +1308,7 @@ async fn handle_rpc(
                 .get("token_type")
                 .and_then(|v| v.as_str())
                 .unwrap_or("bearer");
-            let expires_at = request
-                .params
-                .get("expires_at")
-                .and_then(|v| v.as_u64());
+            let expires_at = request.params.get("expires_at").and_then(|v| v.as_u64());
             // Never echo token back.
             match crate::mcp_runtime::global_mcp().set_auth_token(
                 id,
@@ -1295,7 +1322,8 @@ async fn handle_rpc(
                         &request.request_id,
                         &request.client_id,
                         &request.session_token,
-                        serde_json::to_value(lease).unwrap_or(serde_json::json!({"has_token": true})),
+                        serde_json::to_value(lease)
+                            .unwrap_or(serde_json::json!({"has_token": true})),
                     )
                     .await;
                 }
@@ -1327,7 +1355,8 @@ async fn handle_rpc(
                         &request.request_id,
                         &request.client_id,
                         &request.session_token,
-                        serde_json::to_value(lease).unwrap_or(serde_json::json!({"has_token": false})),
+                        serde_json::to_value(lease)
+                            .unwrap_or(serde_json::json!({"has_token": false})),
                     )
                     .await;
                 }
@@ -1378,10 +1407,7 @@ async fn handle_rpc(
             }
         }
         names::ARTIFACT_LIST => {
-            let run_id = request
-                .params
-                .get("run_id")
-                .and_then(|v| v.as_str());
+            let run_id = request.params.get("run_id").and_then(|v| v.as_str());
             let items = crate::artifact_store::global_artifacts().list(run_id);
             send_success(
                 writer,
@@ -1702,7 +1728,8 @@ async fn handle_rpc(
                 )
                 .await;
             } else {
-                match crate::scheduler_store::global_scheduler().update(id, request.params.clone()) {
+                match crate::scheduler_store::global_scheduler().update(id, request.params.clone())
+                {
                     Ok(job) => {
                         send_success(
                             writer,
@@ -1817,10 +1844,7 @@ async fn send_success(
 }
 
 /// Send an error response.
-async fn send_error(
-    writer: &mut tokio::net::unix::OwnedWriteHalf,
-    error: &DaemonError,
-) {
+async fn send_error(writer: &mut tokio::net::unix::OwnedWriteHalf, error: &DaemonError) {
     let json = serde_json::to_string(error).unwrap_or_default();
     let _ = writer.write_all(json.as_bytes()).await;
     let _ = writer.write_all(b"\n").await;
@@ -1933,7 +1957,10 @@ mod tests {
         async fn chat(
             &self,
             _request: ProviderRequest,
-        ) -> Result<provider_adapters::capabilities::ProviderResponse, provider_adapters::capabilities::ProviderError> {
+        ) -> Result<
+            provider_adapters::capabilities::ProviderResponse,
+            provider_adapters::capabilities::ProviderError,
+        > {
             unreachable!("provider.test must use stream")
         }
 
@@ -1941,7 +1968,11 @@ mod tests {
             &self,
             _request: ProviderRequest,
         ) -> Result<
-            Box<dyn futures_util::Stream<Item = provider_adapters::ProviderStreamEvent> + Send + Unpin>,
+            Box<
+                dyn futures_util::Stream<Item = provider_adapters::ProviderStreamEvent>
+                    + Send
+                    + Unpin,
+            >,
             provider_adapters::capabilities::ProviderError,
         > {
             unreachable!("provider.test must use stream")
@@ -1960,7 +1991,10 @@ mod tests {
 
         async fn list_models(
             &self,
-        ) -> Result<Vec<provider_adapters::capabilities::ModelInfo>, provider_adapters::capabilities::ProviderError> {
+        ) -> Result<
+            Vec<provider_adapters::capabilities::ModelInfo>,
+            provider_adapters::capabilities::ProviderError,
+        > {
             Ok(Vec::new())
         }
 
