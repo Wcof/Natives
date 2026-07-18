@@ -635,7 +635,11 @@ impl EngineProvider for RealProvider {
         let stream = adapter
             .stream(request, credential)
             .await
-            .map_err(|e| EngineError::Message(e.message))?;
+            .map_err(|e| EngineError::Provider {
+                message: e.message,
+                code: e.code,
+                retryable: e.retryable,
+            })?;
         let mapped = futures_util::stream::unfold((stream, cancel), |(mut stream, cancel)| async move {
             loop {
                 if cancel.load(Ordering::SeqCst) {

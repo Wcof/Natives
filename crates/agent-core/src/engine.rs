@@ -104,12 +104,34 @@ pub enum EngineProviderEvent {
 pub enum EngineError {
     #[error("{0}")]
     Message(String),
+    #[error("{message}")]
+    Provider {
+        message: String,
+        code: String,
+        retryable: bool,
+    },
     #[error("cancelled")]
     Cancelled,
     #[error("doom loop detected")]
     DoomLoop,
     #[error("max steps exceeded")]
     MaxSteps,
+}
+
+impl EngineError {
+    fn code(&self) -> &str {
+        match self {
+            Self::Provider { code, .. } => code,
+            Self::Cancelled => "cancelled",
+            Self::DoomLoop => "doom_loop",
+            Self::MaxSteps => "max_steps",
+            Self::Message(_) => "provider",
+        }
+    }
+
+    fn retryable(&self) -> bool {
+        matches!(self, Self::Provider { retryable: true, .. })
+    }
 }
 
 /// Configuration for one engine run.
@@ -215,25 +237,29 @@ impl AgentEngine {
                 return Err(EngineError::MaxSteps);
             }
 
-            let provider_events = provider
-                .stream(
+            let provider_events = match self
+                .open_provider_stream_with_retry(
+                    run_id,
+                    provider,
                     &config.model,
                     messages.clone(),
                     &tool_schemas,
                     config.system_prompt.as_deref(),
-                    self.cancel.clone(),
                 )
                 .await
-                .map_err(|e| {
+            {
+                Ok(stream) => stream,
+                Err(EngineError::Cancelled) => {
                     self.events.append(
                         run_id,
-                        RunEventKind::Failed {
-                            error: e.to_string(),
-                            code: "provider".into(),
+                        RunEventKind::Interrupted {
+                            reason: "cancelled".into(),
                         },
                     );
-                    e
-                })?;
+                    return Ok(RunStatusV2::Interrupted);
+                }
+                Err(e) => return Err(e),
+            };
 
             let mut text_acc = String::new();
             let mut tool_acc: BTreeMap<usize, (String, String, String)> = BTreeMap::new();
@@ -559,6 +585,66 @@ impl AgentEngine {
             .await;
 
         values_to_engine_messages(&result.messages)
+    }
+
+    async fn open_provider_stream_with_retry(
+        &self,
+        run_id: &str,
+        provider: &dyn EngineProvider,
+        model: &str,
+        messages: Vec<EngineMessage>,
+        tool_schemas: &[ToolSchema],
+        system_prompt: Option<&str>,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        const MAX_PROVIDER_ATTEMPTS: u32 = 3;
+
+        for attempt in 1..=MAX_PROVIDER_ATTEMPTS {
+            self.events.append(
+                run_id,
+                RunEventKind::Progress {
+                    message: format!("provider_attempt:{attempt}"),
+                    percentage: None,
+                },
+            );
+            match provider
+                .stream(
+                    model,
+                    messages.clone(),
+                    tool_schemas,
+                    system_prompt,
+                    self.cancel.clone(),
+                )
+                .await
+            {
+                Ok(stream) => return Ok(stream),
+                Err(_e) if self.cancel.load(Ordering::SeqCst) => return Err(EngineError::Cancelled),
+                Err(e) if e.retryable() && attempt < MAX_PROVIDER_ATTEMPTS => {
+                    self.events.append(
+                        run_id,
+                        RunEventKind::Progress {
+                            message: format!(
+                                "provider_attempt_failed:{attempt}:{}:retrying",
+                                e.code()
+                            ),
+                            percentage: None,
+                        },
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(150 * attempt as u64))
+                        .await;
+                }
+                Err(e) => {
+                    self.events.append(
+                        run_id,
+                        RunEventKind::Failed {
+                            error: e.to_string(),
+                            code: e.code().into(),
+                        },
+                    );
+                    return Err(e);
+                }
+            }
+        }
+        unreachable!("provider attempts loop must return")
     }
 
 }
@@ -963,6 +1049,89 @@ mod tests {
             .iter()
             .any(|e| matches!(e.payload, RunEventKind::Interrupted { .. })));
         assert!(!current
+            .iter()
+            .any(|e| matches!(e.payload, RunEventKind::Completed { .. })));
+    }
+
+    #[tokio::test]
+    async fn retries_retryable_provider_stream_open_errors() {
+        struct FlakyProvider {
+            attempts: std::sync::atomic::AtomicUsize,
+        }
+
+        #[async_trait::async_trait]
+        impl EngineProvider for FlakyProvider {
+            async fn stream(
+                &self,
+                _model: &str,
+                _messages: Vec<EngineMessage>,
+                _tools: &[ToolSchema],
+                _system_prompt: Option<&str>,
+                _cancel: Arc<AtomicBool>,
+            ) -> Result<EngineProviderEventStream, EngineError> {
+                let attempt = self
+                    .attempts
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    + 1;
+                if attempt < 3 {
+                    return Err(EngineError::Provider {
+                        message: "temporary provider failure".into(),
+                        code: "http_503".into(),
+                        retryable: true,
+                    });
+                }
+                Ok(Box::pin(futures_util::stream::iter(vec![
+                    EngineProviderEvent::TextDelta("ok".into()),
+                    EngineProviderEvent::Completed,
+                ])))
+            }
+        }
+
+        let engine = AgentEngine::new(EventSequencer::new());
+        let run_id = format!("r-provider-retry-{}", uuid::Uuid::new_v4());
+        let provider = FlakyProvider {
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let status = engine
+            .run(
+                EngineRunConfig {
+                    run_id: run_id.clone(),
+                    conversation_id: "c1".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    user_content: "hi".into(),
+                    max_steps: 5,
+                },
+                &provider,
+                &FakeTools,
+            )
+            .await
+            .unwrap();
+        assert_eq!(status, RunStatusV2::Completed);
+        assert_eq!(
+            provider.attempts.load(std::sync::atomic::Ordering::SeqCst),
+            3
+        );
+        let events = engine.events.replay_after(&run_id, 0);
+        let attempt_events = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    &e.payload,
+                    RunEventKind::Progress { message, .. }
+                        if message.starts_with("provider_attempt:")
+                )
+            })
+            .count();
+        assert_eq!(attempt_events, 3);
+        assert!(events.iter().any(|e| {
+            matches!(
+                &e.payload,
+                RunEventKind::Progress { message, .. }
+                    if message == "provider_attempt_failed:1:http_503:retrying"
+            )
+        }));
+        assert!(events
             .iter()
             .any(|e| matches!(e.payload, RunEventKind::Completed { .. })));
     }
