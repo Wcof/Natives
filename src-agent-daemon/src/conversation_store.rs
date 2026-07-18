@@ -1,7 +1,7 @@
 use crate::storage::DataStore;
 use agent_core::EngineMessage;
 use assistant_protocol::v2::methods::names;
-use assistant_protocol::v2::AttachmentRef;
+use assistant_protocol::v2::{AttachmentRef, RunEventKind, RunEventV2};
 use rusqlite::{params, OptionalExtension};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -267,8 +267,58 @@ fn block_text(block: &Value) -> Option<String> {
             let name = content.get("name").and_then(Value::as_str).unwrap_or(path);
             Some(format!("[attachment: {name} at {path}]"))
         }
+        "tool_result" => {
+            let content = block.get("content").unwrap_or(block);
+            let name = content.get("name").and_then(Value::as_str).unwrap_or("tool");
+            let output = content.get("output").cloned().unwrap_or(Value::Null);
+            Some(format!("[tool result: {name} => {output}]"))
+        }
         _ => None,
     }
+}
+
+pub fn append_assistant_turn_from_events(
+    conversation_id: &str,
+    run_id: &str,
+    events: &[RunEventV2],
+) -> Result<Option<String>, String> {
+    let mut text = String::new();
+    let mut blocks = vec![serde_json::json!({ "type": "run_reference", "run_id": run_id })];
+    for event in events {
+        match &event.payload {
+            RunEventKind::TextDelta { text: delta } => text.push_str(delta),
+            RunEventKind::ToolCallCompleted {
+                id,
+                name,
+                output,
+                is_error,
+                duration_ms,
+            } => blocks.push(serde_json::json!({
+                "type": "tool_result",
+                "id": id,
+                "name": name,
+                "output": output,
+                "is_error": is_error,
+                "duration_ms": duration_ms,
+            })),
+            _ => {}
+        }
+    }
+    if !text.trim().is_empty() {
+        blocks.insert(0, serde_json::json!({ "type": "text", "text": text }));
+    }
+    if blocks.len() == 1 {
+        return Ok(None);
+    }
+    let appended = append_message(serde_json::json!({
+        "conversation_id": conversation_id,
+        "role": "assistant",
+        "blocks": blocks,
+    }))?;
+    Ok(appended
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string))
 }
 
 fn append_message(params: Value) -> Result<Value, String> {
@@ -505,6 +555,35 @@ mod tests {
         assert_eq!(messages[0]["content_blocks"][0]["content"]["text"], "hello");
         let history = engine_history(id).unwrap();
         assert_eq!(history[0].content, "hello");
+        append_assistant_turn_from_events(
+            id,
+            "run-1",
+            &[
+                RunEventV2 {
+                    run_id: "run-1".into(),
+                    sequence: 1,
+                    timestamp: chrono::Utc::now(),
+                    payload: RunEventKind::TextDelta { text: "done".into() },
+                },
+                RunEventV2 {
+                    run_id: "run-1".into(),
+                    sequence: 2,
+                    timestamp: chrono::Utc::now(),
+                    payload: RunEventKind::ToolCallCompleted {
+                        id: "tool-1".into(),
+                        name: "read_file".into(),
+                        output: serde_json::json!({"ok": true}),
+                        is_error: false,
+                        duration_ms: 1,
+                    },
+                },
+            ],
+        )
+        .unwrap();
+        let history = engine_history(id).unwrap();
+        assert_eq!(history[1].role, "assistant");
+        assert!(history[1].content.contains("done"));
+        assert!(history[1].content.contains("tool result: read_file"));
 
         if let Some(value) = previous_db {
             std::env::set_var("NATIVES_DB_PATH", value);

@@ -322,6 +322,13 @@ impl ProductionRuntime {
             .await
             .map(|s| s.as_str().to_string())
             .unwrap_or_else(|_| "failed".into());
+        if status == "completed" {
+            crate::conversation_store::append_assistant_turn_from_events(
+                &conversation_id,
+                &run_id,
+                &self.events.replay_after(&run_id, 0),
+            )?;
+        }
         self.events.append(
             &run_id,
             if status == "completed" {

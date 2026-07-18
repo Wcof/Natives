@@ -507,10 +507,21 @@ impl RunManager {
                 user_content: content,
                 max_steps,
             };
-            let status = engine
+            let mut status = engine
                 .run(config, &provider, &tools)
                 .await
                 .unwrap_or(RunStatusV2::Failed);
+            if status == RunStatusV2::Completed {
+                if crate::conversation_store::append_assistant_turn_from_events(
+                    &run.conversation_id,
+                    &run.id,
+                    &self.runtime.events.replay_after(&run.id, 0),
+                )
+                .is_err()
+                {
+                    status = RunStatusV2::Failed;
+                }
+            }
             self.runtime.engines.lock().await.remove(&run.id);
             status
         } else {
@@ -632,6 +643,18 @@ impl RunManager {
             .run(config, provider, tools)
             .await
             .unwrap_or(RunStatusV2::Failed);
+        let final_status = if final_status == RunStatusV2::Completed
+            && crate::conversation_store::append_assistant_turn_from_events(
+                &run.conversation_id,
+                &run.id,
+                &self.runtime.events.replay_after(&run.id, 0),
+            )
+            .is_err()
+        {
+            RunStatusV2::Failed
+        } else {
+            final_status
+        };
         self.runtime.engines.lock().await.remove(&run.id);
         let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
         if let Some(r) = runs.get_mut(&run.id) {
@@ -903,9 +926,10 @@ mod tests {
                     project_path: None,
                     idempotency_key: Some("history-run".into()),
                 }).unwrap();
+                let run_id = run.id.clone();
                 rm.start_with_seams(
                     StartRunRequest {
-                        run_id: Some(run.id),
+                        run_id: Some(run_id.clone()),
                         conversation_id: None,
                         provider_id: None,
                         model_id: None,
@@ -925,6 +949,30 @@ mod tests {
                 assert_eq!(seen.len(), 2);
                 assert_eq!(seen[0].content, "remember alpha");
                 assert_eq!(seen[1].content, "now beta");
+                let reply: String = store.conn().unwrap().query_row(
+                    "SELECT block_json
+                     FROM message_block
+                     WHERE block_type = 'text'
+                       AND message_id IN (SELECT id FROM message WHERE conversation_id = 'history-conv' AND role = 'assistant')",
+                    [],
+                    |row| row.get(0),
+                ).unwrap();
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&reply).unwrap()["text"],
+                    "ok"
+                );
+                let linked_run: String = store.conn().unwrap().query_row(
+                    "SELECT block_json
+                     FROM message_block
+                     WHERE block_type = 'run_reference'
+                       AND message_id IN (SELECT id FROM message WHERE conversation_id = 'history-conv' AND role = 'assistant')",
+                    [],
+                    |row| row.get(0),
+                ).unwrap();
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&linked_run).unwrap()["run_id"],
+                    run_id
+                );
 
                 if let Some(value) = previous_db {
                     std::env::set_var("NATIVES_DB_PATH", value);
@@ -971,6 +1019,19 @@ mod tests {
     #[tokio::test]
     async fn start_detached_returns_preparing_before_terminal() {
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
+        let dir = tempfile::tempdir().unwrap();
+        let previous_db = std::env::var("NATIVES_DB_PATH").ok();
+        let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
+        let db_path = dir.path().join("natives.db");
+        std::env::set_var("NATIVES_DB_PATH", &db_path);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        let store =
+            crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap();
+        store.conn().unwrap().execute(
+            "INSERT INTO conversation (id, mode, title, provider_id, model_id, permission_profile_id)
+             VALUES ('c-detach', 'agent', 'Detached', 'openai', 'gpt-4o', 'full_access')",
+            [],
+        ).unwrap();
         let rm = Arc::new(RunManager::new());
         let created = rm
             .create_run(CreateRunRequest {
@@ -1047,6 +1108,16 @@ mod tests {
             err.contains("terminal") || err.contains("retry"),
             "unexpected: {err}"
         );
+        if let Some(value) = previous_db {
+            std::env::set_var("NATIVES_DB_PATH", value);
+        } else {
+            std::env::remove_var("NATIVES_DB_PATH");
+        }
+        if let Some(value) = previous_runtime {
+            std::env::set_var("NATIVES_RUNTIME_DIR", value);
+        } else {
+            std::env::remove_var("NATIVES_RUNTIME_DIR");
+        }
         std::env::remove_var("NATIVES_DAEMON_FIXTURE");
     }
 
