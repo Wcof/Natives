@@ -594,6 +594,7 @@ impl EngineProvider for RealProvider {
         messages: Vec<EngineMessage>,
         tools: &[ToolSchema],
         system_prompt: Option<&str>,
+        cancel: Arc<AtomicBool>,
     ) -> Result<EngineProviderEventStream, EngineError> {
         let credential =
             resolve_credential_for_run(&self.provider_id, self.key_id.as_deref(), "provider-stream")
@@ -635,28 +636,43 @@ impl EngineProvider for RealProvider {
             .stream(request, credential)
             .await
             .map_err(|e| EngineError::Message(e.message))?;
-        let mapped = stream.map(|ev| match ev {
-                ProviderEvent::TextDelta(t) => EngineProviderEvent::TextDelta(t),
-                ProviderEvent::ReasoningDelta(t) => EngineProviderEvent::ReasoningDelta(t),
-                ProviderEvent::ToolCallDelta {
-                    index,
-                    id,
-                    name,
-                    arguments_delta,
-                } => EngineProviderEvent::ToolCallDelta {
-                    index,
-                    id,
-                    name,
-                    arguments_delta,
-                },
-                ProviderEvent::Usage(u) => EngineProviderEvent::Usage {
-                    input_tokens: u.input_tokens,
-                    output_tokens: u.output_tokens,
-                    reasoning_tokens: u.reasoning_tokens,
-                },
-                ProviderEvent::Completed => EngineProviderEvent::Completed,
-                ProviderEvent::Error(e) => EngineProviderEvent::Error(e.message),
-            });
+        let mapped = futures_util::stream::unfold((stream, cancel), |(mut stream, cancel)| async move {
+            loop {
+                if cancel.load(Ordering::SeqCst) {
+                    return None;
+                }
+                tokio::select! {
+                    ev = stream.next() => {
+                        return ev.map(|ev| {
+                            let event = match ev {
+                                ProviderEvent::TextDelta(t) => EngineProviderEvent::TextDelta(t),
+                                ProviderEvent::ReasoningDelta(t) => EngineProviderEvent::ReasoningDelta(t),
+                                ProviderEvent::ToolCallDelta {
+                                    index,
+                                    id,
+                                    name,
+                                    arguments_delta,
+                                } => EngineProviderEvent::ToolCallDelta {
+                                    index,
+                                    id,
+                                    name,
+                                    arguments_delta,
+                                },
+                                ProviderEvent::Usage(u) => EngineProviderEvent::Usage {
+                                    input_tokens: u.input_tokens,
+                                    output_tokens: u.output_tokens,
+                                    reasoning_tokens: u.reasoning_tokens,
+                                },
+                                ProviderEvent::Completed => EngineProviderEvent::Completed,
+                                ProviderEvent::Error(e) => EngineProviderEvent::Error(e.message),
+                            };
+                            (event, (stream, cancel))
+                        });
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(25)) => {}
+                }
+            }
+        });
         Ok(Box::pin(mapped))
     }
 }
@@ -1666,6 +1682,7 @@ impl EngineProvider for FixtureProvider {
         messages: Vec<EngineMessage>,
         _tools: &[ToolSchema],
         _system_prompt: Option<&str>,
+        _cancel: Arc<AtomicBool>,
     ) -> Result<EngineProviderEventStream, EngineError> {
         // If last message is a tool result, complete with text.
         if messages

@@ -18,6 +18,7 @@ pub struct RunManager {
     last_content: Mutex<HashMap<String, String>>,
     /// Explicit project/workspace root per run (hooks + tool sandbox).
     project_paths: Mutex<HashMap<String, std::path::PathBuf>>,
+    snapshot_path_override: Option<std::path::PathBuf>,
     pub runtime: Arc<ProductionRuntime>,
 }
 
@@ -47,6 +48,7 @@ impl RunManager {
             idempotency: Mutex::new(HashMap::new()),
             last_content: Mutex::new(HashMap::new()),
             project_paths: Mutex::new(HashMap::new()),
+            snapshot_path_override: None,
             runtime: Arc::new(ProductionRuntime::new()),
         };
         let _ = mgr.restore_runs_snapshot();
@@ -89,9 +91,15 @@ impl RunManager {
         root.join("runs").join("snapshot.json")
     }
 
+    fn snapshot_path(&self) -> std::path::PathBuf {
+        self.snapshot_path_override
+            .clone()
+            .unwrap_or_else(Self::runs_snapshot_path)
+    }
+
     /// Persist run rows for restart recovery (best-effort).
     pub fn persist_runs_snapshot(&self) -> Result<(), String> {
-        let path = Self::runs_snapshot_path();
+        let path = self.snapshot_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -102,7 +110,7 @@ impl RunManager {
 
     /// Load non-terminal runs from disk; mark interrupted activity for safe resume UX.
     pub fn restore_runs_snapshot(&self) -> Result<usize, String> {
-        let path = Self::runs_snapshot_path();
+        let path = self.snapshot_path();
         let Ok(raw) = std::fs::read_to_string(&path) else {
             return Ok(0);
         };
@@ -817,13 +825,13 @@ mod tests {
         with_env_lock(|| {
         let dir = std::env::temp_dir().join(format!("natives-runs-{}", Uuid::new_v4()));
         let _ = std::fs::create_dir_all(dir.join("runs"));
-        let prev = std::env::var("NATIVES_RUNTIME_DIR").ok();
-        std::env::set_var("NATIVES_RUNTIME_DIR", &dir);
+        let snapshot_path = dir.join("runs").join("snapshot.json");
         let rm = RunManager {
             runs: Mutex::new(HashMap::new()),
             idempotency: Mutex::new(HashMap::new()),
             last_content: Mutex::new(HashMap::new()),
             project_paths: Mutex::new(HashMap::new()),
+            snapshot_path_override: Some(snapshot_path.clone()),
             runtime: Arc::new(crate::production::ProductionRuntime::new()),
         };
         let run = rm
@@ -861,6 +869,7 @@ mod tests {
             idempotency: Mutex::new(HashMap::new()),
             last_content: Mutex::new(HashMap::new()),
             project_paths: Mutex::new(HashMap::new()),
+            snapshot_path_override: Some(snapshot_path),
             runtime: Arc::new(crate::production::ProductionRuntime::new()),
         };
         let n = rm2.restore_runs_snapshot().unwrap();
@@ -870,11 +879,6 @@ mod tests {
         assert_eq!(restored.error_code.as_deref(), Some("daemon_restarted"));
         assert_eq!(restored.project_path.as_deref(), Some("/tmp/proj"));
         let _ = std::fs::remove_dir_all(&dir);
-        if let Some(v) = prev {
-            std::env::set_var("NATIVES_RUNTIME_DIR", v);
-        } else {
-            std::env::remove_var("NATIVES_RUNTIME_DIR");
-        }
         }); // with_env_lock
     }
 
@@ -1204,6 +1208,7 @@ mod tests {
                     _messages: Vec<agent_core::EngineMessage>,
                     _tools: &[agent_core::ToolSchema],
                     _system_prompt: Option<&str>,
+                    _cancel: Arc<std::sync::atomic::AtomicBool>,
                 ) -> Result<agent_core::EngineProviderEventStream, agent_core::EngineError>
                 {
                     // Stay in stream long enough for cancel to register.
@@ -1263,6 +1268,7 @@ mod tests {
                     messages: Vec<agent_core::EngineMessage>,
                     _tools: &[agent_core::ToolSchema],
                     _system_prompt: Option<&str>,
+                    _cancel: Arc<std::sync::atomic::AtomicBool>,
                 ) -> Result<agent_core::EngineProviderEventStream, agent_core::EngineError>
                 {
                     if messages.last().map(|m| m.role == "tool").unwrap_or(false) {

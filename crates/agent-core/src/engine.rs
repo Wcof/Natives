@@ -57,6 +57,7 @@ pub trait EngineProvider: Send + Sync {
         messages: Vec<EngineMessage>,
         tools: &[ToolSchema],
         system_prompt: Option<&str>,
+        cancel: Arc<AtomicBool>,
     ) -> Result<EngineProviderEventStream, EngineError>;
 }
 
@@ -220,6 +221,7 @@ impl AgentEngine {
                     messages.clone(),
                     &tool_schemas,
                     config.system_prompt.as_deref(),
+                    self.cancel.clone(),
                 )
                 .await
                 .map_err(|e| {
@@ -313,6 +315,16 @@ impl AgentEngine {
                     }
                     EngineProviderEvent::Completed => {}
                 }
+            }
+
+            if self.cancel.load(Ordering::SeqCst) {
+                self.events.append(
+                    run_id,
+                    RunEventKind::Interrupted {
+                        reason: "cancelled".into(),
+                    },
+                );
+                return Ok(RunStatusV2::Interrupted);
             }
 
             if !text_acc.is_empty() {
@@ -673,6 +685,7 @@ mod tests {
             _messages: Vec<EngineMessage>,
             _tools: &[ToolSchema],
             _system_prompt: Option<&str>,
+            _cancel: Arc<AtomicBool>,
         ) -> Result<EngineProviderEventStream, EngineError> {
             let mut rounds = self.rounds.lock().unwrap();
             let events = if rounds.is_empty() {
@@ -800,12 +813,13 @@ mod tests {
                 _messages: Vec<EngineMessage>,
                 _tools: &[ToolSchema],
                 _system_prompt: Option<&str>,
+                _cancel: Arc<AtomicBool>,
             ) -> Result<EngineProviderEventStream, EngineError> {
                 Ok(Box::pin(futures_util::stream::unfold(0, |state| async move {
                     match state {
                         0 => Some((EngineProviderEvent::TextDelta("early".into()), 1)),
                         1 => {
-                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                             Some((EngineProviderEvent::Completed, 2))
                         }
                         _ => None,
@@ -816,11 +830,13 @@ mod tests {
 
         let engine = AgentEngine::new(EventSequencer::new());
         let events = engine.events.clone();
+        let run_id = format!("r-stream-{}", uuid::Uuid::new_v4());
+        let run_id_bg = run_id.clone();
         let handle = tokio::spawn(async move {
             engine
                 .run(
                     EngineRunConfig {
-                        run_id: "r-stream".into(),
+                        run_id: run_id_bg,
                         conversation_id: "c1".into(),
                         model: "m".into(),
                         system_prompt: None,
@@ -834,8 +850,8 @@ mod tests {
         });
 
         let mut saw_text_before_done = false;
-        for _ in 0..20 {
-            let current = events.replay_after("r-stream", 0);
+        for _ in 0..100 {
+            let current = events.replay_after(&run_id, 0);
             if current
                 .iter()
                 .any(|e| matches!(e.payload, RunEventKind::TextDelta { .. }))
@@ -850,5 +866,104 @@ mod tests {
         }
         assert!(saw_text_before_done, "text delta must be emitted before stream completion");
         handle.await.expect("join").expect("run");
+    }
+
+    #[tokio::test]
+    async fn provider_stream_receives_cancel_and_run_interrupts_promptly() {
+        struct CancelAwareProvider {
+            seen: Arc<AtomicBool>,
+        }
+
+        #[async_trait::async_trait]
+        impl EngineProvider for CancelAwareProvider {
+            async fn stream(
+                &self,
+                _model: &str,
+                _messages: Vec<EngineMessage>,
+                _tools: &[ToolSchema],
+                _system_prompt: Option<&str>,
+                cancel: Arc<AtomicBool>,
+            ) -> Result<EngineProviderEventStream, EngineError> {
+                let seen = self.seen.clone();
+                Ok(Box::pin(futures_util::stream::unfold(
+                    (0u8, cancel, seen),
+                    |(state, cancel, seen)| async move {
+                        if state == 0 {
+                            return Some((
+                                EngineProviderEvent::TextDelta("early".into()),
+                                (1, cancel, seen),
+                            ));
+                        }
+                        loop {
+                            if cancel.load(Ordering::SeqCst) {
+                                seen.store(true, Ordering::SeqCst);
+                                return None;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                        }
+                    },
+                )))
+            }
+        }
+
+        let engine = AgentEngine::new(EventSequencer::new());
+        let cancel = engine.cancel_flag();
+        let events = engine.events.clone();
+        let run_id = format!("r-provider-cancel-{}", uuid::Uuid::new_v4());
+        let run_id_bg = run_id.clone();
+        let provider_cancel_seen = Arc::new(AtomicBool::new(false));
+        let provider_cancel_seen_bg = provider_cancel_seen.clone();
+        let handle = tokio::spawn(async move {
+            let provider = CancelAwareProvider {
+                seen: provider_cancel_seen_bg,
+            };
+            engine
+                .run(
+                    EngineRunConfig {
+                        run_id: run_id_bg,
+                        conversation_id: "c1".into(),
+                        model: "m".into(),
+                        system_prompt: None,
+                        user_content: "hi".into(),
+                        max_steps: 5,
+                    },
+                    &provider,
+                    &FakeTools,
+                )
+                .await
+        });
+
+        let mut saw_text = false;
+        for _ in 0..100 {
+            if events
+                .replay_after(&run_id, 0)
+                .iter()
+                .any(|e| matches!(e.payload, RunEventKind::TextDelta { .. }))
+            {
+                saw_text = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(saw_text, "test must observe first text delta before cancelling");
+        cancel.store(true, Ordering::SeqCst);
+
+        let status = tokio::time::timeout(std::time::Duration::from_secs(1), handle)
+            .await
+            .expect("run should stop promptly after cancel")
+            .expect("join")
+            .expect("run");
+        assert_eq!(status, RunStatusV2::Interrupted);
+        assert!(
+            provider_cancel_seen.load(Ordering::SeqCst),
+            "provider stream must observe engine cancel flag"
+        );
+        let current = events.replay_after(&run_id, 0);
+        assert!(current
+            .iter()
+            .any(|e| matches!(e.payload, RunEventKind::Interrupted { .. })));
+        assert!(!current
+            .iter()
+            .any(|e| matches!(e.payload, RunEventKind::Completed { .. })));
     }
 }
