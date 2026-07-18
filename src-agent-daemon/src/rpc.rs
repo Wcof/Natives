@@ -17,6 +17,11 @@ use assistant_protocol::v1::daemon::{
 };
 use assistant_protocol::version::{ProtocolVersion, negotiate};
 use assistant_protocol::error::{DaemonError, ErrorCategory, error_codes};
+use futures_util::StreamExt;
+use provider_adapters::capabilities::{
+    Credential, ProviderContentBlock, ProviderMessage, ProviderRequest, ProviderTestResult,
+};
+use provider_adapters::stream::ProviderEvent;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -309,6 +314,52 @@ fn resolve_provider_adapter(
             || (needle.contains("gemini") && t.contains("gemini"))
             || (needle.contains("deepseek") && t.contains("deepseek"))
             || (needle.contains("ollama") && t.contains("ollama"))
+    })
+}
+
+async fn test_provider_model(
+    adapter: &dyn provider_adapters::ProviderAdapter,
+    credential: Credential,
+    model: &str,
+) -> Result<ProviderTestResult, provider_adapters::capabilities::ProviderError> {
+    let started = std::time::Instant::now();
+    let request = ProviderRequest {
+        model: model.to_string(),
+        messages: vec![ProviderMessage {
+            role: "user".into(),
+            content: vec![ProviderContentBlock::Text {
+                text: "Reply with exactly: ok".into(),
+            }],
+        }],
+        system_prompt: Some("Be concise.".into()),
+        tools: None,
+        max_tokens: Some(16),
+        temperature: Some(0.0),
+        stream: true,
+        structured_output: None,
+    };
+    let mut stream = adapter.stream(request, credential).await?;
+    let mut text = String::new();
+    let mut completed = false;
+    while let Some(event) = stream.next().await {
+        match event {
+            ProviderEvent::TextDelta(delta) => text.push_str(&delta),
+            ProviderEvent::Completed => {
+                completed = true;
+                break;
+            }
+            ProviderEvent::Error(err) => return Err(err),
+            _ => {}
+        }
+    }
+    Ok(ProviderTestResult {
+        success: completed || !text.trim().is_empty(),
+        latency_ms: Some(started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64),
+        message: if completed || !text.trim().is_empty() {
+            format!("Model test passed: {model}")
+        } else {
+            format!("Model response missing content: {model}")
+        },
     })
 }
 
@@ -872,6 +923,26 @@ async fn handle_rpc(
                 .get("run_id")
                 .and_then(|v| v.as_str())
                 .unwrap_or("provider-test");
+            let model = request
+                .params
+                .get("model_id")
+                .or_else(|| request.params.get("model"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if model.is_empty() {
+                send_error(
+                    writer,
+                    &DaemonError::new(
+                        error_codes::INVALID_INPUT,
+                        ErrorCategory::Validation,
+                        false,
+                        "model_id is required for provider.test",
+                    ),
+                )
+                .await;
+                return;
+            }
             match resolve_provider_adapter(provider_id) {
                 Some(adapter) => {
                     let result = match crate::production::resolve_credential_for_run(
@@ -879,7 +950,7 @@ async fn handle_rpc(
                         key_id.as_deref(),
                         run_id,
                     ) {
-                        Ok(c) => adapter.test_connection_with_credential(c).await,
+                        Ok(c) => test_provider_model(adapter.as_ref(), c, model).await,
                         Err(e) => {
                             send_error(
                                 writer,
@@ -909,7 +980,7 @@ async fn handle_rpc(
                             send_error(
                                 writer,
                                 &DaemonError::new(
-                                    error_codes::PROVIDER_ERROR,
+                                    e.code.clone(),
                                     ErrorCategory::Provider,
                                     e.retryable,
                                     e.message.clone(),
@@ -1791,6 +1862,98 @@ mod tests {
             "extension.enable must be advertised when implemented"
         );
         assert!(caps.extensions);
+    }
+
+    struct StaticStreamAdapter {
+        events: Vec<ProviderEvent>,
+    }
+
+    #[async_trait::async_trait]
+    impl provider_adapters::ProviderAdapter for StaticStreamAdapter {
+        fn provider_type(&self) -> assistant_protocol::v1::provider::ProviderType {
+            assistant_protocol::v1::provider::ProviderType::OpenaiCompatible
+        }
+
+        fn capabilities(&self) -> provider_adapters::capabilities::ProviderCapabilities {
+            provider_adapters::capabilities::ProviderCapabilities {
+                provider_type: self.provider_type(),
+                features: vec!["streaming".into()],
+                max_context_window: 1_000,
+                streaming: true,
+                tool_calls: false,
+                structured_output: false,
+                image_input: false,
+                file_input: false,
+                reasoning: false,
+                system_prompt: true,
+                function_calling: false,
+            }
+        }
+
+        async fn chat(
+            &self,
+            _request: ProviderRequest,
+        ) -> Result<provider_adapters::capabilities::ProviderResponse, provider_adapters::capabilities::ProviderError> {
+            unreachable!("provider.test must use stream")
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: ProviderRequest,
+        ) -> Result<
+            Box<dyn futures_util::Stream<Item = provider_adapters::ProviderStreamEvent> + Send + Unpin>,
+            provider_adapters::capabilities::ProviderError,
+        > {
+            unreachable!("provider.test must use stream")
+        }
+
+        async fn stream(
+            &self,
+            _request: ProviderRequest,
+            _credential: Credential,
+        ) -> Result<
+            std::pin::Pin<Box<dyn futures_util::Stream<Item = ProviderEvent> + Send>>,
+            provider_adapters::capabilities::ProviderError,
+        > {
+            Ok(Box::pin(futures_util::stream::iter(self.events.clone())))
+        }
+
+        async fn list_models(
+            &self,
+        ) -> Result<Vec<provider_adapters::capabilities::ModelInfo>, provider_adapters::capabilities::ProviderError> {
+            Ok(Vec::new())
+        }
+
+        async fn test_connection(
+            &self,
+        ) -> Result<ProviderTestResult, provider_adapters::capabilities::ProviderError> {
+            unreachable!("provider.test must not use key-present fake checks")
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_model_test_consumes_stream_content() {
+        let adapter = StaticStreamAdapter {
+            events: vec![
+                ProviderEvent::TextDelta("ok".into()),
+                ProviderEvent::Completed,
+            ],
+        };
+        let result = test_provider_model(
+            &adapter,
+            Credential {
+                api_key: "test-key".into(),
+                base_url: None,
+                key_id: Some("k".into()),
+                provider_type: Some("openai_compatible".into()),
+            },
+            "model-under-test",
+        )
+        .await
+        .unwrap();
+
+        assert!(result.success);
+        assert!(result.message.contains("model-under-test"));
     }
 
     /// Test client disconnect cleanup.
