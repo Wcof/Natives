@@ -269,7 +269,10 @@ fn block_text(block: &Value) -> Option<String> {
         }
         "tool_result" => {
             let content = block.get("content").unwrap_or(block);
-            let name = content.get("name").and_then(Value::as_str).unwrap_or("tool");
+            let name = content
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("tool");
             let output = content.get("output").cloned().unwrap_or(Value::Null);
             Some(format!("[tool result: {name} => {output}]"))
         }
@@ -420,6 +423,17 @@ pub fn append_trigger_message(
         .map(str::to_string))
 }
 
+pub fn delete_message(message_id: &str) -> Result<(), String> {
+    if message_id.trim().is_empty() {
+        return Ok(());
+    }
+    let store = store()?;
+    let conn = store.conn()?;
+    conn.execute("DELETE FROM message WHERE id = ?1", params![message_id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn rename(params: Value) -> Result<Value, String> {
     let id = id_param(&params)?;
     let title = required_str(&params, "title")?;
@@ -563,7 +577,9 @@ mod tests {
                     run_id: "run-1".into(),
                     sequence: 1,
                     timestamp: chrono::Utc::now(),
-                    payload: RunEventKind::TextDelta { text: "done".into() },
+                    payload: RunEventKind::TextDelta {
+                        text: "done".into(),
+                    },
                 },
                 RunEventV2 {
                     run_id: "run-1".into(),

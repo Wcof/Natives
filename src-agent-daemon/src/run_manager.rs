@@ -383,7 +383,7 @@ impl RunManager {
                 req.attachments.as_deref(),
             )?,
         };
-        let mut run = self.create_run(CreateRunRequest {
+        let mut run = match self.create_run(CreateRunRequest {
             conversation_id,
             provider_id: req.provider_id.clone().unwrap_or_default(),
             model_id: req.model_id.clone().unwrap_or_default(),
@@ -400,7 +400,17 @@ impl RunManager {
             parent_run_id: None,
             project_path: req.project_path.clone(),
             idempotency_key: req.idempotency_key.clone(),
-        })?;
+        }) {
+            Ok(run) => run,
+            Err(error) => {
+                if req.trigger_message_id.is_none() {
+                    if let Some(id) = trigger_message_id.as_deref() {
+                        let _ = crate::conversation_store::delete_message(id);
+                    }
+                }
+                return Err(error);
+            }
+        };
         if let Some(trigger_message_id) = trigger_message_id {
             {
                 let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
@@ -999,6 +1009,76 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(count, 0);
+        });
+    }
+
+    #[test]
+    fn start_cleans_auto_trigger_message_when_run_create_fails() {
+        with_env_lock(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let previous_db = std::env::var("NATIVES_DB_PATH").ok();
+            let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
+            let db_path = dir.path().join("natives.db");
+            std::env::set_var("NATIVES_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+
+            let store = Arc::new(
+                crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
+            );
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES ('trigger-clean-conv', 'agent', 'Trigger Clean', 'openai', 'gpt-4o')",
+                    [],
+                )
+                .unwrap();
+            store
+                .conn()
+                .unwrap()
+                .execute("DROP TABLE run_event", [])
+                .unwrap();
+
+            let rm = RunManager::new_with_store(store.clone());
+            let err = rm
+                .ensure_run_for_start(&StartRunRequest {
+                    run_id: None,
+                    conversation_id: Some("trigger-clean-conv".into()),
+                    provider_id: Some("openai".into()),
+                    model_id: Some("gpt-4o".into()),
+                    key_id: None,
+                    content: Some("do not leave me".into()),
+                    attachments: None,
+                    trigger_message_id: None,
+                    permission_profile: None,
+                    max_steps: None,
+                    project_path: None,
+                    idempotency_key: Some(format!("trigger-clean-{}", Uuid::new_v4())),
+                })
+                .unwrap_err();
+            assert!(err.contains("PERSISTENCE_FAILED"), "{err}");
+            let messages: i64 = store
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM message WHERE conversation_id = 'trigger-clean-conv'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(messages, 0);
+
+            if let Some(value) = previous_db {
+                std::env::set_var("NATIVES_DB_PATH", value);
+            } else {
+                std::env::remove_var("NATIVES_DB_PATH");
+            }
+            if let Some(value) = previous_runtime {
+                std::env::set_var("NATIVES_RUNTIME_DIR", value);
+            } else {
+                std::env::remove_var("NATIVES_RUNTIME_DIR");
+            }
         });
     }
 
