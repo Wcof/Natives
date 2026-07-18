@@ -141,6 +141,14 @@ impl RunManager {
         Ok(())
     }
 
+    fn delete_run_row(&self, run_id: &str) {
+        if let Some(store) = &self.data_store {
+            if let Ok(conn) = store.conn() {
+                let _ = conn.execute("DELETE FROM run WHERE id = ?1", rusqlite::params![run_id]);
+            }
+        }
+    }
+
     fn store_project_path(&self, run_id: &str, project_path: Option<&str>) {
         let Some(p) = project_path.map(str::trim).filter(|s| !s.is_empty()) else {
             return;
@@ -270,11 +278,11 @@ impl RunManager {
             last_event_sequence: 0,
             idempotency_key: req.idempotency_key.clone(),
         };
+        self.persist_run_row(&run)?;
         {
             let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
             runs.insert(id.clone(), run.clone());
         }
-        self.persist_run_row(&run)?;
         let _ = self.persist_runs_snapshot();
         if let Some(key) = req.idempotency_key {
             self.idempotency
@@ -292,6 +300,10 @@ impl RunManager {
         let queued = self.runtime.events.append(&run.id, RunEventKind::Queued);
         if let RunEventKind::Failed { error, code } = queued.payload {
             if code == "PERSISTENCE_FAILED" {
+                if let Ok(mut runs) = self.runs.lock() {
+                    runs.remove(&run.id);
+                }
+                self.delete_run_row(&run.id);
                 return Err(error);
             }
         }
@@ -931,6 +943,62 @@ mod tests {
                 .replay_after(&run.id, 0);
             assert_eq!(replayed.len(), 1);
             assert!(matches!(replayed[0].payload, RunEventKind::Queued));
+        });
+    }
+
+    #[test]
+    fn create_run_cleans_sqlite_row_when_queued_event_persistence_fails() {
+        with_env_lock(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let db_path = dir.path().join("natives.db");
+            let store = Arc::new(
+                crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
+            );
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES ('broken-events-conv', 'agent', 'Broken Events', 'openai', 'gpt-4o')",
+                    [],
+                )
+                .unwrap();
+            store
+                .conn()
+                .unwrap()
+                .execute("DROP TABLE run_event", [])
+                .unwrap();
+
+            let rm = RunManager::new_with_store(store.clone());
+            let run_id = format!("broken-event-{}", Uuid::new_v4());
+            let err = rm
+                .create_run(CreateRunRequest {
+                    conversation_id: "broken-events-conv".into(),
+                    provider_id: "openai".into(),
+                    model_id: "gpt-4o".into(),
+                    key_id: None,
+                    agent_profile_id: None,
+                    permission_profile: Some("ask".into()),
+                    content: Some("must rollback".into()),
+                    attachments: None,
+                    max_steps: Some(3),
+                    parent_run_id: None,
+                    project_path: None,
+                    idempotency_key: Some(run_id.clone()),
+                })
+                .unwrap_err();
+            assert!(err.contains("PERSISTENCE_FAILED"), "{err}");
+            assert!(rm.get_run(&run_id).is_none());
+            let count: i64 = store
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM run WHERE id = ?1",
+                    rusqlite::params![run_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 0);
         });
     }
 
