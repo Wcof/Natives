@@ -538,36 +538,110 @@ fn anthropic_url(base_url: &str, endpoint: &str) -> Result<String> {
 }
 
 fn provider_test_url(provider_type: &str, base_url: &str) -> Result<String> {
-    if is_anthropic_protocol(provider_type) {
-        anthropic_url(base_url, "messages")
-    } else {
-        Ok(chat_completions_url(&normalize_url(base_url)?))
+    match normalize_api_protocol(provider_type).as_str() {
+        "anthropic_messages" => anthropic_url(base_url, "messages"),
+        "openai_responses" => Ok(format!("{}/responses", normalize_url(base_url)?.trim_end_matches('/'))),
+        "openai_chat_completions" => Ok(chat_completions_url(&normalize_url(base_url)?)),
+        protocol => Err(Error::InvalidInput(format!(
+            "Provider test unsupported for api_protocol={protocol}; select openai_chat_completions, openai_responses, or anthropic_messages"
+        ))),
     }
 }
 
 fn models_url(provider_type: &str, base_url: &str) -> Result<String> {
-    if is_anthropic_protocol(provider_type) {
-        anthropic_url(base_url, "models")
-    } else {
-        Ok(format!("{}/models", normalize_url(base_url)?.trim_end_matches('/')))
+    match normalize_api_protocol(provider_type).as_str() {
+        "anthropic_messages" => anthropic_url(base_url, "models"),
+        "openai_chat_completions" | "openai_responses" => {
+            Ok(format!("{}/models", normalize_url(base_url)?.trim_end_matches('/')))
+        }
+        protocol => Err(Error::InvalidInput(format!(
+            "Model discovery unsupported for api_protocol={protocol}; select openai_chat_completions, openai_responses, or anthropic_messages"
+        ))),
     }
 }
 
 fn provider_response_has_content(provider_type: &str, value: &serde_json::Value) -> bool {
-    if is_anthropic_protocol(provider_type) {
-        return value["content"].as_array().is_some_and(|blocks| {
+    match normalize_api_protocol(provider_type).as_str() {
+        "anthropic_messages" => value["content"].as_array().is_some_and(|blocks| {
             blocks.iter().any(|block| {
                 block["text"].as_str().is_some_and(|text| !text.trim().is_empty())
             })
-        });
+        }),
+        "openai_responses" => value["output_text"].as_str().is_some_and(|text| !text.trim().is_empty())
+            || value["output"].as_array().is_some_and(|items| {
+                items.iter().any(|item| {
+                    item["content"].as_array().is_some_and(|blocks| {
+                        blocks.iter().any(|block| {
+                            block["text"].as_str().is_some_and(|text| !text.trim().is_empty())
+                        })
+                    })
+                })
+            }),
+        _ => {
+            let content = &value["choices"][0]["message"]["content"];
+            content.as_str().is_some_and(|text| !text.trim().is_empty())
+                || content.as_array().is_some_and(|blocks| {
+                    blocks.iter().any(|block| {
+                        block["text"].as_str().is_some_and(|text| !text.trim().is_empty())
+                    })
+                })
+        }
     }
-    let content = &value["choices"][0]["message"]["content"];
-    content.as_str().is_some_and(|text| !text.trim().is_empty())
-        || content.as_array().is_some_and(|blocks| {
-            blocks.iter().any(|block| {
-                block["text"].as_str().is_some_and(|text| !text.trim().is_empty())
-            })
-        })
+}
+
+fn provider_test_body(provider_type: &str, model: &str) -> Result<serde_json::Value> {
+    let model = model.trim();
+    if model.is_empty() {
+        return Err(Error::InvalidInput("Model is required for provider test".to_string()));
+    }
+    match normalize_api_protocol(provider_type).as_str() {
+        "anthropic_messages" => Ok(serde_json::json!({
+            "model": model,
+            "messages": [
+                { "role": "user", "content": "Reply with exactly: ok" }
+            ],
+            "max_tokens": 16,
+            "stream": false,
+        })),
+        "openai_responses" => Ok(serde_json::json!({
+            "model": model,
+            "input": "Reply with exactly: ok",
+            "max_output_tokens": 16,
+            "stream": false,
+        })),
+        "openai_chat_completions" => Ok(serde_json::json!({
+            "model": model,
+            "messages": [
+                { "role": "user", "content": "Reply with exactly: ok" }
+            ],
+            "max_tokens": 16,
+            "stream": false,
+        })),
+        protocol => Err(Error::InvalidInput(format!(
+            "Provider test unsupported for api_protocol={protocol}; select openai_chat_completions, openai_responses, or anthropic_messages"
+        ))),
+    }
+}
+
+fn provider_test_error(
+    protocol: &str,
+    model: Option<&str>,
+    status: Option<reqwest::StatusCode>,
+    request_id: Option<String>,
+    message: String,
+) -> String {
+    let retryable = status.is_some_and(|status| {
+        status.as_u16() == 408 || status.as_u16() == 429 || status.is_server_error()
+    });
+    format!(
+        "Provider test failed: protocol={}, model={}, http_status={}, retryable={}, request_id={}, message={}",
+        normalize_api_protocol(protocol),
+        model.unwrap_or("<none>"),
+        status.map(|s| s.as_u16().to_string()).unwrap_or_else(|| "none".to_string()),
+        retryable,
+        request_id.unwrap_or_else(|| "none".to_string()),
+        message,
+    )
 }
 
 #[tauri::command]
@@ -695,27 +769,26 @@ async fn execute_provider_test(
         },
     };
 
-    let test_url = match provider_test_url(provider_type, base_url) {
+    let protocol = normalize_api_protocol(provider_type);
+    let test_url = match provider_test_url(&protocol, base_url) {
         Ok(url) => url,
         Err(e) => return ProviderTestResult {
             success: false,
-            error: Some(format!("Invalid base URL: {e}")),
+            error: Some(provider_test_error(&protocol, model, None, None, format!("Invalid base URL: {e}"))),
         },
     };
 
-    // If a model is provided, test chat completions (OpenAI-compatible)
     if let Some(model) = model {
-        let body = serde_json::json!({
-            "model": model,
-            "messages": [
-                { "role": "user", "content": "Respond with the word 'ok'." }
-            ],
-            "max_tokens": 10,
-            "stream": false,
-        });
+        let body = match provider_test_body(&protocol, model) {
+            Ok(body) => body,
+            Err(e) => return ProviderTestResult {
+                success: false,
+                error: Some(provider_test_error(&protocol, Some(model), None, None, e.to_string())),
+            },
+        };
 
         let mut request = client.post(&test_url).header("Content-Type", "application/json");
-        if is_anthropic_protocol(provider_type) {
+        if is_anthropic_protocol(&protocol) {
             request = request
                 .header("x-api-key", api_key)
                 .header("anthropic-version", "2023-06-01");
@@ -727,10 +800,15 @@ async fn execute_provider_test(
         return match response {
             Ok(resp) => {
                 let status = resp.status();
+                let request_id = resp.headers()
+                    .get("x-request-id")
+                    .or_else(|| resp.headers().get("request-id"))
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToOwned::to_owned);
                 if status.is_success() {
                     match resp.json::<serde_json::Value>().await {
                         Ok(json) => {
-                            let has_content = provider_response_has_content(provider_type, &json);
+                            let has_content = provider_response_has_content(&protocol, &json);
                             if has_content {
                                 ProviderTestResult { success: true, error: None }
                             } else {
@@ -739,15 +817,15 @@ async fn execute_provider_test(
                                     .unwrap_or_else(|| json.to_string().chars().take(80).collect());
                                 ProviderTestResult {
                                     success: false,
-                                    error: Some(format!(
-                                        "Provider returned no assistant text for the selected protocol ({provider_type}). Check protocol/model. Response keys: {keys}"
-                                    )),
+                                    error: Some(provider_test_error(&protocol, Some(model), Some(status), request_id, format!(
+                                        "Provider returned no assistant text. Check protocol/model. Response keys: {keys}"
+                                    ))),
                                 }
                             }
                         }
                         Err(_) => ProviderTestResult {
                             success: false,
-                            error: Some("Invalid JSON response from API".to_string()),
+                            error: Some(provider_test_error(&protocol, Some(model), Some(status), request_id, "Invalid JSON response from API".to_string())),
                         },
                     }
                 } else if status.is_client_error() {
@@ -762,12 +840,12 @@ async fn execute_provider_test(
                     } else {
                         format!("HTTP {}: {}", status, error_body)
                     };
-                    ProviderTestResult { success: false, error: Some(classified) }
+                    ProviderTestResult { success: false, error: Some(provider_test_error(&protocol, Some(model), Some(status), request_id, classified)) }
                 } else {
                     let body = resp.text().await.unwrap_or_default();
                     ProviderTestResult {
                         success: false,
-                        error: Some(format!("HTTP {}: {}", status, body.chars().take(200).collect::<String>())),
+                        error: Some(provider_test_error(&protocol, Some(model), Some(status), request_id, format!("HTTP {}: {}", status, body.chars().take(200).collect::<String>()))),
                     }
                 }
             }
@@ -775,28 +853,33 @@ async fn execute_provider_test(
                 if e.is_timeout() {
                     ProviderTestResult {
                         success: false,
-                        error: Some("Connection timed out (15s)".to_string()),
+                        error: Some(provider_test_error(&protocol, Some(model), None, None, "Connection timed out (15s)".to_string())),
                     }
                 } else if e.is_connect() {
                     ProviderTestResult {
                         success: false,
-                        error: Some("Cannot connect — check base URL and network".to_string()),
+                        error: Some(provider_test_error(&protocol, Some(model), None, None, "Cannot connect — check base URL and network".to_string())),
                     }
                 } else {
                     ProviderTestResult {
                         success: false,
-                        error: Some(format!("Connection failed: {e}")),
+                        error: Some(provider_test_error(&protocol, Some(model), None, None, format!("Connection failed: {e}"))),
                     }
                 }
             }
         };
     }
 
-    // Legacy test: GET /models on the normalized OpenAI-compatible base URL.
-    let request_url = models_url(provider_type, base_url).unwrap_or(test_url);
+    let request_url = match models_url(&protocol, base_url) {
+        Ok(url) => url,
+        Err(e) => return ProviderTestResult {
+            success: false,
+            error: Some(provider_test_error(&protocol, None, None, None, format!("Invalid base URL: {e}"))),
+        },
+    };
 
     let mut request = client.get(&request_url);
-    if is_anthropic_protocol(provider_type) {
+    if is_anthropic_protocol(&protocol) {
         request = request
             .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01");
@@ -807,24 +890,29 @@ async fn execute_provider_test(
 
     match response {
         Ok(resp) => {
+            let status = resp.status();
+            let request_id = resp.headers()
+                .get("x-request-id")
+                .or_else(|| resp.headers().get("request-id"))
+                .and_then(|value| value.to_str().ok())
+                .map(ToOwned::to_owned);
             if resp.status().is_success() {
                 ProviderTestResult { success: true, error: None }
             } else {
-                let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
                 let classified = if status == 401 { "Authentication failed".to_string() }
                     else if status == 404 { "Endpoint not found — check base URL".to_string() }
                     else { format!("HTTP {}: {}", status, body.chars().take(200).collect::<String>()) };
-                ProviderTestResult { success: false, error: Some(classified) }
+                ProviderTestResult { success: false, error: Some(provider_test_error(&protocol, None, Some(status), request_id, classified)) }
             }
         }
         Err(e) => {
             if e.is_timeout() {
-                ProviderTestResult { success: false, error: Some("Connection timed out (15s)".to_string()) }
+                ProviderTestResult { success: false, error: Some(provider_test_error(&protocol, None, None, None, "Connection timed out (15s)".to_string())) }
             } else if e.is_connect() {
-                ProviderTestResult { success: false, error: Some("Cannot connect — check base URL and network".to_string()) }
+                ProviderTestResult { success: false, error: Some(provider_test_error(&protocol, None, None, None, "Cannot connect — check base URL and network".to_string())) }
             } else {
-                ProviderTestResult { success: false, error: Some(format!("Connection failed: {e}")) }
+                ProviderTestResult { success: false, error: Some(provider_test_error(&protocol, None, None, None, format!("Connection failed: {e}"))) }
             }
         }
     }
@@ -1100,14 +1188,45 @@ mod tests {
     #[test]
     fn provider_test_supports_openai_and_anthropic_response_shapes() {
         let openai = serde_json::json!({"choices": [{"message": {"content": "ok"}}]});
+        let responses = serde_json::json!({"output_text": "ok"});
         let anthropic = serde_json::json!({"content": [{"type": "text", "text": "ok"}]});
         assert!(provider_response_has_content("openai_compatible", &openai));
+        assert!(provider_response_has_content("openai_responses", &responses));
         assert!(provider_response_has_content("anthropic", &anthropic));
         assert!(provider_response_has_content("anthropic_messages", &anthropic));
         assert_eq!(
             provider_test_url("anthropic_messages", "https://api.anthropic.com").unwrap(),
             "https://api.anthropic.com/v1/messages"
         );
+        assert_eq!(
+            provider_test_url("openai_responses", "https://api.openai.com/v1").unwrap(),
+            "https://api.openai.com/v1/responses"
+        );
+    }
+
+    #[test]
+    fn provider_test_builds_protocol_specific_request_bodies() {
+        let anthropic = provider_test_body("anthropic_messages", "claude-sonnet").unwrap();
+        assert_eq!(anthropic["model"], "claude-sonnet");
+        assert_eq!(anthropic["messages"][0]["content"], "Reply with exactly: ok");
+        assert!(anthropic.get("max_tokens").is_some());
+        assert!(anthropic.get("max_output_tokens").is_none());
+
+        let responses = provider_test_body("openai_responses", "gpt-5").unwrap();
+        assert_eq!(responses["model"], "gpt-5");
+        assert_eq!(responses["input"], "Reply with exactly: ok");
+        assert!(responses.get("max_output_tokens").is_some());
+        assert!(responses.get("messages").is_none());
+    }
+
+    #[test]
+    fn unsupported_protocols_are_not_silently_tested_as_openai() {
+        assert!(provider_test_url("gemini_generate_content", "https://example.com").is_err());
+        assert!(models_url("ollama_chat", "http://localhost:11434").is_err());
+        let message = provider_test_body("gemini_generate_content", "gemini-pro")
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("unsupported"));
     }
 
     // ── Integration tests (simulate manual validation) ──

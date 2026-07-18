@@ -356,6 +356,22 @@ async fn dispatch_request(
         "project.register" => handle_project_register(request).await,
         "project.list" => handle_project_list(request, data_store).await,
 
+        _ if assistant_protocol::v2::is_implemented_method(&request.method) => {
+            match crate::daemon_authority::request(&request.method, request.params.clone()).await {
+                Ok(data) => success_response(request, data),
+                Err(error) => error_response(
+                    request,
+                    "DAEMON_RPC_ERROR",
+                    &format!("Daemon RPC failed for {}: {error}", request.method),
+                ),
+            }
+        }
+        _ if assistant_protocol::v2::is_known_method(&request.method) => error_response(
+            request,
+            "METHOD_UNSUPPORTED",
+            &format!("RPC method is not implemented by this server: {}", request.method),
+        ),
+
         // ── Unknown ──
         _ => {
             RpcResponse {
@@ -431,7 +447,7 @@ async fn handle_get_capabilities(request: &RpcRequest, _event_bus: &Arc<EventBus
                 "ollama".to_string(),
             ],
             has_plugin_host: false,
-            has_mcp_support: false,
+            has_mcp_support: true,
         })),
         error: None,
     }
@@ -1708,7 +1724,7 @@ fn error_response(request: &RpcRequest, code: &str, message: &str) -> RpcRespons
         "PERMISSION_DENIED" => ErrorCategory::PermissionDenied,
         "RATE_LIMITED" => ErrorCategory::RateLimited,
         "TIMEOUT" => ErrorCategory::Timeout,
-        "METHOD_NOT_FOUND" => ErrorCategory::Unsupported,
+        "METHOD_NOT_FOUND" | "METHOD_UNSUPPORTED" => ErrorCategory::Unsupported,
         "PROJECT_PATH_REQUIRED" | "PROJECT_NOT_FOUND" | "PROJECT_NOT_DIRECTORY" | "PROJECT_REGISTER_FAILED" => ErrorCategory::Validation,
         _ => ErrorCategory::Internal,
     };
@@ -1721,7 +1737,7 @@ fn error_response(request: &RpcRequest, code: &str, message: &str) -> RpcRespons
             "NOT_FOUND" => vec!["Verify the resource ID is correct".to_string()],
             "INTERNAL_ERROR" => vec!["Retry the request. If the problem persists, restart the daemon.".to_string()],
             "UNAUTHORIZED" => vec!["Re-authenticate by restarting the client".to_string()],
-            "METHOD_NOT_FOUND" => vec!["Check the API version compatibility".to_string()],
+            "METHOD_NOT_FOUND" | "METHOD_UNSUPPORTED" => vec!["Check the API version compatibility".to_string()],
             "PROJECT_PATH_REQUIRED" => vec!["Provide a valid project folder path".to_string()],
             "PROJECT_NOT_FOUND" => vec!["The project folder may have been moved or deleted".to_string()],
             "PROJECT_NOT_DIRECTORY" => vec!["Select a folder, not a file".to_string()],

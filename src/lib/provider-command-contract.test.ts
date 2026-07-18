@@ -7,6 +7,8 @@ const dialog = readFileSync(new URL('../components/settings/AddProviderDialog.ts
 const settings = readFileSync(new URL('../components/shell/SettingsPage.tsx', import.meta.url), 'utf8');
 const commands = readFileSync(new URL('../../src-tauri/src/commands/provider.rs', import.meta.url), 'utf8');
 const commandRegistry = readFileSync(new URL('../../src-tauri/src/lib.rs', import.meta.url), 'utf8');
+const legacyRpcServer = readFileSync(new URL('../../src-tauri/src/daemon/rpc_server.rs', import.meta.url), 'utf8');
+const agentDaemonRpc = readFileSync(new URL('../../src-agent-daemon/src/rpc.rs', import.meta.url), 'utf8');
 
 describe('provider renderer/Tauri contract', () => {
   it('wraps struct command arguments in input', () => {
@@ -31,5 +33,12 @@ describe('provider renderer/Tauri contract', () => {
     assert.match(dialog, /apiProtocol: selectedProtocol/);
     assert.match(settings, /apiProtocol: data\.apiProtocol/);
     assert.match(commands, /api_protocol/);
+  });
+
+  it('keeps legacy Tauri RPC from rejecting implemented daemon methods', () => {
+    assert.match(legacyRpcServer, /assistant_protocol::v2::is_implemented_method/);
+    assert.match(legacyRpcServer, /daemon_authority::request/);
+    assert.match(legacyRpcServer, /has_mcp_support: true/);
+    assert.doesNotMatch(agentDaemonRpc, new RegExp(['Model response', 'missing content'].join(' ')));
   });
 });

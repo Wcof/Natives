@@ -340,27 +340,30 @@ async fn test_provider_model(
     };
     let mut stream = adapter.stream(request, credential).await?;
     let mut text = String::new();
-    let mut completed = false;
     while let Some(event) = stream.next().await {
         match event {
             ProviderEvent::TextDelta(delta) => text.push_str(&delta),
             ProviderEvent::Completed => {
-                completed = true;
                 break;
             }
             ProviderEvent::Error(err) => return Err(err),
             _ => {}
         }
     }
-    Ok(ProviderTestResult {
-        success: completed || !text.trim().is_empty(),
-        latency_ms: Some(started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64),
-        message: if completed || !text.trim().is_empty() {
-            format!("Model test passed: {model}")
-        } else {
-            format!("Model response missing content: {model}")
-        },
-    })
+    if !text.trim().is_empty() {
+        Ok(ProviderTestResult {
+            success: true,
+            latency_ms: Some(started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64),
+            message: format!("Model test passed: {model}"),
+        })
+    } else {
+        Err(provider_adapters::capabilities::ProviderError {
+            code: "EMPTY_RESPONSE".into(),
+            message: format!("Provider test returned no content: model={model}"),
+            category: provider_adapters::capabilities::ProviderErrorCategory::Unknown,
+            retryable: true,
+        })
+    }
 }
 
 /// Dispatch an RPC request to the appropriate handler.
@@ -1954,6 +1957,29 @@ mod tests {
 
         assert!(result.success);
         assert!(result.message.contains("model-under-test"));
+    }
+
+    #[tokio::test]
+    async fn provider_model_test_empty_stream_is_structured_error() {
+        let adapter = StaticStreamAdapter {
+            events: vec![ProviderEvent::Completed],
+        };
+        let error = test_provider_model(
+            &adapter,
+            Credential {
+                api_key: "test-key".into(),
+                base_url: None,
+                key_id: Some("k".into()),
+                provider_type: Some("openai_compatible".into()),
+            },
+            "empty-model",
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.code, "EMPTY_RESPONSE");
+        assert!(error.retryable);
+        assert!(error.message.contains("Provider test returned no content"));
     }
 
     /// Test client disconnect cleanup.
