@@ -5,13 +5,14 @@ import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 import { useLocale, t } from '@/i18n';
 import type { UsageDailyRecord, UsageActivityBucket, UsageSessionRecord, UsageMetrics, UsageSourceStatus } from '@/types/usage';
 import {
-  buildDailyTrend, buildHourlyHeatmap, buildSourceDistribution, buildModelDistribution, getChartVolumeLevel,
+  buildDailyTrend, buildHourlyHeatmap, buildSourceDistribution, buildModelDistribution,
+  buildProjectDistribution, getChartVolumeLevel,
 } from '@/lib/usage-dashboard';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from 'recharts';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { BarChart3, Clock, PieChart } from 'lucide-react';
+import { BarChart3, Clock, Folder, PieChart } from 'lucide-react';
 import { fmtCount } from '@/lib/format';
 
 interface Props {
@@ -34,6 +35,17 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
   const othersLabel = t(locale, 'usage.others');
   const sourceDist = useMemo(() => buildSourceDistribution(daily, sources, othersLabel), [daily, sources, othersLabel]);
   const modelDist = useMemo(() => buildModelDistribution(daily, othersLabel), [daily, othersLabel]);
+  const projectDist = useMemo(() => {
+    const dist = buildProjectDistribution(daily, othersLabel);
+    return dist.map((p) => {
+      const isPath = p.label.includes('/') || p.label.includes('\\');
+      if (!isPath) return p;
+      const cleaned = p.label.replace(/[/\\]+$/, '');
+      const lastSlash = Math.max(cleaned.lastIndexOf('/'), cleaned.lastIndexOf('\\'));
+      const basename = lastSlash === -1 ? cleaned : cleaned.substring(lastSlash + 1);
+      return { ...p, label: basename || p.label };
+    });
+  }, [daily, othersLabel]);
 
   // Check if any source supports hourly data
   const hasHourlySources = sources.some((s) => s.capabilities.hourly);
@@ -257,7 +269,7 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
       </div>
 
       {/* ── Distribution Row ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: SPACING.md }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: SPACING.md }}>
         {/* Source Distribution */}
         <div style={{ padding: SPACING.md, borderRadius: BORDER_RADIUS.md, background: 'var(--bg-2)', border: '0.0625rem solid var(--border)' }}>
           <div style={{ fontSize: FONT_SIZE.xs, fontWeight: 600, color: 'var(--text-dim)', marginBottom: SPACING.sm }}>{t(locale, 'usage.sourceDistribution')}</div>
@@ -303,6 +315,30 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
             </ResponsiveContainer>
           ) : (
             <EmptyState icon={<BarChart3 size={20} />} title={t(locale, 'usage.noModelData')} description="" />
+          )}
+        </div>
+
+        {/* Project Distribution */}
+        <div style={{ padding: SPACING.md, borderRadius: BORDER_RADIUS.md, background: 'var(--bg-2)', border: '0.0625rem solid var(--border)' }}>
+          <div style={{ fontSize: FONT_SIZE.xs, fontWeight: 600, color: 'var(--text-dim)', marginBottom: SPACING.sm }}>{t(locale, 'usage.projectDistribution')}</div>
+          {projectDist.length > 0 ? (
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={projectDist} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={compact} />
+                <YAxis type="category" dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} width={80} />
+                <Tooltip contentStyle={{ background: 'var(--bg)', border: '0.0625rem solid var(--border)', borderRadius: 8 }} formatter={exact} />
+                <Bar dataKey="totalTokens" radius={[0, 2, 2, 0]} name={t(locale, 'usage.totalTokens')}>
+                  {projectDist.map((entry, index) => {
+                    const maxVal = Math.max(...projectDist.map(d => d.totalTokens ?? 0));
+                    const level = getChartVolumeLevel(entry.totalTokens ?? 0, maxVal);
+                    return <Cell key={`cell-${index}`} fill={`var(--chart-volume-${level})`} />;
+                  })}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <EmptyState icon={<Folder size={20} />} title={t(locale, 'usage.noProjectData')} description="" />
           )}
         </div>
       </div>

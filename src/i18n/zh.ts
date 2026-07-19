@@ -807,6 +807,8 @@ export const zh = {
     noSourceData: '暂无来源数据',
     modelDistribution: '模型分布',
     noModelData: '暂无模型数据',
+    projectDistribution: '项目分布',
+    noProjectData: '暂无项目数据',
     unrecordedModel: '未记录模型',
     dataSources: '数据来源与覆盖',
     detectedUnmeasurable: '已检测到 · 暂无可靠本地用量数据',

@@ -160,9 +160,37 @@ pub fn slice_response(
     time_zone: &str,
     project_path: Option<&str>,
 ) -> UsageDashboardResponse {
+    slice_response_with_custom(
+        snapshot,
+        preset,
+        now_ms,
+        time_zone,
+        project_path,
+        None,
+        None,
+    )
+}
+
+/// Same as [`slice_response`], but accepts an optional custom range for the `custom` preset.
+pub fn slice_response_with_custom(
+    snapshot: &UsageDashboardSnapshot,
+    preset: &str,
+    now_ms: i64,
+    time_zone: &str,
+    project_path: Option<&str>,
+    custom_start_ms: Option<i64>,
+    custom_end_ms: Option<i64>,
+) -> UsageDashboardResponse {
     use crate::usage::UsageDashboardRange;
 
-    let (start_ms, end_ms) = compute_range(preset, now_ms, time_zone, snapshot);
+    let (start_ms, end_ms) = compute_range(
+        preset,
+        now_ms,
+        time_zone,
+        snapshot,
+        custom_start_ms,
+        custom_end_ms,
+    );
 
     // Filter daily records to the range
     let daily: Vec<_> = snapshot.calendar.daily.iter()
@@ -204,7 +232,15 @@ pub fn slice_response(
         .collect();
 
     // Build comparison data
-    let comparison = build_comparison(snapshot, preset, now_ms, time_zone, project_path);
+    let comparison = build_comparison(
+        snapshot,
+        preset,
+        now_ms,
+        time_zone,
+        project_path,
+        custom_start_ms,
+        custom_end_ms,
+    );
 
     // Handle 24h preset specially — use rolling_24h data
     let (daily, activity, sessions) = if preset == "24h" {
@@ -260,7 +296,17 @@ pub fn slice_response(
 }
 
 /// Compute the request range for a given preset.
-fn compute_range(preset: &str, now_ms: i64, time_zone: &str, snapshot: &UsageDashboardSnapshot) -> (i64, i64) {
+///
+/// For `custom`, uses `custom_start_ms`/`custom_end_ms` when both are valid
+/// (`end > start`). Otherwise falls back to the snapshot coverage window.
+fn compute_range(
+    preset: &str,
+    now_ms: i64,
+    time_zone: &str,
+    snapshot: &UsageDashboardSnapshot,
+    custom_start_ms: Option<i64>,
+    custom_end_ms: Option<i64>,
+) -> (i64, i64) {
     let day_start_ms = {
         let tz: chrono_tz::Tz = time_zone.parse().unwrap_or(chrono_tz::UTC);
         let secs = now_ms / 1000;
@@ -282,6 +328,10 @@ fn compute_range(preset: &str, now_ms: i64, time_zone: &str, snapshot: &UsageDas
         "7d" => (day_start_ms - 6 * 86_400_000, now_ms),
         "30d" => (day_start_ms - 29 * 86_400_000, now_ms),
         "90d" => (day_start_ms - 89 * 86_400_000, now_ms),
+        "custom" => match (custom_start_ms, custom_end_ms) {
+            (Some(start), Some(end)) if end > start => (start, end),
+            _ => (snapshot.coverage_start_ms, snapshot.coverage_end_ms),
+        },
         _ => (snapshot.coverage_start_ms, snapshot.coverage_end_ms),
     }
 }
@@ -293,8 +343,17 @@ fn build_comparison(
     now_ms: i64,
     time_zone: &str,
     project_path: Option<&str>,
+    custom_start_ms: Option<i64>,
+    custom_end_ms: Option<i64>,
 ) -> Option<UsagePeriodData> {
-    let (current_start_ms, current_end_ms) = compute_range(preset, now_ms, time_zone, snapshot);
+    let (current_start_ms, current_end_ms) = compute_range(
+        preset,
+        now_ms,
+        time_zone,
+        snapshot,
+        custom_start_ms,
+        custom_end_ms,
+    );
     let span = current_end_ms - current_start_ms;
     let comp_start_ms = current_start_ms - span;
     let comp_end_ms = current_start_ms;
@@ -495,7 +554,7 @@ mod tests {
             warnings: vec![],
             rtk: None,
         };
-        let (start, end) = compute_range("today", now, "UTC", &snapshot);
+        let (start, end) = compute_range("today", now, "UTC", &snapshot, None, None);
         // 2026-01-05 00:00:00 UTC = 1767571200000ms
         assert_eq!(start, 1767571200000); // day start = same as now (already midnight)
         assert_eq!(end, now);
@@ -532,8 +591,70 @@ mod tests {
             warnings: vec![],
             rtk: None,
         };
-        let (start, end) = compute_range("24h", now, "UTC", &snapshot);
+        let (start, end) = compute_range("24h", now, "UTC", &snapshot, None, None);
         assert_eq!(start, now - 24 * 3600 * 1000);
+        assert_eq!(end, now);
+    }
+
+    #[test]
+    fn test_compute_range_custom_uses_explicit_bounds() {
+        let now = 1767571200000;
+        let coverage_start = now - 180 * 86_400_000;
+        let snapshot = UsageDashboardSnapshot {
+            schema_version: SNAPSHOT_SCHEMA_VERSION,
+            generated_at_ms: now,
+            coverage_start_ms: coverage_start,
+            coverage_end_ms: now,
+            time_zone: "UTC".to_string(),
+            calendar: UsagePeriodData {
+                range: crate::usage::UsageDashboardRange { start_ms: 0, end_ms: 0 },
+                daily: vec![],
+                activity: vec![],
+                sessions: vec![],
+            },
+            rolling_24h: UsagePeriodData {
+                range: crate::usage::UsageDashboardRange { start_ms: 0, end_ms: 0 },
+                daily: vec![],
+                activity: vec![],
+                sessions: vec![],
+            },
+            rolling_24h_comparison: UsagePeriodData {
+                range: crate::usage::UsageDashboardRange { start_ms: 0, end_ms: 0 },
+                daily: vec![],
+                activity: vec![],
+                sessions: vec![],
+            },
+            sources: vec![],
+            warnings: vec![],
+            rtk: None,
+        };
+
+        let custom_start = now - 10 * 86_400_000;
+        let custom_end = now - 3 * 86_400_000;
+        let (start, end) = compute_range(
+            "custom",
+            now,
+            "UTC",
+            &snapshot,
+            Some(custom_start),
+            Some(custom_end),
+        );
+        assert_eq!(start, custom_start);
+        assert_eq!(end, custom_end);
+
+        // Invalid / missing custom bounds fall back to full coverage.
+        let (start, end) = compute_range("custom", now, "UTC", &snapshot, None, None);
+        assert_eq!(start, coverage_start);
+        assert_eq!(end, now);
+        let (start, end) = compute_range(
+            "custom",
+            now,
+            "UTC",
+            &snapshot,
+            Some(custom_end),
+            Some(custom_start),
+        );
+        assert_eq!(start, coverage_start);
         assert_eq!(end, now);
     }
 

@@ -12,7 +12,7 @@ import { UsageToolbar } from './UsageToolbar';
 import { UsageMetricGrid } from './UsageMetricGrid';
 import { UsageCharts } from './UsageCharts';
 import { UsageSourcesPanel } from './UsageSourcesPanel';
-import { RefreshCw, AlertCircle, X } from 'lucide-react';
+import { RefreshCw, AlertCircle, X, Download, FileText, Image as ImageIcon } from 'lucide-react';
 import { classifyError } from '@/lib/error-classifier';
 import styles from './UsageDashboard.module.css';
 import Modal from '@/components/ui/Modal';
@@ -381,7 +381,38 @@ export function UsageDashboard() {
         onSelectDir={handleSelectDir}
         style={{ marginBottom: '16px' }}
       >
-        <div style={{ marginLeft: 'auto' }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+          {shareable && (
+            <>
+              <button
+                type="button"
+                onClick={() => openExportDialog('csv')}
+                className={styles.secondaryAction}
+                title={t(locale, 'usage.exportCsv')}
+              >
+                <Download size={12} />
+                {t(locale, 'usage.exportCsv')}
+              </button>
+              <button
+                type="button"
+                onClick={handleCopyMarkdown}
+                className={styles.secondaryAction}
+                title={t(locale, 'usage.copyMarkdown')}
+              >
+                <FileText size={12} />
+                {t(locale, 'usage.copyMarkdown')}
+              </button>
+              <button
+                type="button"
+                onClick={() => openExportDialog('badge')}
+                className={styles.secondaryAction}
+                title={t(locale, 'usage.saveBadge')}
+              >
+                <ImageIcon size={12} />
+                {t(locale, 'usage.saveBadge')}
+              </button>
+            </>
+          )}
           <button
             onClick={handleSync}
             disabled={isSyncing}

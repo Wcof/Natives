@@ -73,12 +73,14 @@ pub async fn usage_get_cached(
     // Try memory cache first
     let tz = &query.time_zone;
     if let Some(cached) = state.usage_cache.get_snapshot(tz) {
-        let response = snapshot::slice_response(
+        let response = snapshot::slice_response_with_custom(
             &cached,
             preset_to_str(&query.preset),
             usage::now_ms(),
             tz,
             query.project_path.as_deref(),
+            query.custom_start_ms,
+            query.custom_end_ms,
         );
         let metadata = UsageCacheMetadata {
             schema_version: cached.schema_version,
@@ -96,12 +98,14 @@ pub async fn usage_get_cached(
             // Cache in memory for this session
             state.usage_cache.set_snapshot(tz, snapshot_data.clone());
 
-            let response = snapshot::slice_response(
+            let response = snapshot::slice_response_with_custom(
                 &snapshot_data,
                 preset_to_str(&query.preset),
                 usage::now_ms(),
                 tz,
                 query.project_path.as_deref(),
+                query.custom_start_ms,
+                query.custom_end_ms,
             );
             let metadata = UsageCacheMetadata {
                 schema_version: snapshot_data.schema_version,
@@ -245,12 +249,14 @@ pub async fn usage_sync(
     state.usage_cache.set_snapshot(tz_str, snapshot.clone());
 
     // ── 6. Build response for the current view ──
-    let response = snapshot::slice_response(
+    let response = snapshot::slice_response_with_custom(
         &snapshot,
         preset_to_str(&request.current_view.preset),
         generated_at_ms,
         tz_str,
         request.current_view.project_path.as_deref(),
+        request.current_view.custom_start_ms,
+        request.current_view.custom_end_ms,
     );
 
     let metadata = UsageCacheMetadata {

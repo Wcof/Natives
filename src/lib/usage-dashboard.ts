@@ -216,6 +216,11 @@ export function buildDailyTrend(
 }
 
 // ── Heatmap ──
+//
+// Backend `localized_time_metrics` encodes each local wall-clock hour as a
+// UTC timestamp whose hour/day fields match the user's local hour/day
+// (i.e. "treat local hour as if it were UTC"). Always decode with getUTC*
+// so non-UTC users see the correct active-hour grid.
 
 export function buildHourlyHeatmap(
   activity: UsageActivityBucket[],
@@ -226,6 +231,7 @@ export function buildHourlyHeatmap(
     if (a.hourStartMs === 0) continue;
 
     const date = new Date(a.hourStartMs);
+    // Must use UTC getters — see comment above. Do NOT use getHours().
     const hour = date.getUTCHours();
     const dayOfWeek = date.getUTCDay(); // 0=Sun, 6=Sat
     const key = `${dayOfWeek}-${hour}`;
@@ -248,6 +254,28 @@ export function buildHourlyHeatmap(
   }
 
   return Array.from(map.values());
+}
+
+// ── Project distribution ──
+
+export function buildProjectDistribution(
+  daily: UsageDailyRecord[],
+  othersLabel: string = 'Others',
+): DistributionItem[] {
+  const items = buildDistribution(daily, 'projectId');
+  if (items.length <= 6) return items;
+
+  const top6 = items.slice(0, 6);
+  const other = items.slice(6);
+  const otherTotal = other.reduce((sum, item) => sum + (item.totalTokens ?? 0), 0);
+  const grandTotal = items.reduce((sum, item) => sum + (item.totalTokens ?? 0), 0);
+  top6.push({
+    id: '__other__',
+    label: othersLabel,
+    totalTokens: otherTotal,
+    percentage: grandTotal > 0 ? otherTotal / grandTotal : null,
+  });
+  return top6;
 }
 
 // ── Source distribution ──

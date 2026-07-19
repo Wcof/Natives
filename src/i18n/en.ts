@@ -820,6 +820,8 @@ export const en = {
     noSourceData: 'No source data',
     modelDistribution: 'Model Distribution',
     noModelData: 'No model data',
+    projectDistribution: 'Project Distribution',
+    noProjectData: 'No project data',
     unrecordedModel: 'Unrecorded Model',
     dataSources: 'Data Sources & Coverage',
     detectedUnmeasurable: 'Detected · no reliable local usage data',

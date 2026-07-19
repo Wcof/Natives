@@ -8,6 +8,7 @@ import {
   aggregateUsageMetrics,
   buildDailyTrend,
   buildHourlyHeatmap,
+  buildProjectDistribution,
   uniqueSessionCount,
   buildSourceDimensions,
 } from './usage-dashboard';
@@ -129,14 +130,17 @@ describe('buildDailyTrend', () => {
 });
 
 describe('buildHourlyHeatmap', () => {
-  it('uses real event hour', () => {
+  it('uses UTC hour fields matching backend local-as-UTC encoding', () => {
+    // Backend localized_time_metrics stores local wall-clock hour as a UTC
+    // timestamp. e.g. local 22:00 becomes a Date whose getUTCHours() === 22.
     const activity: UsageActivityBucket[] = [
-      { hourStartMs: new Date('2026-07-01T10:00:00Z').getTime(), sourceId: 'a', modelId: null, projectId: null, terminalId: null, totalTokens: 100, userMessages: 1, assistantMessages: 1, activeSeconds: null },
+      { hourStartMs: new Date('2026-07-01T22:00:00Z').getTime(), sourceId: 'a', modelId: null, projectId: null, terminalId: null, totalTokens: 100, userMessages: 1, assistantMessages: 1, activeSeconds: null },
     ];
     const heatmap = buildHourlyHeatmap(activity);
     assert.equal(heatmap.length, 1);
     assert.ok(heatmap[0] !== undefined);
-    assert.equal(heatmap[0]!.hour, 10);
+    assert.equal(heatmap[0]!.hour, 22);
+    assert.equal(heatmap[0]!.dayOfWeek, 3); // 2026-07-01 is Wednesday
   });
 
   it('zero hourStartMs is excluded', () => {
@@ -144,6 +148,30 @@ describe('buildHourlyHeatmap', () => {
       { hourStartMs: 0, sourceId: 'a', modelId: null, projectId: null, terminalId: null, totalTokens: 100, userMessages: 1, assistantMessages: 1, activeSeconds: null },
     ];
     assert.equal(buildHourlyHeatmap(activity).length, 0);
+  });
+});
+
+describe('buildProjectDistribution', () => {
+  it('aggregates tokens by project and merges long tail into others', () => {
+    const daily: UsageDailyRecord[] = Array.from({ length: 8 }, (_, i) => ({
+      date: '2026-07-01',
+      sourceId: 'a',
+      modelId: null,
+      projectId: `/proj/${i}`,
+      terminalId: null,
+      inputTokens: null,
+      outputTokens: null,
+      cacheCreationTokens: null,
+      cacheReadTokens: null,
+      totalTokens: 100 - i * 5,
+      costUsd: null,
+      costQuality: 'unavailable' as const,
+    }));
+    const dist = buildProjectDistribution(daily, 'Others');
+    assert.equal(dist.length, 7); // top 6 + others
+    assert.equal(dist[6]!.id, '__other__');
+    assert.equal(dist[6]!.label, 'Others');
+    assert.ok((dist[6]!.totalTokens ?? 0) > 0);
   });
 });
 

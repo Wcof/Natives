@@ -148,6 +148,8 @@ export function UsageMetricGrid({ metrics, prevMetrics, totalSessions, prevTotal
           label={t(locale, 'usage.estimatedCost')}
           value={costStr}
           delta={renderDelta(metrics?.estimatedCost ?? null, prevMetrics?.estimatedCost ?? null, true, t(locale, 'usage.newData'))}
+          subLabel={metrics?.costCoverage != null ? t(locale, 'usage.costCoverage') : undefined}
+          subValue={metrics?.costCoverage != null ? `${Math.round(metrics.costCoverage * 100)}%` : undefined}
         />
         <MetricCard
           icon={<Cpu size={12} />}
