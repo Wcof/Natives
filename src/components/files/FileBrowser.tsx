@@ -841,6 +841,15 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           if (list.length > 0) setSelectedIndex(0);
           break;
         }
+        case 'Escape': {
+          if (selectedPaths.size > 0 || selectedIndex >= 0) {
+            e.preventDefault();
+            setSelectedPaths(new Set());
+            setSelectedIndex(-1);
+            lastClickedIndexRef.current = -1;
+          }
+          break;
+        }
         case 'Home': {
           e.preventDefault();
           if (list.length === 0) break;
@@ -938,6 +947,14 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         role="listbox"
         aria-label={t(locale, 'fileBrowser.ariaLabelFiles')}
         tabIndex={0}
+        onClick={(e) => {
+          const target = e.target as HTMLElement;
+          if (!target.closest('[data-file-entry]')) {
+            setSelectedPaths(new Set());
+            setSelectedIndex(-1);
+            lastClickedIndexRef.current = -1;
+          }
+        }}
         onContextMenu={(e) => {
           // Blank area right-click — only if not on a file/dir element
           const target = e.target as HTMLElement;
