@@ -767,9 +767,27 @@ pub fn move_entries(paths: &[String], dest_dir: &str) -> Result<serde_json::Valu
     }
 
     let mut moved: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
     let mut errors: Vec<serde_json::Value> = Vec::new();
+    let dest_canon = std::fs::canonicalize(&dest).unwrap_or_else(|_| dest.clone());
     for p in paths {
-        // Skip if source is already under dest as the same leaf (no-op-ish)
+        let src = expand_tilde(p);
+        // Skip no-op: already directly inside dest
+        if let Some(parent) = src.parent() {
+            let parent_canon = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+            if parent_canon == dest_canon {
+                skipped.push(p.clone());
+                continue;
+            }
+        }
+        // Prevent moving a directory into itself / its descendant
+        if src.is_dir() {
+            let src_canon = std::fs::canonicalize(&src).unwrap_or_else(|_| src.clone());
+            if dest_canon.starts_with(&src_canon) {
+                errors.push(serde_json::json!({ "path": p, "error": "cannot move a folder into itself" }));
+                continue;
+            }
+        }
         match move_entry(p, dest.to_string_lossy().as_ref()) {
             Ok(path) => moved.push(path),
             Err(e) => errors.push(serde_json::json!({ "path": p, "error": e.to_string() })),
@@ -778,6 +796,7 @@ pub fn move_entries(paths: &[String], dest_dir: &str) -> Result<serde_json::Valu
     Ok(serde_json::json!({
         "ok": errors.is_empty(),
         "moved": moved,
+        "skipped": skipped,
         "errors": errors,
         "count": moved.len(),
     }))

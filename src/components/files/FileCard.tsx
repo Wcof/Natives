@@ -38,6 +38,7 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
   const [flash, setFlash] = useState(false);
   const [heat, setHeat] = useState(0);
   const [showRipple, setShowRipple] = useState(false);
+  const [dropTarget, setDropTarget] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const heatDecayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -145,11 +146,14 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
         if (!entry.isDir) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
+        if (!dropTarget) setDropTarget(true);
       }}
+      onDragLeave={() => { if (dropTarget) setDropTarget(false); }}
       onDrop={(e) => {
         if (!entry.isDir || !onMoveDrop) return;
         e.preventDefault();
         e.stopPropagation();
+        setDropTarget(false);
         try {
           const raw = e.dataTransfer.getData('application/x-natives-paths');
           const paths = raw ? JSON.parse(raw) as string[] : [];
@@ -164,8 +168,8 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
         padding: SPACING.md,
         borderRadius: 'var(--radius, 4px)',
         cursor: 'pointer',
-        border: `1px solid ${selected ? 'var(--primary)' : isChanged ? 'var(--primary)' : 'var(--border)'}`,
-        background: selected ? 'var(--primary-soft)' : flash ? 'var(--primary-soft)' : 'transparent',
+        border: `1px solid ${dropTarget ? 'var(--primary)' : selected ? 'var(--primary)' : isChanged ? 'var(--primary)' : 'var(--border)'}`,
+        background: dropTarget ? 'var(--accent-soft, rgba(205,242,75,0.12))' : selected ? 'var(--primary-soft)' : flash ? 'var(--primary-soft)' : 'transparent',
         boxShadow: isChanged
           ? `0 0 calc(6px + 20px * ${heat}) color-mix(in srgb, var(--primary) calc(55% * ${heat}), transparent)`
           : selected ? '0 0 0 1px var(--primary)' : 'none',

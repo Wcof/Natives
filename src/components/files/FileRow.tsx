@@ -24,6 +24,7 @@ interface FileRowProps {
 
 export default function FileRow({ entry, onSelect, onContextMenu, showDir, selected, onDoubleClick, isFavorite, onFavoriteToggle, dimmed, onMoveDrop, dragPaths }: FileRowProps) {
   const [flash, setFlash] = useState(false);
+  const [dropTarget, setDropTarget] = useState(false);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -110,11 +111,14 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir, selec
         if (!entry.isDir) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
+        if (!dropTarget) setDropTarget(true);
       }}
+      onDragLeave={() => { if (dropTarget) setDropTarget(false); }}
       onDrop={(e) => {
         if (!entry.isDir || !onMoveDrop) return;
         e.preventDefault();
         e.stopPropagation();
+        setDropTarget(false);
         try {
           const raw = e.dataTransfer.getData('application/x-natives-paths');
           const paths = raw ? JSON.parse(raw) as string[] : [];
@@ -135,8 +139,8 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir, selec
         fontSize: FONT_SIZE.lg,
         color: 'var(--text)',
         borderBottom: '1px solid var(--border)',
-        background: selected ? 'var(--primary-soft)' : flash ? 'var(--primary-soft)' : 'transparent',
-        outline: selected ? '1px solid var(--primary)' : 'none',
+        background: dropTarget ? 'var(--accent-soft, rgba(205,242,75,0.12))' : selected ? 'var(--primary-soft)' : flash ? 'var(--primary-soft)' : 'transparent',
+        outline: dropTarget || selected ? '1px solid var(--primary)' : 'none',
         outlineOffset: -1,
         transition: 'background 0.12s, opacity 0.12s',
         opacity: dimmed ? 0.45 : entry.hidden ? 0.5 : 1,
