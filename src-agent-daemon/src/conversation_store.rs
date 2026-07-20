@@ -103,8 +103,8 @@ fn create(params: Value) -> Result<Value, String> {
         .get("mode")
         .and_then(Value::as_str)
         .unwrap_or("agent");
-    if !matches!(mode, "chat" | "agent") {
-        return Err("mode must be chat or agent".into());
+    if !matches!(mode, "chat" | "agent" | "goal") {
+        return Err("mode must be chat, agent, or goal".into());
     }
     let title = required_str(&params, "title")?;
     let provider_id = required_str(&params, "provider_id")?;

@@ -552,7 +552,14 @@ async fn handle_conversation_create(
     let mode = match request.params.get("mode").and_then(|value| value.as_str()) {
         Some("chat") => "chat",
         Some("agent") => "agent",
-        _ => return error_response(request, "INVALID_INPUT", "Mode must be 'chat' or 'agent'"),
+        Some("goal") => "goal",
+        _ => {
+            return error_response(
+                request,
+                "INVALID_INPUT",
+                "Mode must be 'chat', 'agent', or 'goal'",
+            )
+        }
     };
     let title = match request
         .params

@@ -12,6 +12,7 @@ pub const ALL: &[(i64, &str)] = &[
     (5, MIGRATION_005),
     (6, MIGRATION_006),
     (7, MIGRATION_007),
+    (8, MIGRATION_008),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -323,4 +324,34 @@ ALTER TABLE run ADD COLUMN project_path TEXT;
 ALTER TABLE run ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE run ADD COLUMN idempotency_key TEXT;
 CREATE INDEX IF NOT EXISTS idx_run_idempotency_key ON run(idempotency_key);
+";
+
+/// Migration 008: Allow conversation mode = goal.
+const MIGRATION_008: &str = "
+PRAGMA foreign_keys=OFF;
+CREATE TABLE conversation_v8 (
+    id TEXT PRIMARY KEY,
+    mode TEXT NOT NULL DEFAULT 'chat' CHECK(mode IN ('chat', 'agent', 'goal')),
+    project_id TEXT,
+    title TEXT NOT NULL DEFAULT '',
+    provider_id TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    permission_profile_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    archived_at TEXT
+);
+INSERT INTO conversation_v8 (
+    id, mode, project_id, title, provider_id, model_id,
+    permission_profile_id, created_at, updated_at, archived_at
+)
+SELECT
+    id,
+    CASE WHEN mode IN ('chat','agent','goal') THEN mode ELSE 'agent' END,
+    project_id, title, provider_id, model_id,
+    permission_profile_id, created_at, updated_at, archived_at
+FROM conversation;
+DROP TABLE conversation;
+ALTER TABLE conversation_v8 RENAME TO conversation;
+PRAGMA foreign_keys=ON;
 ";

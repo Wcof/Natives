@@ -59,7 +59,7 @@ export default function RunStatusBar({
 }: RunStatusBarProps) {
   const zh = locale.startsWith('zh');
   // Only show for live runs or connection recovery — not for idle/terminal leftovers.
-  // Goal-style long-running chrome should be a separate surface when goal mode lands.
+  // Goal conversations render GoalStatusBar instead (see AssistantWorkbench).
   const active = run ? isActiveRunStatus(run.status) : false;
   if (!connectionHint && !active) return null;
 

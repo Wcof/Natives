@@ -312,8 +312,10 @@ pub fn run() {
             // Window
             commands::window::window_minimize,
             commands::window::window_maximize,
+            commands::window::window_toggle_fullscreen,
             commands::window::window_close,
             commands::window::window_is_maximized,
+            commands::window::window_is_fullscreen,
             commands::window::window_tile,
             // Clipboard
             commands::clipboard::clipboard_write,

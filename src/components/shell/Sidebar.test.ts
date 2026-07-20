@@ -61,9 +61,11 @@ test('sidebar exposes macOS traffic lights for window controls', () => {
   assert.match(sidebar, /mac-traffic-btn close/);
   assert.match(sidebar, /mac-traffic-btn minimize/);
   assert.match(sidebar, /mac-traffic-btn zoom/);
+  assert.match(sidebar, /data-active=\{windowActive/);
   assert.match(sidebar, /handleWindowAction\('close'\)/);
   assert.match(sidebar, /handleWindowAction\('minimize'\)/);
-  assert.match(sidebar, /handleWindowAction\('maximize'\)/);
+  assert.match(sidebar, /handleZoomClick/);
+  assert.match(sidebar, /toggleFullscreen|fullscreen/);
 });
 
 test('assistant heading exposes only tree toggle and add project actions', () => {

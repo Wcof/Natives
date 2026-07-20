@@ -23,7 +23,7 @@ export interface AssistantNavigationSnapshot {
 export interface AssistantRuntimeSnapshot {
   conversationId: string | null;
   conversationTitle: string | null;
-  conversationMode: 'chat' | 'agent';
+  conversationMode: 'chat' | 'agent' | 'goal';
   providerId: string;
   modelId: string;
   runId: string | null;

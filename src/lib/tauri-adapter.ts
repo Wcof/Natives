@@ -386,8 +386,10 @@ export interface NativesAPI {
   windowControls: {
     minimize: () => Promise<void>;
     maximize: () => Promise<void>;
+    toggleFullscreen: () => Promise<void>;
     close: () => Promise<void>;
     isMaximized: () => Promise<boolean>;
+    isFullscreen: () => Promise<boolean>;
     tileWindow: (action: string) => Promise<void>;
   };
   openWidgetWindow: () => void;
@@ -988,8 +990,10 @@ const nativesAPI: NativesAPI = {
   windowControls: {
     minimize: () => cmd('window_minimize'),
     maximize: () => cmd('window_maximize'),
+    toggleFullscreen: () => cmd('window_toggle_fullscreen'),
     close: () => cmd('window_close'),
     isMaximized: () => cmd('window_is_maximized'),
+    isFullscreen: () => cmd('window_is_fullscreen'),
     tileWindow: (action: string) => cmd('window_tile', { action }),
   },
 

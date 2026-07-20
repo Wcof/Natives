@@ -45,7 +45,7 @@ export function mapWireCapabilities(raw: Record<string, unknown>): DaemonCapabil
 export function mapWireConversation(raw: Record<string, unknown>): Conversation {
   return {
     id: str(raw.id),
-    mode: (raw.mode === 'chat' ? 'chat' : 'agent') as Conversation['mode'],
+    mode: (raw.mode === 'chat' || raw.mode === 'goal' ? raw.mode : 'agent') as Conversation['mode'],
     projectId: optStr(raw.project_id ?? raw.projectId),
     title: str(raw.title, 'Untitled'),
     providerId: str(raw.provider_id ?? raw.providerId),

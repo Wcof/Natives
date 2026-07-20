@@ -3,7 +3,7 @@ export interface AssistantProjectConversation {
   projectId: string | null;
   title: string;
   updatedAt: string;
-  mode?: 'chat' | 'agent';
+  mode?: 'chat' | 'agent' | 'goal';
 }
 
 export interface AssistantProjectGroup {

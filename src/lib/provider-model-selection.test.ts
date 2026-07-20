@@ -7,6 +7,7 @@ import {
   selectDiscoveredModel,
   canTestDiscoveredModel,
   selectAssistantModel,
+  resolveModelSelection,
   unwrapProviderListPayload,
   mapWireProviders,
   toProviderInfo,
@@ -190,5 +191,57 @@ describe('mapWireProviders', () => {
     assert.equal(mapped.length, 1);
     assert.equal(mapped[0]!.models.length, 2);
     assert.ok(mapped[0]!.keys.length > 0);
+  });
+});
+
+describe('resolveModelSelection', () => {
+  const providers = mapWireProviders({
+    providers: [
+      {
+        id: 'p1',
+        display_name: 'SenseNova',
+        has_active_key: true,
+        default_model: 'deepseek-v4-flash',
+        models: [
+          { id: 'deepseek-v4-flash', display_name: 'Flash' },
+          { id: 'deepseek-v4-pro', display_name: 'Pro' },
+        ],
+      },
+      {
+        id: 'p2',
+        display_name: 'OpenAI',
+        has_active_key: true,
+        models: [{ id: 'gpt-4o' }],
+      },
+    ],
+  });
+
+  it('keeps an explicit provider+model pair', () => {
+    const r = resolveModelSelection(providers, {
+      providerId: 'p2',
+      modelId: 'gpt-4o',
+    });
+    assert.deepEqual(r, { providerId: 'p2', modelId: 'gpt-4o' });
+  });
+
+  it('falls back to provider default when model missing', () => {
+    const r = resolveModelSelection(providers, {
+      providerId: 'p1',
+      modelId: '',
+    });
+    assert.deepEqual(r, { providerId: 'p1', modelId: 'deepseek-v4-flash' });
+  });
+
+  it('remaps collapsed provider ids via model host', () => {
+    const r = resolveModelSelection(providers, {
+      providerId: 'ghost-id',
+      modelId: 'gpt-4o',
+    });
+    assert.deepEqual(r, { providerId: 'p2', modelId: 'gpt-4o' });
+  });
+
+  it('defaults to first ready provider when preference empty', () => {
+    const r = resolveModelSelection(providers, { providerId: '', modelId: '' });
+    assert.deepEqual(r, { providerId: 'p1', modelId: 'deepseek-v4-flash' });
   });
 });

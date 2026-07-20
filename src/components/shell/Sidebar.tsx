@@ -3,6 +3,7 @@
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
 import type {
   DragEvent,
+  MouseEvent as ReactMouseEvent,
   ReactNode,
 } from 'react';
 import type { LucideIcon } from 'lucide-react';
@@ -13,12 +14,10 @@ import {
   Layers,
   LayoutDashboard,
   MessageSquare,
-  Minus,
   Monitor,
   Search,
   Settings,
   Square,
-  X,
   ArrowLeft,
   ChevronDown,
   ChevronRight,
@@ -288,11 +287,24 @@ export default function Sidebar({
     return () => window.removeEventListener('favorites-changed', handleFavoritesChanged);
   }, [loadFavorites]);
 
-  // ── 窗口控制（关闭 / 最小化 / 最大化）──
+  // ── 窗口控制（关闭 / 最小化 / 最大化 / 全屏）──
   const [isMaximized, setIsMaximized] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [windowActive, setWindowActive] = useState(true);
+  const longPressTriggeredRef = useRef(false);
+
+  const refreshWindowState = useCallback(async () => {
+    const ctrl = window.nativesAPI?.windowControls;
+    try {
+      if (ctrl?.isMaximized) setIsMaximized(await ctrl.isMaximized());
+      if (ctrl?.isFullscreen) setIsFullscreen(await ctrl.isFullscreen());
+    } catch { /* browser/dev fallback */ }
+  }, []);
 
   useEffect(() => {
     let unlistenResize: (() => void) | undefined;
+    let unlistenFocus: (() => void) | undefined;
+    let unlistenBlur: (() => void) | undefined;
     let cancelled = false;
 
     const setupListener = async () => {
@@ -300,31 +312,47 @@ export default function Sidebar({
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
         const activeWin = getCurrentWindow();
 
-        // Initial state
         if (!cancelled) {
           setIsMaximized(await activeWin.isMaximized());
+          setIsFullscreen(await activeWin.isFullscreen());
+          setWindowActive(await activeWin.isFocused());
         }
 
-        // Listen to resize events instead of polling every 300ms
-        const unsub = await activeWin.onResized(async () => {
-          if (!cancelled) {
-            setIsMaximized(await activeWin.isMaximized());
-          }
+        const unsubResize = await activeWin.onResized(async () => {
+          if (cancelled) return;
+          setIsMaximized(await activeWin.isMaximized());
+          setIsFullscreen(await activeWin.isFullscreen());
         });
-        unlistenResize = unsub;
+        unlistenResize = unsubResize;
+
+        const unsubFocus = await activeWin.onFocusChanged(({ payload: focused }) => {
+          if (!cancelled) setWindowActive(focused);
+        });
+        unlistenFocus = unsubFocus;
       } catch {
         // Fallback: polling only when Tauri API is unavailable (browser dev)
         const poll = setInterval(async () => {
           try {
-            const m = await window.nativesAPI?.windowControls?.isMaximized?.();
-            if (m !== undefined && !cancelled) setIsMaximized(m);
+            const ctrl = window.nativesAPI?.windowControls;
+            if (!ctrl || cancelled) return;
+            if (ctrl.isMaximized) {
+              const m = await ctrl.isMaximized();
+              if (!cancelled) setIsMaximized(m);
+            }
+            if (ctrl.isFullscreen) {
+              const f = await ctrl.isFullscreen();
+              if (!cancelled) setIsFullscreen(f);
+            }
           } catch { /* ignore */ }
         }, 2000);
-        // Store cleanup ref
-        const origCleanup = cleanup;
+        const onFocus = () => setWindowActive(true);
+        const onBlur = () => setWindowActive(false);
+        window.addEventListener('focus', onFocus);
+        window.addEventListener('blur', onBlur);
         cleanup = () => {
           clearInterval(poll);
-          origCleanup?.();
+          window.removeEventListener('focus', onFocus);
+          window.removeEventListener('blur', onBlur);
         };
       }
     };
@@ -335,20 +363,30 @@ export default function Sidebar({
     return () => {
       cancelled = true;
       if (unlistenResize) unlistenResize();
+      if (unlistenFocus) unlistenFocus();
+      if (unlistenBlur) unlistenBlur();
       if (cleanup) cleanup();
     };
   }, []);
 
-  const handleWindowAction = useCallback(async (action: 'minimize' | 'maximize' | 'close') => {
+  const handleWindowAction = useCallback(async (
+    action: 'minimize' | 'maximize' | 'close' | 'fullscreen',
+  ) => {
     const ctrl = window.nativesAPI?.windowControls;
     if (!ctrl) return;
-    if (action === 'minimize') await ctrl.minimize();
-    else if (action === 'close') await ctrl.close();
-    else {
-      await ctrl.maximize();
-      try { setIsMaximized(await ctrl.isMaximized()); } catch { /* ignore */ }
-    }
-  }, []);
+    try {
+      if (action === 'minimize') await ctrl.minimize();
+      else if (action === 'close') await ctrl.close();
+      else if (action === 'fullscreen') {
+        if (ctrl.toggleFullscreen) await ctrl.toggleFullscreen();
+        else await ctrl.tileWindow?.('fullscreen');
+      } else {
+        // macOS zoom: if fullscreen, exit; otherwise toggle maximize
+        await ctrl.maximize();
+      }
+      await refreshWindowState();
+    } catch { /* ignore */ }
+  }, [refreshWindowState]);
 
   // ── 长按 Zoom 弹出菜单（macOS 原生行为）──
   const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
@@ -358,13 +396,13 @@ export default function Sidebar({
   const zoomBtnRef = useRef<HTMLButtonElement>(null);
 
   const handleTileWindow = useCallback(async (action: string) => {
-    const ctrl = window.nativesAPI?.windowControls as Record<string, unknown> | undefined;
-    if (!ctrl) return;
+    const ctrl = window.nativesAPI?.windowControls;
+    if (!ctrl?.tileWindow) return;
     try {
-      const fn = ctrl.tileWindow as ((a: string) => Promise<void>) | undefined;
-      await fn?.(action);
+      await ctrl.tileWindow(action);
+      await refreshWindowState();
     } catch { /* fallback */ }
-  }, []);
+  }, [refreshWindowState]);
 
   // 当菜单打开时，document mouseup 检测鼠标下方元素
   useEffect(() => {
@@ -375,7 +413,7 @@ export default function Sidebar({
       let el: Element | null = target;
       while (el && el !== document.body) {
         if (el instanceof HTMLElement && el.dataset.tileAction) {
-          handleTileWindow(el.dataset.tileAction);
+          void handleTileWindow(el.dataset.tileAction);
           break;
         }
         el = el.parentElement;
@@ -385,6 +423,40 @@ export default function Sidebar({
     document.addEventListener('mouseup', handler);
     return () => document.removeEventListener('mouseup', handler);
   }, [zoomMenuOpen, handleTileWindow]);
+
+  const clearZoomTimer = useCallback(() => {
+    if (zoomTimerRef.current) {
+      clearTimeout(zoomTimerRef.current);
+      zoomTimerRef.current = null;
+    }
+  }, []);
+
+  const handleZoomClick = useCallback((e: ReactMouseEvent<HTMLButtonElement>) => {
+    // Long-press already handled the interaction
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false;
+      return;
+    }
+    // Option/Alt-click → toggle native fullscreen (macOS convention)
+    if (e.altKey) {
+      void handleWindowAction('fullscreen');
+      return;
+    }
+    void handleWindowAction('maximize');
+  }, [handleWindowAction]);
+
+  const handleZoomMouseDown = useCallback((e: ReactMouseEvent<HTMLButtonElement>) => {
+    if (e.button !== 0) return;
+    longPressTriggeredRef.current = false;
+    const cx = e.clientX;
+    const cy = e.clientY;
+    clearZoomTimer();
+    zoomTimerRef.current = window.setTimeout(() => {
+      longPressTriggeredRef.current = true;
+      setZoomMenuPos({ x: cx, y: cy });
+      setZoomMenuOpen(true);
+    }, 420);
+  }, [clearZoomTimer]);
 
   // ── 弹窗内 SVG 图标组件 ──
   const iconWrap = (svg: React.ReactNode) => <svg width="22" height="14" viewBox="0 0 22 14" fill="none" className="text-[var(--text-secondary)]">{svg}</svg>;
@@ -504,8 +576,10 @@ export default function Sidebar({
           <div
             className="mac-traffic-lights"
             data-collapsed={isCollapsed ? 'true' : 'false'}
+            data-active={windowActive ? 'true' : 'false'}
+            data-force-glyphs={zoomMenuOpen ? 'true' : undefined}
             role="toolbar"
-            aria-label={t(locale, 'sidebar.ariaToggle')}
+            aria-label={t(locale, 'header.windowControls')}
           >
             {/* 关闭 — macOS 红圆 */}
             <button
@@ -515,7 +589,9 @@ export default function Sidebar({
               aria-label={t(locale, 'header.close')}
               title={t(locale, 'header.close')}
             >
-              <X strokeWidth={2.75} />
+              <svg viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                <path d="M2.2 2.2l5.6 5.6M7.8 2.2L2.2 7.8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
             </button>
             {/* 最小化 — macOS 黄圆 */}
             <button
@@ -525,44 +601,41 @@ export default function Sidebar({
               aria-label={t(locale, 'header.minimize')}
               title={t(locale, 'header.minimize')}
             >
-              <Minus strokeWidth={2.75} />
+              <svg viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                <path d="M2.2 5h5.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              </svg>
             </button>
-            {/* 最大化 / 全屏 — macOS 绿圆 */}
+            {/* Zoom — 单击最大化/还原；Option 全屏；长按分屏菜单 */}
             <div className="relative" ref={zoomPopupRef}>
               <button
                 type="button"
                 ref={zoomBtnRef}
-                onClick={() => void handleWindowAction('maximize')}
-                onMouseDown={(e) => {
-                  const cx = e.clientX;
-                  const cy = e.clientY;
-                  zoomTimerRef.current = window.setTimeout(() => {
-                    setZoomMenuPos({ x: cx, y: cy });
-                    setZoomMenuOpen(true);
-                  }, 500);
-                }}
-                onMouseUp={() => {
-                  if (zoomTimerRef.current) {
-                    clearTimeout(zoomTimerRef.current);
-                    zoomTimerRef.current = null;
-                  }
-                }}
-                onMouseLeave={() => {
-                  if (zoomTimerRef.current) {
-                    clearTimeout(zoomTimerRef.current);
-                    zoomTimerRef.current = null;
-                  }
-                }}
+                onClick={handleZoomClick}
+                onMouseDown={handleZoomMouseDown}
+                onMouseUp={clearZoomTimer}
+                onMouseLeave={clearZoomTimer}
                 className="mac-traffic-btn zoom"
-                aria-label={isMaximized ? t(locale, 'header.restore') : t(locale, 'header.maximize')}
-                title={isMaximized ? t(locale, 'header.restore') : t(locale, 'header.maximize')}
+                aria-label={
+                  isFullscreen || isMaximized
+                    ? t(locale, 'header.restore')
+                    : t(locale, 'header.maximize')
+                }
+                title={
+                  isFullscreen || isMaximized
+                    ? t(locale, 'header.restore')
+                    : t(locale, 'header.zoomHint')
+                }
               >
-                <svg viewBox="0 0 10 10" fill="none" aria-hidden="true">
-                  <path d="M7 1h2v2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-                  <path d="M9 1l-4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-                  <path d="M3 9H1V7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-                  <path d="M1 9l4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
+                {isFullscreen || isMaximized ? (
+                  <svg viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                    <path d="M2 6.2V8h1.8M8 3.8V2H6.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M2 8l2.4-2.4M8 2L5.6 4.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                    <path d="M3.5 1.8H1.8V3.5M6.5 1.8h1.7V3.5M3.5 8.2H1.8V6.5M6.5 8.2h1.7V6.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                )}
               </button>
 
               {/* 长按弹出菜单 — macOS 窗口管理，跟随鼠标位置 */}
@@ -572,14 +645,14 @@ export default function Sidebar({
                   style={{ left: zoomMenuPos.x, top: zoomMenuPos.y }}
                 >
                   <p className="px-2.5 pb-1 pt-0.5 text-[0.625rem] font-medium uppercase tracking-[0.06em] text-[var(--text-disabled)]">
-                    移动与调整大小
+                    {t(locale, 'header.tileMove')}
                   </p>
                   <div className="grid grid-cols-4 gap-1 px-1 pb-2">
                     {[
-                      { id: 'left', label: '左', icon: leftHalfIcon },
-                      { id: 'right', label: '右', icon: rightHalfIcon },
-                      { id: 'top', label: '上', icon: topHalfIcon },
-                      { id: 'bottom', label: '下', icon: bottomHalfIcon },
+                      { id: 'left', label: t(locale, 'header.tileLeft'), icon: leftHalfIcon },
+                      { id: 'right', label: t(locale, 'header.tileRight'), icon: rightHalfIcon },
+                      { id: 'top', label: t(locale, 'header.tileTop'), icon: topHalfIcon },
+                      { id: 'bottom', label: t(locale, 'header.tileBottom'), icon: bottomHalfIcon },
                     ].map((opt) => (
                       <button
                         key={opt.id}
@@ -595,14 +668,14 @@ export default function Sidebar({
                   </div>
                   <div className="mx-2 my-1 border-t border-[var(--border)]" />
                   <p className="px-2.5 pb-1 pt-1.5 text-[0.625rem] font-medium uppercase tracking-[0.06em] text-[var(--text-disabled)]">
-                    填充与排列
+                    {t(locale, 'header.tileFill')}
                   </p>
                   <div className="grid grid-cols-4 gap-1 px-1 pb-1">
                     {[
-                      { id: 'fullscreen', label: '填充', icon: fillIcon },
-                      { id: 'left-half', label: '居左', icon: leftFillIcon },
-                      { id: 'right-half', label: '居右', icon: rightFillIcon },
-                      { id: 'tile', label: '平铺', icon: tileIcon },
+                      { id: 'fullscreen', label: t(locale, 'header.tileFullscreen'), icon: fillIcon },
+                      { id: 'left-half', label: t(locale, 'header.tileLeftHalf'), icon: leftFillIcon },
+                      { id: 'right-half', label: t(locale, 'header.tileRightHalf'), icon: rightFillIcon },
+                      { id: 'tile', label: t(locale, 'header.tileRestore'), icon: tileIcon },
                     ].map((opt) => (
                       <button
                         key={opt.id}

@@ -13,14 +13,29 @@ pub fn window_minimize(app: tauri::AppHandle) -> Result<()> {
         .map_err(|e| Error::Internal(e.to_string()))
 }
 
+/// Zoom button behavior closer to macOS:
+/// - If currently fullscreen → exit fullscreen
+/// - Else toggle maximized / restored
 #[tauri::command]
 pub fn window_maximize(app: tauri::AppHandle) -> Result<()> {
     let win = main_window(&app)?;
-    if win.is_maximized().unwrap_or(false) {
+    if win.is_fullscreen().unwrap_or(false) {
+        win.set_fullscreen(false)
+            .map_err(|e| Error::Internal(e.to_string()))
+    } else if win.is_maximized().unwrap_or(false) {
         win.unmaximize().map_err(|e| Error::Internal(e.to_string()))
     } else {
         win.maximize().map_err(|e| Error::Internal(e.to_string()))
     }
+}
+
+/// Option/Alt-click (or explicit fullscreen request) on the green button.
+#[tauri::command]
+pub fn window_toggle_fullscreen(app: tauri::AppHandle) -> Result<()> {
+    let win = main_window(&app)?;
+    let next = !win.is_fullscreen().unwrap_or(false);
+    win.set_fullscreen(next)
+        .map_err(|e| Error::Internal(e.to_string()))
 }
 
 #[tauri::command]
@@ -34,6 +49,13 @@ pub fn window_close(app: tauri::AppHandle) -> Result<()> {
 pub fn window_is_maximized(app: tauri::AppHandle) -> Result<bool> {
     main_window(&app)?
         .is_maximized()
+        .map_err(|e| Error::Internal(e.to_string()))
+}
+
+#[tauri::command]
+pub fn window_is_fullscreen(app: tauri::AppHandle) -> Result<bool> {
+    main_window(&app)?
+        .is_fullscreen()
         .map_err(|e| Error::Internal(e.to_string()))
 }
 

@@ -15,6 +15,7 @@ import { classifyError } from '@/lib/error-classifier';
 import {
   classifyProviderReadiness,
   mapWireProviders,
+  resolveModelSelection,
   selectAssistantModel,
   toProviderInfo,
   type ProviderReadiness,
@@ -59,12 +60,14 @@ import {
 import { hydrateFileDiffContents } from '@/lib/assistant-workspace/file-diff-contents';
 import { createDefaultGateway, FixtureAssistantAdapter } from '@/lib/assistant-gateway';
 import { goldenTextStream } from '@/lib/assistant-fixtures/golden';
-import { isActiveRunStatus } from '@/lib/assistant-protocol';
+import { isActiveRunStatus, mapWireConversation } from '@/lib/assistant-protocol';
 import type { Conversation } from '@/lib/assistant-protocol';
+import { messagePlainText } from '@/lib/assistant-message-view';
 import ConversationTimeline from './ConversationTimeline';
 import MessageInput from './MessageInput';
 import PermissionRequestCard from './PermissionRequestCard';
 import RunStatusBar from './RunStatusBar';
+import GoalStatusBar from './GoalStatusBar';
 import PromptQueuePanel from './PromptQueuePanel';
 import ActivityInspector from './ActivityInspector';
 import ConnectionBanner from './ConnectionBanner';
@@ -111,6 +114,16 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
 
   const activeId = state.activeConversationId;
   const activeConversation = activeId ? state.conversations[activeId] : null;
+  // Picker selection is resolved against the live provider list so collapsed
+  // /stale provider ids still highlight and empty wire fields still show a model.
+  const modelSelection = useMemo(
+    () =>
+      resolveModelSelection(providers, {
+        providerId: activeConversation?.providerId,
+        modelId: activeConversation?.modelId,
+      }),
+    [providers, activeConversation?.providerId, activeConversation?.modelId],
+  );
   const messages = useMemo(
     () => selectConversationMessages(state, activeId),
     [state, activeId],
@@ -129,6 +142,20 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const permission = interactions.find((i) => i.kind === 'permission');
   const askUser = interactions.find((i) => i.kind === 'ask_user');
   const planApproval = interactions.find((i) => i.kind === 'plan_approval');
+  const isGoalMode = activeConversation?.mode === 'goal';
+  const goalInstruction = useMemo(() => {
+    if (!isGoalMode) return null;
+    const firstUser = messages.find((m) => m.role === 'user');
+    if (!firstUser) return activeConversation?.title ?? null;
+    const text = messagePlainText(firstUser.contentBlocks).trim();
+    return text || activeConversation?.title || null;
+  }, [isGoalMode, messages, activeConversation?.title]);
+  const goalCanResume = Boolean(
+    activeRun &&
+      (activeRun.status === 'interrupted' ||
+        activeRun.status === 'cancelled' ||
+        activeRun.status === 'failed'),
+  );
 
   // Layout breakpoint
   useEffect(() => {
@@ -363,16 +390,13 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const handleSend = useCallback(
     async (draft: AssistantDraft, forceImmediate = false): Promise<boolean> => {
       let conversationId = activeId;
-      let providerId = activeConversation?.providerId ?? '';
-      let modelId = activeConversation?.modelId ?? '';
-
-      if (!providerId || !modelId) {
-        const pick = selectAssistantModel(toProviderInfo(providers));
-        if (pick) {
-          providerId = pick.providerId;
-          modelId = pick.modelId;
-        }
-      }
+      const pick =
+        resolveModelSelection(providers, {
+          providerId: activeConversation?.providerId,
+          modelId: activeConversation?.modelId,
+        }) ?? selectAssistantModel(toProviderInfo(providers));
+      const providerId = pick?.providerId ?? '';
+      const modelId = pick?.modelId ?? '';
       if (!providerId || !modelId || providerReadiness !== 'ready') {
         toast(zh ? '请先配置供应商和模型' : 'Configure provider and model first', 'error');
         return false;
@@ -381,17 +405,31 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       try {
         if (!conversationId || conversationId.startsWith('temp-')) {
           const title = draft.content.trim().slice(0, 30) || t(locale, 'assistant.newConversation');
-          const created = await gateway.request<Conversation>('conversation.create', {
-            mode: 'agent',
-            title,
-            provider_id: providerId,
-            model_id: modelId,
-            project_id: activeProjectPath,
-            permission_profile_id: activeConversation?.permissionProfileId ?? 'ask',
-          });
-          dispatch({ type: 'conversations/upsert', conversation: created });
-          dispatch({ type: 'conversations/setActive', id: created.id });
-          conversationId = created.id;
+          const createdRaw = await gateway.request<Record<string, unknown> | Conversation>(
+            'conversation.create',
+            {
+              mode: 'agent',
+              title,
+              provider_id: providerId,
+              model_id: modelId,
+              project_id: activeProjectPath,
+              permission_profile_id: activeConversation?.permissionProfileId ?? 'ask',
+            },
+          );
+          // Host returns snake_case; map so providerId/modelId actually land in store.
+          const created =
+            createdRaw && typeof createdRaw === 'object' && 'providerId' in createdRaw
+              ? (createdRaw as Conversation)
+              : mapWireConversation((createdRaw ?? {}) as Record<string, unknown>);
+          // Prefer the selection the user just confirmed if wire fields came back empty.
+          const conversation: Conversation = {
+            ...created,
+            providerId: created.providerId || providerId,
+            modelId: created.modelId || modelId,
+          };
+          dispatch({ type: 'conversations/upsert', conversation });
+          dispatch({ type: 'conversations/setActive', id: conversation.id });
+          conversationId = conversation.id;
         }
 
         const result = await sendOrQueue(gateway, dispatch, stateRef.current, {
@@ -902,37 +940,62 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             </div>
           )}
 
-          <RunStatusBar
-            run={activeRun}
-            locale={locale}
-            queueCount={promptQueue.length}
-            tokenLabel={
-              contextUsage ? `${contextUsage.usedTokens} tokens` : undefined
-            }
-            connectionHint={
-              state.connection === 'recovering'
-                ? zh
-                  ? '恢复中…'
-                  : 'Recovering…'
-                : state.connection === 'reconnecting'
+          {isGoalMode ? (
+            <GoalStatusBar
+              goalTitle={activeConversation?.title ?? (zh ? 'Goal 任务' : 'Goal')}
+              instruction={goalInstruction}
+              run={activeRun}
+              locale={locale}
+              tokenLabel={
+                contextUsage ? `${contextUsage.usedTokens} tokens` : undefined
+              }
+              canResume={goalCanResume}
+              onPause={() => void handleStop()}
+              onResume={() => void handleRetry()}
+              onDelete={() => {
+                if (!activeId) return;
+                const ok = window.confirm(
+                  zh ? '确定删除此 Goal 会话？' : 'Delete this goal conversation?',
+                );
+                if (!ok) return;
+                void gateway
+                  .request('conversation.delete', { id: activeId })
+                  .then(() => dispatch({ type: 'conversations/remove', id: activeId }))
+                  .catch((err) => toast(classifyError(err).userMessage, 'error'));
+              }}
+            />
+          ) : (
+            <RunStatusBar
+              run={activeRun}
+              locale={locale}
+              queueCount={promptQueue.length}
+              tokenLabel={
+                contextUsage ? `${contextUsage.usedTokens} tokens` : undefined
+              }
+              connectionHint={
+                state.connection === 'recovering'
                   ? zh
-                    ? '重连中…'
-                    : 'Reconnecting…'
-                  : null
-            }
-            onStop={() => void handleStop()}
-            onBackground={
-              activeRun
-                ? () => {
-                    // Background mode is represented by the live subscription/event stream.
-                    void startSubscription(
-                      activeRun.id,
-                      stateRef.current.lastSequenceByRun[activeRun.id] ?? 0,
-                    );
-                  }
-                : undefined
-            }
-          />
+                    ? '恢复中…'
+                    : 'Recovering…'
+                  : state.connection === 'reconnecting'
+                    ? zh
+                      ? '重连中…'
+                      : 'Reconnecting…'
+                    : null
+              }
+              onStop={() => void handleStop()}
+              onBackground={
+                activeRun
+                  ? () => {
+                      void startSubscription(
+                        activeRun.id,
+                        stateRef.current.lastSequenceByRun[activeRun.id] ?? 0,
+                      );
+                    }
+                  : undefined
+              }
+            />
+          )}
 
           <PromptQueuePanel
             items={promptQueue}
@@ -1018,20 +1081,72 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               }
             }}
             providers={providers}
-            selectedProviderId={activeConversation?.providerId ?? providers[0]?.id ?? ''}
-            selectedModel={activeConversation?.modelId}
+            selectedProviderId={modelSelection?.providerId ?? providers[0]?.id ?? ''}
+            selectedModel={modelSelection?.modelId}
             onSelectModel={(providerId, modelId) => {
-              if (!activeConversation) return;
-              dispatch({
-                type: 'conversations/upsert',
-                conversation: { ...activeConversation, providerId, modelId },
-              });
-              if (!activeId?.startsWith('temp-') && activeId) {
-                void gateway.request('conversation.update_model', {
-                  id: activeId,
-                  provider_id: providerId,
-                  model_id: modelId,
+              const now = new Date().toISOString();
+              // Always write selection into store — even without an active conversation —
+              // so the picker echoes immediately and temp shells stay editable.
+              if (activeConversation) {
+                dispatch({
+                  type: 'conversations/upsert',
+                  conversation: {
+                    ...activeConversation,
+                    providerId,
+                    modelId,
+                    updatedAt: now,
+                  },
                 });
+              } else if (activeId) {
+                const existing = stateRef.current.conversations[activeId];
+                if (existing) {
+                  dispatch({
+                    type: 'conversations/upsert',
+                    conversation: { ...existing, providerId, modelId, updatedAt: now },
+                  });
+                } else {
+                  dispatch({
+                    type: 'conversations/upsert',
+                    conversation: {
+                      id: activeId,
+                      mode: 'agent',
+                      title: t(locale, 'assistant.newConversation'),
+                      providerId,
+                      modelId,
+                      projectId: activeProjectPath,
+                      permissionProfileId: 'ask',
+                      createdAt: now,
+                      updatedAt: now,
+                    },
+                  });
+                }
+              } else {
+                // No conversation yet: create a temp shell so selection has a home.
+                const id = `temp-${Date.now()}`;
+                dispatch({
+                  type: 'conversations/upsert',
+                  conversation: {
+                    id,
+                    mode: 'agent',
+                    title: t(locale, 'assistant.newConversation'),
+                    providerId,
+                    modelId,
+                    projectId: activeProjectPath,
+                    permissionProfileId: 'ask',
+                    createdAt: now,
+                    updatedAt: now,
+                  },
+                });
+                dispatch({ type: 'conversations/setActive', id });
+              }
+              if (activeId && !activeId.startsWith('temp-')) {
+                void gateway
+                  .request('conversation.update_model', {
+                    id: activeId,
+                    provider_id: providerId,
+                    model_id: modelId,
+                  })
+                  .catch((err) => toast(classifyError(err).userMessage, 'error'));
               }
             }}
             draftText={selectComposerDraft(state, activeId).text}

@@ -405,10 +405,10 @@ async fn handle_conversation_fork(data_store: &Arc<DataStore>, params: &Value) -
 
 async fn handle_conversation_create(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
     let project_id = params.get("project_id").and_then(|v| v.as_str());
-    let mode = params
-        .get("mode")
-        .and_then(|v| v.as_str())
-        .unwrap_or("agent");
+    let mode = match params.get("mode").and_then(|v| v.as_str()).unwrap_or("agent") {
+        m @ ("chat" | "agent" | "goal") => m,
+        _ => return error_response("INVALID_PARAM", "mode must be chat, agent, or goal"),
+    };
     let title = match params.get("title").and_then(|v| v.as_str()) {
         Some(t) => t,
         None => return error_response("MISSING_PARAM", "title is required"),

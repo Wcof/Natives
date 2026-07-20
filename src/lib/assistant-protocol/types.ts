@@ -67,7 +67,8 @@ export interface DaemonCapabilities {
 
 // ─── Conversation / Message ──────────────────────────────
 
-export type ConversationMode = 'chat' | 'agent';
+/** chat = plain Q&A; agent = tool-using; goal = long-running task chrome (pause/resume/delete). */
+export type ConversationMode = 'chat' | 'agent' | 'goal';
 
 export interface Conversation {
   id: string;

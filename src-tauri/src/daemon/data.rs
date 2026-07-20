@@ -147,6 +147,7 @@ impl DataStore {
                 (8, MIGRATION_008),
                 (11, MIGRATION_011),
                 (12, MIGRATION_012),
+                (13, MIGRATION_013),
             ];
 
             for (version, sql) in migrations {
@@ -1107,6 +1108,39 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_model_cache_provider_model
     ON assistant_model_cache(provider_id, model_id);
 ";
 
+/// v13: Allow conversation mode = goal (long-running task chrome).
+/// SQLite cannot ALTER CHECK constraints; rebuild the table.
+const MIGRATION_013: &str = "
+PRAGMA foreign_keys=OFF;
+CREATE TABLE assistant_conversations_v13 (
+    id TEXT PRIMARY KEY,
+    mode TEXT NOT NULL DEFAULT 'chat' CHECK(mode IN ('chat','agent','goal')),
+    project_id TEXT,
+    title TEXT NOT NULL DEFAULT '',
+    provider_id TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    permission_profile_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    archived_at TEXT
+);
+INSERT INTO assistant_conversations_v13 (
+    id, mode, project_id, title, provider_id, model_id,
+    permission_profile_id, created_at, updated_at, archived_at
+)
+SELECT
+    id,
+    CASE WHEN mode IN ('chat','agent','goal') THEN mode ELSE 'agent' END,
+    project_id, title, provider_id, model_id,
+    permission_profile_id, created_at, updated_at, archived_at
+FROM assistant_conversations;
+DROP TABLE assistant_conversations;
+ALTER TABLE assistant_conversations_v13 RENAME TO assistant_conversations;
+CREATE INDEX IF NOT EXISTS idx_conversations_project ON assistant_conversations(project_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_updated ON assistant_conversations(updated_at);
+PRAGMA foreign_keys=ON;
+";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1163,7 +1197,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 12);
+        assert_eq!(version, 13);
     }
 
     #[test]

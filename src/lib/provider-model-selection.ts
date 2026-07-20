@@ -175,6 +175,75 @@ export function selectAssistantModel(
   return null;
 }
 
+export interface ModelSelection {
+  providerId: string;
+  modelId: string;
+}
+
+/**
+ * Resolve a picker selection against the current provider list.
+ * Falls back when conversation still points at a collapsed/stale provider id,
+ * or when model/provider fields are empty (common after unmapped wire creates).
+ */
+export function resolveModelSelection(
+  providers: Array<{
+    id: string;
+    name?: string;
+    presetName?: string;
+    baseUrl?: string;
+    keys?: Array<{ id: string; label: string; maskedKey: string }>;
+    models?: Array<{ id: string; displayName?: string }>;
+    defaultModel?: string | null;
+  }>,
+  preferred?: { providerId?: string | null; modelId?: string | null } | null,
+): ModelSelection | null {
+  if (providers.length === 0) return null;
+
+  const preferredProviderId = preferred?.providerId?.trim() ?? '';
+  const preferredModelId = preferred?.modelId?.trim() ?? '';
+
+  const byId = preferredProviderId
+    ? providers.find((p) => p.id === preferredProviderId)
+    : undefined;
+
+  if (byId) {
+    const models = byId.models ?? [];
+    if (preferredModelId && models.some((m) => m.id === preferredModelId)) {
+      return { providerId: byId.id, modelId: preferredModelId };
+    }
+    const fallback =
+      (byId.defaultModel && models.some((m) => m.id === byId.defaultModel)
+        ? byId.defaultModel
+        : null) ??
+      models[0]?.id ??
+      null;
+    if (fallback) return { providerId: byId.id, modelId: fallback };
+  }
+
+  // Preferred provider id may have been collapsed by name+baseUrl dedupe.
+  // Prefer any provider that still hosts the preferred model.
+  if (preferredModelId) {
+    const host = providers.find((p) =>
+      (p.models ?? []).some((m) => m.id === preferredModelId),
+    );
+    if (host) return { providerId: host.id, modelId: preferredModelId };
+  }
+
+  return selectAssistantModel(
+    toProviderInfo(
+      providers.map((p) => ({
+        id: p.id,
+        name: p.name ?? p.id,
+        presetName: p.presetName ?? p.name ?? p.id,
+        baseUrl: p.baseUrl ?? '',
+        keys: p.keys ?? [],
+        models: p.models ?? [],
+        defaultModel: p.defaultModel ?? null,
+      })),
+    ),
+  );
+}
+
 export function canTestDiscoveredModel(_m: unknown[]): boolean {
   return true;
 }

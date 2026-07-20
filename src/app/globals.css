@@ -1713,8 +1713,8 @@ input[type="search"]::placeholder {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 28px;
-  padding: 0 2px;
+  height: 20px;
+  padding: 0;
   position: relative;
   z-index: 60;
   -webkit-app-region: no-drag;
@@ -1728,8 +1728,9 @@ input[type="search"]::placeholder {
 }
 
 .mac-traffic-btn {
-  width: 12px;
-  height: 12px;
+  --mac-btn-size: 12px;
+  width: var(--mac-btn-size);
+  height: var(--mac-btn-size);
   border: none;
   border-radius: 999px;
   padding: 0;
@@ -1738,10 +1739,34 @@ input[type="search"]::placeholder {
   justify-content: center;
   flex-shrink: 0;
   cursor: default;
-  transition: background-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+  position: relative;
+  color: rgba(0, 0, 0, 0.55);
+  transition:
+    background-color 100ms ease,
+    box-shadow 100ms ease,
+    filter 100ms ease,
+    transform 80ms ease;
   -webkit-app-region: no-drag;
   app-region: no-drag;
-  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.12);
+  /* Soft bevel like real macOS traffic lights */
+  box-shadow:
+    inset 0 0 0 0.5px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.mac-traffic-btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.28) 0%,
+    rgba(255, 255, 255, 0.05) 42%,
+    rgba(0, 0, 0, 0.06) 100%
+  );
+  opacity: 0.9;
 }
 
 .mac-traffic-btn:focus-visible {
@@ -1750,50 +1775,71 @@ input[type="search"]::placeholder {
 }
 
 .mac-traffic-btn > svg {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   opacity: 0;
-  transition: opacity 100ms ease;
+  transition: opacity 80ms ease;
   pointer-events: none;
+  position: relative;
+  z-index: 1;
 }
 
+/* Glyphs appear on group hover / focus, matching macOS */
 .mac-traffic-lights:hover .mac-traffic-btn > svg,
-.mac-traffic-btn:focus-visible > svg {
-  opacity: 0.85;
+.mac-traffic-btn:focus-visible > svg,
+.mac-traffic-lights[data-force-glyphs='true'] .mac-traffic-btn > svg {
+  opacity: 0.78;
 }
 
+/* Inactive/unfocused window: gray dots like real macOS chrome */
+.mac-traffic-lights[data-active='false'] .mac-traffic-btn {
+  background: #DEDEDE !important;
+  color: transparent;
+  box-shadow:
+    inset 0 0 0 0.5px rgba(0, 0, 0, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  filter: none;
+}
+
+.mac-traffic-lights[data-active='false'] .mac-traffic-btn > svg {
+  opacity: 0 !important;
+}
+
+.mac-traffic-lights[data-active='false']:hover .mac-traffic-btn {
+  filter: none;
+}
+
+/* Active colors */
 .mac-traffic-btn.close {
   background: var(--mac-red);
-  color: #4a0002;
-}
-
-.mac-traffic-btn.close:hover {
-  background: var(--mac-red-hover);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.04), 0 0 6px var(--mac-red-glow);
 }
 
 .mac-traffic-btn.minimize {
   background: var(--mac-yellow);
-  color: #5a3b00;
-}
-
-.mac-traffic-btn.minimize:hover {
-  background: var(--mac-yellow-hover);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.04), 0 0 6px var(--mac-yellow-glow);
 }
 
 .mac-traffic-btn.zoom {
   background: var(--mac-green);
-  color: #0b3d12;
 }
 
-.mac-traffic-btn.zoom:hover {
+.mac-traffic-lights[data-active='true'] .mac-traffic-btn.close:hover {
+  background: var(--mac-red-hover);
+  filter: brightness(1.02);
+}
+
+.mac-traffic-lights[data-active='true'] .mac-traffic-btn.minimize:hover {
+  background: var(--mac-yellow-hover);
+  filter: brightness(1.02);
+}
+
+.mac-traffic-lights[data-active='true'] .mac-traffic-btn.zoom:hover {
   background: var(--mac-green-hover);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.04), 0 0 6px var(--mac-green-glow);
+  filter: brightness(1.02);
 }
 
 .mac-traffic-btn:active {
-  transform: scale(0.94);
+  transform: scale(0.92);
+  filter: brightness(0.96);
 }
 
 .mac-traffic-row {
@@ -1801,7 +1847,7 @@ input[type="search"]::placeholder {
   width: 100%;
   align-items: center;
   min-height: 36px;
-  padding: 10px 12px 6px;
+  padding: 12px 14px 8px;
   box-sizing: border-box;
 }
 
@@ -1809,7 +1855,13 @@ input[type="search"]::placeholder {
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  padding: 10px 6px 6px;
+  padding: 12px 6px 8px;
+}
+
+/* Keep collapsed traffic lights in one horizontal cluster */
+.mac-traffic-row[data-collapsed='true'] .mac-traffic-lights {
+  height: auto;
+  min-height: 20px;
 }
 .tb-min #btn-terminal { display: inline-flex !important; }
 
