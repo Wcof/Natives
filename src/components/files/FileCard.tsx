@@ -10,7 +10,7 @@ import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 
 interface FileCardProps {
   entry: FileEntry;
-  onSelect: (entry: FileEntry) => void;
+  onSelect: (entry: FileEntry, e?: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean }) => void;
   onContextMenu?: (e: React.MouseEvent, entry: FileEntry) => void;
   selected?: boolean;
   onDoubleClick?: () => void;
@@ -109,11 +109,17 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
       className={'file-card' + (flash ? ' anim-liveZap' : '') + (isChanged ? ' changed' : '')}
       data-file-entry={entry.path}
       data-heat={heat.toFixed(2)}
-      onClick={() => {
+      onClick={(ev) => {
         // Delay single-click to distinguish from double-click
         if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+        const mods = { shiftKey: ev.shiftKey, metaKey: ev.metaKey, ctrlKey: ev.ctrlKey };
+        // Multi-select should not delay — respond immediately
+        if (mods.shiftKey || mods.metaKey || mods.ctrlKey) {
+          onSelect(entry, mods);
+          return;
+        }
         clickTimerRef.current = setTimeout(() => {
-          onSelect(entry);
+          onSelect(entry, mods);
           clickTimerRef.current = null;
         }, 200);
       }}

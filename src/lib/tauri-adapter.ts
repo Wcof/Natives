@@ -276,6 +276,13 @@ export interface NativesAPI {
     recentFiles: (root: string) => Promise<unknown[]>;
     saveBlob: (dir: string, name: string, base64Data: string) => Promise<string>;
     convertFileSrc: (filePath: string) => string;
+    trashEntries: (paths: string[]) => Promise<{ ok: boolean; trashed?: string[]; errors?: Array<{ path: string; error: string }>; count?: number }>;
+    moveEntries: (paths: string[], destDir: string) => Promise<{ ok: boolean; moved?: string[]; errors?: Array<{ path: string; error: string }>; count?: number }>;
+    copyEntries: (paths: string[], destDir: string) => Promise<{ ok: boolean; copied?: string[]; errors?: Array<{ path: string; error: string }>; count?: number }>;
+    roots: () => Promise<Array<{ id: string; name: string; path: string }>>;
+    openWith: (path: string, withApp?: 'default' | 'reveal' | 'terminal' | 'editor') => Promise<{ ok: boolean; with?: string }>;
+    clipboardCopyFiles: (paths: string[]) => Promise<{ ok: boolean; count?: number }>;
+    clipboardCopyImage: (filePath: string) => Promise<{ ok: boolean }>;
   };
   archive: {
     list: (archivePath: string) => Promise<unknown[]>;
@@ -789,6 +796,44 @@ const nativesAPI: NativesAPI = {
     saveBlob: (dir: string, name: string, base64Data: string) =>
       cmd('fs_save_blob', { dir, name, base64Data }),
     convertFileSrc: (filePath: string) => convertFileSrc(filePath),
+    trashEntries: async (paths: string[]) => {
+      try {
+        return await cmd('fs_trash_entries', { paths });
+      } catch (e: any) {
+        return { ok: false, errors: [{ path: '', error: e?.message || String(e) }] };
+      }
+    },
+    moveEntries: async (paths: string[], destDir: string) => {
+      try {
+        return await cmd('fs_move_entries', { paths, destDir });
+      } catch (e: any) {
+        return { ok: false, errors: [{ path: '', error: e?.message || String(e) }] };
+      }
+    },
+    copyEntries: async (paths: string[], destDir: string) => {
+      try {
+        return await cmd('fs_copy_entries', { paths, destDir });
+      } catch (e: any) {
+        return { ok: false, errors: [{ path: '', error: e?.message || String(e) }] };
+      }
+    },
+    roots: () => cmd('fs_roots'),
+    openWith: (path: string, withApp: 'default' | 'reveal' | 'terminal' | 'editor' = 'default') =>
+      cmd('fs_open_with', { path, with: withApp }),
+    clipboardCopyFiles: async (paths: string[]) => {
+      try {
+        return await cmd('fs_clipboard_copy_files', { paths });
+      } catch (e: any) {
+        return { ok: false, count: 0 };
+      }
+    },
+    clipboardCopyImage: async (filePath: string) => {
+      try {
+        return await cmd('fs_clipboard_copy_image', { filePath });
+      } catch (e: any) {
+        return { ok: false };
+      }
+    },
   },
 
   // Archive

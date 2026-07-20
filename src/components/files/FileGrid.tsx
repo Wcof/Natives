@@ -8,9 +8,10 @@ import { FONT_SIZE, SPACING } from '@/lib/design-tokens';
 
 interface FileGridProps {
   entries: FileEntry[];
-  onSelect: (entry: FileEntry) => void;
+  onSelect: (entry: FileEntry, e?: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean }) => void;
   onContextMenu?: (e: React.MouseEvent, entry: FileEntry) => void;
   selectedIndex?: number;
+  selectedPaths?: Set<string>;
   gridSize?: 'sm' | 'md' | 'lg';
   onEditRequest?: (entry: FileEntry) => void;
   favorites?: string[];
@@ -24,7 +25,7 @@ const GRID_COLS: Record<string, string> = {
 };
 
 const FileGrid = forwardRef<HTMLDivElement, FileGridProps>(function FileGrid(
-  { entries, onSelect, onContextMenu, selectedIndex = -1, gridSize = 'md', onEditRequest, favorites, onFavoriteToggle },
+  { entries, onSelect, onContextMenu, selectedIndex = -1, selectedPaths, gridSize = 'md', onEditRequest, favorites, onFavoriteToggle },
   ref,
 ) {
   const locale = useLocale();
@@ -54,9 +55,9 @@ const FileGrid = forwardRef<HTMLDivElement, FileGridProps>(function FileGrid(
         <FileCard
           key={entry.path}
           entry={entry}
-          onSelect={onSelect}
+          onSelect={(ent, ev) => onSelect(ent, ev)}
           onContextMenu={onContextMenu}
-          selected={index === selectedIndex}
+          selected={selectedPaths ? selectedPaths.has(entry.path) : index === selectedIndex}
           onDoubleClick={() => onEditRequest?.(entry)}
           isFavorite={favorites?.includes(entry.path)}
           onFavoriteToggle={onFavoriteToggle}

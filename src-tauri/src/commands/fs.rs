@@ -84,6 +84,41 @@ pub fn fs_import_files(source_paths: Vec<String>, dest_dir: String) -> Result<Ve
     file_manager::import_files(&source_paths, &dest_dir)
 }
 
+#[tauri::command]
+pub fn fs_trash_entries(paths: Vec<String>) -> Result<JsonValue> {
+    file_manager::trash_entries(&paths)
+}
+
+#[tauri::command]
+pub fn fs_move_entries(paths: Vec<String>, dest_dir: String) -> Result<JsonValue> {
+    file_manager::move_entries(&paths, &dest_dir)
+}
+
+#[tauri::command]
+pub fn fs_copy_entries(paths: Vec<String>, dest_dir: String) -> Result<JsonValue> {
+    file_manager::copy_entries(&paths, &dest_dir)
+}
+
+#[tauri::command]
+pub fn fs_roots() -> Result<Vec<JsonValue>> {
+    file_manager::default_roots()
+}
+
+#[tauri::command]
+pub fn fs_open_with(path: String, with: Option<String>) -> Result<JsonValue> {
+    file_manager::open_with(&path, with.as_deref().unwrap_or("default"))
+}
+
+#[tauri::command]
+pub fn fs_clipboard_copy_files(paths: Vec<String>) -> Result<JsonValue> {
+    file_manager::clipboard_copy_files(&paths)
+}
+
+#[tauri::command]
+pub fn fs_clipboard_copy_image(file_path: String) -> Result<JsonValue> {
+    file_manager::clipboard_copy_image(&file_path)
+}
+
 /// Save a base64-encoded blob to disk with path validation and atomic write.
 /// Used by URL/image drops (WeChat, browser drags) that need to save binary data.
 #[tauri::command]

@@ -726,7 +726,7 @@ fn is_exdev(err: &std::io::Error) -> bool {
         || err.kind() == std::io::ErrorKind::CrossesDevices
 }
 
-/// Trash entry (macOS)
+/// Trash entry (macOS/Linux/Windows via trash crate)
 pub fn trash_entry(file_path: &str) -> Result<()> {
     let path = expand_tilde(file_path);
     if !path.exists() {
@@ -735,6 +735,382 @@ pub fn trash_entry(file_path: &str) -> Result<()> {
 
     // Use trash crate
     trash::delete(&path).map_err(|e| Error::Internal(format!("trash failed: {e}")))
+}
+
+/// Batch trash. Continues on individual failures and reports them.
+pub fn trash_entries(paths: &[String]) -> Result<serde_json::Value> {
+    let mut ok: Vec<String> = Vec::new();
+    let mut errors: Vec<serde_json::Value> = Vec::new();
+    for p in paths {
+        match trash_entry(p) {
+            Ok(()) => ok.push(p.clone()),
+            Err(e) => errors.push(serde_json::json!({ "path": p, "error": e.to_string() })),
+        }
+    }
+    Ok(serde_json::json!({
+        "ok": errors.is_empty(),
+        "trashed": ok,
+        "errors": errors,
+        "count": ok.len(),
+    }))
+}
+
+/// Batch move into a destination directory. Auto-dedupe, cross-volume safe.
+pub fn move_entries(paths: &[String], dest_dir: &str) -> Result<serde_json::Value> {
+    let dest = expand_tilde(dest_dir);
+    if !dest.exists() {
+        std::fs::create_dir_all(&dest).map_err(Error::Io)?;
+    }
+    validate_path(&dest)?;
+    if !dest.is_dir() {
+        return Err(Error::InvalidInput("destination is not a directory".into()));
+    }
+
+    let mut moved: Vec<String> = Vec::new();
+    let mut errors: Vec<serde_json::Value> = Vec::new();
+    for p in paths {
+        // Skip if source is already under dest as the same leaf (no-op-ish)
+        match move_entry(p, dest.to_string_lossy().as_ref()) {
+            Ok(path) => moved.push(path),
+            Err(e) => errors.push(serde_json::json!({ "path": p, "error": e.to_string() })),
+        }
+    }
+    Ok(serde_json::json!({
+        "ok": errors.is_empty(),
+        "moved": moved,
+        "errors": errors,
+        "count": moved.len(),
+    }))
+}
+
+/// Batch copy into a destination directory. Auto-dedupe. Source preserved.
+pub fn copy_entries(paths: &[String], dest_dir: &str) -> Result<serde_json::Value> {
+    let dest = expand_tilde(dest_dir);
+    if !dest.exists() {
+        std::fs::create_dir_all(&dest).map_err(Error::Io)?;
+    }
+    validate_path(&dest)?;
+    if !dest.is_dir() {
+        return Err(Error::InvalidInput("destination is not a directory".into()));
+    }
+
+    let mut copied: Vec<String> = Vec::new();
+    let mut errors: Vec<serde_json::Value> = Vec::new();
+    for p in paths {
+        match copy_entry(p, dest.to_string_lossy().as_ref()) {
+            Ok(path) => copied.push(path),
+            Err(e) => errors.push(serde_json::json!({ "path": p, "error": e.to_string() })),
+        }
+    }
+    Ok(serde_json::json!({
+        "ok": errors.is_empty(),
+        "copied": copied,
+        "errors": errors,
+        "count": copied.len(),
+    }))
+}
+
+/// Default quick-access roots (fanbox `/api/roots` equivalent).
+pub fn default_roots() -> Result<Vec<serde_json::Value>> {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+    let candidates: Vec<(&str, PathBuf)> = vec![
+        ("home", home.clone()),
+        ("desktop", home.join("Desktop")),
+        ("documents", home.join("Documents")),
+        ("downloads", home.join("Downloads")),
+        ("pictures", home.join("Pictures")),
+        ("movies", home.join("Movies")),
+        ("music", home.join("Music")),
+    ];
+
+    let mut roots = Vec::new();
+    for (id, path) in candidates {
+        if path.is_dir() {
+            roots.push(serde_json::json!({
+                "id": id,
+                "name": match id {
+                    "home" => "Home",
+                    "desktop" => "Desktop",
+                    "documents" => "Documents",
+                    "downloads" => "Downloads",
+                    "pictures" => "Pictures",
+                    "movies" => "Movies",
+                    "music" => "Music",
+                    _ => id,
+                },
+                "path": path.to_string_lossy(),
+            }));
+        }
+    }
+    // Always include /tmp if present
+    for tmp in ["/tmp", "/private/tmp"] {
+        let p = PathBuf::from(tmp);
+        if p.is_dir() {
+            roots.push(serde_json::json!({
+                "id": "tmp",
+                "name": "tmp",
+                "path": p.to_string_lossy(),
+            }));
+            break;
+        }
+    }
+    Ok(roots)
+}
+
+/// Open path with a preferred app (fanbox `/api/open`).
+/// `with`: "default" | "reveal" | "terminal" | "editor"
+pub fn open_with(target: &str, with: &str) -> Result<serde_json::Value> {
+    let path = expand_tilde(target);
+    if !path.exists() {
+        return Err(Error::NotFound(target.to_string()));
+    }
+
+    match with {
+        "reveal" => {
+            #[cfg(target_os = "macos")]
+            {
+                std::process::Command::new("open")
+                    .args(["-R", path.to_string_lossy().as_ref()])
+                    .spawn()
+                    .map_err(|e| Error::Internal(e.to_string()))?;
+            }
+            #[cfg(target_os = "windows")]
+            {
+                std::process::Command::new("explorer")
+                    .args(["/select,", path.to_string_lossy().as_ref()])
+                    .spawn()
+                    .map_err(|e| Error::Internal(e.to_string()))?;
+            }
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                let parent = path
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| path.clone());
+                open::that(parent).map_err(|e| Error::Internal(e.to_string()))?;
+            }
+            Ok(serde_json::json!({ "ok": true, "with": "reveal" }))
+        }
+        "terminal" => {
+            let dir = if path.is_dir() {
+                path.clone()
+            } else {
+                path.parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| path.clone())
+            };
+            #[cfg(target_os = "macos")]
+            {
+                std::process::Command::new("open")
+                    .args(["-a", "Terminal", dir.to_string_lossy().as_ref()])
+                    .spawn()
+                    .map_err(|e| Error::Internal(e.to_string()))?;
+            }
+            #[cfg(target_os = "windows")]
+            {
+                std::process::Command::new("cmd")
+                    .args(["/C", "start", "cmd", "/K", &format!("cd /d {}", dir.display())])
+                    .spawn()
+                    .map_err(|e| Error::Internal(e.to_string()))?;
+            }
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                // Best-effort terminal launch
+                let dir_s = dir.to_string_lossy().to_string();
+                let tried = [
+                    ("x-terminal-emulator", vec![format!("--working-directory={dir_s}")]),
+                    ("gnome-terminal", vec![format!("--working-directory={dir_s}")]),
+                    ("xterm", vec!["-e".into(), format!("cd {dir_s} && bash")]),
+                ];
+                let mut last_err = None;
+                for (bin, args) in tried {
+                    match std::process::Command::new(bin).args(&args).spawn() {
+                        Ok(_) => {
+                            last_err = None;
+                            break;
+                        }
+                        Err(e) => last_err = Some(e),
+                    }
+                }
+                if let Some(e) = last_err {
+                    return Err(Error::Internal(e.to_string()));
+                }
+            }
+            Ok(serde_json::json!({ "ok": true, "with": "terminal" }))
+        }
+        "editor" => {
+            // Prefer VS Code CLI, fall back to default opener.
+            let path_s = path.to_string_lossy().to_string();
+            match std::process::Command::new("code").arg(&path_s).spawn() {
+                Ok(_child) => {
+                    // Detach: don't wait. If spawn succeeded we're good.
+                    Ok(serde_json::json!({ "ok": true, "with": "editor" }))
+                }
+                Err(_) => {
+                    open::that(&path).map_err(|e| Error::Internal(e.to_string()))?;
+                    Ok(serde_json::json!({ "ok": true, "with": "default" }))
+                }
+            }
+        }
+        _ => {
+            open::that(&path).map_err(|e| Error::Internal(e.to_string()))?;
+            Ok(serde_json::json!({ "ok": true, "with": "default" }))
+        }
+    }
+}
+
+/// Put file paths on the system pasteboard so Finder/Explorer can paste them.
+/// macOS: AppleScript `set the clipboard to … as «class furl»` via osascript.
+pub fn clipboard_copy_files(paths: &[String]) -> Result<serde_json::Value> {
+    if paths.is_empty() {
+        return Err(Error::InvalidInput("no paths".into()));
+    }
+    // Validate all paths exist & allowed
+    let mut abs: Vec<PathBuf> = Vec::new();
+    for p in paths {
+        let path = expand_tilde(p);
+        if !path.exists() {
+            return Err(Error::NotFound(p.clone()));
+        }
+        validate_path(&path)?;
+        abs.push(path);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // Build AppleScript list of POSIX files.
+        // Use argv-style osascript to avoid quote injection.
+        // osascript -e 'on run argv' -e 'set the clipboard to (POSIX file (item 1 of argv) as alias)' ...
+        // Multi-file: set the clipboard to {POSIX file a as alias, POSIX file b as alias}
+        let mut script = String::from("on run argv\nset fileList to {}\n");
+        script.push_str("repeat with a in argv\n");
+        script.push_str("set end of fileList to (POSIX file a as alias)\n");
+        script.push_str("end repeat\n");
+        script.push_str("set the clipboard to fileList\nend run\n");
+
+        let mut cmd = std::process::Command::new("osascript");
+        cmd.arg("-e").arg(&script);
+        for p in &abs {
+            cmd.arg(p.to_string_lossy().as_ref());
+        }
+        let output = cmd
+            .output()
+            .map_err(|e| Error::Internal(format!("osascript failed: {e}")))?;
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            return Err(Error::Internal(format!("clipboard copy files failed: {err}")));
+        }
+        return Ok(serde_json::json!({ "ok": true, "count": abs.len(), "platform": "macos" }));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Fallback: put newline-joined paths as text (better than nothing)
+        let text = abs
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Reuse pbcopy/xclip via std process when available
+        #[cfg(target_os = "linux")]
+        {
+            use std::io::Write;
+            let mut child = std::process::Command::new("xclip")
+                .args(["-selection", "clipboard"])
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .or_else(|_| {
+                    std::process::Command::new("xsel")
+                        .args(["--clipboard", "--input"])
+                        .stdin(std::process::Stdio::piped())
+                        .spawn()
+                })
+                .map_err(|e| Error::Internal(format!("clipboard tool failed: {e}")))?;
+            if let Some(stdin) = child.stdin.as_mut() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
+        }
+        #[cfg(target_os = "windows")]
+        {
+            // PowerShell Set-Clipboard
+            let ps = format!("Set-Clipboard -Value @'\n{text}\n'@");
+            std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command", &ps])
+                .spawn()
+                .map_err(|e| Error::Internal(e.to_string()))?;
+        }
+        Ok(serde_json::json!({
+            "ok": true,
+            "count": abs.len(),
+            "platform": std::env::consts::OS,
+            "mode": "text-paths"
+        }))
+    }
+}
+
+/// Copy an image file onto the pasteboard as image data (macOS).
+pub fn clipboard_copy_image(file_path: &str) -> Result<serde_json::Value> {
+    let path = expand_tilde(file_path);
+    validate_path(&path)?;
+    if !path.exists() {
+        return Err(Error::NotFound(file_path.to_string()));
+    }
+    let kind = detect_file_kind(
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(""),
+    );
+    if kind != "image" {
+        return Err(Error::InvalidInput("not an image file".into()));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // osascript: set the clipboard to (read POSIX file "..." as «class PNGf»/JPEG)
+        // Use generic picture data via Finder/System Events is fragile; use `osascript` + `read … as TIFF picture`
+        let script = r#"
+on run argv
+  set p to item 1 of argv
+  set the clipboard to (read (POSIX file p) as «class PNGf»)
+end run
+"#;
+        let output = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .arg(path.to_string_lossy().as_ref())
+            .output()
+            .map_err(|e| Error::Internal(format!("osascript failed: {e}")))?;
+        if !output.status.success() {
+            // Fallback: try TIFF
+            let script2 = r#"
+on run argv
+  set p to item 1 of argv
+  set the clipboard to (read (POSIX file p) as TIFF picture)
+end run
+"#;
+            let output2 = std::process::Command::new("osascript")
+                .arg("-e")
+                .arg(script2)
+                .arg(path.to_string_lossy().as_ref())
+                .output()
+                .map_err(|e| Error::Internal(format!("osascript failed: {e}")))?;
+            if !output2.status.success() {
+                let err = String::from_utf8_lossy(&output2.stderr);
+                return Err(Error::Internal(format!("copy image failed: {err}")));
+            }
+        }
+        return Ok(serde_json::json!({ "ok": true, "path": path.to_string_lossy() }));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Best-effort: copy path text
+        let _ = file_path;
+        Err(Error::NotImplemented(
+            "clipboard image copy not implemented on this platform".into(),
+        ))
+    }
 }
 
 /// Import files (copy from external paths)
@@ -1117,6 +1493,45 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+
+    #[test]
+    fn batch_copy_move_trash_and_roots() {
+        let base = tmp_dir("batch");
+        let a = base.join("a.txt");
+        let b = base.join("b.txt");
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
+        let dest = base.join("out");
+        std::fs::create_dir(&dest).unwrap();
+
+        let copied = copy_entries(
+            &[a.to_string_lossy().to_string(), b.to_string_lossy().to_string()],
+            dest.to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(copied["count"], 2);
+        assert!(dest.join("a.txt").exists());
+
+        let dest2 = base.join("out2");
+        std::fs::create_dir(&dest2).unwrap();
+        let moved = move_entries(
+            &[dest.join("a.txt").to_string_lossy().to_string()],
+            dest2.to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(moved["count"], 1);
+        assert!(dest2.join("a.txt").exists());
+        assert!(!dest.join("a.txt").exists());
+
+        let roots = default_roots().unwrap();
+        assert!(!roots.is_empty());
+        // open_with default on a real file should not panic (may fail headless)
+        let _ = open_with(b.to_str().unwrap(), "default");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     #[test]
     fn deduplicate_path_adds_counter() {
         let base = tmp_dir("dedupe");

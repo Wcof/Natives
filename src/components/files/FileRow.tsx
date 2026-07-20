@@ -10,7 +10,7 @@ import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 
 interface FileRowProps {
   entry: FileEntry;
-  onSelect: (entry: FileEntry) => void;
+  onSelect: (entry: FileEntry, e?: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean }) => void;
   onContextMenu?: (e: React.MouseEvent, entry: FileEntry) => void;
   showDir?: boolean;
   selected?: boolean;
@@ -77,10 +77,15 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir, selec
     <div
       className={flash ? 'anim-liveZapRow' : ''}
       data-file-entry={entry.path}
-      onClick={() => {
+      onClick={(ev) => {
         if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+        const mods = { shiftKey: ev.shiftKey, metaKey: ev.metaKey, ctrlKey: ev.ctrlKey };
+        if (mods.shiftKey || mods.metaKey || mods.ctrlKey) {
+          onSelect(entry, mods);
+          return;
+        }
         clickTimerRef.current = setTimeout(() => {
-          onSelect(entry);
+          onSelect(entry, mods);
           clickTimerRef.current = null;
         }, 200);
       }}
