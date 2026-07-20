@@ -16,6 +16,9 @@ interface FileGridProps {
   onEditRequest?: (entry: FileEntry) => void;
   favorites?: string[];
   onFavoriteToggle?: (entry: FileEntry) => void;
+  cutPaths?: Set<string>;
+  onMoveDrop?: (sourcePaths: string[], destDir: string) => void;
+  dragPaths?: string[];
 }
 
 const GRID_COLS: Record<string, string> = {
@@ -25,7 +28,7 @@ const GRID_COLS: Record<string, string> = {
 };
 
 const FileGrid = forwardRef<HTMLDivElement, FileGridProps>(function FileGrid(
-  { entries, onSelect, onContextMenu, selectedIndex = -1, selectedPaths, gridSize = 'md', onEditRequest, favorites, onFavoriteToggle },
+  { entries, onSelect, onContextMenu, selectedIndex = -1, selectedPaths, gridSize = 'md', onEditRequest, favorites, onFavoriteToggle, cutPaths, onMoveDrop, dragPaths },
   ref,
 ) {
   const locale = useLocale();
@@ -61,6 +64,9 @@ const FileGrid = forwardRef<HTMLDivElement, FileGridProps>(function FileGrid(
           onDoubleClick={() => onEditRequest?.(entry)}
           isFavorite={favorites?.includes(entry.path)}
           onFavoriteToggle={onFavoriteToggle}
+          dimmed={cutPaths?.has(entry.path)}
+          onMoveDrop={onMoveDrop}
+          dragPaths={dragPaths}
         />
       ))}
     </div>

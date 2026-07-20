@@ -16,6 +16,9 @@ interface FileCardProps {
   onDoubleClick?: () => void;
   isFavorite?: boolean;
   onFavoriteToggle?: (entry: FileEntry) => void;
+  dimmed?: boolean;
+  onMoveDrop?: (sourcePaths: string[], destDir: string) => void;
+  dragPaths?: string[];
 }
 
 const BADGE_LABELS: Record<string, string> = {
@@ -31,7 +34,7 @@ const BADGE_COLORS: Record<string, { bg: string; text: string; border: string }>
   git: { bg: 'transparent', text: 'var(--text-secondary)', border: 'var(--border)' },
 };
 
-export default function FileCard({ entry, onSelect, onContextMenu, selected, onDoubleClick, isFavorite, onFavoriteToggle }: FileCardProps) {
+export default function FileCard({ entry, onSelect, onContextMenu, selected, onDoubleClick, isFavorite, onFavoriteToggle, dimmed, onMoveDrop, dragPaths }: FileCardProps) {
   const [flash, setFlash] = useState(false);
   const [heat, setHeat] = useState(0);
   const [showRipple, setShowRipple] = useState(false);
@@ -132,6 +135,28 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
         onDoubleClick?.();
       }}
       onContextMenu={(e) => onContextMenu?.(e, entry)}
+      draggable
+      onDragStart={(e) => {
+        const paths = dragPaths && dragPaths.length > 0 ? dragPaths : [entry.path];
+        e.dataTransfer.setData('application/x-natives-paths', JSON.stringify(paths));
+        e.dataTransfer.effectAllowed = 'move';
+      }}
+      onDragOver={(e) => {
+        if (!entry.isDir) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+      }}
+      onDrop={(e) => {
+        if (!entry.isDir || !onMoveDrop) return;
+        e.preventDefault();
+        e.stopPropagation();
+        try {
+          const raw = e.dataTransfer.getData('application/x-natives-paths');
+          const paths = raw ? JSON.parse(raw) as string[] : [];
+          const filtered = paths.filter(p => p !== entry.path);
+          if (filtered.length) onMoveDrop(filtered, entry.path);
+        } catch { /* ignore */ }
+      }}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter') onSelect(entry); }}
@@ -147,7 +172,7 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
         transition: 'background 0.12s, border-color 0.12s, transform 0.12s, box-shadow 0.3s, opacity 0.12s',
         position: 'relative',
         overflow: 'hidden',
-        opacity: entry.hidden ? 0.5 : 1,
+        opacity: dimmed ? 0.45 : entry.hidden ? 0.5 : 1,
         animation: isChanged ? 'changedBreath 2.2s ease-in-out infinite' : undefined,
       }}
       onMouseEnter={(e) => {

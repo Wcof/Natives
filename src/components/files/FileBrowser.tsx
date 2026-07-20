@@ -413,9 +413,29 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   }, [renameTarget, renameValue, loadEntries, showToast]);
 
   const handleTrash = useCallback((entry: FileEntry) => {
-    setTrashTarget(entry);
-    return;
-  }, []);
+    // fanbox: files trash immediately; directories ask once
+    if (entry.isDir) {
+      setTrashTarget(entry);
+      return;
+    }
+    void (async () => {
+      try {
+        const result = await getFsApi().trashEntry(entry.path);
+        if (result?.ok) {
+          showToast(t(locale, 'fileBrowser.trashed'));
+          window.dispatchEvent(new CustomEvent('file-trashed', { detail: { path: entry.path } }));
+          setSelectedPaths(prev => {
+            const n = new Set(prev); n.delete(entry.path); return n;
+          });
+          await loadEntries();
+        } else {
+          showToast(result?.error || t(locale, 'fileBrowser.trashFailed'));
+        }
+      } catch {
+        showToast(t(locale, 'fileBrowser.trashFailed'));
+      }
+    })();
+  }, [loadEntries, showToast, locale]);
 
   const handleDuplicate = useCallback(async (entry: FileEntry) => {
     try {
@@ -577,6 +597,28 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       showToast(t(locale, 'fileBrowser.trashFailed'));
     }
   }, [resolveTargetPaths, entries, filteredEntries, loadEntries, showToast, locale]);
+
+
+  const handleInternalMove = useCallback(async (sourcePaths: string[], destDir: string) => {
+    if (!sourcePaths.length || !destDir) return;
+    // Prevent moving a folder into itself
+    const safe = sourcePaths.filter(p => p !== destDir && !destDir.startsWith(p + '/'));
+    if (!safe.length) return;
+    try {
+      const fsApi = getFsApi();
+      if (typeof fsApi.moveEntries === 'function') {
+        const r = await fsApi.moveEntries(safe, destDir);
+        showToast(t(locale, 'fileBrowser.batchMoved').replace('{count}', String(r?.count ?? safe.length)));
+      } else {
+        for (const pth of safe) await fsApi.moveEntry?.(pth, destDir);
+        showToast(t(locale, 'fileBrowser.batchMoved').replace('{count}', String(safe.length)));
+      }
+      setSelectedPaths(new Set());
+      await loadEntries();
+    } catch {
+      showToast(t(locale, 'fileBrowser.moveFailed'));
+    }
+  }, [loadEntries, showToast, locale]);
 
   // Shell operations
   const handleRevealInFinder = useCallback((entry: FileEntry) => {
@@ -799,6 +841,21 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           if (list.length > 0) setSelectedIndex(0);
           break;
         }
+        case 'Home': {
+          e.preventDefault();
+          if (list.length === 0) break;
+          setSelectedIndex(0);
+          setSelectedPaths(new Set([list[0]!.path]));
+          break;
+        }
+        case 'End': {
+          e.preventDefault();
+          if (list.length === 0) break;
+          const last = list.length - 1;
+          setSelectedIndex(last);
+          setSelectedPaths(new Set([list[last]!.path]));
+          break;
+        }
         case ' ': {
           if (selectedIndex < 0 || selectedIndex >= list.length) break;
           e.preventDefault();
@@ -819,6 +876,15 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       lastClickedIndexRef.current = -1;
     });
   }, [currentPath, entries, searchQuery]);
+
+  // Scroll keyboard selection into view
+  useEffect(() => {
+    if (selectedIndex < 0 || selectedIndex >= filteredEntries.length) return;
+    const path = filteredEntries[selectedIndex]?.path;
+    if (!path) return;
+    const el = document.querySelector(`[data-file-entry="${CSS.escape(path)}"]`) as HTMLElement | null;
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [selectedIndex, filteredEntries]);
 
   // Detect project badge from current directory entries
   const detectedProject = useMemo(() => {
@@ -925,6 +991,9 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             onEditRequest={handleOpenEntry}
             favorites={favoritePaths}
             onFavoriteToggle={handleFavoriteToggle}
+            cutPaths={clipBoard?.mode === 'cut' ? new Set(clipBoard.paths) : undefined}
+            onMoveDrop={handleInternalMove}
+            dragPaths={selectedPaths.size > 0 ? Array.from(selectedPaths) : undefined}
           />
         ) : (
           <FileList
@@ -940,9 +1009,26 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             onEditRequest={handleOpenEntry}
             favorites={favoritePaths}
             onFavoriteToggle={handleFavoriteToggle}
+            cutPaths={clipBoard?.mode === 'cut' ? new Set(clipBoard.paths) : undefined}
+            onMoveDrop={handleInternalMove}
+            dragPaths={selectedPaths.size > 0 ? Array.from(selectedPaths) : undefined}
           />
         )}
       </div>
+
+
+      {!loading && filteredEntries.length === 0 && (
+        <div style={{
+          display: 'flex', gap: SPACING.sm, justifyContent: 'center',
+          padding: SPACING.md, borderTop: '1px solid var(--border)',
+        }}>
+          <button className="btn btn-ghost" onClick={() => handleNewFile(currentPath)}>{t(locale, 'fileBrowser.newFile')}</button>
+          <button className="btn btn-primary" onClick={() => handleNewFolder(currentPath)}>{t(locale, 'fileBrowser.newFolder')}</button>
+          {clipBoard && clipBoard.paths.length > 0 && (
+            <button className="btn btn-ghost" onClick={() => { void handlePaste(); }}>{t(locale, 'fileBrowser.paste')}</button>
+          )}
+        </div>
+      )}
 
       {/* Status bar */}
       {!loading && filteredEntries.length > 0 && (() => {
@@ -1042,6 +1128,16 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           className="input"
           style={{ width: '100%', fontSize: FONT_SIZE.lg }}
           autoFocus
+          onFocus={(e) => {
+            const v = e.currentTarget.value;
+            const dot = v.lastIndexOf('.');
+            // Select stem only for files with extension (not dotfiles)
+            if (dot > 0 && !renameTarget?.isDir) {
+              e.currentTarget.setSelectionRange(0, dot);
+            } else {
+              e.currentTarget.select();
+            }
+          }}
         />
         <div style={{ display: 'flex', gap: SPACING.sm, marginTop: 14, justifyContent: 'flex-end' }}>
           <button className="btn btn-ghost" onClick={() => setRenameTarget(null)}>{t(locale, 'common.cancel')}</button>
