@@ -9,6 +9,7 @@
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { unwrapAssistantRpc, type AssistantRpcEnvelope } from './assistant-rpc';
+import { classifyError } from './error-classifier';
 
 // ── Ghostty render state payload (feature gate ghostty-vt) ──
 
@@ -21,6 +22,16 @@ export interface RenderStatePayload {
   pwd: string | null;
   cols: number;
   rows: number;
+}
+
+/** write_generated_module result — ok/moduleId always present */
+export interface WriteGeneratedModuleResult {
+  moduleId: string;
+  ok: boolean;
+  oldContent?: string | null;
+  newContent?: string;
+  contractId?: string;
+  contentHash?: string;
 }
 
 // --- Types matching the Electron preload contract ---
@@ -102,13 +113,37 @@ function normalizeProvider(provider: StoredProvider): ProviderSummary {
   };
 }
 
-function normalizeProviderTest(result: StoredProviderTestResult): ProviderTestResult {
+/**
+ * Map a stored provider-test payload into UI-facing fields.
+ * Non-throwing failures still need classification so AddProvider / ProviderDetail
+ * do not dump raw diagnostic strings (protocol=/http_status=/request_id=…).
+ */
+export function normalizeProviderTest(result: StoredProviderTestResult): ProviderTestResult {
+  if (result.success) {
+    return {
+      success: true,
+      status: 'valid',
+      testedAt: new Date().toISOString(),
+      errorCode: null,
+      userMessage: null,
+    };
+  }
+
+  const raw = result.error ?? 'Provider test failed';
+  const classified = classifyError(raw);
+  const lower = raw.toLowerCase();
+  const rateLimited =
+    classified.category === 'RATE_LIMITED' ||
+    lower.includes('http_status=429') ||
+    lower.includes('rate limited') ||
+    lower.includes('too many requests');
+
   return {
-    success: result.success,
-    status: result.success ? 'valid' : 'invalid',
+    success: false,
+    status: rateLimited ? 'rate_limited' : 'invalid',
     testedAt: new Date().toISOString(),
-    errorCode: null,
-    userMessage: result.error,
+    errorCode: rateLimited ? 'RATE_LIMITED' : classified.category,
+    userMessage: classified.userMessage,
   };
 }
 
@@ -192,7 +227,7 @@ export interface NativesAPI {
       name: string,
       htmlContent: string,
       permissions: string[],
-    ) => Promise<{ moduleId: string; ok: boolean }>;
+    ) => Promise<WriteGeneratedModuleResult>;
     rollback: (params: { moduleId: string; oldContent: string }) => Promise<void>;
   };
   env: {
@@ -317,6 +352,10 @@ export interface NativesAPI {
       metadata: { schemaVersion: number; generatedAtMs: number; coverageStartMs: number; coverageEndMs: number; timeZone: string };
       response: unknown;
     }>;
+    /** Optional ccusage enrichment (default disabled). */
+    getCcusageEnabled: () => Promise<boolean>;
+    setCcusageEnabled: (enabled: boolean) => Promise<boolean>;
+    detectCcusage: () => Promise<string | null>;
   };
   codegraph: {
     read: () => Promise<unknown>;
@@ -623,7 +662,7 @@ const nativesAPI: NativesAPI = {
       htmlContent: string,
       permissions: string[],
     ) =>
-      cmd<{ moduleId: string; ok: boolean }>('write_generated_module', {
+      cmd<WriteGeneratedModuleResult>('write_generated_module', {
         moduleId,
         name,
         htmlContent,
@@ -829,6 +868,10 @@ const nativesAPI: NativesAPI = {
         customEndMs?: number;
       };
     }) => cmd('usage_sync', { request }),
+    getCcusageEnabled: () => cmd<boolean>('usage_get_ccusage_enabled'),
+    setCcusageEnabled: (enabled: boolean) =>
+      cmd<boolean>('usage_set_ccusage_enabled', { enabled }),
+    detectCcusage: () => cmd<string | null>('usage_detect_ccusage'),
   },
 
   // CodeGraph

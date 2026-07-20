@@ -104,7 +104,7 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
     try {
       await onSaveDefaults(selected.id, value || null);
     } catch (error) {
-      setModelErrors((current) => ({ ...current, [selected.id]: classifyError(error).userMessage }));
+      setModelErrors((current) => ({ ...current, [selected.id]: classifyError(error, { locale }).userMessage }));
     } finally {
       setSavingModel(null);
     }
@@ -119,7 +119,7 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
       setNewLabel('');
       setNewKey('');
     } catch (error) {
-      setAddError(classifyError(error).userMessage);
+      setAddError(classifyError(error, { locale }).userMessage);
     } finally {
       setAddingKey(null);
     }
@@ -132,7 +132,7 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
       const result = await onTestKey(selected.id, key.id);
       setTestResults((current) => ({ ...current, [key.id]: { status: result.status, testedAt: result.testedAt, error: result.userMessage } }));
     } catch (error) {
-      setTestResults((current) => ({ ...current, [key.id]: { status: 'unavailable', testedAt: new Date().toISOString(), error: classifyError(error).userMessage } }));
+      setTestResults((current) => ({ ...current, [key.id]: { status: 'unavailable', testedAt: new Date().toISOString(), error: classifyError(error, { locale }).userMessage } }));
     } finally {
       setTestingId(null);
     }
@@ -158,7 +158,7 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
         setDropdownOpen(true);
       }
     } catch (error) {
-      setModelErrors((current) => ({ ...current, [selected.id]: classifyError(error).userMessage }));
+      setModelErrors((current) => ({ ...current, [selected.id]: classifyError(error, { locale }).userMessage }));
     } finally {
       setDiscovering(false);
     }
@@ -177,7 +177,7 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
       const result = await onTestKey(selected.id, selected.primaryKeyId, value);
       setDetailTestResult({ success: result.status === 'valid', error: result.userMessage ?? undefined });
     } catch (error) {
-      setDetailTestResult({ success: false, error: classifyError(error).userMessage });
+      setDetailTestResult({ success: false, error: classifyError(error, { locale }).userMessage });
     } finally {
       setTesting(false);
     }

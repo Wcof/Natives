@@ -3,7 +3,12 @@
  *
  * Pattern-matching classifier inspired by CodePilot's error-classifier.
  * Produces actionable, user-facing error messages with clickable recovery buttons.
+ *
+ * User-facing copy is locale-aware via i18n. Default locale is Chinese (zh),
+ * matching the product default. Pass `{ locale }` when the active UI locale is known.
  */
+
+import { t } from '@/i18n';
 
 // ── Error categories ────────────────────────────────────────────
 
@@ -57,6 +62,8 @@ export interface ErrorContext {
   error: unknown;
   moduleId?: string;
   stderr?: string;
+  /** Active UI locale. Defaults to Chinese. */
+  locale?: string;
 }
 
 // ── Extraction Helpers ──────────────────────────────────────────
@@ -86,6 +93,10 @@ function extractErrorMessage(error: unknown): string {
   return String(error);
 }
 
+function resolveLocale(ctx: ErrorContext): string {
+  return ctx.locale && ctx.locale.trim() ? ctx.locale : 'zh';
+}
+
 // ── Pattern definitions ─────────────────────────────────────────
 
 interface ErrorPattern {
@@ -101,8 +112,8 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     category: 'MUTATION_APPLIED_REFRESH_FAILED',
     patterns: ['mutation applied on branch', 'mutation_succeeded_status_refresh_failed'],
-    userMessage: () => 'The branch changed, but its latest status could not be loaded',
-    actionHint: () => 'Refresh the Git status. Do not repeat the branch switch.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.mutationRefreshFailed'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintMutationRefresh'),
     retryable: true,
   },
   // ── Project errors (must be before TERMINAL_SPAWN_FAILED to avoid 'not found' clash) ──
@@ -110,32 +121,32 @@ const ERROR_PATTERNS: ErrorPattern[] = [
     category: 'PROJECT_PATH_REQUIRED',
     patterns: ['PROJECT_PATH_REQUIRED', 'project path is required'],
     codes: ['PROJECT_PATH_REQUIRED'],
-    userMessage: () => 'Project path is required',
-    actionHint: () => 'Please provide a valid project folder path.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.projectPathRequired'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintProjectPath'),
     retryable: false,
   },
   {
     category: 'PROJECT_NOT_FOUND',
     patterns: ['PROJECT_NOT_FOUND', 'project directory not found', 'project path must exist'],
     codes: ['PROJECT_NOT_FOUND'],
-    userMessage: () => 'Project directory not found',
-    actionHint: () => 'The project folder may have been moved or deleted. Please select a valid folder.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.projectNotFound'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintProjectNotFound'),
     retryable: false,
   },
   {
     category: 'PROJECT_NOT_DIRECTORY',
     patterns: ['PROJECT_NOT_DIRECTORY', 'project path must be a directory'],
     codes: ['PROJECT_NOT_DIRECTORY'],
-    userMessage: () => 'Selected path is not a directory',
-    actionHint: () => 'Please select a folder, not a file.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.projectNotDirectory'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintProjectNotDirectory'),
     retryable: false,
   },
   {
     category: 'PROJECT_REGISTER_FAILED',
     patterns: ['PROJECT_REGISTER_FAILED', 'project register', 'failed to register project'],
     codes: ['PROJECT_REGISTER_FAILED'],
-    userMessage: () => 'Failed to register project',
-    actionHint: () => 'The project could not be registered. Check permissions and try again.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.projectRegisterFailed'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintProjectRegister'),
     retryable: true,
   },
 
@@ -144,8 +155,8 @@ const ERROR_PATTERNS: ErrorPattern[] = [
     category: 'TERMINAL_SPAWN_FAILED',
     patterns: ['ENOENT', 'spawn', 'pty', 'not found'],
     codes: ['ENOENT'],
-    userMessage: () => 'Failed to start terminal',
-    actionHint: () => 'Check that your shell (zsh/bash) is available and try again.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.terminalSpawnFailed'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintTerminalSpawn'),
     retryable: true,
   },
 
@@ -153,8 +164,8 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     category: 'TERMINAL_CRASH',
     patterns: [/terminal.*crash/i, /session.*exit/i, /pty.*error/i],
-    userMessage: () => 'Terminal session ended unexpectedly',
-    actionHint: () => 'The terminal process exited. You can start a new session.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.terminalCrash'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintTerminalCrash'),
     retryable: true,
   },
 
@@ -163,8 +174,9 @@ const ERROR_PATTERNS: ErrorPattern[] = [
     category: 'DB_ERROR',
     patterns: ['SQLITE', 'sqlite', 'database', 'db error', 'no such table', 'disk I/O'],
     codes: ['SQLITE_ERROR', 'SQLITE_CORRUPT', 'SQLITE_FULL'],
-    userMessage: (ctx) => `Database error: ${extractErrorMessage(ctx.error)}`,
-    actionHint: () => 'An internal database error occurred. Try restarting the application.',
+    userMessage: (ctx) =>
+      t(resolveLocale(ctx), 'errors.dbErrorDetail', { detail: extractErrorMessage(ctx.error) }),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintDbError'),
     retryable: true,
   },
 
@@ -172,8 +184,8 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     category: 'MODULE_INSTALL_FAILED',
     patterns: [/install.*fail/i, /manifest.*invalid/i, /module.*corrupt/i],
-    userMessage: () => 'Module installation failed',
-    actionHint: () => 'Check that the module has a valid manifest.json and try again.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.installFailedSimple'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintInstallFailed'),
     retryable: true,
   },
 
@@ -181,8 +193,8 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     category: 'NETWORK_ERROR',
     patterns: [/daemon.*not connected/i, /not connected to daemon/i, /failed to connect to daemon/i, /assistant rpc failed/i],
-    userMessage: () => 'Assistant service is unavailable',
-    actionHint: () => 'Restart the application and try again.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.assistantUnavailable'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintAssistantUnavailable'),
     retryable: true,
   },
 
@@ -190,8 +202,11 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     category: 'MODULE_NOT_FOUND',
     patterns: ['not found', 'missing', 'no such file', 'MODULE_NOT_FOUND'],
-    userMessage: (ctx) => ctx.moduleId ? `Module not found: ${ctx.moduleId}` : 'Module not found',
-    actionHint: () => 'The module may have been moved or deleted. Try reinstalling.',
+    userMessage: (ctx) =>
+      ctx.moduleId
+        ? t(resolveLocale(ctx), 'errors.moduleNotFoundNamed', { id: ctx.moduleId })
+        : t(resolveLocale(ctx), 'errors.moduleNotFound'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintModuleNotFound'),
     retryable: false,
   },
 
@@ -199,8 +214,8 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     category: 'BRIDGE_PERMISSION_DENIED',
     patterns: ['permission', 'denied', 'forbidden', '403', 'unauthorized scope'],
-    userMessage: () => 'Permission denied',
-    actionHint: () => 'This plugin does not have the required permission. Check plugin settings.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.permissionDenied'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintPermissionDenied'),
     retryable: false,
   },
 
@@ -208,8 +223,8 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     category: 'AUTH_REJECTED',
     patterns: ['401', 'Unauthorized', 'invalid_api_key', 'authentication failed', 'authentication_error'],
-    userMessage: () => 'Authentication failed',
-    actionHint: () => 'Verify your API key is correct and has not expired.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.authRejected'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintAuthRejected'),
     retryable: false,
   },
 
@@ -217,8 +232,8 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     category: 'AUTH_FORBIDDEN',
     patterns: ['403', 'Forbidden', 'access denied', 'permission_error'],
-    userMessage: () => 'Access denied',
-    actionHint: () => 'Your API key may lack permissions for this operation.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.authForbidden'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintAuthForbidden'),
     retryable: false,
   },
 
@@ -226,17 +241,17 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     category: 'BRIDGE_INVALID_REQUEST',
     patterns: ['malformed', 'bad request', '400', 'schema validation', 'invalid request'],
-    userMessage: () => 'Invalid request',
-    actionHint: () => 'The plugin sent a malformed request. Contact the developer.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.invalidRequest'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintInvalidRequest'),
     retryable: false,
   },
 
   // ── Rate limited (429) ──
   {
     category: 'RATE_LIMITED',
-    patterns: ['429', 'rate limit', 'too many requests', 'overloaded'],
-    userMessage: () => 'Rate limit exceeded',
-    actionHint: () => 'Wait a moment before retrying. If this persists, consider upgrading your plan.',
+    patterns: ['429', 'rate limit', 'too many requests', 'overloaded', 'rate limited'],
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.rateLimited'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintRateLimited'),
     retryable: true,
   },
 
@@ -245,8 +260,8 @@ const ERROR_PATTERNS: ErrorPattern[] = [
     category: 'NETWORK_ERROR',
     patterns: ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'fetch failed', 'network error'],
     codes: ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'],
-    userMessage: () => 'Network error',
-    actionHint: () => 'Check your internet connection and try again.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.networkError'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintNetworkError'),
     retryable: true,
   },
 
@@ -254,8 +269,8 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     category: 'IPC_TIMEOUT',
     patterns: [/ipc.*timeout/i, /invoke.*timeout/i, /handler.*timeout/i],
-    userMessage: () => 'Request timed out',
-    actionHint: () => 'The operation took too long. The main process may be busy. Try again.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.requestTimedOut'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintRequestTimedOut'),
     retryable: true,
   },
 
@@ -263,8 +278,8 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     category: 'IPC_HANDLER_MISSING',
     patterns: ['No handler', 'handler not registered', 'unknown channel'],
-    userMessage: () => 'Feature not available',
-    actionHint: () => 'This feature may not be loaded yet. Try restarting the application.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.featureUnavailable'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintFeatureUnavailable'),
     retryable: false,
   },
 
@@ -272,8 +287,8 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     category: 'FILE_WRITE_FAILED',
     patterns: [/EACCES.*write/i, /EPERM.*write/i, 'ENOSPC', /write.*fail/i, /atomic.*fail/i],
-    userMessage: () => 'Failed to save file',
-    actionHint: () => 'Check file permissions and available disk space.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.fileWriteFailed'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintFileWrite'),
     retryable: true,
   },
 
@@ -281,8 +296,8 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     category: 'FILE_READ_FAILED',
     patterns: [/EACCES.*read/i, /EPERM.*read/i, /read.*fail/i, /EISDIR/i],
-    userMessage: () => 'Failed to read file',
-    actionHint: () => 'Check that the file exists and you have read permissions.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.fileReadFailed'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintFileRead'),
     retryable: false,
   },
 
@@ -290,8 +305,8 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     category: 'CONFIG_CORRUPTED',
     patterns: [/config.*corrupt/i, /parse.*error/i, /JSON.*parse/i, /syntax.*error.*JSON/i],
-    userMessage: () => 'Configuration file corrupted',
-    actionHint: () => 'The configuration file could not be read. Default settings will be used.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.configCorrupted'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintConfigCorrupted'),
     retryable: false,
   },
 
@@ -299,8 +314,8 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     category: 'PLUGIN_CRASH',
     patterns: ['crash', 'segfault', 'SIGSEGV', 'core dumped'],
-    userMessage: () => 'A plugin has crashed',
-    actionHint: () => 'Try reloading the plugin. If the problem persists, contact the developer.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.pluginCrash'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintPluginCrash'),
     retryable: true,
   },
 
@@ -308,51 +323,38 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     category: 'PLUGIN_TIMEOUT',
     patterns: ['timeout', 'timed out', 'deadline exceeded'],
-    userMessage: () => 'A plugin is not responding',
-    actionHint: () => 'The plugin took too long to load. Try reloading.',
+    userMessage: (ctx) => t(resolveLocale(ctx), 'errors.pluginTimeout'),
+    actionHint: (ctx) => t(resolveLocale(ctx), 'errors.hintPluginTimeout'),
     retryable: true,
   },
 ];
 
 // ── Recovery action builder ─────────────────────────────────────
 
-function buildRecoveryActions(category: ErrorCategory): RecoveryAction[] {
+function buildRecoveryActions(category: ErrorCategory, locale: string): RecoveryAction[] {
   switch (category) {
     case 'AUTH_REJECTED':
     case 'AUTH_FORBIDDEN':
-      return [
-        { label: 'Open Settings', action: 'open_settings' },
-      ];
+      return [{ label: t(locale, 'errors.openSettings'), action: 'open_settings' }];
     case 'RATE_LIMITED':
-      return [
-        { label: 'Retry', action: 'retry' },
-      ];
     case 'NETWORK_ERROR':
     case 'IPC_TIMEOUT':
-      return [
-        { label: 'Retry', action: 'retry' },
-      ];
+      return [{ label: t(locale, 'errors.retry'), action: 'retry' }];
     case 'TERMINAL_CRASH':
     case 'TERMINAL_SPAWN_FAILED':
-      return [
-        { label: 'New Session', action: 'new_session' },
-      ];
+      return [{ label: t(locale, 'errors.newSession'), action: 'new_session' }];
     case 'DB_ERROR':
     case 'CONFIG_CORRUPTED':
-      return [
-        { label: 'Restart App', action: 'restart' },
-      ];
+      return [{ label: t(locale, 'errors.restartApp'), action: 'restart' }];
     case 'MODULE_INSTALL_FAILED':
     case 'MODULE_NOT_FOUND':
       return [
-        { label: 'Retry', action: 'retry' },
-        { label: 'Open Settings', action: 'open_settings' },
+        { label: t(locale, 'errors.retry'), action: 'retry' },
+        { label: t(locale, 'errors.openSettings'), action: 'open_settings' },
       ];
     case 'PLUGIN_CRASH':
     case 'PLUGIN_TIMEOUT':
-      return [
-        { label: 'Retry', action: 'retry' },
-      ];
+      return [{ label: t(locale, 'errors.retry'), action: 'retry' }];
     default:
       return [];
   }
@@ -363,13 +365,16 @@ function buildRecoveryActions(category: ErrorCategory): RecoveryAction[] {
 /**
  * Classify an error into a structured error with user-facing message,
  * actionable hints, and recovery action buttons.
+ *
+ * Second argument may be a moduleId string (legacy) or full ErrorContext.
+ * Locale defaults to Chinese when omitted.
  */
-
-
 export function classifyError(error: unknown, moduleIdOrCtx?: string | ErrorContext): ClassifiedError {
   const ctx: ErrorContext = typeof moduleIdOrCtx === 'string'
     ? { error, moduleId: moduleIdOrCtx }
-    : moduleIdOrCtx || { error };
+    : { error, ...(moduleIdOrCtx ?? {}) };
+
+  const locale = resolveLocale(ctx);
 
   // Support structured errors: `{ code, message }`, `{ code, technical_message }`
   const errorCode = extractErrorCode(ctx.error);
@@ -383,7 +388,7 @@ export function classifyError(error: unknown, moduleIdOrCtx?: string | ErrorCont
   for (const pattern of ERROR_PATTERNS) {
     // Check error code first (most specific)
     if (pattern.codes && errorCode && pattern.codes.includes(errorCode)) {
-      return buildResult(pattern, ctx, rawMessage);
+      return buildResult(pattern, ctx, rawMessage, locale);
     }
 
     // Check patterns against combined text
@@ -393,7 +398,7 @@ export function classifyError(error: unknown, moduleIdOrCtx?: string | ErrorCont
     });
 
     if (matched) {
-      return buildResult(pattern, ctx, rawMessage);
+      return buildResult(pattern, ctx, rawMessage, locale);
     }
   }
 
@@ -403,8 +408,14 @@ export function classifyError(error: unknown, moduleIdOrCtx?: string | ErrorCont
     : Math.random().toString(36).slice(2, 10);
   return {
     category: 'UNKNOWN',
-    userMessage: `操作未完成：${rawMessage || '未知错误'}。诊断编号：${diagnosticId}。`,
-    actionHint: `Operation failed: ${rawMessage || 'Unknown error'}. Diagnostic ID: ${diagnosticId}.`,
+    userMessage: t(locale, 'errors.unknownWithDetail', {
+      detail: rawMessage || t(locale, 'errors.unknown'),
+      id: diagnosticId,
+    }),
+    actionHint: t(locale, 'errors.unknownWithDetail', {
+      detail: rawMessage || t(locale, 'errors.unknown'),
+      id: diagnosticId,
+    }),
     retryable: false,
     rawMessage,
     moduleId: ctx.moduleId,
@@ -412,7 +423,12 @@ export function classifyError(error: unknown, moduleIdOrCtx?: string | ErrorCont
   };
 }
 
-function buildResult(pattern: ErrorPattern, ctx: ErrorContext, rawMessage: string): ClassifiedError {
+function buildResult(
+  pattern: ErrorPattern,
+  ctx: ErrorContext,
+  rawMessage: string,
+  locale: string,
+): ClassifiedError {
   return {
     category: pattern.category,
     userMessage: pattern.userMessage(ctx),
@@ -421,7 +437,7 @@ function buildResult(pattern: ErrorPattern, ctx: ErrorContext, rawMessage: strin
     rawMessage,
     moduleId: ctx.moduleId,
     details: ctx.stderr || undefined,
-    recoveryActions: buildRecoveryActions(pattern.category),
+    recoveryActions: buildRecoveryActions(pattern.category, locale),
   };
 }
 
@@ -430,10 +446,16 @@ function buildResult(pattern: ErrorPattern, ctx: ErrorContext, rawMessage: strin
 /**
  * Format a ClassifiedError into a user-friendly string.
  */
-export function formatClassifiedError(err: ClassifiedError): string {
+export function formatClassifiedError(err: ClassifiedError, locale = 'zh'): string {
   let msg = err.userMessage;
-  if (err.actionHint) msg += `\n\nWhat to do: ${err.actionHint}`;
-  if (err.details) msg += `\n\nDetails: ${err.details}`;
+  if (err.actionHint) {
+    const what = locale.startsWith('zh') ? '建议' : 'What to do';
+    msg += `\n\n${what}: ${err.actionHint}`;
+  }
+  if (err.details) {
+    const details = locale.startsWith('zh') ? '详情' : 'Details';
+    msg += `\n\n${details}: ${err.details}`;
+  }
   return msg;
 }
 

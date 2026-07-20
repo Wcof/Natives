@@ -7,7 +7,7 @@ import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-toke
 import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { EmptyState, LoadingState } from '@/components/ui/EmptyState';
-import { useAsyncData } from '@/hooks/useAsyncData';
+import { useModuleCatalog } from '@/hooks/useModuleCatalog';
 import Modal from '@/components/ui/Modal';
 import { classifyError } from '@/lib/error-classifier'; // classifyError for errors
 
@@ -35,12 +35,10 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
   const [activeTab, setActiveTab] = useState<'installed' | 'browse'>('installed');
   const [searchQuery, setSearchQuery] = useState('');
 
-  const { data: modules, loading, error, reload: loadModules } = useAsyncData(async () => {
-    const api = window.nativesAPI;
-    const result = await api?.module?.list?.();
-    if (Array.isArray(result)) return result as ModuleInfo[];
-    return [];
-  }, []);
+  const { modules: catalogModules, loading, error, reload: loadModules } = useModuleCatalog<ModuleInfo>({
+    source: 'list',
+  });
+  const modules = catalogModules;
 
   const filteredModules = (modules ?? []).filter((m) => {
     if (!searchQuery) return true;

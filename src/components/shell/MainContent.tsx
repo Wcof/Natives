@@ -15,7 +15,6 @@ const LazyFileBrowser = lazy(() => import('@/components/files/FileBrowser'));
 const LazyFilePreview = lazy(() => import('@/components/files/FilePreview'));
 const LazyAiWorkbench = lazy(() => import('@/components/ai/AiWorkbench'));
 const LazyToolsPage = lazy(() => import('@/components/tools/ToolsPage'));
-const LazyModulesPage = lazy(() => import('@/app/modules/page'));
 const LazyAssistantWorkbench = lazy(() => import('@/components/assistant/AssistantWorkbench'));
 
 const BUILTIN_LAZY_MAP: Record<string, React.LazyExoticComponent<any>> = {};
@@ -99,6 +98,9 @@ export default function MainContent({
 
   switch (activeView) {
     case 'workshop':
+    case 'modules':
+    case 'store':
+      // Single surface: Personal Creations (install + create + manage)
       return <Suspense fallback={<LazyFallback />}><LazyWorkshopPage onInstall={() => {}} /></Suspense>;
     case 'files':
       return (
@@ -112,8 +114,6 @@ export default function MainContent({
       return <Suspense fallback={<LazyFallback />}><LazyAssistantWorkbench locale={locale} /></Suspense>;
     case 'tools':
       return <Suspense fallback={<LazyFallback />}><LazyToolsPage /></Suspense>;
-    case 'modules':
-      return <Suspense fallback={<LazyFallback />}><LazyModulesPage /></Suspense>;
     case 'dashboard':
       return children;
     default:

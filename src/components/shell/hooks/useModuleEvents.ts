@@ -101,10 +101,11 @@ export function useModuleEvents({
     const handleNavigate = (e: Event) => {
       const view = (e as CustomEvent).detail;
       if (view === '__settings__') setActiveView(DEFAULT_SETTINGS_VIEW);
-      else if (view === '__workshop__') setActiveView('workshop');
+      else if (view === '__workshop__' || view === 'workshop' || view === 'modules' || view === 'store') {
+        setActiveView('modules');
+      }
       else if (view === 'ai') setActiveView('ai');
       else if (view === 'tools') setActiveView('tools');
-      else if (view === 'modules') setActiveView('modules');
       else if (typeof view === 'string' && view.startsWith('files')) {
         setActiveView('files');
         const qIndex = view.indexOf('?');

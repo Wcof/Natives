@@ -128,9 +128,14 @@ pub fn scan_gemini_root(
             if timestamp_ms < start_ms || timestamp_ms >= end_ms {
                 continue;
             }
-            let input = tokens.input.max(0);
+            // Gemini promptTokenCount / tokens.input is cache-inclusive
+            // (same as OpenAI/Codex). Convert to fresh input so
+            // token_total does not double-count cache reads.
+            // Matches cc-switch fresh_input_sql for app_type = "gemini".
+            let raw_input = tokens.input.max(0);
             let output = tokens.output.max(0) + tokens.thoughts.max(0);
-            let cached = tokens.cached.max(0);
+            let cached = tokens.cached.max(0).min(raw_input);
+            let input = raw_input - cached;
             if input + output + cached > 0 {
                 events.push(Event {
                     session_id: session.session_id.clone(),
@@ -269,9 +274,12 @@ mod tests {
         let result = scan_gemini_root(&root, 1_784_080_000_000, 1_784_100_000_000, &chrono_tz::UTC);
         std::fs::remove_dir_all(root).unwrap();
 
-        assert_eq!(result.daily[0].input_tokens, Some(10));
+        // raw input=10 already includes cached=8 → fresh input=2
+        assert_eq!(result.daily[0].input_tokens, Some(2));
         assert_eq!(result.daily[0].output_tokens, Some(6));
         assert_eq!(result.daily[0].cache_read_tokens, Some(8));
-        assert_eq!(result.daily[0].total_tokens, Some(24));
+        // real total = fresh + output + cache = 2 + 6 + 8 = 16
+        // (equals raw_input + output, not raw_input + output + cache)
+        assert_eq!(result.daily[0].total_tokens, Some(16));
     }
 }

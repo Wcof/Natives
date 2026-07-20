@@ -363,8 +363,15 @@ fn compute_codex_delta(
     (0, 0, 0)
 }
 
+/// Codex / OpenAI Responses semantics: `input_tokens` already includes
+/// `cached_input_tokens`. Convert to Claude-style fresh input so
+/// `token_total(input, output, 0, cache_read)` does not double-count cache.
+///
+/// Matches cc-switch `fresh_input_sql` for `app_type = "codex"`.
 fn normalize_codex_input(input: i64, cache_read: i64) -> (i64, i64) {
-    (input.max(0), cache_read.max(0))
+    let input = input.max(0);
+    let cache_read = cache_read.max(0).min(input);
+    (input - cache_read, cache_read)
 }
 
 fn build_codex_daily(events: &[ParsedCodexEvent]) -> Vec<UsageDailyRecord> {
@@ -421,8 +428,11 @@ fn build_codex_daily(events: &[ParsedCodexEvent]) -> Vec<UsageDailyRecord> {
 }
 
 fn build_codex_activity(events: &[ParsedCodexEvent]) -> Vec<UsageActivityBucket> {
-    let mut groups: HashMap<(i64, String, Option<String>, Option<String>), Vec<i64>> =
-        HashMap::new();
+    // (hour, source, model, project) -> (token sum, timestamps for gap duration)
+    let mut groups: HashMap<
+        (i64, String, Option<String>, Option<String>),
+        (i64, Vec<i64>),
+    > = HashMap::new();
 
     for event in events {
         if event.is_replay_or_fork {
@@ -440,22 +450,40 @@ fn build_codex_activity(events: &[ParsedCodexEvent]) -> Vec<UsageActivityBucket>
             0,
             event.cache_read_tokens,
         );
-        groups.entry(key).or_default().push(total);
+        let entry = groups.entry(key).or_default();
+        entry.0 += total;
+        entry.1.push(event.timestamp_ms);
     }
 
     let mut buckets = Vec::new();
-    for (key, tokens) in groups {
-        let total: i64 = tokens.iter().sum();
+    for (key, (total, mut timestamps)) in groups {
+        timestamps.sort_unstable();
+        let active_seconds: i64 = timestamps
+            .windows(2)
+            .map(|w| {
+                let gap = (w[1] - w[0]) as f64 / 1000.0;
+                gap.min(EVENT_GAP_MAX_SECS) as i64
+            })
+            .sum();
+        let active_seconds = if timestamps.len() == 1 {
+            active_seconds.max(1)
+        } else {
+            active_seconds
+        };
         buckets.push(UsageActivityBucket {
             hour_start_ms: key.0,
             source_id: key.1,
             model_id: key.2,
             project_id: key.3,
-                terminal_id: None,
+            terminal_id: None,
             total_tokens: Some(total),
             user_messages: 0,
-            assistant_messages: tokens.len() as i64,
-            active_seconds: None,
+            assistant_messages: timestamps.len() as i64,
+            active_seconds: if active_seconds > 0 {
+                Some(active_seconds)
+            } else {
+                None
+            },
         });
     }
 
@@ -620,13 +648,19 @@ mod tests {
     }
 
     #[test]
-    fn codex_preserves_raw_input_and_cache_for_total() {
-        assert_eq!(normalize_codex_input(100, 40), (100, 40));
-        assert_eq!(normalize_codex_input(20, 40), (20, 40));
+    fn codex_normalizes_cache_inclusive_input_to_fresh() {
+        // Official total_tokens = input + output = 120 when input already includes cache.
+        assert_eq!(normalize_codex_input(100, 40), (60, 40));
+        // Cache cannot exceed input.
+        assert_eq!(normalize_codex_input(20, 40), (0, 20));
+        // No cache stays unchanged.
+        assert_eq!(normalize_codex_input(100, 0), (100, 0));
     }
 
     #[test]
-    fn codex_daily_total_includes_cached_input() {
+    fn codex_daily_total_matches_official_total_tokens() {
+        // After normalize: fresh=60, output=20, cache=40 → real total 120
+        // (same as Codex last_token_usage.total_tokens).
         let daily = build_codex_daily(&[ParsedCodexEvent {
             event_id: "event-1".into(),
             timestamp_ms: 1,
@@ -636,14 +670,36 @@ mod tests {
             model: Some("gpt-5".into()),
             project: None,
             project_label: None,
-            input_tokens: 100,
+            input_tokens: 60,
             output_tokens: 20,
             cache_read_tokens: 40,
             reasoning_tokens: 0,
             input_cache_hit: 40,
             is_replay_or_fork: false,
         }]);
-        assert_eq!(daily[0].total_tokens, Some(160));
+        assert_eq!(daily[0].input_tokens, Some(60));
+        assert_eq!(daily[0].cache_read_tokens, Some(40));
+        assert_eq!(daily[0].total_tokens, Some(120));
+    }
+
+    #[test]
+    fn codex_end_to_end_total_matches_rollout_total_field() {
+        let mut context = CodexFileContext::default();
+        let meta = r#"{"timestamp":"2026-07-15T10:00:00Z","type":"session_meta","payload":{"id":"session-1","cwd":"/work/natives"}}"#;
+        let turn = r#"{"timestamp":"2026-07-15T10:00:01Z","type":"turn_context","payload":{"model":"gpt-5.6","cwd":"/work/natives"}}"#;
+        // Real Codex shape: total_tokens == input_tokens + output_tokens (cache already inside input).
+        let tokens = r#"{"timestamp":"2026-07-15T10:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20,"reasoning_output_tokens":5,"total_tokens":120},"total_token_usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20,"reasoning_output_tokens":5,"total_tokens":120}}}}"#;
+        assert!(normalize_codex_line(meta, &mut context).is_none());
+        assert!(normalize_codex_line(turn, &mut context).is_none());
+        let event = normalize_codex_line(tokens, &mut context).expect("token event");
+        let (input, output, cache_read) = compute_codex_delta(&event, None);
+        let (fresh, cache) = normalize_codex_input(input, cache_read);
+        assert_eq!((fresh, output, cache), (60, 20, 40));
+        assert_eq!(
+            crate::usage::token_total(fresh, output, 0, cache),
+            120,
+            "must match Codex total_tokens field"
+        );
     }
 
     #[test]

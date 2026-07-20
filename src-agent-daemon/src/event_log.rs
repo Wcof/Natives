@@ -81,6 +81,75 @@ impl EventLog {
             ],
         )
         .map_err(|e| format!("PERSISTENCE_FAILED insert run_event: {e}"))?;
+
+        // Project usage totals so the dashboard can read Natives usage without
+        // an external CLI (native-first design).
+        if let RunEventKind::UsageUpdated {
+            input_tokens,
+            output_tokens,
+            ..
+        } = &event.payload
+        {
+            let input = *input_tokens as i64;
+            let output = *output_tokens as i64;
+            let _ = conn.execute(
+                "UPDATE run
+                 SET total_input_tokens = COALESCE(total_input_tokens, 0) + ?1,
+                     total_output_tokens = COALESCE(total_output_tokens, 0) + ?2
+                 WHERE id = ?3",
+                params![input, output, event.run_id],
+            );
+            // Best-effort dual-write to message token columns when a trigger
+            // message exists (keeps conversation-level history useful).
+            let _ = conn.execute(
+                "UPDATE message
+                 SET input_tokens = COALESCE(input_tokens, 0) + ?1,
+                     output_tokens = COALESCE(output_tokens, 0) + ?2
+                 WHERE id = (
+                    SELECT trigger_message_id FROM run WHERE id = ?3 AND trigger_message_id IS NOT NULL
+                 )",
+                params![input, output, event.run_id],
+            );
+
+            // Aggregate into usage_stats when the table exists (same natives.db).
+            // date uses UTC YYYY-MM-DD; dashboard localizes via range filters.
+            let model = conn
+                .query_row(
+                    "SELECT model_id FROM run WHERE id = ?1",
+                    params![event.run_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap_or_else(|_| "unknown".into());
+            let date = event.timestamp.format("%Y-%m-%d").to_string();
+            // Ensure table exists (older DBs may not have been migrated by Host).
+            let _ = conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS usage_stats (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    source_path TEXT,
+                    model TEXT NOT NULL,
+                    input_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                    request_count INTEGER NOT NULL DEFAULT 0,
+                    cost_usd REAL NOT NULL DEFAULT 0.0,
+                    UNIQUE(date, source, model)
+                );",
+            );
+            let _ = conn.execute(
+                "INSERT INTO usage_stats
+                    (date, source, source_path, model, input_tokens, output_tokens,
+                     cache_creation_tokens, cache_read_tokens, request_count, cost_usd)
+                 VALUES (?1, 'natives', 'daemon:run_event', ?2, ?3, ?4, 0, 0, 1, 0.0)
+                 ON CONFLICT(date, source, model) DO UPDATE SET
+                    input_tokens = input_tokens + excluded.input_tokens,
+                    output_tokens = output_tokens + excluded.output_tokens,
+                    request_count = request_count + 1",
+                params![date, model, input, output],
+            );
+        }
         Ok(())
     }
 
@@ -523,4 +592,39 @@ mod tests {
             _ => panic!("Expected TextDelta"),
         }
     }
+
+    #[test]
+    fn usage_updated_increments_run_totals_and_usage_stats() {
+        use assistant_protocol::v2::{RunEventKind, RunEventV2};
+        let (log, run_id) = setup_event_log();
+        let event = RunEventV2 {
+            run_id: run_id.clone(),
+            sequence: 1,
+            timestamp: chrono::Utc::now(),
+            payload: RunEventKind::UsageUpdated {
+                input_tokens: 10,
+                output_tokens: 5,
+                reasoning_tokens: None,
+            },
+        };
+        log.append_event_v2(&event).unwrap();
+        let conn = log.data_store.conn().unwrap();
+        let (inp, out): (i64, i64) = conn
+            .query_row(
+                "SELECT total_input_tokens, total_output_tokens FROM run WHERE id=?1",
+                params![run_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((inp, out), (10, 5));
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM usage_stats WHERE source='natives' AND input_tokens=10",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        assert!(count >= 1, "usage_stats row should exist");
+    }
+
 }

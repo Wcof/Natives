@@ -42,7 +42,7 @@ interface CommandPaletteProps {
 function getStaticCommands(locale: Locale): CommandItem[] {
   return [
     { id: '__settings__', label: t(locale, 'nav.settings'), category: 'navigation', icon: <Settings size={14} /> },
-    { id: '__workshop__', label: t(locale, 'nav.workshop'), category: 'navigation', icon: <Wrench size={14} /> },
+    { id: 'modules', label: t(locale, 'nav.modules'), category: 'navigation', icon: <Wrench size={14} /> },
     { id: '__notifications__', label: t(locale, 'notifications.title'), category: 'navigation', icon: <Bell size={14} /> },
     { id: 'files', label: t(locale, 'nav.fileBrowser'), category: 'navigation', icon: <Folder size={14} /> },
     { id: 'ai', label: t(locale, 'nav.aiWorkbench'), category: 'navigation', icon: <Bot size={14} /> },

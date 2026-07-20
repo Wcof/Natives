@@ -146,14 +146,35 @@ export default function MessageInput(props: MessageInputProps) {
   };
 
   const handleAddFiles = async () => {
-    const paths = await window.nativesAPI?.dialog.pickFiles();
-    if (!paths?.length) return;
+    const dialog = window.nativesAPI?.dialog;
+    if (!dialog?.pickFiles) {
+      // Browser / fixture shell has no native dialog — surface instead of silent no-op.
+      return;
+    }
+    let paths: string[] = [];
+    try {
+      paths = (await dialog.pickFiles()) ?? [];
+    } catch {
+      return;
+    }
+    if (!paths.length) return;
     const selected = (await Promise.all(paths.map(async path => {
       try {
         const metadata = await window.nativesAPI?.fs?.readFile(path) as unknown as { size?: number } | undefined;
-        return { path, name: fileNameFromPath(path), mimeType: mimeTypeFromPath(path), size: Number(metadata?.size ?? 0) };
+        return {
+          path,
+          name: fileNameFromPath(path),
+          mimeType: mimeTypeFromPath(path),
+          size: Number(metadata?.size ?? 0),
+        };
       } catch {
-        return null;
+        // Still attach with size 0 if metadata read fails — host will re-validate.
+        return {
+          path,
+          name: fileNameFromPath(path),
+          mimeType: mimeTypeFromPath(path),
+          size: 0,
+        };
       }
     }))).filter((file): file is AssistantAttachment => file !== null);
     setAttachments(current => {
@@ -222,14 +243,41 @@ export default function MessageInput(props: MessageInputProps) {
           style={{ outline: 'none', boxShadow: 'none', overflowY: 'auto' }} />
         <div className="flex items-center justify-between gap-3 px-3 pb-3">
           <div className="flex min-w-0 items-center gap-1">
-            <button type="button" onClick={() => void handleAddFiles()} disabled={effectiveDisabled || isStreaming} title={zh ? '添加附件' : 'Add attachment'} className="grid h-8 w-8 place-items-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-40"><Plus size={18} /></button>
+            <button
+              type="button"
+              onClick={() => void handleAddFiles()}
+              disabled={effectiveDisabled}
+              title={zh ? '添加附件' : 'Add attachment'}
+              className="grid h-8 w-8 place-items-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-40"
+            >
+              <Plus size={18} />
+            </button>
             <div className="relative">
-              <button type="button" onClick={() => setPermissionOpen(open => !open)} className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"><ShieldCheck size={15} /><span>{permissionLabels[permissionProfile][zh ? 'zh' : 'en']}</span><ChevronDown size={12} /></button>
-              {permissionOpen && (
+              <button
+                type="button"
+                onClick={() => setPermissionOpen(open => !open)}
+                disabled={effectiveDisabled}
+                title={zh ? '权限配置' : 'Permission profile'}
+                className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-40"
+              >
+                <ShieldCheck size={15} />
+                <span>{permissionLabels[permissionProfile][zh ? 'zh' : 'en']}</span>
+                <ChevronDown size={12} />
+              </button>
+              {permissionOpen && !effectiveDisabled && (
                 <div className="absolute bottom-full left-0 z-50 mb-2 w-48 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5 shadow-popup">
                   {(Object.keys(permissionLabels) as AssistantPermissionProfile[]).map(profile => (
-                    <button key={profile} type="button" onClick={() => { setPermissionOpen(false); void onPermissionChange(profile); }} className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
-                      {permissionLabels[profile][zh ? 'zh' : 'en']}{permissionProfile === profile && <Check size={14} />}
+                    <button
+                      key={profile}
+                      type="button"
+                      onClick={() => {
+                        setPermissionOpen(false);
+                        void onPermissionChange(profile);
+                      }}
+                      className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                    >
+                      {permissionLabels[profile][zh ? 'zh' : 'en']}
+                      {permissionProfile === profile && <Check size={14} />}
                     </button>
                   ))}
                 </div>

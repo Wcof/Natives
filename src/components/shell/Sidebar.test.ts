@@ -48,6 +48,24 @@ test('expanded sidebar owns collapse and header only restores it', () => {
   assert.match(header, /sidebarCollapsed && onToggleSidebar/);
 });
 
+test('collapsed sidebar renders an icon rail with expand control', () => {
+  assert.match(sidebar, /SIDEBAR_COLLAPSED_WIDTH\s*=\s*64/);
+  assert.match(sidebar, /Collapsed icon rail/);
+  assert.match(sidebar, /sidebar\.expand/);
+  assert.match(sidebar, /PanelLeft size=\{15\}/);
+  assert.equal(sidebar.includes("style={{ width: 0, overflow: 'hidden' }}"), false);
+});
+
+test('sidebar exposes macOS traffic lights for window controls', () => {
+  assert.match(sidebar, /mac-traffic-lights/);
+  assert.match(sidebar, /mac-traffic-btn close/);
+  assert.match(sidebar, /mac-traffic-btn minimize/);
+  assert.match(sidebar, /mac-traffic-btn zoom/);
+  assert.match(sidebar, /handleWindowAction\('close'\)/);
+  assert.match(sidebar, /handleWindowAction\('minimize'\)/);
+  assert.match(sidebar, /handleWindowAction\('maximize'\)/);
+});
+
 test('assistant heading exposes only tree toggle and add project actions', () => {
   const section = sidebar.slice(sidebar.indexOf('Assistant is a first-level'), sidebar.indexOf('Modules section'));
   assert.equal(section.includes('<Bot'), false);

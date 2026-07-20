@@ -152,6 +152,21 @@ describe('ErrorClassifier', () => {
     assert.ok(err.recoveryActions!.some(a => a.action === 'new_session'));
   });
 
+
+  it('defaults user-facing copy to Chinese and supports English locale override', () => {
+    const zh = classifyError('429 Too Many Requests');
+    assert.equal(zh.userMessage, '请求过于频繁，已被限流');
+    assert.equal(zh.actionHint, '请稍候再试。若持续出现，可能是套餐额度不足。');
+    assert.ok(zh.recoveryActions?.some((a) => a.label === '重试'));
+
+    const en = classifyError('429 Too Many Requests', { locale: 'en' });
+    assert.equal(en.userMessage, 'Rate limited — too many requests');
+    assert.ok(en.recoveryActions?.some((a) => a.label === 'Retry'));
+
+    const authZh = classifyError('401 Unauthorized: invalid_api_key');
+    assert.equal(authZh.userMessage, '身份验证失败');
+  });
+
   it('should include diagnostic ID in unknown error fallback', () => {
     const err = classifyError('Some truly random error message');
     assert.equal(err.category, 'UNKNOWN');

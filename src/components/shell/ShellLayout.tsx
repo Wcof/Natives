@@ -3,7 +3,7 @@
 import { startTransition, useState, useEffect, useCallback, memo, lazy, Suspense } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { type Locale } from '@/i18n';
-import Sidebar from './Sidebar';
+import Sidebar, { SIDEBAR_COLLAPSED_WIDTH } from './Sidebar';
 import RightPanel from './RightPanel';
 import type { RightPanelMode } from './RightPanel';
 import NotificationPanel from './NotificationPanel';
@@ -229,8 +229,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
     if (moduleId === '__dashboard__') {
       setActiveView('dashboard');
-    } else if (moduleId === '__workshop__') {
-      setActiveView('workshop');
+    } else if (moduleId === '__workshop__' || moduleId === 'modules' || moduleId === 'store') {
+      // Personal Creations — canonical view key remains `modules` for main menu / deep links
+      setActiveView('modules');
     } else if (moduleId === '__assistant__') {
       setActiveView('assistant');
     } else if (moduleId === '__notifications__') {
@@ -308,18 +309,21 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
       <div className="w-full h-full" style={{ opacity: themeReady ? 1 : 0 }}>
       <div className="w-full h-full bg-[var(--background)] p-3 flex gap-3 overflow-visible box-border relative isolate">
-      {/* ── 全宽透明拖拽条 ── */}
+      {/* ── 全宽透明拖拽条（避开左上角 traffic lights 点击区） ── */}
       <div
         data-tauri-drag-region
-        className="absolute top-0 z-50"
-        style={{ left: '-12px', right: '-12px', height: '28px' }}
+        className="absolute top-0 z-40"
+        style={{ left: '88px', right: '-12px', height: '28px' }}
       />
       {/* ── V1.0 已移除：wallpaper / liquid-blob / WebGL LiquidGlass 全局背景层 ── */}
 
-      {/* Left: Sidebar */}
+      {/* Left: Sidebar — collapsed keeps an icon rail, not width 0 */}
       <div
         className="h-full shrink-0 transition-[width] duration-200 relative z-10"
-        style={{ width: effectiveSidebarCollapsed ? 0 : state.sidebarWidth, overflow: effectiveSidebarCollapsed ? 'hidden' : undefined }}
+        style={{
+          width: effectiveSidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : state.sidebarWidth,
+          overflow: 'hidden',
+        }}
       >
         <MemoizedSidebar
           isCollapsed={effectiveSidebarCollapsed}

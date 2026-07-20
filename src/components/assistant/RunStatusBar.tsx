@@ -58,11 +58,14 @@ export default function RunStatusBar({
   onBackground,
 }: RunStatusBarProps) {
   const zh = locale.startsWith('zh');
-  if (!run && !connectionHint) return null;
+  // Only show for live runs or connection recovery — not for idle/terminal leftovers.
+  // Goal-style long-running chrome should be a separate surface when goal mode lands.
+  const active = run ? isActiveRunStatus(run.status) : false;
+  if (!connectionHint && !active) return null;
 
   const status = run?.status ?? 'connecting';
-  const active = run ? isActiveRunStatus(run.status) : Boolean(connectionHint);
   const terminal = run ? isTerminalRunStatus(run.status) : false;
+  const showSpinner = (active && !terminal) || Boolean(connectionHint);
 
   return (
     <div
@@ -71,7 +74,7 @@ export default function RunStatusBar({
       aria-live="polite"
       aria-atomic="true"
     >
-      {active && !terminal && (
+      {showSpinner && (
         <Loader2 size={14} className="animate-spin text-[var(--primary)] shrink-0" aria-hidden />
       )}
       <span className="font-medium text-[var(--text)]">

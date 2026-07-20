@@ -270,6 +270,26 @@ pub async fn usage_sync(
     Ok(UsageSyncResult { metadata, response })
 }
 
+/// Whether optional ccusage enrichment is enabled (default false).
+#[tauri::command]
+pub fn usage_get_ccusage_enabled() -> Result<bool> {
+    Ok(crate::usage::ccusage_enabled())
+}
+
+/// Enable/disable optional ccusage enrichment. Does not install the binary.
+#[tauri::command]
+pub fn usage_set_ccusage_enabled(enabled: bool) -> Result<bool> {
+    crate::usage::set_ccusage_enabled(enabled).map_err(Error::from)?;
+    Ok(crate::usage::ccusage_enabled())
+}
+
+/// Detect whether the ccusage binary is available (independent of enable flag).
+#[tauri::command]
+pub fn usage_detect_ccusage() -> Result<Option<String>> {
+    // Reuse plugin detect path semantics without requiring plugin UI wiring.
+    crate::commands::plugins::plugin_detect("ccusage".into())
+}
+
 /// Convert a UsageRangePreset to its string representation.
 fn preset_to_str(preset: &UsageRangePreset) -> &'static str {
     match preset {

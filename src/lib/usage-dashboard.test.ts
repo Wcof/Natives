@@ -130,17 +130,18 @@ describe('buildDailyTrend', () => {
 });
 
 describe('buildHourlyHeatmap', () => {
-  it('uses UTC hour fields matching backend local-as-UTC encoding', () => {
-    // Backend localized_time_metrics stores local wall-clock hour as a UTC
-    // timestamp. e.g. local 22:00 becomes a Date whose getUTCHours() === 22.
+  it('uses local hour fields from real-epoch hour starts', () => {
+    // Real epoch for a local wall hour: construct via Date so the machine
+    // timezone matches what getHours()/getDay() will read back.
+    const local = new Date(2026, 6, 1, 22, 0, 0, 0); // 2026-07-01 22:00 local
     const activity: UsageActivityBucket[] = [
-      { hourStartMs: new Date('2026-07-01T22:00:00Z').getTime(), sourceId: 'a', modelId: null, projectId: null, terminalId: null, totalTokens: 100, userMessages: 1, assistantMessages: 1, activeSeconds: null },
+      { hourStartMs: local.getTime(), sourceId: 'a', modelId: null, projectId: null, terminalId: null, totalTokens: 100, userMessages: 1, assistantMessages: 1, activeSeconds: null },
     ];
     const heatmap = buildHourlyHeatmap(activity);
     assert.equal(heatmap.length, 1);
     assert.ok(heatmap[0] !== undefined);
     assert.equal(heatmap[0]!.hour, 22);
-    assert.equal(heatmap[0]!.dayOfWeek, 3); // 2026-07-01 is Wednesday
+    assert.equal(heatmap[0]!.dayOfWeek, local.getDay());
   });
 
   it('zero hourStartMs is excluded', () => {

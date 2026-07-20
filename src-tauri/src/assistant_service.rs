@@ -93,6 +93,7 @@ async fn dispatch_rpc(data_store: &Arc<DataStore>, method: &str, params: &Value)
     }
 
     match method {
+        "provider.list" => handle_provider_list(data_store, params).await,
         "conversation.list" => handle_conversation_list(data_store, params).await,
         "conversation.create" => handle_conversation_create(data_store, params).await,
         "conversation.get" => handle_conversation_get(data_store, params).await,
@@ -142,6 +143,12 @@ async fn dispatch_rpc(data_store: &Arc<DataStore>, method: &str, params: &Value)
 }
 
 fn daemon_owned_method(method: &str) -> bool {
+    // provider.list is host-owned: it must read user-configured providers from
+    // assistant.db (mirrored from Settings). Agent Daemon's provider.list only
+    // returns built-in adapter types, which is useless for the model picker.
+    if method == "provider.list" {
+        return false;
+    }
     (method.starts_with("conversation.") && daemon_authority::authority_mode_label() == "uds")
         || (method.starts_with("run.")
             && (method != "run.start" || daemon_authority::authority_mode_label() == "uds"))
@@ -175,6 +182,107 @@ fn success_response(data: Value) -> RpcResponse {
 }
 
 // ─── Conversation handlers ───
+
+async fn handle_provider_list(data_store: &Arc<DataStore>, _params: &Value) -> RpcResponse {
+    // Always re-run the idempotent natives.db → assistant.db migration so
+    // providers added via Settings become visible without restarting the app.
+    let _ = data_store.migrate_legacy_provider_keys();
+
+    let conn = data_store.conn();
+    let mut stmt = match conn.prepare(
+        "SELECT id, provider_type, display_name, api_base_url, health_status, default_model, created_at, updated_at
+         FROM assistant_provider_configs ORDER BY display_name ASC",
+    ) {
+        Ok(s) => s,
+        Err(e) => return error_response("DB_ERROR", &e.to_string()),
+    };
+
+    let provider_rows: Vec<(
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        String,
+        String,
+    )> = match stmt.query_map([], |row| {
+        Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+            row.get(6)?,
+            row.get(7)?,
+        ))
+    }) {
+        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+        Err(e) => return error_response("DB_QUERY_ERROR", &e.to_string()),
+    };
+
+    let mut providers = Vec::with_capacity(provider_rows.len());
+    for (
+        id,
+        provider_type,
+        display_name,
+        api_base_url,
+        health_status,
+        default_model,
+        created_at,
+        updated_at,
+    ) in provider_rows
+    {
+        let mut model_stmt = match conn.prepare(
+            "SELECT model_id, display_name, capabilities, context_window, max_output, source, discovered_at
+             FROM assistant_model_cache
+             WHERE provider_id = ?1 ORDER BY model_id ASC",
+        ) {
+            Ok(stmt) => stmt,
+            Err(e) => return error_response("DB_ERROR", &e.to_string()),
+        };
+        let models: Vec<Value> = match model_stmt.query_map(rusqlite::params![id], |row| {
+            let capabilities = row.get::<_, String>(2)?;
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "display_name": row.get::<_, Option<String>>(1)?,
+                "capabilities": serde_json::from_str::<Value>(&capabilities)
+                    .unwrap_or_else(|_| serde_json::json!({})),
+                "context_window": row.get::<_, i64>(3)?,
+                "max_output": row.get::<_, i64>(4)?,
+                "source": row.get::<_, String>(5)?,
+                "discovered_at": row.get::<_, String>(6)?,
+            }))
+        }) {
+            Ok(rows) => rows.filter_map(|row| row.ok()).collect(),
+            Err(e) => return error_response("DB_QUERY_ERROR", &e.to_string()),
+        };
+
+        let has_active_key = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM assistant_provider_keys WHERE provider_id = ?1 AND is_active = 1)",
+                rusqlite::params![id],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap_or(false);
+
+        providers.push(serde_json::json!({
+            "id": id,
+            "provider_type": provider_type,
+            "display_name": display_name,
+            "api_base_url": api_base_url,
+            "health_status": health_status,
+            "default_model": default_model,
+            "has_active_key": has_active_key,
+            "models": models,
+            "created_at": created_at,
+            "updated_at": updated_at,
+        }));
+    }
+
+    success_response(serde_json::json!({ "providers": providers }))
+}
 
 async fn handle_conversation_list(data_store: &Arc<DataStore>, _params: &Value) -> RpcResponse {
     let conn = data_store.conn();
@@ -681,15 +789,34 @@ async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcRes
                 )
             }
         };
-        let name = std::path::Path::new(path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(path);
+        let name = attachment
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                std::path::Path::new(path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(path)
+                    .to_string()
+            });
+        // Frontend historically sent camelCase `mimeType`; accept both wire shapes.
+        let mime_type = attachment
+            .get("mime_type")
+            .or_else(|| attachment.get("mimeType"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("text/plain");
+        let size = attachment
+            .get("size")
+            .and_then(Value::as_u64)
+            .unwrap_or(metadata.size);
         normalized_attachments.push(serde_json::json!({
             "path": path,
             "name": name,
-            "mime_type": attachment.get("mime_type").and_then(Value::as_str).unwrap_or("text/plain"),
-            "size": metadata.size,
+            "mime_type": mime_type,
+            "size": size,
         }));
     }
     // Validate the execution boundary before reserving a local run row. A
@@ -831,6 +958,29 @@ async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcRes
 
     // Protocol v2: Run Authority via embedded RunManager or UDS sidecar (G4).
     let user_content = content.unwrap_or("").to_string();
+    let daemon_attachments: Vec<assistant_protocol::v2::AttachmentRef> = normalized_attachments
+        .iter()
+        .filter_map(|attachment| {
+            let path = attachment.get("path")?.as_str()?.to_string();
+            Some(assistant_protocol::v2::AttachmentRef {
+                path,
+                name: attachment
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                mime_type: attachment
+                    .get("mime_type")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                size: attachment.get("size").and_then(Value::as_u64),
+            })
+        })
+        .collect();
+    let daemon_attachments_opt = if daemon_attachments.is_empty() {
+        None
+    } else {
+        Some(daemon_attachments)
+    };
     let daemon_run = match daemon_authority::create_run(assistant_protocol::v2::CreateRunRequest {
         conversation_id: conversation_id.to_string(),
         provider_id: provider_id.to_string(),
@@ -839,7 +989,7 @@ async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcRes
         agent_profile_id: None,
         permission_profile: Some(permission_profile.clone()),
         content: Some(user_content.clone()),
-        attachments: None,
+        attachments: daemon_attachments_opt.clone(),
         max_steps: Some(50),
         parent_run_id: None,
         project_path: project_path.clone(),
@@ -857,7 +1007,7 @@ async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcRes
         model_id: Some(model_id.to_string()),
         key_id: None,
         content: Some(user_content),
-        attachments: None,
+        attachments: daemon_attachments_opt,
         trigger_message_id: trigger_message_id.clone(),
         permission_profile: Some(permission_profile.clone()),
         max_steps: Some(50),
@@ -1688,6 +1838,70 @@ async fn handle_artifact_open(_data_store: &Arc<DataStore>, params: &Value) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_list_is_host_owned_not_daemon_owned() {
+        let previous = std::env::var("NATIVES_DAEMON_MODE").ok();
+        std::env::set_var("NATIVES_DAEMON_MODE", "uds");
+        assert!(
+            !daemon_owned_method("provider.list"),
+            "provider.list must stay host-owned so user configs are visible"
+        );
+        assert!(daemon_owned_method("provider.test"));
+        if let Some(value) = previous {
+            std::env::set_var("NATIVES_DAEMON_MODE", value);
+        } else {
+            std::env::remove_var("NATIVES_DAEMON_MODE");
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_list_returns_mirrored_user_provider_models() {
+        let store = Arc::new(DataStore::new(":memory:").unwrap());
+        store
+            .conn()
+            .execute(
+                "INSERT INTO assistant_provider_configs
+                 (id, provider_type, display_name, api_base_url, default_model, health_status, created_at, updated_at)
+                 VALUES ('p1', 'openai_compatible', 'SenseNova', 'https://api.example/v1', 'deepseek-v4-flash', 'unknown', 'now', 'now')",
+                [],
+            )
+            .unwrap();
+        store
+            .conn()
+            .execute(
+                "INSERT INTO assistant_provider_keys
+                 (id, provider_id, encrypted_key, masked_key, label, is_active, created_at)
+                 VALUES ('k1', 'p1', 'enc', 'sk-…abcd', 'API Key', 1, 'now')",
+                [],
+            )
+            .unwrap();
+        store
+            .conn()
+            .execute(
+                "INSERT INTO assistant_model_cache
+                 (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at)
+                 VALUES ('p1:deepseek-v4-flash', 'p1', 'deepseek-v4-flash', 'DeepSeek V4 Flash', '{}', 0, 0, 'manual', 'now')",
+                [],
+            )
+            .unwrap();
+
+        let response = dispatch_rpc(&store, "provider.list", &serde_json::json!({})).await;
+        assert!(
+            response.success,
+            "provider.list failed: {:?}",
+            response.error
+        );
+        let data = response.data.expect("provider.list data");
+        let providers = data
+            .get("providers")
+            .and_then(|v| v.as_array())
+            .expect("providers array");
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0]["id"], "p1");
+        assert_eq!(providers[0]["has_active_key"], true);
+        assert_eq!(providers[0]["models"][0]["id"], "deepseek-v4-flash");
+    }
 
     #[test]
     fn run_start_is_daemon_owned_only_in_uds_mode() {

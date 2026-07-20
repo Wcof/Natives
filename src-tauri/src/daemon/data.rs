@@ -146,6 +146,7 @@ impl DataStore {
                 (7, MIGRATION_007),
                 (8, MIGRATION_008),
                 (11, MIGRATION_011),
+                (12, MIGRATION_012),
             ];
 
             for (version, sql) in migrations {
@@ -1094,6 +1095,18 @@ CREATE TABLE IF NOT EXISTS assistant_prompt_queue (
 CREATE INDEX IF NOT EXISTS idx_prompt_queue_conversation ON assistant_prompt_queue(conversation_id, position);
 ";
 
+/// v12: Collapse duplicate model cache rows and enforce uniqueness per provider.
+const MIGRATION_012: &str = "
+DELETE FROM assistant_model_cache
+WHERE rowid NOT IN (
+    SELECT MIN(rowid)
+    FROM assistant_model_cache
+    GROUP BY provider_id, model_id
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_model_cache_provider_model
+    ON assistant_model_cache(provider_id, model_id);
+";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1150,7 +1163,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 11);
+        assert_eq!(version, 12);
     }
 
     #[test]

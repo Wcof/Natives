@@ -67,6 +67,18 @@ export function useLayoutEvents({
     return () => window.removeEventListener('toggle-terminal', handler);
   }, [toggleTerminal]);
 
+  // Open/toggle command palette from UI chrome (e.g. collapsed sidebar search)
+  useEffect(() => {
+    const openHandler = () => setState((prev: any) => ({ ...prev, cmdkOpen: true }));
+    const toggleHandler = () => setState((prev: any) => ({ ...prev, cmdkOpen: !prev.cmdkOpen }));
+    window.addEventListener('open-cmdk', openHandler);
+    window.addEventListener('toggle-cmdk', toggleHandler);
+    return () => {
+      window.removeEventListener('open-cmdk', openHandler);
+      window.removeEventListener('toggle-cmdk', toggleHandler);
+    };
+  }, [setState]);
+
   // Keyboard shortcuts: Cmd+B/K/N
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {

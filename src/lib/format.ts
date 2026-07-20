@@ -43,9 +43,36 @@ export function fmtCount(n: number, locale: string = 'en'): string {
 
 /** 时长格式化（秒 → 可读文本） */
 export function fmtDuration(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  return `${h}h ${m}m`;
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) {
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return rem > 0 ? `${m}m ${rem}s` : `${m}m`;
+  }
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+/**
+ * Compact duration for dense UI (heatmap tooltips / chart ticks).
+ * Avoids the old `Math.round(sec/60)` trap that turns 1–29s into "0 min".
+ */
+export function fmtDurationCompact(seconds: number, locale: string = 'en'): string {
+  const s = Math.max(0, Math.round(seconds));
+  const zh = locale.startsWith('zh');
+  if (s <= 0) return zh ? '0秒' : '0s';
+  if (s < 60) return zh ? `${s}秒` : `${s}s`;
+  if (s < 3600) {
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    if (rem === 0) return zh ? `${m}分钟` : `${m}m`;
+    // Keep short: "3分20秒" / "3m 20s"
+    return zh ? `${m}分${rem}秒` : `${m}m ${rem}s`;
+  }
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (m === 0) return zh ? `${h}小时` : `${h}h`;
+  return zh ? `${h}小时${m}分` : `${h}h ${m}m`;
 }

@@ -2,9 +2,7 @@
 
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
 import type {
-  ButtonHTMLAttributes,
   DragEvent,
-  MouseEvent,
   ReactNode,
 } from 'react';
 import type { LucideIcon } from 'lucide-react';
@@ -14,17 +12,14 @@ import {
   FileText,
   Layers,
   LayoutDashboard,
+  MessageSquare,
   Minus,
   Monitor,
-  Plus,
   Search,
   Settings,
   Square,
-  Star,
   X,
-  Zap,
   ArrowLeft,
-  ChevronLeft,
   ChevronDown,
   ChevronRight,
   FolderPlus,
@@ -33,6 +28,7 @@ import {
   SlidersHorizontal,
   Cpu,
   Server,
+  PanelLeft,
   PanelLeftClose,
 } from 'lucide-react';
 import * as LucideIcons from 'lucide-react';
@@ -112,6 +108,9 @@ const SETTINGS_NAV_ITEMS = [
   icon: LucideIcon;
 }>;
 
+/** Collapsed rail width — icon-only navigation, still interactive. */
+export const SIDEBAR_COLLAPSED_WIDTH = 64;
+
 interface SidebarProps {
   isCollapsed: boolean;
   onToggle: () => void;
@@ -131,12 +130,14 @@ function getNavigationId(activeModuleId?: string): string | null {
   if (!activeModuleId) return null;
   if (activeModuleId === 'dashboard' || activeModuleId === '__dashboard__') return '__dashboard__';
   if (isSettingsView(activeModuleId)) return '__settings__';
-  if (activeModuleId === 'workshop' || activeModuleId === '__workshop__') return '__workshop__';
+  if (activeModuleId === 'workshop' || activeModuleId === '__workshop__' || activeModuleId === 'modules' || activeModuleId === 'store') {
+    return '__workshop__';
+  }
   if (activeModuleId === 'assistant' || activeModuleId === '__assistant__') return '__assistant__';
   if (activeModuleId.startsWith('module:')) return activeModuleId;
   if (activeModuleId.startsWith('__files__:')) return activeModuleId;
   if (activeModuleId.startsWith('builtin:')) return activeModuleId;
-  // Other views (files/ai/tools/modules/store) are not sidebar entries —
+  // Other views (files/ai/tools) are not fixed sidebar entries —
   // returning null keeps the previous highlight from sticking after navigation.
   return null;
 }
@@ -152,6 +153,7 @@ function SidebarNavItem({
   draggable,
   onDragStart,
   onDragOver,
+  collapsed = false,
 }: {
   isActive: boolean;
   icon: ReactNode;
@@ -163,6 +165,7 @@ function SidebarNavItem({
   draggable?: boolean;
   onDragStart?: (e: DragEvent<HTMLButtonElement>) => void;
   onDragOver?: (e: DragEvent<HTMLButtonElement>) => void;
+  collapsed?: boolean;
 }) {
   return (
     <button
@@ -173,15 +176,24 @@ function SidebarNavItem({
       onDragStart={onDragStart}
       onDragOver={onDragOver}
       onClick={onClick}
-      title={title}
-      className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-sm transition-all ${
-        isActive
-          ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
-          : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
-      }`}
+      title={title ?? label}
+      aria-label={label}
+      className={
+        collapsed
+          ? `flex h-9 w-9 items-center justify-center rounded-lg transition-all ${
+              isActive
+                ? 'bg-[var(--accent)] text-[var(--accent-ink)]'
+                : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
+            }`
+          : `flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-sm transition-all ${
+              isActive
+                ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+                : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
+            }`
+      }
     >
       <span className="shrink-0">{icon}</span>
-      <span className="truncate">{label}</span>
+      {!collapsed && <span className="truncate">{label}</span>}
     </button>
   );
 }
@@ -426,7 +438,22 @@ export default function Sidebar({
       }
     };
     void loadModules();
-    return () => { cancelled = true; };
+
+    // R-T6: refresh sidebar module list only on module-channel events
+    let unsubModule: (() => void) | undefined;
+    try {
+      if (window.nativesAPI?.onDbStateChanged) {
+        unsubModule = window.nativesAPI.onDbStateChanged((_event, channel) => {
+          if (channel !== 'module') return;
+          if (!cancelled) void loadModules();
+        });
+      }
+    } catch { /* browser dev mode */ }
+
+    return () => {
+      cancelled = true;
+      unsubModule?.();
+    };
   }, []);
 
   const handleDragOver = (event: DragEvent<HTMLButtonElement>, index: number) => {
@@ -450,13 +477,7 @@ export default function Sidebar({
   };
 
   const normalizedLocale = locale.startsWith('zh') ? 'zh' : 'en';
-
-  if (isCollapsed) {
-    return (
-      <aside style={{ width: 0, overflow: 'hidden' }} role="navigation" aria-label={t(locale, 'nav.modules')}>
-      </aside>
-    );
-  }
+  const sidebarWidth = isCollapsed ? SIDEBAR_COLLAPSED_WIDTH : width;
 
   return (
     <div className="doppelrand-outer h-full">
@@ -464,198 +485,340 @@ export default function Sidebar({
     <aside
       className="flex flex-col h-full overflow-hidden"
       style={{
-        width,
+        width: sidebarWidth,
         background: 'var(--sidebar)',
         borderRight: '1px solid var(--border)'
       }}
       role="navigation"
       aria-label={t(locale, 'nav.modules')}
       data-sidebar
+      data-collapsed={isCollapsed ? 'true' : 'false'}
     >
-      {/* ── 窗口控制 + Brand Header ── */}
-      <div className="shrink-0" data-tauri-drag-region >
-        {/* 窗口控制按钮行 */}
-      <div className="flex w-full items-center justify-start gap-[6px] px-3 pt-2.5 pb-1">
-        {/* 关闭 — macOS 红圆 */}
-        <button
-          onClick={() => handleWindowAction('close')}
-          className="group flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--mac-red)] hover:bg-[var(--mac-red-hover)] hover:shadow-[0_0_6px_var(--mac-red-glow)] transition-all"
-         
-          aria-label={t(locale, 'header.close')}
-          title={t(locale, 'header.close')}
+      {/* ── 窗口控制（macOS traffic lights） ── */}
+      <div className="shrink-0 relative z-[60]">
+        <div
+          className="mac-traffic-row"
+          data-collapsed={isCollapsed ? 'true' : 'false'}
+          data-tauri-drag-region
         >
-          <X size={9} className="text-[#1a1a1e] opacity-0 group-hover:opacity-100 transition-opacity" strokeWidth={2.5} />
-        </button>
-        {/* 最小化 — macOS 黄圆 */}
-        <button
-          onClick={() => handleWindowAction('minimize')}
-          className="group flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--mac-yellow)] hover:bg-[var(--mac-yellow-hover)] hover:shadow-[0_0_6px_var(--mac-yellow-glow)] transition-all"
-
-          aria-label={t(locale, 'header.minimize')}
-          title={t(locale, 'header.minimize')}
-        >
-          <Minus size={9} className="text-[#1a1a1e] opacity-0 group-hover:opacity-100 transition-opacity" strokeWidth={2.5} />
-        </button>
-        {/* 最大化 / 全屏 — macOS 绿圆 */}
-        <div className="relative" ref={zoomPopupRef}>
-          <button
-            ref={zoomBtnRef}
-            onClick={() => handleWindowAction('maximize')}
-            onMouseDown={(e) => {
-              const cx = e.clientX;
-              const cy = e.clientY;
-              zoomTimerRef.current = window.setTimeout(() => {
-                setZoomMenuPos({ x: cx, y: cy });
-                setZoomMenuOpen(true);
-              }, 500);
-            }}
-            onMouseUp={() => {
-              if (zoomTimerRef.current) {
-                clearTimeout(zoomTimerRef.current);
-                zoomTimerRef.current = null;
-              }
-            }}
-            onMouseLeave={() => {
-              if (zoomTimerRef.current) {
-                clearTimeout(zoomTimerRef.current);
-                zoomTimerRef.current = null;
-              }
-            }}
-            className="group flex h-3.5 w-3.5 items-center justify-center rounded-full bg-[var(--mac-green)] hover:bg-[var(--mac-green-hover)] hover:shadow-[0_0_6px_var(--mac-green-glow)] transition-all"
-           
-            aria-label={isMaximized ? '还原' : '最大化'}
-            title={isMaximized ? '还原' : '最大化'}
+          <div
+            className="mac-traffic-lights"
+            data-collapsed={isCollapsed ? 'true' : 'false'}
+            role="toolbar"
+            aria-label={t(locale, 'sidebar.ariaToggle')}
           >
-            <svg width="8" height="8" viewBox="0 0 10 10" fill="none" className="text-[#1a1a1e] opacity-0 group-hover:opacity-100 transition-opacity">
-              <path d="M7 1h2v2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M9 1l-4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M3 9H1V7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M1 9l4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
+            {/* 关闭 — macOS 红圆 */}
+            <button
+              type="button"
+              onClick={() => void handleWindowAction('close')}
+              className="mac-traffic-btn close"
+              aria-label={t(locale, 'header.close')}
+              title={t(locale, 'header.close')}
+            >
+              <X strokeWidth={2.75} />
             </button>
-
-            {/* 长按弹出菜单 — macOS 窗口管理，跟随鼠标位置 */}
-            {zoomMenuOpen && zoomMenuPos && (
-              <div
-                className="fixed z-50 min-w-[180px] rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5 shadow-modal"
-                style={{ left: zoomMenuPos.x, top: zoomMenuPos.y }}
+            {/* 最小化 — macOS 黄圆 */}
+            <button
+              type="button"
+              onClick={() => void handleWindowAction('minimize')}
+              className="mac-traffic-btn minimize"
+              aria-label={t(locale, 'header.minimize')}
+              title={t(locale, 'header.minimize')}
+            >
+              <Minus strokeWidth={2.75} />
+            </button>
+            {/* 最大化 / 全屏 — macOS 绿圆 */}
+            <div className="relative" ref={zoomPopupRef}>
+              <button
+                type="button"
+                ref={zoomBtnRef}
+                onClick={() => void handleWindowAction('maximize')}
+                onMouseDown={(e) => {
+                  const cx = e.clientX;
+                  const cy = e.clientY;
+                  zoomTimerRef.current = window.setTimeout(() => {
+                    setZoomMenuPos({ x: cx, y: cy });
+                    setZoomMenuOpen(true);
+                  }, 500);
+                }}
+                onMouseUp={() => {
+                  if (zoomTimerRef.current) {
+                    clearTimeout(zoomTimerRef.current);
+                    zoomTimerRef.current = null;
+                  }
+                }}
+                onMouseLeave={() => {
+                  if (zoomTimerRef.current) {
+                    clearTimeout(zoomTimerRef.current);
+                    zoomTimerRef.current = null;
+                  }
+                }}
+                className="mac-traffic-btn zoom"
+                aria-label={isMaximized ? t(locale, 'header.restore') : t(locale, 'header.maximize')}
+                title={isMaximized ? t(locale, 'header.restore') : t(locale, 'header.maximize')}
               >
-                <p className="px-2.5 pb-1 pt-0.5 text-[0.625rem] font-medium uppercase tracking-[0.06em] text-[var(--text-disabled)]">
-                  移动与调整大小
-                </p>
-                <div className="grid grid-cols-4 gap-1 px-1 pb-2">
-                  {[
-                    { id: 'left', label: '左', icon: leftHalfIcon },
-                    { id: 'right', label: '右', icon: rightHalfIcon },
-                    { id: 'top', label: '上', icon: topHalfIcon },
-                    { id: 'bottom', label: '下', icon: bottomHalfIcon },
-                  ].map((opt) => (
-                    <button
-                      key={opt.id}
-                      data-tile-action={opt.id}
-                      className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-[0.625rem] text-[var(--text-secondary)] hover:bg-[var(--surface)] hover:text-[var(--text)] transition-all"
-                     
-                      title={opt.label}
-                    >
-                      {opt.icon}
-                      <span>{opt.label}</span>
-                    </button>
-                  ))}
-                </div>
-                <div className="mx-2 my-1 border-t border-[var(--border)]" />
-                <p className="px-2.5 pb-1 pt-1.5 text-[0.625rem] font-medium uppercase tracking-[0.06em] text-[var(--text-disabled)]">
-                  填充与排列
-                </p>
-                <div className="grid grid-cols-4 gap-1 px-1 pb-1">
-                  {[
-                    { id: 'fullscreen', label: '填充', icon: fillIcon },
-                    { id: 'left-half', label: '居左', icon: leftFillIcon },
-                    { id: 'right-half', label: '居右', icon: rightFillIcon },
-                    { id: 'tile', label: '平铺', icon: tileIcon },
-                  ].map((opt) => (
-                    <button
-                      key={opt.id}
-                      data-tile-action={opt.id}
-                      className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-[0.625rem] text-[var(--text-secondary)] hover:bg-[var(--surface)] hover:text-[var(--text)] transition-all"
-                     
-                      title={opt.label}
-                    >
-                      {opt.icon}
-                      <span>{opt.label}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={onToggle}
-            className="ml-auto flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
-            aria-label={t(locale, 'sidebar.collapse')}
-            title={t(locale, 'sidebar.collapse')}
-          >
-            <PanelLeftClose size={15} />
-          </button>
-        </div>
+                <svg viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                  <path d="M7 1h2v2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M9 1l-4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M3 9H1V7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M1 9l4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
 
-        {/* Brand Header */}
-        {!isSettingsMode && (
-          <div className="flex items-center gap-3 px-4 pb-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface)]">
-              <Zap size={18} className="text-[var(--text-secondary)]" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold text-[var(--text)] leading-tight">Natives</h1>
-              <p className="text-[0.6875rem] text-[var(--text-disabled)]">personal desktop</p>
+              {/* 长按弹出菜单 — macOS 窗口管理，跟随鼠标位置 */}
+              {zoomMenuOpen && zoomMenuPos && (
+                <div
+                  className="fixed z-50 min-w-[180px] rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5 shadow-modal"
+                  style={{ left: zoomMenuPos.x, top: zoomMenuPos.y }}
+                >
+                  <p className="px-2.5 pb-1 pt-0.5 text-[0.625rem] font-medium uppercase tracking-[0.06em] text-[var(--text-disabled)]">
+                    移动与调整大小
+                  </p>
+                  <div className="grid grid-cols-4 gap-1 px-1 pb-2">
+                    {[
+                      { id: 'left', label: '左', icon: leftHalfIcon },
+                      { id: 'right', label: '右', icon: rightHalfIcon },
+                      { id: 'top', label: '上', icon: topHalfIcon },
+                      { id: 'bottom', label: '下', icon: bottomHalfIcon },
+                    ].map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        data-tile-action={opt.id}
+                        className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-[0.625rem] text-[var(--text-secondary)] hover:bg-[var(--surface)] hover:text-[var(--text)] transition-all"
+                        title={opt.label}
+                      >
+                        {opt.icon}
+                        <span>{opt.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mx-2 my-1 border-t border-[var(--border)]" />
+                  <p className="px-2.5 pb-1 pt-1.5 text-[0.625rem] font-medium uppercase tracking-[0.06em] text-[var(--text-disabled)]">
+                    填充与排列
+                  </p>
+                  <div className="grid grid-cols-4 gap-1 px-1 pb-1">
+                    {[
+                      { id: 'fullscreen', label: '填充', icon: fillIcon },
+                      { id: 'left-half', label: '居左', icon: leftFillIcon },
+                      { id: 'right-half', label: '居右', icon: rightFillIcon },
+                      { id: 'tile', label: '平铺', icon: tileIcon },
+                    ].map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        data-tile-action={opt.id}
+                        className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-[0.625rem] text-[var(--text-secondary)] hover:bg-[var(--surface)] hover:text-[var(--text)] transition-all"
+                        title={opt.label}
+                      >
+                        {opt.icon}
+                        <span>{opt.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
-        )}
+
+          {!isCollapsed && (
+            <button
+              type="button"
+              onClick={onToggle}
+              className="ml-auto flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+              aria-label={t(locale, 'sidebar.collapse')}
+              title={t(locale, 'sidebar.collapse')}
+            >
+              <PanelLeftClose size={15} />
+            </button>
+          )}
+
+          {isCollapsed && (
+            <button
+              type="button"
+              onClick={onToggle}
+              className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]"
+              aria-label={t(locale, 'sidebar.expand')}
+              title={t(locale, 'sidebar.expand')}
+            >
+              <PanelLeft size={15} />
+            </button>
+          )}
+        </div>
       </div>
 
       {isSettingsMode ? (
         /* ── Settings Sidebar Layout ── */
         <div className="flex-1 flex flex-col min-h-0">
           {/* Back button */}
-          <div className="px-4 pb-3 pt-2">
+          <div className={`pt-2 ${isCollapsed ? 'px-2 pb-2' : 'px-4 pb-3'}`}>
             <button
               onClick={() => selectNavigation('dashboard', '__dashboard__')}
-              className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all w-full font-medium"
+              className={
+                isCollapsed
+                  ? 'flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all'
+                  : 'flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all w-full font-medium'
+              }
+              title={t(locale, 'settings.backHome')}
+              aria-label={t(locale, 'settings.backHome')}
             >
               <ArrowLeft size={13} />
-              <span>{t(locale, 'settings.backHome')}</span>
+              {!isCollapsed && <span>{t(locale, 'settings.backHome')}</span>}
             </button>
           </div>
 
           {/* Section title */}
-          <div className="px-5 pb-2 pt-1 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
-            {t(locale, 'settings.title')}
-          </div>
+          {!isCollapsed && (
+            <div className="px-5 pb-2 pt-1 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
+              {t(locale, 'settings.title')}
+            </div>
+          )}
 
           {/* Settings items — flat nav with five sections */}
-          <div className="flex flex-col gap-0.5 px-3 flex-1 overflow-y-auto">
+          <div className={`flex flex-col gap-0.5 flex-1 overflow-y-auto ${isCollapsed ? 'items-center px-2' : 'px-3'}`}>
             {SETTINGS_NAV_ITEMS.map((item) => {
               const Icon = item.icon;
               const isActive = activeSettingsSection === item.id;
+              const label = t(locale, item.labelKey);
               return (
                 <button
                   key={item.id}
                   type="button"
                   aria-current={isActive ? 'page' : undefined}
+                  aria-label={label}
                   onClick={() => selectNavigation('__settings__', `settings:${item.id}`)}
-                  className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all ${
-                    isActive
-                      ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
-                      : 'text-[var(--text-secondary)] hover:text-[var(--primary)] hover:bg-[var(--border-subtle)]'
-                  }`}
+                  title={label}
+                  className={
+                    isCollapsed
+                      ? `flex h-9 w-9 items-center justify-center rounded-lg transition-all ${
+                          isActive
+                            ? 'bg-[var(--accent)] text-[var(--accent-ink)]'
+                            : 'text-[var(--text-secondary)] hover:text-[var(--primary)] hover:bg-[var(--border-subtle)]'
+                        }`
+                      : `flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left transition-all ${
+                          isActive
+                            ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+                            : 'text-[var(--text-secondary)] hover:text-[var(--primary)] hover:bg-[var(--border-subtle)]'
+                        }`
+                  }
                 >
                   <Icon size={15} className="shrink-0" />
-                  <span className="truncate text-sm">{t(locale, item.labelKey)}</span>
+                  {!isCollapsed && <span className="truncate text-sm">{label}</span>}
                 </button>
               );
             })}
           </div>
         </div>
+      ) : isCollapsed ? (
+        /* ── Collapsed icon rail ── */
+        <>
+          <div className="flex-1 overflow-y-auto min-h-0 flex flex-col items-center gap-1 px-2 pt-1">
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent('open-cmdk'))}
+              className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]"
+              title={t(locale, 'sidebar.searchPlaceholder')}
+              aria-label={t(locale, 'sidebar.searchPlaceholder')}
+            >
+              <Search size={15} />
+            </button>
+
+            <div className="my-1 h-px w-6 bg-[var(--border-subtle)]" />
+
+            {QUICK_ACCESS_ITEMS.map((item) => {
+              const Icon = item.icon;
+              const label = t(locale, 'sidebar.quickAccessDirs.' + item.id);
+              return (
+                <SidebarNavItem
+                  key={item.id}
+                  collapsed
+                  isActive={activeNavigationId === item.target}
+                  icon={<Icon size={15} />}
+                  label={label}
+                  onClick={() => selectNavigation(item.target, item.target)}
+                />
+              );
+            })}
+
+            <div className="my-1 h-px w-6 bg-[var(--border-subtle)]" />
+
+            <SidebarNavItem
+              collapsed
+              isActive={activeNavigationId === '__assistant__'}
+              icon={<MessageSquare size={15} />}
+              label={t(locale, 'nav.assistant')}
+              onClick={() => selectNavigation('__assistant__', '__assistant__')}
+            />
+
+            {modules.map((module, index) => {
+              const moduleId = getModuleId(module);
+              const moduleName =
+                module.manifest?.i18n?.name?.[normalizedLocale] ??
+                module.manifest?.name ??
+                module.moduleId;
+              const moduleIcon = module.manifest?.icon;
+              const navigationId = `module:${moduleId}`;
+              return (
+                <SidebarNavItem
+                  key={`${moduleId}-${index}`}
+                  collapsed
+                  isActive={activeNavigationId === navigationId}
+                  icon={
+                    moduleIcon ? (
+                      <img src={moduleIcon} alt="" draggable={false} className="h-[18px] w-[18px] object-contain" />
+                    ) : (
+                      <Square size={15} />
+                    )
+                  }
+                  label={moduleName}
+                  onClick={() => selectNavigation(navigationId, moduleId)}
+                />
+              );
+            })}
+
+            {enabledTools.map((et) => {
+              const toolDef = BUILTIN_TOOLS.find((tool) => tool.id === et.id);
+              if (!toolDef) return null;
+              const navigationId = `builtin:${et.id}`;
+              const toolLabel = locale.startsWith('zh') ? toolDef.label.zh : toolDef.label.en;
+              const IconComp = (LucideIcons as unknown as Record<string, React.ComponentType<{ size?: number; className?: string }>>)[toolDef.icon];
+              return (
+                <SidebarNavItem
+                  key={et.id}
+                  collapsed
+                  isActive={activeNavigationId === navigationId}
+                  icon={IconComp ? <IconComp size={15} /> : <Square size={15} />}
+                  label={toolLabel}
+                  onClick={() => selectNavigation(navigationId, navigationId)}
+                />
+              );
+            })}
+          </div>
+
+          <div className="shrink-0 flex flex-col items-center gap-1 px-2 py-2 border-t border-[var(--border-subtle)]">
+            <SidebarNavItem
+              collapsed
+              isActive={false}
+              icon={<Bell size={16} />}
+              label={t(locale, 'notifications.title')}
+              onClick={onNotificationClick}
+            />
+            <SidebarNavItem
+              collapsed
+              isActive={activeNavigationId === '__settings__'}
+              icon={<Settings size={16} />}
+              label={t(locale, 'nav.settings')}
+              onClick={() => selectNavigation('__settings__', 'settings:general')}
+            />
+            <SidebarNavItem
+              collapsed
+              isActive={activeNavigationId === '__workshop__'}
+              icon={<Layers size={16} />}
+              label={t(locale, 'nav.modules')}
+              onClick={() => selectNavigation('__workshop__', 'modules')}
+            />
+          </div>
+        </>
       ) : (
         /* ── Normal Sidebar Layout ── */
         <>
@@ -684,6 +847,7 @@ export default function Sidebar({
               {QUICK_ACCESS_ITEMS.map((item) => {
                 const Icon = item.icon;
                 const isActive = activeNavigationId === item.target;
+                const label = t(locale, 'sidebar.quickAccessDirs.' + item.id);
                 return (
                   <button
                     key={item.id}
@@ -694,12 +858,10 @@ export default function Sidebar({
                         ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
                         : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
                     }`}
-                    title={item.id}
+                    title={label}
                   >
                     <Icon size={15} className="shrink-0" />
-                    <span className="truncate text-sm">
-                      {t(locale, 'sidebar.quickAccessDirs.' + item.id)}
-                    </span>
+                    <span className="truncate text-sm">{label}</span>
                   </button>
                 );
               })}
@@ -712,7 +874,7 @@ export default function Sidebar({
                 <button
                   type="button"
                   onClick={() => setAssistantExpanded(value => !value)}
-                  className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+                  className="rounded p-1 text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
                   title={assistantExpanded ? t(locale, 'common.collapse') : t(locale, 'common.expand')}
                   aria-label={assistantExpanded ? t(locale, 'common.collapse') : t(locale, 'common.expand')}
                 >
@@ -721,7 +883,7 @@ export default function Sidebar({
                 <button
                   type="button"
                   onClick={() => { selectNavigation('assistant', '__assistant__'); assistantActions?.addProjectFolder(); }}
-                  className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+                  className="rounded p-1 text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
                   title={t(locale, 'assistant.chooseProjectDirectory')}
                   aria-label={t(locale, 'assistant.chooseProjectDirectory')}
                 >
@@ -796,7 +958,7 @@ export default function Sidebar({
                 </div>
                 <div className="mb-3 flex flex-col gap-0.5 px-3">
                   {enabledTools.map((et) => {
-                    const toolDef = BUILTIN_TOOLS.find((t) => t.id === et.id);
+                    const toolDef = BUILTIN_TOOLS.find((tool) => tool.id === et.id);
                     if (!toolDef) return null;
                     const navigationId = `builtin:${et.id}`;
                     const toolLabel = locale.startsWith('zh') ? toolDef.label.zh : toolDef.label.en;
@@ -818,7 +980,7 @@ export default function Sidebar({
             )}
           </div>
 
-          {/* 底部固定区域：通知、设置、创意工坊 */}
+          {/* 底部固定区域：通知、设置、个人创意 */}
           <div className="shrink-0 px-3 py-2 border-t border-[var(--border-subtle)]">
             <button
               type="button"
@@ -842,7 +1004,7 @@ export default function Sidebar({
             </button>
             <button
               type="button"
-              onClick={() => selectNavigation('__workshop__', '__workshop__')}
+              onClick={() => selectNavigation('__workshop__', 'modules')}
               className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
                 activeNavigationId === '__workshop__'
                   ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
@@ -850,7 +1012,7 @@ export default function Sidebar({
               }`}
             >
               <Layers size={16} />
-              <span>{t(locale, 'nav.workshop')}</span>
+              <span>{t(locale, 'nav.modules')}</span>
             </button>
           </div>
         </>

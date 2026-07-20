@@ -1,8 +1,27 @@
-import type { ProviderPreset } from '@/types/provider';
+import type { ApiProtocol, ProviderPreset } from '@/types/provider';
+
+/**
+ * 新增供应商对话框可配置的协议。
+ * 仅包含后端 test/discover 已实现的协议；gemini/ollama 暂不上。
+ */
+export const CONFIGURABLE_API_PROTOCOLS = [
+  'anthropic_messages',
+  'openai_chat_completions',
+  'openai_responses',
+] as const satisfies readonly ApiProtocol[];
+
+export type ConfigurableApiProtocol = (typeof CONFIGURABLE_API_PROTOCOLS)[number];
+
+export const DEFAULT_API_PROTOCOL: ConfigurableApiProtocol = 'anthropic_messages';
 
 /**
  * 预设供应商列表 — 复刻自 cc-switch，双语名称 + 简短描述。
  * 显示时根据当前 locale 切换：locale=zh 显示 nameZh/descriptionZh，否则显示 name/description。
+ *
+ * protocol 含义：上游实际接受的请求格式。
+ * - anthropic_messages：Anthropic Messages（/v1/messages）
+ * - openai_chat_completions：OpenAI Chat Completions（/chat/completions）
+ * - openai_responses：OpenAI Responses（/responses）
  */
 export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
@@ -25,7 +44,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: '',
     description: 'Official Anthropic Claude API — direct access',
     descriptionZh: 'Anthropic Claude 官方 API，直连访问',
-    category: 'official', icon: 'anthropic', iconColor: '#D4915D',
+    category: 'official',
+    protocol: 'anthropic_messages',
+    icon: 'anthropic',
+    iconColor: '#D4915D',
   },
 
   // ── 国内厂商 ──
@@ -36,7 +58,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.deepseek.com/anthropic',
     description: 'DeepSeek official Anthropic-compatible endpoint',
     descriptionZh: '深度求索官方 Anthropic 兼容接口',
-    category: 'cn_official', icon: 'deepseek', iconColor: '#1E88E5',
+    category: 'cn_official',
+    protocol: 'anthropic_messages',
+    icon: 'deepseek',
+    iconColor: '#1E88E5',
   },
   {
     name: 'Volcengine Agentplan',
@@ -45,7 +70,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://ark.cn-beijing.volces.com/api/coding',
     description: 'Volcengine Ark coding plan with Claude models',
     descriptionZh: '火山引擎方舟模型，Claude 编码计划',
-    category: 'cn_official', icon: 'huoshan', iconColor: '#3370FF',
+    category: 'cn_official',
+    protocol: 'anthropic_messages',
+    icon: 'huoshan',
+    iconColor: '#3370FF',
   },
   {
     name: 'BytePlus',
@@ -54,7 +82,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://ark.ap-southeast.bytepluses.com/api/coding',
     description: 'BytePlus ModelArk for Southeast Asia region',
     descriptionZh: 'BytePlus 方舟模型，东南亚区域',
-    category: 'cn_official', icon: 'byteplus', iconColor: '#3370FF',
+    category: 'cn_official',
+    protocol: 'anthropic_messages',
+    icon: 'byteplus',
+    iconColor: '#3370FF',
   },
   {
     name: 'DouBao Seed',
@@ -63,7 +94,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://ark.cn-beijing.volces.com/api/compatible',
     description: 'DouBao Seed 2.0 code model via Volcengine Ark',
     descriptionZh: '豆包 Seed 2.0 代码模型，火山引擎方舟',
-    category: 'cn_official', icon: 'doubao', iconColor: '#3370FF',
+    category: 'cn_official',
+    protocol: 'openai_chat_completions',
+    icon: 'doubao',
+    iconColor: '#3370FF',
   },
   {
     name: 'Zhipu GLM',
@@ -72,7 +106,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://open.bigmodel.cn/api/anthropic',
     description: 'Zhipu GLM Claude-compatible API (China)',
     descriptionZh: '智谱 GLM Claude 兼容接口（国内站）',
-    category: 'cn_official', icon: 'zhipu', iconColor: '#0F62FE',
+    category: 'cn_official',
+    protocol: 'anthropic_messages',
+    icon: 'zhipu',
+    iconColor: '#0F62FE',
   },
   {
     name: 'Zhipu GLM (Global)',
@@ -81,7 +118,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.z.ai/api/anthropic',
     description: 'Zhipu GLM Claude-compatible API (Global)',
     descriptionZh: '智谱 GLM Claude 兼容接口（海外站）',
-    category: 'cn_official', icon: 'zhipu', iconColor: '#0F62FE',
+    category: 'cn_official',
+    protocol: 'anthropic_messages',
+    icon: 'zhipu',
+    iconColor: '#0F62FE',
   },
   {
     name: 'Baidu Qianfan Coding Plan',
@@ -90,7 +130,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://qianfan.baidubce.com/anthropic/coding',
     description: 'Baidu Qianfan coding plan with Claude models',
     descriptionZh: '百度千帆编码计划，Claude 模型',
-    category: 'cn_official', icon: 'baidu', iconColor: '#2932E1',
+    category: 'cn_official',
+    protocol: 'anthropic_messages',
+    icon: 'baidu',
+    iconColor: '#2932E1',
   },
   {
     name: 'Alibaba Bailian',
@@ -99,7 +142,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://dashscope.aliyuncs.com/apps/anthropic',
     description: 'Alibaba Cloud Bailian Claude-compatible API',
     descriptionZh: '阿里云百炼 Claude 兼容接口',
-    category: 'cn_official', icon: 'bailian', iconColor: '#624AFF',
+    category: 'cn_official',
+    protocol: 'anthropic_messages',
+    icon: 'bailian',
+    iconColor: '#624AFF',
   },
   {
     name: 'Bailian For Coding',
@@ -108,7 +154,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://coding.dashscope.aliyuncs.com/apps/anthropic',
     description: 'Alibaba Cloud Bailian coding-specific endpoint',
     descriptionZh: '阿里云百炼编码专用接口',
-    category: 'cn_official', icon: 'bailian', iconColor: '#624AFF',
+    category: 'cn_official',
+    protocol: 'anthropic_messages',
+    icon: 'bailian',
+    iconColor: '#624AFF',
   },
   {
     name: 'Kimi',
@@ -117,7 +166,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.moonshot.cn/anthropic',
     description: 'Moonshot Kimi K2.7 code model',
     descriptionZh: '月之暗面 Kimi K2.7 代码模型',
-    category: 'cn_official', icon: 'kimi', iconColor: '#6366F1',
+    category: 'cn_official',
+    protocol: 'anthropic_messages',
+    icon: 'kimi',
+    iconColor: '#6366F1',
   },
   {
     name: 'Kimi For Coding',
@@ -126,7 +178,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.kimi.com/coding/',
     description: 'Kimi dedicated coding endpoint',
     descriptionZh: 'Kimi 编码专用接口',
-    category: 'cn_official', icon: 'kimi', iconColor: '#6366F1',
+    category: 'cn_official',
+    protocol: 'anthropic_messages',
+    icon: 'kimi',
+    iconColor: '#6366F1',
   },
   {
     name: 'StepFun',
@@ -135,7 +190,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.stepfun.com/step_plan',
     description: 'StepFun step-plan API (China)',
     descriptionZh: '阶跃星辰 step-plan 接口（国内）',
-    category: 'cn_official', icon: 'stepfun', iconColor: '#16D6D2',
+    category: 'cn_official',
+    protocol: 'anthropic_messages',
+    icon: 'stepfun',
+    iconColor: '#16D6D2',
   },
   {
     name: 'StepFun (Global)',
@@ -144,7 +202,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.stepfun.ai/step_plan',
     description: 'StepFun step-plan API (Global)',
     descriptionZh: '阶跃星辰 step-plan 接口（海外）',
-    category: 'cn_official', icon: 'stepfun', iconColor: '#16D6D2',
+    category: 'cn_official',
+    protocol: 'anthropic_messages',
+    icon: 'stepfun',
+    iconColor: '#16D6D2',
   },
   {
     name: 'MiniMax',
@@ -153,7 +214,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.minimaxi.com/anthropic',
     description: 'MiniMax M2.7 Claude-compatible API (China)',
     descriptionZh: 'MiniMax M2.7 Claude 兼容接口（国内）',
-    category: 'cn_official', icon: 'minimax', iconColor: '#FF6B6B',
+    category: 'cn_official',
+    protocol: 'anthropic_messages',
+    icon: 'minimax',
+    iconColor: '#FF6B6B',
   },
   {
     name: 'MiniMax (Global)',
@@ -162,7 +226,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.minimax.io/anthropic',
     description: 'MiniMax M2.7 Claude-compatible API (Global)',
     descriptionZh: 'MiniMax M2.7 Claude 兼容接口（海外）',
-    category: 'cn_official', icon: 'minimax', iconColor: '#FF6B6B',
+    category: 'cn_official',
+    protocol: 'anthropic_messages',
+    icon: 'minimax',
+    iconColor: '#FF6B6B',
   },
   {
     name: 'BaiLing',
@@ -172,6 +239,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     description: 'Ant Group BaiLing 2.5-1T model',
     descriptionZh: '蚂蚁集团百灵 Ling 2.5-1T 模型',
     category: 'cn_official',
+    protocol: 'anthropic_messages',
   },
   {
     name: 'Longcat',
@@ -180,7 +248,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.longcat.chat/anthropic',
     description: 'Longcat Flash Chat Claude-compatible API',
     descriptionZh: 'Longcat Flash Chat Claude 兼容接口',
-    category: 'cn_official', icon: 'longcat', iconColor: '#29E154',
+    category: 'cn_official',
+    protocol: 'anthropic_messages',
+    icon: 'longcat',
+    iconColor: '#29E154',
   },
   {
     name: 'KAT-Coder',
@@ -189,7 +260,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://vanchin.streamlake.ai/api/gateway/v1/endpoints/${ENDPOINT_ID}/claude-code-proxy',
     description: 'KAT-Coder Pro via StreamLake vanchin gateway',
     descriptionZh: 'StreamLake 万臻网关 KAT-Coder Pro',
-    category: 'cn_official', icon: 'catcoder',
+    category: 'cn_official',
+    protocol: 'anthropic_messages',
+    icon: 'catcoder',
   },
   {
     name: 'ModelScope',
@@ -198,7 +271,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api-inference.modelscope.cn',
     description: 'Alibaba ModelScope inference API',
     descriptionZh: '阿里魔搭推理接口',
-    category: 'aggregator', icon: 'modelscope', iconColor: '#624AFF',
+    category: 'aggregator',
+    protocol: 'openai_chat_completions',
+    icon: 'modelscope',
+    iconColor: '#624AFF',
   },
 
   // ── 聚合商 ──
@@ -209,7 +285,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://router.shengsuanyun.com/api',
     description: 'Multi-model aggregation router',
     descriptionZh: '多模型聚合路由',
-    category: 'aggregator', icon: 'shengsuanyun',
+    category: 'aggregator',
+    protocol: 'anthropic_messages',
+    icon: 'shengsuanyun',
   },
   {
     name: 'CCSub',
@@ -218,7 +296,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://www.ccsub.net',
     description: 'Subscription-based AI API aggregator',
     descriptionZh: '订阅制 AI API 聚合',
-    category: 'aggregator', icon: 'ccsub',
+    category: 'aggregator',
+    protocol: 'anthropic_messages',
+    icon: 'ccsub',
   },
   {
     name: 'Unity2.ai',
@@ -227,7 +307,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.unity2.ai',
     description: 'AI API aggregation platform',
     descriptionZh: 'AI API 聚合平台',
-    category: 'aggregator', icon: 'unity2',
+    category: 'aggregator',
+    protocol: 'anthropic_messages',
+    icon: 'unity2',
   },
   {
     name: 'AiHubMix',
@@ -236,7 +318,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://aihubmix.com',
     description: 'Multi-model API marketplace',
     descriptionZh: '多模型 API 市场',
-    category: 'aggregator', icon: 'aihubmix', iconColor: '#006FFB',
+    category: 'aggregator',
+    protocol: 'anthropic_messages',
+    icon: 'aihubmix',
+    iconColor: '#006FFB',
   },
   {
     name: 'CherryIN',
@@ -245,7 +330,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://open.cherryin.net',
     description: 'CherryIN open API aggregator',
     descriptionZh: 'CherryIN 开放 API 聚合',
-    category: 'aggregator', icon: 'cherryin',
+    category: 'aggregator',
+    protocol: 'anthropic_messages',
+    icon: 'cherryin',
   },
   {
     name: 'SiliconFlow',
@@ -254,7 +341,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.siliconflow.cn',
     description: 'SiliconFlow model inference platform (China)',
     descriptionZh: '硅基流动模型推理平台（国内）',
-    category: 'aggregator', icon: 'siliconflow', iconColor: '#6E29F6',
+    category: 'aggregator',
+    protocol: 'openai_chat_completions',
+    icon: 'siliconflow',
+    iconColor: '#6E29F6',
   },
   {
     name: 'SiliconFlow (Global)',
@@ -263,7 +353,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.siliconflow.com',
     description: 'SiliconFlow model inference platform (Global)',
     descriptionZh: '硅基流动模型推理平台（海外）',
-    category: 'aggregator', icon: 'siliconflow', iconColor: '#000000',
+    category: 'aggregator',
+    protocol: 'openai_chat_completions',
+    icon: 'siliconflow',
+    iconColor: '#000000',
   },
   {
     name: 'DMXAPI',
@@ -273,6 +366,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     description: 'DMX multi-model API gateway',
     descriptionZh: '多魔熊多模型 API 网关',
     category: 'aggregator',
+    protocol: 'anthropic_messages',
   },
   {
     name: 'ClaudeAPI',
@@ -281,7 +375,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://gw.claudeapi.com',
     description: 'Claude API proxy service',
     descriptionZh: 'Claude API 代理服务',
-    category: 'aggregator', icon: 'claudeapi',
+    category: 'aggregator',
+    protocol: 'anthropic_messages',
+    icon: 'claudeapi',
   },
   {
     name: 'ClaudeCN',
@@ -291,6 +387,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     description: 'Claude API proxy for China region',
     descriptionZh: 'Claude API 国内代理',
     category: 'aggregator',
+    protocol: 'anthropic_messages',
   },
   {
     name: 'AtlasCloud',
@@ -299,7 +396,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.atlascloud.ai',
     description: 'AtlasCloud AI coding plan',
     descriptionZh: 'AtlasCloud AI 编码计划',
-    category: 'aggregator', icon: 'atlascloud',
+    category: 'aggregator',
+    protocol: 'anthropic_messages',
+    icon: 'atlascloud',
   },
 
   // ── 第三方 ──
@@ -310,7 +409,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.pateway.ai',
     description: 'Pateway AI API gateway',
     descriptionZh: 'Pateway AI API 网关',
-    category: 'third_party', icon: 'pateway',
+    category: 'third_party',
+    protocol: 'anthropic_messages',
+    icon: 'pateway',
   },
   {
     name: 'Gemini Native',
@@ -319,7 +420,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://generativelanguage.googleapis.com',
     description: 'Google Gemini native API via Anthropic-compatible proxy',
     descriptionZh: 'Google Gemini 原生 API，Anthropic 兼容代理',
-    category: 'third_party', icon: 'gemini', iconColor: '#4285F4',
+    category: 'third_party',
+    protocol: 'anthropic_messages',
+    icon: 'gemini',
+    iconColor: '#4285F4',
   },
   {
     name: 'OpenCode Go',
@@ -328,7 +432,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://opencode.ai/zen/go',
     description: 'OpenCode Go API gateway',
     descriptionZh: 'OpenCode Go API 网关',
-    category: 'third_party', icon: 'opencode', iconColor: '#211E1E',
+    category: 'third_party',
+    protocol: 'openai_chat_completions',
+    icon: 'opencode',
+    iconColor: '#211E1E',
   },
   {
     name: 'PackyCode',
@@ -337,7 +444,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://www.packyapi.com',
     description: 'PackyCode API service',
     descriptionZh: 'PackyCode API 服务',
-    category: 'third_party', icon: 'packycode',
+    category: 'third_party',
+    protocol: 'anthropic_messages',
+    icon: 'packycode',
   },
   {
     name: 'APIKEY.FUN',
@@ -346,7 +455,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.apikey.fun',
     description: 'API key marketplace',
     descriptionZh: 'API Key 市场',
-    category: 'third_party', icon: 'apikeyfun',
+    category: 'third_party',
+    protocol: 'anthropic_messages',
+    icon: 'apikeyfun',
   },
   {
     name: 'APINebula',
@@ -355,7 +466,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://apinebula.com',
     description: 'APINebula API aggregation',
     descriptionZh: 'APINebula API 聚合',
-    category: 'third_party', icon: 'apinebula',
+    category: 'third_party',
+    protocol: 'anthropic_messages',
+    icon: 'apinebula',
   },
   {
     name: 'SudoCode',
@@ -364,7 +477,9 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://sudocode.us',
     description: 'SudoCode API service',
     descriptionZh: 'SudoCode API 服务',
-    category: 'third_party', icon: 'sudocode',
+    category: 'third_party',
+    protocol: 'anthropic_messages',
+    icon: 'sudocode',
   },
   // ── OpenAI-compatible test providers ──
   {
@@ -374,9 +489,19 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://token.sensenova.cn/v1',
     description: 'SenseNova OpenAI-compatible endpoint. Models: sensenova-6.7-flash-lite, deepseek-v4-flash',
     descriptionZh: '商汤 SenseNova OpenAI 兼容接口。模型：sensenova-6.7-flash-lite、deepseek-v4-flash',
-    category: 'cn_official', icon: 'sensenova', iconColor: '#0B7BFF',
+    category: 'cn_official',
     protocol: 'openai_chat_completions',
+    icon: 'sensenova',
+    iconColor: '#0B7BFF',
   },
 ];
 
 export const CONFIGURABLE_PROVIDER_PRESETS = PROVIDER_PRESETS;
+
+export function resolvePresetProtocol(provider: ProviderPreset | null | undefined): ConfigurableApiProtocol {
+  const protocol = provider?.protocol;
+  if (protocol && (CONFIGURABLE_API_PROTOCOLS as readonly string[]).includes(protocol)) {
+    return protocol as ConfigurableApiProtocol;
+  }
+  return DEFAULT_API_PROTOCOL;
+}

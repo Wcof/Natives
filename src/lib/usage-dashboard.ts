@@ -203,9 +203,10 @@ export function buildDailyTrend(
     dateMap.set(r.date, existing);
   }
 
-  // Add activity seconds per date
+  // Add activity seconds per date (local calendar day of the real epoch hour).
   for (const a of activity) {
-    const date = new Date(a.hourStartMs).toISOString().slice(0, 10);
+    if (a.hourStartMs === 0) continue;
+    const date = localDateKey(a.hourStartMs);
     const existing = dateMap.get(date);
     if (existing && a.activeSeconds !== null) {
       existing.activeSeconds = (existing.activeSeconds ?? 0) + a.activeSeconds;
@@ -217,10 +218,19 @@ export function buildDailyTrend(
 
 // ── Heatmap ──
 //
-// Backend `localized_time_metrics` encodes each local wall-clock hour as a
-// UTC timestamp whose hour/day fields match the user's local hour/day
-// (i.e. "treat local hour as if it were UTC"). Always decode with getUTC*
-// so non-UTC users see the correct active-hour grid.
+// Backend `localized_time_metrics` now stores a **real epoch** ms for the start
+// of the user's local hour. Decode with local getters so the 7×24 grid matches
+// wall-clock time. (Older snapshots that painted local wall as UTC will look
+// shifted until the user re-syncs — that is intentional.)
+
+/** Local calendar YYYY-MM-DD for an epoch ms (machine timezone). */
+export function localDateKey(ms: number): string {
+  const d = new Date(ms);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
 export function buildHourlyHeatmap(
   activity: UsageActivityBucket[],
@@ -231,9 +241,9 @@ export function buildHourlyHeatmap(
     if (a.hourStartMs === 0) continue;
 
     const date = new Date(a.hourStartMs);
-    // Must use UTC getters — see comment above. Do NOT use getHours().
-    const hour = date.getUTCHours();
-    const dayOfWeek = date.getUTCDay(); // 0=Sun, 6=Sat
+    // Real-epoch local hour/day.
+    const hour = date.getHours();
+    const dayOfWeek = date.getDay(); // 0=Sun, 6=Sat
     const key = `${dayOfWeek}-${hour}`;
 
     const existing = map.get(key) ?? {
@@ -249,7 +259,6 @@ export function buildHourlyHeatmap(
     if (a.activeSeconds !== null) {
       existing.activeSeconds = (existing.activeSeconds ?? 0) + a.activeSeconds;
     }
-
     map.set(key, existing);
   }
 

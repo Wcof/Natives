@@ -98,9 +98,15 @@ export default function ModelSelectorDropdown({
                     <div className="px-2.5 py-2 text-xs text-[var(--text-disabled)]">
                       {locale.startsWith('zh') ? '未发现可用模型' : 'No discovered models'}
                     </div>
-                  ) : providerModels.map((model) => (
+                  ) : (provider.models ?? []).map((modelInfo) => {
+                    const model = modelInfo.id;
+                    const label =
+                      modelInfo.displayName && modelInfo.displayName !== model
+                        ? modelInfo.displayName
+                        : model;
+                    return (
                     <button
-                      key={model}
+                      key={`${provider.id}:${model}`}
                       type="button"
                       onClick={() => {
                         onSelect(provider.id, model);
@@ -112,9 +118,12 @@ export default function ModelSelectorDropdown({
                           : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]'
                       }`}
                     >
-                      <span className="text-xs font-mono">{model}</span>
+                      <span className="min-w-0 flex-1 truncate text-xs font-mono" title={model}>
+                        {label}
+                      </span>
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
               );
             })

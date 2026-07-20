@@ -162,6 +162,7 @@ export type RunStatus =
   | 'created'
   | 'queued'
   | 'preparing'
+  | 'reasoning'
   | 'running'
   | 'waiting_permission'
   | 'waiting_user'
@@ -187,6 +188,7 @@ export function isTerminalRunStatus(status: RunStatus | string): boolean {
 export function isActiveRunStatus(status: RunStatus | string): boolean {
   return (
     status === 'preparing' ||
+    status === 'reasoning' ||
     status === 'running' ||
     status === 'waiting_permission' ||
     status === 'waiting_user' ||

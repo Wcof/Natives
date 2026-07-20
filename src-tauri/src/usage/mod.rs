@@ -1,5 +1,49 @@
 // ── Natives Usage Module ──
-// Real data collection from ccusage, Claude logs, Codex logs, and Natives DB.
+// Primary: native local scanners (Claude/Codex/Atomcode/Natives/OpenCode/…).
+// Optional: ccusage CLI for cost verification and extra agents only.
+// Dashboard must remain correct when ccusage is not installed.
+//
+// Feature flag (default OFF):
+// - settings key `usage:ccusage_enabled` = "true"/"false"
+// - env `NATIVES_USAGE_ENABLE_CCUSAGE=1` forces on for one process
+
+/// Settings key for optional ccusage enrichment.
+pub const CCUSAGE_ENABLED_SETTING_KEY: &str = "usage:ccusage_enabled";
+
+/// Whether optional ccusage enrichment is enabled.
+/// Default: **false** (native scanners only).
+pub fn ccusage_enabled() -> bool {
+    // Env override wins for ops/debug.
+    if let Ok(v) = std::env::var("NATIVES_USAGE_ENABLE_CCUSAGE") {
+        let t = v.trim();
+        if t == "1" || t.eq_ignore_ascii_case("true") || t.eq_ignore_ascii_case("on") {
+            return true;
+        }
+        if t == "0" || t.eq_ignore_ascii_case("false") || t.eq_ignore_ascii_case("off") {
+            return false;
+        }
+    }
+    // Persisted setting in natives.db
+    if let Ok(conn) = crate::db::get_main_conn() {
+        if let Ok(Some(raw)) = crate::db::get_setting(&conn, CCUSAGE_ENABLED_SETTING_KEY) {
+            let t = raw.trim();
+            return t == "1" || t.eq_ignore_ascii_case("true") || t.eq_ignore_ascii_case("on");
+        }
+    }
+    false
+}
+
+/// Persist optional ccusage enablement.
+pub fn set_ccusage_enabled(enabled: bool) -> Result<(), String> {
+    let conn = crate::db::get_main_conn().map_err(|e| e.to_string())?;
+    crate::db::set_setting(
+        &conn,
+        CCUSAGE_ENABLED_SETTING_KEY,
+        if enabled { "true" } else { "false" },
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
 
 mod aggregate;
 mod atomcode;
@@ -287,6 +331,16 @@ pub fn now_ms() -> i64 {
     Utc::now().timestamp_millis()
 }
 
+/// Convert an event timestamp into:
+/// - local calendar date string `YYYY-MM-DD` in `tz`
+/// - real-epoch ms of the start of that local hour (not "local wall painted as UTC")
+///
+/// Earlier code encoded the local wall-clock hour as a fake UTC timestamp so the
+/// frontend could read it with `getUTCHours()`. That broke range filters which
+/// compare against real epoch bounds (`today` / `24h` / custom): for UTC+8 every
+/// encoded hour is shifted +8h and most "today so far" activity was dropped, and
+/// heatmap evenings disappeared. Store a real instant; the frontend decodes with
+/// local getters (the app timezone matches the scan timezone on this machine).
 pub fn localized_time_metrics(ts_ms: i64, tz: &Tz) -> (String, i64) {
     let local_dt = tz.timestamp_opt(ts_ms / 1000, ((ts_ms % 1000) * 1_000_000) as u32)
         .single()
@@ -298,12 +352,18 @@ pub fn localized_time_metrics(ts_ms: i64, tz: &Tz) -> (String, i64) {
         });
     let date_str = local_dt.format("%Y-%m-%d").to_string();
 
-    let hour_start_utc = DateTime::<Utc>::from_naive_utc_and_offset(
-        chrono::NaiveDate::from_ymd_opt(local_dt.year(), local_dt.month(), local_dt.day()).unwrap()
-            .and_hms_opt(local_dt.hour(), 0, 0).unwrap(),
-        Utc
-    );
-    (date_str, hour_start_utc.timestamp_millis())
+    let local_hour = chrono::NaiveDate::from_ymd_opt(local_dt.year(), local_dt.month(), local_dt.day())
+        .unwrap()
+        .and_hms_opt(local_dt.hour(), 0, 0)
+        .unwrap();
+    let hour_start_ms = tz
+        .from_local_datetime(&local_hour)
+        .single()
+        .map(|dt| dt.timestamp_millis())
+        // Ambiguous/skipped DST hour: fall back to the prior valid mapping.
+        .or_else(|| tz.from_local_datetime(&local_hour).earliest().map(|dt| dt.timestamp_millis()))
+        .unwrap_or(ts_ms);
+    (date_str, hour_start_ms)
 }
 
 /// Collect all dimension labels from records into a sorted unique list.
@@ -452,6 +512,19 @@ mod tests {
     #[test]
     fn total_tokens_include_all_cache_tokens() {
         assert_eq!(token_total(60, 20, 10, 40), 130);
+    }
+
+    #[test]
+    fn localized_hour_start_is_real_epoch_not_painted_utc() {
+        // 2026-07-20 09:34:52 UTC+8 = 01:34:52Z
+        let ts = 1_784_511_292_928i64;
+        let tz: chrono_tz::Tz = "Asia/Shanghai".parse().unwrap();
+        let (date, hour_start) = localized_time_metrics(ts, &tz);
+        assert_eq!(date, "2026-07-20");
+        // Local 09:00 Asia/Shanghai = 01:00Z
+        assert_eq!(hour_start, 1_784_509_200_000);
+        // Must NOT be the old "paint local 09:00 as 09:00Z" value.
+        assert_ne!(hour_start, 1_784_538_000_000);
     }
 
     #[test]

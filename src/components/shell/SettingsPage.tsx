@@ -101,6 +101,10 @@ export default function SettingsPage({
   const [plugins, setPlugins] = useState<Array<{ id: string; name: string; version?: string; enabled: boolean; description?: string }>>([]);
   const [pluginLoading, setPluginLoading] = useState(false);
   const [pluginsError, setPluginsError] = useState<string | null>(null);
+  // Optional ccusage enrichment (default off; native scanners are authoritative).
+  const [ccusageEnabled, setCcusageEnabled] = useState(false);
+  const [ccusageVersion, setCcusageVersion] = useState<string | null>(null);
+  const [ccusageBusy, setCcusageBusy] = useState(false);
 
   // Providers state
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
@@ -176,6 +180,17 @@ export default function SettingsPage({
     setPluginsError(null);
     try {
       const api = window.nativesAPI;
+      // Optional usage enricher status (not a web-module plugin).
+      try {
+        const enabled = await api?.usage?.getCcusageEnabled?.();
+        setCcusageEnabled(Boolean(enabled));
+        const ver = await api?.usage?.detectCcusage?.();
+        setCcusageVersion(ver ?? null);
+      } catch {
+        setCcusageEnabled(false);
+        setCcusageVersion(null);
+      }
+
       if (!api?.module?.list) { setPlugins([]); return; }
       const list = await api.module.list() as Array<{ id: string; name?: string; version?: string; enabled: boolean; description?: string }>;
       setPlugins(list.map(p => ({ ...p, name: p.name || p.id })));
@@ -184,6 +199,32 @@ export default function SettingsPage({
       setPlugins([]);
     }
     finally { setPluginLoading(false); }
+  }
+
+  async function handleToggleCcusage(next: boolean) {
+    setCcusageBusy(true);
+    try {
+      const api = window.nativesAPI;
+      if (next && !ccusageVersion) {
+        // Install optional binary if missing.
+        await api?.plugins?.install?.('ccusage');
+        const ver = await api?.usage?.detectCcusage?.();
+        setCcusageVersion(ver ?? null);
+      }
+      const enabled = await api?.usage?.setCcusageEnabled?.(next);
+      setCcusageEnabled(Boolean(enabled));
+      globalToast(
+        next
+          ? (locale === 'zh' ? '已启用 ccusage 可选增强（下次同步生效）' : 'ccusage enrichment enabled (applies on next sync)')
+          : (locale === 'zh' ? '已关闭 ccusage，仅使用本机日志扫描' : 'ccusage disabled; native log scans only'),
+        'success',
+      );
+    } catch (e) {
+      globalToast(classifyError(e).userMessage, 'error');
+    } finally {
+      setCcusageBusy(false);
+      await loadPlugins();
+    }
   }
 
   async function handleTogglePlugin(id: string, enabled: boolean) {
@@ -359,6 +400,42 @@ export default function SettingsPage({
             </button>
           }
         />
+
+        {/* Optional ccusage enricher — not required for dashboard accuracy */}
+        <div className="settings-section-card" style={{ marginBottom: 12 }}>
+          <div className="settings-plugin-row">
+            <span className="settings-preference-icon"><Package size={17} /></span>
+            <div className="settings-plugin-copy">
+              <strong>ccusage</strong>
+              <span>
+                {locale === 'zh'
+                  ? '可选增强：成本校验与额外 agent。默认关闭；个人主页主数据来自本机日志扫描。'
+                  : 'Optional enricher for cost checks/extra agents. Off by default; dashboard uses native log scans.'}
+              </span>
+              <small>
+                {ccusageVersion
+                  ? `v${ccusageVersion}`
+                  : (locale === 'zh' ? '未安装' : 'Not installed')}
+                {' · '}
+                {ccusageEnabled
+                  ? (locale === 'zh' ? '已启用' : 'Enabled')
+                  : (locale === 'zh' ? '已关闭（默认）' : 'Disabled (default)')}
+              </small>
+            </div>
+            <button
+              onClick={() => handleToggleCcusage(!ccusageEnabled)}
+              disabled={ccusageBusy || pluginLoading}
+              className={`settings-status-button${ccusageEnabled ? ' enabled' : ''}`}
+            >
+              {ccusageBusy
+                ? (locale === 'zh' ? '处理中…' : 'Working…')
+                : ccusageEnabled
+                  ? t(locale, 'common.disable')
+                  : t(locale, 'common.enable')}
+            </button>
+          </div>
+        </div>
+
         {pluginsError ? (
           <InlineLoadError message={pluginsError} onRetry={loadPlugins} locale={locale} />
         ) : pluginLoading ? (

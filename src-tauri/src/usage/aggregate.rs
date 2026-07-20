@@ -58,7 +58,8 @@ pub async fn build_dashboard_response(req: &UsageDashboardRequest) -> UsageDashb
     };
     let query_end_ms = req.end_ms;
 
-    // 2. Perform parallel native scans and ccusage call
+    // 2. Native-first scans (no external CLI required).
+    // ccusage is optional enrichment for cost verification / extra agents.
     let start_ms = query_start_ms;
     let end_ms = query_end_ms;
     let tz_clone = tz;
@@ -93,11 +94,12 @@ pub async fn build_dashboard_response(req: &UsageDashboardRequest) -> UsageDashb
             .map(|root| scan_grok_root(&root, start_ms, end_ms, &tz_clone))
     });
 
+    // Optional external enricher. Default OFF to keep dashboard native-only.
+    // Enable with NATIVES_USAGE_ENABLE_CCUSAGE=1 or settings key usage:ccusage_enabled=true.
     let since_str = ms_to_ccusage_date_str(start_ms, &tz);
     let until_str = ms_to_ccusage_date_str(end_ms - 1, &tz);
     let tz_name = req.time_zone.clone();
-
-    let ccusage_fut = scan_ccusage_all(&since_str, &until_str, &tz_name);
+    let ccusage_enabled = crate::usage::ccusage_enabled();
 
     let (
         claude_res,
@@ -108,16 +110,37 @@ pub async fn build_dashboard_response(req: &UsageDashboardRequest) -> UsageDashb
         gemini_res,
         grok_res,
         ccusage_res,
-    ) = tokio::join!(
-        claude_handle,
-        codex_handle,
-        atomcode_handle,
-        natives_handle,
-        opencode_handle,
-        gemini_handle,
-        grok_handle,
-        ccusage_fut
-    );
+    ) = if ccusage_enabled {
+        let ccusage_fut = scan_ccusage_all(&since_str, &until_str, &tz_name);
+        tokio::join!(
+            claude_handle,
+            codex_handle,
+            atomcode_handle,
+            natives_handle,
+            opencode_handle,
+            gemini_handle,
+            grok_handle,
+            ccusage_fut
+        )
+    } else {
+        let empty = async {
+            crate::usage::CcusageScanResult {
+                results: vec![],
+                verification: std::collections::HashMap::new(),
+                warnings: vec![],
+            }
+        };
+        tokio::join!(
+            claude_handle,
+            codex_handle,
+            atomcode_handle,
+            natives_handle,
+            opencode_handle,
+            gemini_handle,
+            grok_handle,
+            empty
+        )
+    };
 
     let claude_native = claude_res.unwrap_or_else(|_| ClaudeScanResult {
         daily: vec![],

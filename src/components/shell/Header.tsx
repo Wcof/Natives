@@ -30,11 +30,11 @@ const VIEW_LABELS: Record<string, string> = {
   dashboard: 'nav.dashboard',
   files: '',
   ai: 'header.aiWorkbench',
-  workshop: 'nav.workshop',
+  workshop: 'nav.modules',
   settings: 'nav.settings',
   tools: 'nav.tools',
   modules: 'nav.modules',
-  store: 'nav.store',
+  store: 'nav.modules',
 };
 
 interface FileState {

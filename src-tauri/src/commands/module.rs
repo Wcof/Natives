@@ -203,7 +203,7 @@ pub fn write_generated_module(
     let pool_conn = state.db.get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
-    module_manager::write_generated_module(
+    let outcome = module_manager::write_generated_module(
         conn,
         &modules_dir(),
         &module_id,
@@ -211,13 +211,21 @@ pub fn write_generated_module(
         &html_content,
         &permissions,
     )?;
-    // Emit hot-reload event so frontend menu refreshes immediately
+    // Emit hot-reload event so frontend menu refreshes immediately (R-T6)
     emit_db_state_changed(
         &app_handle,
         "module",
         serde_json::json!({ "action": "generated", "moduleId": module_id }),
     );
-    Ok(serde_json::json!({ "moduleId": module_id, "ok": true }))
+    // Keep moduleId + ok for older callers; surface full outcome for rollback UX.
+    Ok(serde_json::json!({
+        "moduleId": module_id,
+        "ok": true,
+        "oldContent": outcome.old_content,
+        "newContent": outcome.new_content,
+        "contractId": outcome.contract_id,
+        "contentHash": outcome.content_hash,
+    }))
 }
 
 /// 回滚模块到上一版本（US-6 一键回滚）。

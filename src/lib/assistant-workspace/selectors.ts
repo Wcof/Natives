@@ -33,7 +33,13 @@ export function selectConversationMessages(
           id: live.messageId,
           conversationId,
           role: 'assistant',
-          status: run.status === 'running' ? 'streaming' : run.status,
+          status:
+            run.status === 'running' ||
+            run.status === 'reasoning' ||
+            run.status === 'preparing' ||
+            run.status === 'queued'
+              ? 'streaming'
+              : run.status,
           createdAt: run.startedAt ?? new Date().toISOString(),
           contentBlocks: live.blocks,
           runId,

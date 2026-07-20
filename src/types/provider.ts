@@ -19,6 +19,11 @@ export interface ProviderPreset {
   iconColor?: string;
 }
 
+/**
+ * 供应商 API 协议（上游请求格式）。
+ * 前端新增流程仅暴露后端 test/discover 已支持的子集；
+ * gemini / ollama 保留在类型中供运行时/历史数据兼容，暂不在新增 UI 中配置。
+ */
 export type ApiProtocol =
   | 'openai_chat_completions'
   | 'openai_responses'

@@ -258,7 +258,7 @@ export function UsageDashboard() {
 
   const handleCopyMarkdown = useCallback(async () => {
     if (!filtered || !data || !metrics) return;
-    const period = `${new Date(data.range.startMs).toISOString().slice(0, 10)} – ${new Date(data.range.endMs).toISOString().slice(0, 10)}`;
+    const period = `${new Date(data.range.startMs).toLocaleDateString()} – ${new Date(data.range.endMs).toLocaleDateString()}`;
     const md = serializeUsageMarkdown(period, metrics, totalSessions);
     try {
       const api = window.nativesAPI;

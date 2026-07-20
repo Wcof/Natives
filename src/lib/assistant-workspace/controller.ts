@@ -247,7 +247,13 @@ export async function sendOrQueue(
     model_id: modelId,
     permission_profile: conversation?.permissionProfileId ?? 'ask',
     content,
-    attachments,
+    attachments: attachments.map((a) => ({
+      path: a.path,
+      name: a.name,
+      mime_type: a.mimeType,
+      mimeType: a.mimeType,
+      size: a.size,
+    })),
     project_path: projectPath,
   });
 
@@ -256,7 +262,11 @@ export async function sendOrQueue(
       ? (started as Run)
       : mapWireRun(started as Record<string, unknown>);
 
-  dispatch({ type: 'run/upsert', run: { ...mapped, status: 'running' } });
+  // Prefer host/daemon status; only promote bare "queued" to "preparing" so the
+  // UI does not sit on "排队中" while the engine is already spinning up.
+  const nextStatus =
+    mapped.status === 'queued' || mapped.status === 'created' ? 'preparing' : mapped.status;
+  dispatch({ type: 'run/upsert', run: { ...mapped, status: nextStatus } });
   dispatch({ type: 'composer/clear', conversationId });
   return { queued: false, runId: mapped.id };
 }

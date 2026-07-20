@@ -110,8 +110,13 @@ export function UsageSourcesPanel({ sources, warnings, lastRefresh, rtk }: Props
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {warnings.map((w, i) => (
               <div key={i} style={{ fontSize: 10, color: 'var(--text-dim)', padding: '2px 8px', borderRadius: 4, background: 'var(--bg-3)' }}>
-                <span style={{ color: 'var(--text-faint)' }}>{w.sourceId ?? 'system'}:</span> {w.code}
-                {Object.keys(w.details).length > 0 && (
+                <span style={{ color: 'var(--text-faint)' }}>{w.sourceId ?? 'system'}:</span>{' '}
+                {w.code === 'CLI_NOT_FOUND'
+                  ? (locale === 'zh'
+                      ? '未安装 ccusage（可选）。已使用本机日志扫描，不影响主统计。'
+                      : 'ccusage not installed (optional). Using native log scans for primary stats.')
+                  : w.code}
+                {Object.keys(w.details).length > 0 && w.code !== 'CLI_NOT_FOUND' && (
                   <span style={{ color: 'var(--text-faint)', marginLeft: 4 }}>
                     ({Object.entries(w.details).map(([k, v]) => `${k}=${v}`).join(', ')})
                   </span>

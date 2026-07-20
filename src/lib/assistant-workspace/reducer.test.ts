@@ -330,13 +330,41 @@ test('reasoning then text freezes reasoning and tool+terminal', () => {
     type: 'event/apply',
     event: ev('r1', 1, 'reasoning_delta', { text: 'plan' }),
   });
+  assert.equal(state.runs.r1!.status, 'reasoning');
   state = workspaceReducer(state, {
     type: 'event/apply',
     event: ev('r1', 2, 'text_delta', { text: 'answer' }),
   });
   assert.ok(state.liveByRun.r1!.reasoningFinishedAt);
+  assert.equal(state.runs.r1!.status, 'running');
   const msgs = selectConversationMessages(state, 'c1');
   assert.ok(msgs.some((m) => m.role === 'assistant'));
+});
+
+test('queued event does not regress preparing/running status', () => {
+  let state = withRun(createInitialWorkspaceState());
+  state = workspaceReducer(state, {
+    type: 'run/upsert',
+    run: {
+      ...state.runs.r1!,
+      status: 'preparing',
+    },
+  });
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 1, 'queued', {}),
+  });
+  assert.equal(state.runs.r1!.status, 'preparing');
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 2, 'started', {}),
+  });
+  assert.equal(state.runs.r1!.status, 'running');
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 3, 'queued', {}),
+  });
+  assert.equal(state.runs.r1!.status, 'running');
 });
 
 test('failed terminal from event only', () => {

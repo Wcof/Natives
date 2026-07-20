@@ -50,9 +50,10 @@ test('Sidebar - collapsed project state is frontend-only', () => {
   assert.ok(true, 'Collapsed state uses frontend-only persistence');
 });
 
-test('Sidebar - sidebar collapsed hides assistant tree entirely', () => {
-  // When sidebar is collapsed (width=0), all content including assistant section is hidden
-  assert.ok(true, 'Collapsed sidebar hides all content');
+test('Sidebar - sidebar collapsed keeps icon rail navigation', () => {
+  // Collapsed mode keeps SIDEBAR_COLLAPSED_WIDTH (64px) icon rail with expand control
+  // instead of hiding the entire sidebar (width=0)
+  assert.ok(true, 'Collapsed sidebar keeps icon rail');
 });
 
 test('Sidebar - stacked notification and settings are fixed at bottom', () => {

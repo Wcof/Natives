@@ -438,6 +438,9 @@ pub fn run() {
             // Usage
             commands::usage::usage_get_cached,
             commands::usage::usage_sync,
+            commands::usage::usage_get_ccusage_enabled,
+            commands::usage::usage_set_ccusage_enabled,
+            commands::usage::usage_detect_ccusage,
             // CodeGraph
             commands::codegraph::read_codegraph,
             commands::codegraph::rtk_gain,

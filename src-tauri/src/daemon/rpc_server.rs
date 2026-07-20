@@ -425,6 +425,11 @@ async fn dispatch_request(
 }
 
 fn production_daemon_owned_method(method: &str) -> bool {
+    // User-configured providers live in assistant.db and must be listed by the
+    // host handler. Daemon's provider.list only returns built-in adapter types.
+    if method == "provider.list" {
+        return false;
+    }
     crate::daemon_authority::authority_mode_label() == "uds"
         && assistant_protocol::v2::is_implemented_method(method)
 }
@@ -2236,6 +2241,10 @@ mod tests {
         assert!(production_daemon_owned_method("mcp.list"));
         assert!(production_daemon_owned_method("run.start"));
         assert!(production_daemon_owned_method("provider.test"));
+        assert!(
+            !production_daemon_owned_method("provider.list"),
+            "provider.list must remain host-owned"
+        );
         assert!(!production_daemon_owned_method("provider.create"));
 
         if let Some(value) = previous_mode {

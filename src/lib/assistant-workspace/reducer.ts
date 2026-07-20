@@ -20,22 +20,53 @@ import {
   type WorkspaceAction,
 } from './state';
 
+/** Lifecycle rank — higher means further along; used to prevent status regression. */
+function runStatusRank(status: RunStatus | string): number {
+  switch (status) {
+    case 'created':
+      return 0;
+    case 'queued':
+      return 1;
+    case 'preparing':
+      return 2;
+    case 'reasoning':
+    case 'running':
+    case 'waiting_permission':
+    case 'waiting_user':
+    case 'waiting_subagent':
+    case 'cancelling':
+    case 'background_watching':
+      return 3;
+    case 'completed':
+    case 'failed':
+    case 'cancelled':
+    case 'interrupted':
+      return 100;
+    default:
+      return 0;
+  }
+}
+
 function statusFromEventType(type: string): RunStatus | null {
   switch (type) {
     case 'queued':
       return 'queued';
     case 'preparing':
+    case 'generation_attempt_started':
       return 'preparing';
     case 'started':
-    case 'text_delta':
+      return 'running';
     case 'reasoning_delta':
+      return 'reasoning';
+    case 'text_delta':
+    case 'assistant_delta':
     case 'tool_call_requested':
     case 'tool_call_started':
     case 'tool_call_delta':
     case 'tool_call_completed':
     case 'progress':
       // progress.message may signal background_watching from engine
-      return null;
+      return 'running';
     case 'usage_updated':
     case 'file_changed':
     case 'permission_responded':
@@ -402,10 +433,15 @@ function applyOneEvent(
   ) {
     statusPatch = 'background_watching';
   }
-  // Never invent terminal status without terminal event
+  // Never invent terminal status without terminal event; never regress lifecycle.
   if (statusPatch) {
-    // Don't regress terminal runs
-    if (!isTerminalRunStatus(run.status) || isTerminalRunStatus(statusPatch)) {
+    const canApply =
+      (isTerminalRunStatus(statusPatch) && !isTerminalRunStatus(run.status)) ||
+      (!isTerminalRunStatus(run.status) &&
+        !isTerminalRunStatus(statusPatch) &&
+        runStatusRank(statusPatch) >= runStatusRank(run.status)) ||
+      (isTerminalRunStatus(run.status) && isTerminalRunStatus(statusPatch));
+    if (canApply) {
       run = {
         ...run,
         status: statusPatch,
@@ -429,6 +465,8 @@ function applyOneEvent(
               ? String(event.payload.name ?? event.payload.tool_name ?? run.activity ?? '')
               : run.activity,
       };
+    } else {
+      run = { ...run, lastEventSequence: event.sequence };
     }
   } else {
     run = { ...run, lastEventSequence: event.sequence };
@@ -439,12 +477,10 @@ function applyOneEvent(
     runs: { ...next.runs, [runId]: run },
     activeRunByConversation: {
       ...next.activeRunByConversation,
-      [run.conversationId]:
-        isTerminalRunStatus(run.status)
-          ? next.activeRunByConversation[run.conversationId] === runId
-            ? runId
-            : next.activeRunByConversation[run.conversationId] ?? runId
-          : runId,
+      // Terminal runs stay selectable for inspector, but status bar gates on isActive.
+      [run.conversationId]: isTerminalRunStatus(run.status)
+        ? next.activeRunByConversation[run.conversationId] ?? runId
+        : runId,
     },
   };
 

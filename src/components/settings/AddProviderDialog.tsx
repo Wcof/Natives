@@ -1,8 +1,13 @@
 'use client';
 
 import { useMemo, useState, type CSSProperties } from 'react';
-import { Check, ChevronRight, KeyRound, Loader, RefreshCw, Search, Server, ShieldCheck, Wifi } from 'lucide-react';
-import { CONFIGURABLE_PROVIDER_PRESETS } from '@/lib/provider-presets';
+import { Check, ChevronDown, ChevronRight, KeyRound, Loader, RefreshCw, Search, Server, ShieldCheck, Wifi } from 'lucide-react';
+import {
+  CONFIGURABLE_API_PROTOCOLS,
+  CONFIGURABLE_PROVIDER_PRESETS,
+  DEFAULT_API_PROTOCOL,
+  resolvePresetProtocol,
+} from '@/lib/provider-presets';
 import { t } from '@/i18n';
 import type { ApiProtocol, ProviderPreset } from '@/types/provider';
 import Modal from '@/components/ui/Modal';
@@ -42,10 +47,34 @@ function providerDescription(provider: ProviderPreset, locale: string) {
     : provider.description ?? '';
 }
 
+function protocolLabel(locale: string, protocol: ApiProtocol) {
+  switch (protocol) {
+    case 'anthropic_messages':
+      return t(locale, 'settings.apiProtocolAnthropic');
+    case 'openai_responses':
+      return t(locale, 'settings.apiProtocolOpenAIResponses');
+    case 'openai_chat_completions':
+    default:
+      return t(locale, 'settings.apiProtocolOpenAIChat');
+  }
+}
+
+function baseUrlHint(locale: string, protocol: ApiProtocol) {
+  switch (protocol) {
+    case 'anthropic_messages':
+      return t(locale, 'settings.baseUrlHintAnthropic');
+    case 'openai_responses':
+      return t(locale, 'settings.baseUrlHintResponses');
+    case 'openai_chat_completions':
+    default:
+      return t(locale, 'settings.baseUrlHintOpenAI');
+  }
+}
+
 export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<ProviderPreset | null>(null);
-  const [selectedProtocol, setSelectedProtocol] = useState<ApiProtocol>('openai_chat_completions');
+  const [selectedProtocol, setSelectedProtocol] = useState<ApiProtocol>(DEFAULT_API_PROTOCOL);
   const [name, setName] = useState('');
   const [websiteUrl, setWebsiteUrl] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
@@ -61,6 +90,7 @@ export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
   const [testResult, setTestResult] = useState<{ success: boolean; error?: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const filteredProviders = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -79,6 +109,7 @@ export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
   const detailsReady = Boolean(name.trim() && effectiveBaseUrl && effectiveApiKey);
   const canTest = detailsReady && Boolean(defaultModel.trim());
   const canSave = detailsReady && canTest && testResult?.success === true && !saving;
+  const protocolIsNonDefault = selectedProtocol !== DEFAULT_API_PROTOCOL;
 
   const invalidateConnection = () => {
     setModels([]);
@@ -90,13 +121,21 @@ export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
   };
 
   const selectProvider = (provider: ProviderPreset) => {
+    const protocol = resolvePresetProtocol(provider);
     setSelected(provider);
     setName(providerName(provider, locale));
     setWebsiteUrl(provider.websiteUrl);
     setBaseUrl(provider.baseUrl);
-    setSelectedProtocol(provider.protocol ?? 'anthropic_messages');
+    setSelectedProtocol(protocol);
     setKeyLabel('API Key 1');
     setApiKey('');
+    setAdvancedOpen(protocol !== DEFAULT_API_PROTOCOL);
+    invalidateConnection();
+  };
+
+  const changeProtocol = (protocol: ApiProtocol) => {
+    setSelectedProtocol(protocol);
+    setAdvancedOpen(true);
     invalidateConnection();
   };
 
@@ -109,6 +148,7 @@ export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
       const providerApi = window.nativesAPI?.provider;
       if (!providerApi?.discoverModels) throw new Error(t(locale, 'settings.modelDiscoveryUnavailable'));
       const discovered = normalizeDiscoveredModels(await providerApi.discoverModels({
+        // providerType is retained for adapter compatibility; protocol drives request shape.
         providerType: selectedProtocol,
         apiProtocol: selectedProtocol,
         baseUrl: effectiveBaseUrl,
@@ -122,7 +162,7 @@ export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
       setModels([]);
       setDefaultModel('');
       setDiscoveryFingerprint(null);
-      setDiscoveryError(classifyError(error).userMessage);
+      setDiscoveryError(classifyError(error, { locale }).userMessage);
     } finally {
       setDiscovering(false);
     }
@@ -144,7 +184,7 @@ export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
       });
       setTestResult({ success: result.success, error: result.userMessage ?? undefined });
     } catch (error) {
-      setTestResult({ success: false, error: classifyError(error).userMessage });
+      setTestResult({ success: false, error: classifyError(error, { locale }).userMessage });
     } finally {
       setTesting(false);
     }
@@ -170,7 +210,7 @@ export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
       setApiKey('');
       onClose();
     } catch (error) {
-      setSaveError(classifyError(error).userMessage);
+      setSaveError(classifyError(error, { locale }).userMessage);
       setSaving(false);
     }
   };
@@ -211,8 +251,53 @@ export default function AddProviderDialog({ locale, onClose, onSave }: Props) {
                   <div className="add-provider-field-grid">
                     <label><span>{t(locale, 'settings.providerName')}</span><input className="settings-input" value={name} onChange={(event) => setName(event.target.value)} placeholder={t(locale, 'settings.providerNamePlaceholder')} /></label>
                     <label><span>{t(locale, 'settings.websiteOptional')}</span><input className="settings-input" value={websiteUrl} onChange={(event) => setWebsiteUrl(event.target.value)} placeholder="https://example.com" /></label>
-                    <label className="wide"><span>{t(locale, 'settings.baseUrl')}</span><input className="settings-input add-provider-mono" value={baseUrl} onChange={(event) => { setBaseUrl(event.target.value); invalidateConnection(); }} placeholder="https://api.example.com/v1" /></label>
-                    <label><span>{locale.startsWith('zh') ? '协议' : 'Protocol'}</span><select className="settings-input" value={selectedProtocol} onChange={(event) => { setSelectedProtocol(event.target.value as ApiProtocol); invalidateConnection(); }}><option value="openai_chat_completions">OpenAI Chat Completions</option><option value="openai_responses">OpenAI Responses</option><option value="anthropic_messages">Anthropic Messages</option><option value="gemini_generate_content">Gemini Generate Content</option><option value="ollama_chat">Ollama Chat</option></select></label>
+                    <label className="wide">
+                      <span>{t(locale, 'settings.baseUrl')}</span>
+                      <input
+                        className="settings-input add-provider-mono"
+                        value={baseUrl}
+                        onChange={(event) => { setBaseUrl(event.target.value); invalidateConnection(); }}
+                        placeholder="https://api.example.com/v1"
+                      />
+                      <em className="add-provider-field-hint">{baseUrlHint(locale, selectedProtocol)}</em>
+                    </label>
+                  </div>
+
+                  <div className="add-provider-advanced">
+                    <button
+                      type="button"
+                      className="add-provider-advanced-toggle"
+                      aria-expanded={advancedOpen}
+                      onClick={() => setAdvancedOpen((open) => !open)}
+                    >
+                      {advancedOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      <span>{t(locale, 'settings.advancedOptions')}</span>
+                      {protocolIsNonDefault && !advancedOpen && (
+                        <span className="add-provider-advanced-badge">{protocolLabel(locale, selectedProtocol)}</span>
+                      )}
+                    </button>
+                    {!advancedOpen && (
+                      <p className="add-provider-advanced-summary">{t(locale, 'settings.advancedOptionsHint')}</p>
+                    )}
+                    {advancedOpen && (
+                      <div className="add-provider-advanced-body">
+                        <label>
+                          <span>{t(locale, 'settings.apiProtocol')}</span>
+                          <select
+                            className="settings-input"
+                            value={selectedProtocol}
+                            onChange={(event) => changeProtocol(event.target.value as ApiProtocol)}
+                          >
+                            {CONFIGURABLE_API_PROTOCOLS.map((protocol) => (
+                              <option key={protocol} value={protocol}>
+                                {protocolLabel(locale, protocol)}
+                              </option>
+                            ))}
+                          </select>
+                          <em className="add-provider-field-hint">{t(locale, 'settings.apiProtocolHint')}</em>
+                        </label>
+                      </div>
+                    )}
                   </div>
                 </section>
 

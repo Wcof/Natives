@@ -14,7 +14,9 @@ import { useToast } from '@/components/ui/Toast';
 import { classifyError } from '@/lib/error-classifier';
 import {
   classifyProviderReadiness,
+  mapWireProviders,
   selectAssistantModel,
+  toProviderInfo,
   type ProviderReadiness,
 } from '@/lib/provider-model-selection';
 import {
@@ -220,38 +222,12 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         }
 
         try {
-          const list = await gateway.request<Array<Record<string, unknown>>>('provider.list', {});
-          const mapped: ProviderWithModels[] = (Array.isArray(list) ? list : []).map((p) => {
-            const name = String(p.display_name ?? p.displayName ?? p.name ?? p.id);
-            return {
-              id: String(p.id),
-              name,
-              presetName: String(p.provider_type ?? p.presetName ?? name),
-              baseUrl: String(p.api_base_url ?? p.baseUrl ?? ''),
-              keys: (p.has_active_key ?? p.hasActiveKey ?? true)
-                ? [{ id: 'active', label: 'default', maskedKey: '••••' }]
-                : [],
-              models: Array.isArray(p.models)
-                ? (p.models as Array<Record<string, unknown>>).map((m) => ({
-                    id: String(m.id),
-                    displayName: String(m.display_name ?? m.displayName ?? m.id),
-                  }))
-                : [],
-            };
-          });
+          // Production returns `{ providers: [...] }`; fixtures may return a bare array.
+          const list = await gateway.request<unknown>('provider.list', {});
+          const mapped: ProviderWithModels[] = mapWireProviders(list);
           if (!cancelled) {
             setProviders(mapped);
-            setProviderReadiness(
-              classifyProviderReadiness(
-                mapped.map((p) => ({
-                  id: p.id,
-                  provider_type: p.presetName,
-                  display_name: p.name,
-                  has_active_key: p.keys.length > 0,
-                  models: (p.models ?? []).map((m) => ({ id: m.id, display_name: m.displayName })),
-                })),
-              ),
-            );
+            setProviderReadiness(classifyProviderReadiness(toProviderInfo(mapped)));
           }
         } catch (err) {
           if (!cancelled) {
@@ -391,15 +367,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       let modelId = activeConversation?.modelId ?? '';
 
       if (!providerId || !modelId) {
-        const pick = selectAssistantModel(
-          providers.map((p) => ({
-            id: p.id,
-            provider_type: p.presetName,
-            display_name: p.name,
-            has_active_key: p.keys.length > 0,
-            models: (p.models ?? []).map((m) => ({ id: m.id, display_name: m.displayName })),
-          })),
-        );
+        const pick = selectAssistantModel(toProviderInfo(providers));
         if (pick) {
           providerId = pick.providerId;
           modelId = pick.modelId;
@@ -536,15 +504,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       createConversation: () => {
         const id = `temp-${Date.now()}`;
         const now = new Date().toISOString();
-        const pick = selectAssistantModel(
-          providers.map((p) => ({
-            id: p.id,
-            provider_type: p.presetName,
-            display_name: p.name,
-            has_active_key: p.keys.length > 0,
-            models: (p.models ?? []).map((m) => ({ id: m.id, display_name: m.displayName })),
-          })),
-        );
+        const pick = selectAssistantModel(toProviderInfo(providers));
         if (!pick) {
           toast(zh ? '请先配置供应商和模型' : 'Configure provider and model first', 'error');
           return;
@@ -668,15 +628,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         run: () => {
           const id = `temp-${Date.now()}`;
           const now = new Date().toISOString();
-          const pick = selectAssistantModel(
-            providers.map((p) => ({
-              id: p.id,
-              provider_type: p.presetName,
-              display_name: p.name,
-              has_active_key: p.keys.length > 0,
-              models: (p.models ?? []).map((m) => ({ id: m.id, display_name: m.displayName })),
-            })),
-          );
+          const pick = selectAssistantModel(toProviderInfo(providers));
           if (!pick) {
             toast(zh ? '请先配置供应商和模型' : 'Configure provider and model first', 'error');
             return;
@@ -1038,16 +990,31 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             }
             permissionProfile={permissionProfile}
             onPermissionChange={async (profile: AssistantPermissionProfile) => {
-              if (!activeId || activeId.startsWith('temp-')) return;
-              await gateway.request('conversation.update_permission', {
-                id: activeId,
-                permission_profile_id: profile,
-              });
+              // Always update local conversation state so the picker reflects the choice.
               if (activeConversation) {
                 dispatch({
                   type: 'conversations/upsert',
                   conversation: { ...activeConversation, permissionProfileId: profile },
                 });
+              } else if (activeId) {
+                // Temp conversation shell without full object — create minimal patch via store.
+                const existing = stateRef.current.conversations[activeId];
+                if (existing) {
+                  dispatch({
+                    type: 'conversations/upsert',
+                    conversation: { ...existing, permissionProfileId: profile },
+                  });
+                }
+              }
+              // Persist only when the conversation is real on the host.
+              if (!activeId || activeId.startsWith('temp-')) return;
+              try {
+                await gateway.request('conversation.update_permission', {
+                  id: activeId,
+                  permission_profile_id: profile,
+                });
+              } catch (err) {
+                toast(classifyError(err).userMessage, 'error');
               }
             }}
             providers={providers}

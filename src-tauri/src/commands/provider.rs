@@ -403,11 +403,25 @@ pub fn add_provider(state: State<'_, AppState>, input: AddProviderInput) -> Resu
         .commit()
         .map_err(|e| Error::Internal(e.to_string()))?;
 
-    let assistant = crate::db::get_assistant_db_conn()?;
-    assistant.execute(
-        "INSERT OR IGNORE INTO assistant_model_cache (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at) VALUES (?1, ?2, ?3, ?4, '{}', 0, 0, 'manual', datetime('now'))",
-        params![uuid_v4(), id, default_model, default_model],
-    ).map_err(|e| Error::Internal(e.to_string()))?;
+    // Keep assistant.db in sync so AssistantWorkbench provider.list / run.start
+    // can see the same provider/model pair that Settings just saved.
+    mirror_provider_to_assistant(
+        &id,
+        &provider_type,
+        &display_name,
+        &base_url,
+        input.website_url.trim(),
+        &default_model,
+        &kid,
+        key_label,
+        &encrypted,
+        &masked_key,
+        &now,
+        &[DiscoveredModel {
+            id: default_model.clone(),
+            display_name: Some(default_model.clone()),
+        }],
+    )?;
 
     let key = ProviderKey {
         id: kid,
@@ -511,10 +525,15 @@ pub fn provider_update_defaults(
     if updated == 0 {
         return Err(Error::InvalidInput("Provider not found".to_string()));
     }
+    let now = chrono_now();
     let assistant = crate::db::get_assistant_db_conn()?;
+    let _ = assistant.execute(
+        "UPDATE assistant_provider_configs SET default_model = ?1, updated_at = ?2 WHERE id = ?3",
+        params![model, now, input.provider_id],
+    );
     assistant.execute(
         "INSERT OR IGNORE INTO assistant_model_cache (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at) VALUES (?1, ?2, ?3, ?4, '{}', 0, 0, 'manual', datetime('now'))",
-        params![uuid_v4(), input.provider_id, model, model],
+        params![format!("{}:{}", input.provider_id, model), input.provider_id, model, model],
     ).map_err(|e| Error::Internal(e.to_string()))?;
     Ok(())
 }
@@ -618,6 +637,23 @@ pub fn delete_provider(state: State<'_, AppState>, provider_id: String) -> Resul
         params![provider_id],
     )
     .map_err(|e| Error::Internal(e.to_string()))?;
+
+    // Best-effort cleanup of the assistant mirror so the picker does not keep
+    // a deleted provider around after Settings removes it.
+    if let Ok(assistant) = crate::db::get_assistant_db_conn() {
+        let _ = assistant.execute(
+            "DELETE FROM assistant_model_cache WHERE provider_id = ?1",
+            params![provider_id],
+        );
+        let _ = assistant.execute(
+            "DELETE FROM assistant_provider_keys WHERE provider_id = ?1",
+            params![provider_id],
+        );
+        let _ = assistant.execute(
+            "DELETE FROM assistant_provider_configs WHERE id = ?1",
+            params![provider_id],
+        );
+    }
     Ok(())
 }
 
@@ -735,40 +771,54 @@ fn models_url(provider_type: &str, base_url: &str) -> Result<String> {
     }
 }
 
+fn non_empty_text(value: &serde_json::Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|text| !text.trim().is_empty())
+}
+
+/// Whether a provider test response proves the endpoint/model is usable.
+///
+/// Reasoning-first OpenAI-compatible models (e.g. SenseNova deepseek-v4-flash)
+/// often return empty `message.content` while filling `reasoning_content` /
+/// `reasoning` when `max_tokens` is small. Treat those as success — the key,
+/// base URL, protocol, and model are all valid. cc-switch connectivity checks
+/// similarly accept any reachable HTTP response rather than requiring final
+/// assistant text.
 fn provider_response_has_content(provider_type: &str, value: &serde_json::Value) -> bool {
     match normalize_api_protocol(provider_type).as_str() {
-        "anthropic_messages" => value["content"].as_array().is_some_and(|blocks| {
-            blocks.iter().any(|block| {
-                block["text"]
-                    .as_str()
-                    .is_some_and(|text| !text.trim().is_empty())
-            })
-        }),
-        "openai_responses" => {
-            value["output_text"]
-                .as_str()
-                .is_some_and(|text| !text.trim().is_empty())
-                || value["output"].as_array().is_some_and(|items| {
-                    items.iter().any(|item| {
-                        item["content"].as_array().is_some_and(|blocks| {
-                            blocks.iter().any(|block| {
-                                block["text"]
-                                    .as_str()
-                                    .is_some_and(|text| !text.trim().is_empty())
-                            })
-                        })
+        "anthropic_messages" => {
+            // Prefer real text/thinking blocks; fall back to any well-formed content array
+            // (connectivity proof). Auth/protocol/model are already validated by HTTP 200.
+            value["content"].as_array().is_some_and(|blocks| {
+                !blocks.is_empty()
+                    && blocks.iter().any(|block| {
+                        non_empty_text(&block["text"])
+                            || non_empty_text(&block["thinking"])
+                            || block.get("type").is_some()
                     })
-                })
+            }) || (value.get("id").is_some() && value.get("model").is_some())
+        }
+        "openai_responses" => {
+            non_empty_text(&value["output_text"])
+                || value["output"].as_array().is_some_and(|items| !items.is_empty())
+                || (value.get("id").is_some() && value.get("model").is_some())
         }
         _ => {
-            let content = &value["choices"][0]["message"]["content"];
-            content.as_str().is_some_and(|text| !text.trim().is_empty())
+            let message = &value["choices"][0]["message"];
+            let content = &message["content"];
+            non_empty_text(content)
                 || content.as_array().is_some_and(|blocks| {
-                    blocks.iter().any(|block| {
-                        block["text"]
-                            .as_str()
-                            .is_some_and(|text| !text.trim().is_empty())
-                    })
+                    blocks.iter().any(|block| non_empty_text(&block["text"]))
+                })
+                // Reasoning-only completion still proves connectivity/auth/model.
+                || non_empty_text(&message["reasoning_content"])
+                || non_empty_text(&message["reasoning"])
+                // Some gateways put text under delta-shaped fields even on non-stream.
+                || non_empty_text(&value["choices"][0]["text"])
+                // Last resort: HTTP 200 with a well-formed choice is enough for "test connection".
+                || value["choices"].as_array().is_some_and(|choices| {
+                    !choices.is_empty() && choices[0].get("message").is_some()
                 })
         }
     }
@@ -787,21 +837,24 @@ fn provider_test_body(provider_type: &str, model: &str) -> Result<serde_json::Va
             "messages": [
                 { "role": "user", "content": "Reply with exactly: ok" }
             ],
-            "max_tokens": 16,
+            // Reasoning/thinking models may consume the budget before final text.
+            "max_tokens": 64,
             "stream": false,
         })),
         "openai_responses" => Ok(serde_json::json!({
             "model": model,
             "input": "Reply with exactly: ok",
-            "max_output_tokens": 16,
+            "max_output_tokens": 64,
             "stream": false,
         })),
         "openai_chat_completions" => Ok(serde_json::json!({
             "model": model,
+            // Keep the prompt short; reasoning models may spend the budget on
+            // reasoning_content before producing final content.
             "messages": [
                 { "role": "user", "content": "Reply with exactly: ok" }
             ],
-            "max_tokens": 16,
+            "max_tokens": 64,
             "stream": false,
         })),
         protocol => Err(Error::InvalidInput(format!(
@@ -830,6 +883,35 @@ fn provider_test_error(
         message,
     )
 }
+
+
+fn provider_test_is_rate_limited(result: &ProviderTestResult) -> bool {
+    result
+        .error
+        .as_deref()
+        .is_some_and(|err| {
+            let lower = err.to_ascii_lowercase();
+            lower.contains("http_status=429")
+                || lower.contains("rate limited")
+                || lower.contains("too many requests")
+        })
+}
+
+async fn execute_provider_test_with_retry(
+    provider_type: &str,
+    base_url: &str,
+    api_key: &str,
+    model: Option<&str>,
+) -> ProviderTestResult {
+    let first = execute_provider_test(provider_type, base_url, api_key, model).await;
+    if first.success || !provider_test_is_rate_limited(&first) {
+        return first;
+    }
+    // One short backoff: many gateways burst-limit the discover+test sequence.
+    tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+    execute_provider_test(provider_type, base_url, api_key, model).await
+}
+
 
 #[tauri::command]
 pub async fn provider_discover_models(
@@ -954,10 +1036,20 @@ pub async fn provider_discover_models_saved(
     )
     .map_err(|e| Error::Internal(e.to_string()))?;
     for model in &models {
+        // Stable id so re-discovery after DELETE is deterministic; unique index
+        // on (provider_id, model_id) also guards against residual duplicates.
         tx.execute(
-            "INSERT INTO assistant_model_cache (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at) VALUES (?1, ?2, ?3, ?4, '{}', 0, 0, 'api_discovery', datetime('now'))",
-            params![uuid_v4(), provider_id, model.id, model.display_name],
-        ).map_err(|e| Error::Internal(e.to_string()))?;
+            "INSERT OR REPLACE INTO assistant_model_cache
+             (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at)
+             VALUES (?1, ?2, ?3, ?4, '{}', 0, 0, 'api_discovery', datetime('now'))",
+            params![
+                format!("{provider_id}:{}", model.id),
+                provider_id,
+                model.id,
+                model.display_name
+            ],
+        )
+        .map_err(|e| Error::Internal(e.to_string()))?;
     }
     tx.commit().map_err(|e| Error::Internal(e.to_string()))?;
     Ok(models)
@@ -1055,7 +1147,7 @@ async fn execute_provider_test(
                                 ProviderTestResult {
                                     success: false,
                                     error: Some(provider_test_error(&protocol, Some(model), Some(status), request_id, format!(
-                                        "Provider returned no assistant text. Check protocol/model. Response keys: {keys}"
+                                        "Provider returned an empty assistant payload. Check protocol/model. Response keys: {keys}"
                                     ))),
                                 }
                             }
@@ -1304,9 +1396,15 @@ pub async fn provider_test(
 
     let model = input.model.or(default_model);
     let protocol = normalize_api_protocol(&api_protocol);
-    let result = execute_provider_test(&protocol, &base_url, &api_key, model.as_deref()).await;
+    let result = execute_provider_test_with_retry(&protocol, &base_url, &api_key, model.as_deref()).await;
     let now = chrono_now();
-    let status = if result.success { "valid" } else { "invalid" };
+    let status = if result.success {
+        "valid"
+    } else if provider_test_is_rate_limited(&result) {
+        "rate_limited"
+    } else {
+        "invalid"
+    };
     state.db.get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?
         .execute(
@@ -1321,7 +1419,7 @@ pub async fn provider_test(
 #[tauri::command]
 pub async fn test_provider_raw(input: RawProviderTestInput) -> Result<ProviderTestResult> {
     let protocol = required_api_protocol(input.api_protocol.as_deref())?;
-    Ok(execute_provider_test(
+    Ok(execute_provider_test_with_retry(
         &protocol,
         &input.base_url,
         &input.api_key,
@@ -1481,6 +1579,190 @@ fn chrono_now() -> String {
     Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
+/// Mirror a settings-owned provider into assistant.db tables used by
+/// `provider.list` / `run.start`. Settings writes natives.db; assistant reads
+/// assistant.db — without this mirror the picker stays empty after add.
+fn mirror_provider_to_assistant(
+    provider_id: &str,
+    provider_type: &str,
+    display_name: &str,
+    base_url: &str,
+    website_url: &str,
+    default_model: &str,
+    key_id: &str,
+    key_label: &str,
+    encrypted_key: &str,
+    masked_key: &str,
+    now: &str,
+    models: &[DiscoveredModel],
+) -> Result<()> {
+    let assistant = crate::db::get_assistant_db_conn()?;
+
+    // Defensive: Settings pool init historically only created session tables.
+    // DataStore migrations own the full schema, but ensure picker tables exist
+    // even if this write races ahead of host store init.
+    assistant
+        .execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS assistant_provider_configs (
+                id TEXT PRIMARY KEY,
+                provider_type TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                api_base_url TEXT NOT NULL,
+                website_url TEXT NOT NULL DEFAULT '',
+                organization_id TEXT,
+                project_id TEXT,
+                proxy_url TEXT,
+                timeout_secs INTEGER,
+                default_model TEXT,
+                health_status TEXT NOT NULL DEFAULT 'unknown',
+                last_test_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS assistant_provider_keys (
+                id TEXT PRIMARY KEY,
+                provider_id TEXT NOT NULL REFERENCES assistant_provider_configs(id) ON DELETE CASCADE,
+                encrypted_key TEXT NOT NULL,
+                masked_key TEXT NOT NULL,
+                label TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                is_primary INTEGER NOT NULL DEFAULT 0,
+                test_status TEXT NOT NULL DEFAULT 'untested',
+                last_test_at TEXT,
+                last_test_ok INTEGER,
+                last_error_code TEXT,
+                last_error_message TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS assistant_model_cache (
+                id TEXT PRIMARY KEY,
+                provider_id TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                display_name TEXT,
+                capabilities TEXT NOT NULL,
+                context_window INTEGER NOT NULL,
+                max_output INTEGER NOT NULL,
+                source TEXT NOT NULL DEFAULT 'api_discovery',
+                discovered_at TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_model_cache_provider_model
+                ON assistant_model_cache(provider_id, model_id);
+            ",
+        )
+        .map_err(|e| Error::Internal(format!("assistant provider schema ensure failed: {e}")))?;
+
+    // Collapse historical duplicates then enforce uniqueness even on older DBs.
+    let _ = assistant.execute_batch(
+        "DELETE FROM assistant_model_cache
+         WHERE rowid NOT IN (
+             SELECT MIN(rowid) FROM assistant_model_cache GROUP BY provider_id, model_id
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_model_cache_provider_model
+             ON assistant_model_cache(provider_id, model_id);",
+    );
+
+    assistant
+        .execute(
+            "INSERT INTO assistant_provider_configs
+             (id, provider_type, display_name, api_base_url, website_url, default_model, health_status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'unknown', ?7, ?7)
+             ON CONFLICT(id) DO UPDATE SET
+                provider_type = excluded.provider_type,
+                display_name = excluded.display_name,
+                api_base_url = excluded.api_base_url,
+                website_url = excluded.website_url,
+                default_model = excluded.default_model,
+                updated_at = excluded.updated_at",
+            params![
+                provider_id,
+                provider_type,
+                display_name,
+                base_url,
+                website_url,
+                default_model,
+                now
+            ],
+        )
+        .map_err(|e| Error::Internal(format!("assistant provider mirror failed: {e}")))?;
+
+    assistant
+        .execute(
+            "INSERT INTO assistant_provider_keys
+             (id, provider_id, encrypted_key, masked_key, label, is_active, is_primary, test_status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 1, 1, 'untested', ?6, ?6)
+             ON CONFLICT(id) DO UPDATE SET
+                encrypted_key = excluded.encrypted_key,
+                masked_key = excluded.masked_key,
+                label = excluded.label,
+                is_active = 1,
+                is_primary = 1,
+                updated_at = excluded.updated_at",
+            params![
+                key_id,
+                provider_id,
+                encrypted_key,
+                masked_key,
+                key_label,
+                now
+            ],
+        )
+        .map_err(|e| Error::Internal(format!("assistant key mirror failed: {e}")))?;
+
+    // Ensure at most one primary key is marked for this provider in assistant.db.
+    let _ = assistant.execute(
+        "UPDATE assistant_provider_keys SET is_primary = 0 WHERE provider_id = ?1 AND id != ?2",
+        params![provider_id, key_id],
+    );
+
+    if !models.is_empty() {
+        for model in models {
+            let model_id = model.id.trim();
+            if model_id.is_empty() {
+                continue;
+            }
+            let display = model
+                .display_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(model_id);
+            assistant
+                .execute(
+                    "INSERT OR IGNORE INTO assistant_model_cache
+                     (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at)
+                     VALUES (?1, ?2, ?3, ?4, '{}', 0, 0, 'manual', ?5)",
+                    params![
+                        format!("{provider_id}:{model_id}"),
+                        provider_id,
+                        model_id,
+                        display,
+                        now
+                    ],
+                )
+                .map_err(|e| Error::Internal(format!("assistant model mirror failed: {e}")))?;
+        }
+    } else if !default_model.trim().is_empty() {
+        assistant
+            .execute(
+                "INSERT OR IGNORE INTO assistant_model_cache
+                 (id, provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at)
+                 VALUES (?1, ?2, ?3, ?4, '{}', 0, 0, 'manual', ?5)",
+                params![
+                    format!("{provider_id}:{default_model}"),
+                    provider_id,
+                    default_model,
+                    default_model,
+                    now
+                ],
+            )
+            .map_err(|e| Error::Internal(format!("assistant default model mirror failed: {e}")))?;
+    }
+
+    Ok(())
+}
+
 // ── Tests ──
 
 #[cfg(test)]
@@ -1566,7 +1848,30 @@ mod tests {
         let openai = serde_json::json!({"choices": [{"message": {"content": "ok"}}]});
         let responses = serde_json::json!({"output_text": "ok"});
         let anthropic = serde_json::json!({"content": [{"type": "text", "text": "ok"}]});
+        // SenseNova deepseek-v4-flash style: empty content, non-empty reasoning.
+        let reasoning_only = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_content": "We are asked to reply with exactly ok."
+                },
+                "finish_reason": "length"
+            }]
+        });
+        // Well-formed choice with empty fields still proves connectivity.
+        let empty_but_formed = serde_json::json!({
+            "choices": [{ "message": { "role": "assistant", "content": "" } }]
+        });
         assert!(provider_response_has_content("openai_compatible", &openai));
+        assert!(provider_response_has_content(
+            "openai_chat_completions",
+            &reasoning_only
+        ));
+        assert!(provider_response_has_content(
+            "openai_chat_completions",
+            &empty_but_formed
+        ));
         assert!(provider_response_has_content(
             "openai_responses",
             &responses
@@ -1575,6 +1880,20 @@ mod tests {
         assert!(provider_response_has_content(
             "anthropic_messages",
             &anthropic
+        ));
+        let anthropic_thinking = serde_json::json!({
+            "id": "msg_1",
+            "model": "claude",
+            "content": [{"type": "thinking", "thinking": "plan..."}]
+        });
+        assert!(provider_response_has_content(
+            "anthropic_messages",
+            &anthropic_thinking
+        ));
+        let responses_id_only = serde_json::json!({"id": "resp_1", "model": "gpt", "output": []});
+        assert!(provider_response_has_content(
+            "openai_responses",
+            &responses_id_only
         ));
         assert_eq!(
             provider_test_url("anthropic_messages", "https://api.anthropic.com").unwrap(),
@@ -1745,6 +2064,51 @@ mod tests {
 
     /// Verify that the ProviderKey DTO struct used for frontend communication
     /// has masked_key instead of an api_key field.
+
+
+    /// Regression: chat-completions 429 must surface a structured rate-limit error.
+    /// Spins a local HTTP server that returns 429, then asserts the exact error
+    /// shape currently shown in the UI (protocol/model/http_status/retryable/message).
+    #[test]
+    fn provider_test_surfaces_rate_limit_for_chat_completions() {
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind mock server");
+        let addr = server.server_addr().to_ip().expect("ip addr");
+        let base = format!("http://{}:{}/v1", addr.ip(), addr.port());
+
+        let handle = std::thread::spawn(move || {
+            let request = server.recv().expect("recv");
+            assert_eq!(request.url(), "/v1/chat/completions");
+            let response = tiny_http::Response::from_string(
+                r#"{"error":{"message":"Rate limit exceeded for model deepseek-v4-flash","type":"rate_limit_error"}}"#,
+            )
+            .with_status_code(429)
+            .with_header(
+                "x-request-id: 2e75f801-ffc9-42d0-aad5-22b9179b355b"
+                    .parse::<tiny_http::Header>()
+                    .unwrap(),
+            );
+            request.respond(response).ok();
+        });
+
+        let result = tauri::async_runtime::block_on(execute_provider_test(
+            "openai_chat_completions",
+            &base,
+            "sk-test",
+            Some("deepseek-v4-flash"),
+        ));
+
+        handle.join().expect("server thread");
+
+        assert!(!result.success, "429 must not be treated as success");
+        let err = result.error.expect("error message required");
+        assert!(err.contains("Provider test failed:"), "missing prefix: {err}");
+        assert!(err.contains("protocol=openai_chat_completions"), "missing protocol: {err}");
+        assert!(err.contains("model=deepseek-v4-flash"), "missing model: {err}");
+        assert!(err.contains("http_status=429"), "missing status: {err}");
+        assert!(err.contains("retryable=true"), "429 should be retryable: {err}");
+        assert!(err.contains("Rate limited"), "missing rate-limit message: {err}");
+    }
+
     #[test]
     fn test_provider_key_dto_has_masked_key_not_api_key() {
         // The ProviderKey struct is defined with `masked_key: String`
