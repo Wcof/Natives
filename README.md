@@ -1,6 +1,7 @@
 # Natives
 
-> **AI Steam Base** — AI 时代的桌面应用容器 · v0.1.0
+> **本机个人全能 AI 工作台** · 本地创意工坊 · v0.1.0  
+> （历史曾称 AI Steam Base；联网 Steam 式分享为远期能力）
 
 [![Tauri](https://img.shields.io/badge/Tauri-v2-blueviolet.svg)](https://v2.tauri.app/)
 [![Next.js](https://img.shields.io/badge/Next.js-15-black.svg)](https://nextjs.org/)
@@ -9,30 +10,34 @@
 [![Release](https://img.shields.io/badge/Release-v0.1.0-brightgreen.svg)](https://github.com/Wcof/Natives/releases)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Natives 是一个类似 **Steam + 创意工坊** 的桌面应用容器。它不是单体应用，而是一个**生态基座** — 用户在其中浏览、订阅、安装 Web 页面插件，通过内置终端运行 CLI 工具和 AI Agent，所有凭证和环境配置统一管理。
+Natives 是**本机个人全能 AI 工作台**：统一管理凭证与环境，内置终端与 AI Agent 编排，并在本地运行可热插拔的 Web 模块（创意工坊域）。你可在工作台上自研/AI 生成能力；**满意后再考虑分享**。联网商店式发现与上架为 **P2**，当前聚焦本地闭环。
+
+产品边界权威：[`docs/adr/0012-product-identity-workshop-scope.md`](docs/adr/0012-product-identity-workshop-scope.md) · [`docs/standards/product/01-positioning.md`](docs/standards/product/01-positioning.md)
 
 ---
 
 ## 核心特性
 
-- **🔌 零代码嵌入** — 插件通过 iframe + 本地 HTTP 服务加载，无需修改源码即可接入
-- **🎨 玻璃态视觉系统** — 液态玻璃 (Liquid Glass) UI 引擎，三套皮肤主题（浅色茉莉 / 琥珀档案馆 / 终端荧光绿），所有圆角、透明度、模糊强度均可通过滑块实时微调
-- **📊 CCUsage Token 统计** — 集成 `ccusage` CLI，实时追踪 Claude/Codex/RTK 的 Token 消耗、费用和技能调用，支持历史趋势图
-- **🔐 环境注入 & Shell 沙箱** — 多组环境配置 + AES-256-GCM 凭证加密存储，终端启动时自动注入
-- **🛡️ 子应用隔离** — 每个插件在独立 iframe sandbox 中运行，互不干扰
-- **💻 完整 PTY 终端** — 基于 portable-pty (Rust) + xterm.js，支持多 Tab、会话录制与回放、TUI 程序
-- **🏪 创意工坊** — 内置插件浏览、安装、管理界面
-- **🌐 国际化** — 中 / 英双语界面
-- **🛠️ 内置工具集** — 图片编辑器、截图标注、文件搜索、Git 状态查看、Release Wizard
+- **💻 完整 PTY 终端** — portable-pty (Rust) + xterm.js，多 Tab、环境注入、TUI
+- **🤖 AI 工作台** — Agent / Subagent 编排与用量等（Hub / capability）
+- **🔌 本地模块运行时** — iframe + 本地 HTTP；Unique Origin 沙箱；Bridge API
+- **🧬 本地创意工坊** — 生成/安装 web-module，事件驱动热上架；数据按 domain 长青（Workshop）
+- **🔐 环境注入 & 凭证** — 多组环境 + AES-256-GCM 加密存储
+- **🎨 玻璃态视觉系统** — Liquid Glass，多皮肤与设计令牌
+- **📊 CCUsage Token 统计** — 追踪 Claude/Codex 等用量（真实数据源）
+- **🌐 国际化** — 中 / 英双语
+- **🛠️ 内置工具集** — 文件、截图标注、Git 状态、Release Wizard 等
+- **📦 分发（P2）** — 将个人外置能力分享给他人：本地工坊跑通后再做联网商店
 
 ## 设计哲学
 
 | 哲学 | 核心思想 |
 |------|----------|
-| 应用消亡论 | 未来不是单体应用的天下，而是可组合的 MCP/API/微服务单元 |
-| UI 自生成 | 界面不应由开发者硬编码，应基于用户偏好动态生成 |
-| 用户主权 | 最终的审美和布局决策完全属于用户 |
-| 不造领域轮子 | 插件层直接嵌入现有工具；基座层必须自建 |
+| 工作台优先 | 全能工作台是身份；工坊是其中一域 |
+| 双轨组合 | web-module（SPA）与 capability（MCP/CLI/Agent）分轨 |
+| UI 可生成 | 短寿模块可 AI 生成；长青的是数据与契约 |
+| 用户主权 | 审美和布局决策归用户 |
+| 不造领域轮子 | 租户层嵌入现成工具；宿主基础设施自建 |
 
 ## 技术栈
 
