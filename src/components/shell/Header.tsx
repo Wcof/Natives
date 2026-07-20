@@ -11,16 +11,18 @@ import {
   FolderPlus,
   Search,
   ArrowUpDown,
-  SlidersHorizontal,
   X,
   ArrowUp,
   ArrowDown,
+  ArrowLeft,
+  ArrowRight,
   Eye,
   EyeOff,
   PanelLeft,
   HardDrive,
   MoreHorizontal,
-  LayoutGrid,
+  FolderSearch,
+  RefreshCw,
 } from 'lucide-react';
 
 // Tauri v2: drag region via data-tauri-drag-region attribute; no-drag is automatic
@@ -47,6 +49,12 @@ interface FileState {
   isFavorite: boolean;
   breadcrumbPath: string;
   projectBadge?: string | null;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
+  canGoUp?: boolean;
+  recentMode?: boolean;
+  searchQuery?: string;
+  loading?: boolean;
 }
 
 // Elastic breadcrumb. Layout rule (a segment = one clickable dir):
@@ -348,8 +356,46 @@ export default function Header({
 
       {/* 根据 activeView 渲染不同导航 */}
       {isFileView ? (
-        /* ── 文件浏览器：动态面包屑 + 控件 ── */
+        /* ── 文件浏览器：导航 + 动态面包屑 + 控件 ── */
         <>
+          {/* History / up / refresh — always visible in header chrome */}
+          <div className="flex items-center gap-0.5 shrink-0">
+            <button
+              className="btn-secondary-v1 !h-8 !w-8 !p-0 flex items-center justify-center"
+              disabled={!fs?.canGoBack}
+              onClick={() => dispatchAction('back')}
+              title={`${t(locale, 'fileBrowser.back')} ⌘[`}
+              style={{ opacity: fs?.canGoBack ? 1 : 0.35 }}
+            >
+              <ArrowLeft size={14} />
+            </button>
+            <button
+              className="btn-secondary-v1 !h-8 !w-8 !p-0 flex items-center justify-center"
+              disabled={!fs?.canGoForward}
+              onClick={() => dispatchAction('forward')}
+              title={`${t(locale, 'fileBrowser.forward')} ⌘]`}
+              style={{ opacity: fs?.canGoForward ? 1 : 0.35 }}
+            >
+              <ArrowRight size={14} />
+            </button>
+            <button
+              className="btn-secondary-v1 !h-8 !w-8 !p-0 flex items-center justify-center"
+              disabled={!fs?.canGoUp}
+              onClick={() => dispatchAction('up')}
+              title={t(locale, 'fileBrowser.goUp')}
+              style={{ opacity: fs?.canGoUp ? 1 : 0.35 }}
+            >
+              <ArrowUp size={14} />
+            </button>
+            <button
+              className="btn-secondary-v1 !h-8 !w-8 !p-0 flex items-center justify-center"
+              onClick={() => dispatchAction('refresh')}
+              title={t(locale, 'fileBrowser.refresh')}
+            >
+              <RefreshCw size={13} style={{ animation: fs?.loading ? 'spin 0.8s linear infinite' : undefined }} />
+            </button>
+          </div>
+
           {/* Dynamic breadcrumbs — smart truncation handled inside BreadcrumbPath */}
           <nav
             aria-label={t(locale, 'fileBrowser.breadcrumbLabel')}
@@ -422,7 +468,7 @@ export default function Header({
               </div>
             )}
 
-            {/* Sort — dropdown */}
+            {/* Sort — dropdown with live status */}
             <div ref={sortRef} className="relative">
               <button
                 className="btn-secondary-v1 !h-8 text-xs"
@@ -430,12 +476,19 @@ export default function Header({
                 title={t(locale, 'fileBrowser.sort')}
               >
                 <ArrowUpDown size={12} />
-                <span>{t(locale, 'fileBrowser.sort')}</span>
+                <span>
+                  {fs?.sortBy === 'mtime'
+                    ? t(locale, 'fileBrowser.modified')
+                    : fs?.sortBy === 'size'
+                      ? t(locale, 'fileBrowser.size')
+                      : t(locale, 'fileBrowser.name')}
+                  {fs?.sortDir === 'asc' ? ' ↑' : ' ↓'}
+                </span>
               </button>
               {sortOpen && (
                 <div
                   className="absolute right-0 top-full mt-1 z-50 min-w-[160px] rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-popup"
-                  
+
                 >
                   {([
                     { key: 'name', label: t(locale, 'fileBrowser.sortByName') },
@@ -493,7 +546,7 @@ export default function Header({
               {filterOpen && (
                 <div
                   className="absolute right-0 top-full mt-1 z-50 min-w-[140px] rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-popup"
-                  
+
                 >
                   <button
                     className={`flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs transition-all ${
@@ -527,8 +580,8 @@ export default function Header({
               )}
             </div>
 
-            {/* Search */}
-            <div className="relative flex items-center" >
+            {/* Local filter + global search */}
+            <div className="relative flex items-center gap-1">
               {searchOpen ? (
                 <div className="flex items-center gap-1 rounded-lg bg-[var(--surface)] border border-[var(--border)] px-2 py-1">
                   <Search size={12} className="text-[var(--text-disabled)] shrink-0" />
@@ -536,7 +589,8 @@ export default function Header({
                     ref={searchRef}
                     type="text"
                     className="bg-transparent border-none outline-none focus-visible:outline-none text-xs text-[var(--text)] w-[120px] placeholder:text-[var(--text-disabled)]"
-                    placeholder={t(locale, 'fileBrowser.searchPlaceholder')}
+                    placeholder={t(locale, 'fileBrowser.filterCurrent')}
+                    defaultValue={fs?.searchQuery ?? ''}
                     onChange={(e) => dispatchAction('search', e.target.value)}
                     onKeyDown={(e) => e.key === 'Escape' && setSearchOpen(false)}
                   />
@@ -552,11 +606,18 @@ export default function Header({
                 <button
                   className="btn-secondary-v1 !h-8 !w-8 !p-0 flex items-center justify-center"
                   onClick={() => setSearchOpen(true)}
-                  title={t(locale, 'fileBrowser.searchPlaceholder')}
+                  title={t(locale, 'fileBrowser.filterCurrent')}
                 >
                   <Search size={14} />
                 </button>
               )}
+              <button
+                className="btn-secondary-v1 !h-8 !w-8 !p-0 flex items-center justify-center"
+                onClick={() => dispatchAction('globalSearch')}
+                title={`${t(locale, 'fileBrowser.globalSearch')} ⌘⇧F`}
+              >
+                <FolderSearch size={14} />
+              </button>
             </div>
           </div>
         </>

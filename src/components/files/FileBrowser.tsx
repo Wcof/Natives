@@ -8,6 +8,8 @@ import FileGrid from './FileGrid';
 import FileList from './FileList';
 import FileContextMenu from './FileContextMenu';
 import DiskUsagePanel from './DiskUsagePanel';
+import FileNavShell from './FileNavShell';
+import FileSearch from './FileSearch';
 import Skeleton from '@/components/ui/Skeleton';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Modal from '@/components/ui/Modal';
@@ -66,17 +68,30 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   // Navigation history for back/forward
   const historyRef = useRef<string[]>(['/']);
   const historyIndexRef = useRef(0);
+  /** Bumped so canGoBack/canGoForward re-render after ref mutations. */
+  const [historyTick, setHistoryTick] = useState(0);
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const fileAreaRef = useRef<HTMLDivElement>(null);
   const gridContainerRef = useRef<HTMLDivElement>(null);
   const lastClickedIndexRef = useRef<number>(-1);
 
   const navigateTo = useCallback((path: string) => {
-    // Truncate forward history and append
+    const normalized = path === '' ? '/' : path.replace(/\/+$/, '') || '/';
+    // Truncate forward history and append (skip no-op)
+    if (historyRef.current[historyIndexRef.current] === normalized) {
+      setCurrentPath(normalized);
+      setRecentMode(false);
+      setSelectedPaths(new Set());
+      lastClickedIndexRef.current = -1;
+      return;
+    }
     const hist = historyRef.current.slice(0, historyIndexRef.current + 1);
-    hist.push(path);
+    hist.push(normalized);
     historyRef.current = hist;
     historyIndexRef.current = hist.length - 1;
-    setCurrentPath(path);
+    setHistoryTick((n) => n + 1);
+    setCurrentPath(normalized);
+    setRecentMode(false);
     setSelectedPaths(new Set());
     lastClickedIndexRef.current = -1;
   }, []);
@@ -84,24 +99,83 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const goBack = useCallback(() => {
     if (historyIndexRef.current > 0) {
       historyIndexRef.current--;
+      setHistoryTick((n) => n + 1);
       setCurrentPath(historyRef.current[historyIndexRef.current]!);
+      setRecentMode(false);
+      setSelectedPaths(new Set());
+      lastClickedIndexRef.current = -1;
     }
   }, []);
 
   const goForward = useCallback(() => {
     if (historyIndexRef.current < historyRef.current.length - 1) {
       historyIndexRef.current++;
+      setHistoryTick((n) => n + 1);
       setCurrentPath(historyRef.current[historyIndexRef.current]!);
+      setRecentMode(false);
+      setSelectedPaths(new Set());
+      lastClickedIndexRef.current = -1;
     }
   }, []);
 
+  const goUp = useCallback(() => {
+    if (currentPath === '/' || currentPath === '') return;
+    const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
+    if (parentPath !== currentPath) navigateTo(parentPath);
+  }, [currentPath, navigateTo]);
+
   const canGoBack = historyIndexRef.current > 0;
   const canGoForward = historyIndexRef.current < historyRef.current.length - 1;
+  const canGoUp = currentPath !== '/' && currentPath !== '';
+  // Keep historyTick referenced so React tracks navigation state for chrome buttons.
+  void historyTick;
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
   }, []);
+
+  /** Resolve pasted/typed path via fs.stat; open parent if target is a file. */
+  const resolveAndNavigate = useCallback(async (raw: string) => {
+    let path = raw.trim();
+    if (!path) return;
+    // Expand bare ~ to home if roots available
+    if (path === '~' || path.startsWith('~/')) {
+      try {
+        const roots = await (window as any).nativesAPI?.fs?.roots?.();
+        const home = Array.isArray(roots) ? roots.find((r: any) => r.id === 'home') : null;
+        if (home?.path) {
+          path = path === '~' ? home.path : home.path + path.slice(1);
+        }
+      } catch { /* keep as-is */ }
+    }
+    // Normalize double slashes except leading
+    path = path.replace(/\/{2,}/g, '/');
+    if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);
+
+    try {
+      const fsApi = (window as any).nativesAPI?.fs;
+      if (fsApi?.stat) {
+        const st = await fsApi.stat(path);
+        if (st?.found) {
+          if (st.isDir) {
+            navigateTo(st.path || path);
+          } else {
+            const parent = (st.path || path).substring(0, (st.path || path).lastIndexOf('/')) || '/';
+            navigateTo(parent);
+            // Soft-select after list loads: stash intended selection
+            (window as any).__pendingSelectFile = st.path || path;
+          }
+          return;
+        }
+        showToast(t(locale, 'fileBrowser.pathNotFound'));
+        return;
+      }
+    } catch {
+      // fall through to best-effort navigate
+    }
+    navigateTo(path);
+  }, [navigateTo, locale, showToast]);
 
   // Load favorites, locale, and default home root
   useEffect(() => {
@@ -132,6 +206,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           if (home?.path) {
             historyRef.current = [home.path];
             historyIndexRef.current = 0;
+            setHistoryTick((n) => n + 1);
             setCurrentPath(home.path);
           }
         }
@@ -280,11 +355,25 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         const dir = detail.value ?? '';
         if (dir) setNewItemTarget({ parentDir: dir, type: 'folder' });
       }
+      if (detail.type === 'newFile') {
+        const dir = detail.value ?? '';
+        if (dir) setNewItemTarget({ parentDir: dir, type: 'file' });
+      }
       if (detail.type === 'gridSize') setGridSize(detail.value);
+      if (detail.type === 'back') goBack();
+      if (detail.type === 'forward') goForward();
+      if (detail.type === 'up') goUp();
+      if (detail.type === 'refresh') void loadEntries();
+      if (detail.type === 'toggleRecent') setRecentMode((prev) => !prev);
+      if (detail.type === 'toggleFavorite') void toggleFavorite();
+      if (detail.type === 'globalSearch') setGlobalSearchOpen(true);
+      if (detail.type === 'goToPath' && typeof detail.value === 'string') {
+        void resolveAndNavigate(detail.value);
+      }
     };
     window.addEventListener('header-file-action', handler);
     return () => window.removeEventListener('header-file-action', handler);
-  }, []);
+  }, [goBack, goForward, goUp, loadEntries, toggleFavorite, resolveAndNavigate]);
 
   // Listen for external navigation events (from sidebar quick access)
   useEffect(() => {
@@ -877,9 +966,18 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     return () => window.removeEventListener('keydown', handleFileKeyDown);
   }, [filteredEntries, selectedIndex, viewMode, getGridColumns, onFileSelect, currentPath, renameTarget, newItemTarget, trashTarget, contextMenu, toggleFavorite, handleOpenEntry, handleRename, handleTrash, handleDuplicate, handleCopyEntry, handleCutEntry, handlePaste, handleBatchTrash, navigateTo, selectedPaths]);
 
-  // Reset selection when entries or path change
+  // Reset selection when entries or path change; honor pending file selection from path bar
   useEffect(() => {
     startTransition(() => {
+      const pending = (window as any).__pendingSelectFile as string | undefined;
+      if (pending && entries.some((e) => e.path === pending)) {
+        const idx = entries.findIndex((e) => e.path === pending);
+        setSelectedIndex(idx);
+        setSelectedPaths(new Set([pending]));
+        lastClickedIndexRef.current = idx;
+        delete (window as any).__pendingSelectFile;
+        return;
+      }
       setSelectedIndex(-1);
       setSelectedPaths(new Set());
       lastClickedIndexRef.current = -1;
@@ -928,9 +1026,10 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       viewMode, sortBy, sortDir, showHidden, gridSize,
       segments: segments.length > 0 ? segments : ['/'],
       isFavorite, breadcrumbPath: currentPath, projectBadge: detectedProject,
+      canGoBack, canGoForward, canGoUp, recentMode, searchQuery, loading,
     };
     window.dispatchEvent(new CustomEvent('header-file-state', { detail }));
-  }, [viewMode, sortBy, sortDir, showHidden, gridSize, segments, isFavorite, currentPath, detectedProject]);
+  }, [viewMode, sortBy, sortDir, showHidden, gridSize, segments, isFavorite, currentPath, detectedProject, canGoBack, canGoForward, canGoUp, recentMode, searchQuery, loading, historyTick]);
 
   return (
     <div style={{
@@ -940,8 +1039,32 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       background: 'var(--surface)',
       position: 'relative',
     }}>
+      {/* Navigation chrome: back/forward/up, editable path, filter, global search */}
+      <FileNavShell
+        currentPath={currentPath}
+        canGoBack={canGoBack}
+        canGoForward={canGoForward}
+        canGoUp={canGoUp}
+        isFavorite={isFavorite}
+        recentMode={recentMode}
+        searchQuery={searchQuery}
+        sortBy={sortBy}
+        sortDir={sortDir}
+        loading={loading}
+        onBack={goBack}
+        onForward={goForward}
+        onUp={goUp}
+        onRefresh={() => { void loadEntries(); }}
+        onToggleFavorite={() => { void toggleFavorite(); }}
+        onToggleRecent={() => setRecentMode((prev) => !prev)}
+        onSearchChange={setSearchQuery}
+        onOpenGlobalSearch={() => setGlobalSearchOpen(true)}
+        onPathSubmit={(path) => { void resolveAndNavigate(path); }}
+      />
+
       {/* File area — drop zone covers entire height including empty space */}
       <div
+        ref={fileAreaRef}
         {...dragHandlers}
         style={{ flex: 1, overflow: 'auto', position: 'relative' }}
         role="listbox"
@@ -1188,6 +1311,18 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           </>
         )}
       </Modal>
+
+      {/* Global name/content search (fanbox cmdk-class, scoped + recursive) */}
+      {globalSearchOpen && (
+        <FileSearch
+          rootPath={currentPath}
+          onClose={() => setGlobalSearchOpen(false)}
+          onNavigate={async (path) => {
+            setGlobalSearchOpen(false);
+            await resolveAndNavigate(path);
+          }}
+        />
+      )}
 
       {/* Disk Usage Panel (overlay) */}
       {diskUsageTarget && (
