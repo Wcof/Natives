@@ -30,6 +30,9 @@ interface FileContextMenuProps {
   onDiskUsage?: (dir: string) => void;
   onRename?: (entry: FileEntry) => void;
   onTrash?: (entry: FileEntry) => void;
+  onDuplicate?: (entry: FileEntry) => void;
+  onCopy?: (entry: FileEntry) => void;
+  onCopyPath?: (entry: FileEntry) => void;
   onNewFile?: (parentDir: string) => void;
   onNewFolder?: (parentDir: string) => void;
   onFavorite?: (entry: FileEntry) => void;
@@ -42,6 +45,7 @@ export default function FileContextMenu({
   entry, x, y, mode, parentDir, onClose,
   onOpen, onOpenInTerminal, onRevealInFinder, onOpenInEditor,
   onPreview, onDiskUsage, onRename, onTrash,
+  onDuplicate, onCopy, onCopyPath,
   onNewFile, onNewFolder, onFavorite, onUnfavorite,
   isFavorite, onEditImage,
 }: FileContextMenuProps) {
@@ -134,7 +138,9 @@ export default function FileContextMenu({
         mkItem({ label: t(locale, 'fileBrowser.diskUsage'), action: () => onDiskUsage?.(p) }),
         mkItem({ label: t(locale, 'fileBrowser.revealInFinder'), action: () => onRevealInFinder?.(entry) }),
         'sep',
-        mkItem({ label: t(locale, 'fileBrowser.copyPath'), action: () => { navigator.clipboard.writeText(p); } }),
+        mkItem({ label: t(locale, 'fileBrowser.copyPath'), action: () => onCopyPath?.(entry) ?? navigator.clipboard.writeText(p) }),
+        mkItem({ label: t(locale, 'fileBrowser.duplicate'), action: () => onDuplicate?.(entry), shortcut: '⌘D' }),
+        mkItem({ label: t(locale, 'fileBrowser.copy'), action: () => onCopy?.(entry), shortcut: '⌘C' }),
         'sep',
         mkItem({ label: t(locale, isFavorite ? 'fileBrowser.unfavorite' : 'fileBrowser.favorite'), action: () => {
           if (isFavorite) onUnfavorite?.(entry); else onFavorite?.(entry);
@@ -157,7 +163,9 @@ export default function FileContextMenu({
     items.push(
       mkItem({ label: t(locale, 'fileBrowser.revealInFinder'), action: () => onRevealInFinder?.(entry) }),
       'sep',
-      mkItem({ label: t(locale, 'fileBrowser.copyPath'), action: () => { navigator.clipboard.writeText(p); } }),
+      mkItem({ label: t(locale, 'fileBrowser.copyPath'), action: () => onCopyPath?.(entry) ?? navigator.clipboard.writeText(p) }),
+      mkItem({ label: t(locale, 'fileBrowser.duplicate'), action: () => onDuplicate?.(entry), shortcut: '⌘D' }),
+      mkItem({ label: t(locale, 'fileBrowser.copy'), action: () => onCopy?.(entry), shortcut: '⌘C' }),
       'sep',
       mkItem({ label: t(locale, isFavorite ? 'fileBrowser.unfavorite' : 'fileBrowser.favorite'), action: () => {
         if (isFavorite) onUnfavorite?.(entry); else onFavorite?.(entry);

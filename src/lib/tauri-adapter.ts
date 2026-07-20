@@ -257,13 +257,22 @@ export interface NativesAPI {
   };
   fs: {
     listDir: (dirPath: string, options?: unknown) => Promise<unknown>;
-    readFile: (filePath: string) => Promise<string>;
-    writeFileAtomic: (filePath: string, content: string, expectedMtime?: number) => Promise<void>;
-    createEntry: (targetPath: string, type: string) => Promise<{ ok: boolean }>;
-    renameEntry: (oldPath: string, newPath: string) => Promise<{ ok: boolean }>;
-    trashEntry: (filePath: string) => Promise<{ ok: boolean }>;
-    moveEntry: (from: string, to: string) => Promise<void>;
-    importFiles: (sourcePaths: string[], destDir: string) => Promise<void>;
+    listDirDetailed: (dirPath: string, options?: unknown) => Promise<{
+      path: string;
+      parent: string;
+      entries: unknown[];
+      project?: string | null;
+    }>;
+    readFile: (filePath: string) => Promise<unknown>;
+    writeFileAtomic: (filePath: string, content: string, expectedMtime?: number) => Promise<unknown>;
+    createEntry: (targetPath: string, type: string) => Promise<{ ok: boolean; error?: string }>;
+    renameEntry: (oldPath: string, newPath: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
+    trashEntry: (filePath: string) => Promise<{ ok: boolean; error?: string }>;
+    moveEntry: (from: string, to: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
+    copyEntry: (from: string, to: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
+    duplicateEntry: (filePath: string) => Promise<{ ok: boolean; path?: string; error?: string }>;
+    stat: (filePath: string) => Promise<{ found: boolean; path?: string; isDir?: boolean; name?: string; kind?: string; size?: number; mtime?: number }>;
+    importFiles: (sourcePaths: string[], destDir: string) => Promise<string[]>;
     recentFiles: (root: string) => Promise<unknown[]>;
     saveBlob: (dir: string, name: string, base64Data: string) => Promise<string>;
     convertFileSrc: (filePath: string) => string;
@@ -718,22 +727,62 @@ const nativesAPI: NativesAPI = {
   // File System
   fs: {
     listDir: (dirPath: string, options?: unknown) => cmd('fs_list_dir', { dirPath, options }),
+    listDirDetailed: (dirPath: string, options?: unknown) =>
+      cmd('fs_list_dir_detailed', { dirPath, options }),
     readFile: (filePath: string) => cmd('fs_read_file', { filePath }),
     writeFileAtomic: (filePath: string, content: string, expectedMtime?: number) =>
       cmd('fs_write_file_atomic', { filePath, content, expectedMtime }),
     createEntry: async (targetPath: string, type: string) => {
-      await cmd('fs_create_entry', { targetPath, type });
-      return { ok: true } as any;
+      try {
+        // Backend accepts "file" | "dir" | "folder". Tauri maps camelCase → snake_case.
+        const entryType = type === 'folder' ? 'folder' : type;
+        await cmd('fs_create_entry', { targetPath, entryType });
+        return { ok: true };
+      } catch (e: any) {
+        return { ok: false, error: e?.message || String(e) };
+      }
     },
     renameEntry: async (oldPath: string, newPath: string) => {
-      await cmd('fs_rename_entry', { oldPath, newPath });
-      return { ok: true } as any;
+      try {
+        const path = await cmd<string>('fs_rename_entry', { oldPath, newPath });
+        return { ok: true, path };
+      } catch (e: any) {
+        return { ok: false, error: e?.message || String(e) };
+      }
     },
     trashEntry: async (filePath: string) => {
-      await cmd('fs_trash_entry', { filePath });
-      return { ok: true } as any;
+      try {
+        await cmd('fs_trash_entry', { filePath });
+        return { ok: true };
+      } catch (e: any) {
+        return { ok: false, error: e?.message || String(e) };
+      }
     },
-    moveEntry: (from: string, to: string) => cmd('fs_move_entry', { from, to }),
+    moveEntry: async (from: string, to: string) => {
+      try {
+        const path = await cmd<string>('fs_move_entry', { from, to });
+        return { ok: true, path };
+      } catch (e: any) {
+        return { ok: false, error: e?.message || String(e) };
+      }
+    },
+    copyEntry: async (from: string, to: string) => {
+      try {
+        const path = await cmd<string>('fs_copy_entry', { from, to });
+        return { ok: true, path };
+      } catch (e: any) {
+        return { ok: false, error: e?.message || String(e) };
+      }
+    },
+    duplicateEntry: async (filePath: string) => {
+      try {
+        const path = await cmd<string>('fs_duplicate_entry', { filePath });
+        return { ok: true, path };
+      } catch (e: any) {
+        return { ok: false, error: e?.message || String(e) };
+      }
+    },
+    stat: (filePath: string) => cmd('fs_stat', { filePath }),
     importFiles: (sourcePaths: string[], destDir: string) =>
       cmd('fs_import_files', { sourcePaths, destDir }),
     recentFiles: (root: string) => cmd('fs_recent_files', { root }),
