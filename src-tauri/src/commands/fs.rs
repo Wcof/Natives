@@ -18,6 +18,16 @@ pub fn fs_list_dir(dir_path: String, options: Option<JsonValue>) -> Result<Vec<J
         .map_err(|e| Error::Internal(e.to_string()))
 }
 
+/// Rich list: entries + parent + current project badge (fanbox-compatible shape).
+#[tauri::command]
+pub fn fs_list_dir_detailed(dir_path: String, options: Option<JsonValue>) -> Result<JsonValue> {
+    let opts = options
+        .and_then(|v| serde_json::from_value::<file_manager::ListDirOptions>(v).ok())
+        .unwrap_or_default();
+    let result = file_manager::list_dir_detailed(&dir_path, &opts)?;
+    serde_json::to_value(result).map_err(|e| Error::Internal(e.to_string()))
+}
+
 #[tauri::command]
 pub fn fs_read_file(file_path: String) -> Result<JsonValue> {
     let result = file_manager::read_file(&file_path)?;
@@ -40,7 +50,7 @@ pub fn fs_create_entry(target_path: String, entry_type: String) -> Result<()> {
 }
 
 #[tauri::command]
-pub fn fs_rename_entry(old_path: String, new_path: String) -> Result<()> {
+pub fn fs_rename_entry(old_path: String, new_path: String) -> Result<String> {
     file_manager::rename_entry(&old_path, &new_path)
 }
 
@@ -50,13 +60,63 @@ pub fn fs_trash_entry(file_path: String) -> Result<()> {
 }
 
 #[tauri::command]
-pub fn fs_move_entry(from: String, to: String) -> Result<()> {
+pub fn fs_move_entry(from: String, to: String) -> Result<String> {
     file_manager::move_entry(&from, &to)
+}
+
+#[tauri::command]
+pub fn fs_copy_entry(from: String, to: String) -> Result<String> {
+    file_manager::copy_entry(&from, &to)
+}
+
+#[tauri::command]
+pub fn fs_duplicate_entry(file_path: String) -> Result<String> {
+    file_manager::duplicate_entry(&file_path)
+}
+
+#[tauri::command]
+pub fn fs_stat(file_path: String) -> Result<JsonValue> {
+    file_manager::stat_path(&file_path)
 }
 
 #[tauri::command]
 pub fn fs_import_files(source_paths: Vec<String>, dest_dir: String) -> Result<Vec<String>> {
     file_manager::import_files(&source_paths, &dest_dir)
+}
+
+#[tauri::command]
+pub fn fs_trash_entries(paths: Vec<String>) -> Result<JsonValue> {
+    file_manager::trash_entries(&paths)
+}
+
+#[tauri::command]
+pub fn fs_move_entries(paths: Vec<String>, dest_dir: String) -> Result<JsonValue> {
+    file_manager::move_entries(&paths, &dest_dir)
+}
+
+#[tauri::command]
+pub fn fs_copy_entries(paths: Vec<String>, dest_dir: String) -> Result<JsonValue> {
+    file_manager::copy_entries(&paths, &dest_dir)
+}
+
+#[tauri::command]
+pub fn fs_roots() -> Result<Vec<JsonValue>> {
+    file_manager::default_roots()
+}
+
+#[tauri::command]
+pub fn fs_open_with(path: String, with: Option<String>) -> Result<JsonValue> {
+    file_manager::open_with(&path, with.as_deref().unwrap_or("default"))
+}
+
+#[tauri::command]
+pub fn fs_clipboard_copy_files(paths: Vec<String>) -> Result<JsonValue> {
+    file_manager::clipboard_copy_files(&paths)
+}
+
+#[tauri::command]
+pub fn fs_clipboard_copy_image(file_path: String) -> Result<JsonValue> {
+    file_manager::clipboard_copy_image(&file_path)
 }
 
 /// Save a base64-encoded blob to disk with path validation and atomic write.

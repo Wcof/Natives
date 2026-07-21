@@ -10,17 +10,21 @@ import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 
 interface FileRowProps {
   entry: FileEntry;
-  onSelect: (entry: FileEntry) => void;
+  onSelect: (entry: FileEntry, e?: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean }) => void;
   onContextMenu?: (e: React.MouseEvent, entry: FileEntry) => void;
   showDir?: boolean;
   selected?: boolean;
   onDoubleClick?: () => void;
   isFavorite?: boolean;
   onFavoriteToggle?: (entry: FileEntry) => void;
+  dimmed?: boolean;
+  onMoveDrop?: (sourcePaths: string[], destDir: string) => void;
+  dragPaths?: string[];
 }
 
-export default function FileRow({ entry, onSelect, onContextMenu, showDir, selected, onDoubleClick, isFavorite, onFavoriteToggle }: FileRowProps) {
+export default function FileRow({ entry, onSelect, onContextMenu, showDir, selected, onDoubleClick, isFavorite, onFavoriteToggle, dimmed, onMoveDrop, dragPaths }: FileRowProps) {
   const [flash, setFlash] = useState(false);
+  const [dropTarget, setDropTarget] = useState(false);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -77,10 +81,15 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir, selec
     <div
       className={flash ? 'anim-liveZapRow' : ''}
       data-file-entry={entry.path}
-      onClick={() => {
+      onClick={(ev) => {
         if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+        const mods = { shiftKey: ev.shiftKey, metaKey: ev.metaKey, ctrlKey: ev.ctrlKey };
+        if (mods.shiftKey || mods.metaKey || mods.ctrlKey) {
+          onSelect(entry, mods);
+          return;
+        }
         clickTimerRef.current = setTimeout(() => {
-          onSelect(entry);
+          onSelect(entry, mods);
           clickTimerRef.current = null;
         }, 200);
       }}
@@ -92,6 +101,31 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir, selec
         onDoubleClick?.();
       }}
       onContextMenu={(e) => onContextMenu?.(e, entry)}
+      draggable
+      onDragStart={(e) => {
+        const paths = dragPaths && dragPaths.length > 0 ? dragPaths : [entry.path];
+        e.dataTransfer.setData('application/x-natives-paths', JSON.stringify(paths));
+        e.dataTransfer.effectAllowed = 'move';
+      }}
+      onDragOver={(e) => {
+        if (!entry.isDir) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (!dropTarget) setDropTarget(true);
+      }}
+      onDragLeave={() => { if (dropTarget) setDropTarget(false); }}
+      onDrop={(e) => {
+        if (!entry.isDir || !onMoveDrop) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setDropTarget(false);
+        try {
+          const raw = e.dataTransfer.getData('application/x-natives-paths');
+          const paths = raw ? JSON.parse(raw) as string[] : [];
+          const filtered = paths.filter(p => p !== entry.path);
+          if (filtered.length) onMoveDrop(filtered, entry.path);
+        } catch { /* ignore */ }
+      }}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter') onSelect(entry); }}
@@ -105,11 +139,11 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir, selec
         fontSize: FONT_SIZE.lg,
         color: 'var(--text)',
         borderBottom: '1px solid var(--border)',
-        background: selected ? 'var(--primary-soft)' : flash ? 'var(--primary-soft)' : 'transparent',
-        outline: selected ? '1px solid var(--primary)' : 'none',
+        background: dropTarget ? 'var(--accent-soft, rgba(205,242,75,0.12))' : selected ? 'var(--primary-soft)' : flash ? 'var(--primary-soft)' : 'transparent',
+        outline: dropTarget || selected ? '1px solid var(--primary)' : 'none',
         outlineOffset: -1,
         transition: 'background 0.12s, opacity 0.12s',
-        opacity: entry.hidden ? 0.5 : 1,
+        opacity: dimmed ? 0.45 : entry.hidden ? 0.5 : 1,
       }}
       onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--surface)'; }}
       onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = selected ? 'var(--primary-soft)' : 'transparent'; }}

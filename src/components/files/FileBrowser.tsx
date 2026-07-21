@@ -8,6 +8,8 @@ import FileGrid from './FileGrid';
 import FileList from './FileList';
 import FileContextMenu from './FileContextMenu';
 import DiskUsagePanel from './DiskUsagePanel';
+import FileNavShell from './FileNavShell';
+import FileSearch from './FileSearch';
 import Skeleton from '@/components/ui/Skeleton';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Modal from '@/components/ui/Modal';
@@ -52,6 +54,10 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const [locale, setLocale] = useState<Locale>('zh');
   const [recentMode, setRecentMode] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(-1);
+  /** Multi-selection by path (shift/cmd click). Primary cursor remains selectedIndex. */
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  /** In-app clipboard for cut/copy → paste */
+  const [clipBoard, setClipBoard] = useState<{ mode: 'copy' | 'cut'; paths: string[] } | null>(null);
   const [gridSize, setGridSize] = useState<'sm' | 'md' | 'lg'>(() => {
     if (typeof window !== 'undefined') {
       return (localStorage.getItem('file-grid-size') as 'sm' | 'md' | 'lg') || 'md';
@@ -62,41 +68,116 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   // Navigation history for back/forward
   const historyRef = useRef<string[]>(['/']);
   const historyIndexRef = useRef(0);
+  /** Bumped so canGoBack/canGoForward re-render after ref mutations. */
+  const [historyTick, setHistoryTick] = useState(0);
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const fileAreaRef = useRef<HTMLDivElement>(null);
   const gridContainerRef = useRef<HTMLDivElement>(null);
+  const lastClickedIndexRef = useRef<number>(-1);
 
   const navigateTo = useCallback((path: string) => {
-    // Truncate forward history and append
+    const normalized = path === '' ? '/' : path.replace(/\/+$/, '') || '/';
+    // Truncate forward history and append (skip no-op)
+    if (historyRef.current[historyIndexRef.current] === normalized) {
+      setCurrentPath(normalized);
+      setRecentMode(false);
+      setSelectedPaths(new Set());
+      lastClickedIndexRef.current = -1;
+      return;
+    }
     const hist = historyRef.current.slice(0, historyIndexRef.current + 1);
-    hist.push(path);
+    hist.push(normalized);
     historyRef.current = hist;
     historyIndexRef.current = hist.length - 1;
-    setCurrentPath(path);
+    setHistoryTick((n) => n + 1);
+    setCurrentPath(normalized);
+    setRecentMode(false);
+    setSelectedPaths(new Set());
+    lastClickedIndexRef.current = -1;
   }, []);
 
   const goBack = useCallback(() => {
     if (historyIndexRef.current > 0) {
       historyIndexRef.current--;
+      setHistoryTick((n) => n + 1);
       setCurrentPath(historyRef.current[historyIndexRef.current]!);
+      setRecentMode(false);
+      setSelectedPaths(new Set());
+      lastClickedIndexRef.current = -1;
     }
   }, []);
 
   const goForward = useCallback(() => {
     if (historyIndexRef.current < historyRef.current.length - 1) {
       historyIndexRef.current++;
+      setHistoryTick((n) => n + 1);
       setCurrentPath(historyRef.current[historyIndexRef.current]!);
+      setRecentMode(false);
+      setSelectedPaths(new Set());
+      lastClickedIndexRef.current = -1;
     }
   }, []);
 
+  const goUp = useCallback(() => {
+    if (currentPath === '/' || currentPath === '') return;
+    const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
+    if (parentPath !== currentPath) navigateTo(parentPath);
+  }, [currentPath, navigateTo]);
+
   const canGoBack = historyIndexRef.current > 0;
   const canGoForward = historyIndexRef.current < historyRef.current.length - 1;
+  const canGoUp = currentPath !== '/' && currentPath !== '';
+  // Keep historyTick referenced so React tracks navigation state for chrome buttons.
+  void historyTick;
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2200);
   }, []);
 
-  // Load favorites and locale
+  /** Resolve pasted/typed path via fs.stat; open parent if target is a file. */
+  const resolveAndNavigate = useCallback(async (raw: string) => {
+    let path = raw.trim();
+    if (!path) return;
+    // Expand bare ~ to home if roots available
+    if (path === '~' || path.startsWith('~/')) {
+      try {
+        const roots = await (window as any).nativesAPI?.fs?.roots?.();
+        const home = Array.isArray(roots) ? roots.find((r: any) => r.id === 'home') : null;
+        if (home?.path) {
+          path = path === '~' ? home.path : home.path + path.slice(1);
+        }
+      } catch { /* keep as-is */ }
+    }
+    // Normalize double slashes except leading
+    path = path.replace(/\/{2,}/g, '/');
+    if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);
+
+    try {
+      const fsApi = (window as any).nativesAPI?.fs;
+      if (fsApi?.stat) {
+        const st = await fsApi.stat(path);
+        if (st?.found) {
+          if (st.isDir) {
+            navigateTo(st.path || path);
+          } else {
+            const parent = (st.path || path).substring(0, (st.path || path).lastIndexOf('/')) || '/';
+            navigateTo(parent);
+            // Soft-select after list loads: stash intended selection
+            (window as any).__pendingSelectFile = st.path || path;
+          }
+          return;
+        }
+        showToast(t(locale, 'fileBrowser.pathNotFound'));
+        return;
+      }
+    } catch {
+      // fall through to best-effort navigate
+    }
+    navigateTo(path);
+  }, [navigateTo, locale, showToast]);
+
+  // Load favorites, locale, and default home root
   useEffect(() => {
     async function load() {
       try {
@@ -116,8 +197,23 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         const saved = await window.nativesAPI?.getLocale?.();
         if (saved) setLocale(saved === 'en' ? 'en' : 'zh');
       } catch { /* ignore */ }
+      // Prefer real home root over "/" (fanbox roots)
+      try {
+        const fsApi = (window as any).nativesAPI?.fs;
+        if (fsApi?.roots && currentPath === '/') {
+          const roots = await fsApi.roots();
+          const home = Array.isArray(roots) ? roots.find((r: any) => r.id === 'home') : null;
+          if (home?.path) {
+            historyRef.current = [home.path];
+            historyIndexRef.current = 0;
+            setHistoryTick((n) => n + 1);
+            setCurrentPath(home.path);
+          }
+        }
+      } catch { /* ignore */ }
     }
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const isFavorite = favorites.some((f) => f.path === currentPath);
@@ -170,9 +266,18 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           setEntries([]);
         }
       } else {
-        const options = { sortBy, sortDir, showHidden };
-        const data = await fsApi.listDir(currentPath, options);
-        setEntries(data || []);
+        const options = { sortBy, sortDir, showHidden, probeProjects: true };
+        // Prefer detailed list (entries + project badges on subdirs); fall back to plain listDir
+        if (typeof fsApi.listDirDetailed === 'function') {
+          const detailed = await fsApi.listDirDetailed(currentPath, options) as {
+            entries?: FileEntry[];
+            project?: string | null;
+          };
+          setEntries(Array.isArray(detailed?.entries) ? detailed.entries : []);
+        } else {
+          const data = await fsApi.listDir(currentPath, options);
+          setEntries((data as FileEntry[]) || []);
+        }
       }
     } catch (err) {
       showToast(t(locale, 'fileBrowser.loadFailed'));
@@ -180,7 +285,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     } finally {
       setLoading(false);
     }
-  }, [currentPath, sortBy, sortDir, showHidden, recentMode]);
+  }, [currentPath, sortBy, sortDir, showHidden, recentMode, locale, showToast]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -250,11 +355,25 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         const dir = detail.value ?? '';
         if (dir) setNewItemTarget({ parentDir: dir, type: 'folder' });
       }
+      if (detail.type === 'newFile') {
+        const dir = detail.value ?? '';
+        if (dir) setNewItemTarget({ parentDir: dir, type: 'file' });
+      }
       if (detail.type === 'gridSize') setGridSize(detail.value);
+      if (detail.type === 'back') goBack();
+      if (detail.type === 'forward') goForward();
+      if (detail.type === 'up') goUp();
+      if (detail.type === 'refresh') void loadEntries();
+      if (detail.type === 'toggleRecent') setRecentMode((prev) => !prev);
+      if (detail.type === 'toggleFavorite') void toggleFavorite();
+      if (detail.type === 'globalSearch') setGlobalSearchOpen(true);
+      if (detail.type === 'goToPath' && typeof detail.value === 'string') {
+        void resolveAndNavigate(detail.value);
+      }
     };
     window.addEventListener('header-file-action', handler);
     return () => window.removeEventListener('header-file-action', handler);
-  }, []);
+  }, [goBack, goForward, goUp, loadEntries, toggleFavorite, resolveAndNavigate]);
 
   // Listen for external navigation events (from sidebar quick access)
   useEffect(() => {
@@ -276,7 +395,47 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     return () => window.removeEventListener('navigate-files', handler);
   }, []);
 
-  const handleSelect = useCallback((entry: FileEntry) => {
+  const filteredEntries = useMemo(() => {
+    if (!searchQuery) return entries;
+    const q = searchQuery.toLowerCase();
+    return entries.filter(e => e.name.toLowerCase().includes(q));
+  }, [entries, searchQuery]);
+
+  const handleSelect = useCallback((entry: FileEntry, e?: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean }) => {
+    const idx = filteredEntries.findIndex(x => x.path === entry.path);
+    const isMulti = !!(e && (e.metaKey || e.ctrlKey || e.shiftKey));
+
+    if (isMulti) {
+      setSelectedIndex(idx);
+      setSelectedPaths(prev => {
+        const next = new Set(prev);
+        if (e?.shiftKey && lastClickedIndexRef.current >= 0 && idx >= 0) {
+          const a = Math.min(lastClickedIndexRef.current, idx);
+          const b = Math.max(lastClickedIndexRef.current, idx);
+          for (let i = a; i <= b; i++) {
+            const p = filteredEntries[i]?.path;
+            if (p) next.add(p);
+          }
+        } else if (e?.metaKey || e?.ctrlKey) {
+          if (next.has(entry.path)) next.delete(entry.path);
+          else next.add(entry.path);
+          lastClickedIndexRef.current = idx;
+        }
+        return next;
+      });
+      return;
+    }
+
+    // Single click: set selection; directories open immediately (fanbox)
+    lastClickedIndexRef.current = idx;
+    setSelectedIndex(idx);
+    setSelectedPaths(new Set([entry.path]));
+    if (entry.isDir) {
+      navigateTo(entry.path);
+    }
+  }, [filteredEntries, navigateTo]);
+
+  const handleOpenEntry = useCallback((entry: FileEntry) => {
     if (entry.isDir) {
       navigateTo(entry.path);
     } else {
@@ -302,17 +461,20 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     e.preventDefault();
     // Stop propagation so the blank-area handler on the parent doesn't fire
     e.stopPropagation();
+    // If right-click target is outside current multi-selection, select only it
+    if (!selectedPaths.has(entry.path)) {
+      setSelectedPaths(new Set([entry.path]));
+      const idx = filteredEntries.findIndex(x => x.path === entry.path);
+      setSelectedIndex(idx);
+      lastClickedIndexRef.current = idx;
+    }
     setContextMenu({ x: e.clientX, y: e.clientY, entry, mode: entry.isDir ? 'dir' : 'file' });
   };
 
   // Context menu actions
   const handleOpen = useCallback((entry: FileEntry) => {
-    if (entry.isDir) {
-      navigateTo(entry.path);
-    } else {
-      onFileSelect?.(entry);
-    }
-  }, [onFileSelect, navigateTo]);
+    handleOpenEntry(entry);
+  }, [handleOpenEntry]);
 
   const handleRename = useCallback((entry: FileEntry) => {
     setRenameTarget(entry);
@@ -340,9 +502,212 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   }, [renameTarget, renameValue, loadEntries, showToast]);
 
   const handleTrash = useCallback((entry: FileEntry) => {
-    setTrashTarget(entry);
-    return;
+    // fanbox: files trash immediately; directories ask once
+    if (entry.isDir) {
+      setTrashTarget(entry);
+      return;
+    }
+    void (async () => {
+      try {
+        const result = await getFsApi().trashEntry(entry.path);
+        if (result?.ok) {
+          showToast(t(locale, 'fileBrowser.trashed'));
+          window.dispatchEvent(new CustomEvent('file-trashed', { detail: { path: entry.path } }));
+          setSelectedPaths(prev => {
+            const n = new Set(prev); n.delete(entry.path); return n;
+          });
+          await loadEntries();
+        } else {
+          showToast(result?.error || t(locale, 'fileBrowser.trashFailed'));
+        }
+      } catch {
+        showToast(t(locale, 'fileBrowser.trashFailed'));
+      }
+    })();
+  }, [loadEntries, showToast, locale]);
+
+  const handleDuplicate = useCallback(async (entry: FileEntry) => {
+    try {
+      const fsApi = getFsApi();
+      if (typeof fsApi.duplicateEntry !== 'function') {
+        showToast(t(locale, 'fileBrowser.duplicateFailed'));
+        return;
+      }
+      const result = await fsApi.duplicateEntry(entry.path);
+      if (result?.ok) {
+        showToast(t(locale, 'fileBrowser.duplicated'));
+        await loadEntries();
+        if (result.path) {
+          window.dispatchEvent(new CustomEvent('file-flash', { detail: result.path }));
+        }
+      } else {
+        showToast(result?.error || t(locale, 'fileBrowser.duplicateFailed'));
+      }
+    } catch {
+      showToast(t(locale, 'fileBrowser.duplicateFailed'));
+    }
+  }, [loadEntries, showToast, locale]);
+
+  /** Resolve current target paths: multi-selection, else single entry, else cursor */
+  const resolveTargetPaths = useCallback((entry?: FileEntry | null) => {
+    if (selectedPaths.size > 0) return Array.from(selectedPaths);
+    if (entry) return [entry.path];
+    if (selectedIndex >= 0 && selectedIndex < filteredEntries.length) {
+      return [filteredEntries[selectedIndex]!.path];
+    }
+    return [] as string[];
+  }, [selectedPaths, selectedIndex, filteredEntries]);
+
+  const handleCopyEntry = useCallback(async (entry?: FileEntry) => {
+    const paths = resolveTargetPaths(entry);
+    if (paths.length === 0) return;
+    setClipBoard({ mode: 'copy', paths });
+    // System pasteboard for Finder paste (fanbox copyFile)
+    try {
+      const fsApi = getFsApi();
+      if (typeof fsApi.clipboardCopyFiles === 'function') {
+        await fsApi.clipboardCopyFiles(paths);
+      } else {
+        await navigator.clipboard.writeText(paths.join('\n'));
+      }
+    } catch {
+      try { await navigator.clipboard.writeText(paths.join('\n')); } catch { /* ignore */ }
+    }
+    showToast(t(locale, 'fileBrowser.batchCopied').replace('{count}', String(paths.length)));
+  }, [resolveTargetPaths, showToast, locale]);
+
+  const handleCutEntry = useCallback(async (entry?: FileEntry) => {
+    const paths = resolveTargetPaths(entry);
+    if (paths.length === 0) return;
+    setClipBoard({ mode: 'cut', paths });
+    try {
+      const fsApi = getFsApi();
+      if (typeof fsApi.clipboardCopyFiles === 'function') {
+        await fsApi.clipboardCopyFiles(paths);
+      }
+    } catch { /* ignore */ }
+    showToast(t(locale, 'fileBrowser.cutDone').replace('{count}', String(paths.length)));
+  }, [resolveTargetPaths, showToast, locale]);
+
+  const handlePaste = useCallback(async () => {
+    if (!clipBoard || clipBoard.paths.length === 0) {
+      showToast(t(locale, 'fileBrowser.pasteEmpty'));
+      return;
+    }
+    try {
+      const fsApi = getFsApi();
+      if (clipBoard.mode === 'copy') {
+        if (typeof fsApi.copyEntries !== 'function') {
+          // fallback sequential
+          for (const p of clipBoard.paths) {
+            await fsApi.copyEntry?.(p, currentPath);
+          }
+          showToast(t(locale, 'fileBrowser.pasted').replace('{count}', String(clipBoard.paths.length)));
+        } else {
+          const result = await fsApi.copyEntries(clipBoard.paths, currentPath);
+          const count = result?.count ?? clipBoard.paths.length;
+          showToast(t(locale, 'fileBrowser.pasted').replace('{count}', String(count)));
+        }
+      } else {
+        if (typeof fsApi.moveEntries !== 'function') {
+          for (const p of clipBoard.paths) {
+            await fsApi.moveEntry?.(p, currentPath);
+          }
+          showToast(t(locale, 'fileBrowser.batchMoved').replace('{count}', String(clipBoard.paths.length)));
+        } else {
+          const result = await fsApi.moveEntries(clipBoard.paths, currentPath);
+          const count = result?.count ?? clipBoard.paths.length;
+          showToast(t(locale, 'fileBrowser.batchMoved').replace('{count}', String(count)));
+        }
+        setClipBoard(null); // cut is one-shot
+      }
+      await loadEntries();
+    } catch {
+      showToast(t(locale, 'fileBrowser.pasteFailed'));
+    }
+  }, [clipBoard, currentPath, loadEntries, showToast, locale]);
+
+  const handleCopyPath = useCallback(async (entry: FileEntry) => {
+    try {
+      await navigator.clipboard.writeText(entry.path);
+      showToast(t(locale, 'fileBrowser.pathCopied'));
+    } catch {
+      showToast(t(locale, 'fileBrowser.copyPath'));
+    }
+  }, [showToast, locale]);
+
+  const handleCopyImage = useCallback(async (entry: FileEntry) => {
+    try {
+      const fsApi = getFsApi();
+      if (typeof fsApi.clipboardCopyImage !== 'function') {
+        showToast(t(locale, 'fileBrowser.clipboardImageFailed'));
+        return;
+      }
+      const r = await fsApi.clipboardCopyImage(entry.path);
+      showToast(r?.ok ? t(locale, 'fileBrowser.clipboardImageCopied') : t(locale, 'fileBrowser.clipboardImageFailed'));
+    } catch {
+      showToast(t(locale, 'fileBrowser.clipboardImageFailed'));
+    }
+  }, [showToast, locale]);
+
+  const handleOpenWith = useCallback(async (entry: FileEntry, withApp: 'default' | 'reveal' | 'terminal' | 'editor' = 'default') => {
+    try {
+      const fsApi = getFsApi();
+      if (typeof fsApi.openWith === 'function') {
+        await fsApi.openWith(entry.path, withApp);
+        return;
+      }
+    } catch { /* fall through */ }
+    const api = (window as any).nativesAPI?.shell;
+    if (withApp === 'reveal' && api?.showItemInFolder) api.showItemInFolder(entry.path);
+    else if (api?.openPath) api.openPath(entry.path);
   }, []);
+
+  const handleBatchTrash = useCallback(async () => {
+    const paths = resolveTargetPaths(null);
+    if (paths.length === 0) return;
+    if (paths.length === 1) {
+      const entry = entries.find(e => e.path === paths[0]) || filteredEntries.find(e => e.path === paths[0]);
+      if (entry) { setTrashTarget(entry); return; }
+    }
+    // Multi: confirm via first name style message then trash
+    try {
+      const fsApi = getFsApi();
+      if (typeof fsApi.trashEntries === 'function') {
+        const r = await fsApi.trashEntries(paths);
+        showToast(t(locale, 'fileBrowser.batchTrashed').replace('{count}', String(r?.count ?? paths.length)));
+      } else {
+        for (const p of paths) await fsApi.trashEntry(p);
+        showToast(t(locale, 'fileBrowser.batchTrashed').replace('{count}', String(paths.length)));
+      }
+      setSelectedPaths(new Set());
+      await loadEntries();
+    } catch {
+      showToast(t(locale, 'fileBrowser.trashFailed'));
+    }
+  }, [resolveTargetPaths, entries, filteredEntries, loadEntries, showToast, locale]);
+
+
+  const handleInternalMove = useCallback(async (sourcePaths: string[], destDir: string) => {
+    if (!sourcePaths.length || !destDir) return;
+    // Prevent moving a folder into itself
+    const safe = sourcePaths.filter(p => p !== destDir && !destDir.startsWith(p + '/'));
+    if (!safe.length) return;
+    try {
+      const fsApi = getFsApi();
+      if (typeof fsApi.moveEntries === 'function') {
+        const r = await fsApi.moveEntries(safe, destDir);
+        showToast(t(locale, 'fileBrowser.batchMoved').replace('{count}', String(r?.count ?? safe.length)));
+      } else {
+        for (const pth of safe) await fsApi.moveEntry?.(pth, destDir);
+        showToast(t(locale, 'fileBrowser.batchMoved').replace('{count}', String(safe.length)));
+      }
+      setSelectedPaths(new Set());
+      await loadEntries();
+    } catch {
+      showToast(t(locale, 'fileBrowser.moveFailed'));
+    }
+  }, [loadEntries, showToast, locale]);
 
   // Shell operations
   const handleRevealInFinder = useCallback((entry: FileEntry) => {
@@ -441,12 +806,6 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const segments = currentPath.split('/').filter(Boolean);
 
   // Search filter (client-side)
-  const filteredEntries = useMemo(() => {
-    if (!searchQuery) return entries;
-    const q = searchQuery.toLowerCase();
-    return entries.filter(e => e.name.toLowerCase().includes(q));
-  }, [entries, searchQuery]);
-
   // Keyboard navigation for file area
   useEffect(() => {
     const handleFileKeyDown = (e: KeyboardEvent) => {
@@ -502,15 +861,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           if (e.metaKey || e.ctrlKey) {
             onFileSelect?.(entry);
           } else {
-            handleSelect(entry);
-          }
-          break;
-        }
-        case 'Backspace': {
-          e.preventDefault();
-          const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
-          if (parentPath !== currentPath) {
-            navigateTo(parentPath);
+            handleOpenEntry(entry);
           }
           break;
         }
@@ -520,11 +871,87 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           handleRename(list[selectedIndex]!);
           break;
         }
-        case 'Delete': {
+        case 'Delete':
+        case 'Backspace': {
+          // ⌘⌫ / ⌘Del → trash (fanbox). Bare Backspace goes up one directory.
+          if (e.metaKey || e.ctrlKey) {
+            e.preventDefault();
+            if (selectedPaths.size > 1) { void handleBatchTrash(); break; }
+            if (selectedIndex < 0 || selectedIndex >= list.length) break;
+            handleTrash(list[selectedIndex]!);
+            break;
+          }
+          if (e.key === 'Backspace') {
+            e.preventDefault();
+            const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
+            if (parentPath !== currentPath) navigateTo(parentPath);
+          }
+          break;
+        }
+        case 'd':
+        case 'D': {
+          // ⌘D → duplicate
+          if (!(e.metaKey || e.ctrlKey)) break;
           if (selectedIndex < 0 || selectedIndex >= list.length) break;
-          if (!e.metaKey) break;
           e.preventDefault();
-          handleTrash(list[selectedIndex]!);
+          void handleDuplicate(list[selectedIndex]!);
+          break;
+        }
+        case 'c':
+        case 'C': {
+          // ⌘C → copy to clipboard (in-app + system)
+          if (!(e.metaKey || e.ctrlKey)) break;
+          e.preventDefault();
+          void handleCopyEntry();
+          break;
+        }
+        case 'x':
+        case 'X': {
+          // ⌘X → cut
+          if (!(e.metaKey || e.ctrlKey)) break;
+          e.preventDefault();
+          void handleCutEntry();
+          break;
+        }
+        case 'v':
+        case 'V': {
+          // ⌘V → paste into current directory
+          if (!(e.metaKey || e.ctrlKey)) break;
+          e.preventDefault();
+          void handlePaste();
+          break;
+        }
+        case 'a':
+        case 'A': {
+          // ⌘A → select all
+          if (!(e.metaKey || e.ctrlKey)) break;
+          e.preventDefault();
+          setSelectedPaths(new Set(list.map(x => x.path)));
+          if (list.length > 0) setSelectedIndex(0);
+          break;
+        }
+        case 'Escape': {
+          if (selectedPaths.size > 0 || selectedIndex >= 0) {
+            e.preventDefault();
+            setSelectedPaths(new Set());
+            setSelectedIndex(-1);
+            lastClickedIndexRef.current = -1;
+          }
+          break;
+        }
+        case 'Home': {
+          e.preventDefault();
+          if (list.length === 0) break;
+          setSelectedIndex(0);
+          setSelectedPaths(new Set([list[0]!.path]));
+          break;
+        }
+        case 'End': {
+          e.preventDefault();
+          if (list.length === 0) break;
+          const last = list.length - 1;
+          setSelectedIndex(last);
+          setSelectedPaths(new Set([list[last]!.path]));
           break;
         }
         case ' ': {
@@ -537,12 +964,34 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     };
     window.addEventListener('keydown', handleFileKeyDown);
     return () => window.removeEventListener('keydown', handleFileKeyDown);
-  }, [filteredEntries, selectedIndex, viewMode, getGridColumns, onFileSelect, currentPath, renameTarget, newItemTarget, trashTarget, contextMenu, toggleFavorite, handleSelect, handleRename, handleTrash]);
+  }, [filteredEntries, selectedIndex, viewMode, getGridColumns, onFileSelect, currentPath, renameTarget, newItemTarget, trashTarget, contextMenu, toggleFavorite, handleOpenEntry, handleRename, handleTrash, handleDuplicate, handleCopyEntry, handleCutEntry, handlePaste, handleBatchTrash, navigateTo, selectedPaths]);
 
-  // Reset selectedIndex when entries or path change
+  // Reset selection when entries or path change; honor pending file selection from path bar
   useEffect(() => {
-    startTransition(() => { setSelectedIndex(-1); });
+    startTransition(() => {
+      const pending = (window as any).__pendingSelectFile as string | undefined;
+      if (pending && entries.some((e) => e.path === pending)) {
+        const idx = entries.findIndex((e) => e.path === pending);
+        setSelectedIndex(idx);
+        setSelectedPaths(new Set([pending]));
+        lastClickedIndexRef.current = idx;
+        delete (window as any).__pendingSelectFile;
+        return;
+      }
+      setSelectedIndex(-1);
+      setSelectedPaths(new Set());
+      lastClickedIndexRef.current = -1;
+    });
   }, [currentPath, entries, searchQuery]);
+
+  // Scroll keyboard selection into view
+  useEffect(() => {
+    if (selectedIndex < 0 || selectedIndex >= filteredEntries.length) return;
+    const path = filteredEntries[selectedIndex]?.path;
+    if (!path) return;
+    const el = document.querySelector(`[data-file-entry="${CSS.escape(path)}"]`) as HTMLElement | null;
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [selectedIndex, filteredEntries]);
 
   // Detect project badge from current directory entries
   const detectedProject = useMemo(() => {
@@ -577,9 +1026,10 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       viewMode, sortBy, sortDir, showHidden, gridSize,
       segments: segments.length > 0 ? segments : ['/'],
       isFavorite, breadcrumbPath: currentPath, projectBadge: detectedProject,
+      canGoBack, canGoForward, canGoUp, recentMode, searchQuery, loading,
     };
     window.dispatchEvent(new CustomEvent('header-file-state', { detail }));
-  }, [viewMode, sortBy, sortDir, showHidden, gridSize, segments, isFavorite, currentPath, detectedProject]);
+  }, [viewMode, sortBy, sortDir, showHidden, gridSize, segments, isFavorite, currentPath, detectedProject, canGoBack, canGoForward, canGoUp, recentMode, searchQuery, loading, historyTick]);
 
   return (
     <div style={{
@@ -589,13 +1039,45 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       background: 'var(--surface)',
       position: 'relative',
     }}>
+      {/* Navigation chrome: back/forward/up, editable path, filter, global search */}
+      <FileNavShell
+        currentPath={currentPath}
+        canGoBack={canGoBack}
+        canGoForward={canGoForward}
+        canGoUp={canGoUp}
+        isFavorite={isFavorite}
+        recentMode={recentMode}
+        searchQuery={searchQuery}
+        sortBy={sortBy}
+        sortDir={sortDir}
+        loading={loading}
+        onBack={goBack}
+        onForward={goForward}
+        onUp={goUp}
+        onRefresh={() => { void loadEntries(); }}
+        onToggleFavorite={() => { void toggleFavorite(); }}
+        onToggleRecent={() => setRecentMode((prev) => !prev)}
+        onSearchChange={setSearchQuery}
+        onOpenGlobalSearch={() => setGlobalSearchOpen(true)}
+        onPathSubmit={(path) => { void resolveAndNavigate(path); }}
+      />
+
       {/* File area — drop zone covers entire height including empty space */}
       <div
+        ref={fileAreaRef}
         {...dragHandlers}
         style={{ flex: 1, overflow: 'auto', position: 'relative' }}
         role="listbox"
         aria-label={t(locale, 'fileBrowser.ariaLabelFiles')}
         tabIndex={0}
+        onClick={(e) => {
+          const target = e.target as HTMLElement;
+          if (!target.closest('[data-file-entry]')) {
+            setSelectedPaths(new Set());
+            setSelectedIndex(-1);
+            lastClickedIndexRef.current = -1;
+          }
+        }}
         onContextMenu={(e) => {
           // Blank area right-click — only if not on a file/dir element
           const target = e.target as HTMLElement;
@@ -641,13 +1123,17 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           <FileGrid
             ref={gridContainerRef}
             entries={filteredEntries}
-            onSelect={handleSelect}
+            onSelect={(entry, ev) => handleSelect(entry, ev)}
             onContextMenu={handleContextMenu}
             selectedIndex={selectedIndex}
+            selectedPaths={selectedPaths}
             gridSize={gridSize}
-            onEditRequest={handleEditRequest}
+            onEditRequest={handleOpenEntry}
             favorites={favoritePaths}
             onFavoriteToggle={handleFavoriteToggle}
+            cutPaths={clipBoard?.mode === 'cut' ? new Set(clipBoard.paths) : undefined}
+            onMoveDrop={handleInternalMove}
+            dragPaths={selectedPaths.size > 0 ? Array.from(selectedPaths) : undefined}
           />
         ) : (
           <FileList
@@ -655,16 +1141,34 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             sortBy={sortBy}
             sortDir={sortDir}
             onSort={handleSort}
-            onSelect={handleSelect}
+            onSelect={(entry, ev) => handleSelect(entry, ev)}
             onContextMenu={handleContextMenu}
             showDir={recentMode}
             selectedIndex={selectedIndex}
-            onEditRequest={handleEditRequest}
+            selectedPaths={selectedPaths}
+            onEditRequest={handleOpenEntry}
             favorites={favoritePaths}
             onFavoriteToggle={handleFavoriteToggle}
+            cutPaths={clipBoard?.mode === 'cut' ? new Set(clipBoard.paths) : undefined}
+            onMoveDrop={handleInternalMove}
+            dragPaths={selectedPaths.size > 0 ? Array.from(selectedPaths) : undefined}
           />
         )}
       </div>
+
+
+      {!loading && filteredEntries.length === 0 && (
+        <div style={{
+          display: 'flex', gap: SPACING.sm, justifyContent: 'center',
+          padding: SPACING.md, borderTop: '1px solid var(--border)',
+        }}>
+          <button className="btn btn-ghost" onClick={() => handleNewFile(currentPath)}>{t(locale, 'fileBrowser.newFile')}</button>
+          <button className="btn btn-primary" onClick={() => handleNewFolder(currentPath)}>{t(locale, 'fileBrowser.newFolder')}</button>
+          {clipBoard && clipBoard.paths.length > 0 && (
+            <button className="btn btn-ghost" onClick={() => { void handlePaste(); }}>{t(locale, 'fileBrowser.paste')}</button>
+          )}
+        </div>
+      )}
 
       {/* Status bar */}
       {!loading && filteredEntries.length > 0 && (() => {
@@ -679,11 +1183,27 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             borderTop: '1px solid var(--border)',
             background: 'var(--surface)',
           }}>
-            <span>{filteredEntries.length} 项</span>
-            {dirs > 0 && <span>{dirs} 个文件夹</span>}
-            {files > 0 && <span>{files} 个文件</span>}
+            <span>{t(locale, 'fileBrowser.statusItems').replace('{count}', String(filteredEntries.length))}</span>
+            {dirs > 0 && <span>{t(locale, 'fileBrowser.statusFolders').replace('{count}', String(dirs))}</span>}
+            {files > 0 && <span>{t(locale, 'fileBrowser.statusFiles').replace('{count}', String(files))}</span>}
             {totalSize > 0 && <span>{fmtSize(totalSize)}</span>}
+            {selectedPaths.size > 0 && (
+              <span style={{ color: 'var(--primary)' }}>
+                {t(locale, 'fileBrowser.selectedCount').replace('{count}', String(selectedPaths.size))}
+              </span>
+            )}
+            {clipBoard && (
+              <span style={{ opacity: 0.75 }}>
+                {clipBoard.mode === 'cut' ? t(locale, 'fileBrowser.cut') : t(locale, 'fileBrowser.copy')}
+                {' · '}{clipBoard.paths.length}
+              </span>
+            )}
             <div style={{ flex: 1 }} />
+            {selectedIndex >= 0 && selectedIndex < filteredEntries.length && selectedPaths.size <= 1 && (
+              <span style={{ opacity: 0.7 }} title={t(locale, 'fileBrowser.multiHint')}>
+                {filteredEntries[selectedIndex]!.name}
+              </span>
+            )}
             <span
               onClick={() => setDiskUsageTarget(currentPath)}
               style={{
@@ -717,20 +1237,19 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           onDiskUsage={handleDiskUsage}
           onRename={handleRename}
           onTrash={handleTrash}
+          onDuplicate={handleDuplicate}
+          onCopy={(entry) => { void handleCopyEntry(entry); }}
+          onCut={(entry) => { void handleCutEntry(entry); }}
+          onPaste={() => { void handlePaste(); }}
+          canPaste={!!clipBoard && clipBoard.paths.length > 0}
+          onCopyPath={handleCopyPath}
+          onCopyImage={handleCopyImage}
+          onOpenDefault={(entry) => { void handleOpenWith(entry, 'default'); }}
           onNewFile={handleNewFile}
           onNewFolder={handleNewFolder}
-          onFavorite={(entry) => {
-            const api = (window as any).nativesAPI;
-            if (!isFavorite) {
-              toggleFavorite();
-            }
-          }}
-          onUnfavorite={(entry) => {
-            if (isFavorite) {
-              toggleFavorite();
-            }
-          }}
-          isFavorite={isFavorite}
+          onFavorite={(entry) => { void toggleFavorite(entry.path); }}
+          onUnfavorite={(entry) => { void toggleFavorite(entry.path); }}
+          isFavorite={contextMenu.entry ? favoritePaths.includes(contextMenu.entry.path) : isFavorite}
         />
       )}
 
@@ -749,6 +1268,16 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           className="input"
           style={{ width: '100%', fontSize: FONT_SIZE.lg }}
           autoFocus
+          onFocus={(e) => {
+            const v = e.currentTarget.value;
+            const dot = v.lastIndexOf('.');
+            // Select stem only for files with extension (not dotfiles)
+            if (dot > 0 && !renameTarget?.isDir) {
+              e.currentTarget.setSelectionRange(0, dot);
+            } else {
+              e.currentTarget.select();
+            }
+          }}
         />
         <div style={{ display: 'flex', gap: SPACING.sm, marginTop: 14, justifyContent: 'flex-end' }}>
           <button className="btn btn-ghost" onClick={() => setRenameTarget(null)}>{t(locale, 'common.cancel')}</button>
@@ -782,6 +1311,18 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           </>
         )}
       </Modal>
+
+      {/* Global name/content search (fanbox cmdk-class, scoped + recursive) */}
+      {globalSearchOpen && (
+        <FileSearch
+          rootPath={currentPath}
+          onClose={() => setGlobalSearchOpen(false)}
+          onNavigate={async (path) => {
+            setGlobalSearchOpen(false);
+            await resolveAndNavigate(path);
+          }}
+        />
+      )}
 
       {/* Disk Usage Panel (overlay) */}
       {diskUsageTarget && (

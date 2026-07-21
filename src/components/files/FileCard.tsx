@@ -10,12 +10,15 @@ import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 
 interface FileCardProps {
   entry: FileEntry;
-  onSelect: (entry: FileEntry) => void;
+  onSelect: (entry: FileEntry, e?: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean }) => void;
   onContextMenu?: (e: React.MouseEvent, entry: FileEntry) => void;
   selected?: boolean;
   onDoubleClick?: () => void;
   isFavorite?: boolean;
   onFavoriteToggle?: (entry: FileEntry) => void;
+  dimmed?: boolean;
+  onMoveDrop?: (sourcePaths: string[], destDir: string) => void;
+  dragPaths?: string[];
 }
 
 const BADGE_LABELS: Record<string, string> = {
@@ -31,10 +34,11 @@ const BADGE_COLORS: Record<string, { bg: string; text: string; border: string }>
   git: { bg: 'transparent', text: 'var(--text-secondary)', border: 'var(--border)' },
 };
 
-export default function FileCard({ entry, onSelect, onContextMenu, selected, onDoubleClick, isFavorite, onFavoriteToggle }: FileCardProps) {
+export default function FileCard({ entry, onSelect, onContextMenu, selected, onDoubleClick, isFavorite, onFavoriteToggle, dimmed, onMoveDrop, dragPaths }: FileCardProps) {
   const [flash, setFlash] = useState(false);
   const [heat, setHeat] = useState(0);
   const [showRipple, setShowRipple] = useState(false);
+  const [dropTarget, setDropTarget] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const heatDecayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -109,11 +113,17 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
       className={'file-card' + (flash ? ' anim-liveZap' : '') + (isChanged ? ' changed' : '')}
       data-file-entry={entry.path}
       data-heat={heat.toFixed(2)}
-      onClick={() => {
+      onClick={(ev) => {
         // Delay single-click to distinguish from double-click
         if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+        const mods = { shiftKey: ev.shiftKey, metaKey: ev.metaKey, ctrlKey: ev.ctrlKey };
+        // Multi-select should not delay — respond immediately
+        if (mods.shiftKey || mods.metaKey || mods.ctrlKey) {
+          onSelect(entry, mods);
+          return;
+        }
         clickTimerRef.current = setTimeout(() => {
-          onSelect(entry);
+          onSelect(entry, mods);
           clickTimerRef.current = null;
         }, 200);
       }}
@@ -126,6 +136,31 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
         onDoubleClick?.();
       }}
       onContextMenu={(e) => onContextMenu?.(e, entry)}
+      draggable
+      onDragStart={(e) => {
+        const paths = dragPaths && dragPaths.length > 0 ? dragPaths : [entry.path];
+        e.dataTransfer.setData('application/x-natives-paths', JSON.stringify(paths));
+        e.dataTransfer.effectAllowed = 'move';
+      }}
+      onDragOver={(e) => {
+        if (!entry.isDir) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (!dropTarget) setDropTarget(true);
+      }}
+      onDragLeave={() => { if (dropTarget) setDropTarget(false); }}
+      onDrop={(e) => {
+        if (!entry.isDir || !onMoveDrop) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setDropTarget(false);
+        try {
+          const raw = e.dataTransfer.getData('application/x-natives-paths');
+          const paths = raw ? JSON.parse(raw) as string[] : [];
+          const filtered = paths.filter(p => p !== entry.path);
+          if (filtered.length) onMoveDrop(filtered, entry.path);
+        } catch { /* ignore */ }
+      }}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter') onSelect(entry); }}
@@ -133,15 +168,15 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
         padding: SPACING.md,
         borderRadius: 'var(--radius, 4px)',
         cursor: 'pointer',
-        border: `1px solid ${selected ? 'var(--primary)' : isChanged ? 'var(--primary)' : 'var(--border)'}`,
-        background: selected ? 'var(--primary-soft)' : flash ? 'var(--primary-soft)' : 'transparent',
+        border: `1px solid ${dropTarget ? 'var(--primary)' : selected ? 'var(--primary)' : isChanged ? 'var(--primary)' : 'var(--border)'}`,
+        background: dropTarget ? 'var(--accent-soft, rgba(205,242,75,0.12))' : selected ? 'var(--primary-soft)' : flash ? 'var(--primary-soft)' : 'transparent',
         boxShadow: isChanged
           ? `0 0 calc(6px + 20px * ${heat}) color-mix(in srgb, var(--primary) calc(55% * ${heat}), transparent)`
           : selected ? '0 0 0 1px var(--primary)' : 'none',
         transition: 'background 0.12s, border-color 0.12s, transform 0.12s, box-shadow 0.3s, opacity 0.12s',
         position: 'relative',
         overflow: 'hidden',
-        opacity: entry.hidden ? 0.5 : 1,
+        opacity: dimmed ? 0.45 : entry.hidden ? 0.5 : 1,
         animation: isChanged ? 'changedBreath 2.2s ease-in-out infinite' : undefined,
       }}
       onMouseEnter={(e) => {

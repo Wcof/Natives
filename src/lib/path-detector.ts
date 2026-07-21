@@ -170,17 +170,32 @@ function getNativeFs() {
   return api?.fs as { listDir?: (p: string, opts?: unknown) => Promise<unknown[]> } | undefined;
 }
 
-/** Strategy 1: Direct stat via Tauri IPC */
+/** Strategy 1: Direct stat via Tauri IPC (prefers fs.stat, falls back to listDir) */
 async function statPath(candidate: string, currentDir: string): Promise<string | null> {
   const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(currentDir, candidate);
   try {
-    const fs = getNativeFs();
-    const listDir = fs?.listDir;
-    if (!listDir) return null;
+    const fs = getNativeFs() as {
+      stat?: (p: string) => Promise<{ found?: boolean; path?: string }>;
+      listDir?: (p: string, opts?: unknown) => Promise<Array<{ name: string; path: string }>>;
+    } | undefined;
+    if (!fs) return null;
 
+    if (typeof fs.stat === 'function') {
+      const st = await fs.stat(resolved);
+      if (st?.found && st.path) return st.path;
+      // also try as-is candidate if different
+      if (resolved !== candidate) {
+        const st2 = await fs.stat(candidate);
+        if (st2?.found && st2.path) return st2.path;
+      }
+      return null;
+    }
+
+    const listDir = fs.listDir;
+    if (!listDir) return null;
     const parentDir = path.dirname(resolved);
     const basename = path.basename(resolved);
-    const entries = await listDir(parentDir, { showHidden: true }) as Array<{ name: string; path: string }>;
+    const entries = await listDir(parentDir, { showHidden: true });
     const found = entries.find(e => e.name === basename);
     return found?.path ?? null;
   } catch {

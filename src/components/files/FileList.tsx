@@ -11,16 +11,20 @@ interface FileListProps {
   sortBy: 'name' | 'mtime' | 'size';
   sortDir: 'asc' | 'desc';
   onSort: (sortBy: 'name' | 'mtime' | 'size') => void;
-  onSelect: (entry: FileEntry) => void;
+  onSelect: (entry: FileEntry, e?: { shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean }) => void;
   onContextMenu?: (e: React.MouseEvent, entry: FileEntry) => void;
   showDir?: boolean;
   selectedIndex?: number;
+  selectedPaths?: Set<string>;
   onEditRequest?: (entry: FileEntry) => void;
   favorites?: string[];
   onFavoriteToggle?: (entry: FileEntry) => void;
+  cutPaths?: Set<string>;
+  onMoveDrop?: (sourcePaths: string[], destDir: string) => void;
+  dragPaths?: string[];
 }
 
-export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, onContextMenu, showDir, selectedIndex = -1, onEditRequest, favorites, onFavoriteToggle }: FileListProps) {
+export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, onContextMenu, showDir, selectedIndex = -1, selectedPaths, onEditRequest, favorites, onFavoriteToggle, cutPaths, onMoveDrop, dragPaths }: FileListProps) {
   const [locale, setLocale] = useState<Locale>('zh');
 
   useEffect(() => {
@@ -88,13 +92,16 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
           <FileRow
             key={entry.path}
             entry={entry}
-            onSelect={onSelect}
+            onSelect={(ent, ev) => onSelect(ent, ev)}
             onContextMenu={onContextMenu}
             showDir={showDir}
-            selected={index === selectedIndex}
+            selected={selectedPaths ? selectedPaths.has(entry.path) : index === selectedIndex}
             onDoubleClick={() => onEditRequest?.(entry)}
             isFavorite={favorites?.includes(entry.path)}
             onFavoriteToggle={onFavoriteToggle}
+            dimmed={cutPaths?.has(entry.path)}
+            onMoveDrop={onMoveDrop}
+            dragPaths={dragPaths}
           />
         ))
       )}
