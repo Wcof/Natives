@@ -18,6 +18,7 @@ import {
 import { t, type Locale } from '@/i18n';
 import Modal from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
+import { createTempSession, isTempConversationId } from '@/lib/assistant-temp-conversation';
 import { useAssistantWorkspace } from './AssistantWorkspaceContext';
 
 interface AssistantSidebarSectionProps {
@@ -72,10 +73,17 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
     void window.nativesAPI?.db?.set('assistant:pinnedProjects', JSON.stringify([...next]));
   }, [pinned]);
 
-  const orderedGroups = useMemo(() => navigation.groups
-    .map((group, index) => ({ group, index }))
-    .sort((left, right) => Number(pinned.has(right.group.id)) - Number(pinned.has(left.group.id)) || left.index - right.index)
-    .map(item => item.group), [navigation.groups, pinned]);
+  const orderedGroups = useMemo(() => {
+    // Temp shells must never appear in the persistent project/conversation tree.
+    const groups = navigation.groups.map((group) => ({
+      ...group,
+      conversations: group.conversations.filter((c) => !isTempConversationId(c.id)),
+    }));
+    return groups
+      .map((group, index) => ({ group, index }))
+      .sort((left, right) => Number(pinned.has(right.group.id)) - Number(pinned.has(left.group.id)) || left.index - right.index)
+      .map(item => item.group);
+  }, [navigation.groups, pinned]);
 
   // Build flat list of all conversation items for keyboard navigation
   const flatItems = useMemo(() => {
@@ -178,7 +186,11 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
         {navigation.loading ? (
           <div className="flex justify-center py-3"><Loader2 size={14} className="animate-spin text-[var(--text-disabled)]" /></div>
         ) : navigation.groups.length === 0 ? (
-          <button type="button" onClick={() => actions?.addProjectFolder()} className="drag-none w-full rounded-lg px-3 py-3 text-left text-xs text-[var(--text-disabled)] hover:bg-[var(--surface-hover)]">
+          <button type="button" onClick={() => {
+            // From other modules / empty state: always land on the assistant surface first.
+            onNavigateAssistant();
+            actions?.addProjectFolder();
+          }} className="drag-none w-full rounded-lg px-3 py-3 text-left text-xs text-[var(--text-disabled)] hover:bg-[var(--surface-hover)]">
             {t(locale, 'assistant.chooseProjectToBegin')}
           </button>
         ) : orderedGroups.map(group => {
@@ -213,14 +225,22 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                       onNavigateAssistant();
                       if (actions) {
                         if (group.path) actions.createConversationInProject(group.path);
-                      } else {
+                      } else if (group.path) {
+                        // Shell-only: local temp shell, no conversation.create.
+                        const session = createTempSession({
+                          projectId: group.path,
+                          title: t(locale, 'assistant.newConversation'),
+                        });
                         publishNavigation({
                           ...navigation,
-                          pendingCreateProjectPath: group.path || null,
+                          activeProjectPath: group.path,
+                          selectedId: session.conversation.id,
+                          tempSession: session,
+                          pendingCreateProjectPath: undefined,
                         });
                       }
                     }}
-                    disabled={navigation.creationState !== 'ready' || navigation.isCreatingConversation}
+                    disabled={navigation.isCreatingConversation}
                     aria-label={t(locale, 'assistant.newConversation')}
                     title={t(locale, 'assistant.newConversation')}
                     className="drag-none rounded-md p-1 text-inherit hover:bg-black/10 dark:hover:bg-white/10 disabled:opacity-35 transition-all"
@@ -285,7 +305,12 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                         if (actions) {
                           actions.selectConversation(conversation.id);
                         } else {
-                          publishNavigation({ ...navigation, selectedId: conversation.id });
+                          // Selecting a persisted session clears any local temp shell.
+                          publishNavigation({
+                            ...navigation,
+                            selectedId: conversation.id,
+                            tempSession: null,
+                          });
                         }
                       }}
                       className="drag-none flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5 text-left text-xs leading-4"

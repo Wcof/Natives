@@ -1294,6 +1294,8 @@ export const en = {
     rollback: 'Rollback to previous version',
     tokensUsed: '{count} tokens used',
     selfHeal: 'Build failed, retrying ({count}/3)',
+    slashHeader: 'Commands',
+    slashEmpty: 'The current runtime does not provide slash commands',
   },
 
   subagent: {

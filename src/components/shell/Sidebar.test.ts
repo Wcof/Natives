@@ -211,11 +211,13 @@ test('assistant sidebar deletion goes only through workspace actions (Gateway se
   assert.equal(assistantSidebar.includes("request('conversation.delete'"), false);
 });
 
-test('slash commands use composer-local positioning and own Enter before sending', () => {
+test('slash commands use composer-local positioning; keyboard owned by MessageInput', () => {
   const slashPopover = readFileSync(new URL('../assistant/SlashCommandPopover.tsx', import.meta.url), 'utf8');
   assert.equal(messageInput.includes('anchorRect'), false);
   assert.match(slashPopover, /bottom-full left-0/);
-  assert.match(slashPopover, /addEventListener\('keydown', handleKeyDown, true\)/);
+  // Popover must NOT own document keydown — MessageInput textarea does
+  assert.equal(slashPopover.includes("addEventListener('keydown'"), false);
+  assert.match(messageInput, /handleTextareaKeyDown|onKeyDown=\{handleTextareaKeyDown\}/);
   assert.match(messageInput, /event\.defaultPrevented/);
 });
 

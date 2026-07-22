@@ -83,6 +83,14 @@ import {
   ASSISTANT_LOCATE_EVENT,
   type AssistantLocateTarget,
 } from '@/lib/assistant-notifications';
+import {
+  collectTempConversationIds,
+  conversationsWithoutTemp,
+  createTempConversationShell,
+  createTempSession,
+  isTempConversationId,
+  resolveRegisteredProjectPath,
+} from '@/lib/assistant-temp-conversation';
 
 interface AssistantWorkbenchProps {
   locale: Locale;
@@ -325,9 +333,11 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
 
   // Publish navigation snapshot for shell sidebar
   useEffect(() => {
-    const conversations = state.conversationOrder
-      .map((id) => state.conversations[id])
-      .filter(Boolean) as Conversation[];
+    const conversations = conversationsWithoutTemp(
+      (state.conversationOrder
+        .map((id) => state.conversations[id])
+        .filter(Boolean) as Conversation[]),
+    );
     const groups = groupAssistantConversations(
       conversations.map((c) => ({
         id: c.id,
@@ -362,9 +372,17 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
           );
         }
       }
+      // Prefer root-level temp shell (survives workbench remount) when store has none.
+      const storeTempId = isTempConversationId(activeId) ? activeId : null;
+      const rootTemp = prev.tempSession;
+      const selectedId =
+        storeTempId ??
+        (rootTemp && activeId === null ? rootTemp.conversation.id : activeId) ??
+        rootTemp?.conversation.id ??
+        activeId;
       return {
         groups: nextGroups,
-        selectedId: activeId,
+        selectedId,
         activeProjectPath: activeProjectPath ?? prev.activeProjectPath,
         loading: loadingConversations,
         creationState: projectCreationState({
@@ -378,6 +396,15 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         }),
         isCreatingConversation: false,
         pendingCreateProjectPath: prev.pendingCreateProjectPath,
+        // Drop root temp once the store has a real active session (or a different temp).
+        tempSession:
+          storeTempId && rootTemp && rootTemp.conversation.id === storeTempId
+            ? rootTemp
+            : isTempConversationId(activeId)
+              ? rootTemp
+              : activeId
+                ? null
+                : rootTemp,
       };
     });
   }, [
@@ -458,46 +485,113 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     [gateway, dispatch, toast, startSubscription],
   );
 
-  // Sync external sidebar selection
+  // Sync external sidebar selection (persisted sessions only — temps hydrate below).
   useEffect(() => {
-    if (navigation.selectedId && navigation.selectedId !== activeId) {
-      void selectConversation(navigation.selectedId);
-    }
+    const selected = navigation.selectedId;
+    if (!selected || selected === activeId) return;
+    if (isTempConversationId(selected)) return;
+    void selectConversation(selected);
   }, [navigation.selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Consume deferred "create conversation in project" from shell sidebar
-  // (issued before this lazy workbench mounted).
+  /**
+   * Hydrate a root-level temp shell into the workbench store.
+   * Shell can create temp-* before this lazy workbench mounts; once mounted we
+   * adopt it without calling conversation.create. Consecutive project picks
+   * leave only the latest temp shell.
+   *
+   * Re-runs after loadConversations finishes because `conversations/replace`
+   * wipes local-only shells — we re-upsert from the root-level tempSession.
+   */
+  useEffect(() => {
+    const temp = navigation.tempSession;
+    if (!temp) return;
+    if (loadingConversations) return;
+    const { conversation } = temp;
+    if (!isTempConversationId(conversation.id)) return;
+
+    if (conversation.projectId) {
+      setActiveProjectPath(conversation.projectId);
+      void writeActiveProject(window.nativesAPI, conversation.projectId).catch(() => undefined);
+    }
+
+    // Drop any previous local temp shells (only keep the latest pick).
+    for (const oldId of collectTempConversationIds(stateRef.current.conversationOrder)) {
+      if (oldId !== conversation.id) {
+        dispatch({ type: 'conversations/remove', id: oldId });
+        dispatch({ type: 'composer/clear', conversationId: oldId });
+      }
+    }
+
+    // Prefer a model already chosen on the shell; otherwise fill from live providers
+    // without blocking when none are configured (composer shows existing disabled state).
+    const pick = selectAssistantModel(toProviderInfo(providers));
+    const existing = stateRef.current.conversations[conversation.id];
+    const shell: Conversation = {
+      ...conversation,
+      // Keep in-store edits (provider/model/permission) if hydrate re-runs after list load.
+      providerId:
+        existing?.providerId || conversation.providerId || pick?.providerId || '',
+      modelId: existing?.modelId || conversation.modelId || pick?.modelId || '',
+      permissionProfileId:
+        existing?.permissionProfileId || conversation.permissionProfileId || 'ask',
+    };
+    dispatch({ type: 'conversations/upsert', conversation: shell });
+    dispatch({ type: 'conversations/setActive', id: shell.id });
+    const draftFromStore = stateRef.current.composerByConversation[shell.id];
+    const draft = draftFromStore?.text || (draftFromStore?.attachments?.length ?? 0) > 0
+      ? draftFromStore
+      : temp.draft;
+    if (draft && (draft.text || (draft.attachments?.length ?? 0) > 0)) {
+      dispatch({
+        type: 'composer/set',
+        conversationId: shell.id,
+        draft: {
+          text: draft.text,
+          attachments: draft.attachments,
+          updatedAt: draft.updatedAt,
+        },
+      });
+    }
+  }, [navigation.tempSession?.conversation.id, loadingConversations]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Legacy deferred path: shell set pendingCreateProjectPath before tempSession existed.
   useEffect(() => {
     const path = navigation.pendingCreateProjectPath;
     if (path === undefined) return;
+    // Prefer the modern tempSession path when both are present.
+    if (navigation.tempSession) {
+      publishNavigation((prev) => ({ ...prev, pendingCreateProjectPath: undefined }));
+      return;
+    }
     if (path) {
       setActiveProjectPath(path);
       void writeActiveProject(window.nativesAPI, path).catch(() => undefined);
     }
-    // Only auto-create when engine/providers are ready; otherwise clear the flag.
-    if (providerReadiness === 'ready' && state.connection === 'connected') {
-      const id = `temp-${Date.now()}`;
-      const now = new Date().toISOString();
-      const pick = selectAssistantModel(toProviderInfo(providers));
-      if (pick) {
-        dispatch({
-          type: 'conversations/upsert',
-          conversation: {
-            id,
-            mode: 'agent',
-            title: t(locale, 'assistant.newConversation'),
-            providerId: pick.providerId,
-            modelId: pick.modelId,
-            projectId: path,
-            permissionProfileId: 'ask',
-            createdAt: now,
-            updatedAt: now,
-          },
-        });
-        dispatch({ type: 'conversations/setActive', id });
+    const session = createTempSession({
+      projectId: path,
+      title: t(locale, 'assistant.newConversation'),
+    });
+    const pick = selectAssistantModel(toProviderInfo(providers));
+    const conversation: Conversation = {
+      ...session.conversation,
+      providerId: pick?.providerId ?? '',
+      modelId: pick?.modelId ?? '',
+    };
+    for (const oldId of collectTempConversationIds(stateRef.current.conversationOrder)) {
+      if (oldId !== conversation.id) {
+        dispatch({ type: 'conversations/remove', id: oldId });
+        dispatch({ type: 'composer/clear', conversationId: oldId });
       }
     }
-    publishNavigation((prev) => ({ ...prev, pendingCreateProjectPath: undefined }));
+    dispatch({ type: 'conversations/upsert', conversation });
+    dispatch({ type: 'conversations/setActive', id: conversation.id });
+    publishNavigation((prev) => ({
+      ...prev,
+      pendingCreateProjectPath: undefined,
+      tempSession: { conversation, draft: session.draft },
+      selectedId: conversation.id,
+      activeProjectPath: path,
+    }));
   }, [navigation.pendingCreateProjectPath]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSend = useCallback(
@@ -528,7 +622,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       }
 
       try {
-        if (!conversationId || conversationId.startsWith('temp-')) {
+        if (!conversationId || isTempConversationId(conversationId)) {
           const title = draft.content.trim().slice(0, 30) || t(locale, 'assistant.newConversation');
           const createdRaw = await gateway.request<Record<string, unknown> | Conversation>(
             'conversation.create',
@@ -537,6 +631,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               title,
               provider_id: providerId,
               model_id: modelId,
+              // Always use the normalized active project path (from project.register).
               project_id: activeProjectPath,
               permission_profile_id: activeConversation?.permissionProfileId ?? 'ask',
             },
@@ -551,9 +646,14 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             ...created,
             providerId: created.providerId || providerId,
             modelId: created.modelId || modelId,
+            projectId: created.projectId ?? activeProjectPath,
+            permissionProfileId:
+              created.permissionProfileId ??
+              activeConversation?.permissionProfileId ??
+              'ask',
           };
           const previousTempId =
-            activeId && activeId.startsWith('temp-') ? activeId : null;
+            activeId && isTempConversationId(activeId) ? activeId : null;
           dispatch({ type: 'conversations/upsert', conversation });
           dispatch({ type: 'conversations/setActive', id: conversation.id });
           // Atomic temp → persisted: drop the local shell so the session appears once.
@@ -569,6 +669,13 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             }
             dispatch({ type: 'conversations/remove', id: previousTempId });
           }
+          // Clear root-level temp shell so sidebar/remount do not resurrect it.
+          publishNavigation((prev) => ({
+            ...prev,
+            tempSession: null,
+            selectedId: conversation.id,
+            activeProjectPath: activeProjectPath ?? prev.activeProjectPath,
+          }));
           conversationId = conversation.id;
         }
 
@@ -597,6 +704,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         }
         return true;
       } catch (err) {
+        // Create/send failure keeps the temp page and user input intact.
         toast(classifyError(err).userMessage, 'error');
         return false;
       }
@@ -613,6 +721,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       locale,
       activeProjectPath,
       startSubscription,
+      publishNavigation,
     ],
   );
 
@@ -667,49 +776,110 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   // Workspace actions for sidebar
   useEffect(() => {
     const actions: AssistantWorkspaceActions = {
-      selectConversation: (id) => void selectConversation(id),
+      selectConversation: (id) => {
+        // Switching to a persisted session: drop any local temp shell.
+        // Do NOT cancel background runs on other conversations.
+        if (!isTempConversationId(id)) {
+          for (const oldId of collectTempConversationIds(stateRef.current.conversationOrder)) {
+            dispatch({ type: 'conversations/remove', id: oldId });
+            dispatch({ type: 'composer/clear', conversationId: oldId });
+          }
+          publishNavigation((prev) => ({
+            ...prev,
+            tempSession: null,
+            selectedId: id,
+          }));
+        }
+        void selectConversation(id);
+      },
       selectProject: (path) => {
         setActiveProjectPath(path);
         if (path) void writeActiveProject(window.nativesAPI, path).catch(() => undefined);
       },
       addProjectFolder: () => {
-        void window.nativesAPI?.dialog?.pickDirectory?.().then(async (path) => {
-          if (!path) return;
-          await window.nativesAPI?.project?.register?.(path);
-          const projects = (await window.nativesAPI?.project?.list?.()) ?? [];
-          setRegisteredProjects(projects);
-          setActiveProjectPath(path);
+        void window.nativesAPI?.dialog?.pickDirectory?.().then(async (picked) => {
+          if (!picked) return;
+          try {
+            const registered = await window.nativesAPI?.project?.register?.(picked);
+            const path = resolveRegisteredProjectPath(registered, picked);
+            const projects = (await window.nativesAPI?.project?.list?.()) ?? [];
+            setRegisteredProjects(projects);
+            setActiveProjectPath(path);
+            void writeActiveProject(window.nativesAPI, path).catch(() => undefined);
+
+            // Drop previous local temps; keep only this pick. Never cancel other runs.
+            for (const oldId of collectTempConversationIds(stateRef.current.conversationOrder)) {
+              dispatch({ type: 'conversations/remove', id: oldId });
+              dispatch({ type: 'composer/clear', conversationId: oldId });
+            }
+
+            const pick = selectAssistantModel(toProviderInfo(providers));
+            const session = createTempSession({
+              projectId: path,
+              title: t(locale, 'assistant.newConversation'),
+              providerId: pick?.providerId,
+              modelId: pick?.modelId,
+            });
+            dispatch({ type: 'conversations/upsert', conversation: session.conversation });
+            dispatch({ type: 'conversations/setActive', id: session.conversation.id });
+            publishNavigation((prev) => ({
+              ...prev,
+              activeProjectPath: path,
+              selectedId: session.conversation.id,
+              tempSession: session,
+              pendingCreateProjectPath: undefined,
+            }));
+          } catch (err) {
+            toast(classifyError(err).userMessage, 'error');
+          }
         });
       },
       createConversation: () => {
-        const id = `temp-${Date.now()}`;
-        const now = new Date().toISOString();
-        const pick = selectAssistantModel(toProviderInfo(providers));
-        if (!pick) {
-          toast(zh ? '请先配置供应商和模型' : 'Configure provider and model first', 'error');
-          return;
+        // Local temp shell only — no conversation.create, no provider hard-gate.
+        for (const oldId of collectTempConversationIds(stateRef.current.conversationOrder)) {
+          dispatch({ type: 'conversations/remove', id: oldId });
+          dispatch({ type: 'composer/clear', conversationId: oldId });
         }
-        dispatch({
-          type: 'conversations/upsert',
-          conversation: {
-            id,
-            mode: 'agent',
-            title: t(locale, 'assistant.newConversation'),
-            providerId: pick.providerId,
-            modelId: pick.modelId,
-            projectId: activeProjectPath,
-            permissionProfileId: 'ask',
-            createdAt: now,
-            updatedAt: now,
-          },
+        const pick = selectAssistantModel(toProviderInfo(providers));
+        const session = createTempSession({
+          projectId: activeProjectPath,
+          title: t(locale, 'assistant.newConversation'),
+          providerId: pick?.providerId,
+          modelId: pick?.modelId,
         });
-        dispatch({ type: 'conversations/setActive', id });
+        dispatch({ type: 'conversations/upsert', conversation: session.conversation });
+        dispatch({ type: 'conversations/setActive', id: session.conversation.id });
+        publishNavigation((prev) => ({
+          ...prev,
+          selectedId: session.conversation.id,
+          tempSession: session,
+          pendingCreateProjectPath: undefined,
+        }));
       },
       createConversationInProject: (path) => {
         setActiveProjectPath(path);
-        actions.createConversation();
-      },
-      removeProject: (path) => {
+        void writeActiveProject(window.nativesAPI, path).catch(() => undefined);
+        for (const oldId of collectTempConversationIds(stateRef.current.conversationOrder)) {
+          dispatch({ type: 'conversations/remove', id: oldId });
+          dispatch({ type: 'composer/clear', conversationId: oldId });
+        }
+        const pick = selectAssistantModel(toProviderInfo(providers));
+        const session = createTempSession({
+          projectId: path,
+          title: t(locale, 'assistant.newConversation'),
+          providerId: pick?.providerId,
+          modelId: pick?.modelId,
+        });
+        dispatch({ type: 'conversations/upsert', conversation: session.conversation });
+        dispatch({ type: 'conversations/setActive', id: session.conversation.id });
+        publishNavigation((prev) => ({
+          ...prev,
+          activeProjectPath: path,
+          selectedId: session.conversation.id,
+          tempSession: session,
+          pendingCreateProjectPath: undefined,
+        }));
+      },      removeProject: (path) => {
         void (async () => {
           try {
             const projects = (await window.nativesAPI?.project?.list?.()) ?? [];
@@ -832,12 +1002,18 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             } catch { /* ignore */ }
           })();
         };
-        if (id.startsWith('temp-')) {
+        if (isTempConversationId(id)) {
           dispatch({ type: 'conversations/remove', id });
           clearPin();
           if (stateRef.current.activeConversationId === id) {
             dispatch({ type: 'conversations/setActive', id: null });
           }
+          publishNavigation((prev) => ({
+            ...prev,
+            tempSession:
+              prev.tempSession?.conversation.id === id ? null : prev.tempSession,
+            selectedId: prev.selectedId === id ? null : prev.selectedId,
+          }));
           return true;
         }
         try {
@@ -879,6 +1055,8 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     handleRetry,
     handlePermission,
     registerActions,
+    publishNavigation,
+    toast,
   ]);
 
   // Keyboard shortcuts + notification deep-link
@@ -932,31 +1110,27 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         id: 'new',
         label: zh ? '新会话' : 'New conversation',
         run: () => {
-          const id = `temp-${Date.now()}`;
-          const now = new Date().toISOString();
-          const pick = selectAssistantModel(toProviderInfo(providers));
-          if (!pick) {
-            toast(zh ? '请先配置供应商和模型' : 'Configure provider and model first', 'error');
-            return;
+          for (const oldId of collectTempConversationIds(stateRef.current.conversationOrder)) {
+            dispatch({ type: 'conversations/remove', id: oldId });
+            dispatch({ type: 'composer/clear', conversationId: oldId });
           }
-          dispatch({
-            type: 'conversations/upsert',
-            conversation: {
-              id,
-              mode: 'agent',
-              title: t(locale, 'assistant.newConversation'),
-              providerId: pick.providerId,
-              modelId: pick.modelId,
-              projectId: activeProjectPath,
-              permissionProfileId: 'ask',
-              createdAt: now,
-              updatedAt: now,
-            },
+          const pick = selectAssistantModel(toProviderInfo(providers));
+          const session = createTempSession({
+            projectId: activeProjectPath,
+            title: t(locale, 'assistant.newConversation'),
+            providerId: pick?.providerId,
+            modelId: pick?.modelId,
           });
-          dispatch({ type: 'conversations/setActive', id });
+          dispatch({ type: 'conversations/upsert', conversation: session.conversation });
+          dispatch({ type: 'conversations/setActive', id: session.conversation.id });
+          publishNavigation((prev) => ({
+            ...prev,
+            selectedId: session.conversation.id,
+            tempSession: session,
+            pendingCreateProjectPath: undefined,
+          }));
         },
-      },
-      {
+      },      {
         id: 'stop',
         label: zh ? '停止当前 Run' : 'Stop current run',
         shortcut: '⌘.',
@@ -1009,9 +1183,9 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       {
         id: 'fork',
         label: zh ? 'Fork 会话' : 'Fork conversation',
-        disabledReason: activeId && !activeId.startsWith('temp-') ? undefined : zh ? '无会话' : 'No conversation',
+        disabledReason: activeId && !isTempConversationId(activeId) ? undefined : zh ? '无会话' : 'No conversation',
         run: () => {
-          if (!activeId) return;
+          if (!activeId || isTempConversationId(activeId)) return;
           void gateway.request('conversation.fork', { conversation_id: activeId }).then((forked) => {
             const c = forked as Conversation;
             if (c?.id) {
@@ -1039,6 +1213,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     providers,
     locale,
     activeProjectPath,
+    publishNavigation,
   ]);
 
   const timelineMessages = useMemo(
@@ -1049,6 +1224,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         contentBlocks: m.contentBlocks,
         status: m.status,
         createdAt: m.createdAt,
+        runId: m.runId ?? null,
         inputTokens: m.inputTokens,
         outputTokens: m.outputTokens,
         startedAt: m.runId ? state.runs[m.runId]?.startedAt ?? undefined : undefined,
@@ -1114,6 +1290,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
           <div className="min-h-0 flex-1">
             <ConversationTimeline
               messages={timelineMessages}
+              eventsByRun={state.eventsByRun}
               loading={loadingMessages}
               locale={locale}
               onRetry={() => void handleRetry()}
@@ -1313,7 +1490,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
                 }
               }
               // Persist only when the conversation is real on the host.
-              if (!activeId || activeId.startsWith('temp-')) return;
+              if (!activeId || isTempConversationId(activeId)) return;
               try {
                 await gateway.request('conversation.update_permission', {
                   id: activeId,
@@ -1348,41 +1525,34 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
                     conversation: { ...existing, providerId, modelId, updatedAt: now },
                   });
                 } else {
-                  dispatch({
-                    type: 'conversations/upsert',
-                    conversation: {
-                      id: activeId,
-                      mode: 'agent',
-                      title: t(locale, 'assistant.newConversation'),
-                      providerId,
-                      modelId,
-                      projectId: activeProjectPath,
-                      permissionProfileId: 'ask',
-                      createdAt: now,
-                      updatedAt: now,
-                    },
-                  });
-                }
-              } else {
-                // No conversation yet: create a temp shell so selection has a home.
-                const id = `temp-${Date.now()}`;
-                dispatch({
-                  type: 'conversations/upsert',
-                  conversation: {
-                    id,
-                    mode: 'agent',
+                  const shell = createTempConversationShell({
+                    id: activeId,
+                    projectId: activeProjectPath,
                     title: t(locale, 'assistant.newConversation'),
                     providerId,
                     modelId,
-                    projectId: activeProjectPath,
-                    permissionProfileId: 'ask',
-                    createdAt: now,
-                    updatedAt: now,
-                  },
+                    now,
+                  });
+                  dispatch({ type: 'conversations/upsert', conversation: shell });
+                }
+              } else {
+                // No conversation yet: create a temp shell so selection has a home.
+                const session = createTempSession({
+                  projectId: activeProjectPath,
+                  title: t(locale, 'assistant.newConversation'),
+                  providerId,
+                  modelId,
+                  now,
                 });
-                dispatch({ type: 'conversations/setActive', id });
+                dispatch({ type: 'conversations/upsert', conversation: session.conversation });
+                dispatch({ type: 'conversations/setActive', id: session.conversation.id });
+                publishNavigation((prev) => ({
+                  ...prev,
+                  selectedId: session.conversation.id,
+                  tempSession: session,
+                }));
               }
-              if (activeId && !activeId.startsWith('temp-')) {
+              if (activeId && !isTempConversationId(activeId)) {
                 void gateway
                   .request('conversation.update_model', {
                     id: activeId,
@@ -1396,6 +1566,26 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             onDraftChange={(text) => {
               if (activeId) {
                 dispatch({ type: 'composer/set', conversationId: activeId, draft: { text } });
+                // Keep root-level temp draft in sync so remount (settings round-trip)
+                // restores the in-progress text — but never write long-term storage.
+                if (isTempConversationId(activeId)) {
+                  publishNavigation((prev) => {
+                    if (!prev.tempSession || prev.tempSession.conversation.id !== activeId) {
+                      return prev;
+                    }
+                    return {
+                      ...prev,
+                      tempSession: {
+                        ...prev.tempSession,
+                        draft: {
+                          ...prev.tempSession.draft,
+                          text,
+                          updatedAt: new Date().toISOString(),
+                        },
+                      },
+                    };
+                  });
+                }
               }
             }}
             projectPath={activeProjectPath}

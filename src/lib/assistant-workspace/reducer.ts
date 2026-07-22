@@ -405,7 +405,8 @@ function mergeLiveIntoMessages(
     return { ...state, liveByRun: { ...state.liveByRun, [run.id]: live } };
   }
 
-  // Promote live bubble to a persisted assistant message once terminal
+  // Promote live bubble to a persisted assistant message once terminal.
+  // Completed tools stay in eventsByRun (activity panel), not the answer body.
   const msgId = live.messageId;
   const message: Message = {
     id: msgId,
@@ -413,9 +414,9 @@ function mergeLiveIntoMessages(
     role: 'assistant',
     status: run.status,
     createdAt: run.startedAt ?? new Date().toISOString(),
-    contentBlocks: live.blocks.map((b) =>
-      b.type === 'reasoning' ? { ...b, live: false } : b,
-    ),
+    contentBlocks: live.blocks
+      .filter((b) => b.type !== 'tool_call' && b.type !== 'tool_result')
+      .map((b) => (b.type === 'reasoning' ? { ...b, live: false } : b)),
     runId: run.id,
   };
   const order = state.messagesByConversation[run.conversationId] ?? [];

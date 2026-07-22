@@ -3,7 +3,15 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, Check, Copy, RefreshCw } from 'lucide-react';
 import { formatElapsed, messagePlainText } from '@/lib/assistant-message-view';
+import type { RunEvent } from '@/lib/assistant-protocol';
+import {
+  deriveToolActivityFromEvents,
+  extractLiveThinking,
+  filterTimelineBodyBlocks,
+  selectActiveToolActivity,
+} from '@/lib/assistant-timeline';
 import { renderBlocks, type ContentBlock } from './blocks';
+import ThinkingActivity from './ThinkingActivity';
 
 export interface Message {
   id: string;
@@ -11,6 +19,8 @@ export interface Message {
   contentBlocks: ContentBlock[];
   status: string;
   createdAt: string;
+  /** Owning run for live activity + duration. */
+  runId?: string | null;
   inputTokens?: number;
   outputTokens?: number;
   startedAt?: string;
@@ -24,6 +34,8 @@ interface ConversationTimelineProps {
   loading: boolean;
   locale: string;
   onRetry?: () => void;
+  /** Full event streams keyed by run id (for live tool nesting). */
+  eventsByRun?: Record<string, RunEvent[]>;
 }
 
 const NEAR_BOTTOM_PX = 80;
@@ -38,6 +50,7 @@ const MessageRow = memo(function MessageRow({
   onRetry,
   copiedId,
   onCopy,
+  runEvents,
 }: {
   message: Message;
   locale: string;
@@ -48,6 +61,7 @@ const MessageRow = memo(function MessageRow({
   onRetry?: () => void;
   copiedId: string | null;
   onCopy: (id: string, text: string) => void;
+  runEvents: RunEvent[];
 }) {
   const user = message.role === 'user';
   const start = message.startedAt ? Date.parse(message.startedAt) : Number.NaN;
@@ -63,29 +77,49 @@ const MessageRow = memo(function MessageRow({
       ? now
       : Number.NaN;
   const messageLive = message.status === 'streaming' || message.status === 'running';
-  // Keep real event / store order — do not force reasoning to the top.
-  const contentBlocks = message.contentBlocks.map((block) => {
-    if (block.type !== 'reasoning') return block;
-    const withLocale = {
-      ...block,
-      locale: locale.startsWith('zh') ? 'zh' : 'en',
-      live: messageLive && Boolean(block.live ?? true),
-    };
-    if (!Number.isFinite(reasoningStart)) return withLocale;
-    return {
-      ...withLocale,
-      durationMs: Math.max(
-        0,
-        (Number.isFinite(reasoningEnd) ? reasoningEnd : now) - reasoningStart,
-      ),
-    };
-  });
-  const hasReasoning = contentBlocks.some((block) => block.type === 'reasoning');
+
+  const bodyBlocks = useMemo(() => {
+    const prepared = message.contentBlocks.map((block) => {
+      if (block.type !== 'reasoning') return block;
+      const withLocale = {
+        ...block,
+        locale: locale.startsWith('zh') ? 'zh' : 'en',
+        live: messageLive && Boolean(block.live ?? true),
+      };
+      if (!Number.isFinite(reasoningStart)) return withLocale;
+      return {
+        ...withLocale,
+        durationMs: Math.max(
+          0,
+          (Number.isFinite(reasoningEnd) ? reasoningEnd : now) - reasoningStart,
+        ),
+      };
+    });
+    return filterTimelineBodyBlocks(prepared);
+  }, [message.contentBlocks, locale, messageLive, reasoningStart, reasoningEnd, now]);
+
+  const liveThinking = useMemo(
+    () => (messageLive ? extractLiveThinking(message.contentBlocks) : null),
+    [message.contentBlocks, messageLive],
+  );
+
+  const toolActivity = useMemo(() => {
+    if (!messageLive) return [];
+    const all = deriveToolActivityFromEvents(runEvents);
+    return selectActiveToolActivity(all);
+  }, [runEvents, messageLive]);
+
+  const thinkingDurationLabel =
+    liveThinking && Number.isFinite(reasoningStart)
+      ? formatElapsed(
+          Math.max(0, (Number.isFinite(reasoningEnd) ? reasoningEnd : now) - reasoningStart),
+        )
+      : null;
+
+  const hasReasoning = bodyBlocks.some((block) => block.type === 'reasoning');
 
   return (
-    <article
-      className={user ? 'ml-auto max-w-[78%]' : 'mr-auto w-full max-w-[760px]'}
-    >
+    <article className={user ? 'ml-auto max-w-[78%]' : 'mr-auto w-full max-w-[760px]'}>
       <div
         className={
           user
@@ -93,10 +127,20 @@ const MessageRow = memo(function MessageRow({
             : 'text-left text-black dark:text-white'
         }
       >
-        {renderBlocks(contentBlocks)}
+        {!user && (liveThinking || toolActivity.length > 0) && (
+          <ThinkingActivity
+            locale={locale}
+            thinking={liveThinking}
+            tools={toolActivity}
+            thinkingDurationLabel={thinkingDurationLabel}
+          />
+        )}
+        {renderBlocks(bodyBlocks)}
         {!user &&
           (message.status === 'streaming' || message.status === 'running') &&
-          contentBlocks.length === 0 && (
+          bodyBlocks.length === 0 &&
+          !liveThinking &&
+          toolActivity.length === 0 && (
             <div className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
               <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--primary)]" />
               {zh ? '正在思考' : 'Thinking'}
@@ -147,6 +191,7 @@ export default function ConversationTimeline({
   loading,
   locale,
   onRetry,
+  eventsByRun = {},
 }: ConversationTimelineProps) {
   const zh = locale.startsWith('zh');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -156,7 +201,7 @@ export default function ConversationTimeline({
   const hasActive = messages.some(
     (message) => message.status === 'streaming' || message.status === 'running',
   );
-  // Elapsed timer: 1s cadence, isolated from stream chunk rate.
+
   useEffect(() => {
     if (!hasActive) return;
     setNow(Date.now());
@@ -164,7 +209,6 @@ export default function ConversationTimeline({
     return () => window.clearInterval(timer);
   }, [hasActive]);
 
-  // Stick to bottom without smooth animation on every stream chunk.
   useEffect(() => {
     if (!following) return;
     const el = scrollRef.current;
@@ -236,6 +280,7 @@ export default function ConversationTimeline({
             onRetry={onRetry}
             copiedId={copiedId}
             onCopy={onCopy}
+            runEvents={message.runId ? eventsByRun[message.runId] ?? [] : []}
           />
         ))}
       </div>

@@ -142,13 +142,21 @@ test('tool fixture produces single in-place tool block via shipped reducer', asy
   const events = [];
   for await (const e of adapter.subscribe(run.id, 0)) events.push(e);
   state = workspaceReducer(state, { type: 'event/applyBatch', events });
-  const blocks =
-    state.messages[`live-${run.id}`]?.contentBlocks ??
-    state.liveByRun[run.id]?.blocks ??
-    [];
-  const tools = blocks.filter((b) => b.type === 'tool_call');
-  assert.equal(tools.length, 1);
-  assert.equal(tools[0]!.toolStatus, 'completed');
+  // Live path may still hold tools; after terminal promote, tools stay in events only.
+  const liveTools = (state.liveByRun[run.id]?.blocks ?? []).filter((b) => b.type === 'tool_call');
+  const msgTools = Object.values(state.messages)
+    .flatMap((m) => m.contentBlocks)
+    .filter((b) => b.type === 'tool_call');
+  const eventTools = (state.eventsByRun[run.id] ?? []).filter((e) =>
+    String(e.type).includes('tool_call') || String(e.type).includes('tool_'),
+  );
+  if (liveTools.length > 0) {
+    assert.equal(liveTools.length, 1);
+    assert.equal(liveTools[0]!.toolStatus, 'completed');
+  } else {
+    assert.equal(msgTools.length, 0, 'completed tools must not enter answer body');
+    assert.ok(eventTools.length >= 1, 'tool lifecycle remains in eventsByRun');
+  }
 });
 
 test('persistence helpers round-trip view and drafts (non-execution only)', () => {

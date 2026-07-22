@@ -64,8 +64,10 @@ export function loadPersistedDrafts(): Record<string, ComposerDraft> {
 export function savePersistedDrafts(drafts: Record<string, ComposerDraft>): void {
   if (!canUseStorage()) return;
   try {
-    // Cap payload: keep last 40 conversations by updatedAt
+    // Cap payload: keep last 40 conversations by updatedAt.
+    // Never persist temp-* drafts — they would resurrect as ghost sessions after restart.
     const entries = Object.entries(drafts)
+      .filter(([id]) => !id.startsWith('temp-'))
       .filter(([, d]) => d && (d.text?.trim() || (d.attachments?.length ?? 0) > 0))
       .sort((a, b) => String(b[1].updatedAt).localeCompare(String(a[1].updatedAt)))
       .slice(0, 40);

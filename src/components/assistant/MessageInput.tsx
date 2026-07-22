@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Paperclip, Plus, Send, ShieldCheck, Square, X } from 'lucide-react';
-import type { Locale } from '@/i18n';
+import { t, type Locale } from '@/i18n';
 import {
   canSendAssistantDraft,
   fileNameFromPath,
@@ -11,11 +11,16 @@ import {
   type AssistantPermissionProfile,
   mimeTypeFromPath,
 } from '@/lib/assistant-composer';
+import {
+  detectSlashInput,
+  filterSlashCommands,
+  listSlashCommands,
+  nextSlashIndex,
+  type SlashCommand,
+} from '@/lib/assistant-slash';
 import ModelSelectorDropdown, { type ProviderWithModels } from './ModelSelectorDropdown';
 import SlashCommandPopover from './SlashCommandPopover';
 import FileMentionPopover, { type ProjectFileHit } from './FileMentionPopover';
-
-interface SlashCommand { id: string; label: string; description: string; category: 'system' | 'skill' | 'mcp' }
 
 interface MessageInputProps {
   locale: Locale;
@@ -60,6 +65,7 @@ export default function MessageInput(props: MessageInputProps) {
   const [attachments, setAttachments] = useState<AssistantAttachment[]>([]);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashQuery, setSlashQuery] = useState('');
+  const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const [permissionOpen, setPermissionOpen] = useState(false);
@@ -68,6 +74,13 @@ export default function MessageInput(props: MessageInputProps) {
   const lastSlashIndex = useRef(-1);
   const lastAtIndex = useRef(-1);
   const effectiveDisabled = disabled || inputDisabledReason === 'no_provider' || inputDisabledReason === 'no_model' || inputDisabledReason === 'creating';
+
+  // Native currently exposes no slash commands — empty list, honest empty state.
+  const availableCommands = useMemo(() => listSlashCommands(), []);
+  const filteredCommands = useMemo(
+    () => filterSlashCommands(availableCommands, slashQuery),
+    [availableCommands, slashQuery],
+  );
 
   useEffect(() => {
     if (draftText !== undefined && draftText !== input) setInput(draftText);
@@ -80,18 +93,35 @@ export default function MessageInput(props: MessageInputProps) {
     textareaRef.current.style.height = `${Math.min(Math.max(textareaRef.current.scrollHeight, 36), 200)}px`;
   }, [input]);
 
+  useEffect(() => {
+    setSlashSelectedIndex(0);
+  }, [slashQuery, slashOpen]);
+
+  const closeSlashMenu = useCallback(() => {
+    setSlashOpen(false);
+    setSlashQuery('');
+    lastSlashIndex.current = -1;
+  }, []);
+
+  const syncSlashFromValue = useCallback((value: string, caret?: number) => {
+    const detection = detectSlashInput(value, caret);
+    setSlashOpen(detection.active);
+    if (detection.active) {
+      setSlashQuery(detection.query);
+      lastSlashIndex.current = detection.slashIndex;
+    } else {
+      setSlashQuery('');
+      lastSlashIndex.current = -1;
+    }
+    return detection;
+  }, []);
+
   const handleInputChange = (value: string) => {
     setInput(value);
     onDraftChange?.(value);
-    const slashIndex = value.lastIndexOf('/');
-    const atLineStart = slashIndex === 0 || (slashIndex > 0 && value.slice(0, slashIndex).endsWith('\n'));
-    const afterSlash = atLineStart ? value.slice(slashIndex + 1) : '';
-    const slashActive = atLineStart && !afterSlash.includes(' ') && !afterSlash.includes('\n');
-    setSlashOpen(slashActive);
-    if (slashActive) {
-      setSlashQuery(afterSlash);
-      lastSlashIndex.current = slashIndex;
-    }
+
+    const caret = textareaRef.current?.selectionStart;
+    const detection = syncSlashFromValue(value, caret);
 
     // `@` file mention: last @ not followed by whitespace boundary end
     const atIndex = value.lastIndexOf('@');
@@ -99,7 +129,7 @@ export default function MessageInput(props: MessageInputProps) {
       const before = atIndex === 0 || /[\s\n]/.test(value[atIndex - 1] ?? '');
       const fragment = value.slice(atIndex + 1);
       const valid = before && !fragment.includes(' ') && !fragment.includes('\n');
-      setMentionOpen(valid && !slashActive);
+      setMentionOpen(valid && !detection.active);
       if (valid) {
         setMentionQuery(fragment);
         lastAtIndex.current = atIndex;
@@ -126,12 +156,13 @@ export default function MessageInput(props: MessageInputProps) {
       onBlockedSend?.();
       return;
     }
+    // Free-form content (including `/anything`) goes through ordinary send unchanged.
     const draft = { content: input.trim(), attachments };
     setSubmitting(true);
     setInput('');
     onDraftChange?.('');
     setAttachments([]);
-    setSlashOpen(false);
+    closeSlashMenu();
     try {
       const sender = forceImmediate && onForceSend ? onForceSend : onSend;
       const sent = await sender(draft);
@@ -184,10 +215,72 @@ export default function MessageInput(props: MessageInputProps) {
   };
 
   const handleSlashSelect = useCallback((command: SlashCommand) => {
-    setInput(`${input.slice(0, lastSlashIndex.current)}${command.id} `);
-    setSlashOpen(false);
+    const prefix = input.slice(0, lastSlashIndex.current);
+    const afterQuery = input.slice(lastSlashIndex.current + 1 + slashQuery.length);
+    const next = `${prefix}${command.id} ${afterQuery}`;
+    setInput(next);
+    onDraftChange?.(next);
+    closeSlashMenu();
     textareaRef.current?.focus();
-  }, [input]);
+  }, [input, slashQuery, onDraftChange, closeSlashMenu]);
+
+  const handleTextareaKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.defaultPrevented) return;
+
+    // Slash menu keyboard ownership (no document listener).
+    if (slashOpen) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        // Close menu; keep text as-is so `/abc` can still be sent later.
+        closeSlashMenu();
+        return;
+      }
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        if (filteredCommands.length > 0) {
+          setSlashSelectedIndex((prev) => nextSlashIndex(prev, filteredCommands.length, 1));
+        }
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        if (filteredCommands.length > 0) {
+          setSlashSelectedIndex((prev) => nextSlashIndex(prev, filteredCommands.length, -1));
+        }
+        return;
+      }
+      if (event.key === 'Enter' && !event.shiftKey && !(event.metaKey || event.ctrlKey)) {
+        // Menu open: never send. Select if a command is highlighted; else no-op.
+        event.preventDefault();
+        const selected = filteredCommands[slashSelectedIndex];
+        if (selected) handleSlashSelect(selected);
+        return;
+      }
+      // Cmd/Ctrl+Enter while menu open still force-sends (existing force-send contract).
+      if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        closeSlashMenu();
+        void handleSend(true);
+        return;
+      }
+      // Shift+Enter falls through → newline (default).
+    }
+
+    // Shift+Enter → newline (default)
+    if (event.key === 'Enter' && event.shiftKey) return;
+
+    // Cmd/Ctrl+Enter → cancel & send now (or send immediately when idle)
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      void handleSend(true);
+      return;
+    }
+
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void handleSend(false);
+    }
+  };
 
   const placeholder = inputDisabledReason === 'creating'
     ? (zh ? '正在创建会话…' : 'Starting conversation…')
@@ -198,7 +291,17 @@ export default function MessageInput(props: MessageInputProps) {
   return (
     <div className="mx-auto w-full max-w-[860px] px-5 pb-5 pt-2">
       <div className="relative rounded-[22px] border border-[var(--border)] bg-[var(--surface)] shadow-[0_8px_30px_rgba(0,0,0,0.08)]">
-        <SlashCommandPopover isOpen={slashOpen} query={slashQuery} onSelect={handleSlashSelect} onClose={() => setSlashOpen(false)} disabled={false} />
+        <SlashCommandPopover
+          isOpen={slashOpen}
+          query={slashQuery}
+          commands={filteredCommands}
+          selectedIndex={slashSelectedIndex}
+          onSelect={handleSlashSelect}
+          onHoverIndex={setSlashSelectedIndex}
+          onClose={closeSlashMenu}
+          emptyMessage={t(locale, 'assistant.slashEmpty')}
+          headerLabel={t(locale, 'assistant.slashHeader')}
+        />
         <FileMentionPopover
           open={mentionOpen}
           query={mentionQuery}
@@ -217,30 +320,21 @@ export default function MessageInput(props: MessageInputProps) {
             ))}
           </div>
         )}
-        <textarea ref={textareaRef} value={input} onChange={event => handleInputChange(event.target.value)}
-          onKeyDown={event => {
-            if (event.defaultPrevented) return;
-            // Shift+Enter → newline (default)
-            if (event.key === 'Enter' && event.shiftKey) return;
-            // Cmd/Ctrl+Enter while streaming → cancel & send now
-            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-              event.preventDefault();
-              void handleSend(true);
-              return;
-            }
-            if (event.key === 'Enter' && !event.shiftKey) {
-              event.preventDefault();
-              void handleSend(false);
-            }
-          }}
+        <textarea
+          ref={textareaRef}
+          value={input}
+          onChange={event => handleInputChange(event.target.value)}
+          onKeyDown={handleTextareaKeyDown}
           placeholder={
             isStreaming && allowQueueWhileStreaming
               ? (zh ? '运行中：Enter 入队，⌘Enter 取消并立即发送' : 'Running: Enter queues, ⌘Enter cancel & send')
               : placeholder
           }
-          disabled={effectiveDisabled} rows={1}
+          disabled={effectiveDisabled}
+          rows={1}
           className="block w-full resize-none bg-transparent px-4 pb-2 pt-4 text-[15px] leading-6 text-[var(--text)] placeholder:text-[var(--text-disabled)] disabled:cursor-not-allowed"
-          style={{ outline: 'none', boxShadow: 'none', overflowY: 'auto' }} />
+          style={{ outline: 'none', boxShadow: 'none', overflowY: 'auto' }}
+        />
         <div className="flex items-center justify-between gap-3 px-3 pb-3">
           <div className="flex min-w-0 items-center gap-1">
             <button

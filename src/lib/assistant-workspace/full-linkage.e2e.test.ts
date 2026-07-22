@@ -132,17 +132,23 @@ test('E2E: tool call lifecycle produces one completed tool block', async () => {
   const events = [];
   for await (const e of adapter.subscribe(run.id, 0)) events.push(e);
   state = workspaceReducer(state, { type: 'event/applyBatch', events });
-  // Tool blocks may live in live bubble or promoted message after terminal.
+  // Live bubble may still hold tools mid-run; after terminal promote, body has no tools.
   const fromLive = (state.liveByRun[run.id]?.blocks ?? []).filter((b) => b.type === 'tool_call');
   const fromMsgs = Object.values(state.messages)
     .flatMap((m) => m.contentBlocks)
     .filter((b) => b.type === 'tool_call');
-  const tools = fromLive.length ? fromLive : fromMsgs;
-  assert.ok(tools.length >= 1, 'expected at least one tool_call block');
-  assert.ok(
-    tools.some((b) => b.toolStatus === 'completed' || b.toolStatus === 'running'),
-    'expected tool status running/completed',
+  const fromEvents = (state.eventsByRun[run.id] ?? []).filter(
+    (e) => String(e.type).includes('tool'),
   );
+  if (fromLive.length > 0) {
+    assert.ok(
+      fromLive.some((b) => b.toolStatus === 'completed' || b.toolStatus === 'running'),
+      'expected tool status running/completed on live bubble',
+    );
+  } else {
+    assert.equal(fromMsgs.length, 0, 'answer body must not keep tool cards after terminal');
+    assert.ok(fromEvents.length >= 1, 'expected tool lifecycle events in eventsByRun');
+  }
 });
 
 test('E2E: ask_user interaction event is pending (not treated as permission-only)', async () => {

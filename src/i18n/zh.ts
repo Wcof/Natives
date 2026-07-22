@@ -1282,6 +1282,8 @@ export const zh = {
     rollback: '回滚到上一版本',
     tokensUsed: '消耗 {count} Tokens',
     selfHeal: '构建失败，正在重试 ({count}/3)',
+    slashHeader: '指令',
+    slashEmpty: '当前执行引擎未提供可用指令',
   },
 
   subagent: {

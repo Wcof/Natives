@@ -48,7 +48,10 @@ function hydrateInitial(
 ): AssistantWorkspaceState {
   if (disablePersistence) return base;
   const view = loadPersistedView();
-  const drafts = loadPersistedDrafts();
+  // Strip any legacy temp-* drafts that may still sit in localStorage from older builds.
+  const drafts = Object.fromEntries(
+    Object.entries(loadPersistedDrafts()).filter(([id]) => !id.startsWith('temp-')),
+  );
   return {
     ...base,
     view: view ? { ...base.view, ...view } : base.view,

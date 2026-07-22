@@ -15,6 +15,12 @@ import {
 } from '@/lib/assistant-project-groups';
 import type { AssistantFileChange, AssistantRunEvent } from '@/lib/assistant-types';
 import { readActiveProject, writeActiveProject } from '@/lib/active-project';
+import {
+  createTempSession,
+  isTempConversationId,
+  resolveRegisteredProjectPath,
+  type TempConversationSession,
+} from '@/lib/assistant-temp-conversation';
 
 export interface AssistantNavigationSnapshot {
   groups: AssistantProjectGroup[];
@@ -24,6 +30,11 @@ export interface AssistantNavigationSnapshot {
   creationState: AssistantProjectCreationState;
   isCreatingConversation: boolean;
   pendingCreateProjectPath?: string | null;
+  /**
+   * Local-only blank session created after project pick / "new conversation".
+   * Never listed in `groups`, never written to the host DB until first send.
+   */
+  tempSession: TempConversationSession | null;
 }
 
 export interface AssistantRuntimeSnapshot {
@@ -78,7 +89,35 @@ const emptyNavigation: AssistantNavigationSnapshot = {
   creationState: 'engine_unavailable',
   isCreatingConversation: false,
   pendingCreateProjectPath: undefined,
+  tempSession: null,
 };
+
+function newConversationTitle(): string {
+  if (typeof navigator !== 'undefined' && navigator.language.startsWith('zh')) {
+    return '新会话';
+  }
+  return 'New conversation';
+}
+
+/** Replace any prior temp shell with a fresh one for `projectPath` (null = unassigned). */
+function withFreshTempSession(
+  prev: AssistantNavigationSnapshot,
+  projectPath: string | null,
+): AssistantNavigationSnapshot {
+  const session = createTempSession({
+    projectId: projectPath,
+    title: newConversationTitle(),
+  });
+  return {
+    ...prev,
+    activeProjectPath: projectPath,
+    selectedId: session.conversation.id,
+    tempSession: session,
+    // Creating a local shell never blocks on engine/provider readiness.
+    isCreatingConversation: false,
+    pendingCreateProjectPath: undefined,
+  };
+}
 
 const emptyRuntime: AssistantRuntimeSnapshot = {
   conversationId: null,
@@ -206,7 +245,12 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
     });
     // Sessions that reference unregistered / legacy project paths go to unassigned.
     // Do not invent historical project nodes from conversation.projectId alone.
-    const groups = groupAssistantConversations(conversations, projectMetas, unassignedLabel);
+    // Temp shells never come from the host list — keep them out of sidebar groups.
+    const groups = groupAssistantConversations(
+      conversations.filter((c) => !isTempConversationId(c.id)),
+      projectMetas,
+      unassignedLabel,
+    );
 
     publishNavigation((prev) => ({
       ...prev,
@@ -215,6 +259,9 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
       loading: false,
       creationState:
         prev.creationState === 'engine_unavailable' ? 'ready' : prev.creationState,
+      // Host refresh must not drop an in-memory temp shell the user is composing.
+      tempSession: prev.tempSession,
+      selectedId: prev.selectedId,
     }));
   }, [publishNavigation]);
 
@@ -266,7 +313,12 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
           workbenchActions.selectConversation(id);
           return;
         }
-        publishNavigation((prev) => ({ ...prev, selectedId: id }));
+        // Selecting a persisted session clears any local temp shell.
+        publishNavigation((prev) => ({
+          ...prev,
+          selectedId: id,
+          tempSession: isTempConversationId(id) ? prev.tempSession : null,
+        }));
       },
       selectProject: (path) => {
         if (workbenchActions) {
@@ -283,12 +335,15 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
           workbenchActions.addProjectFolder();
           return;
         }
-        void window.nativesAPI?.dialog?.pickDirectory?.().then(async (path) => {
-          if (!path) return;
+        void window.nativesAPI?.dialog?.pickDirectory?.().then(async (picked) => {
+          if (!picked) return;
           try {
-            await window.nativesAPI?.project?.register?.(path);
+            const registered = await window.nativesAPI?.project?.register?.(picked);
+            const path = resolveRegisteredProjectPath(registered, picked);
             await refreshNavigationFromHost();
-            publishNavigation((prev) => ({ ...prev, activeProjectPath: path }));
+            // Navigate + set active project + deselect prior persistent session +
+            // create a local temp-* shell (no conversation.create).
+            publishNavigation((prev) => withFreshTempSession(prev, path));
             void writeActiveProject(window.nativesAPI, path).catch(() => undefined);
           } catch (e) {
             console.error('Failed to register project:', e);
@@ -300,21 +355,17 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
           workbenchActions.createConversation();
           return;
         }
-        publishNavigation((prev) => ({
-          ...prev,
-          pendingCreateProjectPath: prev.activeProjectPath ?? null,
-        }));
+        // Shell-only path: local temp shell, no host create, no provider gate.
+        publishNavigation((prev) =>
+          withFreshTempSession(prev, prev.activeProjectPath ?? null),
+        );
       },
       createConversationInProject: (path) => {
         if (workbenchActions) {
           workbenchActions.createConversationInProject(path);
           return;
         }
-        publishNavigation((prev) => ({
-          ...prev,
-          activeProjectPath: path,
-          pendingCreateProjectPath: path,
-        }));
+        publishNavigation((prev) => withFreshTempSession(prev, path));
         void writeActiveProject(window.nativesAPI, path).catch(() => undefined);
       },
       removeProject: (path) => {
@@ -381,7 +432,7 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
       deleteConversation: async (id) => {
         if (workbenchActions) return workbenchActions.deleteConversation(id);
         // Workbench may be unmounted (user only using sidebar) — still hit host DB.
-        if (id.startsWith('temp-')) {
+        if (isTempConversationId(id)) {
           publishNavigation((prev) => ({
             ...prev,
             groups: prev.groups.map((g) => ({
@@ -389,6 +440,8 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
               conversations: g.conversations.filter((c) => c.id !== id),
             })),
             selectedId: prev.selectedId === id ? null : prev.selectedId,
+            tempSession:
+              prev.tempSession?.conversation.id === id ? null : prev.tempSession,
           }));
           return true;
         }
