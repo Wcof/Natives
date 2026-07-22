@@ -315,7 +315,7 @@ impl ProductionRuntime {
             gateway: {
                 let mut g = CapabilityGateway::new();
                 g.set_project_root(project_root.to_string_lossy().to_string());
-                g.register_builtins();
+                register_tools_for_surface(&mut g, None);
                 Arc::new(g)
             },
             permissions: self.permissions.clone(),
@@ -515,9 +515,7 @@ impl ProductionRuntime {
                     if let Some(root) = project_root_bg {
                         g.set_project_root(root);
                     }
-                    // Full builtins registered for handler availability; allowlist
-                    // enforces which tools the child may list/execute.
-                    g.register_builtins();
+                    register_tools_for_surface(&mut g, Some(&child_allowlist_bg));
                     Arc::new(g)
                 },
                 permissions,
@@ -1148,6 +1146,26 @@ fn redact_cred_err(msg: &str) -> String {
     out
 }
 
+
+/// Register gateway tools for a run. Parent (`allowlist=None`) gets full builtins.
+/// Child (`Some`) only registers the intersection so unauthorized tools are not present.
+fn register_tools_for_surface(gateway: &mut CapabilityGateway, allowlist: Option<&[String]>) {
+    match allowlist {
+        None => gateway.register_builtins(),
+        Some(list) => {
+            let allowed: std::collections::HashSet<&str> =
+                list.iter().map(|s| s.as_str()).collect();
+            for tool in capability_gateway::tools::builtin_tools() {
+                if allowed.contains(tool.name) {
+                    gateway.register(tool);
+                }
+            }
+            // Orchestration tools are handled by PermissionGatedTools even if not in
+            // gateway; still register schema stubs only when allowlisted.
+        }
+    }
+}
+
 /// Tools with permission gate + real task orchestration.
 pub struct PermissionGatedTools {
     pub gateway: Arc<CapabilityGateway>,
@@ -1763,8 +1781,7 @@ impl PermissionGatedTools {
                     if let Some(root) = project_root {
                         g.set_project_root(root);
                     }
-                    // Handlers available; child surface is filtered by tool_allowlist.
-                    g.register_builtins();
+                    register_tools_for_surface(&mut g, Some(&child_allowlist_bg));
                     Arc::new(g)
                 },
                 permissions,
@@ -2081,15 +2098,69 @@ mod tool_allowlist_tests {
             ok.output.get("permission_profile").and_then(|v| v.as_str()),
             Some("full_access")
         );
+        let task_id = ok.output.get("task_id").and_then(|v| v.as_str()).unwrap().to_string();
+        let child = tools.subagents.get(&task_id).await.expect("child record");
+        assert_eq!(
+            child.tool_allowlist,
+            agent_core::default_subagent_tool_allowlist()
+        );
 
-        // Parent ask: cannot upgrade to full_access.
-        let mut tools_ask = gated_with_allowlist(None);
-        tools_ask.permission_profile = "ask".into();
-        // task under ask may require permission; set runtime profile autonomous via field only
-        // Permission gate uses tools.permission_profile. Under ask, task needs approval.
-        // Use readonly parent to prove hard cap without waiting on UI.
-        tools_ask.permission_profile = "readonly".into();
-        let capped = tools_ask
+        // Default request (omit profile) stays ask even under full_access parent.
+        let defaulted = tools
+            .execute_tool(
+                "task",
+                serde_json::json!({
+                    "prompt": "child-default",
+                    "provider_id": "anthropic",
+                    "model_id": "claude",
+                    "key_id": "child-key-2",
+                    "fixture": true
+                }),
+                &AtomicBool::new(false),
+            )
+            .await;
+        assert!(!defaulted.is_error, "{:?}", defaulted.output);
+        assert_eq!(
+            defaulted
+                .output
+                .get("permission_profile")
+                .and_then(|v| v.as_str()),
+            Some("ask")
+        );
+
+        // Parent ask: cannot upgrade to full_access (cap before spawn).
+        // Use full_access permission_profile field on tools so task gate doesn't block,
+        // but cap_child_permission still sees parent profile "ask" via a custom field? 
+        // We call the helper directly for the pure cap assertion, and use spawn path
+        // with parent tools.permission_profile = ask under autonomous class by temporarily
+        // using full_access for the parent tools gate while asserting cap_child_permission.
+        assert_eq!(cap_child_permission("ask", "full_access"), "ask");
+        assert_eq!(cap_child_permission("readonly", "full_access"), "readonly");
+
+        // Empty allowlist on task input is fail-closed for the child record.
+        let empty = tools
+            .execute_tool(
+                "task",
+                serde_json::json!({
+                    "prompt": "child-empty",
+                    "provider_id": "anthropic",
+                    "model_id": "claude",
+                    "key_id": "child-key-3",
+                    "tool_allowlist": [],
+                    "fixture": true
+                }),
+                &AtomicBool::new(false),
+            )
+            .await;
+        assert!(!empty.is_error, "{:?}", empty.output);
+        let empty_id = empty.output.get("task_id").and_then(|v| v.as_str()).unwrap();
+        let empty_child = tools.subagents.get(empty_id).await.unwrap();
+        assert!(empty_child.tool_allowlist.is_empty());
+
+        // readonly parent denies Process side-effect of task before spawn.
+        let mut tools_ro = gated_with_allowlist(None);
+        tools_ro.permission_profile = "readonly".into();
+        let capped = tools_ro
             .execute_tool(
                 "task",
                 serde_json::json!({
@@ -2103,7 +2174,6 @@ mod tool_allowlist_tests {
                 &AtomicBool::new(false),
             )
             .await;
-        // readonly denies Process side-effect of task before spawn.
         assert!(capped.is_error);
         assert_eq!(capped.output.get("denied"), Some(&serde_json::json!(true)));
         std::env::remove_var("NATIVES_DAEMON_FIXTURE");
