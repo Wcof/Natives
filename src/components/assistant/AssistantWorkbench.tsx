@@ -975,7 +975,8 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         })();
       },
       deleteConversation: async (id) => {
-        // Local-only temp sessions never hit the host DB.
+        // Always drop from UI first so the sidebar never looks like a no-op.
+        // Host/daemon cleanup is best-effort after the optimistic remove.
         const clearPin = () => {
           setPinnedConversationIds((prev) => {
             if (!prev.has(id)) return prev;
@@ -1002,7 +1003,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             } catch { /* ignore */ }
           })();
         };
-        if (isTempConversationId(id)) {
+        const dropFromUi = () => {
           dispatch({ type: 'conversations/remove', id });
           clearPin();
           if (stateRef.current.activeConversationId === id) {
@@ -1010,34 +1011,34 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
           }
           publishNavigation((prev) => ({
             ...prev,
+            groups: prev.groups.map((g) => ({
+              ...g,
+              conversations: g.conversations.filter((c) => c.id !== id),
+            })),
             tempSession:
               prev.tempSession?.conversation.id === id ? null : prev.tempSession,
             selectedId: prev.selectedId === id ? null : prev.selectedId,
           }));
+        };
+
+        if (isTempConversationId(id)) {
+          dropFromUi();
           return true;
         }
+
+        dropFromUi();
         try {
           await gateway.request('conversation.delete', { id });
-          dispatch({ type: 'conversations/remove', id });
-          clearPin();
-          if (stateRef.current.activeConversationId === id) {
-            dispatch({ type: 'conversations/setActive', id: null });
-          }
           return true;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          // Host already gone (or dual-store ghost) — still drop from UI so delete
-          // is never a no-op after the user confirmed.
+          // Already gone on host — UI already updated.
           if (/not found|NOT_FOUND|conversation not found/i.test(message)) {
-            dispatch({ type: 'conversations/remove', id });
-            clearPin();
-            if (stateRef.current.activeConversationId === id) {
-              dispatch({ type: 'conversations/setActive', id: null });
-            }
             return true;
           }
+          // Keep UI deleted (idempotent user intent) but surface the host error.
           toast(classifyError(err).userMessage, 'error');
-          return false;
+          return true;
         }
       },
       retryRun: () => void handleRetry(),

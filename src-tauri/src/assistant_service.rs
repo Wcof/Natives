@@ -1538,22 +1538,28 @@ async fn handle_conversation_delete(data_store: &Arc<DataStore>, params: &Value)
     };
 
     // Idempotent delete:
-    // 1) Soft-archive immediately so the conversation disappears from UI lists.
-    // 2) Cancel active daemon runs + hard-delete host row when daemon is reachable.
-    // 3) If daemon is unavailable, leave archived with cleanup_pending for later.
+    // 1) Soft-archive immediately so list queries hide the row even if hard-delete is deferred.
+    // 2) Best-effort cancel daemon runs / cascade.
+    // 3) Always hard-delete the host conversation row so refresh cannot resurrect it.
+    //    Daemon offline only sets cleanup_pending for orphan engine records.
     let now = chrono::Utc::now().to_rfc3339();
     {
         let conn = data_store.conn();
-        let changed = match conn.execute(
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM assistant_conversations WHERE id = ?1)",
+                rusqlite::params![id],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if !exists {
+            return success_response(serde_json::json!({ "deleted": true, "cleanup_pending": false }));
+        }
+        if let Err(e) = conn.execute(
             "UPDATE assistant_conversations SET archived_at = COALESCE(archived_at, ?1) WHERE id = ?2",
             rusqlite::params![now, id],
         ) {
-            Ok(n) => n,
-            Err(e) => return error_response("DB_UPDATE_ERROR", &e.to_string()),
-        };
-        if changed == 0 {
-            // Already gone — still success for idempotency.
-            return success_response(serde_json::json!({ "deleted": true, "cleanup_pending": false }));
+            return error_response("DB_UPDATE_ERROR", &e.to_string());
         }
     }
 
@@ -1567,11 +1573,16 @@ async fn handle_conversation_delete(data_store: &Arc<DataStore>, params: &Value)
                 }
             }
             // Best-effort daemon conversation cascade (method may be unsupported).
-            let _ = daemon_authority::request(
+            if let Err(error) = daemon_authority::request(
                 "conversation.delete",
                 serde_json::json!({ "id": id }),
             )
-            .await;
+            .await
+            {
+                // Unsupported / offline cascade is fine; host row still goes away.
+                eprintln!("conversation.delete daemon cascade: {error}");
+                cleanup_pending = true;
+            }
         }
         Err(error) => {
             eprintln!("conversation.delete list_runs failed: {error}");
@@ -1579,17 +1590,15 @@ async fn handle_conversation_delete(data_store: &Arc<DataStore>, params: &Value)
         }
     }
 
-    if cleanup_pending {
-        return success_response(serde_json::json!({ "deleted": true, "cleanup_pending": true }));
-    }
-
     let conn = data_store.conn();
     match conn.execute(
         "DELETE FROM assistant_conversations WHERE id = ?1",
         rusqlite::params![id],
     ) {
-        Ok(0) => success_response(serde_json::json!({ "deleted": true, "cleanup_pending": false })),
-        Ok(_) => success_response(serde_json::json!({ "deleted": true, "cleanup_pending": false })),
+        Ok(_) => success_response(serde_json::json!({
+            "deleted": true,
+            "cleanup_pending": cleanup_pending
+        })),
         Err(e) => error_response("DB_DELETE_ERROR", &e.to_string()),
     }
 }

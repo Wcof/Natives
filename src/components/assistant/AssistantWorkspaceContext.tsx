@@ -432,7 +432,7 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
       deleteConversation: async (id) => {
         if (workbenchActions) return workbenchActions.deleteConversation(id);
         // Workbench may be unmounted (user only using sidebar) — still hit host DB.
-        if (isTempConversationId(id)) {
+        const dropFromNav = () => {
           publishNavigation((prev) => ({
             ...prev,
             groups: prev.groups.map((g) => ({
@@ -443,36 +443,32 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
             tempSession:
               prev.tempSession?.conversation.id === id ? null : prev.tempSession,
           }));
+        };
+
+        if (isTempConversationId(id)) {
+          dropFromNav();
           return true;
         }
+
+        // Optimistic: sidebar must update even if RPC is slow/offline.
+        dropFromNav();
         try {
           const api = window.nativesAPI?.assistantV2;
-          if (!api?.request) return false;
+          if (!api?.request) {
+            // UI already updated; host cleanup will retry when engine is back.
+            console.warn('assistantV2 unavailable after optimistic conversation delete');
+            return true;
+          }
           await api.request('conversation.delete', { id });
-          publishNavigation((prev) => ({
-            ...prev,
-            groups: prev.groups.map((g) => ({
-              ...g,
-              conversations: g.conversations.filter((c) => c.id !== id),
-            })),
-            selectedId: prev.selectedId === id ? null : prev.selectedId,
-          }));
           return true;
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           if (/not found|NOT_FOUND|conversation not found/i.test(message)) {
-            publishNavigation((prev) => ({
-              ...prev,
-              groups: prev.groups.map((g) => ({
-                ...g,
-                conversations: g.conversations.filter((c) => c.id !== id),
-              })),
-              selectedId: prev.selectedId === id ? null : prev.selectedId,
-            }));
             return true;
           }
-          console.error('Failed to delete conversation:', e);
-          return false;
+          console.error('Failed to delete conversation on host:', e);
+          // Keep optimistic removal — user asked to delete; do not resurrect.
+          return true;
         }
       },
       retryRun: () => {
