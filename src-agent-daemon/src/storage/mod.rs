@@ -20,7 +20,7 @@ pub mod migrations;
 
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 /// The data store — manages SQLite connection and artifact storage.
 pub struct DataStore {
@@ -90,8 +90,18 @@ impl DataStore {
         .unwrap_or(false)
     }
 
+    /// Process-wide lock so concurrent DataStore::new calls cannot interleave
+    /// schema migrations on different connections to the same file.
+    fn migration_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Run all pending migrations.
     fn run_migrations(&self) -> Result<(), String> {
+        let _migrate = Self::migration_lock();
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {e}"))?;
 
         conn.execute_batch(
