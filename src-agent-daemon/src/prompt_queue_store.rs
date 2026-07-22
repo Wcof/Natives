@@ -509,15 +509,24 @@ mod tests {
         let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
         let prev_db = std::env::var("NATIVES_DB_PATH").ok();
+        let prev_asst = std::env::var("NATIVES_ASSISTANT_DB_PATH").ok();
         let prev_rt = std::env::var("NATIVES_RUNTIME_DIR").ok();
-        std::env::set_var("NATIVES_DB_PATH", dir.path().join("assistant.db"));
+        let db = dir.path().join("assistant.db");
+        // store() prefers NATIVES_ASSISTANT_DB_PATH over NATIVES_DB_PATH.
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_DB_PATH", &db);
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
-        // Fresh harness for isolation — reset by using unique conversation ids.
+        // Fresh harness isolation via unique conversation ids in each test.
         f();
         if let Some(v) = prev_db {
             std::env::set_var("NATIVES_DB_PATH", v);
         } else {
             std::env::remove_var("NATIVES_DB_PATH");
+        }
+        if let Some(v) = prev_asst {
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", v);
+        } else {
+            std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
         }
         if let Some(v) = prev_rt {
             std::env::set_var("NATIVES_RUNTIME_DIR", v);

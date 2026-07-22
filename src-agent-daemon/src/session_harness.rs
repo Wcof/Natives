@@ -56,6 +56,8 @@ struct ConversationActor {
     active_run_id: Option<String>,
     queue: Vec<QueueItem>,
     pending_interjection: Option<Interjection>,
+    /// Pending human interaction (permission / ask) — reserved for engine wiring.
+    #[allow(dead_code)]
     pending_interaction_id: Option<String>,
     /// When set, after terminal run finish, start this queue item as a new run.
     cancel_and_send: Option<String>,
