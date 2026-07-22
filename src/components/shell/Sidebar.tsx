@@ -523,7 +523,7 @@ export default function Sidebar({
             <button
               type="button"
               onClick={onToggle}
-              className="ml-auto flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+              className="titlebar-collapse-btn ml-auto flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
               aria-label={t(locale, 'sidebar.collapse')}
               title={t(locale, 'sidebar.collapse')}
             >
@@ -535,7 +535,7 @@ export default function Sidebar({
             <button
               type="button"
               onClick={onToggle}
-              className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]"
+              className="titlebar-collapse-btn flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]"
               aria-label={t(locale, 'sidebar.expand')}
               title={t(locale, 'sidebar.expand')}
             >

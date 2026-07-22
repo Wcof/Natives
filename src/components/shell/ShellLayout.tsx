@@ -324,7 +324,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       <div
         data-tauri-drag-region
         className="absolute top-0 z-40"
-        style={{ left: '108px', right: '-12px', height: '40px' }}
+        style={{ left: '108px', right: '-12px', height: '44px' }}
       />
       {/* ── V1.0 已移除：wallpaper / liquid-blob / WebGL LiquidGlass 全局背景层 ── */}
 

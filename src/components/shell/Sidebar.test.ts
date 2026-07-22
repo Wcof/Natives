@@ -100,6 +100,9 @@ test('macOS window chrome keeps system traffic lights (decorations + Overlay)', 
   assert.match(macosConf, /"titleBarStyle"\s*:\s*"Overlay"/);
   assert.match(macosConf, /"hiddenTitle"\s*:\s*true/);
   assert.match(macosConf, /"trafficLightPosition"/);
+  // Vertically centered with the 折叠 button (see globals.css geometry contract)
+  assert.match(macosConf, /"y"\s*:\s*28/);
+  assert.match(macosConf, /"x"\s*:\s*26/);
 
   // Base conf stays frameless for Win/Linux custom chrome
   assert.match(baseConf, /"decorations"\s*:\s*false/);

@@ -1784,46 +1784,66 @@ input[type="search"]::placeholder {
 .tb-min .btn-ghost { display: none !important; }
 
 /* ── Titlebar row + native/fallback window chrome ── */
-/* ShellLayout uses p-3 (12px). trafficLightPosition is absolute to the
-   window, so spacer padding must cancel that outer inset and land the
-   system buttons inside the sidebar header. */
+/* Geometry contract (must stay in sync with tauri.macos.conf.json
+   trafficLightPosition):
+     ShellLayout outer inset  = 12px (p-3)
+     titlebar-row height      = 44px, equal vertical padding via flex center
+     collapse button          = 28×28 (h-7 w-7)
+     collapse center Y        = 12 + 22 = 34
+     traffic lights (~12px)   → y ≈ 34 − 6 = 28 (top of cluster)
+     spacer starts at x       = 12 + 14 = 26  → trafficLightPosition.x = 26
+*/
 .titlebar-row {
   display: flex;
   width: 100%;
   align-items: center;
-  min-height: 40px;
-  padding: 12px 14px 8px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0 14px;
   box-sizing: border-box;
 }
 
 .titlebar-row[data-native-traffic='true'] {
-  /* Leave a clear hit target under system traffic lights */
-  padding-top: 10px;
+  /* Left inset matches spacer start; no extra top pad so flex centers cleanly */
   padding-left: 14px;
 }
 
 .titlebar-row[data-collapsed='true'] {
   flex-direction: column;
   align-items: center;
+  justify-content: flex-start;
+  height: auto;
+  min-height: 44px;
   gap: 8px;
-  padding: 12px 6px 8px;
+  padding: 8px 6px;
 }
 
 .titlebar-row[data-collapsed='true'][data-native-traffic='true'] {
-  padding-top: 10px;
+  /* Keep first row (lights + expand) on the same 44px band as expanded mode */
+  padding-top: 0;
+  min-height: 44px;
 }
 
-/* Reserve space for system traffic lights (Overlay title bar) */
+/* Reserve space for system traffic lights (Overlay title bar).
+   Height matches collapse button (28px) so the row's flex center
+   is the shared vertical axis for lights + 折叠. */
 .native-traffic-spacer {
   width: 70px;
-  height: 16px;
+  height: 28px;
   flex-shrink: 0;
   pointer-events: none;
 }
 
 .titlebar-row[data-collapsed='true'] .native-traffic-spacer {
   width: 52px;
-  height: 20px;
+  height: 28px;
+}
+
+/* Collapse / expand control shares the traffic-light vertical axis */
+.titlebar-collapse-btn {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  flex-shrink: 0;
 }
 
 /* Windows/Linux frameless fallback controls */
