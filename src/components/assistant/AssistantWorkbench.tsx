@@ -71,6 +71,7 @@ import PermissionRequestCard from './PermissionRequestCard';
 import GoalStatusBar from './GoalStatusBar';
 import PromptQueuePanel from './PromptQueuePanel';
 import ActivityInspector from './ActivityInspector';
+import ResizableRightPanel from '@/components/ui/ResizableRightPanel';
 import ConnectionBanner from './ConnectionBanner';
 import CommandPalette, { type AssistantCommand } from './CommandPalette';
 import type { ProviderWithModels } from './ModelSelectorDropdown';
@@ -1402,9 +1403,20 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         </div>
 
         {showRight && (
-          <div
-            className="shrink-0"
-            style={{ width: state.view.rightWidth || 320 }}
+          <ResizableRightPanel
+            open={showRight}
+            width={state.view.rightWidth || 320}
+            onResize={(width) => dispatch({ type: 'view/patch', patch: { rightWidth: width } })}
+            onClose={() => {
+              setRightPanelOpen(false);
+              dispatch({ type: 'view/patch', patch: { rightCollapsed: true } });
+            }}
+            title={zh ? '活动' : 'Activity'}
+            ariaLabel={zh ? '助理右侧栏' : 'Assistant inspector'}
+            resizeLabel={zh ? '调整宽度' : 'Resize panel'}
+            resizeHint={zh ? '拖动调整宽度 · 双击重置' : 'Drag to resize · double-click to reset'}
+            closeLabel={zh ? '关闭' : 'Close'}
+            scrollBody={false}
           >
             <ActivityInspector
               run={activeRun}
@@ -1434,7 +1446,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
                 });
               }}
             />
-          </div>
+          </ResizableRightPanel>
         )}
       </div>
     </div>

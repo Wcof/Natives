@@ -3,23 +3,28 @@
 import { ReactNode, useState, useCallback, useEffect, useRef } from 'react';
 import { FileText, Bell, Info, GitBranch } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
+import {
+  clampResizableRightPanelWidth,
+  RESIZABLE_RIGHT_PANEL_DEFAULT_WIDTH,
+  RESIZABLE_RIGHT_PANEL_MAX_WIDTH,
+  RESIZABLE_RIGHT_PANEL_MIN_WIDTH,
+} from '@/components/ui/ResizableRightPanel';
 
 export type RightPanelMode = 'file-preview' | 'notifications' | 'module-details' | 'closed';
 export type PreviewSubMode = 'preview' | 'info' | 'git';
 
 /** Default open width — also used as double-click reset target. */
-export const RIGHT_PANEL_DEFAULT_WIDTH = 320;
+export const RIGHT_PANEL_DEFAULT_WIDTH = RESIZABLE_RIGHT_PANEL_DEFAULT_WIDTH;
 /** Narrowest usable width (header icons + close still fit). */
-export const RIGHT_PANEL_MIN_WIDTH = 260;
+export const RIGHT_PANEL_MIN_WIDTH = RESIZABLE_RIGHT_PANEL_MIN_WIDTH;
 /** Hard cap; further limited by viewport so main content keeps a floor. */
-export const RIGHT_PANEL_MAX_WIDTH = 640;
-/** Keep at least this much horizontal room for sidebar + main workspace. */
-const MAIN_CONTENT_FLOOR = 420;
+export const RIGHT_PANEL_MAX_WIDTH = RESIZABLE_RIGHT_PANEL_MAX_WIDTH;
 
-export function clampRightPanelWidth(width: number, viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1280): number {
-  const maxByViewport = Math.max(RIGHT_PANEL_MIN_WIDTH, viewportWidth - MAIN_CONTENT_FLOOR);
-  const max = Math.min(RIGHT_PANEL_MAX_WIDTH, maxByViewport);
-  return Math.max(RIGHT_PANEL_MIN_WIDTH, Math.min(max, Math.round(width)));
+export function clampRightPanelWidth(
+  width: number,
+  viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1280,
+): number {
+  return clampResizableRightPanelWidth(width, viewportWidth);
 }
 
 interface RightPanelProps {
