@@ -7,6 +7,41 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+/// Default readonly tool surface for sub-agents (Phase 0 security floor).
+pub fn default_subagent_tool_allowlist() -> Vec<String> {
+    vec![
+        "read_file".into(),
+        "list_dir".into(),
+        "grep".into(),
+    ]
+}
+
+/// Cap a child's permission profile so it never exceeds the parent.
+///
+/// Privilege order: `readonly` < `ask` < `full_access`.
+/// Unknown / empty values normalize to `ask`.
+///
+/// Child defaults remain readonly/ask even when the parent is `full_access`
+/// (callers pass the requested profile; omit or pass `ask` for the default).
+pub fn cap_child_permission(parent: &str, requested: &str) -> String {
+    fn rank(profile: &str) -> u8 {
+        match profile.trim() {
+            "readonly" | "read_only" => 0,
+            "full_access" | "autonomous" | "full" => 2,
+            // ask / confirm_each / empty / unknown
+            _ => 1,
+        }
+    }
+    fn label(rank: u8) -> String {
+        match rank {
+            0 => "readonly".into(),
+            2 => "full_access".into(),
+            _ => "ask".into(),
+        }
+    }
+    label(rank(parent).min(rank(requested)))
+}
+
 /// Sub-agent configuration.
 #[derive(Debug, Clone)]
 pub struct SubAgentConfig {
@@ -367,5 +402,30 @@ mod tests {
         spawn_default(&manager, "parent-1", "Task 1", 1).await.unwrap();
         spawn_default(&manager, "parent-1", "Task 2", 1).await.unwrap();
         assert_eq!(manager.list().await.len(), 2);
+    }
+
+    #[test]
+    fn test_cap_child_permission_never_upgrades() {
+        // Parent ask: child cannot become full_access.
+        assert_eq!(cap_child_permission("ask", "full_access"), "ask");
+        assert_eq!(cap_child_permission("readonly", "ask"), "readonly");
+        assert_eq!(cap_child_permission("readonly", "full_access"), "readonly");
+        // Parent full_access: explicit full_access request allowed; default ask stays ask.
+        assert_eq!(cap_child_permission("full_access", "full_access"), "full_access");
+        assert_eq!(cap_child_permission("full_access", "ask"), "ask");
+        assert_eq!(cap_child_permission("full_access", "readonly"), "readonly");
+        assert_eq!(cap_child_permission("autonomous", "full"), "full_access");
+        // Unknown → ask floor.
+        assert_eq!(cap_child_permission("ask", ""), "ask");
+        assert_eq!(cap_child_permission("", "full_access"), "ask");
+    }
+
+    #[test]
+    fn test_default_subagent_tool_allowlist_is_readonly() {
+        let list = default_subagent_tool_allowlist();
+        assert!(list.contains(&"read_file".into()));
+        assert!(list.contains(&"list_dir".into()));
+        assert!(list.contains(&"grep".into()));
+        assert!(!list.iter().any(|t| t == "write_file" || t == "task" || t == "run_terminal"));
     }
 }

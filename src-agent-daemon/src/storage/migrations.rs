@@ -13,6 +13,7 @@ pub const ALL: &[(i64, &str)] = &[
     (6, MIGRATION_006),
     (7, MIGRATION_007),
     (8, MIGRATION_008),
+    (9, MIGRATION_009),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -354,4 +355,88 @@ FROM conversation;
 DROP TABLE conversation;
 ALTER TABLE conversation_v8 RENAME TO conversation;
 PRAGMA foreign_keys=ON;
+";
+
+/// Migration 009: Phase 0 storage entities (queue / interaction / task / checkpoint / grant).
+const MIGRATION_009: &str = "
+CREATE TABLE IF NOT EXISTS prompt_queue (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'user',
+    attachments TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
+    client_temp_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_queue_conversation
+    ON prompt_queue(conversation_id, position);
+
+CREATE TABLE IF NOT EXISTS interaction (
+    id TEXT PRIMARY KEY,
+    run_id TEXT REFERENCES run(id) ON DELETE CASCADE,
+    conversation_id TEXT REFERENCES conversation(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN (
+        'pending', 'resolved', 'expired', 'cancelled'
+    )),
+    payload TEXT NOT NULL DEFAULT '{}',
+    response TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    responded_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_interaction_run ON interaction(run_id);
+CREATE INDEX IF NOT EXISTS idx_interaction_status ON interaction(status);
+
+CREATE TABLE IF NOT EXISTS task (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT REFERENCES conversation(id) ON DELETE CASCADE,
+    parent_run_id TEXT REFERENCES run(id) ON DELETE SET NULL,
+    agent_profile_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN (
+        'pending', 'running', 'completed', 'failed', 'cancelled', 'interrupted'
+    )),
+    title TEXT NOT NULL DEFAULT '',
+    input TEXT,
+    result TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_task_conversation ON task(conversation_id, created_at);
+
+CREATE TABLE IF NOT EXISTS checkpoint (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
+    conversation_id TEXT NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL DEFAULT 0,
+    label TEXT,
+    snapshot_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_checkpoint_run ON checkpoint(run_id, sequence);
+
+CREATE TABLE IF NOT EXISTS tool_grant (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT REFERENCES conversation(id) ON DELETE CASCADE,
+    run_id TEXT REFERENCES run(id) ON DELETE CASCADE,
+    tool_name TEXT NOT NULL,
+    scope TEXT,
+    grant_type TEXT NOT NULL DEFAULT 'once' CHECK(grant_type IN (
+        'once', 'session', 'always'
+    )),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tool_grant_conversation
+    ON tool_grant(conversation_id, tool_name);
+
+CREATE TABLE IF NOT EXISTS _host_authority_migration (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    version INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('completed', 'failed')),
+    detail TEXT,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 ";

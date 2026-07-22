@@ -63,6 +63,7 @@ async fn live_engine_text_turn() {
         conversation_id: "live-c1".into(),
         model_id: model.clone(),
         permission_profile: "full_access".into(),
+        tool_allowlist: None,
     };
 
     let status = engine
@@ -155,6 +156,7 @@ async fn live_engine_tool_loop() {
         conversation_id: "live-c-tool".into(),
         model_id: model.clone(),
         permission_profile: "full_access".into(),
+        tool_allowlist: None,
     };
 
     // list_dir is ReadOnly and registered — forces AgentEngine tool cycle.
@@ -267,6 +269,7 @@ async fn live_subagent_task_completes() {
         conversation_id: "live-c-sub".into(),
         model_id: model.clone(),
         permission_profile: "full_access".into(),
+        tool_allowlist: None,
     };
 
     // Independent key identity: different key_id label than parent (same env secret is OK for smoke).
@@ -445,6 +448,7 @@ async fn live_engine_cancel_stream() {
             conversation_id: conversation_id_for_task.clone(),
             model_id: model_for_task.clone(),
             permission_profile: "full_access".into(),
+            tool_allowlist: None,
         };
         engine
             .run(
@@ -552,6 +556,7 @@ async fn live_cross_provider_subagent_openai_parent_anthropic_child() {
         conversation_id: "live-cross-conv".into(),
         model_id: parent_model.clone(),
         permission_profile: "full_access".into(),
+        tool_allowlist: None,
     };
     let parent_status = engine
         .run(
@@ -673,6 +678,7 @@ async fn dual_provider_engine_fixture_subagent() {
         conversation_id: "fixture-parent-conversation".into(),
         model_id: "fixture-parent-model".into(),
         permission_profile: "full_access".into(),
+        tool_allowlist: None,
     };
     let parent_status = engine
         .run(
@@ -771,6 +777,7 @@ async fn fixture_engine_still_works_without_live() {
         conversation_id: "c".into(),
         model_id: "m".into(),
         permission_profile: "full_access".into(),
+        tool_allowlist: None,
     };
     let status = engine
         .run(

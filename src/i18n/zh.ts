@@ -1284,6 +1284,15 @@ export const zh = {
     selfHeal: '构建失败，正在重试 ({count}/3)',
     slashHeader: '指令',
     slashEmpty: '当前执行引擎未提供可用指令',
+    engineRecoveryTitle: '引擎不可用',
+    engineUnavailableBody: '无法连接助理引擎。请重试连接；在恢复前不会启动执行链路。',
+    engineFatalBody: '引擎发生致命错误，无法继续执行。请重试连接或复制诊断信息。',
+    engineIncompatibleBody: '客户端与引擎协议不兼容。请升级应用或引擎后重试。',
+    engineRetryConnection: '重试连接',
+    engineCopyDiagnostics: '复制诊断',
+    contextUsageNotReady: '上下文用量能力未就绪',
+    tasksCapabilityNotReady: '任务深度能力未就绪',
+    capabilityNotReady: '能力未就绪',
   },
 
   subagent: {

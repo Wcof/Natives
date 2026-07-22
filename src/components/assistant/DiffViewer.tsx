@@ -78,8 +78,9 @@ export default function DiffViewer({
               type="button"
               onClick={onRollback}
               className="text-amber-500 underline hover:text-amber-400"
+              data-testid="diff-rollback"
             >
-              Rollback
+              {zh ? '回滚' : 'Rollback'}
             </button>
           )}
           {mode === 'inline' && (

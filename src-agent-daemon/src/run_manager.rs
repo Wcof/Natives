@@ -82,10 +82,14 @@ impl RunManager {
     }
 
     fn store_from_env() -> Option<Arc<DataStore>> {
-        let db_path = std::env::var("NATIVES_DB_PATH").ok()?;
-        if db_path.trim().is_empty() {
-            return None;
-        }
+        // Phase 0: authority store is assistant.db (NATIVES_ASSISTANT_DB_PATH).
+        // Fall back to NATIVES_DB_PATH only for legacy test fixtures that still
+        // point a single temp DB at NATIVES_DB_PATH.
+        let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| std::env::var("NATIVES_DB_PATH").ok())
+            .filter(|s| !s.trim().is_empty())?;
         let db_path = std::path::PathBuf::from(db_path);
         if let Some(parent) = db_path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -982,6 +986,7 @@ impl RunManager {
                 conversation_id: run.conversation_id.clone(),
                 model_id: model_id.clone(),
                 permission_profile: permission_profile.clone(),
+                tool_allowlist: None,
             };
             let config = EngineRunConfig {
                 run_id: run.id.clone(),
@@ -2696,6 +2701,7 @@ mod tests {
             conversation_id: "c-perm".into(),
             model_id: "gpt-4o".into(),
             permission_profile: "ask".into(),
+            tool_allowlist: None,
         };
         let provider = FixtureProvider {
             mode: FixtureMode::RequestPermissionPath,
@@ -2897,6 +2903,7 @@ mod tests {
             conversation_id: "c".into(),
             model_id: "gpt-4o".into(),
             permission_profile: "full_access".into(),
+            tool_allowlist: None,
         };
         let result = tools
             .execute_tool(
@@ -3005,6 +3012,7 @@ mod tests {
                     conversation_id: "c-dual".into(),
                     model_id: "gpt-4o".into(),
                     permission_profile: "full_access".into(),
+                    tool_allowlist: None,
                 };
                 let result = tools
                     .execute_tool(
@@ -3135,6 +3143,7 @@ mod tests {
             conversation_id: "c".into(),
             model_id: "m".into(),
             permission_profile: "full_access".into(),
+            tool_allowlist: None,
         };
         let out = tools
             .execute_tool(

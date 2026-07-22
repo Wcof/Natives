@@ -24,9 +24,20 @@ pub async fn request(method: &str, params: Value) -> Result<Value, String> {
 }
 
 fn store() -> Result<DataStore, String> {
-    let db_path = std::env::var("NATIVES_DB_PATH")
+    // Phase 0: Daemon conversation/run authority is assistant.db.
+    // Prefer NATIVES_ASSISTANT_DB_PATH; fall back to NATIVES_DB_PATH for tests that
+    // still use a single temp file; finally default_assistant_db_path().
+    let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|_| crate::default_natives_db_path());
+        .or_else(|| {
+            std::env::var("NATIVES_DB_PATH")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .map(PathBuf::from)
+        })
+        .unwrap_or_else(crate::default_assistant_db_path);
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }

@@ -17,11 +17,18 @@ import type {
   Artifact,
   ChildRunSummary,
   ContextUsage,
+  DaemonCapabilities,
   FileChange,
   Run,
   RunEvent,
 } from '@/lib/assistant-protocol';
 import type { InspectorTab } from '@/lib/assistant-workspace';
+import {
+  canListTasks,
+  canRewind,
+  canShowContextUsage,
+} from '@/lib/assistant-workspace/capability-gate';
+import { t } from '@/i18n';
 import DiffViewer from './DiffViewer';
 
 interface ActivityInspectorProps {
@@ -43,6 +50,8 @@ interface ActivityInspectorProps {
   fileContentsByPath?: Record<string, { before: string; after: string }>;
   onOpenFile?: (path: string) => void;
   onRollbackFile?: (path: string) => void;
+  /** daemon.getCapabilities result — gates rewind / context / tasks. */
+  capabilities?: DaemonCapabilities | null;
 }
 
 const TABS: Array<{ id: InspectorTab; zh: string; en: string; icon: typeof Play; devOnly?: boolean }> = [
@@ -80,15 +89,30 @@ export default function ActivityInspector({
   fileContentsByPath = {},
   onOpenFile,
   onRollbackFile,
+  capabilities = null,
 }: ActivityInspectorProps) {
   const zh = locale.startsWith('zh');
-  const tabs = TABS.filter((t) => !t.devOnly || developerMode);
+  const allowRewind = canRewind(capabilities);
+  const allowContextUsage = canShowContextUsage(capabilities);
+  const allowTasks = canListTasks(capabilities);
+  const tabs = TABS.filter((tab) => {
+    if (tab.devOnly && !developerMode) return false;
+    if (tab.id === 'tasks' && !allowTasks) return false;
+    return true;
+  });
   const [selectedChangePath, setSelectedChangePath] = useState<string | null>(null);
   const selectedContents = useMemo(() => {
     const path = selectedChangePath ?? fileChanges[0]?.path ?? null;
     if (!path) return null;
     return { path, ...(fileContentsByPath[path] ?? { before: '', after: '' }) };
   }, [selectedChangePath, fileChanges, fileContentsByPath]);
+
+  const effectiveTab =
+    activeTab === 'tasks' && !allowTasks
+      ? 'run'
+      : tabs.some((tab) => tab.id === activeTab)
+        ? activeTab
+        : (tabs[0]?.id ?? 'run');
 
   return (
     <div className="flex h-full flex-col border-l border-[var(--border)] bg-[var(--surface)]">
@@ -99,7 +123,7 @@ export default function ActivityInspector({
             type="button"
             onClick={() => onTabChange(tab.id)}
             className={`inline-flex items-center gap-1 px-2.5 py-2 text-[11px] font-medium transition-colors ${
-              activeTab === tab.id
+              effectiveTab === tab.id
                 ? 'border-b-2 border-[var(--primary)] text-[var(--primary)]'
                 : 'text-[var(--text-disabled)] hover:text-[var(--text-secondary)]'
             }`}
@@ -117,7 +141,7 @@ export default function ActivityInspector({
           </div>
         )}
 
-        {run && activeTab === 'run' && (
+        {run && effectiveTab === 'run' && (
           <div className="space-y-2">
             <div className="flex items-center gap-2">
               <StatusIcon status={run.status} />
@@ -143,7 +167,7 @@ export default function ActivityInspector({
           </div>
         )}
 
-        {run && activeTab === 'tasks' && (
+        {run && effectiveTab === 'tasks' && allowTasks && (
           <div className="space-y-1">
             <div className="mb-2 font-medium text-[var(--text-secondary)]">
               {zh ? '父运行' : 'Parent'} · {run.id.slice(0, 8)}
@@ -171,7 +195,7 @@ export default function ActivityInspector({
           </div>
         )}
 
-        {run && activeTab === 'changes' && (
+        {run && effectiveTab === 'changes' && (
           <div className="space-y-2">
             {fileChanges.length === 0 ? (
               <Empty zh={zh} zhMsg="无文件变更" enMsg="No file changes" />
@@ -205,7 +229,7 @@ export default function ActivityInspector({
                       onOpenFile ? () => onOpenFile(selectedContents.path) : undefined
                     }
                     onRollback={
-                      onRollbackFile
+                      allowRewind && onRollbackFile
                         ? () => onRollbackFile(selectedContents.path)
                         : undefined
                     }
@@ -216,7 +240,7 @@ export default function ActivityInspector({
           </div>
         )}
 
-        {run && activeTab === 'artifacts' && (
+        {run && effectiveTab === 'artifacts' && (
           <div className="space-y-1">
             {artifacts.length === 0 ? (
               <Empty zh={zh} zhMsg="无产物" enMsg="No artifacts" />
@@ -245,9 +269,16 @@ export default function ActivityInspector({
           </div>
         )}
 
-        {run && activeTab === 'context' && (
+        {run && effectiveTab === 'context' && (
           <div className="space-y-2">
-            {contextUsage ? (
+            {!allowContextUsage ? (
+              <div
+                className="py-8 text-center text-[var(--text-disabled)]"
+                data-testid="context-capability-not-ready"
+              >
+                {t(locale, 'assistant.contextUsageNotReady')}
+              </div>
+            ) : contextUsage ? (
               <>
                 <div className="h-2 overflow-hidden rounded-full bg-[var(--surface-hover)]">
                   <div
@@ -268,7 +299,7 @@ export default function ActivityInspector({
           </div>
         )}
 
-        {run && activeTab === 'events' && (
+        {run && effectiveTab === 'events' && (
           <div className="space-y-0.5 font-mono">
             {events.length === 0 ? (
               <Empty zh={zh} zhMsg="暂无事件" enMsg="No events" />

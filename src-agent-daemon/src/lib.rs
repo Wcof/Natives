@@ -28,7 +28,8 @@ pub use client::{
     DaemonClientError, RunAuthorityMode,
 };
 pub use natives_db_broker::{
-    default_natives_db_path, try_install_natives_db_broker, NativesDbBroker,
+    default_assistant_db_path, default_natives_db_path, try_install_natives_db_broker,
+    NativesDbBroker,
 };
 pub use authority::{
     build_execution_authority, AuthorityError, EmbeddedAuthority, ExecutionAuthority, UdsAuthority,

@@ -167,6 +167,7 @@ fn envelope_decrypt(
 }
 
 /// Default path: `$NATIVES_DB_PATH` or `~/.natives/natives.db`.
+/// Credentials only — never the assistant conversation authority store.
 pub fn default_natives_db_path() -> PathBuf {
     if let Ok(p) = std::env::var("NATIVES_DB_PATH") {
         if !p.trim().is_empty() {
@@ -177,6 +178,20 @@ pub fn default_natives_db_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".natives")
         .join("natives.db")
+}
+
+/// Daemon authority DB: `$NATIVES_ASSISTANT_DB_PATH` or `~/.natives/assistant.db`.
+/// Phase 0: conversation/run/event authority lives here (not natives.db).
+pub fn default_assistant_db_path() -> PathBuf {
+    if let Ok(p) = std::env::var("NATIVES_ASSISTANT_DB_PATH") {
+        if !p.trim().is_empty() {
+            return PathBuf::from(p);
+        }
+    }
+    dirs_next_home()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".natives")
+        .join("assistant.db")
 }
 
 fn dirs_next_home() -> Option<PathBuf> {

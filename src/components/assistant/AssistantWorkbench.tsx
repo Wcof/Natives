@@ -50,6 +50,11 @@ import {
 // runtime pref loaded via persistence export
 import { loadPreferredRuntimeId } from '@/lib/assistant-workspace/persistence';
 import {
+  canRewind,
+  buildDiagnosticsText,
+  needsEngineRecovery,
+} from '@/lib/assistant-workspace/capability-gate';
+import {
   cancelRun,
   connectWorkspace,
   loadConversations,
@@ -65,6 +70,7 @@ import { goldenTextStream } from '@/lib/assistant-fixtures/golden';
 import { isActiveRunStatus, mapWireConversation } from '@/lib/assistant-protocol';
 import type { Conversation } from '@/lib/assistant-protocol';
 import { messagePlainText } from '@/lib/assistant-message-view';
+import { copyToClipboard } from '@/lib/clipboard';
 import ConversationTimeline from './ConversationTimeline';
 import MessageInput from './MessageInput';
 import PermissionRequestCard from './PermissionRequestCard';
@@ -73,6 +79,7 @@ import PromptQueuePanel from './PromptQueuePanel';
 import ActivityInspector from './ActivityInspector';
 import ResizableRightPanel from '@/components/ui/ResizableRightPanel';
 import ConnectionBanner from './ConnectionBanner';
+import EngineRecoveryPage from './EngineRecoveryPage';
 import CommandPalette, { type AssistantCommand } from './CommandPalette';
 import type { ProviderWithModels } from './ModelSelectorDropdown';
 import {
@@ -1244,6 +1251,36 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     rightPanelOpen &&
     (state.view.layoutBreakpoint === 'full' || state.view.layoutBreakpoint === 'drawer-right');
 
+  const recoveryMode = needsEngineRecovery(state.connection, state.capabilities);
+  const allowRewind = canRewind(state.capabilities);
+
+  const handleCopyDiagnostics = useCallback(() => {
+    const text = buildDiagnosticsText({
+      connection: state.connection,
+      connectionError: state.connectionError,
+      protocolVersion: state.capabilities?.protocolVersion ?? null,
+      methodsCount: state.capabilities?.methods?.length ?? 0,
+      reconnectAttempts: state.reconnectAttempts,
+    });
+    void copyToClipboard(text).then((ok) => {
+      if (ok) toast(zh ? '诊断已复制' : 'Diagnostics copied', 'success');
+      else toast(zh ? '复制失败' : 'Copy failed', 'error');
+    });
+  }, [
+    state.connection,
+    state.connectionError,
+    state.capabilities,
+    state.reconnectAttempts,
+    toast,
+    zh,
+  ]);
+
+  const handleRetryConnection = useCallback(() => {
+    void connectWorkspace(gateway, dispatch).catch((err) => {
+      toast(classifyError(err).userMessage, 'error');
+    });
+  }, [gateway, dispatch, toast]);
+
   return (
     <div className="relative flex h-full min-h-0 flex-col" data-assistant-workbench data-gateway="1">
       <CommandPalette
@@ -1257,9 +1294,19 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         error={state.connectionError}
         reconnectAttempts={state.reconnectAttempts}
         locale={locale}
-        onReconnect={() => void connectWorkspace(gateway, dispatch)}
+        onReconnect={handleRetryConnection}
+        onCopyDiagnostics={handleCopyDiagnostics}
       />
 
+      {recoveryMode ? (
+        <EngineRecoveryPage
+          locale={locale}
+          connection={state.connection}
+          error={state.connectionError}
+          onRetry={handleRetryConnection}
+          onCopyDiagnostics={handleCopyDiagnostics}
+        />
+      ) : (
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex items-center justify-end gap-1 border-b border-[var(--border)] px-3 py-1">
@@ -1630,16 +1677,24 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               }
               fileContentsByPath={fileContentsByPath}
               onOpenFile={(path) => void gateway.request('artifact.open', { path })}
-              onRollbackFile={(path) => {
-                // Rollback must go through engine permission/events — intent only.
-                void gateway.request('run.rewind', { path, run_id: activeRun?.id }).catch((err) => {
-                  toast(classifyError(err).userMessage, 'error');
-                });
-              }}
+              capabilities={state.capabilities}
+              onRollbackFile={
+                allowRewind
+                  ? (path) => {
+                      // Rollback must go through engine permission/events — intent only.
+                      void gateway
+                        .request('run.rewind', { path, run_id: activeRun?.id })
+                        .catch((err) => {
+                          toast(classifyError(err).userMessage, 'error');
+                        });
+                    }
+                  : undefined
+              }
             />
           </ResizableRightPanel>
         )}
       </div>
+      )}
     </div>
   );
 }

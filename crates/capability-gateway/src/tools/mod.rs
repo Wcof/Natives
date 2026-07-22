@@ -1,25 +1,108 @@
 //! Built-in tool implementations for the capability gateway.
 
+mod apply_patch_parser;
 mod extra;
+mod ssrf;
+
+pub use apply_patch_parser::{parse_patch_input, PatchOp};
+pub use ssrf::validate_fetch_url;
 
 use crate::{Tool, SideEffect, PermissionClass, PathScope, ToolHandler, ToolOutput, ToolError};
 use std::sync::Arc;
 
-/// Read a file from the filesystem.
+/// Read a file from the filesystem (offset/limit, binary-safe metadata).
 pub struct ReadFileTool;
 #[async_trait::async_trait]
 impl ToolHandler for ReadFileTool {
     async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
-        let path = input.get("path")
+        let path = input
+            .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError {
-                code: "invalid_input".into(), message: "Missing 'path' field".into(), retryable: false,
+                code: "invalid_input".into(),
+                message: "Missing 'path' field".into(),
+                retryable: false,
             })?;
-        let content = tokio::fs::read_to_string(path).await
-            .map_err(|e| ToolError {
-                code: "read_error".into(), message: e.to_string(), retryable: true,
-            })?;
-        Ok(ToolOutput { result: serde_json::json!({"content": content, "path": path}), truncated: false, duration_ms: 0 })
+        let offset = input
+            .get("offset")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+        let limit = input
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+        let max_chars = input
+            .get("max_chars")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(200_000) as usize;
+
+        let meta = tokio::fs::metadata(path).await.map_err(|e| ToolError {
+            code: "read_error".into(),
+            message: e.to_string(),
+            retryable: true,
+        })?;
+        let size = meta.len();
+
+        // Sample head for binary detection
+        let mut file = tokio::fs::File::open(path).await.map_err(|e| ToolError {
+            code: "read_error".into(),
+            message: e.to_string(),
+            retryable: true,
+        })?;
+        use tokio::io::AsyncReadExt;
+        let mut head = vec![0u8; 8192.min(size as usize)];
+        let n = file.read(&mut head).await.map_err(|e| ToolError {
+            code: "read_error".into(),
+            message: e.to_string(),
+            retryable: true,
+        })?;
+        head.truncate(n);
+        let is_binary = head.iter().any(|&b| b == 0);
+        if is_binary {
+            return Ok(ToolOutput {
+                result: serde_json::json!({
+                    "path": path,
+                    "binary": true,
+                    "size": size,
+                    "content": null,
+                    "message": "binary file; content omitted",
+                }),
+                truncated: false,
+                duration_ms: 0,
+            });
+        }
+
+        let full = tokio::fs::read_to_string(path).await.map_err(|e| ToolError {
+            code: "read_error".into(),
+            message: e.to_string(),
+            retryable: true,
+        })?;
+        let lines: Vec<&str> = full.lines().collect();
+        let total_lines = lines.len();
+        let start = offset.min(total_lines);
+        let end = limit
+            .map(|l| (start + l).min(total_lines))
+            .unwrap_or(total_lines);
+        let mut slice = lines[start..end].join("\n");
+        let mut truncated = end < total_lines;
+        if slice.len() > max_chars {
+            slice.truncate(max_chars);
+            truncated = true;
+        }
+        Ok(ToolOutput {
+            result: serde_json::json!({
+                "path": path,
+                "binary": false,
+                "size": size,
+                "total_lines": total_lines,
+                "offset": start,
+                "limit": end.saturating_sub(start),
+                "content": slice,
+                "truncated": truncated,
+            }),
+            truncated,
+            duration_ms: 0,
+        })
     }
 }
 
@@ -68,26 +151,75 @@ impl ToolHandler for WriteFileTool {
     }
 }
 
-/// List directory contents.
+/// List directory contents (stable sort, cap + continuation).
 pub struct ListDirTool;
 #[async_trait::async_trait]
 impl ToolHandler for ListDirTool {
     async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
         let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-        let mut entries = tokio::fs::read_dir(path).await
-            .map_err(|e| ToolError { code: "read_error".into(), message: e.to_string(), retryable: true })?;
+        let limit = input
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(200) as usize;
+        let cursor = input
+            .get("cursor")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let mut entries = tokio::fs::read_dir(path).await.map_err(|e| ToolError {
+            code: "read_error".into(),
+            message: e.to_string(),
+            retryable: true,
+        })?;
         let mut items = Vec::new();
-        while let Some(entry) = entries.next_entry().await.map_err(|e| ToolError { code: "read_error".into(), message: e.to_string(), retryable: true })? {
-            items.push(serde_json::json!({
-                "name": entry.file_name().to_string_lossy(),
-                "is_dir": entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false),
-            }));
+        while let Some(entry) = entries.next_entry().await.map_err(|e| ToolError {
+            code: "read_error".into(),
+            message: e.to_string(),
+            retryable: true,
+        })? {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let is_dir = entry
+                .file_type()
+                .await
+                .map(|t| t.is_dir())
+                .unwrap_or(false);
+            items.push((name, is_dir));
         }
-        Ok(ToolOutput { result: serde_json::json!({"path": path, "entries": items, "count": items.len()}), truncated: false, duration_ms: 0 })
+        items.sort_by(|a, b| a.0.cmp(&b.0));
+        let start = if cursor.is_empty() {
+            0
+        } else {
+            items
+                .iter()
+                .position(|(n, _)| n.as_str() > cursor)
+                .unwrap_or(items.len())
+        };
+        let end = (start + limit).min(items.len());
+        let page: Vec<serde_json::Value> = items[start..end]
+            .iter()
+            .map(|(name, is_dir)| serde_json::json!({"name": name, "is_dir": is_dir}))
+            .collect();
+        let next_cursor = if end < items.len() {
+            Some(items[end - 1].0.clone())
+        } else {
+            None
+        };
+        Ok(ToolOutput {
+            result: serde_json::json!({
+                "path": path,
+                "entries": page,
+                "count": page.len(),
+                "total": items.len(),
+                "next_cursor": next_cursor,
+                "truncated": next_cursor.is_some(),
+            }),
+            truncated: next_cursor.is_some(),
+            duration_ms: 0,
+        })
     }
 }
 
-/// Grep for a pattern under a root directory (bounded).
+/// Grep for a pattern under a root directory.
+/// Prefers bundled/system `rg --json` when available; falls back to walkdir+regex.
 pub struct GrepTool;
 #[async_trait::async_trait]
 impl ToolHandler for GrepTool {
@@ -101,13 +233,22 @@ impl ToolHandler for GrepTool {
                 retryable: false,
             })?;
         let root = input.get("root").and_then(|v| v.as_str()).unwrap_or(".");
+        let glob = input.get("glob").and_then(|v| v.as_str());
+        if let Some(result) = try_ripgrep_json(pattern, root, glob).await {
+            return result;
+        }
+        // Fallback: pure Rust
         let re = regex::Regex::new(pattern).map_err(|e| ToolError {
             code: "invalid_regex".into(),
             message: e.to_string(),
             retryable: false,
         })?;
         let mut matches = Vec::new();
-        for entry in walkdir::WalkDir::new(root).max_depth(6).into_iter().filter_map(|e| e.ok()) {
+        for entry in walkdir::WalkDir::new(root)
+            .max_depth(8)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -117,24 +258,103 @@ impl ToolHandler for GrepTool {
                         matches.push(serde_json::json!({
                             "path": entry.path().to_string_lossy(),
                             "line": idx + 1,
+                            "column": 1,
                             "text": line.chars().take(240).collect::<String>(),
                         }));
-                        if matches.len() >= 50 {
+                        if matches.len() >= 200 {
                             break;
                         }
                     }
                 }
             }
-            if matches.len() >= 50 {
+            if matches.len() >= 200 {
                 break;
             }
         }
         Ok(ToolOutput {
-            result: serde_json::json!({"matches": matches, "count": matches.len()}),
-            truncated: matches.len() >= 50,
+            result: serde_json::json!({
+                "matches": matches,
+                "count": matches.len(),
+                "engine": "regex_fallback",
+                "truncated": matches.len() >= 200,
+            }),
+            truncated: matches.len() >= 200,
             duration_ms: 0,
         })
     }
+}
+
+async fn try_ripgrep_json(
+    pattern: &str,
+    root: &str,
+    glob: Option<&str>,
+) -> Option<Result<ToolOutput, ToolError>> {
+    let mut cmd = tokio::process::Command::new("rg");
+    cmd.arg("--json")
+        .arg("--line-number")
+        .arg("--no-heading")
+        .arg("--color=never")
+        .arg("--max-count")
+        .arg("200")
+        .arg("--")
+        .arg(pattern)
+        .arg(root);
+    if let Some(g) = glob {
+        cmd.arg("--glob").arg(g);
+    }
+    let output = cmd.output().await.ok()?;
+    // rg exits 1 when no matches — still success for us
+    if !output.status.success() && output.status.code() != Some(1) {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut matches = Vec::new();
+    for line in stdout.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("match") {
+            continue;
+        }
+        let data = v.get("data")?;
+        let path = data
+            .pointer("/path/text")
+            .and_then(|p| p.as_str())
+            .unwrap_or("");
+        let line_no = data.get("line_number").and_then(|n| n.as_u64()).unwrap_or(0);
+        let text = data
+            .pointer("/lines/text")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .trim_end_matches('\n')
+            .chars()
+            .take(240)
+            .collect::<String>();
+        let column = data
+            .pointer("/submatches/0/start")
+            .and_then(|c| c.as_u64())
+            .unwrap_or(0)
+            + 1;
+        matches.push(serde_json::json!({
+            "path": path,
+            "line": line_no,
+            "column": column,
+            "text": text,
+        }));
+        if matches.len() >= 200 {
+            break;
+        }
+    }
+    Some(Ok(ToolOutput {
+        result: serde_json::json!({
+            "matches": matches,
+            "count": matches.len(),
+            "engine": "ripgrep",
+            "truncated": matches.len() >= 200,
+        }),
+        truncated: matches.len() >= 200,
+        duration_ms: 0,
+    }))
 }
 
 /// Apply a simple string replace edit.
@@ -183,104 +403,274 @@ impl ToolHandler for EditFileTool {
     }
 }
 
-/// Run a terminal command (argv-safe: command + args array only).
+/// Run a terminal command.
+///
+/// Preferred schema (Phase 1):
+/// `{ "command": "string", "cwd": "relative?", "timeout_ms": 300000, "background": false, "description": "..." }`
+///
+/// Also accepts legacy argv form: `{ "command", "args": [], "cwd" }`.
 pub struct RunTerminalTool;
 #[async_trait::async_trait]
 impl ToolHandler for RunTerminalTool {
     async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
-        let command = input.get("command").and_then(|v| v.as_str()).ok_or_else(|| ToolError {
-            code: "invalid_input".into(),
-            message: "Missing command".into(),
-            retryable: false,
-        })?;
-        // Reject shell metacharacters — callers must pass simple command name.
-        if command.contains(['|', ';', '&', '`', '$', '\n', '>', '<']) {
-            return Err(ToolError {
-                code: "shell_injection".into(),
-                message: "Shell metacharacters rejected; pass argv-safe command only".into(),
+        let command = input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError {
+                code: "invalid_input".into(),
+                message: "Missing command".into(),
                 retryable: false,
-            });
-        }
-        let args: Vec<String> = input
-            .get("args")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
-        // Prefer explicit cwd; callers (PermissionGatedTools) inject project_root.
+            })?;
+        let timeout_ms = input
+            .get("timeout_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(300_000)
+            .clamp(1_000, 600_000);
+        let background = input
+            .get("background")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let description = input
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let cwd = input.get("cwd").and_then(|v| v.as_str());
         if let Some(cwd) = cwd {
             crate::policy::check_path_traversal(cwd)?;
-        }
-        let mut cmd = tokio::process::Command::new(command);
-        cmd.args(&args).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
-        if let Some(cwd) = cwd {
-            cmd.current_dir(cwd);
         } else {
-            // No cwd and no project injection → refuse open-ended shell.
             return Err(ToolError {
                 code: "cwd_required".into(),
                 message: "run_terminal requires cwd within project scope".into(),
                 retryable: false,
             });
         }
-        let output = tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output())
-            .await
-            .map_err(|_| ToolError {
-                code: "timeout".into(),
-                message: "command timed out".into(),
-                retryable: true,
-            })?
-            .map_err(|e| ToolError {
+
+        // Legacy argv-only path when `args` is present.
+        let (program, args, display) = if let Some(arr) = input.get("args").and_then(|v| v.as_array())
+        {
+            if command.contains(['|', ';', '&', '`', '$', '\n', '>', '<']) {
+                return Err(ToolError {
+                    code: "shell_injection".into(),
+                    message: "Shell metacharacters rejected for argv mode".into(),
+                    retryable: false,
+                });
+            }
+            let args: Vec<String> = arr
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect();
+            let display = format!("{command} {}", args.join(" "));
+            (command.to_string(), args, display)
+        } else {
+            // Shell form — real user command for permission cards.
+            let (shell, mut prefix) = crate::process_supervisor::platform_shell_program();
+            prefix.push(command.to_string());
+            let display = command.to_string();
+            let program = shell;
+            let args = prefix;
+            (program, args, display)
+        };
+
+        let mut cmd = tokio::process::Command::new(&program);
+        cmd.args(&args)
+            .current_dir(cwd.unwrap())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+            cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+        }
+
+        let started = std::time::Instant::now();
+        // Foreground budget 15s then report background=true (process may still run briefly).
+        let foreground_budget = std::time::Duration::from_secs(15);
+        let hard_timeout = std::time::Duration::from_millis(timeout_ms);
+
+        let mut child = cmd.spawn().map_err(|e| ToolError {
+            code: "spawn_error".into(),
+            message: e.to_string(),
+            retryable: true,
+        })?;
+
+        if background {
+            // Detach wait: best-effort try_wait once, return running snapshot.
+            let status = child.try_wait().ok().flatten();
+            if let Some(status) = status {
+                let (stdout, stderr) = drain_child_pipes(&mut child).await;
+                return Ok(terminal_result(
+                    display,
+                    description,
+                    status.code(),
+                    &stdout,
+                    &stderr,
+                    false,
+                    true,
+                    started.elapsed().as_millis() as u64,
+                ));
+            }
+            // Leave process running (kill_on_drop will reap if tool handle drops in tests).
+            std::mem::forget(child);
+            return Ok(terminal_result(
+                display,
+                description,
+                None,
+                "",
+                "",
+                true,
+                true,
+                started.elapsed().as_millis() as u64,
+            ));
+        }
+
+        let wait_fut = child.wait();
+        let result = tokio::time::timeout(foreground_budget.min(hard_timeout), wait_fut).await;
+        match result {
+            Ok(Ok(status)) => {
+                let (stdout, stderr) = drain_child_pipes(&mut child).await;
+                Ok(terminal_result(
+                    display,
+                    description,
+                    status.code(),
+                    &stdout,
+                    &stderr,
+                    false,
+                    false,
+                    started.elapsed().as_millis() as u64,
+                ))
+            }
+            Ok(Err(e)) => Err(ToolError {
                 code: "spawn_error".into(),
                 message: e.to_string(),
                 retryable: true,
-            })?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let mut combined = stdout.to_string();
-        if !stderr.is_empty() {
-            combined.push_str("\n");
-            combined.push_str(&stderr);
-        }
-        let truncated = combined.len() > 64_000;
-        if truncated {
-            combined.truncate(64_000);
-        }
-        Ok(ToolOutput {
-            result: serde_json::json!({
-                "exit_code": output.status.code(),
-                "output": combined,
-                "truncated": truncated,
             }),
-            truncated,
-            duration_ms: 0,
-        })
+            Err(_) if hard_timeout > foreground_budget => {
+                // Auto-background instead of kill.
+                let task_id = uuid::Uuid::new_v4().to_string();
+                std::mem::forget(child);
+                Ok(ToolOutput {
+                    result: serde_json::json!({
+                        "display_command": display,
+                        "description": description,
+                        "exit_code": null,
+                        "output": "",
+                        "background": true,
+                        "auto_backgrounded": true,
+                        "task_id": task_id,
+                        "truncated": false,
+                        "message": "foreground budget exceeded; process continued in background",
+                    }),
+                    truncated: false,
+                    duration_ms: started.elapsed().as_millis() as u64,
+                })
+            }
+            Err(_) => {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                Err(ToolError {
+                    code: "timeout".into(),
+                    message: format!("command timed out after {timeout_ms}ms"),
+                    retryable: true,
+                })
+            }
+        }
     }
 }
 
-/// Fetch a URL (basic SSRF blocklist).
+async fn drain_child_pipes(child: &mut tokio::process::Child) -> (String, String) {
+    use tokio::io::AsyncReadExt;
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    if let Some(mut out) = child.stdout.take() {
+        let mut buf = Vec::new();
+        let _ = out.read_to_end(&mut buf).await;
+        stdout = String::from_utf8_lossy(&buf).into_owned();
+    }
+    if let Some(mut err) = child.stderr.take() {
+        let mut buf = Vec::new();
+        let _ = err.read_to_end(&mut buf).await;
+        stderr = String::from_utf8_lossy(&buf).into_owned();
+    }
+    (stdout, stderr)
+}
+
+fn terminal_result(
+    display: String,
+    description: &str,
+    exit_code: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+    background: bool,
+    auto_bg: bool,
+    duration_ms: u64,
+) -> ToolOutput {
+    let mut combined = stdout.to_string();
+    if !stderr.is_empty() {
+        if !combined.is_empty() {
+            combined.push('\n');
+        }
+        combined.push_str(stderr);
+    }
+    let mut truncated = false;
+    if combined.len() > 64_000 {
+        combined.truncate(64_000);
+        truncated = true;
+    }
+    ToolOutput {
+        result: serde_json::json!({
+            "display_command": display,
+            "description": description,
+            "exit_code": exit_code,
+            "output": combined,
+            "stdout": stdout.chars().take(32_000).collect::<String>(),
+            "stderr": stderr.chars().take(16_000).collect::<String>(),
+            "background": background,
+            "auto_backgrounded": auto_bg,
+            "truncated": truncated,
+        }),
+        truncated,
+        duration_ms,
+    }
+}
+
+/// Fetch a URL with DNS/private IP SSRF guards and redirect re-check.
 pub struct WebFetchTool;
 #[async_trait::async_trait]
 impl ToolHandler for WebFetchTool {
     async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
-        let url = input.get("url").and_then(|v| v.as_str()).ok_or_else(|| ToolError {
-            code: "invalid_input".into(),
-            message: "Missing url".into(),
-            retryable: false,
-        })?;
-        if url.contains("127.0.0.1") || url.contains("localhost") || url.contains("169.254.169.254") {
-            return Err(ToolError {
-                code: "ssrf".into(),
-                message: "Blocked local/metadata URL".into(),
+        let url = input
+            .get("url")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError {
+                code: "invalid_input".into(),
+                message: "Missing url".into(),
                 retryable: false,
-            });
-        }
+            })?;
+        ssrf::validate_fetch_url(url)?;
+        let max_bytes = input
+            .get("max_bytes")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(64_000)
+            .min(512_000) as usize;
+
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(20))
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                let next = attempt.url().as_str();
+                if ssrf::validate_fetch_url(next).is_err() {
+                    attempt.error(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "redirect blocked by SSRF policy",
+                    ))
+                } else if attempt.previous().len() > 5 {
+                    attempt.stop()
+                } else {
+                    attempt.follow()
+                }
+            }))
             .build()
             .map_err(|e| ToolError {
                 code: "http_client".into(),
@@ -292,14 +682,28 @@ impl ToolHandler for WebFetchTool {
             message: e.to_string(),
             retryable: true,
         })?;
+        // Re-validate final URL after redirects.
+        ssrf::validate_fetch_url(resp.url().as_str())?;
         let status = resp.status().as_u16();
-        let mut body = resp.text().await.unwrap_or_default();
-        let truncated = body.len() > 64_000;
-        if truncated {
-            body.truncate(64_000);
-        }
+        let bytes = resp.bytes().await.map_err(|e| ToolError {
+            code: "network".into(),
+            message: e.to_string(),
+            retryable: true,
+        })?;
+        let truncated = bytes.len() > max_bytes;
+        let slice = if truncated {
+            &bytes[..max_bytes]
+        } else {
+            &bytes
+        };
+        let body = String::from_utf8_lossy(slice).into_owned();
         Ok(ToolOutput {
-            result: serde_json::json!({ "status": status, "body": body, "truncated": truncated }),
+            result: serde_json::json!({
+                "status": status,
+                "body": body,
+                "truncated": truncated,
+                "bytes": slice.len(),
+            }),
             truncated,
             duration_ms: 0,
         })
@@ -324,8 +728,17 @@ pub fn builtin_tools() -> Vec<Tool> {
     vec![
         Tool {
             name: "read_file",
-            description: "Read the contents of a file",
-            schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}),
+            description: "Read a text file (supports offset/limit; binary returns metadata only)",
+            schema: serde_json::json!({
+                "type":"object",
+                "properties":{
+                    "path":{"type":"string"},
+                    "offset":{"type":"integer","minimum":0},
+                    "limit":{"type":"integer","minimum":1},
+                    "max_chars":{"type":"integer","minimum":1}
+                },
+                "required":["path"]
+            }),
             side_effect: SideEffect::ReadOnly,
             permission_class: PermissionClass::ProjectRead,
             path_scope: PathScope::Any,
@@ -348,7 +761,7 @@ pub fn builtin_tools() -> Vec<Tool> {
         },
         Tool {
             name: "write_file",
-            description: "Write content to a file",
+            description: "Write content to a file (legacy; prefer apply_patch for new runs)",
             schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}),
             side_effect: SideEffect::Write,
             permission_class: PermissionClass::ProjectWrite,
@@ -360,8 +773,8 @@ pub fn builtin_tools() -> Vec<Tool> {
         },
         Tool {
             name: "list_dir",
-            description: "List contents of a directory",
-            schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string"}},"required":[]}),
+            description: "List directory entries (stable sort, cursor pagination)",
+            schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string"},"limit":{"type":"integer"},"cursor":{"type":"string"}},"required":[]}),
             side_effect: SideEffect::ReadOnly,
             permission_class: PermissionClass::ProjectRead,
             path_scope: PathScope::Any,
@@ -372,8 +785,8 @@ pub fn builtin_tools() -> Vec<Tool> {
         },
         Tool {
             name: "grep",
-            description: "Search file contents with a regex",
-            schema: serde_json::json!({"type":"object","properties":{"pattern":{"type":"string"},"root":{"type":"string"}},"required":["pattern"]}),
+            description: "Search file contents (ripgrep JSON when available)",
+            schema: serde_json::json!({"type":"object","properties":{"pattern":{"type":"string"},"root":{"type":"string"},"glob":{"type":"string"}},"required":["pattern"]}),
             side_effect: SideEffect::ReadOnly,
             permission_class: PermissionClass::ProjectRead,
             path_scope: PathScope::Any,
@@ -384,7 +797,7 @@ pub fn builtin_tools() -> Vec<Tool> {
         },
         Tool {
             name: "edit_file",
-            description: "Replace the first occurrence of old_string with new_string in a file",
+            description: "Replace the first occurrence of old_string with new_string (legacy; prefer apply_patch)",
             schema: serde_json::json!({"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"}},"required":["path","old_string","new_string"]}),
             side_effect: SideEffect::Write,
             permission_class: PermissionClass::ProjectWrite,
@@ -396,20 +809,31 @@ pub fn builtin_tools() -> Vec<Tool> {
         },
         Tool {
             name: "run_terminal",
-            description: "Run a command with argv (no shell)",
-            schema: serde_json::json!({"type":"object","properties":{"command":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"cwd":{"type":"string"}},"required":["command"]}),
+            description: "Run a shell command in the project (15s foreground budget then auto-background)",
+            schema: serde_json::json!({
+                "type":"object",
+                "properties":{
+                    "command":{"type":"string"},
+                    "args":{"type":"array","items":{"type":"string"}},
+                    "cwd":{"type":"string"},
+                    "timeout_ms":{"type":"integer"},
+                    "background":{"type":"boolean"},
+                    "description":{"type":"string"}
+                },
+                "required":["command"]
+            }),
             side_effect: SideEffect::Process,
             permission_class: PermissionClass::DestructiveCommand,
             path_scope: PathScope::Any,
-            timeout_ms: 30000,
+            timeout_ms: 300_000,
             output_limit: 64_000,
             cancellable: true,
             handler: Arc::new(RunTerminalTool),
         },
         Tool {
             name: "web_fetch",
-            description: "Fetch a public HTTP(S) URL",
-            schema: serde_json::json!({"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}),
+            description: "Fetch a public HTTP(S) URL (SSRF-safe DNS checks)",
+            schema: serde_json::json!({"type":"object","properties":{"url":{"type":"string"},"max_bytes":{"type":"integer"}},"required":["url"]}),
             side_effect: SideEffect::Network,
             permission_class: PermissionClass::ExternalWrite,
             path_scope: PathScope::None,

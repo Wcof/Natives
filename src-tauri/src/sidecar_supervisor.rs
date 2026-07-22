@@ -56,6 +56,8 @@ pub struct SupervisorConfig {
     pub bootstrap_path: PathBuf,
     pub daemon_bin: PathBuf,
     pub natives_db_path: PathBuf,
+    /// Daemon conversation/run authority DB (Phase 0 assistant.db).
+    pub assistant_db_path: PathBuf,
     /// When true, missing UDS is Faulted (never Embedded).
     pub require_uds: bool,
     pub health_timeout: Duration,
@@ -77,6 +79,13 @@ impl SupervisorConfig {
                 dirs_home()
                     .map(|h| h.join(".natives").join("natives.db"))
                     .unwrap_or_else(|| PathBuf::from("natives.db"))
+            });
+        let assistant_db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                dirs_home()
+                    .map(|h| h.join(".natives").join("assistant.db"))
+                    .unwrap_or_else(|| PathBuf::from("assistant.db"))
             });
         let daemon_bin = std::env::var("NATIVES_DAEMON_BIN")
             .map(PathBuf::from)
@@ -101,6 +110,7 @@ impl SupervisorConfig {
             socket_path,
             daemon_bin,
             natives_db_path,
+            assistant_db_path,
             require_uds,
             health_timeout: Duration::from_secs(15),
             max_restarts: 5,
@@ -249,6 +259,10 @@ impl SidecarSupervisor {
                         std::env::set_var("NATIVES_DAEMON_MODE", "uds");
                     }
                     std::env::set_var("NATIVES_DB_PATH", &self.config.natives_db_path);
+                    std::env::set_var(
+                        "NATIVES_ASSISTANT_DB_PATH",
+                        &self.config.assistant_db_path,
+                    );
                     // Drop cached UDS client so next call re-handshakes after restart.
                     // (async reset is best-effort from callers; env bootstrap is source of truth.)
                     inner.status.state = SupervisorState::Healthy;
@@ -303,6 +317,10 @@ impl SidecarSupervisor {
         cmd.env("NATIVES_DAEMON_SOCKET", &self.config.socket_path)
             .env("NATIVES_DAEMON_BOOTSTRAP", &bootstrap)
             .env("NATIVES_DB_PATH", &self.config.natives_db_path)
+            .env(
+                "NATIVES_ASSISTANT_DB_PATH",
+                &self.config.assistant_db_path,
+            )
             .env("NATIVES_RUNTIME_DIR", &self.config.runtime_dir)
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -618,6 +636,7 @@ mod tests {
             bootstrap_path: dir.join("boot"),
             daemon_bin: PathBuf::from("/nonexistent/natives-agent-daemon-xyz"),
             natives_db_path: dir.join("natives.db"),
+            assistant_db_path: dir.join("assistant.db"),
             require_uds: true,
             health_timeout: Duration::from_millis(100),
             max_restarts: 1,
@@ -649,6 +668,7 @@ mod tests {
             bootstrap_path: dir.join("boot"),
             daemon_bin: PathBuf::from("/unused"),
             natives_db_path: dir.join("natives.db"),
+            assistant_db_path: dir.join("assistant.db"),
             require_uds: true,
             health_timeout: Duration::from_millis(1),
             max_restarts: 1,

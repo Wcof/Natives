@@ -1,44 +1,239 @@
 //! Additional built-in tools required by the Native engine plan.
 
+use super::apply_patch_parser::{parse_patch_input, PatchOp};
 use crate::{PermissionClass, PathScope, SideEffect, Tool, ToolError, ToolHandler, ToolOutput};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Apply a unified-diff style patch (simplified: path + content replacement).
+/// Multi-file apply_patch with parse-first, batch apply, and rollback on failure.
 pub struct ApplyPatchTool;
 #[async_trait::async_trait]
 impl ToolHandler for ApplyPatchTool {
     async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
-        let path = input.get("path").and_then(|v| v.as_str()).ok_or_else(|| ToolError {
-            code: "invalid_input".into(),
-            message: "Missing path".into(),
-            retryable: false,
-        })?;
-        if path.contains("..") {
-            return Err(ToolError {
-                code: "path_escape".into(),
-                message: "Path traversal rejected".into(),
-                retryable: false,
-            });
-        }
-        let content = input
-            .get("content")
+        let ops = parse_patch_input(&input)?;
+        let root = input
+            .get("project_root")
+            .or_else(|| input.get("cwd"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError {
-                code: "invalid_input".into(),
-                message: "Missing content".into(),
-                retryable: false,
-            })?;
-        tokio::fs::write(path, content).await.map_err(|e| ToolError {
-            code: "write_error".into(),
-            message: e.to_string(),
-            retryable: true,
-        })?;
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+        // Resolve all paths first; capture before-images for rollback.
+        let mut planned: Vec<Planned> = Vec::new();
+        for op in ops {
+            match op {
+                PatchOp::Add { path, content } => {
+                    let abs = resolve_rel(&root, &path)?;
+                    if abs.exists() {
+                        return Err(ToolError {
+                            code: "already_exists".into(),
+                            message: format!("cannot add existing file {path}"),
+                            retryable: false,
+                        });
+                    }
+                    planned.push(Planned {
+                        op: PatchOp::Add { path, content },
+                        abs,
+                        abs_to: None,
+                        before: None,
+                        existed: false,
+                    });
+                }
+                PatchOp::Update { path, content } => {
+                    let abs = resolve_rel(&root, &path)?;
+                    let (before, existed) = if abs.exists() {
+                        (
+                            Some(tokio::fs::read(&abs).await.map_err(|e| ToolError {
+                                code: "read_error".into(),
+                                message: e.to_string(),
+                                retryable: true,
+                            })?),
+                            true,
+                        )
+                    } else {
+                        (None, false)
+                    };
+                    planned.push(Planned {
+                        op: PatchOp::Update { path, content },
+                        abs,
+                        abs_to: None,
+                        before,
+                        existed,
+                    });
+                }
+                PatchOp::Delete { path } => {
+                    let abs = resolve_rel(&root, &path)?;
+                    let before = if abs.exists() {
+                        Some(tokio::fs::read(&abs).await.map_err(|e| ToolError {
+                            code: "read_error".into(),
+                            message: e.to_string(),
+                            retryable: true,
+                        })?)
+                    } else {
+                        None
+                    };
+                    let existed = before.is_some();
+                    planned.push(Planned {
+                        op: PatchOp::Delete { path },
+                        abs,
+                        abs_to: None,
+                        before,
+                        existed,
+                    });
+                }
+                PatchOp::Move { from, to } => {
+                    let abs = resolve_rel(&root, &from)?;
+                    let abs_to = resolve_rel(&root, &to)?;
+                    let before = if abs.exists() {
+                        Some(tokio::fs::read(&abs).await.map_err(|e| ToolError {
+                            code: "read_error".into(),
+                            message: e.to_string(),
+                            retryable: true,
+                        })?)
+                    } else {
+                        return Err(ToolError {
+                            code: "not_found".into(),
+                            message: format!("move source missing: {from}"),
+                            retryable: false,
+                        });
+                    };
+                    planned.push(Planned {
+                        op: PatchOp::Move { from, to },
+                        abs,
+                        abs_to: Some(abs_to),
+                        before,
+                        existed: true,
+                    });
+                }
+            }
+        }
+
+        // Apply sequentially; on failure roll back applied prefix.
+        let mut changed = Vec::new();
+        for (idx, p) in planned.iter().enumerate() {
+            if let Err(e) = apply_planned(p).await {
+                for q in planned[..idx].iter().rev() {
+                    let _ = rollback_planned(q).await;
+                }
+                return Err(e);
+            }
+            match &p.op {
+                PatchOp::Add { path, .. } => changed.push(serde_json::json!({"op":"add","path":path})),
+                PatchOp::Update { path, .. } => {
+                    changed.push(serde_json::json!({"op":"update","path":path}))
+                }
+                PatchOp::Delete { path } => {
+                    changed.push(serde_json::json!({"op":"delete","path":path}))
+                }
+                PatchOp::Move { from, to } => {
+                    changed.push(serde_json::json!({"op":"move","from":from,"to":to}))
+                }
+            }
+        }
+
         Ok(ToolOutput {
-            result: serde_json::json!({ "path": path, "bytes": content.len() }),
+            result: serde_json::json!({
+                "ok": true,
+                "changes": changed,
+                "count": changed.len(),
+            }),
             truncated: false,
             duration_ms: 0,
         })
     }
+}
+
+fn resolve_rel(root: &Path, rel: &str) -> Result<PathBuf, ToolError> {
+    if rel.contains("..") || Path::new(rel).is_absolute() {
+        return Err(ToolError {
+            code: "path_escape".into(),
+            message: "apply_patch only accepts project-relative paths".into(),
+            retryable: false,
+        });
+    }
+    Ok(root.join(rel))
+}
+
+struct Planned {
+    op: PatchOp,
+    abs: PathBuf,
+    abs_to: Option<PathBuf>,
+    before: Option<Vec<u8>>,
+    existed: bool,
+}
+
+async fn apply_planned(p: &Planned) -> Result<(), ToolError> {
+    match &p.op {
+        PatchOp::Add { content, .. } | PatchOp::Update { content, .. } => {
+            if let Some(parent) = p.abs.parent() {
+                tokio::fs::create_dir_all(parent).await.map_err(|e| ToolError {
+                    code: "write_error".into(),
+                    message: e.to_string(),
+                    retryable: true,
+                })?;
+            }
+            tokio::fs::write(&p.abs, content).await.map_err(|e| ToolError {
+                code: "write_error".into(),
+                message: e.to_string(),
+                retryable: true,
+            })?;
+        }
+        PatchOp::Delete { .. } => {
+            if p.abs.exists() {
+                tokio::fs::remove_file(&p.abs).await.map_err(|e| ToolError {
+                    code: "write_error".into(),
+                    message: e.to_string(),
+                    retryable: true,
+                })?;
+            }
+        }
+        PatchOp::Move { .. } => {
+            let to = p.abs_to.as_ref().unwrap();
+            if let Some(parent) = to.parent() {
+                tokio::fs::create_dir_all(parent).await.map_err(|e| ToolError {
+                    code: "write_error".into(),
+                    message: e.to_string(),
+                    retryable: true,
+                })?;
+            }
+            tokio::fs::rename(&p.abs, to).await.map_err(|e| ToolError {
+                code: "write_error".into(),
+                message: e.to_string(),
+                retryable: true,
+            })?;
+        }
+    }
+    Ok(())
+}
+
+async fn rollback_planned(p: &Planned) -> Result<(), ToolError> {
+    match &p.op {
+        PatchOp::Add { .. } => {
+            if p.abs.exists() {
+                let _ = tokio::fs::remove_file(&p.abs).await;
+            }
+        }
+        PatchOp::Update { .. } | PatchOp::Delete { .. } => {
+            if let Some(bytes) = &p.before {
+                if let Some(parent) = p.abs.parent() {
+                    let _ = tokio::fs::create_dir_all(parent).await;
+                }
+                let _ = tokio::fs::write(&p.abs, bytes).await;
+            } else if p.abs.exists() && !p.existed {
+                let _ = tokio::fs::remove_file(&p.abs).await;
+            }
+        }
+        PatchOp::Move { .. } => {
+            if let Some(to) = &p.abs_to {
+                if to.exists() {
+                    let _ = tokio::fs::rename(to, &p.abs).await;
+                } else if let Some(bytes) = &p.before {
+                    let _ = tokio::fs::write(&p.abs, bytes).await;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// File-backed session/workspace memory under NATIVES_RUNTIME_DIR/memory

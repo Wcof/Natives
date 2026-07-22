@@ -5,10 +5,11 @@
 
 use agent_core::assemble_context;
 use agent_core::{
-    AgentEngine, AllowAllHook, CommandHook, EngineError, EngineMessage, EngineProvider,
-    EngineProviderEvent, EngineProviderEventStream, EngineRunConfig, EngineToolRuntime,
-    EventSequencer, HookEvent, HookRegistry, HttpHook, PermissionManager, PermissionProfile,
-    SubAgentConfig, SubAgentManager, SubAgentStatus, ToolExecutionResult, ToolSchema,
+    cap_child_permission, default_subagent_tool_allowlist, AgentEngine, AllowAllHook, CommandHook,
+    EngineError, EngineMessage, EngineProvider, EngineProviderEvent, EngineProviderEventStream,
+    EngineRunConfig, EngineToolRuntime, EventSequencer, HookEvent, HookRegistry, HttpHook,
+    PermissionManager, PermissionProfile, SubAgentConfig, SubAgentManager, SubAgentStatus,
+    ToolExecutionResult, ToolSchema,
 };
 use assistant_protocol::v2::RunEventKind;
 use capability_gateway::{CapabilityGateway, SideEffect};
@@ -329,6 +330,8 @@ impl ProductionRuntime {
             conversation_id: conversation_id.clone(),
             model_id: model_id.clone(),
             permission_profile: permission_profile.clone(),
+            // Parent run: unrestricted tool surface (permission profile still gates).
+            tool_allowlist: None,
         };
 
         let assembled = assemble_context(None, Some(&project_root), None);
@@ -445,7 +448,12 @@ impl ProductionRuntime {
         key_id: String,
         model_id: String,
         permission_profile: String,
+        parent_permission_profile: &str,
+        project_root: Option<String>,
     ) -> Result<String, String> {
+        let child_perm =
+            cap_child_permission(parent_permission_profile, &permission_profile);
+        let child_allowlist = default_subagent_tool_allowlist();
         let child = self
             .subagents
             .spawn(
@@ -455,8 +463,8 @@ impl ProductionRuntime {
                 provider_id.clone(),
                 key_id.clone(),
                 model_id.clone(),
-                permission_profile.clone(),
-                vec!["read_file".into(), "list_dir".into(), "grep".into()],
+                child_perm.clone(),
+                child_allowlist.clone(),
                 None,
                 Some("none".into()),
                 None,
@@ -483,6 +491,9 @@ impl ProductionRuntime {
         let waiters = self.permission_waiters.clone();
         let engines = self.engines.clone();
         let task_id_bg = task_id.clone();
+        let child_allowlist_bg = child_allowlist;
+        let child_perm_bg = child_perm;
+        let project_root_bg = project_root;
 
         task_outputs.lock().await.insert(
             task_id.clone(),
@@ -501,6 +512,11 @@ impl ProductionRuntime {
             let tools = PermissionGatedTools {
                 gateway: {
                     let mut g = CapabilityGateway::new();
+                    if let Some(root) = project_root_bg {
+                        g.set_project_root(root);
+                    }
+                    // Full builtins registered for handler availability; allowlist
+                    // enforces which tools the child may list/execute.
                     g.register_builtins();
                     Arc::new(g)
                 },
@@ -515,7 +531,8 @@ impl ProductionRuntime {
                 parent_run_id: child_run_id.clone(),
                 conversation_id: format!("subagent-{}", child_run_id),
                 model_id: model_id.clone(),
-                permission_profile: permission_profile.clone(),
+                permission_profile: child_perm_bg,
+                tool_allowlist: Some(child_allowlist_bg),
             };
             // Same production hook set as parent (M4) — not a reduced AllowAll-only registry.
             let hooks = build_production_hooks();
@@ -1147,6 +1164,39 @@ pub struct PermissionGatedTools {
     pub conversation_id: String,
     pub model_id: String,
     pub permission_profile: String,
+    /// `None` = parent/unrestricted surface (permission profile still applies).
+    /// `Some` = hard allowlist; tools outside the list are hidden and denied.
+    pub tool_allowlist: Option<Vec<String>>,
+}
+
+impl PermissionGatedTools {
+    fn tool_allowed(&self, name: &str) -> bool {
+        match &self.tool_allowlist {
+            None => true,
+            Some(list) => {
+                if list.iter().any(|t| t == name) {
+                    return true;
+                }
+                // MCP surface: allow only when explicitly listed as `mcp_call` or exact name.
+                if name.starts_with("mcp__") {
+                    return list.iter().any(|t| t == "mcp_call" || t == name);
+                }
+                false
+            }
+        }
+    }
+
+    fn deny_not_allowlisted(name: &str) -> ToolExecutionResult {
+        ToolExecutionResult {
+            output: serde_json::json!({
+                "error": format!("tool `{name}` not in subagent tool_allowlist"),
+                "denied": true,
+                "code": "tool_not_allowlisted",
+            }),
+            is_error: true,
+            duration_ms: 0,
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -1155,6 +1205,7 @@ impl EngineToolRuntime for PermissionGatedTools {
         self.gateway
             .list_tools()
             .into_iter()
+            .filter(|t| self.tool_allowed(t.name))
             .map(|t| ToolSchema {
                 name: t.name.to_string(),
                 description: t.description.to_string(),
@@ -1175,6 +1226,11 @@ impl EngineToolRuntime for PermissionGatedTools {
                 is_error: true,
                 duration_ms: 0,
             };
+        }
+
+        // Hard allowlist gate before permission / orchestration (Phase 0).
+        if !self.tool_allowed(name) {
+            return Self::deny_not_allowlisted(name);
         }
 
         let tool = self.gateway.get_tool(name);
@@ -1596,12 +1652,26 @@ impl PermissionGatedTools {
                 }
             }
         };
-        // Child always starts with ask permission unless explicitly full_access on tool input.
-        let child_perm = input
+        // Child permission never exceeds parent; default request is ask (not full_access).
+        let requested_perm = input
             .get("permission_profile")
             .and_then(|v| v.as_str())
-            .unwrap_or("ask")
-            .to_string();
+            .unwrap_or("ask");
+        let child_perm = cap_child_permission(&self.permission_profile, requested_perm);
+        // Explicit tool_allowlist on task input, else default readonly surface.
+        // Empty array remains empty (deny-all) — fail closed.
+        let child_allowlist: Vec<String> = if let Some(arr) = input.get("tool_allowlist") {
+            arr.as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_else(default_subagent_tool_allowlist)
+        } else {
+            default_subagent_tool_allowlist()
+        };
 
         let child = match self
             .subagents
@@ -1613,7 +1683,7 @@ impl PermissionGatedTools {
                 child_key.clone(),
                 child_model.clone(),
                 child_perm.clone(),
-                vec!["read_file".into(), "list_dir".into(), "grep".into()],
+                child_allowlist.clone(),
                 None,
                 Some("none".into()),
                 None,
@@ -1660,7 +1730,9 @@ impl PermissionGatedTools {
         let child_key_bg = child_key;
         let child_model_bg = child_model;
         let child_perm_bg = child_perm;
+        let child_allowlist_bg = child_allowlist;
         let prompt_bg = prompt;
+        // Inherit normalized parent project_root (no process-cwd fallback).
         let project_root = self.gateway.project_root.clone();
         let engines = self.engines.clone();
         let child_provider_for_tools = child_provider_id.clone();
@@ -1691,6 +1763,7 @@ impl PermissionGatedTools {
                     if let Some(root) = project_root {
                         g.set_project_root(root);
                     }
+                    // Handlers available; child surface is filtered by tool_allowlist.
                     g.register_builtins();
                     Arc::new(g)
                 },
@@ -1707,6 +1780,7 @@ impl PermissionGatedTools {
                 conversation_id: format!("sub-{}", child_run_id),
                 model_id: child_model_bg.clone(),
                 permission_profile: child_perm_bg,
+                tool_allowlist: Some(child_allowlist_bg),
             };
             // Full production hooks for subagents (M4).
             let hooks = build_production_hooks();
@@ -1862,5 +1936,183 @@ impl EngineProvider for FixtureProvider {
             ],
         };
         Ok(Box::pin(futures_util::stream::iter(events)))
+    }
+}
+
+#[cfg(test)]
+mod tool_allowlist_tests {
+    use super::*;
+    use agent_core::{EngineToolRuntime, SubAgentConfig, SubAgentManager};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    fn gated_with_allowlist(list: Option<Vec<String>>) -> PermissionGatedTools {
+        let rt = ProductionRuntime::new();
+        PermissionGatedTools {
+            gateway: {
+                let mut g = CapabilityGateway::new();
+                g.set_project_root("/tmp/natives-allowlist-test");
+                g.register_builtins();
+                Arc::new(g)
+            },
+            permissions: rt.permissions.clone(),
+            events: rt.events.clone(),
+            waiters: rt.permission_waiters.clone(),
+            subagents: Arc::new(SubAgentManager::new(SubAgentConfig::default())),
+            task_outputs: rt.task_outputs.clone(),
+            engines: rt.engines.clone(),
+            runtime: None,
+            provider_id: "openai".into(),
+            parent_run_id: "allowlist-parent".into(),
+            conversation_id: "c-allow".into(),
+            model_id: "m".into(),
+            permission_profile: "full_access".into(),
+            tool_allowlist: list,
+        }
+    }
+
+    #[tokio::test]
+    async fn allowlist_hides_and_denies_tools_outside_list() {
+        let tools = gated_with_allowlist(Some(vec![
+            "read_file".into(),
+            "list_dir".into(),
+            "grep".into(),
+        ]));
+        let names: Vec<_> = tools
+            .list_tool_schemas()
+            .await
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert!(names.contains(&"read_file".into()));
+        assert!(!names.iter().any(|n| n == "write_file" || n == "task" || n == "run_terminal"));
+
+        let denied = tools
+            .execute_tool(
+                "write_file",
+                serde_json::json!({"path":"/tmp/x","content":"y"}),
+                &AtomicBool::new(false),
+            )
+            .await;
+        assert!(denied.is_error);
+        assert_eq!(denied.output.get("denied"), Some(&serde_json::json!(true)));
+        assert_eq!(
+            denied.output.get("code").and_then(|v| v.as_str()),
+            Some("tool_not_allowlisted")
+        );
+
+        // task must not escalate unless allowlisted.
+        let task_denied = tools
+            .execute_tool(
+                "task",
+                serde_json::json!({"prompt":"nope","key_id":"k"}),
+                &AtomicBool::new(false),
+            )
+            .await;
+        assert!(task_denied.is_error);
+        assert_eq!(
+            task_denied.output.get("denied"),
+            Some(&serde_json::json!(true))
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_allowlist_denies_all_tools() {
+        let tools = gated_with_allowlist(Some(vec![]));
+        assert!(tools.list_tool_schemas().await.is_empty());
+        let denied = tools
+            .execute_tool(
+                "read_file",
+                serde_json::json!({"path":"Cargo.toml"}),
+                &AtomicBool::new(false),
+            )
+            .await;
+        assert!(denied.is_error);
+        assert_eq!(denied.output.get("denied"), Some(&serde_json::json!(true)));
+        let write_denied = tools
+            .execute_tool(
+                "write_file",
+                serde_json::json!({"path":"/tmp/x","content":"y"}),
+                &AtomicBool::new(false),
+            )
+            .await;
+        assert!(write_denied.is_error);
+        assert_eq!(
+            write_denied.output.get("denied"),
+            Some(&serde_json::json!(true))
+        );
+    }
+
+    #[tokio::test]
+    async fn parent_none_allowlist_exposes_full_surface() {
+        let tools = gated_with_allowlist(None);
+        let names: Vec<_> = tools
+            .list_tool_schemas()
+            .await
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert!(names.len() > 5);
+        assert!(names.iter().any(|n| n == "write_file"));
+        assert!(names.iter().any(|n| n == "task"));
+    }
+
+    #[tokio::test]
+    async fn execute_task_caps_child_permission_and_sets_allowlist() {
+        std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
+        let tools = gated_with_allowlist(None);
+        // Parent is full_access in helper; request full_access is allowed.
+        let ok = tools
+            .execute_tool(
+                "task",
+                serde_json::json!({
+                    "prompt": "child",
+                    "provider_id": "anthropic",
+                    "model_id": "claude",
+                    "key_id": "child-key",
+                    "permission_profile": "full_access",
+                    "fixture": true
+                }),
+                &AtomicBool::new(false),
+            )
+            .await;
+        assert!(!ok.is_error, "{:?}", ok.output);
+        assert_eq!(
+            ok.output.get("permission_profile").and_then(|v| v.as_str()),
+            Some("full_access")
+        );
+
+        // Parent ask: cannot upgrade to full_access.
+        let mut tools_ask = gated_with_allowlist(None);
+        tools_ask.permission_profile = "ask".into();
+        // task under ask may require permission; set runtime profile autonomous via field only
+        // Permission gate uses tools.permission_profile. Under ask, task needs approval.
+        // Use readonly parent to prove hard cap without waiting on UI.
+        tools_ask.permission_profile = "readonly".into();
+        let capped = tools_ask
+            .execute_tool(
+                "task",
+                serde_json::json!({
+                    "prompt": "child",
+                    "provider_id": "anthropic",
+                    "model_id": "claude",
+                    "key_id": "child-key",
+                    "permission_profile": "full_access",
+                    "fixture": true
+                }),
+                &AtomicBool::new(false),
+            )
+            .await;
+        // readonly denies Process side-effect of task before spawn.
+        assert!(capped.is_error);
+        assert_eq!(capped.output.get("denied"), Some(&serde_json::json!(true)));
+        std::env::remove_var("NATIVES_DAEMON_FIXTURE");
+    }
+
+    #[test]
+    fn cap_child_permission_unit() {
+        assert_eq!(cap_child_permission("ask", "full_access"), "ask");
+        assert_eq!(cap_child_permission("readonly", "ask"), "readonly");
+        assert_eq!(cap_child_permission("full_access", "ask"), "ask");
     }
 }

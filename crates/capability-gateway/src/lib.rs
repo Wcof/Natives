@@ -6,9 +6,14 @@
 
 pub mod policy;
 pub mod manifest;
+pub mod process_supervisor;
 pub mod tools;
 
 pub use manifest::ToolManifest;
+pub use process_supervisor::{
+    FakeProcessSupervisor, LocalProcessSupervisor, ProcessSnapshot, ProcessSpec, ProcessState,
+    ProcessSupervisor, DEFAULT_FOREGROUND_BUDGET_MS,
+};
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

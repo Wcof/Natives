@@ -1296,6 +1296,15 @@ export const en = {
     selfHeal: 'Build failed, retrying ({count}/3)',
     slashHeader: 'Commands',
     slashEmpty: 'The current runtime does not provide slash commands',
+    engineRecoveryTitle: 'Engine unavailable',
+    engineUnavailableBody: 'Cannot reach the assistant engine. Retry the connection; execution will not start until recovery succeeds.',
+    engineFatalBody: 'The engine hit a fatal error and cannot continue. Retry the connection or copy diagnostics.',
+    engineIncompatibleBody: 'Client and engine protocols are incompatible. Upgrade the app or engine, then retry.',
+    engineRetryConnection: 'Retry connection',
+    engineCopyDiagnostics: 'Copy diagnostics',
+    contextUsageNotReady: 'Context usage capability is not ready',
+    tasksCapabilityNotReady: 'Deep task capability is not ready',
+    capabilityNotReady: 'Capability not ready',
   },
 
   subagent: {

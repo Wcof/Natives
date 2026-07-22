@@ -29,6 +29,7 @@ pub mod key_lease;
 mod lid_guard;
 pub mod log_sanitizer;
 mod module_manager;
+pub mod creative_app;
 mod permission_center;
 pub mod provider_key_manager;
 pub mod credential_broker;
@@ -142,6 +143,9 @@ pub fn run() {
             let runtime_dir = data_dir.join("runtime");
             let _ = std::fs::create_dir_all(&runtime_dir);
             std::env::set_var("NATIVES_RUNTIME_DIR", &runtime_dir);
+            // Phase 0: daemon authority store is assistant.db (credentials stay natives.db).
+            let assistant_db_path = data_dir.join("assistant.db");
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &assistant_db_path);
             // Production default: UDS. Tests/dev may override with embedded/auto.
             if std::env::var("NATIVES_DAEMON_MODE").is_err() {
                 std::env::set_var("NATIVES_DAEMON_MODE", "uds");
@@ -272,6 +276,34 @@ pub fn run() {
                 wechat_bridge: Mutex::new(Some(wechat::bridge::Bridge::new())),
             });
 
+            // Creative App: global mutation lock + child browser state (ADR-0013)
+            app.manage(creative_app::service::new_mutation_lock());
+            app.manage(std::sync::Mutex::new(
+                creative_app::browser::BrowserState::new(),
+            ));
+
+            // Converge leftover installing/starting/stopping/deleting vs Docker labels
+            {
+                let pool_for_reconcile = {
+                    // pool already moved into AppState — use global main pool
+                    ()
+                };
+                let _ = pool_for_reconcile;
+                if let Ok(conn) = db::get_main_conn() {
+                    let handle = app.handle().clone();
+                    std::thread::spawn(move || {
+                        let rt = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build();
+                        if let Ok(rt) = rt {
+                            let _ = rt.block_on(async {
+                                let _ = creative_app::install::reconcile_all(&conn, Some(&handle)).await;
+                            });
+                        }
+                    });
+                }
+            }
+
             // ── Initialize Assistant Store (in-process, no sidecar) ──
             // The assistant database (~/.natives/assistant.db) is managed directly
             // through the DataStore, which handles its own migrations and WAL setup.
@@ -398,6 +430,28 @@ pub fn run() {
             commands::module::module_disable,
             commands::module::module_update,
             commands::module::write_generated_module,
+            // Creative App (dual-source: workshop + GitHub container)
+            commands::creative_app::creative_app_list,
+            commands::creative_app::creative_app_start,
+            commands::creative_app::creative_app_stop,
+            commands::creative_app::creative_app_delete,
+            commands::creative_app::creative_app_get_open_target,
+            commands::creative_app::creative_app_inspect_github,
+            commands::creative_app::creative_app_install_github,
+            commands::creative_app::creative_app_logs,
+            commands::creative_app::creative_app_reconcile,
+            commands::creative_app::creative_app_github_token_status,
+            commands::creative_app::creative_app_github_token_set,
+            commands::creative_app::creative_app_github_token_clear,
+            commands::creative_app::creative_app_docker_status,
+            commands::creative_app::creative_app_browser_show,
+            commands::creative_app::creative_app_browser_set_bounds,
+            commands::creative_app::creative_app_browser_back,
+            commands::creative_app::creative_app_browser_forward,
+            commands::creative_app::creative_app_browser_reload,
+            commands::creative_app::creative_app_browser_hide,
+            commands::creative_app::creative_app_browser_close,
+            commands::creative_app::creative_app_browser_current,
             // Environment
             commands::env::env_get_variables,
             commands::env::env_get_default_profile,
