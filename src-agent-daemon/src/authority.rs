@@ -309,9 +309,18 @@ impl UdsAuthority {
     }
 
     async fn call(&self, method: &str, params: Value) -> Result<Value, AuthorityError> {
+        // Prefer live supervisor env after sidecar restart; fall back to construction-time token.
+        let bootstrap = std::env::var("NATIVES_DAEMON_BOOTSTRAP")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| self.bootstrap_token.clone());
+        let socket = std::env::var_os("NATIVES_DAEMON_SOCKET")
+            .map(PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| self.socket.clone());
         let mut client = DaemonClient::connect(
-            &self.socket,
-            &self.bootstrap_token,
+            &socket,
+            &bootstrap,
             client_protocol_version(),
         )
         .await?;

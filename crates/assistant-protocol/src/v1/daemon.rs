@@ -44,12 +44,20 @@ pub struct HandshakeRequest {
 }
 
 /// Handshake response.
+///
+/// Wire names are snake_case. Aliases accept accidental camelCase so a
+/// mismatched serializer cannot brick UDS reconnect.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandshakeResponse {
+    #[serde(alias = "sessionToken", default)]
     pub session_token: String,
+    #[serde(alias = "daemonVersion", default)]
     pub daemon_version: String,
+    #[serde(alias = "protocolVersion", default)]
     pub protocol_version: String,
+    #[serde(default)]
     pub accepted: bool,
+    #[serde(alias = "upgradeRequired", default)]
     pub upgrade_required: Option<String>,
 }
 

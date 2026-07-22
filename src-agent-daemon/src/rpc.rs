@@ -30,6 +30,28 @@ use uuid::Uuid;
 /// Active session: maps session_token -> client_id.
 type SessionMap = Arc<Mutex<HashMap<String, String>>>;
 
+/// Reject handshake with a stable HandshakeResponse shape (always includes session_token).
+async fn write_handshake_reject(
+    writer: &mut (impl AsyncWriteExt + Unpin),
+    protocol_version: &str,
+    daemon_version: &str,
+    reason: impl Into<String>,
+) -> std::io::Result<()> {
+    let resp = HandshakeResponse {
+        session_token: String::new(),
+        daemon_version: daemon_version.to_string(),
+        protocol_version: protocol_version.to_string(),
+        accepted: false,
+        upgrade_required: Some(reason.into()),
+    };
+    let resp_json = serde_json::to_string(&resp).unwrap_or_else(|_| {
+        r#"{"session_token":"","daemon_version":"","protocol_version":"","accepted":false,"upgrade_required":"handshake rejected"}"#.into()
+    });
+    writer.write_all(resp_json.as_bytes()).await?;
+    writer.write_all(b"\n").await?;
+    Ok(())
+}
+
 /// RPC server that listens for client connections.
 pub struct RpcServer {
     socket_path: String,
@@ -150,15 +172,13 @@ async fn handle_connection(
     let handshake_req: HandshakeRequest = match serde_json::from_str(line.trim()) {
         Ok(req) => req,
         Err(e) => {
-            let err = DaemonError::new(
-                error_codes::INVALID_INPUT,
-                ErrorCategory::Validation,
-                false,
-                format!("Invalid handshake JSON: {}", e),
-            );
-            let resp = serde_json::to_string(&err)?;
-            writer.write_all(resp.as_bytes()).await?;
-            writer.write_all(b"\n").await?;
+            write_handshake_reject(
+                &mut writer,
+                &protocol_version.to_string(),
+                &daemon_version,
+                format!("Invalid handshake JSON: {e}"),
+            )
+            .await?;
             return Ok(());
         }
     };
@@ -172,27 +192,23 @@ async fn handle_connection(
             .unwrap_or(false);
         let mut used = bootstrap_used.lock().await;
         if handshake_req.bootstrap_token != bootstrap_token {
-            let err = DaemonError::new(
-                error_codes::UNAUTHORIZED,
-                ErrorCategory::Auth,
-                false,
-                "Invalid bootstrap token".to_string(),
-            );
-            let resp = serde_json::to_string(&err)?;
-            writer.write_all(resp.as_bytes()).await?;
-            writer.write_all(b"\n").await?;
+            write_handshake_reject(
+                &mut writer,
+                &protocol_version.to_string(),
+                &daemon_version,
+                "Invalid bootstrap token",
+            )
+            .await?;
             return Ok(());
         }
         if single_use && *used {
-            let err = DaemonError::new(
-                error_codes::UNAUTHORIZED,
-                ErrorCategory::Auth,
-                false,
-                "Bootstrap token already used (NATIVES_BOOTSTRAP_SINGLE_USE)".to_string(),
-            );
-            let resp = serde_json::to_string(&err)?;
-            writer.write_all(resp.as_bytes()).await?;
-            writer.write_all(b"\n").await?;
+            write_handshake_reject(
+                &mut writer,
+                &protocol_version.to_string(),
+                &daemon_version,
+                "Bootstrap token already used (NATIVES_BOOTSTRAP_SINGLE_USE)",
+            )
+            .await?;
             return Ok(());
         }
         *used = true;
@@ -203,18 +219,15 @@ async fn handle_connection(
     let negotiation = negotiate(&client_version, &protocol_version);
 
     if !negotiation.compatible {
-        let err = DaemonError::new(
-            error_codes::PROTOCOL_INCOMPATIBLE,
-            ErrorCategory::Unsupported,
-            false,
+        write_handshake_reject(
+            &mut writer,
+            &protocol_version.to_string(),
+            &daemon_version,
             format!(
-                "Protocol mismatch: client v{}, daemon v{}",
-                client_version, protocol_version
+                "Protocol mismatch: client v{client_version}, daemon v{protocol_version}"
             ),
-        );
-        let resp = serde_json::to_string(&err)?;
-        writer.write_all(resp.as_bytes()).await?;
-        writer.write_all(b"\n").await?;
+        )
+        .await?;
         return Ok(());
     }
 

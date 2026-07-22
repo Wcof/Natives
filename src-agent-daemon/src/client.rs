@@ -32,6 +32,74 @@ pub enum DaemonClientError {
     Protocol(String),
 }
 
+/// Parse one newline-delimited handshake response body.
+pub(crate) fn parse_handshake_response_line(line: &str) -> Result<HandshakeResponse, DaemonClientError> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Err(DaemonClientError::Handshake("empty handshake response".into()));
+    }
+
+    // Prefer explicit JSON inspection so DaemonError bodies (legacy rejects)
+    // never coerce into an empty HandshakeResponse via serde defaults.
+    let value: Value = serde_json::from_str(trimmed)
+        .map_err(|e| DaemonClientError::Handshake(e.to_string()))?;
+
+    // Daemon auth/protocol failures historically serialized as DaemonError.
+    if let Some(msg) = value
+        .get("technical_message")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        let code = value
+            .get("code")
+            .and_then(|v| v.as_str())
+            .unwrap_or("handshake_error");
+        return Err(DaemonClientError::Handshake(format!("{code}: {msg}")));
+    }
+
+    // Structured reject (accepted=false) — always a Handshake error for UI.
+    if value.get("accepted") == Some(&Value::Bool(false)) {
+        let upgrade = value
+            .get("upgrade_required")
+            .or_else(|| value.get("upgradeRequired"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("handshake not accepted");
+        return Err(DaemonClientError::Handshake(upgrade.to_string()));
+    }
+
+    // Success path requires a non-empty session token.
+    let token = value
+        .get("session_token")
+        .or_else(|| value.get("sessionToken"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if token.trim().is_empty() {
+        return Err(DaemonClientError::Handshake(
+            "missing field `session_token` in handshake response".into(),
+        ));
+    }
+
+    match serde_json::from_value::<HandshakeResponse>(value) {
+        Ok(mut resp) => {
+            // Normalize aliases if deserializer left defaults.
+            if resp.session_token.trim().is_empty() {
+                resp.session_token = token;
+            }
+            if !resp.accepted {
+                return Err(DaemonClientError::Handshake(
+                    resp.upgrade_required
+                        .filter(|s| !s.trim().is_empty())
+                        .unwrap_or_else(|| "handshake not accepted".into()),
+                ));
+            }
+            Ok(resp)
+        }
+        Err(e) => Err(DaemonClientError::Handshake(e.to_string())),
+    }
+}
+
 /// Client for an independent Agent Daemon over Unix Domain Socket.
 ///
 /// Stores bootstrap material so a dropped connection can re-handshake once
@@ -111,13 +179,18 @@ impl DaemonClient {
                 "empty handshake response".into(),
             ));
         }
-        let handshake_resp: HandshakeResponse = serde_json::from_str(resp_line.trim())
-            .map_err(|e| DaemonClientError::Handshake(e.to_string()))?;
+        let handshake_resp = parse_handshake_response_line(resp_line.trim())?;
         if !handshake_resp.accepted {
             return Err(DaemonClientError::Handshake(
                 handshake_resp
                     .upgrade_required
+                    .filter(|s| !s.trim().is_empty())
                     .unwrap_or_else(|| "handshake not accepted".into()),
+            ));
+        }
+        if handshake_resp.session_token.trim().is_empty() {
+            return Err(DaemonClientError::Handshake(
+                "handshake accepted but session_token is empty".into(),
             ));
         }
         Ok((
@@ -127,6 +200,7 @@ impl DaemonClient {
             handshake_resp.protocol_version,
         ))
     }
+
 
     /// Re-handshake after disconnect (uses stored bootstrap; never logs it).
     pub async fn reconnect(&mut self) -> Result<(), DaemonClientError> {
@@ -428,4 +502,30 @@ mod tests {
             std::env::remove_var(key);
         }
     }
+
+    #[test]
+    fn parse_handshake_response_line_maps_daemon_error() {
+        let line = r#"{"code":"unauthorized","category":"auth","retryable":false,"user_message_key":"error.unauthorized","technical_message":"Invalid bootstrap token","recovery_actions":[],"correlation_id":"00000000-0000-0000-0000-000000000001"}"#;
+        let err = parse_handshake_response_line(line).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Invalid bootstrap token"), "{msg}");
+        assert!(!msg.contains("missing field `session_token` at line"), "{msg}");
+    }
+
+    #[test]
+    fn parse_handshake_response_line_accepts_snake_case_success() {
+        let line = r#"{"session_token":"tok","daemon_version":"0.1.0","protocol_version":"2.0.0","accepted":true,"upgrade_required":null}"#;
+        let resp = parse_handshake_response_line(line).unwrap();
+        assert!(resp.accepted);
+        assert_eq!(resp.session_token, "tok");
+    }
+
+    #[test]
+    fn parse_handshake_response_line_accepts_camel_case_aliases() {
+        let line = r#"{"sessionToken":"tok2","daemonVersion":"0.1.0","protocolVersion":"2.0.0","accepted":true}"#;
+        let resp = parse_handshake_response_line(line).unwrap();
+        assert!(resp.accepted);
+        assert_eq!(resp.session_token, "tok2");
+    }
+
 }
