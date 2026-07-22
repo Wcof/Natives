@@ -65,6 +65,18 @@ export async function openConversation(
 }
 
 /** Consume run events into the store; on gap set recovering and replay. */
+function isImmediateEvent(type: string): boolean {
+  return (
+    type === 'completed' ||
+    type === 'failed' ||
+    type === 'interrupted' ||
+    type === 'cancelled' ||
+    type === 'permission_requested' ||
+    type === 'interaction_requested' ||
+    type === 'error'
+  );
+}
+
 export async function subscribeRun(
   gateway: AssistantGateway,
   dispatch: Dispatch,
@@ -75,12 +87,55 @@ export async function subscribeRun(
 ): Promise<void> {
   let last = afterSequence;
   let sawTerminal = false;
+  const pending: RunEvent[] = [];
+  let raf: number | null = null;
+
+  const flush = () => {
+    raf = null;
+    if (pending.length === 0) return;
+    const batch = pending.splice(0, pending.length);
+    if (batch.length === 1) {
+      dispatch({ type: 'event/apply', event: batch[0]! });
+    } else {
+      dispatch({ type: 'event/applyBatch', events: batch });
+    }
+  };
+
+  const scheduleFlush = () => {
+    if (raf != null) return;
+    if (typeof requestAnimationFrame === 'function') {
+      raf = requestAnimationFrame(flush) as unknown as number;
+    } else {
+      // Node / tests: microtask batch.
+      raf = 1;
+      queueMicrotask(() => {
+        raf = null;
+        flush();
+      });
+    }
+  };
+
+  const applyEvent = (event: RunEvent, immediate: boolean) => {
+    if (immediate) {
+      // Drain any queued stream deltas first so order is preserved.
+      flush();
+      dispatch({ type: 'event/apply', event });
+      return;
+    }
+    pending.push(event);
+    scheduleFlush();
+  };
+
   try {
     for await (const event of gateway.subscribe(runId, afterSequence)) {
-      if (signal?.aborted) return;
+      if (signal?.aborted) {
+        flush();
+        return;
+      }
       const state = getState();
       const prevLast = state.lastSequenceByRun[runId] ?? last;
       if (event.sequence > prevLast + 1 && prevLast > 0) {
+        flush();
         dispatch({ type: 'recovering/set', runId, recovering: true });
         const missing = await gateway.request<RunEvent[]>('run.getEvents', {
           run_id: runId,
@@ -91,7 +146,8 @@ export async function subscribeRun(
         // Do not skip the live event after replay — apply if still new.
         if (event.sequence <= last) continue;
       }
-      dispatch({ type: 'event/apply', event });
+      const immediate = isImmediateEvent(event.type);
+      applyEvent(event, immediate);
       last = event.sequence;
       if (
         event.type === 'completed' ||
@@ -100,6 +156,7 @@ export async function subscribeRun(
         event.type === 'cancelled'
       ) {
         sawTerminal = true;
+        flush();
         // Clear any soft-recover banner now that we have a real terminal.
         if (getState().recoveringRuns[runId]) {
           dispatch({ type: 'recovering/set', runId, recovering: false });
@@ -113,6 +170,7 @@ export async function subscribeRun(
         return;
       }
     }
+    flush();
     // Subscribe iterator ended without a terminal event.
     // Quiet empty end is normal when the adapter is still mid-poll and the
     // workbench will resubscribe. Do **not** flip connection/recovering banners
@@ -122,6 +180,7 @@ export async function subscribeRun(
       // intentionally no-op on connection state
     }
   } catch (err) {
+    flush();
     const run = getState().runs[runId];
     if (run && isActiveRunStatus(run.status)) {
       dispatch({ type: 'recovering/set', runId, recovering: true });

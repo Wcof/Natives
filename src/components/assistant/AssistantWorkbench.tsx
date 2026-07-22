@@ -1067,7 +1067,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     (state.view.layoutBreakpoint === 'full' || state.view.layoutBreakpoint === 'drawer-right');
 
   return (
-    <div className="flex h-full min-h-0 flex-col" data-assistant-workbench data-gateway="1">
+    <div className="relative flex h-full min-h-0 flex-col" data-assistant-workbench data-gateway="1">
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}

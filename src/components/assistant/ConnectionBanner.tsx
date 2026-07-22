@@ -54,8 +54,12 @@ export default function ConnectionBanner({
         ? 'border-[var(--border)] bg-[var(--surface-hover)] text-[var(--text-secondary)]'
         : 'border-[var(--primary)]/30 bg-[var(--primary)]/5 text-[var(--text-secondary)]';
 
+  // Overlay: do not push the timeline/composer layout when reconnecting.
   return (
-    <div className={`flex items-center gap-2 border-b px-4 py-2 text-xs ${tone}`} role="status">
+    <div
+      className={`pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center gap-2 border-b px-4 py-2 text-xs shadow-sm backdrop-blur-sm ${tone}`}
+      role="status"
+    >
       {connection === 'offline' || connection === 'fatal' ? (
         <WifiOff size={14} />
       ) : connection === 'incompatible' ? (
@@ -68,17 +72,17 @@ export default function ConnectionBanner({
         {error ? ` — ${error}` : ''}
       </span>
       {onReconnect && (connection === 'offline' || connection === 'reconnecting') && (
-        <button type="button" onClick={onReconnect} className="underline">
+        <button type="button" onClick={onReconnect} className="pointer-events-auto underline">
           {zh ? '重试' : 'Retry'}
         </button>
       )}
       {onRestartDaemon && (connection === 'fatal' || connection === 'offline') && (
-        <button type="button" onClick={onRestartDaemon} className="underline">
+        <button type="button" onClick={onRestartDaemon} className="pointer-events-auto underline">
           {zh ? '重启引擎' : 'Restart engine'}
         </button>
       )}
       {onCopyDiagnostics && (
-        <button type="button" onClick={onCopyDiagnostics} className="underline">
+        <button type="button" onClick={onCopyDiagnostics} className="pointer-events-auto underline">
           {zh ? '复制诊断' : 'Copy diagnostics'}
         </button>
       )}

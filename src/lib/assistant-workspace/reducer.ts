@@ -128,7 +128,8 @@ function upsertReasoning(blocks: ContentBlock[], text: string): ContentBlock[] {
     const cur = next[idx]!;
     next[idx] = { ...cur, reasoning: `${cur.reasoning ?? ''}${text}`, live: true };
   } else {
-    next.unshift({ type: 'reasoning', reasoning: text, live: true });
+    // Append in stream order (do not force reasoning above prior text/tools).
+    next.push({ type: 'reasoning', reasoning: text, live: true });
   }
   return next;
 }

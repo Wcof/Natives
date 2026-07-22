@@ -52,15 +52,22 @@ export interface ContentBlock {
 // ─── Block Renderers ────────────────────────────────────
 
 function TextBlock({ block }: { block: ContentBlock }) {
-  return <div className="whitespace-pre-wrap break-words text-[15px] leading-7">{block.text}</div>;
+  return (
+    <div className="whitespace-pre-wrap break-words text-[15px] leading-7 text-black dark:text-white">
+      {block.text}
+    </div>
+  );
 }
 
 function ReasoningBlock({ block }: { block: ContentBlock }) {
   const live = Boolean(block.live);
+  // Default: expanded while live, collapsed when finished.
   const [expanded, setExpanded] = React.useState(live);
+  // Once the user toggles, stream updates must not override their choice.
+  const userOverrideRef = React.useRef(false);
 
-  // Stream phase auto-expands; completion auto-collapses per design.
   React.useEffect(() => {
+    if (userOverrideRef.current) return;
     setExpanded(live);
   }, [live]);
 
@@ -76,7 +83,10 @@ function ReasoningBlock({ block }: { block: ContentBlock }) {
     <div className="my-3 border-y border-[var(--border-subtle)] py-2">
       <button
         type="button"
-        onClick={() => setExpanded(value => !value)}
+        onClick={() => {
+          userOverrideRef.current = true;
+          setExpanded(value => !value);
+        }}
         className={`inline-flex items-center gap-1.5 text-xs transition-colors ${
           live
             ? 'text-[var(--text-secondary)]'
@@ -90,7 +100,7 @@ function ReasoningBlock({ block }: { block: ContentBlock }) {
         <span>{label}</span>
       </button>
       {expanded && block.reasoning && (
-        <div className="mt-1 text-sm text-[var(--text-secondary)] italic whitespace-pre-wrap">
+        <div className="mt-1 max-h-[280px] overflow-y-auto rounded bg-[var(--surface-hover)]/60 px-2 py-1 text-sm text-[var(--text-secondary)] italic whitespace-pre-wrap">
           {block.reasoning}
         </div>
       )}
@@ -130,33 +140,82 @@ function FileReferenceBlock({ block }: { block: ContentBlock }) {
   );
 }
 
+function defaultToolExpanded(status: ContentBlock['toolStatus']): boolean {
+  // Running/pending tools expand; completed collapse; failed stay open.
+  if (status === 'failed') return true;
+  if (status === 'running' || status === 'pending') return true;
+  return false;
+}
+
 function ToolCallBlock({ block }: { block: ContentBlock }) {
-  const [expanded, setExpanded] = React.useState(block.toolStatus === 'failed');
+  const status = block.toolStatus || 'pending';
+  const [expanded, setExpanded] = React.useState(() => defaultToolExpanded(status));
+  const userOverrideRef = React.useRef(false);
+  const prevStatusRef = React.useRef(status);
+
+  React.useEffect(() => {
+    if (userOverrideRef.current) return;
+    // Only auto-adjust when status actually transitions (e.g. running → completed).
+    if (prevStatusRef.current !== status) {
+      setExpanded(defaultToolExpanded(status));
+      prevStatusRef.current = status;
+    }
+  }, [status]);
+
   const statusColor = {
     pending: 'var(--warning)',
     running: 'var(--primary)',
     completed: 'var(--success)',
     failed: 'var(--danger)',
     rejected: 'var(--text-disabled)',
-  }[block.toolStatus || 'pending'];
+  }[status];
+
+  const durationLabel =
+    typeof block.durationMs === 'number' && block.durationMs >= 0
+      ? block.durationMs >= 1000
+        ? `${(block.durationMs / 1000).toFixed(1)}s`
+        : `${block.durationMs}ms`
+      : null;
 
   return (
-    <div className="my-2 overflow-hidden rounded-lg border border-[var(--border-subtle)]">
-      <button type="button" onClick={() => setExpanded(value => !value)} className="flex w-full items-center gap-2 bg-[var(--surface-hover)] px-3 py-2 text-left text-xs font-medium">
+    <div className="my-2 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-hover)]/40">
+      <button
+        type="button"
+        onClick={() => {
+          userOverrideRef.current = true;
+          setExpanded((value) => !value);
+        }}
+        className="flex w-full items-center gap-2 bg-[var(--surface-hover)] px-3 py-2 text-left text-xs font-medium text-[var(--text-secondary)]"
+      >
         <span className="w-2 h-2 rounded-full" style={{ backgroundColor: statusColor }} />
         <span className="font-mono">{block.toolName}</span>
-        {block.toolStatus && (
-          <span className="text-[var(--text-disabled)] ml-auto">{block.toolStatus}</span>
-        )}
+        <span className="ml-auto flex items-center gap-2 text-[var(--text-disabled)]">
+          {durationLabel && <span className="tabular-nums">{durationLabel}</span>}
+          <span>{status}</span>
+        </span>
       </button>
-      {expanded && block.toolInput && (
-        <div className="px-3 py-2 text-xs font-mono text-[var(--text-secondary)] overflow-x-auto">
-          <pre className="whitespace-pre-wrap">{JSON.stringify(block.toolInput, null, 2)}</pre>
-        </div>
-      )}
-      {block.toolOutput !== undefined && (
-        <div className={`px-3 py-2 text-xs font-mono border-t ${block.isError ? 'border-red-400/30 bg-red-50 dark:bg-red-950/20' : ''}`}>
-          <pre className="whitespace-pre-wrap">{typeof block.toolOutput === 'string' ? block.toolOutput : JSON.stringify(block.toolOutput, null, 2)}</pre>
+      {expanded && (
+        <div className="max-h-[280px] overflow-auto border-t border-[var(--border-subtle)]">
+          {block.toolInput !== undefined && (
+            <div className="px-3 py-2 text-xs font-mono text-[var(--text-secondary)]">
+              <div className="mb-1 text-[10px] uppercase tracking-wide text-[var(--text-disabled)]">input</div>
+              <pre className="whitespace-pre-wrap">{JSON.stringify(block.toolInput, null, 2)}</pre>
+            </div>
+          )}
+          {block.toolOutput !== undefined && (
+            <div
+              className={`px-3 py-2 text-xs font-mono border-t border-[var(--border-subtle)] ${
+                block.isError ? 'border-red-400/30 bg-red-50 dark:bg-red-950/20 text-[var(--danger)]' : 'text-[var(--text-secondary)]'
+              }`}
+            >
+              <div className="mb-1 text-[10px] uppercase tracking-wide text-[var(--text-disabled)]">output</div>
+              <pre className="whitespace-pre-wrap">
+                {typeof block.toolOutput === 'string'
+                  ? block.toolOutput
+                  : JSON.stringify(block.toolOutput, null, 2)}
+              </pre>
+            </div>
+          )}
         </div>
       )}
     </div>
