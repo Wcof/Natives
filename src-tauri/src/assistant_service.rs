@@ -220,25 +220,20 @@ async fn handle_host_get_capabilities() -> RpcResponse {
 
 fn daemon_owned_method(method: &str) -> bool {
     // provider.list is host-owned: it must read user-configured providers from
-    // assistant.db (mirrored from Settings). Agent Daemon's provider.list only
-    // returns built-in adapter types, which is useless for the model picker.
+    // natives.db (Settings SoT). Agent Daemon's provider.list only returns
+    // built-in adapter types, which is useless for the model picker.
     if method == "provider.list" {
         return false;
     }
     if method == "daemon.getCapabilities" {
         return false; // host-mediated honest runtimes
     }
-    // Conversation CRUD lives in host assistant.db (assistant_conversations).
-    // Routing conversation.* to the UDS daemon in the past dual-stored sessions:
-    // UI listed host rows while delete hit daemon tables → "delete has no effect".
-    // Runs / engine still go through daemon authority.
-    if method.starts_with("conversation.") {
-        return false;
-    }
+    // Phase 0 cutover: conversation CRUD is daemon authority on assistant.db.
+    // Host only retains OS-bound methods (artifact.open/reveal) and run.start
+    // preflight (provider/model validation + user message write path).
     // run.start MUST stay host-owned even in UDS mode:
-    // host validates provider/model + project_path, writes user message to assistant.db,
-    // then orchestrates daemon create_run + start_run. Raw UDS run.start skips that and
-    // fails with run_start_failed (daemon conversation FK / missing host preflight).
+    // host validates provider/model + project_path, writes user message,
+    // then orchestrates daemon create_run + start_run.
     if method == "run.start" {
         return false;
     }
@@ -247,6 +242,30 @@ fn daemon_owned_method(method: &str) -> bool {
     if method == "run.subscribe" {
         return false;
     }
+    // artifact.open/reveal are OS actions (host-only).
+    if method == "artifact.open" || method == "artifact.reveal" {
+        return false;
+    }
+    let uds = std::env::var("NATIVES_DAEMON_MODE")
+        .map(|m| {
+            matches!(
+                m.to_ascii_lowercase().as_str(),
+                "uds" | "sidecar" | "remote"
+            )
+        })
+        .unwrap_or(true); // production default UDS
+
+    // In UDS production: conversation/promptQueue/interaction are daemon-owned.
+    // In embedded/test mode: keep host handlers so in-process DataStore tests work.
+    if uds
+        && (method.starts_with("conversation.")
+            || method.starts_with("promptQueue.")
+            || method.starts_with("interaction.")
+            || method.starts_with("task."))
+    {
+        return true;
+    }
+
     method.starts_with("run.")
         || method.starts_with("daemon.")
         || method.starts_with("provider.")
@@ -2949,10 +2968,20 @@ mod tests {
         assert!(!daemon_owned_method("run.subscribe"));
         assert!(daemon_owned_method("provider.test"));
         assert!(daemon_owned_method("mcp.list"));
-        // Conversation CRUD is always host-owned (assistant.db), never UDS dual-store.
+        // Phase 0 cutover under UDS: conversation + promptQueue are daemon authority.
+        std::env::set_var("NATIVES_DAEMON_MODE", "uds");
+        assert!(daemon_owned_method("conversation.list"));
+        assert!(daemon_owned_method("conversation.delete"));
+        assert!(daemon_owned_method("conversation.create"));
+        assert!(daemon_owned_method("promptQueue.list"));
+        assert!(daemon_owned_method("promptQueue.interject"));
+        // Host retains OS artifact actions and run.start preflight.
+        assert!(!daemon_owned_method("artifact.open"));
+        assert!(!daemon_owned_method("run.start"));
+        // Embedded keeps host conversation handlers for in-process tests.
+        std::env::set_var("NATIVES_DAEMON_MODE", "embedded");
         assert!(!daemon_owned_method("conversation.list"));
-        assert!(!daemon_owned_method("conversation.delete"));
-        assert!(!daemon_owned_method("conversation.create"));
+        std::env::remove_var("NATIVES_DAEMON_MODE");
     }
 
     #[tokio::test]

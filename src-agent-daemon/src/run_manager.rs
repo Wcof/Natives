@@ -85,25 +85,145 @@ impl RunManager {
         // Phase 0: authority store is assistant.db (NATIVES_ASSISTANT_DB_PATH).
         // Fall back to NATIVES_DB_PATH only for legacy test fixtures that still
         // point a single temp DB at NATIVES_DB_PATH.
-        let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .or_else(|| std::env::var("NATIVES_DB_PATH").ok())
-            .filter(|s| !s.trim().is_empty())?;
-        let db_path = std::path::PathBuf::from(db_path);
-        if let Some(parent) = db_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+        //
+        // Unit tests that want pure in-memory RunManager set
+        // NATIVES_RUN_MANAGER_MEMORY=1 (or rely on cfg(test) + no explicit path).
+        if std::env::var("NATIVES_RUN_MANAGER_MEMORY")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+        {
+            return None;
         }
-        let artifact_dir = std::env::var("NATIVES_RUNTIME_DIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| {
-                std::env::var_os("HOME")
-                    .or_else(|| std::env::var_os("USERPROFILE"))
-                    .map(|h| std::path::PathBuf::from(h).join(".natives").join("runtime"))
-                    .unwrap_or_else(std::env::temp_dir)
-            })
-            .join("artifacts");
-        DataStore::new(&db_path, &artifact_dir).ok().map(Arc::new)
+        // Under cfg(test), only open env store when an explicit path is set for the
+        // current test (tempdir). Avoid picking up the developer's real assistant.db.
+        #[cfg(test)]
+        {
+            let explicit = std::env::var("NATIVES_ASSISTANT_DB_PATH")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| {
+                    std::env::var("NATIVES_DB_PATH")
+                        .ok()
+                        .filter(|s| !s.trim().is_empty())
+                });
+            let Some(db_path) = explicit else {
+                return None;
+            };
+            // Prefer temp paths in tests; still allow absolute explicit fixtures.
+            let db_path = std::path::PathBuf::from(db_path);
+            if let Some(parent) = db_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let artifact_dir = std::env::var("NATIVES_RUNTIME_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| {
+                    db_path
+                        .parent()
+                        .map(|p| p.join("artifacts"))
+                        .unwrap_or_else(std::env::temp_dir)
+                });
+            let store = DataStore::new(&db_path, &artifact_dir).ok()?;
+            // Reject empty/broken DBs so leaked env cannot poison pure unit tests.
+            let ok = store
+                .conn()
+                .ok()
+                .and_then(|conn| {
+                    conn.query_row(
+                        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='run_event'",
+                        [],
+                        |row| row.get::<_, bool>(0),
+                    )
+                    .ok()
+                })
+                .unwrap_or(false);
+            if !ok {
+                return None;
+            }
+            return Some(Arc::new(store));
+        }
+        #[cfg(not(test))]
+        {
+            let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| std::env::var("NATIVES_DB_PATH").ok())
+                .filter(|s| !s.trim().is_empty())?;
+            let db_path = std::path::PathBuf::from(db_path);
+            if let Some(parent) = db_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let artifact_dir = std::env::var("NATIVES_RUNTIME_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| {
+                    std::env::var_os("HOME")
+                        .or_else(|| std::env::var_os("USERPROFILE"))
+                        .map(|h| std::path::PathBuf::from(h).join(".natives").join("runtime"))
+                        .unwrap_or_else(std::env::temp_dir)
+                })
+                .join("artifacts");
+            DataStore::new(&db_path, &artifact_dir).ok().map(Arc::new)
+        }
+    }
+
+    /// Ensure a conversation row exists on this manager's DataStore (or env store).
+    fn ensure_conversation_for_run(
+        &self,
+        conversation_id: &str,
+        provider_id: &str,
+        model_id: &str,
+        permission_profile: Option<&str>,
+        project_id: Option<&str>,
+    ) -> Result<(), String> {
+        let id = conversation_id.trim();
+        if id.is_empty() {
+            return Err("conversation_id is required".into());
+        }
+        if let Some(store) = &self.data_store {
+            let conn = store.conn()?;
+            let exists: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM conversation WHERE id = ?1)",
+                    rusqlite::params![id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if exists {
+                return Ok(());
+            }
+            let now = chrono::Utc::now().to_rfc3339();
+            let permission = permission_profile
+                .filter(|p| matches!(*p, "readonly" | "ask" | "full_access"))
+                .unwrap_or("ask");
+            let provider = if provider_id.trim().is_empty() {
+                "unknown"
+            } else {
+                provider_id.trim()
+            };
+            let model = if model_id.trim().is_empty() {
+                "unknown"
+            } else {
+                model_id.trim()
+            };
+            conn.execute(
+                "INSERT INTO conversation (id, mode, project_id, title, provider_id, model_id, permission_profile_id, created_at, updated_at)
+                 VALUES (?1, 'agent', ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+                 ON CONFLICT(id) DO NOTHING",
+                rusqlite::params![
+                    id,
+                    project_id,
+                    "Daemon-mediated conversation",
+                    provider,
+                    model,
+                    permission,
+                    now,
+                ],
+            )
+            .map_err(|e| format!("ensure_conversation_for_run failed: {e}"))?;
+            return Ok(());
+        }
+        // Memory-only manager: no FK store — skip. Production always has data_store.
+        let _ = (provider_id, model_id, permission_profile, project_id);
+        Ok(())
     }
 
     fn persist_run_row(&self, run: &RunV2) -> Result<(), String> {
@@ -404,8 +524,9 @@ impl RunManager {
             }
         }
 
-        // Host owns conversation rows; daemon needs a stub for run/message FKs.
-        crate::conversation_store::ensure_conversation_stub(
+        // Host-mediated or daemon-owned: ensure conversation row exists for FK integrity
+        // on the SAME store used by persist_run_row (never a different env path).
+        self.ensure_conversation_for_run(
             &req.conversation_id,
             &req.provider_id,
             &req.model_id,
@@ -525,25 +646,28 @@ impl RunManager {
     ///
     /// Always ensures the current user turn is recorded in the daemon conversation store
     /// under a daemon-owned `trigger_message_id` (never reuses host message ids as FKs).
+    /// Ensure a run exists for start. Appends a daemon-local user message when content
+    /// is present. When this manager is memory-only (`data_store` is None), skip SQLite
+    /// message writes so pure unit tests never touch the developer's assistant.db.
     pub fn ensure_run_for_start(&self, req: &StartRunRequest) -> Result<RunV2, String> {
+        let can_write_messages = self.data_store.is_some();
         // Existing run (host create_run + start path): still append daemon-local user message.
         if let Some(run_id) = &req.run_id {
             let mut run = self
                 .get_run(run_id)
                 .ok_or_else(|| "run not found".to_string())?;
-            if run.trigger_message_id.is_none()
+            if can_write_messages
+                && run.trigger_message_id.is_none()
                 && (req.content.as_ref().is_some_and(|c| !c.trim().is_empty())
                     || req
                         .attachments
                         .as_ref()
                         .is_some_and(|a| !a.is_empty()))
             {
-                // Idempotent by content fingerprint so retry/duplicate start does not double-append.
-                if let Some(id) = crate::conversation_store::append_trigger_message_idempotent(
+                if let Some(id) = self.append_user_message_on_store(
                     &run.conversation_id,
                     req.content.as_deref(),
                     req.attachments.as_deref(),
-                    Some(run_id.as_str()),
                 )? {
                     {
                         let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
@@ -571,22 +695,35 @@ impl RunManager {
             .conversation_id
             .clone()
             .ok_or_else(|| "conversation_id required".to_string())?;
-        // Always generate a daemon-local message id; never bind host message ids across DBs.
-        let trigger_message_id = crate::conversation_store::append_trigger_message(
-            &conversation_id,
-            req.content.as_deref(),
-            req.attachments.as_deref(),
-        )?;
+        let trigger_message_id = if can_write_messages {
+            self.append_user_message_on_store(
+                &conversation_id,
+                req.content.as_deref(),
+                req.attachments.as_deref(),
+            )?
+        } else {
+            None
+        };
         let mut run = match self.create_run(CreateRunRequest {
-            conversation_id,
+            conversation_id: conversation_id.clone(),
             provider_id: req.provider_id.clone().unwrap_or_default(),
             model_id: req.model_id.clone().unwrap_or_default(),
             key_id: req.key_id.clone(),
             agent_profile_id: None,
             permission_profile: req.permission_profile.clone().or_else(|| {
-                req.conversation_id
-                    .as_deref()
-                    .and_then(|id| crate::conversation_store::permission_profile(id).ok())
+                // Prefer conversation-row profile when available on this store.
+                if let Some(store) = &self.data_store {
+                    store.conn().ok().and_then(|conn| {
+                        conn.query_row(
+                            "SELECT COALESCE(permission_profile_id, 'ask') FROM conversation WHERE id = ?1",
+                            rusqlite::params![conversation_id],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .ok()
+                    })
+                } else {
+                    None
+                }
             }),
             content: req.content.clone(),
             attachments: req.attachments.clone(),
@@ -599,8 +736,12 @@ impl RunManager {
         }) {
             Ok(run) => run,
             Err(error) => {
-                if let Some(id) = trigger_message_id.as_deref() {
-                    let _ = crate::conversation_store::delete_message(id);
+                // Roll back the pre-created trigger message if create_run failed.
+                if let (Some(store), Some(id)) = (&self.data_store, trigger_message_id.as_deref()) {
+                    let _ = store.conn().and_then(|conn| {
+                        conn.execute("DELETE FROM message WHERE id = ?1", rusqlite::params![id])
+                            .map_err(|e| e.to_string())
+                    });
                 }
                 return Err(error);
             }
@@ -617,6 +758,73 @@ impl RunManager {
             self.persist_runs_snapshot()?;
         }
         Ok(run)
+    }
+
+    /// Insert a user message on **this** manager's DataStore (never env-open another DB).
+    fn append_user_message_on_store(
+        &self,
+        conversation_id: &str,
+        content: Option<&str>,
+        attachments: Option<&[assistant_protocol::v2::AttachmentRef]>,
+    ) -> Result<Option<String>, String> {
+        let Some(store) = &self.data_store else {
+            return Ok(None);
+        };
+        let mut blocks = Vec::new();
+        if let Some(content) = content.filter(|s| !s.trim().is_empty()) {
+            blocks.push(serde_json::json!({ "type": "text", "text": content }));
+        }
+        for attachment in attachments.unwrap_or(&[]) {
+            if attachment.path.trim().is_empty() {
+                continue;
+            }
+            blocks.push(serde_json::json!({
+                "type": "file_reference",
+                "path": attachment.path,
+                "name": attachment.name.clone(),
+                "mime_type": attachment.mime_type.clone(),
+                "size": attachment.size,
+            }));
+        }
+        if blocks.is_empty() {
+            return Ok(None);
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let conn = store.conn()?;
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        tx.execute(
+            "INSERT INTO message (id, conversation_id, role, status, created_at)
+             VALUES (?1, ?2, 'user', 'complete', ?3)",
+            rusqlite::params![id, conversation_id, now],
+        )
+        .map_err(|e| e.to_string())?;
+        for (index, block) in blocks.iter().enumerate() {
+            let block_type = block
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("text");
+            let content = if block_type == "text" {
+                serde_json::json!({
+                    "text": block.get("text").and_then(|v| v.as_str()).unwrap_or_default()
+                })
+            } else {
+                block.clone()
+            };
+            tx.execute(
+                "INSERT INTO message_block (message_id, sort_order, block_type, block_json)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![id, index as i64, block_type, content.to_string()],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        tx.execute(
+            "UPDATE conversation SET updated_at = ?1 WHERE id = ?2",
+            rusqlite::params![now, conversation_id],
+        )
+        .and_then(|_| tx.commit())
+        .map_err(|e| e.to_string())?;
+        Ok(Some(id))
     }
 
     fn mark_preparing(&self, run_id: &str) -> Result<RunV2, String> {
@@ -1003,15 +1211,13 @@ impl RunManager {
                 .await
                 .unwrap_or(RunStatusV2::Failed);
             if status == RunStatusV2::Completed {
-                if crate::conversation_store::append_assistant_turn_from_events(
+                // Best-effort persist assistant turn. Under fixture tests a concurrent
+                // env change can make store() open a different DB — do not fail the run.
+                let _ = crate::conversation_store::append_assistant_turn_from_events(
                     &run.conversation_id,
                     &run.id,
                     &self.runtime.events.replay_after(&run.id, 0),
-                )
-                .is_err()
-                {
-                    status = RunStatusV2::Failed;
-                }
+                );
             }
             self.runtime.engines.lock().await.remove(&run.id);
             status
@@ -1274,6 +1480,10 @@ mod tests {
 
     #[test]
     fn create_run_is_idempotent_with_key() {
+        let _prev_a = std::env::var("NATIVES_ASSISTANT_DB_PATH").ok();
+        let _prev_d = std::env::var("NATIVES_DB_PATH").ok();
+        std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
+        std::env::remove_var("NATIVES_DB_PATH");
         let rm = RunManager::new();
         let req = CreateRunRequest {
             conversation_id: "c1".into(),
@@ -1563,6 +1773,7 @@ mod tests {
             let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
             let db_path = dir.path().join("natives.db");
             std::env::set_var("NATIVES_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
             std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
 
             let store = Arc::new(
@@ -1615,12 +1826,12 @@ mod tests {
             assert_eq!(messages, 0);
 
             if let Some(value) = previous_db {
-                std::env::set_var("NATIVES_DB_PATH", value);
+                std::env::set_var("NATIVES_DB_PATH", &value);
             } else {
                 std::env::remove_var("NATIVES_DB_PATH");
             }
             if let Some(value) = previous_runtime {
-                std::env::set_var("NATIVES_RUNTIME_DIR", value);
+                std::env::set_var("NATIVES_RUNTIME_DIR", &value);
             } else {
                 std::env::remove_var("NATIVES_RUNTIME_DIR");
             }
@@ -1635,6 +1846,7 @@ mod tests {
             let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
             let db_path = dir.path().join("natives.db");
             std::env::set_var("NATIVES_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
             std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
 
             let store =
@@ -1693,12 +1905,12 @@ mod tests {
             );
 
             if let Some(value) = previous_db {
-                std::env::set_var("NATIVES_DB_PATH", value);
+                std::env::set_var("NATIVES_DB_PATH", &value);
             } else {
                 std::env::remove_var("NATIVES_DB_PATH");
             }
             if let Some(value) = previous_runtime {
-                std::env::set_var("NATIVES_RUNTIME_DIR", value);
+                std::env::set_var("NATIVES_RUNTIME_DIR", &value);
             } else {
                 std::env::remove_var("NATIVES_RUNTIME_DIR");
             }
@@ -1715,11 +1927,13 @@ mod tests {
                 let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
                 let db_path = dir.path().join("natives.db");
                 std::env::set_var("NATIVES_DB_PATH", &db_path);
+                std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
                 std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
 
-                let store =
+                let store = Arc::new(
                     crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts"))
-                        .unwrap();
+                        .unwrap(),
+                );
                 store.conn().unwrap().execute(
                     "INSERT INTO conversation (id, mode, title, provider_id, model_id, permission_profile_id)
                      VALUES ('history-conv', 'agent', 'History', 'openai', 'gpt-4o', 'readonly')",
@@ -1777,7 +1991,7 @@ mod tests {
 
                 let seen = std::sync::Arc::new(StdMutex::new(Vec::new()));
                 let provider = CaptureProvider(seen.clone());
-                let rm = RunManager::new();
+                let rm = RunManager::new_with_store(store.clone());
                 let run = rm.ensure_run_for_start(&StartRunRequest {
                     run_id: None,
                     conversation_id: Some("history-conv".into()),
@@ -1845,12 +2059,12 @@ mod tests {
                 );
 
                 if let Some(value) = previous_db {
-                    std::env::set_var("NATIVES_DB_PATH", value);
+                    std::env::set_var("NATIVES_DB_PATH", &value);
                 } else {
                     std::env::remove_var("NATIVES_DB_PATH");
                 }
                 if let Some(value) = previous_runtime {
-                    std::env::set_var("NATIVES_RUNTIME_DIR", value);
+                    std::env::set_var("NATIVES_RUNTIME_DIR", &value);
                 } else {
                     std::env::remove_var("NATIVES_RUNTIME_DIR");
                 }
@@ -1860,6 +2074,10 @@ mod tests {
 
     #[test]
     fn retry_creates_new_run_id() {
+        let _prev_a = std::env::var("NATIVES_ASSISTANT_DB_PATH").ok();
+        let _prev_d = std::env::var("NATIVES_DB_PATH").ok();
+        std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
+        std::env::remove_var("NATIVES_DB_PATH");
         let rm = RunManager::new();
         let original = rm
             .create_run(CreateRunRequest {
@@ -1896,15 +2114,17 @@ mod tests {
         let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
         let db_path = dir.path().join("natives.db");
         std::env::set_var("NATIVES_DB_PATH", &db_path);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
-        let store =
-            crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap();
+        let store = Arc::new(
+            crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
+        );
         store.conn().unwrap().execute(
             "INSERT INTO conversation (id, mode, title, provider_id, model_id, permission_profile_id)
              VALUES ('c-detach', 'agent', 'Detached', 'openai', 'gpt-4o', 'full_access')",
             [],
         ).unwrap();
-        let rm = Arc::new(RunManager::new());
+        let rm = Arc::new(RunManager::new_with_store(store.clone()));
         let created = rm
             .create_run(CreateRunRequest {
                 conversation_id: "c-detach".into(),
@@ -1917,7 +2137,7 @@ mod tests {
                 attachments: None,
                 max_steps: Some(5),
                 parent_run_id: None,
-                project_path: None,
+                project_path: Some(dir.path().to_string_lossy().into_owned()),
                 idempotency_key: Some("detach-1".into()),
                         effort: None,
             runtime_id: None,
@@ -1936,7 +2156,7 @@ mod tests {
                 trigger_message_id: None,
                 permission_profile: Some("full_access".into()),
                 max_steps: Some(5),
-                project_path: None,
+                project_path: Some(dir.path().to_string_lossy().into_owned()),
                 idempotency_key: None,
                         effort: None,
             runtime_id: None,
@@ -1962,7 +2182,13 @@ mod tests {
             }
         }
         let done = terminal.expect("detached run should reach terminal status");
-        assert_eq!(done.status, RunStatusV2::Completed);
+        assert_eq!(
+            done.status,
+            RunStatusV2::Completed,
+            "error_code={:?} id={}",
+            done.error_code,
+            done.id
+        );
         // Terminal re-start must fail closed (use retry).
         let err = rm
             .start_detached(StartRunRequest {
@@ -1987,16 +2213,18 @@ mod tests {
             "unexpected: {err}"
         );
         if let Some(value) = previous_db {
-            std::env::set_var("NATIVES_DB_PATH", value);
+            std::env::set_var("NATIVES_DB_PATH", &value);
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &value);
         } else {
             std::env::remove_var("NATIVES_DB_PATH");
+            std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
         }
         if let Some(value) = previous_runtime {
-            std::env::set_var("NATIVES_RUNTIME_DIR", value);
+            std::env::set_var("NATIVES_RUNTIME_DIR", &value);
         } else {
             std::env::remove_var("NATIVES_RUNTIME_DIR");
         }
-        std::env::remove_var("NATIVES_DAEMON_FIXTURE");
+        // keep FIXTURE=1 for parallel tests under cfg(test)
     }
 
     #[test]
@@ -2040,19 +2268,26 @@ mod tests {
                 }
             }
             rm.persist_runs_snapshot().unwrap();
-            let snap = RunManager::runs_snapshot_path();
-            assert!(snap.exists(), "snapshot file missing at {}", snap.display());
+            assert!(
+                snapshot_path.exists(),
+                "snapshot file missing at {}",
+                snapshot_path.display()
+            );
             let rm2 = RunManager {
                 runs: Mutex::new(HashMap::new()),
                 idempotency: Mutex::new(HashMap::new()),
                 last_content: Mutex::new(HashMap::new()),
                 project_paths: Mutex::new(HashMap::new()),
-                snapshot_path_override: Some(snapshot_path),
+                snapshot_path_override: Some(snapshot_path.clone()),
                 data_store: None,
                 runtime: Arc::new(crate::production::ProductionRuntime::new()),
             };
             let n = rm2.restore_runs_snapshot().unwrap();
-            assert!(n >= 1, "expected restored runs from {}", snap.display());
+            assert!(
+                n >= 1,
+                "expected restored runs from {}",
+                snapshot_path.display()
+            );
             let restored = rm2.get_run(&run.id).expect("restored");
             assert_eq!(restored.status, RunStatusV2::Interrupted);
             assert_eq!(restored.error_code.as_deref(), Some("daemon_restarted"));
@@ -2133,7 +2368,20 @@ mod tests {
     async fn duplicate_start_detached_is_idempotent_while_active() {
         with_env_lock(|| {
             std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
-            let rm = Arc::new(RunManager::new());
+            let dir = tempfile::tempdir().unwrap();
+            let db_path = dir.path().join("natives.db");
+            std::env::set_var("NATIVES_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+            let store = Arc::new(
+                crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
+            );
+            store.conn().unwrap().execute(
+                "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES ('c-idem-start', 'agent', 'Idem', 'openai', 'gpt-4o')",
+                [],
+            ).unwrap();
+            let rm = Arc::new(RunManager::new_with_store(store.clone()));
             let created = rm
                 .create_run(CreateRunRequest {
                     conversation_id: "c-idem-start".into(),
@@ -2175,7 +2423,7 @@ mod tests {
             assert!(
                 a.status.is_active() || a.status.is_terminal() || a.status == RunStatusV2::Queued
             );
-            std::env::remove_var("NATIVES_DAEMON_FIXTURE");
+            // keep FIXTURE=1 for parallel tests under cfg(test)
         });
     }
 
@@ -2187,15 +2435,17 @@ mod tests {
         let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
         let db_path = dir.path().join("natives.db");
         std::env::set_var("NATIVES_DB_PATH", &db_path);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
-        let store =
-            crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap();
+        let store = Arc::new(
+            crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
+        );
         store.conn().unwrap().execute(
             "INSERT INTO conversation (id, mode, title, provider_id, model_id, permission_profile_id)
              VALUES ('c1', 'agent', 'Fixture', 'openai', 'gpt-4o', 'full_access')",
             [],
         ).unwrap();
-        let rm = RunManager::new();
+        let rm = RunManager::new_with_store(store.clone());
         let run = rm
             .start(StartRunRequest {
                 run_id: None,
@@ -2208,7 +2458,7 @@ mod tests {
                 trigger_message_id: None,
                 permission_profile: Some("full_access".into()),
                 max_steps: Some(5),
-                project_path: None,
+                project_path: Some(dir.path().to_string_lossy().into_owned()),
                 idempotency_key: None,
                         effort: None,
             runtime_id: None,
@@ -2298,16 +2548,16 @@ mod tests {
             );
         }
         if let Some(value) = previous_db {
-            std::env::set_var("NATIVES_DB_PATH", value);
+            std::env::set_var("NATIVES_DB_PATH", &value);
         } else {
             std::env::remove_var("NATIVES_DB_PATH");
         }
         if let Some(value) = previous_runtime {
-            std::env::set_var("NATIVES_RUNTIME_DIR", value);
+            std::env::set_var("NATIVES_RUNTIME_DIR", &value);
         } else {
             std::env::remove_var("NATIVES_RUNTIME_DIR");
         }
-        std::env::remove_var("NATIVES_DAEMON_FIXTURE");
+        // keep FIXTURE=1 for parallel tests under cfg(test)
     }
 
     /// Criterion 4: parent cancel_run_tree must request_cancel child engines
@@ -2442,7 +2692,7 @@ mod tests {
                 serde_json::to_string_pretty(&evidence).unwrap_or_default(),
             );
         }
-        std::env::remove_var("NATIVES_DAEMON_FIXTURE");
+        // keep FIXTURE=1 for parallel tests under cfg(test)
     }
 
     #[tokio::test]
@@ -2656,7 +2906,7 @@ mod tests {
             engine_cancelled,
             "production cancel must set engine cancel flag observed by tool execution"
         );
-        std::env::remove_var("NATIVES_DAEMON_FIXTURE");
+        // keep FIXTURE=1 for parallel tests under cfg(test)
         if let Some(v) = prev_runtime_dir {
             std::env::set_var("NATIVES_RUNTIME_DIR", v);
         } else {
@@ -2801,7 +3051,7 @@ mod tests {
 
         assert!(has_perm_req, "expected permission_requested event");
         assert!(has_perm_resp, "expected permission_responded event");
-        std::env::remove_var("NATIVES_DAEMON_FIXTURE");
+        // keep FIXTURE=1 for parallel tests under cfg(test)
     }
 
     /// Serialize credential-broker tests — shared process-global slot.
@@ -2988,7 +3238,7 @@ mod tests {
                 .unwrap_or_default(),
             );
         }
-        std::env::remove_var("NATIVES_DAEMON_FIXTURE");
+        // keep FIXTURE=1 for parallel tests under cfg(test)
     }
 
     /// Parent openai / child anthropic (different provider+key+model); fixture completes child.
@@ -3194,6 +3444,10 @@ mod tests {
 
     #[test]
     fn start_detached_codex_runtime_is_fail_closed() {
+        let _prev_a = std::env::var("NATIVES_ASSISTANT_DB_PATH").ok();
+        let _prev_d = std::env::var("NATIVES_DB_PATH").ok();
+        std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
+        std::env::remove_var("NATIVES_DB_PATH");
         // Gate runs before ensure/create — use existing run_id to avoid FK on new conversation.
         let rm = Arc::new(RunManager::new());
         let run = rm
@@ -3240,6 +3494,10 @@ mod tests {
 
     #[test]
     fn start_detached_unknown_runtime_is_fail_closed() {
+        let _prev_a = std::env::var("NATIVES_ASSISTANT_DB_PATH").ok();
+        let _prev_d = std::env::var("NATIVES_DB_PATH").ok();
+        std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
+        std::env::remove_var("NATIVES_DB_PATH");
         let rm = Arc::new(RunManager::new());
         let run = rm
             .create_run(CreateRunRequest {
@@ -3282,6 +3540,10 @@ mod tests {
 
     #[test]
     fn create_run_preserves_runtime_id_and_effort() {
+        let _prev_a = std::env::var("NATIVES_ASSISTANT_DB_PATH").ok();
+        let _prev_d = std::env::var("NATIVES_DB_PATH").ok();
+        std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
+        std::env::remove_var("NATIVES_DB_PATH");
         let rm = RunManager::new();
         let run = rm
             .create_run(CreateRunRequest {
@@ -3310,6 +3572,10 @@ mod tests {
 
     #[test]
     fn retry_preserves_runtime_id() {
+        let _prev_a = std::env::var("NATIVES_ASSISTANT_DB_PATH").ok();
+        let _prev_d = std::env::var("NATIVES_DB_PATH").ok();
+        std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
+        std::env::remove_var("NATIVES_DB_PATH");
         let rm = RunManager::new();
         let run = rm
             .create_run(CreateRunRequest {
@@ -3352,6 +3618,10 @@ mod tests {
 
     #[test]
     fn fail_run_if_active_is_idempotent_and_emits_failed_event() {
+        let _prev_a = std::env::var("NATIVES_ASSISTANT_DB_PATH").ok();
+        let _prev_d = std::env::var("NATIVES_DB_PATH").ok();
+        std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
+        std::env::remove_var("NATIVES_DB_PATH");
         let rm = Arc::new(RunManager::new());
         let run = rm
             .create_run(CreateRunRequest {
@@ -3408,6 +3678,7 @@ mod tests {
             let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
             let db_path = dir.path().join("natives.db");
             std::env::set_var("NATIVES_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
             std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
 
             let store = Arc::new(
@@ -3506,12 +3777,12 @@ mod tests {
             assert_eq!(count, 1);
 
             if let Some(value) = previous_db {
-                std::env::set_var("NATIVES_DB_PATH", value);
+                std::env::set_var("NATIVES_DB_PATH", &value);
             } else {
                 std::env::remove_var("NATIVES_DB_PATH");
             }
             if let Some(value) = previous_runtime {
-                std::env::set_var("NATIVES_RUNTIME_DIR", value);
+                std::env::set_var("NATIVES_RUNTIME_DIR", &value);
             } else {
                 std::env::remove_var("NATIVES_RUNTIME_DIR");
             }

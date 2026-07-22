@@ -734,14 +734,24 @@ fn required_str<'a>(params: &'a Value, key: &str) -> Result<&'a str, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     #[tokio::test]
     async fn conversation_round_trip_uses_daemon_tables() {
+        let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
         let previous_db = std::env::var("NATIVES_DB_PATH").ok();
         let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
-        std::env::set_var("NATIVES_DB_PATH", dir.path().join("natives.db"));
+        let db = dir.path().join("natives.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        let _warm = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).expect("migrate");
 
         let created = request(
             names::CONVERSATION_CREATE,
@@ -813,12 +823,14 @@ mod tests {
         assert!(history[1].content.contains("tool result: read_file"));
 
         if let Some(value) = previous_db {
-            std::env::set_var("NATIVES_DB_PATH", value);
+            std::env::set_var("NATIVES_DB_PATH", &value);
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &value);
         } else {
             std::env::remove_var("NATIVES_DB_PATH");
+            std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
         }
         if let Some(value) = previous_runtime {
-            std::env::set_var("NATIVES_RUNTIME_DIR", value);
+            std::env::set_var("NATIVES_RUNTIME_DIR", &value);
         } else {
             std::env::remove_var("NATIVES_RUNTIME_DIR");
         }
@@ -826,11 +838,15 @@ mod tests {
 
     #[test]
     fn context_compression_events_persist_snapshot_and_reenter_history() {
+        let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
         let previous_db = std::env::var("NATIVES_DB_PATH").ok();
         let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
-        std::env::set_var("NATIVES_DB_PATH", dir.path().join("natives.db"));
+        let db = dir.path().join("natives.db");
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        let _warm = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).expect("migrate");
 
         let store = store().unwrap();
         store
@@ -892,12 +908,14 @@ mod tests {
         assert!(history[0].content.contains("alpha survives"));
 
         if let Some(value) = previous_db {
-            std::env::set_var("NATIVES_DB_PATH", value);
+            std::env::set_var("NATIVES_DB_PATH", &value);
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &value);
         } else {
             std::env::remove_var("NATIVES_DB_PATH");
+            std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
         }
         if let Some(value) = previous_runtime {
-            std::env::set_var("NATIVES_RUNTIME_DIR", value);
+            std::env::set_var("NATIVES_RUNTIME_DIR", &value);
         } else {
             std::env::remove_var("NATIVES_RUNTIME_DIR");
         }

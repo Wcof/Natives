@@ -301,7 +301,11 @@ impl ProductionRuntime {
         })?;
         // Full production hook set + project hooks for this workspace.
         let hooks = build_production_hooks_for_project(Some(&project_root));
-        let engine = Arc::new(AgentEngine::new(self.events.clone()).with_hooks(hooks));
+        let engine = Arc::new(
+            AgentEngine::new(self.events.clone())
+                .with_hooks(hooks)
+                .with_session_harness(crate::prompt_queue_store::global_harness()),
+        );
         self.engines
             .lock()
             .await
@@ -551,7 +555,11 @@ impl ProductionRuntime {
             };
             // Same production hook set as parent (M4) — not a reduced AllowAll-only registry.
             let hooks = build_production_hooks();
-            let engine = Arc::new(AgentEngine::new(events.clone()).with_hooks(hooks));
+            let engine = Arc::new(
+                AgentEngine::new(events.clone())
+                    .with_hooks(hooks)
+                    .with_session_harness(crate::prompt_queue_store::global_harness()),
+            );
             engines
                 .lock()
                 .await
@@ -1887,7 +1895,11 @@ impl PermissionGatedTools {
             };
             // Full production hooks for subagents (M4).
             let hooks = build_production_hooks();
-            let engine = Arc::new(AgentEngine::new(events.clone()).with_hooks(hooks));
+            let engine = Arc::new(
+                AgentEngine::new(events.clone())
+                    .with_hooks(hooks)
+                    .with_session_harness(crate::prompt_queue_store::global_harness()),
+            );
             engines
                 .lock()
                 .await

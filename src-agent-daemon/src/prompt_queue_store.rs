@@ -502,7 +502,7 @@ mod tests {
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn with_temp_db<F: FnOnce()>(f: F) {
@@ -516,6 +516,9 @@ mod tests {
         std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
         std::env::set_var("NATIVES_DB_PATH", &db);
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        // Force migrations before RPC handlers open the same path.
+        let _warm = crate::storage::DataStore::new(&db, &dir.path().join("artifacts"))
+            .expect("prompt_queue temp db migrate");
         // Fresh harness isolation via unique conversation ids in each test.
         f();
         if let Some(v) = prev_db {

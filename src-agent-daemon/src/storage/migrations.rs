@@ -61,8 +61,8 @@ CREATE TABLE IF NOT EXISTS run (
     id TEXT PRIMARY KEY,
     conversation_id TEXT NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
     status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
-        'queued', 'preparing', 'running', 'waiting_permission',
-        'cancelling', 'completed', 'failed', 'interrupted'
+        'created', 'queued', 'preparing', 'running', 'waiting_permission',
+        'waiting_subagent', 'cancelling', 'completed', 'failed', 'cancelled', 'interrupted'
     )),
     trigger_message_id TEXT REFERENCES message(id) ON DELETE SET NULL,
     provider_id TEXT NOT NULL,

@@ -176,6 +176,8 @@ pub struct AgentEngine {
     pub events: EventSequencer,
     cancel: Arc<AtomicBool>,
     hooks: HookRegistry,
+    /// Optional session harness for interjection / safe-point drain (Phase 2).
+    session_harness: Option<Arc<crate::session_harness::SessionHarness>>,
 }
 
 impl AgentEngine {
@@ -184,11 +186,20 @@ impl AgentEngine {
             events,
             cancel: Arc::new(AtomicBool::new(false)),
             hooks: HookRegistry::new(),
+            session_harness: None,
         }
     }
 
     pub fn with_hooks(mut self, hooks: HookRegistry) -> Self {
         self.hooks = hooks;
+        self
+    }
+
+    pub fn with_session_harness(
+        mut self,
+        harness: Arc<crate::session_harness::SessionHarness>,
+    ) -> Self {
+        self.session_harness = Some(harness);
         self
     }
 
@@ -198,6 +209,30 @@ impl AgentEngine {
 
     pub fn request_cancel(&self) {
         self.cancel.store(true, Ordering::SeqCst);
+    }
+
+    /// Apply harness action at a safe point: inject interjection into messages.
+    fn apply_safe_point(
+        &self,
+        conversation_id: &str,
+        point: crate::session_harness::SafePoint,
+        messages: &mut Vec<EngineMessage>,
+    ) {
+        let Some(harness) = &self.session_harness else {
+            return;
+        };
+        match harness.on_safe_point(conversation_id, point) {
+            crate::session_harness::HarnessAction::InjectInterjection { content } => {
+                messages.push(EngineMessage {
+                    role: "user".into(),
+                    content: format!("[interjection]\n{content}"),
+                    tool_call_id: None,
+                    tool_name: None,
+                    tool_calls: None,
+                });
+            }
+            _ => {}
+        }
     }
 
     /// Execute a full agent loop against the given seams.
@@ -577,8 +612,12 @@ impl AgentEngine {
             // Execute tools and continue loop.
             // Phase 2: parallel_safe readonly tools may run concurrently (max 4);
             // write / process / network stay serial. Results are filled in call order.
-            // TODO(session_harness): call SessionHarness::on_safe_point at
-            // BeforeTool / AfterTool / ProviderBatchBoundary / AfterPermissionResolved.
+            // Safe point: before any tool in this batch.
+            self.apply_safe_point(
+                &config.conversation_id,
+                crate::session_harness::SafePoint::BeforeTool,
+                &mut messages,
+            );
             let mut prepared: Vec<PreparedToolCall> = Vec::new();
             for (_index, (id, name, args)) in tool_acc {
                 let id = if id.is_empty() {
@@ -678,6 +717,13 @@ impl AgentEngine {
             let executed =
                 self.execute_prepared_tools(run_id, tools, prepared).await;
 
+            // Safe point: after tool batch completes.
+            self.apply_safe_point(
+                &config.conversation_id,
+                crate::session_harness::SafePoint::AfterTool,
+                &mut messages,
+            );
+
             let mut assistant_tool_calls = Vec::new();
             let mut tool_results = Vec::new();
             for item in executed {
@@ -716,6 +762,11 @@ impl AgentEngine {
             // the next provider turn (no isolated tool calls).
             // Safe point: ProviderBatchBoundary — between tool batch and next provider turn.
             messages = self.maybe_compact_history(run_id, messages).await;
+            self.apply_safe_point(
+                &config.conversation_id,
+                crate::session_harness::SafePoint::ProviderBatchBoundary,
+                &mut messages,
+            );
         }
     }
 
