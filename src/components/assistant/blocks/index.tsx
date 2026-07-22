@@ -178,8 +178,29 @@ function ToolCallBlock({ block }: { block: ContentBlock }) {
         : `${block.durationMs}ms`
       : null;
 
+  const isTerminal = block.toolName === 'run_terminal';
+  const terminalOutput =
+    isTerminal && block.toolOutput && typeof block.toolOutput === 'object'
+      ? (block.toolOutput as Record<string, unknown>)
+      : null;
+  const displayCommand =
+    (terminalOutput?.display_command as string | undefined) ||
+    (block.toolInput && typeof block.toolInput === 'object'
+      ? String((block.toolInput as Record<string, unknown>).command ?? '')
+      : '');
+  const exitCode =
+    terminalOutput && 'exit_code' in terminalOutput
+      ? (terminalOutput.exit_code as number | null)
+      : null;
+  const truncated = Boolean(terminalOutput?.truncated);
+  const bg = Boolean(terminalOutput?.background || terminalOutput?.auto_backgrounded);
+
   return (
-    <div className="my-2 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-hover)]/40">
+    <div
+      className="my-2 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-hover)]/40"
+      data-tool-name={block.toolName}
+      data-tool-status={status}
+    >
       <button
         type="button"
         onClick={() => {
@@ -189,15 +210,22 @@ function ToolCallBlock({ block }: { block: ContentBlock }) {
         className="flex w-full items-center gap-2 bg-[var(--surface-hover)] px-3 py-2 text-left text-xs font-medium text-[var(--text-secondary)]"
       >
         <span className="w-2 h-2 rounded-full" style={{ backgroundColor: statusColor }} />
-        <span className="font-mono">{block.toolName}</span>
-        <span className="ml-auto flex items-center gap-2 text-[var(--text-disabled)]">
+        <span className="font-mono truncate">
+          {isTerminal && displayCommand ? displayCommand : block.toolName}
+        </span>
+        <span className="ml-auto flex items-center gap-2 text-[var(--text-disabled)] shrink-0">
+          {isTerminal && exitCode !== null && exitCode !== undefined && (
+            <span className="tabular-nums">exit {String(exitCode)}</span>
+          )}
+          {bg && <span>bg</span>}
+          {truncated && <span>trunc</span>}
           {durationLabel && <span className="tabular-nums">{durationLabel}</span>}
           <span>{status}</span>
         </span>
       </button>
       {expanded && (
         <div className="max-h-[280px] overflow-auto border-t border-[var(--border-subtle)]">
-          {block.toolInput !== undefined && (
+          {block.toolInput !== undefined && !isTerminal && (
             <div className="px-3 py-2 text-xs font-mono text-[var(--text-secondary)]">
               <div className="mb-1 text-[10px] uppercase tracking-wide text-[var(--text-disabled)]">input</div>
               <pre className="whitespace-pre-wrap">{JSON.stringify(block.toolInput, null, 2)}</pre>
@@ -209,11 +237,15 @@ function ToolCallBlock({ block }: { block: ContentBlock }) {
                 block.isError ? 'border-red-400/30 bg-red-50 dark:bg-red-950/20 text-[var(--danger)]' : 'text-[var(--text-secondary)]'
               }`}
             >
-              <div className="mb-1 text-[10px] uppercase tracking-wide text-[var(--text-disabled)]">output</div>
+              <div className="mb-1 text-[10px] uppercase tracking-wide text-[var(--text-disabled)]">
+                {isTerminal ? 'terminal output' : 'output'}
+              </div>
               <pre className="whitespace-pre-wrap">
-                {typeof block.toolOutput === 'string'
-                  ? block.toolOutput
-                  : JSON.stringify(block.toolOutput, null, 2)}
+                {isTerminal && terminalOutput
+                  ? String(terminalOutput.output ?? terminalOutput.stdout ?? JSON.stringify(terminalOutput, null, 2))
+                  : typeof block.toolOutput === 'string'
+                    ? block.toolOutput
+                    : JSON.stringify(block.toolOutput, null, 2)}
               </pre>
             </div>
           )}

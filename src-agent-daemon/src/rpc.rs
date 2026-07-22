@@ -880,6 +880,43 @@ async fn handle_rpc(
             )
             .await;
         }
+        names::PROMPT_QUEUE_LIST
+        | names::PROMPT_QUEUE_ENQUEUE
+        | names::PROMPT_QUEUE_UPDATE
+        | names::PROMPT_QUEUE_REMOVE
+        | names::PROMPT_QUEUE_REORDER
+        | names::PROMPT_QUEUE_SEND_NOW
+        | names::PROMPT_QUEUE_INTERJECT => {
+            match crate::prompt_queue_store::request(&request.method, request.params.clone()).await {
+                Ok(value) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        value,
+                    )
+                    .await
+                }
+                Err(e) => {
+                    let code = if e.contains("not found") {
+                        error_codes::NOT_FOUND
+                    } else {
+                        error_codes::INVALID_INPUT
+                    };
+                    let category = if e.contains("not found") {
+                        ErrorCategory::NotFound
+                    } else {
+                        ErrorCategory::Validation
+                    };
+                    send_error(
+                        writer,
+                        &DaemonError::new(code, category, false, e),
+                    )
+                    .await
+                }
+            }
+        }
         names::TOOL_LIST => {
             let mut gateway = capability_gateway::CapabilityGateway::new();
             gateway.register_builtins();
@@ -1816,6 +1853,59 @@ async fn handle_rpc(
         }
         // Unimplemented catalogue methods: fail closed (not empty success).
         // Method disposition: known→unsupported, unknown→unsupported (invalid only for bad shape).
+        // promptQueue.* is handled above via prompt_queue_store (daemon DB + harness).
+        "run.rewindPreview" | "run.rewind" => {
+            match handle_rewind_rpc(&request.method, &request.params) {
+                Ok(value) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        value,
+                    )
+                    .await
+                }
+                Err(e) => {
+                    send_error(
+                        writer,
+                        &DaemonError::new(
+                            error_codes::INVALID_INPUT,
+                            ErrorCategory::Validation,
+                            false,
+                            e,
+                        ),
+                    )
+                    .await
+                }
+            }
+        }
+        "conversation.getContextUsage" => {
+            match handle_context_usage_rpc(&request.params) {
+                Ok(value) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        value,
+                    )
+                    .await
+                }
+                Err(e) => {
+                    send_error(
+                        writer,
+                        &DaemonError::new(
+                            error_codes::INVALID_INPUT,
+                            ErrorCategory::Validation,
+                            false,
+                            e,
+                        ),
+                    )
+                    .await
+                }
+            }
+        }
         _ => {
             let status = assistant_protocol::v2::method_status(&request.method);
             let code = match status {
@@ -1835,6 +1925,120 @@ async fn handle_rpc(
             send_error(writer, &err).await;
         }
     }
+}
+
+fn handle_rewind_rpc(method: &str, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+    use crate::checkpoint::global_checkpoint_manager;
+    let run_id = params
+        .get("run_id")
+        .and_then(|v| v.as_str())
+        .ok_or("run_id is required")?;
+    let project_path = params
+        .get("project_path")
+        .or_else(|| params.get("project_root"))
+        .and_then(|v| v.as_str())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            crate::run_manager::global_run_manager()
+                .list_runs(None)
+                .into_iter()
+                .find(|r| r.id == run_id)
+                .and_then(|r| r.project_path.map(std::path::PathBuf::from))
+        })
+        .ok_or_else(|| "project_path required for rewind".to_string())?;
+    let paths: Option<Vec<String>> = params.get("paths").and_then(|v| {
+        v.as_array().map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+    });
+    let mgr = global_checkpoint_manager();
+    match method {
+        "run.rewindPreview" => {
+            let preview = mgr.rewind_preview(
+                run_id,
+                &project_path,
+                paths.as_deref(),
+            )?;
+            Ok(serde_json::to_value(preview).unwrap_or_default())
+        }
+        "run.rewind" => {
+            let checkpoint_id = params
+                .get("checkpoint_id")
+                .and_then(|v| v.as_str())
+                .ok_or("checkpoint_id is required")?;
+            let policy = params
+                .get("conflict_policy")
+                .and_then(|v| v.as_str())
+                .unwrap_or("fail");
+            let restored = mgr.rewind(
+                run_id,
+                checkpoint_id,
+                &project_path,
+                paths.as_deref(),
+                policy,
+            )?;
+            // Emit event best-effort
+            crate::run_manager::global_run_manager().events().append(
+                run_id,
+                assistant_protocol::v2::RunEventKind::CheckpointRewound {
+                    checkpoint_id: checkpoint_id.to_string(),
+                    paths: restored.clone(),
+                    conflict_policy: Some(policy.to_string()),
+                },
+            );
+            Ok(serde_json::json!({
+                "ok": true,
+                "checkpoint_id": checkpoint_id,
+                "restored_paths": restored,
+            }))
+        }
+        other => Err(format!("unsupported rewind method: {other}")),
+    }
+}
+
+fn handle_context_usage_rpc(params: &serde_json::Value) -> Result<serde_json::Value, String> {
+    use crate::checkpoint::estimate_context_usage;
+    let conversation_id = params
+        .get("conversation_id")
+        .or_else(|| params.get("id"))
+        .and_then(|v| v.as_str())
+        .ok_or("conversation_id is required")?;
+    // Load messages from daemon store and estimate.
+    let history = crate::conversation_store::engine_history(conversation_id).unwrap_or_default();
+    let mut conv_chars = 0usize;
+    let mut tool_chars = 0usize;
+    for m in &history {
+        let n = m.content.len();
+        if m.role == "tool" {
+            tool_chars += n;
+        } else {
+            conv_chars += n;
+        }
+    }
+    let max_tokens = params
+        .get("max_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(128_000);
+    let mut usage = estimate_context_usage(0, conv_chars, tool_chars, max_tokens);
+    if let Some(obj) = usage.as_object_mut() {
+        obj.insert(
+            "conversationId".into(),
+            serde_json::Value::String(conversation_id.to_string()),
+        );
+        obj.insert(
+            "conversation_id".into(),
+            serde_json::Value::String(conversation_id.to_string()),
+        );
+        if let Some(used) = obj.get("used_tokens").cloned() {
+            obj.insert("usedTokens".into(), used);
+        }
+        if let Some(max) = obj.get("max_tokens").cloned() {
+            obj.insert("maxTokens".into(), max);
+        }
+    }
+    Ok(usage)
 }
 
 /// Send a success response.

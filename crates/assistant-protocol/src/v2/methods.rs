@@ -32,6 +32,7 @@ pub const ALL_METHODS: &[&str] = &[
     "run.listChildren",
     "run.finish",
     "run.rewind",
+    "run.rewindPreview",
     "permission.respond",
     "permission.listPending",
     "interaction.listPending",
@@ -42,6 +43,7 @@ pub const ALL_METHODS: &[&str] = &[
     "promptQueue.remove",
     "promptQueue.reorder",
     "promptQueue.sendNow",
+    "promptQueue.interject",
     "tool.list",
     "agent.list",
     "subagent.list",
@@ -128,6 +130,17 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "memory.add",
     "artifact.list",
     "artifact.open",
+    // Phase 2/3 daemon surface
+    "promptQueue.list",
+    "promptQueue.enqueue",
+    "promptQueue.update",
+    "promptQueue.remove",
+    "promptQueue.reorder",
+    "promptQueue.sendNow",
+    "promptQueue.interject",
+    "run.rewindPreview",
+    "run.rewind",
+    "conversation.getContextUsage",
 ];
 
 /// Methods implemented by the Tauri host (metadata, queue and OS actions).
@@ -155,6 +168,7 @@ pub const HOST_IMPLEMENTED_METHODS: &[&str] = &[
     "permission.listPending",
     "interaction.listPending",
     "interaction.respond",
+    // Host retains queue for UI until full cutover; daemon also implements.
     "promptQueue.list",
     "promptQueue.enqueue",
     "promptQueue.update",
@@ -193,8 +207,18 @@ pub mod names {
     pub const RUN_REPLAY: &str = "run.replay";
     pub const RUN_LIST: &str = "run.list";
     pub const RUN_GET_EVENTS: &str = "run.getEvents";
+    pub const RUN_REWIND: &str = "run.rewind";
+    pub const RUN_REWIND_PREVIEW: &str = "run.rewindPreview";
     pub const PERMISSION_RESPOND: &str = "permission.respond";
     pub const TOOL_LIST: &str = "tool.list";
+    pub const PROMPT_QUEUE_LIST: &str = "promptQueue.list";
+    pub const PROMPT_QUEUE_ENQUEUE: &str = "promptQueue.enqueue";
+    pub const PROMPT_QUEUE_UPDATE: &str = "promptQueue.update";
+    pub const PROMPT_QUEUE_REMOVE: &str = "promptQueue.remove";
+    pub const PROMPT_QUEUE_REORDER: &str = "promptQueue.reorder";
+    pub const PROMPT_QUEUE_SEND_NOW: &str = "promptQueue.sendNow";
+    pub const PROMPT_QUEUE_INTERJECT: &str = "promptQueue.interject";
+    pub const CONVERSATION_GET_CONTEXT_USAGE: &str = "conversation.getContextUsage";
     pub const AGENT_LIST: &str = "agent.list";
     pub const SUBAGENT_LIST: &str = "subagent.list";
     pub const EXTENSION_LIST: &str = "extension.list";
@@ -310,14 +334,21 @@ mod tests {
     #[test]
     fn known_but_unimplemented_methods_are_not_advertised() {
         for method in [
-            "run.rewind",
-            "conversation.getContextUsage",
             "run.getActivity",
             "task.list",
             "task.cancel",
+            "mcp.auth.oauthStart",
         ] {
-            assert!(is_known_method(method));
-            assert!(!is_implemented_method(method));
+            assert!(is_known_method(method), "missing known: {method}");
+            assert!(
+                !is_implemented_method(method),
+                "should not advertise: {method}"
+            );
         }
+        // Phase 3 methods are now implemented on daemon
+        assert!(is_implemented_method("run.rewind"));
+        assert!(is_implemented_method("run.rewindPreview"));
+        assert!(is_implemented_method("conversation.getContextUsage"));
+        assert!(is_implemented_method("promptQueue.interject"));
     }
 }

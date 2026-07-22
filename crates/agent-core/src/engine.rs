@@ -22,6 +22,27 @@ use std::sync::Arc;
 const HISTORY_COMPACT_CHARS: usize = 48_000;
 const TOOL_OUTPUT_MAX_CHARS: usize = 4_000;
 
+/// Tool call after PreToolUse hooks, ready for (possibly parallel) execution.
+#[derive(Debug, Clone)]
+struct PreparedToolCall {
+    id: String,
+    name: String,
+    args: String,
+    input: Value,
+    denied: bool,
+    parallel_safe: bool,
+}
+
+/// Tool call after execution (or hook denial), in original order.
+#[derive(Debug, Clone)]
+struct ExecutedToolCall {
+    id: String,
+    name: String,
+    args: String,
+    denied: bool,
+    result: Option<ToolExecutionResult>,
+}
+
 /// Tool execution seam used by the engine.
 #[async_trait::async_trait]
 pub trait EngineToolRuntime: Send + Sync {
@@ -554,8 +575,11 @@ impl AgentEngine {
             }
 
             // Execute tools and continue loop.
-            let mut assistant_tool_calls = Vec::new();
-            let mut tool_results = Vec::new();
+            // Phase 2: parallel_safe readonly tools may run concurrently (max 4);
+            // write / process / network stay serial. Results are filled in call order.
+            // TODO(session_harness): call SessionHarness::on_safe_point at
+            // BeforeTool / AfterTool / ProviderBatchBoundary / AfterPermissionResolved.
+            let mut prepared: Vec<PreparedToolCall> = Vec::new();
             for (_index, (id, name, args)) in tool_acc {
                 let id = if id.is_empty() {
                     uuid::Uuid::new_v4().to_string()
@@ -577,7 +601,7 @@ impl AgentEngine {
                     return Err(EngineError::DoomLoop);
                 }
 
-                // PreToolUse hooks may deny or modify arguments.
+                // PreToolUse hooks may deny or modify arguments (always serial).
                 let pre = self
                     .hooks
                     .dispatch(HookRequest {
@@ -588,20 +612,12 @@ impl AgentEngine {
                     })
                     .await;
                 let mut denied = false;
+                let mut deny_reason: Option<String> = None;
                 for response in pre {
                     match response.decision {
                         HookDecision::Deny { reason } => {
                             denied = true;
-                            self.events.append(
-                                run_id,
-                                RunEventKind::ToolCallCompleted {
-                                    id: id.clone(),
-                                    name: name.clone(),
-                                    output: serde_json::json!({ "error": reason, "denied_by_hook": true }),
-                                    is_error: true,
-                                    duration_ms: 0,
-                                },
-                            );
+                            deny_reason = Some(reason);
                         }
                         HookDecision::Modify { payload } => {
                             input = payload;
@@ -610,6 +626,25 @@ impl AgentEngine {
                     }
                 }
                 if denied {
+                    let reason = deny_reason.unwrap_or_else(|| "denied".into());
+                    self.events.append(
+                        run_id,
+                        RunEventKind::ToolCallCompleted {
+                            id: id.clone(),
+                            name: name.clone(),
+                            output: serde_json::json!({ "error": reason, "denied_by_hook": true }),
+                            is_error: true,
+                            duration_ms: 0,
+                        },
+                    );
+                    prepared.push(PreparedToolCall {
+                        id,
+                        name,
+                        args,
+                        input,
+                        denied: true,
+                        parallel_safe: false,
+                    });
                     continue;
                 }
 
@@ -629,44 +664,41 @@ impl AgentEngine {
                     },
                 );
 
-                let result = tools
-                    .execute_tool(&name, input.clone(), &self.cancel)
-                    .await;
-                let post_event = if result.is_error {
-                    HookEvent::PostToolUseFailure
-                } else {
-                    HookEvent::PostToolUse
-                };
-                let _ = self
-                    .hooks
-                    .dispatch(HookRequest {
-                        event: post_event,
-                        run_id: run_id.to_string(),
-                        tool_name: Some(name.clone()),
-                        input: serde_json::json!({ "input": input, "output": result.output }),
-                    })
-                    .await;
-                self.events.append(
-                    run_id,
-                    RunEventKind::ToolCallCompleted {
-                        id: id.clone(),
-                        name: name.clone(),
-                        output: result.output.clone(),
-                        is_error: result.is_error,
-                        duration_ms: result.duration_ms,
-                    },
-                );
+                let parallel_safe = crate::session_harness::is_parallel_safe_tool(&name);
+                prepared.push(PreparedToolCall {
+                    id,
+                    name,
+                    args,
+                    input,
+                    denied: false,
+                    parallel_safe,
+                });
+            }
 
+            let executed =
+                self.execute_prepared_tools(run_id, tools, prepared).await;
+
+            let mut assistant_tool_calls = Vec::new();
+            let mut tool_results = Vec::new();
+            for item in executed {
+                // Denied by PreToolUse: already emitted ToolCallCompleted; skip pair.
+                if item.denied {
+                    continue;
+                }
                 assistant_tool_calls.push(EngineToolCall {
-                    id: id.clone(),
-                    name: name.clone(),
-                    arguments: args,
+                    id: item.id.clone(),
+                    name: item.name.clone(),
+                    arguments: item.args,
                 });
                 tool_results.push(EngineMessage {
                     role: "tool".into(),
-                    content: result.output.to_string(),
-                    tool_call_id: Some(id),
-                    tool_name: Some(name),
+                    content: item
+                        .result
+                        .as_ref()
+                        .map(|r| r.output.to_string())
+                        .unwrap_or_else(|| "{}".into()),
+                    tool_call_id: Some(item.id),
+                    tool_name: Some(item.name),
                     tool_calls: None,
                 });
             }
@@ -682,8 +714,157 @@ impl AgentEngine {
 
             // Compact large tool outputs + repair dangling tool_call_ids before
             // the next provider turn (no isolated tool calls).
+            // Safe point: ProviderBatchBoundary — between tool batch and next provider turn.
             messages = self.maybe_compact_history(run_id, messages).await;
         }
+    }
+
+    /// Execute prepared tool calls with parallel_safe batching (max concurrency 4).
+    /// Non-parallel tools and denied hooks stay serial. Results keep original order.
+    async fn execute_prepared_tools(
+        &self,
+        run_id: &str,
+        tools: &dyn EngineToolRuntime,
+        prepared: Vec<PreparedToolCall>,
+    ) -> Vec<ExecutedToolCall> {
+        use crate::session_harness::PARALLEL_SAFE_MAX_CONCURRENCY;
+        use futures_util::stream::{self, StreamExt};
+
+        let mut out: Vec<ExecutedToolCall> = Vec::with_capacity(prepared.len());
+        let mut i = 0;
+        while i < prepared.len() {
+            if prepared[i].denied {
+                out.push(ExecutedToolCall {
+                    id: prepared[i].id.clone(),
+                    name: prepared[i].name.clone(),
+                    args: prepared[i].args.clone(),
+                    denied: true,
+                    result: None,
+                });
+                i += 1;
+                continue;
+            }
+
+            // Gather a contiguous parallel_safe run (cap concurrency).
+            if prepared[i].parallel_safe {
+                let mut batch = Vec::new();
+                while i < prepared.len()
+                    && prepared[i].parallel_safe
+                    && !prepared[i].denied
+                    && batch.len() < PARALLEL_SAFE_MAX_CONCURRENCY
+                {
+                    batch.push(prepared[i].clone());
+                    i += 1;
+                }
+
+                let cancel = self.cancel.clone();
+                let results: Vec<(usize, ToolExecutionResult)> = stream::iter(
+                    batch
+                        .iter()
+                        .cloned()
+                        .enumerate()
+                        .map(|(idx, call)| {
+                            let cancel = cancel.clone();
+                            async move {
+                                let result = tools
+                                    .execute_tool(&call.name, call.input.clone(), &cancel)
+                                    .await;
+                                (idx, result)
+                            }
+                        }),
+                )
+                .buffer_unordered(PARALLEL_SAFE_MAX_CONCURRENCY)
+                .collect()
+                .await;
+
+                let mut by_idx: Vec<Option<ToolExecutionResult>> =
+                    (0..batch.len()).map(|_| None).collect();
+                for (idx, result) in results {
+                    if idx < by_idx.len() {
+                        by_idx[idx] = Some(result);
+                    }
+                }
+
+                for (idx, call) in batch.into_iter().enumerate() {
+                    let result = by_idx[idx].take().unwrap_or(ToolExecutionResult {
+                        output: json!({"error": "missing parallel result"}),
+                        is_error: true,
+                        duration_ms: 0,
+                    });
+                    let post_event = if result.is_error {
+                        HookEvent::PostToolUseFailure
+                    } else {
+                        HookEvent::PostToolUse
+                    };
+                    let _ = self
+                        .hooks
+                        .dispatch(HookRequest {
+                            event: post_event,
+                            run_id: run_id.to_string(),
+                            tool_name: Some(call.name.clone()),
+                            input: json!({ "input": call.input, "output": result.output }),
+                        })
+                        .await;
+                    self.events.append(
+                        run_id,
+                        RunEventKind::ToolCallCompleted {
+                            id: call.id.clone(),
+                            name: call.name.clone(),
+                            output: result.output.clone(),
+                            is_error: result.is_error,
+                            duration_ms: result.duration_ms,
+                        },
+                    );
+                    out.push(ExecutedToolCall {
+                        id: call.id,
+                        name: call.name,
+                        args: call.args,
+                        denied: false,
+                        result: Some(result),
+                    });
+                }
+                continue;
+            }
+
+            // Serial path for write / process / network.
+            let call = &prepared[i];
+            let result = tools
+                .execute_tool(&call.name, call.input.clone(), &self.cancel)
+                .await;
+            let post_event = if result.is_error {
+                HookEvent::PostToolUseFailure
+            } else {
+                HookEvent::PostToolUse
+            };
+            let _ = self
+                .hooks
+                .dispatch(HookRequest {
+                    event: post_event,
+                    run_id: run_id.to_string(),
+                    tool_name: Some(call.name.clone()),
+                    input: json!({ "input": call.input, "output": result.output }),
+                })
+                .await;
+            self.events.append(
+                run_id,
+                RunEventKind::ToolCallCompleted {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    output: result.output.clone(),
+                    is_error: result.is_error,
+                    duration_ms: result.duration_ms,
+                },
+            );
+            out.push(ExecutedToolCall {
+                id: call.id.clone(),
+                name: call.name.clone(),
+                args: call.args.clone(),
+                denied: false,
+                result: Some(result),
+            });
+            i += 1;
+        }
+        out
     }
 
     /// Convert engine history → JSON messages, compact, convert back.

@@ -55,6 +55,13 @@ pub enum RunEventKind {
         is_error: bool,
         duration_ms: u64,
     },
+    /// Incremental tool/process output (terminal stdout/stderr). Batched ~250ms / 8KB.
+    ToolOutputDelta {
+        tool_call_id: String,
+        stream: String,
+        text: String,
+        truncated: bool,
+    },
     PermissionRequested {
         tool_call_id: String,
         tool_name: String,
@@ -70,6 +77,60 @@ pub enum RunEventKind {
     FileChanged {
         path: String,
         change_type: String,
+        /// Optional pre-image for DiffViewer / rewind (empty string for creates).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<String>,
+        /// Optional post-image after the tool write.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before_hash: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after_hash: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        diff_artifact_id: Option<String>,
+    },
+    TaskStarted {
+        task_id: String,
+        run_id: String,
+        label: String,
+    },
+    TaskUpdated {
+        task_id: String,
+        status: String,
+        detail: Option<String>,
+    },
+    TaskCompleted {
+        task_id: String,
+        exit_code: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        artifact_id: Option<String>,
+    },
+    InteractionRequested {
+        interaction_id: String,
+        kind: String,
+        payload: serde_json::Value,
+    },
+    InteractionResponded {
+        interaction_id: String,
+        response: serde_json::Value,
+    },
+    CheckpointCreated {
+        checkpoint_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
+    CheckpointRewound {
+        checkpoint_id: String,
+        paths: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conflict_policy: Option<String>,
+    },
+    ContextUsageUpdated {
+        used_tokens: u64,
+        max_tokens: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        breakdown: Option<serde_json::Value>,
     },
     UsageUpdated {
         input_tokens: u64,
@@ -146,9 +207,18 @@ impl RunEventKind {
             Self::ToolCallStarted { .. } => "tool_call_started",
             Self::ToolCallDelta { .. } => "tool_call_delta",
             Self::ToolCallCompleted { .. } => "tool_call_completed",
+            Self::ToolOutputDelta { .. } => "tool_output_delta",
             Self::PermissionRequested { .. } => "permission_requested",
             Self::PermissionResponded { .. } => "permission_responded",
             Self::FileChanged { .. } => "file_changed",
+            Self::TaskStarted { .. } => "task_started",
+            Self::TaskUpdated { .. } => "task_updated",
+            Self::TaskCompleted { .. } => "task_completed",
+            Self::InteractionRequested { .. } => "interaction_requested",
+            Self::InteractionResponded { .. } => "interaction_responded",
+            Self::CheckpointCreated { .. } => "checkpoint_created",
+            Self::CheckpointRewound { .. } => "checkpoint_rewound",
+            Self::ContextUsageUpdated { .. } => "context_usage_updated",
             Self::UsageUpdated { .. } => "usage_updated",
             Self::ContextCompressed { .. } => "context_compressed",
             Self::SubagentCreated { .. } => "subagent_created",
@@ -267,6 +337,29 @@ mod tests {
                 input_tokens: 1,
                 output_tokens: 2,
                 reasoning_tokens: Some(3),
+            },
+            RunEventKind::FileChanged {
+                path: "a.rs".into(),
+                change_type: "modified".into(),
+                before: Some("old".into()),
+                after: Some("new".into()),
+                before_hash: Some("h1".into()),
+                after_hash: Some("h2".into()),
+                diff_artifact_id: None,
+            },
+            RunEventKind::ContextUsageUpdated {
+                used_tokens: 100,
+                max_tokens: 128000,
+                breakdown: Some(serde_json::json!({"message": 80, "tool": 20})),
+            },
+            RunEventKind::CheckpointCreated {
+                checkpoint_id: "cp-1".into(),
+                label: Some("run_start".into()),
+            },
+            RunEventKind::CheckpointRewound {
+                checkpoint_id: "cp-1".into(),
+                paths: vec!["a.rs".into()],
+                conflict_policy: Some("fail".into()),
             },
             RunEventKind::GenerationAttemptStarted {
                 attempt: 1,
