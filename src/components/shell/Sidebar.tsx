@@ -116,7 +116,7 @@ const SETTINGS_NAV_ITEMS = [
 }>;
 
 /** Collapsed rail width — icon-only navigation, still interactive. */
-export const SIDEBAR_COLLAPSED_WIDTH = 64;
+export const SIDEBAR_COLLAPSED_WIDTH = 0;
 /** Expanded sidebar floor — labels still readable. */
 export const SIDEBAR_MIN_WIDTH = 200;
 /** Hard cap; further limited by viewport so main content keeps a floor. */
@@ -456,15 +456,21 @@ export default function Sidebar({
   const sidebarWidth = isCollapsed ? SIDEBAR_COLLAPSED_WIDTH : width;
 
   return (
-    <div className="doppelrand-outer h-full relative">
-    <div className="doppelrand-inner h-full">
+    <div className={`doppelrand-outer h-full ${isCollapsed ? 'w-0 !border-0 !border-none overflow-visible' : 'relative'}`} style={isCollapsed ? { border: 'none' } : undefined}>
+    <div className={`doppelrand-inner h-full ${isCollapsed ? 'w-0 !border-0 !border-none overflow-visible' : ''}`} style={isCollapsed ? { border: 'none' } : undefined}>
     <aside
-      className={`flex flex-col h-full overflow-hidden${isResizing ? ' is-resizing' : ''}`}
+      className={`flex flex-col h-full ${isCollapsed ? 'overflow-visible' : 'overflow-hidden'}${isResizing ? ' is-resizing' : ''}`}
       style={{
         width: sidebarWidth,
-        background: 'var(--sidebar)',
-        borderRight: '1px solid var(--border)',
+        position: isCollapsed ? 'fixed' : 'relative',
+        top: isCollapsed ? 0 : undefined,
+        left: isCollapsed ? 0 : undefined,
+        zIndex: isCollapsed ? 60 : undefined,
+        background: isCollapsed ? 'transparent' : 'var(--sidebar)',
+        border: 'none',
+        borderRight: isCollapsed ? 'none' : '1px solid var(--border)',
         transition: isResizing ? 'none' : undefined,
+        pointerEvents: isCollapsed ? 'none' : 'auto',
       }}
       role="navigation"
       aria-label={t(locale, 'nav.modules')}
@@ -475,7 +481,7 @@ export default function Sidebar({
       {/* ── 标题栏：macOS 用系统 traffic lights；其它平台自绘按钮 ──
           注意：不要把折叠按钮放在 data-tauri-drag-region 内部，
           否则在 macOS/WKWebView 上点击会被当成拖窗口，无法折叠。 */}
-      <div className="shrink-0 relative z-[60]">
+      <div className="shrink-0 relative z-[60] pointer-events-auto">
         <div
           className="titlebar-row"
           data-collapsed={isCollapsed ? 'true' : 'false'}
@@ -615,145 +621,7 @@ export default function Sidebar({
             })}
           </div>
         </div>
-      ) : isCollapsed ? (
-        /* ── Collapsed icon rail ── */
-        <>
-          <div className="flex-1 overflow-y-auto min-h-0 flex flex-col items-center gap-1 px-2 pt-1">
-            <button
-              type="button"
-              onClick={() => window.dispatchEvent(new CustomEvent('open-cmdk'))}
-              className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]"
-              title={t(locale, 'sidebar.searchPlaceholder')}
-              aria-label={t(locale, 'sidebar.searchPlaceholder')}
-            >
-              <Search size={15} />
-            </button>
-
-            <div className="my-1 h-px w-6 bg-[var(--border-subtle)]" />
-
-            {QUICK_ACCESS_ITEMS.map((item) => {
-              const Icon = item.icon;
-              const label = t(locale, 'sidebar.quickAccessDirs.' + item.id);
-              return (
-                <SidebarNavItem
-                  key={item.id}
-                  collapsed
-                  isActive={activeNavigationId === item.target}
-                  icon={<Icon size={15} />}
-                  label={label}
-                  onClick={() => selectNavigation(item.target, item.target)}
-                />
-              );
-            })}
-
-            <div className="my-1 h-px w-6 bg-[var(--border-subtle)]" />
-
-            {favorites.length === 0 ? (
-              <SidebarNavItem
-                collapsed
-                isActive={false}
-                icon={<Star size={15} />}
-                label={t(locale, 'sidebar.favorites')}
-                title={t(locale, 'sidebar.noFavorites')}
-                onClick={() => {}}
-              />
-            ) : (
-              favorites.slice(0, FAVORITES_SIDEBAR_PREVIEW).map((item) => {
-                const navTarget = favoritesNavTarget(item);
-                return (
-                  <SidebarNavItem
-                    key={item.id}
-                    collapsed
-                    isActive={activeNavigationId === navTarget}
-                    icon={favoriteIcon(item)}
-                    label={item.label}
-                    title={item.kind === 'file' ? item.target : item.label}
-                    onClick={() => handleFavoriteClick(item)}
-                  />
-                );
-              })
-            )}
-
-            <div className="my-1 h-px w-6 bg-[var(--border-subtle)]" />
-
-            <SidebarNavItem
-              collapsed
-              isActive={activeNavigationId === '__assistant__'}
-              icon={<MessageSquare size={15} />}
-              label={t(locale, 'nav.assistant')}
-              onClick={() => selectNavigation('__assistant__', '__assistant__')}
-            />
-
-            {modules.map((module, index) => {
-              const moduleId = getModuleId(module);
-              const moduleName =
-                module.manifest?.i18n?.name?.[normalizedLocale] ??
-                module.manifest?.name ??
-                module.moduleId;
-              const moduleIcon = module.manifest?.icon;
-              const navigationId = `module:${moduleId}`;
-              return (
-                <SidebarNavItem
-                  key={`${moduleId}-${index}`}
-                  collapsed
-                  isActive={activeNavigationId === navigationId}
-                  icon={
-                    moduleIcon ? (
-                      <img src={moduleIcon} alt="" draggable={false} className="h-[18px] w-[18px] object-contain" />
-                    ) : (
-                      <Square size={15} />
-                    )
-                  }
-                  label={moduleName}
-                  onClick={() => selectNavigation(navigationId, moduleId)}
-                />
-              );
-            })}
-
-            {enabledTools.map((et) => {
-              const toolDef = BUILTIN_TOOLS.find((tool) => tool.id === et.id);
-              if (!toolDef) return null;
-              const navigationId = `builtin:${et.id}`;
-              const toolLabel = locale.startsWith('zh') ? toolDef.label.zh : toolDef.label.en;
-              const IconComp = (LucideIcons as unknown as Record<string, React.ComponentType<{ size?: number; className?: string }>>)[toolDef.icon];
-              return (
-                <SidebarNavItem
-                  key={et.id}
-                  collapsed
-                  isActive={activeNavigationId === navigationId}
-                  icon={IconComp ? <IconComp size={15} /> : <Square size={15} />}
-                  label={toolLabel}
-                  onClick={() => selectNavigation(navigationId, navigationId)}
-                />
-              );
-            })}
-          </div>
-
-          <div className="shrink-0 flex flex-col items-center gap-1 px-2 py-2 border-t border-[var(--border-subtle)]">
-            <SidebarNavItem
-              collapsed
-              isActive={false}
-              icon={<Bell size={16} />}
-              label={t(locale, 'notifications.title')}
-              onClick={onNotificationClick}
-            />
-            <SidebarNavItem
-              collapsed
-              isActive={activeNavigationId === '__settings__'}
-              icon={<Settings size={16} />}
-              label={t(locale, 'nav.settings')}
-              onClick={() => selectNavigation('__settings__', 'settings:general')}
-            />
-            <SidebarNavItem
-              collapsed
-              isActive={activeNavigationId === '__workshop__'}
-              icon={<Layers size={16} />}
-              label={t(locale, 'nav.modules')}
-              onClick={() => selectNavigation('__workshop__', 'modules')}
-            />
-          </div>
-        </>
-      ) : (
+      ) : isCollapsed ? null : (
         /* ── Normal Sidebar Layout ── */
         <>
           {/* 中间可滚动区域 */}

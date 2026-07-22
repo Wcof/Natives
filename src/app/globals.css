@@ -1811,19 +1811,19 @@ input[type="search"]::placeholder {
 }
 
 .titlebar-row[data-collapsed='true'] {
-  /* Collapsed rail is only 64px wide — stack expand under the light band. */
-  flex-direction: column;
-  justify-content: flex-start;
+  display: flex;
+  flex-direction: row;
   align-items: center;
-  height: auto;
+  justify-content: flex-start;
+  height: 52px;
   min-height: 52px;
   gap: 6px;
-  padding: 0 6px 8px;
+  padding: 0 8px;
 }
 
 .titlebar-row[data-collapsed='true'][data-native-traffic='true'] {
-  /* First band = 52px so lights share the same vertical center as expanded mode */
   padding-top: 0;
+  padding-left: 8px;
 }
 
 /* Reserve space for system traffic lights (Overlay title bar). */
@@ -1834,10 +1834,9 @@ input[type="search"]::placeholder {
 }
 
 .titlebar-row[data-collapsed='true'] .native-traffic-spacer {
-  /* Center the 28px spacer inside the 52px light band */
-  width: 52px;
+  width: 68px;
   height: 28px;
-  margin-top: 12px;
+  margin-top: 0;
 }
 
 /* Flexible middle drag strip between lights/controls and collapse button */

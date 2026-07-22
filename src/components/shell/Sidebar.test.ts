@@ -70,12 +70,10 @@ test('expanded sidebar owns collapse and header only restores it', () => {
   assert.match(header, /sidebarCollapsed && onToggleSidebar/);
 });
 
-test('collapsed sidebar renders an icon rail with expand control', () => {
-  assert.match(sidebar, /SIDEBAR_COLLAPSED_WIDTH\s*=\s*64/);
-  assert.match(sidebar, /Collapsed icon rail/);
+test('collapsed sidebar hides body and places expand control in titlebar', () => {
+  assert.match(sidebar, /SIDEBAR_COLLAPSED_WIDTH\s*=\s*0/);
   assert.match(sidebar, /sidebar\.expand/);
   assert.match(sidebar, /PanelLeft size=\{15\}/);
-  assert.equal(sidebar.includes("style={{ width: 0, overflow: 'hidden' }}"), false);
 });
 
 test('sidebar uses native traffic lights on macOS and fallback controls elsewhere', () => {

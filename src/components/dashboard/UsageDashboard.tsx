@@ -4,18 +4,13 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useLocale, t } from '@/i18n';
 import type { UsageDashboardResponse, UsageCacheReadResult, UsageCacheMetadata, UsageMetrics, UsageViewRequest, DashboardState } from '@/types/usage';
 import { filterUsageRecords, aggregateUsageMetrics, uniqueSessionCount, buildSourceDimensions } from '@/lib/usage-dashboard';
-import {
-  serializeUsageCsv, serializeUsageBadgeSvg, serializeUsageMarkdown,
-  hasShareableMetrics, defaultExportFilename,
-} from '@/lib/usage-export';
 import { UsageToolbar } from './UsageToolbar';
 import { UsageMetricGrid } from './UsageMetricGrid';
 import { UsageCharts } from './UsageCharts';
 import { UsageSourcesPanel } from './UsageSourcesPanel';
-import { RefreshCw, AlertCircle, X, Download, FileText, Image as ImageIcon } from 'lucide-react';
+import { RefreshCw, AlertCircle, X } from 'lucide-react';
 import { classifyError } from '@/lib/error-classifier';
 import styles from './UsageDashboard.module.css';
-import Modal from '@/components/ui/Modal';
 import { useToast } from '@/components/ui/Toast';
 
 export function UsageDashboard() {
@@ -195,84 +190,6 @@ export function UsageDashboard() {
     return uniqueSessionCount(filteredComp.sessions);
   }, [data?.comparison, sourceFilter, modelFilter, terminalFilter]);
 
-  const shareable = useMemo(() => hasShareableMetrics(metrics), [metrics]);
-
-  // Set default filename when opening export dialog
-  const openExportDialog = (type: 'csv' | 'badge') => {
-    const ext = type === 'csv' ? '.csv' : '.svg';
-    const base = defaultExportFilename('natives-usage');
-    setExportFilename(base + ext);
-    setExportType(type);
-  };
-
-  // Asynchronous export execution (non-blocking UI)
-  const handleDoExport = async () => {
-    if (!filtered || !exportType) return;
-    setIsExporting(true);
-    try {
-      const api = window.nativesAPI;
-      // Get save path via dialog
-      let savePath = exportFilename;
-      if (api?.dialog?.saveFile) {
-        const result = await api.dialog.saveFile();
-        if (!result) {
-          setIsExporting(false);
-          return; // User cancelled
-        }
-        savePath = result;
-      } else if (!exportFilename) {
-        throw new Error('Either dialog.saveFile or exportFilename is required');
-      }
-
-      if (exportType === 'csv') {
-        const csv = serializeUsageCsv(filtered.daily);
-        if (api?.fs?.writeFileAtomic) {
-          await api.fs.writeFileAtomic(savePath, csv);
-          toast(t(locale, 'usage.exportedSuccess'), 'success');
-        } else {
-          throw new Error('writeFileAtomic not available');
-        }
-      } else if (exportType === 'badge') {
-        if (!metrics) return;
-        const period = `${new Date(data!.range.startMs).toISOString().slice(0, 10)} – ${new Date(data!.range.endMs).toISOString().slice(0, 10)}`;
-        const svg = serializeUsageBadgeSvg({
-          period,
-          tokens: metrics.totalTokens,
-          cost: metrics.estimatedCost,
-          sessions: metrics.totalSessions,
-        });
-        if (api?.fs?.writeFileAtomic) {
-          await api.fs.writeFileAtomic(savePath, svg);
-          toast(t(locale, 'usage.badgeSaved'), 'success');
-        } else {
-          throw new Error('writeFileAtomic not available');
-        }
-      }
-      setExportType(null);
-    } catch (err: any) {
-      toast(classifyError(err).userMessage, 'error');
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  const handleCopyMarkdown = useCallback(async () => {
-    if (!filtered || !data || !metrics) return;
-    const period = `${new Date(data.range.startMs).toLocaleDateString()} – ${new Date(data.range.endMs).toLocaleDateString()}`;
-    const md = serializeUsageMarkdown(period, metrics, totalSessions);
-    try {
-      const api = window.nativesAPI;
-      if (api?.clipboard?.write) {
-        await api.clipboard.write(md);
-      } else {
-        await navigator.clipboard.writeText(md);
-      }
-      toast(t(locale, 'usage.copiedToClipboard'), 'success');
-    } catch (err: any) {
-      toast(classifyError(err).userMessage, 'error');
-    }
-  }, [filtered, data, metrics, totalSessions, locale, toast]);
-
   if (state.kind === 'reading-cache') {
     return (
       <div className={styles.container}>
@@ -382,37 +299,6 @@ export function UsageDashboard() {
         style={{ marginBottom: '16px' }}
       >
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
-          {shareable && (
-            <>
-              <button
-                type="button"
-                onClick={() => openExportDialog('csv')}
-                className={styles.secondaryAction}
-                title={t(locale, 'usage.exportCsv')}
-              >
-                <Download size={12} />
-                {t(locale, 'usage.exportCsv')}
-              </button>
-              <button
-                type="button"
-                onClick={handleCopyMarkdown}
-                className={styles.secondaryAction}
-                title={t(locale, 'usage.copyMarkdown')}
-              >
-                <FileText size={12} />
-                {t(locale, 'usage.copyMarkdown')}
-              </button>
-              <button
-                type="button"
-                onClick={() => openExportDialog('badge')}
-                className={styles.secondaryAction}
-                title={t(locale, 'usage.saveBadge')}
-              >
-                <ImageIcon size={12} />
-                {t(locale, 'usage.saveBadge')}
-              </button>
-            </>
-          )}
           <button
             onClick={handleSync}
             disabled={isSyncing}
@@ -465,73 +351,6 @@ export function UsageDashboard() {
         <div className={styles.sourcesSection}>
           <UsageSourcesPanel sources={data.sources} warnings={data.warnings} lastRefresh={lastSyncTime} rtk={data.rtk} />
         </div>
-      )}
-
-      {/* Export Dialog Modal */}
-      {exportType && (
-        <Modal
-          isOpen={true}
-          onClose={() => setExportType(null)}
-          title={t(locale, exportType === 'csv' ? 'usage.exportCsv' : 'usage.saveBadge')}
-          width={400}
-        >
-          <div style={{ padding: '8px 0', display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <label style={{ fontSize: '11px', color: 'var(--text-dim)', fontWeight: 500 }}>
-                {t(locale, 'usage.exportPath')}
-              </label>
-              <input
-                type="text"
-                value={exportFilename}
-                onChange={(e) => setExportFilename(e.target.value)}
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: 6,
-                  border: '1px solid var(--border)',
-                  background: 'var(--bg-2)',
-                  color: 'var(--text)',
-                  fontSize: '12px',
-                  fontFamily: 'var(--font-mono)',
-                  width: '100%',
-                }}
-              />
-            </div>
-            
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
-              <button
-                onClick={() => setExportType(null)}
-                style={{
-                  padding: '6px 12px',
-                  borderRadius: 6,
-                  border: '1px solid var(--border)',
-                  background: 'transparent',
-                  color: 'var(--text)',
-                  fontSize: '12px',
-                  cursor: 'pointer',
-                }}
-              >
-                {t(locale, 'tools.cancel')}
-              </button>
-              <button
-                onClick={handleDoExport}
-                disabled={isExporting || !exportFilename}
-                style={{
-                  padding: '6px 12px',
-                  borderRadius: 6,
-                  border: 'none',
-                  background: 'var(--text)',
-                  color: 'var(--bg)',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  opacity: isExporting || !exportFilename ? 0.6 : 1,
-                }}
-              >
-                {isExporting ? '...' : t(locale, 'tools.save')}
-              </button>
-            </div>
-          </div>
-        </Modal>
       )}
     </div>
   );

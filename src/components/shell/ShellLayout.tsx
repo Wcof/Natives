@@ -329,7 +329,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           // p-3(12) + sidebar + gap-3(12)
           left: `${12 + (effectiveSidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : state.sidebarWidth) + 12}px`,
           right: '0px',
-          height: '52px',
+          height: '20px',
         }}
       />
       {/* ── V1.0 已移除：wallpaper / liquid-blob / WebGL LiquidGlass 全局背景层 ── */}
@@ -363,7 +363,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         {/* Main Content — conditional bottom margin to preserve gap when terminal is visible */}
         <motion.div
           className={`flex-1 surface-section min-w-0 overflow-hidden relative flex flex-col${state.terminalCollapsed || isSettingsMode ? '' : ' mb-3'}`}
-          style={{ paddingTop: '28px' }}
+          style={{ paddingTop: 0 }}
           initial={prefersReducedMotion ? undefined : { opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={prefersReducedMotion ? undefined : { type: 'spring', stiffness: 100, damping: 20, mass: 0.8 }}
