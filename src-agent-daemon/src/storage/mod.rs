@@ -15,6 +15,7 @@
 //! All tables use explicit foreign keys with CASCADE behavior.
 //! SQLite is configured with WAL mode and foreign keys enabled.
 
+pub mod host_authority_migration;
 pub mod migrations;
 
 use rusqlite::{params, Connection};
@@ -55,8 +56,23 @@ impl DataStore {
 
         // Run migrations
         store.run_migrations()?;
+        // Phase 0: merge Host assistant_* tables when present (idempotent).
+        if let Err(e) = store.run_host_authority_migration() {
+            eprintln!("[agent-daemon] host authority migration failed: {e}");
+            // Do not abort open — execution gates can inspect migration status.
+        }
 
         Ok(store)
+    }
+
+    /// Merge host `assistant_*` rows into canonical tables (best-effort).
+    pub fn run_host_authority_migration(&self) -> Result<host_authority_migration::HostAuthorityMigrationResult, String> {
+        let conn = self.conn()?;
+        host_authority_migration::migrate_host_authority(&conn)
+    }
+
+    pub fn db_path(&self) -> &PathBuf {
+        &self.db_path
     }
 
     /// Run all pending migrations.
