@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS _schema_version (
 
 CREATE TABLE IF NOT EXISTS conversation (
     id TEXT PRIMARY KEY,
-    mode TEXT NOT NULL DEFAULT 'chat' CHECK(mode IN ('chat', 'agent')),
+    mode TEXT NOT NULL DEFAULT 'chat' CHECK(mode IN ('chat', 'agent', 'goal')),
     project_id TEXT,
     title TEXT NOT NULL DEFAULT '',
     provider_id TEXT NOT NULL,
@@ -270,94 +270,17 @@ CREATE INDEX IF NOT EXISTS idx_hook_registration_point ON hook_registration(hook
 
 /// Migration 006: Align persisted run status CHECK with Protocol v2.
 const MIGRATION_006: &str = "
-PRAGMA foreign_keys=OFF;
-PRAGMA legacy_alter_table=ON;
-
-ALTER TABLE run RENAME TO run_old_v005;
-
-CREATE TABLE run (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL REFERENCES conversation(id) ON DELETE CASCADE,
-    status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
-        'created', 'queued', 'preparing', 'running', 'waiting_permission',
-        'waiting_subagent', 'cancelling', 'completed', 'failed', 'cancelled', 'interrupted'
-    )),
-    trigger_message_id TEXT REFERENCES message(id) ON DELETE SET NULL,
-    provider_id TEXT NOT NULL,
-    model_id TEXT NOT NULL,
-    started_at TEXT,
-    finished_at TEXT,
-    error_code TEXT,
-    step_count INTEGER DEFAULT 0,
-    max_steps INTEGER DEFAULT 50,
-    token_budget INTEGER,
-    total_input_tokens INTEGER DEFAULT 0,
-    total_output_tokens INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-INSERT INTO run (
-    id, conversation_id, status, trigger_message_id, provider_id, model_id,
-    started_at, finished_at, error_code, step_count, max_steps,
-    token_budget, total_input_tokens, total_output_tokens, created_at
-)
-SELECT
-    id, conversation_id, status, trigger_message_id, provider_id, model_id,
-    started_at, finished_at, error_code, step_count, max_steps,
-    token_budget, total_input_tokens, total_output_tokens, created_at
-FROM run_old_v005;
-
-DROP TABLE run_old_v005;
-
 CREATE INDEX IF NOT EXISTS idx_run_conversation ON run(conversation_id, created_at);
-
-PRAGMA legacy_alter_table=OFF;
-PRAGMA foreign_keys=ON;
+CREATE INDEX IF NOT EXISTS idx_run_status ON run(status);
 ";
 
-/// Migration 007: Persist Protocol v2 run metadata in daemon SQLite.
-const MIGRATION_007: &str = "
-ALTER TABLE run ADD COLUMN parent_run_id TEXT;
-ALTER TABLE run ADD COLUMN agent_profile_id TEXT;
-ALTER TABLE run ADD COLUMN key_id TEXT;
-ALTER TABLE run ADD COLUMN permission_profile TEXT NOT NULL DEFAULT 'ask';
-ALTER TABLE run ADD COLUMN project_path TEXT;
-ALTER TABLE run ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE run ADD COLUMN idempotency_key TEXT;
-CREATE INDEX IF NOT EXISTS idx_run_idempotency_key ON run(idempotency_key);
-";
+const MIGRATION_007: &str = "SELECT 1;";
 
-/// Migration 008: Allow conversation mode = goal.
 const MIGRATION_008: &str = "
-PRAGMA foreign_keys=OFF;
-CREATE TABLE conversation_v8 (
-    id TEXT PRIMARY KEY,
-    mode TEXT NOT NULL DEFAULT 'chat' CHECK(mode IN ('chat', 'agent', 'goal')),
-    project_id TEXT,
-    title TEXT NOT NULL DEFAULT '',
-    provider_id TEXT NOT NULL,
-    model_id TEXT NOT NULL,
-    permission_profile_id TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    archived_at TEXT
-);
-INSERT INTO conversation_v8 (
-    id, mode, project_id, title, provider_id, model_id,
-    permission_profile_id, created_at, updated_at, archived_at
-)
-SELECT
-    id,
-    CASE WHEN mode IN ('chat','agent','goal') THEN mode ELSE 'agent' END,
-    project_id, title, provider_id, model_id,
-    permission_profile_id, created_at, updated_at, archived_at
-FROM conversation;
-DROP TABLE conversation;
-ALTER TABLE conversation_v8 RENAME TO conversation;
-PRAGMA foreign_keys=ON;
+-- conversation.mode may already allow goal via prior rebuilds; ensure index only.
+CREATE INDEX IF NOT EXISTS idx_conversation_updated ON conversation(updated_at);
 ";
 
-/// Migration 009: Phase 0 storage entities (queue / interaction / task / checkpoint / grant).
 const MIGRATION_009: &str = "
 CREATE TABLE IF NOT EXISTS prompt_queue (
     id TEXT PRIMARY KEY,

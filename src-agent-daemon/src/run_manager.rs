@@ -1301,6 +1301,8 @@ mod tests {
         with_env_lock(|| {
             let dir = tempfile::tempdir().unwrap();
             let db_path = dir.path().join("natives.db");
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_DB_PATH", &db_path);
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
@@ -1359,6 +1361,8 @@ mod tests {
         with_env_lock(|| {
             let dir = tempfile::tempdir().unwrap();
             let db_path = dir.path().join("natives.db");
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_DB_PATH", &db_path);
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
@@ -1431,6 +1435,8 @@ mod tests {
         with_env_lock(|| {
             let dir = tempfile::tempdir().unwrap();
             let db_path = dir.path().join("natives.db");
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_DB_PATH", &db_path);
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
@@ -1494,6 +1500,8 @@ mod tests {
         with_env_lock(|| {
             let dir = tempfile::tempdir().unwrap();
             let db_path = dir.path().join("natives.db");
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_DB_PATH", &db_path);
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
@@ -2058,6 +2066,8 @@ mod tests {
         with_env_lock(|| {
             let dir = tempfile::tempdir().unwrap();
             let db_path = dir.path().join("natives.db");
+            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_DB_PATH", &db_path);
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );

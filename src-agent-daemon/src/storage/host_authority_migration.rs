@@ -136,6 +136,9 @@ fn record_status(conn: &Connection, status: &str, detail: &str) -> Result<(), St
 }
 
 fn copy_conversations(conn: &Connection) -> Result<u64, String> {
+    if !table_exists(conn, "conversation") {
+        return Err("canonical conversation table missing".into());
+    }
     let n = conn
         .execute(
             "INSERT OR IGNORE INTO conversation (

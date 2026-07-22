@@ -307,6 +307,21 @@ impl ProductionRuntime {
             .await
             .insert(run_id.clone(), engine.clone());
 
+        // Phase 3: logical checkpoint at run start (lazy before-images on writes).
+        if let Ok(cp_id) = crate::checkpoint::global_checkpoint_manager().begin_run(
+            &run_id,
+            &conversation_id,
+            &project_root,
+        ) {
+            self.events.append(
+                &run_id,
+                RunEventKind::CheckpointCreated {
+                    checkpoint_id: cp_id,
+                    label: Some("run_start".into()),
+                },
+            );
+        }
+
         let provider = RealProvider {
             provider_id: provider_id.clone(),
             key_id: key_id.clone(),
@@ -355,6 +370,8 @@ impl ProductionRuntime {
             .await
             .map(|s| s.as_str().to_string())
             .unwrap_or_else(|_| "failed".into());
+        // Finalize checkpoint after hashes (best-effort).
+        let _ = crate::checkpoint::global_checkpoint_manager().finalize_run(&run_id);
         if status == "completed" {
             crate::conversation_store::append_assistant_turn_from_events(
                 &conversation_id,
@@ -1364,13 +1381,49 @@ impl EngineToolRuntime for PermissionGatedTools {
             }
         }
 
+        // Phase 3: lazy before-image for write tools (write_file / apply_patch).
+        let write_paths = extract_write_paths(name, &input);
+        for rel in &write_paths {
+            let _ = crate::checkpoint::global_checkpoint_manager()
+                .capture_before(&self.parent_run_id, rel);
+        }
+
         let started = Instant::now();
         match self.gateway.execute(name, input).await {
-            Ok(out) => ToolExecutionResult {
-                output: out.result,
-                is_error: false,
-                duration_ms: out.duration_ms.max(started.elapsed().as_millis() as u64),
-            },
+            Ok(out) => {
+                for rel in &write_paths {
+                    let _ = crate::checkpoint::global_checkpoint_manager()
+                        .capture_after(&self.parent_run_id, rel);
+                    // Best-effort FileChanged with before/after from checkpoint live map.
+                    if let Ok(preview) = crate::checkpoint::global_checkpoint_manager()
+                        .checkpoint_for_run_public(&self.parent_run_id)
+                    {
+                        if let Some(snap) = preview.files.iter().find(|f| &f.path == rel) {
+                            self.events.append(
+                                &self.parent_run_id,
+                                RunEventKind::FileChanged {
+                                    path: rel.clone(),
+                                    change_type: if !snap.existed_before {
+                                        "created".into()
+                                    } else {
+                                        "modified".into()
+                                    },
+                                    before: snap.before_content.clone(),
+                                    after: snap.after_content.clone(),
+                                    before_hash: snap.before_hash.clone(),
+                                    after_hash: snap.after_hash.clone(),
+                                    diff_artifact_id: None,
+                                },
+                            );
+                        }
+                    }
+                }
+                ToolExecutionResult {
+                    output: out.result,
+                    is_error: false,
+                    duration_ms: out.duration_ms.max(started.elapsed().as_millis() as u64),
+                }
+            }
             Err(err) => ToolExecutionResult {
                 output: serde_json::json!({"error": err.message, "code": err.code}),
                 is_error: true,
@@ -1378,6 +1431,39 @@ impl EngineToolRuntime for PermissionGatedTools {
             },
         }
     }
+}
+
+/// Collect relative paths that a write-side tool is about to touch.
+fn extract_write_paths(name: &str, input: &Value) -> Vec<String> {
+    let mut paths = Vec::new();
+    match name {
+        "write_file" | "edit_file" => {
+            if let Some(p) = input.get("path").and_then(|v| v.as_str()) {
+                if !p.is_empty() && !p.contains("..") {
+                    // Prefer project-relative: strip absolute if possible is caller's job.
+                    paths.push(p.to_string());
+                }
+            }
+        }
+        "apply_patch" => {
+            if let Some(arr) = input.get("files").and_then(|v| v.as_array()) {
+                for f in arr {
+                    if let Some(p) = f.get("path").and_then(|v| v.as_str()) {
+                        if !p.is_empty() && !p.contains("..") {
+                            paths.push(p.to_string());
+                        }
+                    }
+                }
+            }
+            if let Some(p) = input.get("path").and_then(|v| v.as_str()) {
+                if !p.is_empty() && !p.contains("..") {
+                    paths.push(p.to_string());
+                }
+            }
+        }
+        _ => {}
+    }
+    paths
 }
 
 impl PermissionGatedTools {

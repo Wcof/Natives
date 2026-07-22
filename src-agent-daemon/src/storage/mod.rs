@@ -57,9 +57,12 @@ impl DataStore {
         // Run migrations
         store.run_migrations()?;
         // Phase 0: merge Host assistant_* tables when present (idempotent).
-        if let Err(e) = store.run_host_authority_migration() {
-            eprintln!("[agent-daemon] host authority migration failed: {e}");
-            // Do not abort open — execution gates can inspect migration status.
+        if store.has_table("conversation") {
+            if let Err(e) = store.run_host_authority_migration() {
+                eprintln!("[agent-daemon] host authority migration failed: {e}");
+            }
+        } else {
+            eprintln!("[agent-daemon] warning: conversation table missing after migrations");
         }
 
         Ok(store)
@@ -75,9 +78,29 @@ impl DataStore {
         &self.db_path
     }
 
+    pub fn has_table(&self, name: &str) -> bool {
+        let Ok(conn) = self.conn() else {
+            return false;
+        };
+        conn.query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name=?1",
+            params![name],
+            |row| row.get(0),
+        )
+        .unwrap_or(false)
+    }
+
     /// Run all pending migrations.
     fn run_migrations(&self) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {e}"))?;
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS _schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );",
+        )
+        .map_err(|e| format!("Failed to ensure _schema_version: {e}"))?;
 
         let current_version: i64 = conn
             .query_row(
@@ -88,17 +111,59 @@ impl DataStore {
             .unwrap_or(0);
 
         for (version, sql) in migrations::ALL {
-            if *version > current_version {
-                conn.execute_batch(sql)
-                    .map_err(|e| format!("Migration {version} failed: {e}"))?;
-                conn.execute(
-                    "INSERT INTO _schema_version (version) VALUES (?1)",
-                    params![version],
-                )
-                .map_err(|e| format!("Failed to record migration {version}: {e}"))?;
+            if *version <= current_version {
+                continue;
             }
+            // Avoid SAVEPOINT: some migration SQL toggles PRAGMA foreign_keys /
+            // legacy_alter_table and interacts poorly with nested transactions.
+            if let Err(e) = conn.execute_batch(sql) {
+                let msg = e.to_string();
+                // Tolerate additive column re-runs.
+                if *version == 7 && msg.contains("duplicate column") {
+                    let _ = conn.execute(
+                        "INSERT OR IGNORE INTO _schema_version (version) VALUES (?1)",
+                        params![version],
+                    );
+                    continue;
+                }
+                return Err(format!("Migration {version} failed: {e}"));
+            }
+            conn.execute(
+                "INSERT OR IGNORE INTO _schema_version (version) VALUES (?1)",
+                params![version],
+            )
+            .map_err(|e| format!("Failed to record migration {version}: {e}"))?;
         }
 
+        Self::ensure_run_metadata_columns(&conn)?;
+        Ok(())
+    }
+
+    fn ensure_run_metadata_columns(conn: &Connection) -> Result<(), String> {
+        let alters = [
+            "ALTER TABLE run ADD COLUMN parent_run_id TEXT",
+            "ALTER TABLE run ADD COLUMN agent_profile_id TEXT",
+            "ALTER TABLE run ADD COLUMN key_id TEXT",
+            "ALTER TABLE run ADD COLUMN permission_profile TEXT NOT NULL DEFAULT 'ask'",
+            "ALTER TABLE run ADD COLUMN project_path TEXT",
+            "ALTER TABLE run ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE run ADD COLUMN idempotency_key TEXT",
+        ];
+        for sql in alters {
+            if let Err(e) = conn.execute_batch(sql) {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column") {
+                    // Table may not exist yet on empty brand-new DB before mig1 — ignore
+                    if msg.contains("no such table") {
+                        continue;
+                    }
+                    return Err(format!("ensure run column failed: {e}"));
+                }
+            }
+        }
+        let _ = conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_run_idempotency_key ON run(idempotency_key);",
+        );
         Ok(())
     }
 
