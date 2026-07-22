@@ -11,6 +11,7 @@ pub struct ProjectInfo {
     pub label: String,
     pub conversation_count: i64,
     pub exists: bool,
+    pub last_opened_at: String,
 }
 
 /// List all registered projects with conversation counts.
@@ -21,7 +22,8 @@ pub fn project_list() -> Result<Vec<ProjectInfo>> {
     let mut stmt = conn
         .prepare(
             "SELECT p.id, p.path, p.label,
-                (SELECT COUNT(*) FROM assistant_conversations c WHERE c.project_id = p.path AND c.archived_at IS NULL)
+                (SELECT COUNT(*) FROM assistant_conversations c WHERE c.project_id = p.path AND c.archived_at IS NULL),
+                p.last_opened_at
              FROM assistant_projects p
              ORDER BY p.last_opened_at DESC, p.label COLLATE NOCASE",
         )
@@ -32,6 +34,7 @@ pub fn project_list() -> Result<Vec<ProjectInfo>> {
             let path: String = row.get(1)?;
             let label: String = row.get(2)?;
             let conv_count: i64 = row.get(3)?;
+            let last_opened_at: String = row.get(4)?;
             let exists = Path::new(&path).exists();
             Ok(ProjectInfo {
                 id: row.get(0)?,
@@ -39,6 +42,7 @@ pub fn project_list() -> Result<Vec<ProjectInfo>> {
                 label,
                 conversation_count: conv_count,
                 exists,
+                last_opened_at,
             })
         })
         .map_err(|e| format!("Failed to query projects: {e}"))?
@@ -100,6 +104,7 @@ pub fn project_register(path: String) -> Result<ProjectInfo> {
         label,
         conversation_count: 0,
         exists: true,
+        last_opened_at: now,
     })
 }
 
@@ -108,9 +113,13 @@ pub fn project_register(path: String) -> Result<ProjectInfo> {
 /// is handled by the frontend ShellLayout/ContentArea.
 #[tauri::command]
 pub fn project_open(id: String) -> Result<()> {
-    // Currently a no-op — the frontend navigates to the project directory
-    // via its own file-browser state. This command exists for future expansion.
-    let _ = id;
+    // Touch last_opened_at so assistant project order follows real opens.
+    let now = chrono::Utc::now().to_rfc3339();
+    let conn = db::get_assistant_db_conn().map_err(|e| e.to_string())?;
+    let _ = conn.execute(
+        "UPDATE assistant_projects SET last_opened_at = ?1 WHERE id = ?2 OR path = ?2",
+        rusqlite::params![now, id],
+    );
     Ok(())
 }
 

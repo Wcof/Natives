@@ -52,6 +52,7 @@ export interface AssistantWorkspaceActions {
   renameConversation(id: string, title: string): void;
   archiveConversation(id: string): void;
   deleteConversation(id: string): Promise<boolean>;
+  pinConversation(id: string, projectId: string | null, pinned: boolean): void;
   retryRun(): void;
   respondPermission(requestId: string, approved: boolean): void;
 }
@@ -146,7 +147,7 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
       readActiveProject(api).catch(() => null as string | null),
       api.project.list().then((p) => p ?? []).catch((e) => {
         console.error('Failed to list projects:', e);
-        return [] as Array<{ id: string; path: string }>;
+        return [] as Array<{ id: string; path: string; lastOpenedAt?: string | null }>;
       }),
       (async () => {
         try {
@@ -194,10 +195,18 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
       })(),
     ]);
 
-    const projectPaths = registeredProjects.map((project) => project.path);
+    // Keep host project.list order (last_opened_at DESC). Do not re-sort by session time.
+    const projectMetas = registeredProjects.map((project) => {
+      const rec = project as { path: string; lastOpenedAt?: string | null; last_opened_at?: string | null; label?: string };
+      return {
+        path: rec.path,
+        lastOpenedAt: rec.lastOpenedAt ?? rec.last_opened_at ?? null,
+        label: rec.label,
+      };
+    });
     // Sessions that reference unregistered / legacy project paths go to unassigned.
     // Do not invent historical project nodes from conversation.projectId alone.
-    const groups = groupAssistantConversations(conversations, projectPaths, unassignedLabel);
+    const groups = groupAssistantConversations(conversations, projectMetas, unassignedLabel);
 
     publishNavigation((prev) => ({
       ...prev,
@@ -331,11 +340,16 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
                   mode: c.mode,
                   projectId: c.projectId === path ? null : (c.projectId ?? null),
                   updatedAt: c.updatedAt,
+                  pinned: c.pinned,
                 })),
               );
-              const projectPaths = prev.groups
-                .map((g) => g.path)
-                .filter((p): p is string => Boolean(p) && p !== path);
+              const remainingProjects = prev.groups
+                .filter((g) => Boolean(g.path) && g.path !== path)
+                .map((g) => ({
+                  path: g.path as string,
+                  lastOpenedAt: g.lastOpenedAt ?? null,
+                  label: g.label,
+                }));
               const unassignedLabel =
                 prev.groups.find((g) => !g.path)?.label ??
                 (typeof navigator !== 'undefined' && navigator.language.startsWith('zh')
@@ -343,7 +357,7 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
                   : 'Unassigned');
               return {
                 ...prev,
-                groups: groupAssistantConversations(conversations, projectPaths, unassignedLabel),
+                groups: groupAssistantConversations(conversations, remainingProjects, unassignedLabel),
                 activeProjectPath:
                   prev.activeProjectPath === path ? null : prev.activeProjectPath,
               };
@@ -360,6 +374,9 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
       },
       archiveConversation: (id) => {
         workbenchActions?.archiveConversation(id);
+      },
+      pinConversation: (id, projectId, pinned) => {
+        workbenchActions?.pinConversation?.(id, projectId, pinned);
       },
       deleteConversation: async (id) => {
         if (workbenchActions) return workbenchActions.deleteConversation(id);

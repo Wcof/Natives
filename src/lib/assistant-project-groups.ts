@@ -4,6 +4,8 @@ export interface AssistantProjectConversation {
   title: string;
   updatedAt: string;
   mode?: 'chat' | 'agent' | 'goal';
+  /** Whether this conversation is pinned within its project (UI preference). */
+  pinned?: boolean;
 }
 
 export interface AssistantProjectGroup {
@@ -11,6 +13,8 @@ export interface AssistantProjectGroup {
   path: string | null;
   label: string;
   conversations: AssistantProjectConversation[];
+  /** Host last_opened_at when available; used for unpinned project order. */
+  lastOpenedAt?: string | null;
 }
 
 export type AssistantProjectCreationState =
@@ -56,19 +60,42 @@ export function displayProjectName(path: string): string {
   return parts.at(-1) ?? normalized;
 }
 
+export interface RegisteredProjectMeta {
+  path: string;
+  lastOpenedAt?: string | null;
+  label?: string | null;
+}
+
+/**
+ * Group conversations by project.
+ *
+ * Project order (caller may further pin-sort):
+ * 1. Registered projects keep the order of `registeredProjects` (backend last_opened_at DESC).
+ * 2. Any conversation-only projects not in registered list are appended by latest conversation.
+ * 3. Unassigned is always last.
+ *
+ * Conversation order within a project:
+ * 1. Pinned conversations first (stable by updatedAt among pins).
+ * 2. Remaining by updatedAt DESC.
+ */
 export function groupAssistantConversations(
   conversations: AssistantProjectConversation[],
-  registeredProjects: string[] = [],
+  registeredProjects: Array<string | RegisteredProjectMeta> = [],
   unassignedLabel = 'Unassigned',
 ): AssistantProjectGroup[] {
+  const registered: RegisteredProjectMeta[] = registeredProjects.map((item) =>
+    typeof item === 'string' ? { path: item } : item,
+  );
+
   const byProject = new Map<string, AssistantProjectConversation[]>();
   const unassigned: AssistantProjectConversation[] = [];
+  const metaByPath = new Map<string, RegisteredProjectMeta>();
 
-  // Seed with all registered projects so empty-project groups appear
-  for (const projPath of registeredProjects) {
-    if (!byProject.has(projPath)) {
-      byProject.set(projPath, []);
-    }
+  for (const proj of registered) {
+    const path = proj.path.trim();
+    if (!path) continue;
+    metaByPath.set(path, proj);
+    if (!byProject.has(path)) byProject.set(path, []);
   }
 
   for (const conversation of conversations) {
@@ -83,14 +110,48 @@ export function groupAssistantConversations(
   }
 
   const sortConversations = (items: AssistantProjectConversation[]) =>
-    [...items].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    [...items].sort((left, right) => {
+      const pinDelta = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
+      if (pinDelta !== 0) return pinDelta;
+      return right.updatedAt.localeCompare(left.updatedAt);
+    });
 
-  const groups: AssistantProjectGroup[] = [...byProject.entries()].map(([path, items]) => ({
-    id: path,
-    path,
-    label: displayProjectName(path),
-    conversations: sortConversations(items),
-  }));
+  // Preserve registered project order from backend (last_opened_at DESC).
+  const groups: AssistantProjectGroup[] = [];
+  const seen = new Set<string>();
+  for (const proj of registered) {
+    const path = proj.path.trim();
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    const items = byProject.get(path) ?? [];
+    groups.push({
+      id: path,
+      path,
+      label: proj.label?.trim() || displayProjectName(path),
+      conversations: sortConversations(items),
+      lastOpenedAt: proj.lastOpenedAt ?? null,
+    });
+  }
+
+  // Conversation-only projects not in the registered list (should be rare after unassigned policy).
+  const extras: AssistantProjectGroup[] = [];
+  for (const [path, items] of byProject.entries()) {
+    if (seen.has(path)) continue;
+    extras.push({
+      id: path,
+      path,
+      label: displayProjectName(path),
+      conversations: sortConversations(items),
+      lastOpenedAt: metaByPath.get(path)?.lastOpenedAt ?? null,
+    });
+  }
+  extras.sort((left, right) => {
+    const leftDate = left.conversations[0]?.updatedAt ?? '';
+    const rightDate = right.conversations[0]?.updatedAt ?? '';
+    if (leftDate !== rightDate) return rightDate.localeCompare(leftDate);
+    return left.label.localeCompare(right.label);
+  });
+  groups.push(...extras);
 
   if (unassigned.length > 0) {
     groups.push({
@@ -98,17 +159,31 @@ export function groupAssistantConversations(
       path: null,
       label: unassignedLabel,
       conversations: sortConversations(unassigned),
+      lastOpenedAt: null,
     });
   }
 
+  // Unassigned always last; do not re-sort registered projects by session time.
   return groups.sort((left, right) => {
-    // Unassigned always goes last
     if (left.path === null && right.path !== null) return 1;
     if (left.path !== null && right.path === null) return -1;
-    // Otherwise sort by latest conversation or project name
-    const leftDate = left.conversations[0]?.updatedAt ?? '';
-    const rightDate = right.conversations[0]?.updatedAt ?? '';
-    if (leftDate !== rightDate) return rightDate.localeCompare(leftDate);
-    return left.label.localeCompare(right.label);
+    return 0;
   });
+}
+
+/** Pin overlay: pinned projects first, preserving relative order within each bucket. */
+export function orderGroupsWithPins(
+  groups: AssistantProjectGroup[],
+  pinnedProjectIds: Iterable<string>,
+): AssistantProjectGroup[] {
+  const pinned = new Set(pinnedProjectIds);
+  return groups
+    .map((group, index) => ({ group, index }))
+    .sort((left, right) => {
+      const pinDelta =
+        Number(pinned.has(right.group.id)) - Number(pinned.has(left.group.id));
+      if (pinDelta !== 0) return pinDelta;
+      return left.index - right.index;
+    })
+    .map((item) => item.group);
 }

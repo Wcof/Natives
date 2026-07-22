@@ -185,7 +185,14 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
           const isCollapsed = collapsed.has(group.id);
           const isUnassigned = group.id === 'unassigned' || !group.path;
           return (
-            <section key={group.id} className="mt-0.5">
+            <section key={group.id}
+              onContextMenu={(event) => {
+                // Right-click project chrome (not conversation rows — those stopPropagation).
+                if ((event.target as HTMLElement).closest('[id^="conv-"]')) return;
+                if (!group.path) return;
+                event.preventDefault();
+                setMenuId(`project:${group.id}`);
+              }} className="mt-0.5">
               {/* ── Project Header ── */}
               <div className="group/project relative flex items-center gap-0.5 rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all">
                 <button
@@ -258,6 +265,10 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                     id={`conv-${conversation.id}`}
                     role="option"
                     aria-selected={isSelected}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      setMenuId(`conversation:${conversation.id}`);
+                    }}
                     className={`group relative ml-5 mt-0.5 flex min-h-8 items-center rounded-lg transition-colors ${
                           isSelected
                             ? 'bg-[var(--surface-active)] text-[var(--text)] font-medium'
@@ -281,6 +292,7 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                     >
                       <MessageSquare size={11} className="shrink-0" />
                       <span className="truncate">{conversation.title}</span>
+                      {conversation.pinned ? <Pin size={10} className="ml-auto shrink-0 opacity-70" aria-hidden /> : null}
                     </button>
                     <button
                       type="button"
@@ -292,7 +304,10 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                       <MoreHorizontal size={11} />
                     </button>
                     {menuId === `conversation:${conversation.id}` && (
-                      <div className="absolute right-1 top-full z-50 w-36 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-popup">
+                      <div className="absolute right-1 top-full z-50 w-40 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-popup">
+                        <button type="button" onClick={() => { setMenuId(null); actions?.pinConversation?.(conversation.id, conversation.projectId ?? group.path, !conversation.pinned); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
+                          {conversation.pinned ? <PinOff size={12} /> : <Pin size={12} />}{conversation.pinned ? t(locale, 'assistant.unpinConversation') : t(locale, 'assistant.pinConversation')}
+                        </button>
                         <button type="button" onClick={() => { setMenuId(null); setRenameTarget({ id: conversation.id, title: conversation.title }); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
                           <Pencil size={12} />{t(locale, 'assistant.renameConversation')}
                         </button>

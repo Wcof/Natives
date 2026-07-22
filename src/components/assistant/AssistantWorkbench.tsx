@@ -107,7 +107,8 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const [providerReadiness, setProviderReadiness] = useState<ProviderReadiness>('no_provider');
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
-  const [registeredProjects, setRegisteredProjects] = useState<Array<{ id: string; path: string }>>([]);
+  const [registeredProjects, setRegisteredProjects] = useState<Array<{ id: string; path: string; lastOpenedAt?: string | null; label?: string }>>([]);
+  const [pinnedConversationIds, setPinnedConversationIds] = useState<Set<string>>(new Set());
   const [rightPanelOpen, setRightPanelOpen] = useState(!state.view.rightCollapsed);
   const [loadingConversations, setLoadingConversations] = useState(true);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -279,6 +280,19 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         } catch {
           /* */
         }
+        try {
+          const raw = await window.nativesAPI?.db?.get('assistant:pinnedConversations');
+          if (!cancelled && raw) {
+            const parsed = JSON.parse(String(raw)) as Record<string, string[]>;
+            const ids = new Set<string>();
+            for (const list of Object.values(parsed ?? {})) {
+              for (const id of list ?? []) ids.add(id);
+            }
+            setPinnedConversationIds(ids);
+          }
+        } catch {
+          /* */
+        }
 
         try {
           // Production returns `{ providers: [...] }`; fixtures may return a bare array.
@@ -320,8 +334,9 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         mode: c.mode,
         projectId: c.projectId ?? null,
         updatedAt: c.updatedAt,
+        pinned: pinnedConversationIds.has(c.id),
       })),
-      registeredProjects.map((p) => p.path),
+      registeredProjects.map((p) => ({ path: p.path, lastOpenedAt: (p as { lastOpenedAt?: string | null; last_opened_at?: string | null }).lastOpenedAt ?? (p as { last_opened_at?: string | null }).last_opened_at ?? null, label: p.label })),
       zh ? '未关联项目' : 'Unassigned',
     );
     // Merge with projects already seeded by AssistantWorkspaceProvider so a
@@ -371,6 +386,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     activeId,
     activeProjectPath,
     registeredProjects,
+    pinnedConversationIds,
     loadingConversations,
     providerReadiness,
     publishNavigation,
@@ -535,8 +551,23 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             providerId: created.providerId || providerId,
             modelId: created.modelId || modelId,
           };
+          const previousTempId =
+            activeId && activeId.startsWith('temp-') ? activeId : null;
           dispatch({ type: 'conversations/upsert', conversation });
           dispatch({ type: 'conversations/setActive', id: conversation.id });
+          // Atomic temp → persisted: drop the local shell so the session appears once.
+          if (previousTempId && previousTempId !== conversation.id) {
+            const tempDraft = stateRef.current.composerByConversation[previousTempId];
+            if (tempDraft) {
+              dispatch({
+                type: 'composer/set',
+                conversationId: conversation.id,
+                draft: tempDraft,
+              });
+              dispatch({ type: 'composer/clear', conversationId: previousTempId });
+            }
+            dispatch({ type: 'conversations/remove', id: previousTempId });
+          }
           conversationId = conversation.id;
         }
 
@@ -722,12 +753,87 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       archiveConversation: (id) => {
         void gateway.request('conversation.archive', { id }).then(() => {
           dispatch({ type: 'conversations/remove', id });
+          // Drop pin preference for archived sessions.
+          void (async () => {
+            try {
+              const raw = await window.nativesAPI?.db?.get('assistant:pinnedConversations');
+              if (!raw) return;
+              const map = JSON.parse(String(raw)) as Record<string, string[]>;
+              let changed = false;
+              for (const key of Object.keys(map)) {
+                const next = (map[key] ?? []).filter((x) => x !== id);
+                if (next.length !== (map[key] ?? []).length) {
+                  map[key] = next;
+                  changed = true;
+                }
+              }
+              if (changed) {
+                await window.nativesAPI?.db?.set('assistant:pinnedConversations', JSON.stringify(map));
+                setPinnedConversationIds((prev) => {
+                  const n = new Set(prev);
+                  n.delete(id);
+                  return n;
+                });
+              }
+            } catch { /* ignore */ }
+          })();
         });
+      },
+      pinConversation: (id, projectId, pinned) => {
+        void (async () => {
+          const key = projectId?.trim() || '__unassigned__';
+          try {
+            const raw = await window.nativesAPI?.db?.get('assistant:pinnedConversations');
+            const map = raw ? (JSON.parse(String(raw)) as Record<string, string[]>) : {};
+            const list = new Set(map[key] ?? []);
+            if (pinned) list.add(id);
+            else list.delete(id);
+            map[key] = [...list];
+            // Clean empty buckets
+            if (map[key].length === 0) delete map[key];
+            await window.nativesAPI?.db?.set('assistant:pinnedConversations', JSON.stringify(map));
+            setPinnedConversationIds((prev) => {
+              const n = new Set(prev);
+              if (pinned) n.add(id);
+              else n.delete(id);
+              return n;
+            });
+          } catch (err) {
+            toast(classifyError(err).userMessage, 'error');
+          }
+        })();
       },
       deleteConversation: async (id) => {
         // Local-only temp sessions never hit the host DB.
+        const clearPin = () => {
+          setPinnedConversationIds((prev) => {
+            if (!prev.has(id)) return prev;
+            const n = new Set(prev);
+            n.delete(id);
+            return n;
+          });
+          void (async () => {
+            try {
+              const raw = await window.nativesAPI?.db?.get('assistant:pinnedConversations');
+              if (!raw) return;
+              const map = JSON.parse(String(raw)) as Record<string, string[]>;
+              let changed = false;
+              for (const key of Object.keys(map)) {
+                const next = (map[key] ?? []).filter((x) => x !== id);
+                if (next.length !== (map[key] ?? []).length) {
+                  map[key] = next;
+                  changed = true;
+                }
+              }
+              if (changed) {
+                await window.nativesAPI?.db?.set('assistant:pinnedConversations', JSON.stringify(map));
+              }
+            } catch { /* ignore */ }
+          })();
+        };
         if (id.startsWith('temp-')) {
           dispatch({ type: 'conversations/remove', id });
+          clearPin();
           if (stateRef.current.activeConversationId === id) {
             dispatch({ type: 'conversations/setActive', id: null });
           }
@@ -736,6 +842,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         try {
           await gateway.request('conversation.delete', { id });
           dispatch({ type: 'conversations/remove', id });
+          clearPin();
           if (stateRef.current.activeConversationId === id) {
             dispatch({ type: 'conversations/setActive', id: null });
           }
@@ -746,6 +853,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
           // is never a no-op after the user confirmed.
           if (/not found|NOT_FOUND|conversation not found/i.test(message)) {
             dispatch({ type: 'conversations/remove', id });
+            clearPin();
             if (stateRef.current.activeConversationId === id) {
               dispatch({ type: 'conversations/setActive', id: null });
             }

@@ -1,36 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { classifyAssistantSurface, groupAssistantConversations, projectCreationState } from './assistant-project-groups';
+import { classifyAssistantSurface, groupAssistantConversations, orderGroupsWithPins, projectCreationState } from './assistant-project-groups';
 
 test('groups conversations by their real project directory and keeps unassigned data explicit', () => {
-  assert.deepEqual(
-    groupAssistantConversations([
-      { id: 'b', projectId: '/work/beta', updatedAt: '2026-07-12T10:00:00Z', title: 'B' },
-      { id: 'a', projectId: '/work/alpha', updatedAt: '2026-07-12T11:00:00Z', title: 'A' },
-      { id: 'u', projectId: '', updatedAt: '2026-07-12T12:00:00Z', title: 'U' },
-    ]),
-    [
-      {
-        id: '/work/alpha',
-        path: '/work/alpha',
-        label: 'alpha',
-        conversations: [{ id: 'a', projectId: '/work/alpha', updatedAt: '2026-07-12T11:00:00Z', title: 'A' }],
-      },
-      {
-        id: '/work/beta',
-        path: '/work/beta',
-        label: 'beta',
-        conversations: [{ id: 'b', projectId: '/work/beta', updatedAt: '2026-07-12T10:00:00Z', title: 'B' }],
-      },
-      {
-        id: '__unassigned__',
-        path: null,
-        label: 'Unassigned',
-        conversations: [{ id: 'u', projectId: '', updatedAt: '2026-07-12T12:00:00Z', title: 'U' }],
-      },
-    ],
-  );
+  const groups = groupAssistantConversations([
+    { id: 'b', projectId: '/work/beta', updatedAt: '2026-07-12T10:00:00Z', title: 'B' },
+    { id: 'a', projectId: '/work/alpha', updatedAt: '2026-07-12T11:00:00Z', title: 'A' },
+    { id: 'u', projectId: '', updatedAt: '2026-07-12T12:00:00Z', title: 'U' },
+  ]);
+  assert.deepEqual(groups.map((g) => g.path), ['/work/alpha', '/work/beta', null]);
+  assert.deepEqual(groups[0]!.conversations.map((c) => c.id), ['a']);
+  assert.deepEqual(groups[1]!.conversations.map((c) => c.id), ['b']);
+  assert.deepEqual(groups[2]!.conversations.map((c) => c.id), ['u']);
+  assert.equal(groups[2]!.label, 'Unassigned');
 });
 
 test('registered projects appear even without conversations', () => {
@@ -108,4 +91,37 @@ test('projectId null and empty both treated as unassigned', () => {
   ]);
   const unassignedGroup = result.find(g => g.path === null)!;
   assert.equal(unassignedGroup.conversations.length, 2);
+});
+
+
+test('registered project order follows backend list, not latest session', () => {
+  const result = groupAssistantConversations(
+    [
+      { id: 'old-in-alpha', projectId: '/work/alpha', updatedAt: '2026-07-12T09:00:00Z', title: 'Old' },
+      { id: 'new-in-beta', projectId: '/work/beta', updatedAt: '2026-07-12T12:00:00Z', title: 'New' },
+    ],
+    [
+      { path: '/work/alpha', lastOpenedAt: '2026-07-12T13:00:00Z' },
+      { path: '/work/beta', lastOpenedAt: '2026-07-12T10:00:00Z' },
+    ],
+  );
+  assert.equal(result[0]!.path, '/work/alpha');
+  assert.equal(result[1]!.path, '/work/beta');
+});
+
+test('pinned conversations float within their project only', () => {
+  const [group] = groupAssistantConversations([
+    { id: 'older-pin', projectId: '/work/app', updatedAt: '2026-07-12T09:00:00Z', title: 'Older', pinned: true },
+    { id: 'newer', projectId: '/work/app', updatedAt: '2026-07-12T11:00:00Z', title: 'Newer' },
+  ]);
+  assert.deepEqual(group?.conversations.map((c) => c.id), ['older-pin', 'newer']);
+});
+
+test('orderGroupsWithPins keeps relative order within buckets', () => {
+  const groups = groupAssistantConversations(
+    [],
+    ['/a', '/b', '/c'],
+  );
+  const ordered = orderGroupsWithPins(groups, ['/c', '/a']);
+  assert.deepEqual(ordered.map((g) => g.path), ['/a', '/c', '/b']);
 });
