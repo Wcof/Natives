@@ -63,7 +63,10 @@ test('sidebar owns Favorites as a first-level rail above Assistant', () => {
 });
 
 test('expanded sidebar owns collapse and header only restores it', () => {
-  assert.match(sidebar, /onClick=\{onToggle\}/);
+  // Collapse is owned by the sidebar titlebar button (may wrap onToggle for
+  // stopPropagation against drag-region); header only restores when collapsed.
+  assert.match(sidebar, /onToggle\(\)/);
+  assert.match(sidebar, /titlebar-collapse-btn/);
   assert.match(header, /sidebarCollapsed && onToggleSidebar/);
 });
 
@@ -100,9 +103,18 @@ test('macOS window chrome keeps system traffic lights (decorations + Overlay)', 
   assert.match(macosConf, /"titleBarStyle"\s*:\s*"Overlay"/);
   assert.match(macosConf, /"hiddenTitle"\s*:\s*true/);
   assert.match(macosConf, /"trafficLightPosition"/);
-  // Vertically centered with the 折叠 button (see globals.css geometry contract)
-  assert.match(macosConf, /"y"\s*:\s*28/);
-  assert.match(macosConf, /"x"\s*:\s*26/);
+  // Aligned with titlebar collapse control (see globals.css geometry contract)
+  assert.match(macosConf, /"y"\s*:\s*30/);
+  assert.match(macosConf, /"x"\s*:\s*20/);
+
+  // Collapse button must NOT live inside a drag region (macOS swallows the click)
+  assert.match(sidebar, /titlebar-collapse-btn/);
+  assert.match(sidebar, /titlebar-drag-fill/);
+  // Whole titlebar-row is no longer a drag region
+  assert.equal(
+    /className="titlebar-row"[\s\S]{0,200}data-tauri-drag-region/.test(sidebar),
+    false,
+  );
 
   // Base conf stays frameless for Win/Linux custom chrome
   assert.match(baseConf, /"decorations"\s*:\s*false/);

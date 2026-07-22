@@ -472,17 +472,22 @@ export default function Sidebar({
       data-collapsed={isCollapsed ? 'true' : 'false'}
       data-resizing={isResizing ? 'true' : 'false'}
     >
-      {/* ── 标题栏：macOS 用系统 traffic lights；其它平台自绘按钮 ── */}
+      {/* ── 标题栏：macOS 用系统 traffic lights；其它平台自绘按钮 ──
+          注意：不要把折叠按钮放在 data-tauri-drag-region 内部，
+          否则在 macOS/WKWebView 上点击会被当成拖窗口，无法折叠。 */}
       <div className="shrink-0 relative z-[60]">
         <div
           className="titlebar-row"
           data-collapsed={isCollapsed ? 'true' : 'false'}
           data-native-traffic={usesNativeTrafficLights ? 'true' : 'false'}
-          data-tauri-drag-region
         >
           {usesNativeTrafficLights ? (
-            /* 为系统红黄绿按钮留位，避免与侧栏内容重叠 */
-            <div className="native-traffic-spacer" aria-hidden="true" />
+            /* 为系统红黄绿按钮留位；可拖区域单独挂在 spacer 上 */
+            <div
+              className="native-traffic-spacer"
+              data-tauri-drag-region
+              aria-hidden="true"
+            />
           ) : (
             <div
               className="window-controls"
@@ -519,29 +524,32 @@ export default function Sidebar({
             </div>
           )}
 
+          {/* 中间弹性拖拽条：不覆盖两侧交互控件 */}
           {!isCollapsed && (
-            <button
-              type="button"
-              onClick={onToggle}
-              className="titlebar-collapse-btn ml-auto flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
-              aria-label={t(locale, 'sidebar.collapse')}
-              title={t(locale, 'sidebar.collapse')}
-            >
-              <PanelLeftClose size={15} />
-            </button>
+            <div className="titlebar-drag-fill" data-tauri-drag-region />
           )}
 
-          {isCollapsed && (
-            <button
-              type="button"
-              onClick={onToggle}
-              className="titlebar-collapse-btn flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]"
-              aria-label={t(locale, 'sidebar.expand')}
-              title={t(locale, 'sidebar.expand')}
-            >
-              <PanelLeft size={15} />
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onToggle();
+            }}
+            onMouseDown={(e) => {
+              // 阻止父级/系统 drag-region 抢走 mousedown
+              e.stopPropagation();
+            }}
+            className={
+              isCollapsed
+                ? 'titlebar-collapse-btn flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
+                : 'titlebar-collapse-btn flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]'
+            }
+            aria-label={t(locale, isCollapsed ? 'sidebar.expand' : 'sidebar.collapse')}
+            title={t(locale, isCollapsed ? 'sidebar.expand' : 'sidebar.collapse')}
+          >
+            {isCollapsed ? <PanelLeft size={15} /> : <PanelLeftClose size={15} />}
+          </button>
         </div>
       </div>
 

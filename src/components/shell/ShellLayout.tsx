@@ -320,17 +320,23 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
       <div className="w-full h-full" style={{ opacity: themeReady ? 1 : 0 }}>
       <div className="w-full h-full bg-[var(--background)] p-3 flex gap-3 overflow-visible box-border relative isolate">
-      {/* ── 全宽透明拖拽条（避开左上角系统/自绘窗口按钮点击区） ── */}
+      {/* ── 工作区顶部拖拽条：必须从侧栏右侧开始，否则会盖住「折叠」按钮 ──
+          侧栏 z-50 > 本层 z-30，双重保证侧栏标题栏可点。 */}
       <div
         data-tauri-drag-region
-        className="absolute top-0 z-40"
-        style={{ left: '108px', right: '-12px', height: '44px' }}
+        className="absolute top-0 z-30"
+        style={{
+          // p-3(12) + sidebar + gap-3(12)
+          left: `${12 + (effectiveSidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : state.sidebarWidth) + 12}px`,
+          right: '0px',
+          height: '52px',
+        }}
       />
       {/* ── V1.0 已移除：wallpaper / liquid-blob / WebGL LiquidGlass 全局背景层 ── */}
 
       {/* Left: Sidebar — collapsed keeps an icon rail, not width 0 */}
       <div
-        className="h-full shrink-0 transition-[width] duration-200 relative z-10"
+        className="h-full shrink-0 transition-[width] duration-200 relative z-50"
         style={{
           width: effectiveSidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : state.sidebarWidth,
           // overflow visible so the right-edge drag handle is hit-testable
