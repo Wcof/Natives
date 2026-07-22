@@ -377,163 +377,164 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
                 )}
               </div>
 
-              <div className="settings-field-grid">
-                <div className="settings-readonly-field"><span>{t(locale, 'settings.providerName')}</span><strong>{selected.displayName}</strong></div>
-                <div className="settings-readonly-field"><span>{t(locale, 'settings.baseUrl')}</span><code>{selected.baseUrl}</code></div>
-              </div>
-
-              <div style={{ marginTop: '12px' }}>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="settings-control-label" htmlFor={`model-${selected.id}`}>
-                    {t(locale, 'assistant.defaultModel')}
-                  </label>
-                  {!isEditingModel && (
-                    <span className="text-[11px] text-[var(--text-disabled)] flex items-center gap-1 font-medium">
-                      <Lock size={10} />
-                      {zh ? '只读（点击右上方“编辑配置”进行修改）' : 'Read-only (click Edit above)'}
-                    </span>
-                  )}
-                </div>
-
-                {!isEditingModel ? (
-                  /* 锁定只读显示态 */
-                  <div className="flex items-center justify-between p-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)]">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <code className="text-xs font-semibold text-[var(--text)] truncate">
-                        {currentModelDisplay || (zh ? '未设置默认模型' : 'No default model configured')}
-                      </code>
-                    </div>
-                    <button
-                      type="button"
-                      className="text-xs text-[var(--primary)] hover:underline font-medium shrink-0 ml-2"
-                      onClick={startEdit}
-                    >
-                      {zh ? '修改模型' : 'Change'}
-                    </button>
+              {!isEditingModel ? (
+                /* ── 非编辑模式：只读预览态 ── */
+                <div className="settings-field-grid">
+                  <div className="settings-readonly-field">
+                    <span>{t(locale, 'settings.providerName')}</span>
+                    <strong>{selected.displayName}</strong>
                   </div>
-                ) : (
-                  /* 编辑激活态 */
-                  <div className="add-provider-connection-row" style={{ marginTop: '4px' }}>
-                    <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
-                      <input
-                        id={`model-${selected.id}`}
-                        className="settings-input"
-                        value={currentModelDisplay}
-                        onChange={(event) => {
-                          setModels((current) => ({ ...current, [selected.id]: event.target.value }));
-                          setDetailTestResult(null);
-                        }}
-                        onFocus={() => {
-                          if ((discovered[selected.id]?.length ?? 0) > 0) setDropdownOpen(true);
-                        }}
-                        placeholder="gpt-4o"
-                        style={{ paddingRight: '32px' }}
-                        autoFocus
-                      />
-                      {(discovered[selected.id]?.length ?? 0) > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setDropdownOpen(!dropdownOpen)}
-                          style={{
-                            position: 'absolute',
-                            right: 0,
-                            top: 0,
-                            bottom: 0,
-                            width: '32px',
-                            background: 'none',
-                            border: 'none',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            color: 'var(--text-secondary)',
-                          }}
-                        >
-                          <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                          </svg>
-                        </button>
-                      )}
+                  <div className="settings-readonly-field">
+                    <span>{t(locale, 'settings.baseUrl')}</span>
+                    <code>{selected.baseUrl}</code>
+                  </div>
+                  <div className="settings-readonly-field">
+                    <span>{t(locale, 'assistant.defaultModel')}</span>
+                    <code className="text-xs font-semibold">
+                      {selected.defaultModel || (zh ? '未配置默认模型' : 'Not configured')}
+                    </code>
+                  </div>
+                </div>
+              ) : (
+                /* ── 编辑模式：激活编辑表单 ── */
+                <>
+                  <div className="settings-field-grid">
+                    <div className="settings-readonly-field">
+                      <span>{t(locale, 'settings.providerName')}</span>
+                      <strong>{selected.displayName}</strong>
+                    </div>
+                    <div className="settings-readonly-field">
+                      <span>{t(locale, 'settings.baseUrl')}</span>
+                      <code>{selected.baseUrl}</code>
+                    </div>
+                  </div>
 
-                      {dropdownOpen && (discovered[selected.id]?.length ?? 0) > 0 && (
-                        <>
-                          <div
-                            style={{ position: 'fixed', inset: 0, zIndex: 998 }}
-                            onClick={() => setDropdownOpen(false)}
-                          />
-                          <div
+                  <div style={{ marginTop: '12px' }}>
+                    <label className="settings-control-label" htmlFor={`model-${selected.id}`}>
+                      {t(locale, 'assistant.defaultModel')}
+                    </label>
+                    <div className="add-provider-connection-row" style={{ marginTop: '4px' }}>
+                      <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+                        <input
+                          id={`model-${selected.id}`}
+                          className="settings-input"
+                          value={currentModelDisplay}
+                          onChange={(event) => {
+                            setModels((current) => ({ ...current, [selected.id]: event.target.value }));
+                            setDetailTestResult(null);
+                          }}
+                          onFocus={() => {
+                            if ((discovered[selected.id]?.length ?? 0) > 0) setDropdownOpen(true);
+                          }}
+                          placeholder="gpt-4o"
+                          style={{ paddingRight: '32px' }}
+                          autoFocus
+                        />
+                        {(discovered[selected.id]?.length ?? 0) > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setDropdownOpen(!dropdownOpen)}
                             style={{
                               position: 'absolute',
-                              top: '100%',
-                              left: 0,
                               right: 0,
-                              marginTop: '4px',
-                              maxHeight: '200px',
-                              overflowY: 'auto',
-                              background: 'var(--surface)',
-                              border: '1px solid var(--border)',
-                              borderRadius: 'var(--radius-sm)',
-                              boxShadow: 'var(--shadow-popup)',
-                              zIndex: 999,
+                              top: 0,
+                              bottom: 0,
+                              width: '32px',
+                              background: 'none',
+                              border: 'none',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              color: 'var(--text-secondary)',
                             }}
                           >
-                            {discovered[selected.id]?.map((model) => (
-                              <button
-                                key={model.id}
-                                type="button"
-                                onClick={() => {
-                                  setModels((current) => ({ ...current, [selected.id]: model.id }));
-                                  setDetailTestResult(null);
-                                  setDropdownOpen(false);
-                                }}
-                                style={{
-                                  width: '100%',
-                                  padding: '8px 12px',
-                                  textAlign: 'left',
-                                  background: 'transparent',
-                                  border: 'none',
-                                  color: 'var(--text)',
-                                  fontSize: '13px',
-                                  cursor: 'pointer',
-                                  outline: 'none',
-                                }}
-                                onMouseEnter={(e) => {
-                                  e.currentTarget.style.background = 'var(--surface-hover)';
-                                }}
-                                onMouseLeave={(e) => {
-                                  e.currentTarget.style.background = 'transparent';
-                                }}
-                              >
-                                {model.displayName ?? model.id}
-                              </button>
-                            ))}
-                          </div>
-                        </>
-                      )}
+                            <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
+                              <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                            </svg>
+                          </button>
+                        )}
+
+                        {dropdownOpen && (discovered[selected.id]?.length ?? 0) > 0 && (
+                          <>
+                            <div
+                              style={{ position: 'fixed', inset: 0, zIndex: 998 }}
+                              onClick={() => setDropdownOpen(false)}
+                            />
+                            <div
+                              style={{
+                                position: 'absolute',
+                                top: '100%',
+                                left: 0,
+                                right: 0,
+                                marginTop: '4px',
+                                maxHeight: '200px',
+                                overflowY: 'auto',
+                                background: 'var(--surface)',
+                                border: '1px solid var(--border)',
+                                borderRadius: 'var(--radius-sm)',
+                                boxShadow: 'var(--shadow-popup)',
+                                zIndex: 999,
+                              }}
+                            >
+                              {discovered[selected.id]?.map((model) => (
+                                <button
+                                  key={model.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setModels((current) => ({ ...current, [selected.id]: model.id }));
+                                    setDetailTestResult(null);
+                                    setDropdownOpen(false);
+                                  }}
+                                  style={{
+                                    width: '100%',
+                                    padding: '8px 12px',
+                                    textAlign: 'left',
+                                    background: 'transparent',
+                                    border: 'none',
+                                    color: 'var(--text)',
+                                    fontSize: '13px',
+                                    cursor: 'pointer',
+                                    outline: 'none',
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    e.currentTarget.style.background = 'var(--surface-hover)';
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.currentTarget.style.background = 'transparent';
+                                  }}
+                                >
+                                  {model.displayName ?? model.id}
+                                </button>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={discoverModels}
+                        disabled={!selected.primaryKeyId || discovering}
+                        title={zh ? '获取可用模型列表' : 'Fetch available models'}
+                      >
+                        {discovering ? <Loader size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                        {zh ? '获取模型' : 'Fetch'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={testModelConnection}
+                        disabled={!selected.primaryKeyId || testing}
+                        title={zh ? '测试模型连接' : 'Test model connection'}
+                      >
+                        {testing ? <Loader size={14} className="animate-spin" /> : <Wifi size={14} />}
+                        {zh ? '测试' : 'Test'}
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={discoverModels}
-                      disabled={!selected.primaryKeyId || discovering}
-                      title={zh ? '获取可用模型列表' : 'Fetch available models'}
-                    >
-                      {discovering ? <Loader size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                      {zh ? '获取模型' : 'Fetch'}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={testModelConnection}
-                      disabled={!selected.primaryKeyId || testing}
-                      title={zh ? '测试模型连接' : 'Test model connection'}
-                    >
-                      {testing ? <Loader size={14} className="animate-spin" /> : <Wifi size={14} />}
-                      {zh ? '测试' : 'Test'}
-                    </button>
                   </div>
-                )}
-              </div>
+                </>
+              )}
 
               {saveSuccessMsg && (
                 <div className="add-provider-message success" style={{ marginTop: '8px' }}>
@@ -563,12 +564,15 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
             {/* ── API Keys ── */}
             <section className="settings-section-card">
               <div className="settings-section-heading settings-section-heading-row">
-                <div><h4>API Keys</h4><p>{zh ? '测试连接后，可将可用的 Key 设为主 Key。' : 'Test a connection before setting a key as primary.'}</p></div>
+                <div><h4>API Keys</h4><p>{zh ? '管理供应商的 API 访问密钥。' : 'Manage API access keys for this provider.'}</p></div>
                 <span className="settings-count">{selected.keys.filter((key) => key.isActive).length} / {selected.keys.length}</span>
               </div>
 
               {selected.keys.length === 0 ? (
-                <div className="provider-key-empty"><KeyRound size={18} />{zh ? '还没有 API Key' : 'No API keys yet'}</div>
+                <div className="provider-key-empty">
+                  <KeyRound size={18} />
+                  {zh ? '还没有 API Key（点击上方的“编辑配置”可添加 Key）' : 'No API keys yet (click Edit above to add)'}
+                </div>
               ) : (
                 <div className="provider-key-list">
                   {selected.keys.map((key) => {
@@ -590,9 +594,16 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
                           <span>{testedAt ? new Date(testedAt).toLocaleDateString(locale === 'zh' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric' }) : (zh ? '尚未测试' : 'Not tested')}</span>
                         </div>
                         <div className="provider-key-actions">
+                          {/* 测试连接在任何模式下均可用 */}
                           <button type="button" onClick={() => testKey(key)} disabled={testing} className="settings-icon-button" title={zh ? '测试连接' : 'Test connection'}>{testing ? <Loader size={14} className="animate-spin" /> : <Wifi size={14} />}</button>
-                          {!key.isPrimary && <button type="button" onClick={() => handleSetPrimaryKey(key.id)} disabled={key.status !== 'valid'} className="settings-icon-button" title={key.status !== 'valid' ? (zh ? '请先测试连接' : 'Test first') : t(locale, 'assistant.setPrimaryKey')}><Star size={14} /></button>}
-                          {!key.isPrimary && <button type="button" onClick={() => setDeleteTarget({ providerId: selected.id, keyId: key.id })} className="settings-icon-button danger" title={zh ? '删除 Key' : 'Delete key'}><Trash2 size={14} /></button>}
+                          
+                          {/* 编辑模式下开放 设为主 Key 和 删除 选项 */}
+                          {isEditingModel && !key.isPrimary && (
+                            <button type="button" onClick={() => handleSetPrimaryKey(key.id)} disabled={key.status !== 'valid'} className="settings-icon-button" title={key.status !== 'valid' ? (zh ? '请先测试连接' : 'Test first') : t(locale, 'assistant.setPrimaryKey')}><Star size={14} /></button>
+                          )}
+                          {isEditingModel && !key.isPrimary && (
+                            <button type="button" onClick={() => setDeleteTarget({ providerId: selected.id, keyId: key.id })} className="settings-icon-button danger" title={zh ? '删除 Key' : 'Delete key'}><Trash2 size={14} /></button>
+                          )}
                         </div>
                       </div>
                     );
@@ -600,15 +611,18 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
                 </div>
               )}
 
-              <div className="provider-add-key">
-                <div className="provider-add-key-title"><Plus size={14} />{zh ? '添加新 Key' : 'Add key'}</div>
-                <div className="provider-add-key-fields">
-                  <input className="settings-input" value={newLabel} onChange={(event) => setNewLabel(event.target.value)} placeholder={zh ? '名称（例如：工作账号）' : 'Label (e.g. Work)'} />
-                  <input className="settings-input" type="password" value={newKey} onChange={(event) => setNewKey(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && addKey()} placeholder={zh ? '粘贴 API Key' : 'Paste API key'} />
-                  <button type="button" className="btn" onClick={addKey} disabled={!newKey.trim() || addingKey === selected.id}>{addingKey === selected.id ? <Loader size={14} className="animate-spin" /> : <Plus size={14} />}{zh ? '添加' : 'Add'}</button>
+              {/* 仅在点击“编辑配置”进入编辑模式后，才渲染“添加新 Key”的输入框和“添加”按钮 */}
+              {isEditingModel && (
+                <div className="provider-add-key" style={{ marginTop: '16px' }}>
+                  <div className="provider-add-key-title"><Plus size={14} />{zh ? '添加新 Key' : 'Add key'}</div>
+                  <div className="provider-add-key-fields">
+                    <input className="settings-input" value={newLabel} onChange={(event) => setNewLabel(event.target.value)} placeholder={zh ? '名称（例如：工作账号）' : 'Label (e.g. Work)'} />
+                    <input className="settings-input" type="password" value={newKey} onChange={(event) => setNewKey(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && addKey()} placeholder={zh ? '粘贴 API Key' : 'Paste API key'} />
+                    <button type="button" className="btn btn-primary" onClick={addKey} disabled={!newKey.trim() || addingKey === selected.id}>{addingKey === selected.id ? <Loader size={14} className="animate-spin" /> : <Plus size={14} />}{zh ? '添加' : 'Add'}</button>
+                  </div>
+                  {addError && <p className="settings-error">{addError}</p>}
                 </div>
-                {addError && <p className="settings-error">{addError}</p>}
-              </div>
+              )}
             </section>
           </div>
         </div>
