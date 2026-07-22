@@ -182,8 +182,16 @@ export interface ModelSelection {
 
 /**
  * Resolve a picker selection against the current provider list.
- * Falls back when conversation still points at a collapsed/stale provider id,
- * or when model/provider fields are empty (common after unmapped wire creates).
+ *
+ * Safe policy (default):
+ * - If preferred provider id exists and has the preferred model → keep.
+ * - If preferred provider id exists but model missing → fall back to that
+ *   provider's default/first model (still a live provider).
+ * - If preferred provider id is non-empty but **not** in the live list
+ *   (deleted / stale mirror) → return null. Do **not** auto-remap by name,
+ *   base URL, or "any host that has this model id". Caller must prompt the
+ *   user to re-select and persist via conversation.update_model.
+ * - If preferred is empty → first ready provider default (new sessions).
  */
 export function resolveModelSelection(
   providers: Array<{
@@ -218,15 +226,13 @@ export function resolveModelSelection(
       models[0]?.id ??
       null;
     if (fallback) return { providerId: byId.id, modelId: fallback };
+    // Provider exists but has no models / no key models → not sendable.
+    return null;
   }
 
-  // Preferred provider id may have been collapsed by name+baseUrl dedupe.
-  // Prefer any provider that still hosts the preferred model.
-  if (preferredModelId) {
-    const host = providers.find((p) =>
-      (p.models ?? []).some((m) => m.id === preferredModelId),
-    );
-    if (host) return { providerId: host.id, modelId: preferredModelId };
+  // Preferred provider was set but is no longer live → block send; no ghost remap.
+  if (preferredProviderId) {
+    return null;
   }
 
   return selectAssistantModel(

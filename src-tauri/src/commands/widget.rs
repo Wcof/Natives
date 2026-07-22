@@ -6,6 +6,14 @@ use tauri::Manager;
 #[tauri::command]
 pub fn theme_ready_signal(app: tauri::AppHandle) -> Result<()> {
     if let Some(window) = app.get_webview_window("main") {
+        // Re-assert macOS chrome right before first paint. window-state (or a
+        // prior frameless config) can leave decorations=false; without this the
+        // system traffic lights never appear even though the UI reserves space.
+        #[cfg(target_os = "macos")]
+        {
+            let _ = window.set_decorations(true);
+            let _ = window.set_title_bar_style(tauri::TitleBarStyle::Overlay);
+        }
         window.show().map_err(|e| Error::Internal(e.to_string()))?;
         window
             .set_focus()

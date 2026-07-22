@@ -13,18 +13,15 @@
  *   7. 能力矩阵表格
  *   8. 工具开关 + 自愈熔断
  *   9. 定时任务面板
- *
- * 术语对齐 CONTEXT.md：
- *   - Runtime = 执行引擎运行时（Claude CLI / Codex CLI / Native）
- *   - Native Runtime = Natives 自建引擎（无 CLI 降级方案）
- *   - Agent Loop = 执行回路（步限/doom/自愈熔断/心跳）
- *   - Context Assembler = 上下文装配器（静态摘要+MCP 按需深查）
- *   - Task Scheduler = 定时调度器
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { Locale } from '@/i18n';
 import { classifyError } from '@/lib/error-classifier';
+import {
+  loadPreferredRuntimeId,
+  savePreferredRuntimeId,
+} from '@/lib/assistant-workspace/persistence';
 import { useToast } from '@/components/ui/Toast';
 
 // ═══════════════════════════════════════════════════════════════
@@ -159,7 +156,7 @@ const ZH = {
   taskEnabled: '启用',
   taskNextRun: '下次执行',
   // Detect button
-  detect: '检测',
+  detect: '重新检测环境',
   detectingBtn: '检测中…',
   // Claude CLI safety
   cliConfig: 'Claude CLI 配置边界',
@@ -254,7 +251,7 @@ const EN: Record<string, string> = {
   taskSchedule: 'Schedule',
   taskEnabled: 'Enabled',
   taskNextRun: 'Next run',
-  detect: 'Detect',
+  detect: 'Redetect environment',
   detectingBtn: 'Detecting…',
   cliConfig: 'Claude CLI config boundary',
   cliConfigDesc: 'AiNative detects whether Claude CLI is available and invokes it through a controlled child process at runtime. This version does not edit ~/.claude/settings.json or modify your shell, terminal, or global Claude configuration.',
@@ -274,18 +271,18 @@ function tt(locale: Locale, key: string): string {
 
 function RuntimeStatusPill({ state, locale }: { state: RuntimeState; locale: Locale }) {
   const tone: Record<RuntimeState, string> = {
-    selected: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
-    available: 'bg-zinc-500/10 text-[var(--text-secondary)] dark:text-[var(--text-disabled)]',
-    degraded: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
-    blocked: 'bg-red-500/15 text-red-600 dark:text-red-400',
-    disabled: 'bg-zinc-500/10 text-[var(--text-secondary)] dark:text-[var(--text-disabled)]',
+    selected: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20',
+    available: 'bg-zinc-500/10 text-[var(--text-secondary)] border border-zinc-500/15',
+    degraded: 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20',
+    blocked: 'bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/20',
+    disabled: 'bg-zinc-500/10 text-[var(--text-secondary)] border border-zinc-500/15',
   };
   const dot: Record<RuntimeState, string> = {
     selected: 'bg-emerald-500', available: 'bg-zinc-400', degraded: 'bg-amber-500',
     blocked: 'bg-red-500', disabled: 'bg-zinc-400',
   };
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${tone[state]}`}>
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${tone[state]}`}>
       <span className={`size-1.5 rounded-full ${dot[state]}`} />
       {tt(locale, state)}
     </span>
@@ -303,11 +300,11 @@ function RuntimeStatusExplanation({ info, locale }: { info: RuntimeStatusInfo; l
     ...(info.recovery ? [{ label: tt(locale, 'recovery'), value: info.recovery }] : []),
   ];
   return (
-    <div className="rounded-md bg-[var(--surface)] px-3.5 divide-y divide-[var(--border)]">
+    <div className="rounded-lg bg-[var(--surface-subtle)] px-4 py-1 divide-y divide-[var(--border)] border border-[var(--border)]/60">
       {rows.map((r) => (
-        <div key={r.label} className="py-2.5 flex items-start justify-between gap-3">
-          <span className="text-[11px] text-[var(--text-secondary)] shrink-0">{r.label}</span>
-          <span className="text-xs text-[var(--text)] text-right">{r.value}</span>
+        <div key={r.label} className="py-2.5 flex items-start justify-between gap-4">
+          <span className="text-[11px] font-medium text-[var(--text-secondary)] shrink-0 mt-0.5">{r.label}</span>
+          <span className="text-xs text-[var(--text)] text-right leading-relaxed">{r.value}</span>
         </div>
       ))}
     </div>
@@ -322,8 +319,8 @@ function RuntimeCard({ name, state, locale, children }: {
   name: string; state: RuntimeState; locale: Locale; children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-lg bg-[var(--surface)] border border-[var(--border)] p-5 flex flex-col gap-4">
-      <div className="flex items-center gap-2 flex-wrap">
+    <div className="rounded-xl bg-[var(--surface)] border border-[var(--border)] p-5 shadow-xs flex flex-col gap-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap pb-1 border-b border-[var(--border)]/50">
         <h3 className="text-sm font-semibold leading-tight text-[var(--text)]">{name}</h3>
         <RuntimeStatusPill state={state} locale={locale} />
       </div>
@@ -337,48 +334,91 @@ function RuntimeCard({ name, state, locale, children }: {
 // ═══════════════════════════════════════════════════════════════
 
 function EnginePickerCard({
-  selected, onSelect, title, tagline, pitch, statusKind, statusText, locale, icon,
+  selected, onSelect, title, tagline, pitch, statusKind, statusText, locale, icon, disabled = false,
 }: {
   selected: boolean; onSelect: () => void; title: string; tagline: string; pitch: string;
-  statusKind: 'ok' | 'warning'; statusText: string; locale: Locale; icon: React.ReactNode;
+  statusKind: 'ok' | 'warning' | 'blocked'; statusText: string; locale: Locale; icon: React.ReactNode;
+  disabled?: boolean;
 }) {
-  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const target = e.target as HTMLElement | null;
-    if (target?.closest('button, a, [role="button"]') !== e.currentTarget) return;
-    onSelect();
+  const isZh = locale.startsWith('zh');
+  const handleClick = () => {
+    if (!disabled) {
+      onSelect();
+    }
   };
+
   return (
     <div
-      role="button" tabIndex={0} onClick={handleClick}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(); } }}
+      role="button"
+      tabIndex={disabled ? -1 : 0}
+      onClick={handleClick}
+      onKeyDown={(e) => {
+        if (!disabled && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
       aria-pressed={selected}
-      className={`relative w-full text-left rounded-lg border p-5 flex flex-col gap-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)] ${
-        selected ? 'border-[var(--primary)] bg-[var(--primary-soft)] ring-1 ring-[var(--primary)]/30' : 'border-[var(--border)] bg-[var(--surface)] hover:bg-[var(--surface)]'
+      aria-disabled={disabled}
+      className={`relative w-full text-left rounded-xl border p-5 flex flex-col gap-3 transition-all ${
+        disabled
+          ? 'border-[var(--border)] bg-[var(--surface-subtle)] opacity-75 cursor-not-allowed'
+          : selected
+            ? 'border-[var(--primary)] bg-[var(--primary-soft)] ring-2 ring-[var(--primary)]/30 shadow-sm cursor-pointer'
+            : 'border-[var(--border)] bg-[var(--surface)] hover:border-[var(--border-hover)] hover:shadow-sm cursor-pointer'
       }`}
     >
-      <span className="absolute top-4 right-4 pointer-events-none">
+      {/* 顶部右侧：选择标记 (Radio / Checkmark badge) */}
+      <div className="absolute top-4 right-4 flex items-center gap-1.5 pointer-events-none">
         {selected ? (
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-[var(--primary)]"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" /></svg>
+          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[var(--primary)] bg-[var(--primary-soft)] border border-[var(--primary)]/30 px-2 py-0.5 rounded-full">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+            {isZh ? '当前默认' : 'Default'}
+          </span>
+        ) : disabled ? (
+          <span className="text-[10px] font-medium text-zinc-400 dark:text-zinc-500 bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 rounded-full">
+            {isZh ? '暂未开放' : 'Locked'}
+          </span>
         ) : (
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-zinc-300 dark:text-zinc-600"><circle cx="12" cy="12" r="10" /></svg>
+          <span className="size-4 rounded-full border-2 border-zinc-300 dark:border-zinc-600 transition-colors" />
         )}
-      </span>
-      <div className="pr-8 flex items-start gap-2.5">
-        <span className="shrink-0 mt-0.5">{icon}</span>
+      </div>
+
+      <div className="pr-20 flex items-start gap-3">
+        <span className="shrink-0 mt-0.5 p-1.5 rounded-lg bg-[var(--surface)] border border-[var(--border)]">{icon}</span>
         <div className="min-w-0">
-          <h4 className={`text-sm font-semibold ${selected ? 'text-[var(--primary)]' : 'text-[var(--text)]'}`}>{title}</h4>
-          <p className="text-sm text-[var(--text-secondary)] mt-1.5">{tagline}</p>
+          <h4 className={`text-sm font-semibold tracking-tight ${selected ? 'text-[var(--primary)]' : 'text-[var(--text)]'}`}>{title}</h4>
+          <p className="text-xs text-[var(--text-secondary)] mt-0.5 font-normal leading-snug">{tagline}</p>
         </div>
       </div>
+
       <p className="text-xs text-[var(--text-secondary)] leading-relaxed line-clamp-2">{pitch}</p>
-      <div className="flex items-center justify-between gap-2 mt-auto flex-wrap">
-        <div className="flex items-center gap-1.5 text-[11px]">
-          {statusKind === 'ok' ? (
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-emerald-500 shrink-0"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" /></svg>
-          ) : (
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-amber-500 shrink-0"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>
-          )}
-          <span className={`truncate ${statusKind === 'ok' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>{statusText}</span>
+
+      {/* 底部状态：指示圆点（非打钩图标，消除与选择打钩的混淆） */}
+      <div className="flex items-center justify-between gap-2 mt-auto pt-2 border-t border-[var(--border)]/50">
+        <div className="flex items-center gap-2 text-[11px]">
+          <span
+            className={`size-2 rounded-full shrink-0 ${
+              statusKind === 'ok'
+                ? 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.4)]'
+                : statusKind === 'warning'
+                  ? 'bg-amber-500 shadow-[0_0_6px_rgba(245,158,11,0.4)]'
+                  : 'bg-zinc-400 dark:bg-zinc-600'
+            }`}
+          />
+          <span
+            className={`truncate font-medium ${
+              statusKind === 'ok'
+                ? 'text-emerald-600 dark:text-emerald-400'
+                : statusKind === 'warning'
+                  ? 'text-amber-600 dark:text-amber-400'
+                  : 'text-[var(--text-secondary)]'
+            }`}
+          >
+            {statusText}
+          </span>
         </div>
       </div>
     </div>
@@ -386,20 +426,20 @@ function EnginePickerCard({
 }
 
 // ═══════════════════════════════════════════════════════════════
-// InfoRow — 键值对行（CodePilot 风格的 divide-y 列表）
+// InfoRow — 键值对行
 // ═══════════════════════════════════════════════════════════════
 
 function InfoRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="py-2.5 flex items-center justify-between gap-3">
-      <span className="text-[11px] text-[var(--text-secondary)] shrink-0">{label}</span>
+      <span className="text-[11px] text-[var(--text-secondary)] shrink-0 font-medium">{label}</span>
       <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">{children}</div>
     </div>
   );
 }
 
 function InfoBlock({ children }: { children: React.ReactNode }) {
-  return <div className="rounded-md bg-[var(--surface)] px-3.5 divide-y divide-[var(--border)]">{children}</div>;
+  return <div className="rounded-lg bg-[var(--surface-subtle)] px-4 divide-y divide-[var(--border)] border border-[var(--border)]/60">{children}</div>;
 }
 
 function InlineNotice({ tone = 'info', children }: { tone?: 'info' | 'warning' | 'error'; children: React.ReactNode }) {
@@ -410,7 +450,7 @@ function InlineNotice({ tone = 'info', children }: { tone?: 'info' | 'warning' |
       : 'border-blue-500/20 bg-blue-500/5 text-blue-600 dark:text-blue-400';
 
   return (
-    <div className={`rounded-md border px-3 py-2 text-[11px] leading-relaxed ${toneClass}`}>
+    <div className={`rounded-lg border px-3.5 py-2.5 text-xs leading-relaxed ${toneClass}`}>
       {children}
     </div>
   );
@@ -436,6 +476,31 @@ const CAP_MAP: Record<RuntimeId, Record<string, string>> = {
   native: { memory: '✅', widget: '✅', tasks: '✅', image: '✅', media: '✅', dashboard: '✅', cli: '✅' },
 };
 
+function CapBadge({ val, isZh }: { val: string; isZh: boolean }) {
+  if (val === '✅') {
+    return (
+      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+        {isZh ? '支持' : 'Supported'}
+      </span>
+    );
+  }
+  if (val === '⚠️') {
+    return (
+      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        {isZh ? '部分' : 'Partial'}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-zinc-400 dark:text-zinc-500 bg-zinc-500/10 px-2 py-0.5 rounded-full">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      {isZh ? '暂无' : 'N/A'}
+    </span>
+  );
+}
+
 function CapabilityMatrix({ locale }: { locale: Locale }) {
   const isZh = locale.startsWith('zh');
   const runtimes: { id: RuntimeId; label: string }[] = [
@@ -444,19 +509,23 @@ function CapabilityMatrix({ locale }: { locale: Locale }) {
     { id: 'native', label: tt(locale, 'nativeRuntime') },
   ];
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto rounded-lg border border-[var(--border)]/60">
       <table className="w-full text-xs border-collapse">
         <thead>
-          <tr className="border-b border-[var(--border)]">
-            <th className="py-2 px-3 text-left text-[var(--text-secondary)] font-medium">{tt(locale, 'capability')}</th>
-            {runtimes.map((r) => <th key={r.id} className="py-2 px-3 text-center text-[var(--text-secondary)] font-medium">{r.label}</th>)}
+          <tr className="border-b border-[var(--border)] bg-[var(--surface-subtle)]">
+            <th className="py-2.5 px-4 text-left text-[var(--text-secondary)] font-semibold">{tt(locale, 'capability')}</th>
+            {runtimes.map((r) => <th key={r.id} className="py-2.5 px-4 text-center text-[var(--text-secondary)] font-semibold">{r.label}</th>)}
           </tr>
         </thead>
-        <tbody>
+        <tbody className="divide-y divide-[var(--border)]/40 bg-[var(--surface)]">
           {CAP_ROWS.map((row) => (
-            <tr key={row.key} className="border-b border-zinc-100/50 dark:border-zinc-800/50">
-              <td className="py-2 px-3 text-[var(--text)]">{isZh ? row.zh : row.en}</td>
-              {runtimes.map((r) => <td key={r.id} className="py-2 px-3 text-center">{CAP_MAP[r.id][row.key]}</td>)}
+            <tr key={row.key} className="hover:bg-[var(--surface-subtle)]/50 transition-colors">
+              <td className="py-2.5 px-4 text-[var(--text)] font-medium">{isZh ? row.zh : row.en}</td>
+              {runtimes.map((r) => (
+                <td key={r.id} className="py-2.5 px-4 text-center">
+                  <CapBadge val={CAP_MAP[r.id][row.key]} isZh={isZh} />
+                </td>
+              ))}
             </tr>
           ))}
         </tbody>
@@ -473,13 +542,19 @@ function ToolToggle({ label, sideEffect, enabled, onToggle, locale }: {
   label: string; sideEffect: boolean; enabled: boolean; onToggle: () => void; locale: Locale;
 }) {
   return (
-    <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
+    <div className="flex items-center justify-between py-2.5 px-3.5 rounded-lg bg-[var(--surface)] border border-[var(--border)] shadow-xs">
       <div className="flex items-center gap-2">
-        <span className="text-sm text-[var(--text)]">{label}</span>
-        {sideEffect && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400">{tt(locale, 'sideEffect')}</span>}
+        <span className="text-xs font-medium text-[var(--text)]">{label}</span>
+        {sideEffect && <span className="text-[10px] px-1.5 py-0.5 rounded-md font-medium bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20">{tt(locale, 'sideEffect')}</span>}
       </div>
-      <button onClick={onToggle} role="switch" aria-checked={enabled}
-        className={`relative w-9 h-5 rounded-full transition-colors ${enabled ? 'bg-[var(--primary-soft)]' : 'bg-zinc-300 dark:bg-zinc-600'}`}>
+      <button
+        onClick={onToggle}
+        role="switch"
+        aria-checked={enabled}
+        className={`relative w-9 h-5 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)] ${
+          enabled ? 'bg-[var(--primary)]' : 'bg-zinc-300 dark:bg-zinc-600'
+        }`}
+      >
         <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${enabled ? 'left-[18px]' : 'left-0.5'}`} />
       </button>
     </div>
@@ -519,18 +594,18 @@ function ScheduledTasksPanel({ locale }: { locale: Locale }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-sm text-[var(--text-secondary)]">{tt(locale, 'tasksDesc')}</p>
-      {loading ? <div className="text-sm text-[var(--text-disabled)] py-4 text-center">…</div>
+      <p className="text-xs text-[var(--text-secondary)] leading-relaxed">{tt(locale, 'tasksDesc')}</p>
+      {loading ? <div className="text-xs text-[var(--text-disabled)] py-4 text-center">…</div>
         : errorMessage ? <InlineNotice tone="error">{errorMessage}</InlineNotice>
-        : tasks.length === 0 ? <div className="text-sm text-[var(--text-disabled)] py-4 text-center">{tt(locale, 'noTasks')}</div>
+        : tasks.length === 0 ? <div className="text-xs text-[var(--text-disabled)] py-4 text-center border border-dashed border-[var(--border)] rounded-lg bg-[var(--surface-subtle)]">{tt(locale, 'noTasks')}</div>
         : <div className="flex flex-col gap-2">{tasks.map((t) => (
-          <div key={t.id} className="flex items-center justify-between py-2 px-3 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
+          <div key={t.id} className="flex items-center justify-between py-2.5 px-3.5 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
             <div className="flex flex-col gap-0.5 min-w-0">
-              <span className="text-sm font-medium text-[var(--text)] truncate">{t.name}</span>
-              <span className="text-xs text-[var(--text-secondary)] truncate">{t.prompt}</span>
+              <span className="text-xs font-semibold text-[var(--text)] truncate">{t.name}</span>
+              <span className="text-[11px] text-[var(--text-secondary)] truncate">{t.prompt}</span>
             </div>
             <div className="flex items-center gap-3 shrink-0">
-              <span className={`text-[10px] px-1.5 py-0.5 rounded ${t.enabled ? 'bg-emerald-500/15 text-emerald-600' : 'bg-zinc-500/10 text-[var(--text-secondary)]'}`}>{t.enabled ? tt(locale, 'taskEnabled') : 'Off'}</span>
+              <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${t.enabled ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/20' : 'bg-zinc-500/10 text-[var(--text-secondary)]'}`}>{t.enabled ? tt(locale, 'taskEnabled') : 'Off'}</span>
               <span className="text-[11px] text-[var(--text-secondary)]">{t.nextRun}</span>
             </div>
           </div>
@@ -545,7 +620,7 @@ function ScheduledTasksPanel({ locale }: { locale: Locale }) {
 // ═══════════════════════════════════════════════════════════════
 
 const Icons = {
-  Check: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-emerald-500"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" /></svg>,
+  Check: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-emerald-500"><polyline points="20 6 9 17 4 12" /></svg>,
   X: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-red-500"><circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></svg>,
   Warning: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-amber-500"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>,
   Refresh: () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>,
@@ -565,13 +640,42 @@ export default function RuntimePanel({ locale }: { locale: Locale }) {
   const { toast } = useToast();
 
   // ── Runtime state ──
-  const [selectedRuntime, setSelectedRuntime] = useState<RuntimeId>('native');
+  const [selectedRuntime, setSelectedRuntime] = useState<RuntimeId>(() => {
+    const pref = loadPreferredRuntimeId();
+    if (pref === 'claude_cli' || pref === 'codex_cli' || pref === 'native') return pref;
+    return 'native';
+  });
+
   const [detecting, setDetecting] = useState(false);
   const [claudeAvailable, setClaudeAvailable] = useState(false);
   const [codexAvailable, setCodexAvailable] = useState(false);
   const [claudeVersion, setClaudeVersion] = useState<string | null>(null);
   const [codexVersion, setCodexVersion] = useState<string | null>(null);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
+
+  const selectRuntime = (id: RuntimeId) => {
+    // Codex stays unselectable until app-server is real (REQ-T02).
+    if (id === 'codex_cli') {
+      toast(
+        isZh
+          ? 'Codex 尚未 available，保持不可选（app-server 未实现）'
+          : 'Codex stays unselectable until app-server is available',
+        'warning',
+      );
+      return;
+    }
+    if (id === 'claude_cli' && !claudeAvailable) {
+      toast(
+        isZh
+          ? '未检测到 Claude CLI，无法设为默认引擎'
+          : 'Claude CLI not detected — cannot set as default',
+        'warning',
+      );
+      return;
+    }
+    setSelectedRuntime(id);
+    savePreferredRuntimeId(id);
+  };
 
   // ── Tool settings ──
   const [enabledTools, setEnabledTools] = useState<Record<string, boolean>>(DEFAULT_ENABLED_TOOLS);
@@ -664,10 +768,15 @@ export default function RuntimePanel({ locale }: { locale: Locale }) {
         : { state: 'available', reason: isZh ? 'Claude CLI 已安装但未被设为默认引擎' : 'Claude CLI is installed but isn\'t the default engine', impact: isZh ? '想切回 Claude CLI 内核，把上方「默认引擎」切到 Claude CLI 即可' : 'Switch the "Default engine" selector above to use Claude CLI' };
     }
     if (id === 'codex_cli') {
-      if (!codexAvailable) return { state: 'blocked', reason: isZh ? '未在 PATH 上检测到 codex 命令' : 'codex binary not detected on PATH', impact: isZh ? 'Codex Runtime 整体无法启用' : 'Codex Runtime is fully blocked', recovery: isZh ? '按 Codex 官方指引安装 codex CLI，或设置 CODEX_BIN 指向自定义路径' : 'Install codex CLI per the official guide, or set CODEX_BIN to point at a custom binary' };
-      return isSelected
-        ? { state: 'selected', reason: isZh ? 'Codex 应用服务已就绪并被设为默认引擎' : 'Codex app-server is ready and set as the default engine', impact: isZh ? '新会话默认走 Codex' : 'New chats run on Codex' }
-        : { state: 'available', reason: isZh ? 'Codex 应用服务已就绪但未被设为默认' : 'Codex app-server is ready but not the default engine', impact: isZh ? '想把 Codex 设为默认，把上方「默认引擎」切到 Codex' : 'Switch the "Default engine" selector above to make Codex the default' };
+      // Product red line (REQ-T02): app-server not implemented — always blocked.
+      return {
+        state: 'blocked',
+        reason: isZh
+          ? 'Codex app-server 尚未实现（检测到二进制也不开放）'
+          : 'Codex app-server is not implemented (binary alone does not enable it)',
+        impact: isZh ? '无法将 Codex 设为默认引擎；run.start(runtime_id=codex_cli) 会被拒绝' : 'Cannot set Codex as default; run.start(runtime_id=codex_cli) is rejected',
+        recovery: isZh ? '使用 Native 或 Claude CLI；待 app-server JSON-RPC 落地后再开放' : 'Use Native or Claude CLI until app-server JSON-RPC ships',
+      };
     }
     return isSelected
       ? { state: 'selected', reason: isZh ? 'Native 是默认内核（无需 CLI，直连 provider API）' : 'Native is the default engine (no CLI required, direct provider API)', impact: isZh ? '新会话默认用 Native；工具、权限和上下文由 Natives 自己管理' : 'New chats run on Native; tools, permissions, and context managed by Natives itself' }
@@ -686,64 +795,100 @@ export default function RuntimePanel({ locale }: { locale: Locale }) {
     { key: 'lint_module', label: isZh ? '检查模块' : 'Lint Module', sideEffect: false },
   ];
 
-  const sectionCard = 'rounded-lg bg-[var(--surface)] border border-[var(--border)] p-5 flex flex-col gap-4';
-  const sectionTitle = 'text-sm font-semibold text-[var(--text)] uppercase tracking-wider';
+  const sectionCard = 'rounded-xl bg-[var(--surface)] border border-[var(--border)] p-5 shadow-xs flex flex-col gap-4';
+  const sectionTitle = 'text-xs font-semibold text-[var(--text-secondary)] uppercase tracking-wider';
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8">
+    <div className="max-w-4xl mx-auto space-y-8 pb-10">
       {/* ── 1. 页面标题 ── */}
       <div>
         <h2 className="text-xl font-semibold tracking-tight text-[var(--text)]">{tt(locale, 'pageTitle')}</h2>
-        <p className="text-sm text-[var(--text-secondary)] mt-1.5">{tt(locale, 'pageDesc')}</p>
+        <p className="text-xs text-[var(--text-secondary)] mt-1.5 leading-relaxed">{tt(locale, 'pageDesc')}</p>
       </div>
 
       {runtimeError && <InlineNotice tone="error">{runtimeError}</InlineNotice>}
 
       {/* ── 2. 默认引擎选择器 ── */}
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-semibold text-[var(--text)]">{tt(locale, 'defaultEngine')}</h3>
-          <button onClick={handleDetect} disabled={detecting} className="text-xs text-[var(--primary)] hover:text-blue-600 font-medium disabled:opacity-50">
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-[var(--text)]">{tt(locale, 'defaultEngine')}</h3>
+            <p className="text-xs text-[var(--text-secondary)] mt-0.5">{tt(locale, 'defaultEngineDesc')}</p>
+          </div>
+          <button
+            onClick={handleDetect}
+            disabled={detecting}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg text-[var(--primary)] bg-[var(--primary-soft)] hover:bg-[var(--primary)]/15 border border-[var(--primary)]/20 transition-colors disabled:opacity-50 shrink-0"
+          >
+            <Icons.Refresh />
             {detecting ? tt(locale, 'detectingBtn') : tt(locale, 'detect')}
           </button>
         </div>
-        <p className="text-[11px] text-[var(--text-secondary)] mb-3">{tt(locale, 'defaultEngineDesc')}</p>
 
         {driftWarning && (
-          <div className="mb-3 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
-            <Icons.Warning />
-            <span>{tt(locale, 'driftWarningCliMissing')}</span>
+          <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3.5 py-2.5 text-xs text-amber-600 dark:text-amber-400 flex items-start gap-2">
+            <span className="shrink-0 mt-0.5"><Icons.Warning /></span>
+            <span className="leading-relaxed">{tt(locale, 'driftWarningCliMissing')}</span>
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
           <EnginePickerCard
-            selected={selectedRuntime === 'claude_cli'} onSelect={() => setSelectedRuntime('claude_cli')}
-            title={tt(locale, 'claudeCli')} icon={<Icons.Anthropic />} tagline={tt(locale, 'claudeCliTag')} pitch={tt(locale, 'claudeCliPitch')}
-            statusKind={claudeAvailable ? 'ok' : 'warning'} statusText={claudeAvailable ? `${tt(locale, 'installedV')}${claudeVersion ?? ''}` : tt(locale, 'notInstalled')} locale={locale}
+            selected={selectedRuntime === 'claude_cli'}
+            onSelect={() => selectRuntime('claude_cli')}
+            title={tt(locale, 'claudeCli')}
+            icon={<Icons.Anthropic />}
+            tagline={tt(locale, 'claudeCliTag')}
+            pitch={tt(locale, 'claudeCliPitch')}
+            statusKind={claudeAvailable ? 'ok' : 'warning'}
+            statusText={claudeAvailable ? `${tt(locale, 'installedV')}${claudeVersion ?? ''}` : tt(locale, 'notInstalled')}
+            locale={locale}
           />
           <EnginePickerCard
-            selected={selectedRuntime === 'codex_cli'} onSelect={() => setSelectedRuntime('codex_cli')}
-            title={tt(locale, 'codexCli')} icon={<Icons.OpenAI />} tagline={tt(locale, 'codexCliTag')} pitch={tt(locale, 'codexCliPitch')}
-            statusKind={codexAvailable ? 'ok' : 'warning'} statusText={codexAvailable ? tt(locale, 'ready') : tt(locale, 'notReady')} locale={locale}
+            selected={selectedRuntime === 'codex_cli'}
+            onSelect={() => selectRuntime('codex_cli')}
+            title={tt(locale, 'codexCli')}
+            icon={<Icons.OpenAI />}
+            tagline={tt(locale, 'codexCliTag')}
+            pitch={tt(locale, 'codexCliPitch')}
+            statusKind="blocked"
+            statusText={isZh ? 'Codex app-server 未接入' : 'App-server locked'}
+            locale={locale}
+            disabled={true}
           />
           <EnginePickerCard
-            selected={selectedRuntime === 'native'} onSelect={() => setSelectedRuntime('native')}
-            title={tt(locale, 'nativeRuntime')} icon={<Icons.Native />} tagline={tt(locale, 'nativeTag')} pitch={tt(locale, 'nativePitch')}
-            statusKind="ok" statusText={tt(locale, 'alwaysAvailable')} locale={locale}
+            selected={selectedRuntime === 'native'}
+            onSelect={() => selectRuntime('native')}
+            title={tt(locale, 'nativeRuntime')}
+            icon={<Icons.Native />}
+            tagline={tt(locale, 'nativeTag')}
+            pitch={tt(locale, 'nativePitch')}
+            statusKind="ok"
+            statusText={tt(locale, 'alwaysAvailable')}
+            locale={locale}
           />
         </div>
       </div>
 
       {/* ── 3. "新会话会用什么" 只读解释块 ── */}
       <div className={sectionCard}>
-        <h3 className="text-sm font-semibold leading-tight text-[var(--text)]">{tt(locale, 'whatNewChatUses')}</h3>
-        <p className="text-[11px] text-[var(--text-secondary)]">{tt(locale, 'whatNewChatDesc')}</p>
+        <div className="flex flex-col gap-1">
+          <h3 className="text-sm font-semibold leading-tight text-[var(--text)]">{tt(locale, 'whatNewChatUses')}</h3>
+          <p className="text-xs text-[var(--text-secondary)] leading-relaxed">{tt(locale, 'whatNewChatDesc')}</p>
+        </div>
         <InfoBlock>
-          <InfoRow label={tt(locale, 'runtimeLabel')}>{selectedRuntime === 'claude_cli' ? tt(locale, 'claudeCli') : selectedRuntime === 'codex_cli' ? tt(locale, 'codexCli') : tt(locale, 'nativeRuntime')}</InfoRow>
+          <InfoRow label={tt(locale, 'runtimeLabel')}>
+            <span className="font-semibold text-[var(--primary)]">
+              {selectedRuntime === 'claude_cli' ? tt(locale, 'claudeCli') : selectedRuntime === 'codex_cli' ? tt(locale, 'codexCli') : tt(locale, 'nativeRuntime')}
+            </span>
+          </InfoRow>
           <InfoRow label={tt(locale, 'defaultProvider')}>{tt(locale, 'notConfigured')}</InfoRow>
           <InfoRow label={tt(locale, 'defaultModel')}>{tt(locale, 'notConfigured')}</InfoRow>
-          {driftWarning && <InfoRow label={tt(locale, 'fallbackPath')}><span className="text-amber-600 dark:text-amber-400">{tt(locale, 'cliUnavailableFallback')}</span></InfoRow>}
+          {driftWarning && (
+            <InfoRow label={tt(locale, 'fallbackPath')}>
+              <span className="font-medium text-amber-600 dark:text-amber-400">{tt(locale, 'cliUnavailableFallback')}</span>
+            </InfoRow>
+          )}
         </InfoBlock>
       </div>
 
@@ -752,23 +897,34 @@ export default function RuntimePanel({ locale }: { locale: Locale }) {
         <RuntimeStatusExplanation info={getRuntimeStatus('claude_cli')} locale={locale} />
         <InfoBlock>
           <InfoRow label={tt(locale, 'cliStatus')}>
-            {claudeAvailable ? (<><Icons.Check /><span className="font-mono">v{claudeVersion ?? '?'}</span></>) : (<><Icons.X /><span>{tt(locale, 'notInstalledShort')}</span></>)}
-            <button onClick={handleDetect} className="p-1 rounded hover:bg-[var(--surface)]"><Icons.Refresh /></button>
+            {claudeAvailable ? (
+              <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
+                <Icons.Check />
+                <span className="font-mono text-xs">v{claudeVersion ?? '?'}</span>
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-zinc-400 font-medium">
+                <Icons.X />
+                <span>{tt(locale, 'notInstalledShort')}</span>
+              </span>
+            )}
+            <button onClick={handleDetect} className="p-1 rounded-md hover:bg-[var(--surface)] text-[var(--text-secondary)] hover:text-[var(--text)] transition-colors">
+              <Icons.Refresh />
+            </button>
           </InfoRow>
         </InfoBlock>
-        {/* Claude CLI 的全局配置属于用户环境，当前版本只展示边界，不提供假编辑器。 */}
-        <details className="rounded-md bg-[var(--surface)] px-3.5 py-2 group">
-          <summary className="flex items-center justify-between gap-2 cursor-pointer text-xs font-medium select-none list-none text-[var(--text-secondary)]">
-            <span className="flex items-center gap-1.5"><Icons.Code />{tt(locale, 'cliConfig')}</span>
+        <details className="rounded-lg bg-[var(--surface-subtle)] px-4 py-2.5 group border border-[var(--border)]/60">
+          <summary className="flex items-center justify-between gap-2 cursor-pointer text-xs font-medium select-none list-none text-[var(--text-secondary)] hover:text-[var(--text)]">
+            <span className="flex items-center gap-2"><Icons.Code />{tt(locale, 'cliConfig')}</span>
             <span className="transition-transform group-open:rotate-180"><Icons.Chevron /></span>
           </summary>
-          <p className="mt-1 mb-3 text-[11px] text-[var(--text-secondary)]">{tt(locale, 'cliConfigDesc')}</p>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <div className="rounded-md border border-[var(--border)] bg-white/60 px-3 py-2 dark:bg-zinc-900/40">
+          <p className="mt-2 mb-3 text-xs text-[var(--text-secondary)] leading-relaxed">{tt(locale, 'cliConfigDesc')}</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
               <div className="text-xs font-medium text-[var(--text)]">{tt(locale, 'cliConfigUserOwned')}</div>
               <p className="mt-1 text-[11px] leading-relaxed text-[var(--text-secondary)]">{tt(locale, 'cliConfigUserOwnedDesc')}</p>
             </div>
-            <div className="rounded-md border border-[var(--border)] bg-white/60 px-3 py-2 dark:bg-zinc-900/40">
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
               <div className="text-xs font-medium text-[var(--text)]">{tt(locale, 'cliConfigSandbox')}</div>
               <p className="mt-1 text-[11px] leading-relaxed text-[var(--text-secondary)]">{tt(locale, 'cliConfigSandboxDesc')}</p>
             </div>
@@ -781,39 +937,49 @@ export default function RuntimePanel({ locale }: { locale: Locale }) {
         <RuntimeStatusExplanation info={getRuntimeStatus('codex_cli')} locale={locale} />
         <InfoBlock>
           <InfoRow label={tt(locale, 'appServer')}>
-            {codexAvailable ? (<><Icons.Check /><span className="font-mono">{codexVersion ?? ''}</span></>) : (<><Icons.X /><span>{tt(locale, 'notInstalledShort')}</span></>)}
-            <button onClick={handleDetect} className="p-1 rounded hover:bg-[var(--surface)]"><Icons.Refresh /></button>
+            {codexAvailable ? (
+              <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
+                <Icons.Check />
+                <span className="font-mono text-xs">{codexVersion ?? ''}</span>
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-zinc-400 font-medium">
+                <Icons.X />
+                <span>{tt(locale, 'notInstalledShort')}</span>
+              </span>
+            )}
+            <button onClick={handleDetect} className="p-1 rounded-md hover:bg-[var(--surface)] text-[var(--text-secondary)] hover:text-[var(--text)] transition-colors">
+              <Icons.Refresh />
+            </button>
           </InfoRow>
         </InfoBlock>
-        <div className="flex flex-wrap gap-2 justify-end">
-          <InlineNotice tone="warning">{tt(locale, 'codexInspectionUnavailable')}</InlineNotice>
-        </div>
+        <InlineNotice tone="warning">{tt(locale, 'codexInspectionUnavailable')}</InlineNotice>
       </RuntimeCard>
 
       {/* ── 6. Native 详情卡片 ── */}
       <RuntimeCard name={tt(locale, 'nativeRuntime')} state={getRuntimeStatus('native').state} locale={locale}>
         <RuntimeStatusExplanation info={getRuntimeStatus('native')} locale={locale} />
         <InfoBlock>
-          <div className="py-2.5 flex items-start justify-between gap-3">
-            <div className="flex flex-col gap-0.5 max-w-[55%]">
-              <span className="text-xs font-medium text-[var(--text)]">{tt(locale, 'capabilities')}</span>
-              <span className="text-[11px] text-[var(--text-secondary)] leading-snug">{tt(locale, 'capabilitiesDesc')}</span>
+          <div className="py-2.5 flex items-start justify-between gap-4">
+            <div className="flex flex-col gap-0.5 max-w-[65%]">
+              <span className="text-xs font-semibold text-[var(--text)]">{tt(locale, 'capabilities')}</span>
+              <span className="text-[11px] text-[var(--text-secondary)] leading-relaxed">{tt(locale, 'capabilitiesDesc')}</span>
             </div>
-            <span className="text-[10px] text-[var(--text-disabled)]">{tt(locale, 'shipsWithApp')}</span>
+            <span className="text-[10px] text-[var(--text-disabled)] font-medium bg-[var(--surface)] px-2 py-0.5 rounded-full border border-[var(--border)] shrink-0">{tt(locale, 'shipsWithApp')}</span>
           </div>
-          <div className="py-2.5 flex items-start justify-between gap-3">
-            <div className="flex flex-col gap-0.5 max-w-[55%]">
-              <span className="text-xs font-medium text-[var(--text)]">{tt(locale, 'permissions')}</span>
-              <span className="text-[11px] text-[var(--text-secondary)] leading-snug">{tt(locale, 'permissionsDesc')}</span>
+          <div className="py-2.5 flex items-start justify-between gap-4">
+            <div className="flex flex-col gap-0.5 max-w-[65%]">
+              <span className="text-xs font-semibold text-[var(--text)]">{tt(locale, 'permissions')}</span>
+              <span className="text-[11px] text-[var(--text-secondary)] leading-relaxed">{tt(locale, 'permissionsDesc')}</span>
             </div>
-            <span className="text-[10px] text-[var(--text-disabled)]">{tt(locale, 'perSession')}</span>
+            <span className="text-[10px] text-[var(--text-disabled)] font-medium bg-[var(--surface)] px-2 py-0.5 rounded-full border border-[var(--border)] shrink-0">{tt(locale, 'perSession')}</span>
           </div>
-          <div className="py-2.5 flex items-start justify-between gap-3">
-            <div className="flex flex-col gap-0.5 max-w-[55%]">
-              <span className="text-xs font-medium text-[var(--text)]">{tt(locale, 'context')}</span>
-              <span className="text-[11px] text-[var(--text-secondary)] leading-snug">{tt(locale, 'contextDesc')}</span>
+          <div className="py-2.5 flex items-start justify-between gap-4">
+            <div className="flex flex-col gap-0.5 max-w-[65%]">
+              <span className="text-xs font-semibold text-[var(--text)]">{tt(locale, 'context')}</span>
+              <span className="text-[11px] text-[var(--text-secondary)] leading-relaxed">{tt(locale, 'contextDesc')}</span>
             </div>
-            <span className="text-[10px] text-[var(--text-disabled)]">{tt(locale, 'local')}</span>
+            <span className="text-[10px] text-[var(--text-disabled)] font-medium bg-[var(--surface)] px-2 py-0.5 rounded-full border border-[var(--border)] shrink-0">{tt(locale, 'local')}</span>
           </div>
         </InfoBlock>
       </RuntimeCard>
@@ -827,34 +993,60 @@ export default function RuntimePanel({ locale }: { locale: Locale }) {
       {/* ── 8. 工具开关 + 自愈熔断 ── */}
       <div className={sectionCard}>
         <h3 className={sectionTitle}>{tt(locale, 'toolSettings')}</h3>
-        <div className="flex flex-col gap-2">
-          {tools.map(tool => <ToolToggle key={tool.key} label={tool.label} sideEffect={tool.sideEffect} enabled={enabledTools[tool.key] ?? false} onToggle={() => toggleTool(tool.key)} locale={locale} />)}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          {tools.map(tool => (
+            <ToolToggle
+              key={tool.key}
+              label={tool.label}
+              sideEffect={tool.sideEffect}
+              enabled={enabledTools[tool.key] ?? false}
+              onToggle={() => toggleTool(tool.key)}
+              locale={locale}
+            />
+          ))}
         </div>
       </div>
 
       <div className={sectionCard}>
         <h3 className={sectionTitle}>{tt(locale, 'selfHealTitle')}</h3>
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-3.5">
           <div className="flex items-center justify-between">
-            <span className="text-sm text-[var(--text)]">{tt(locale, 'maxSelfHeal')}</span>
-            <input type="number" min={1} max={10} value={maxSelfHeal} onChange={(e) => updateMaxSelfHeal(Number(e.target.value))}
-              className="w-14 text-sm font-semibold text-[var(--primary)] text-center py-1 px-2 rounded-md bg-zinc-50 dark:bg-zinc-800 border border-[var(--border)] outline-none" />
+            <span className="text-xs font-medium text-[var(--text)]">{tt(locale, 'maxSelfHeal')}</span>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={maxSelfHeal}
+              onChange={(e) => updateMaxSelfHeal(Number(e.target.value))}
+              className="w-16 text-xs font-semibold text-[var(--primary)] text-center py-1 px-2 rounded-lg bg-[var(--surface-subtle)] border border-[var(--border)] outline-none focus:ring-2 focus:ring-[var(--primary)]/30"
+            />
           </div>
-          <p className="text-xs text-[var(--text-secondary)]">{tt(locale, 'selfHealDesc')}</p>
+          <p className="text-xs text-[var(--text-secondary)] leading-relaxed">{tt(locale, 'selfHealDesc')}</p>
+
+          <div className="h-px bg-[var(--border)]/60 my-0.5" />
+
           <div className="flex items-center justify-between">
-            <span className="text-sm text-[var(--text)]">{tt(locale, 'maxSteps')}</span>
-            <input type="number" min={10} max={200} value={maxSteps} onChange={(e) => updateMaxSteps(Number(e.target.value))}
-              className="w-14 text-sm font-semibold text-[var(--primary)] text-center py-1 px-2 rounded-md bg-zinc-50 dark:bg-zinc-800 border border-[var(--border)] outline-none" />
+            <span className="text-xs font-medium text-[var(--text)]">{tt(locale, 'maxSteps')}</span>
+            <input
+              type="number"
+              min={10}
+              max={200}
+              value={maxSteps}
+              onChange={(e) => updateMaxSteps(Number(e.target.value))}
+              className="w-16 text-xs font-semibold text-[var(--primary)] text-center py-1 px-2 rounded-lg bg-[var(--surface-subtle)] border border-[var(--border)] outline-none focus:ring-2 focus:ring-[var(--primary)]/30"
+            />
           </div>
+
           <div className="flex items-center justify-between">
-            <span className="text-sm text-[var(--text)]">{tt(locale, 'circuitBreaker')}</span>
-            <span className="text-xs text-red-500 font-medium">{tt(locale, 'circuitBreakerEnabled')}</span>
+            <span className="text-xs font-medium text-[var(--text)]">{tt(locale, 'circuitBreaker')}</span>
+            <span className="text-xs text-emerald-600 dark:text-emerald-400 font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">{tt(locale, 'circuitBreakerEnabled')}</span>
           </div>
+
           <div className="flex items-center justify-between">
-            <span className="text-sm text-[var(--text)]">{tt(locale, 'doomLoop')}</span>
-            <span className="text-xs text-[var(--text-secondary)]">3 {isZh ? '次' : 'times'}</span>
+            <span className="text-xs font-medium text-[var(--text)]">{tt(locale, 'doomLoop')}</span>
+            <span className="text-xs text-[var(--text-secondary)] font-medium">3 {isZh ? '次' : 'times'}</span>
           </div>
-          <p className="text-xs text-[var(--text-secondary)]">{tt(locale, 'doomLoopDesc')}</p>
+          <p className="text-xs text-[var(--text-secondary)] leading-relaxed">{tt(locale, 'doomLoopDesc')}</p>
         </div>
       </div>
 

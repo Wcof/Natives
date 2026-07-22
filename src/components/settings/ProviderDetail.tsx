@@ -6,21 +6,25 @@ import {
   Ban,
   Check,
   CircleAlert,
+  Edit3,
   KeyRound,
   Loader,
+  Lock,
+  Pencil,
   Plus,
+  RefreshCw,
   Search,
   Server,
   Star,
   Trash2,
   Wifi,
   X,
-  RefreshCw,
 } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import type { ProviderKeyStatus, ProviderKeySummary, ProviderSummary, TestKeyResult } from '@/types/provider';
 import { classifyError } from '@/lib/error-classifier';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { useToast } from '@/components/ui/Toast';
 
 const STATUS_ICON: Record<ProviderKeyStatus, React.ReactNode> = {
   valid: <Check size={12} />,
@@ -54,11 +58,18 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
   onDeleteProvider: (pid: string) => void;
 }) {
   const zh = locale === 'zh';
+  const { toast } = useToast();
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(providers[0]?.id ?? null);
+  
+  // ── 编辑模式控制 ──
+  const [isEditingModel, setIsEditingModel] = useState(false);
+
   const [models, setModels] = useState<Record<string, string>>({});
   const [savingModel, setSavingModel] = useState<string | null>(null);
   const [modelErrors, setModelErrors] = useState<Record<string, string>>({});
+  const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
+
   const [newLabel, setNewLabel] = useState('');
   const [newKey, setNewKey] = useState('');
   const [addingKey, setAddingKey] = useState<string | null>(null);
@@ -81,6 +92,14 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
   }, [providers, query]);
   const selected = providers.find((provider) => provider.id === selectedId) ?? filtered[0] ?? null;
 
+  const handleSelectProvider = (pid: string) => {
+    setSelectedId(pid);
+    setIsEditingModel(false);
+    setAddError(null);
+    setSaveSuccessMsg(null);
+    setDetailTestResult(null);
+  };
+
   if (loading) {
     return <div className="settings-state"><Loader size={22} className="animate-spin" /><span>{t(locale, 'settings.providersLoading')}</span></div>;
   }
@@ -96,15 +115,45 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
     );
   }
 
+  const startEdit = () => {
+    if (!selected) return;
+    setModels((current) => ({
+      ...current,
+      [selected.id]: current[selected.id] ?? selected.defaultModel ?? '',
+    }));
+    setIsEditingModel(true);
+    setSaveSuccessMsg(null);
+    setModelErrors((current) => ({ ...current, [selected.id]: '' }));
+  };
+
+  const cancelEdit = () => {
+    if (!selected) return;
+    setModels((current) => ({
+      ...current,
+      [selected.id]: selected.defaultModel ?? '',
+    }));
+    setIsEditingModel(false);
+    setSaveSuccessMsg(null);
+    setModelErrors((current) => ({ ...current, [selected.id]: '' }));
+    setDetailTestResult(null);
+  };
+
   const saveModel = async () => {
     if (!selected) return;
     const value = (models[selected.id] ?? selected.defaultModel ?? '').trim();
     setSavingModel(selected.id);
     setModelErrors((current) => ({ ...current, [selected.id]: '' }));
+    setSaveSuccessMsg(null);
     try {
       await onSaveDefaults(selected.id, value || null);
+      const msg = zh ? '配置与默认模型保存成功！' : 'Configuration saved successfully!';
+      setSaveSuccessMsg(msg);
+      toast(msg, 'success');
+      setIsEditingModel(false);
     } catch (error) {
-      setModelErrors((current) => ({ ...current, [selected.id]: classifyError(error, { locale }).userMessage }));
+      const errMsg = classifyError(error, { locale }).userMessage;
+      setModelErrors((current) => ({ ...current, [selected.id]: errMsg }));
+      toast(errMsg, 'error');
     } finally {
       setSavingModel(null);
     }
@@ -114,12 +163,16 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
     if (!selected || !newKey.trim()) return;
     setAddingKey(selected.id);
     setAddError(null);
+    const keyName = newLabel.trim() || `Key ${selected.keys.length + 1}`;
     try {
-      await onAddKey(selected.id, newLabel.trim() || `Key ${selected.keys.length + 1}`, newKey);
+      await onAddKey(selected.id, keyName, newKey);
       setNewLabel('');
       setNewKey('');
+      toast(zh ? `API Key "${keyName}" 添加成功` : `API Key "${keyName}" added`, 'success');
     } catch (error) {
-      setAddError(classifyError(error, { locale }).userMessage);
+      const errMsg = classifyError(error, { locale }).userMessage;
+      setAddError(errMsg);
+      toast(errMsg, 'error');
     } finally {
       setAddingKey(null);
     }
@@ -130,11 +183,42 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
     setTestingId(key.id);
     try {
       const result = await onTestKey(selected.id, key.id);
+      const isOk = result.status === 'valid';
       setTestResults((current) => ({ ...current, [key.id]: { status: result.status, testedAt: result.testedAt, error: result.userMessage } }));
+      toast(
+        isOk
+          ? (zh ? `Key "${key.label}" 连接测试成功` : `Key "${key.label}" test succeeded`)
+          : (zh ? `Key "${key.label}" 测试失败: ${result.userMessage || '无法连接'}` : `Key "${key.label}" test failed`),
+        isOk ? 'success' : 'error'
+      );
     } catch (error) {
-      setTestResults((current) => ({ ...current, [key.id]: { status: 'unavailable', testedAt: new Date().toISOString(), error: classifyError(error, { locale }).userMessage } }));
+      const errMsg = classifyError(error, { locale }).userMessage;
+      setTestResults((current) => ({ ...current, [key.id]: { status: 'unavailable', testedAt: new Date().toISOString(), error: errMsg } }));
+      toast(zh ? `Key "${key.label}" 测试失败` : `Key "${key.label}" test failed`, 'error');
     } finally {
       setTestingId(null);
+    }
+  };
+
+  const handleSetPrimaryKey = async (keyId: string) => {
+    if (!selected) return;
+    try {
+      await onSetPrimaryKey(selected.id, keyId);
+      toast(zh ? '主 Key 设置成功' : 'Primary Key updated', 'success');
+    } catch (error) {
+      toast(classifyError(error, { locale }).userMessage, 'error');
+    }
+  };
+
+  const handleConfirmDeleteKey = async () => {
+    if (!deleteTarget) return;
+    try {
+      await onDeleteKey(deleteTarget.providerId, deleteTarget.keyId);
+      toast(zh ? 'API Key 已删除' : 'API Key deleted', 'success');
+    } catch (error) {
+      toast(classifyError(error, { locale }).userMessage, 'error');
+    } finally {
+      setDeleteTarget(null);
     }
   };
 
@@ -156,9 +240,14 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
           setModels((current) => ({ ...current, [selected.id]: firstModel.id }));
         }
         setDropdownOpen(true);
+        toast(zh ? `成功获取 ${result.length} 个可用模型` : `Discovered ${result.length} models`, 'success');
+      } else {
+        toast(zh ? '未获取到任何可用模型' : 'No models discovered', 'warning');
       }
     } catch (error) {
-      setModelErrors((current) => ({ ...current, [selected.id]: classifyError(error, { locale }).userMessage }));
+      const errMsg = classifyError(error, { locale }).userMessage;
+      setModelErrors((current) => ({ ...current, [selected.id]: errMsg }));
+      toast(errMsg, 'error');
     } finally {
       setDiscovering(false);
     }
@@ -168,20 +257,34 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
     if (!selected || !selected.primaryKeyId || testing) return;
     const value = (models[selected.id] ?? selected.defaultModel ?? '').trim();
     if (!value) {
-      setDetailTestResult({ success: false, error: zh ? '请先输入或选择一个模型' : 'Please enter or select a model first' });
+      const msg = zh ? '请先输入或选择一个模型' : 'Please enter or select a model first';
+      setDetailTestResult({ success: false, error: msg });
+      toast(msg, 'warning');
       return;
     }
     setTesting(true);
     setDetailTestResult(null);
     try {
       const result = await onTestKey(selected.id, selected.primaryKeyId, value);
-      setDetailTestResult({ success: result.status === 'valid', error: result.userMessage ?? undefined });
+      const isOk = result.status === 'valid';
+      const resMsg = result.userMessage ?? undefined;
+      setDetailTestResult({ success: isOk, error: resMsg });
+      toast(
+        isOk
+          ? (zh ? `模型 "${value}" 测试连接成功` : `Model "${value}" connection test succeeded`)
+          : (zh ? `模型 "${value}" 测试连接失败` : `Model "${value}" test failed`),
+        isOk ? 'success' : 'error'
+      );
     } catch (error) {
-      setDetailTestResult({ success: false, error: classifyError(error, { locale }).userMessage });
+      const errMsg = classifyError(error, { locale }).userMessage;
+      setDetailTestResult({ success: false, error: errMsg });
+      toast(errMsg, 'error');
     } finally {
       setTesting(false);
     }
   };
+
+  const currentModelDisplay = models[selected?.id ?? ''] ?? selected?.defaultModel ?? '';
 
   return (
     <section className="provider-workspace">
@@ -195,7 +298,12 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
             const active = selected?.id === provider.id;
             const ready = provider.keys.some((key) => key.isPrimary);
             return (
-              <button key={provider.id} type="button" className={`provider-list-item${active ? ' active' : ''}`} onClick={() => { setSelectedId(provider.id); setAddError(null); }}>
+              <button
+                key={provider.id}
+                type="button"
+                className={`provider-list-item${active ? ' active' : ''}`}
+                onClick={() => handleSelectProvider(provider.id)}
+              >
                 <span className="provider-avatar">{provider.displayName.slice(0, 1).toUpperCase()}</span>
                 <span className="provider-list-copy">
                   <strong>{provider.displayName}</strong>
@@ -226,143 +334,214 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
           </div>
 
           <div className="provider-detail-body">
+            {/* ── 基础配置 ── */}
             <section className="settings-section-card">
-              <div className="settings-section-heading">
-                <div><h4>{zh ? '基础配置' : 'Configuration'}</h4><p>{zh ? '请求地址由供应商预设提供，只需指定默认模型。' : 'The provider preset supplies the endpoint; choose the default model.'}</p></div>
+              <div className="settings-section-heading settings-section-heading-row">
+                <div>
+                  <h4>{zh ? '基础配置' : 'Configuration'}</h4>
+                  <p>{zh ? '请求地址由供应商预设提供，指定默认模型后需点击保存。' : 'The provider preset supplies the endpoint; edit to update default model.'}</p>
+                </div>
+                {!isEditingModel ? (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={startEdit}
+                    title={zh ? '编辑配置' : 'Edit Configuration'}
+                  >
+                    <Edit3 size={14} />
+                    {zh ? '编辑配置' : 'Edit'}
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={cancelEdit}
+                      disabled={savingModel === selected.id}
+                      title={zh ? '取消编辑' : 'Cancel'}
+                    >
+                      <X size={14} />
+                      {zh ? '取消' : 'Cancel'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={saveModel}
+                      disabled={savingModel === selected.id}
+                      title={zh ? '保存默认模型' : 'Save default model'}
+                    >
+                      {savingModel === selected.id ? <Loader size={14} className="animate-spin" /> : <Check size={14} />}
+                      {zh ? '保存配置' : 'Save'}
+                    </button>
+                  </div>
+                )}
               </div>
+
               <div className="settings-field-grid">
                 <div className="settings-readonly-field"><span>{t(locale, 'settings.providerName')}</span><strong>{selected.displayName}</strong></div>
                 <div className="settings-readonly-field"><span>{t(locale, 'settings.baseUrl')}</span><code>{selected.baseUrl}</code></div>
               </div>
-              <label className="settings-control-label" htmlFor={`model-${selected.id}`}>{t(locale, 'assistant.defaultModel')}</label>
-              <div className="add-provider-connection-row" style={{ marginTop: '4px' }}>
-                <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
-                  <input
-                    id={`model-${selected.id}`}
-                    className="settings-input"
-                    value={models[selected.id] ?? selected.defaultModel ?? ''}
-                    onChange={(event) => {
-                      setModels((current) => ({ ...current, [selected.id]: event.target.value }));
-                      setDetailTestResult(null);
-                    }}
-                    onFocus={() => {
-                      if ((discovered[selected.id]?.length ?? 0) > 0) setDropdownOpen(true);
-                    }}
-                    placeholder="gpt-4o"
-                    style={{ paddingRight: '32px' }}
-                  />
-                  {(discovered[selected.id]?.length ?? 0) > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setDropdownOpen(!dropdownOpen)}
-                      style={{
-                        position: 'absolute',
-                        right: 0,
-                        top: 0,
-                        bottom: 0,
-                        width: '32px',
-                        background: 'none',
-                        border: 'none',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        color: 'var(--text-secondary)',
-                      }}
-                    >
-                      <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </button>
-                  )}
 
-                  {dropdownOpen && (discovered[selected.id]?.length ?? 0) > 0 && (
-                    <>
-                      <div
-                        style={{ position: 'fixed', inset: 0, zIndex: 998 }}
-                        onClick={() => setDropdownOpen(false)}
-                      />
-                      <div
-                        style={{
-                          position: 'absolute',
-                          top: '100%',
-                          left: 0,
-                          right: 0,
-                          marginTop: '4px',
-                          maxHeight: '200px',
-                          overflowY: 'auto',
-                          background: 'var(--surface)',
-                          border: '1px solid var(--border)',
-                          borderRadius: 'var(--radius-sm)',
-                          boxShadow: 'var(--shadow-popup)',
-                          zIndex: 999,
-                        }}
-                      >
-                        {discovered[selected.id]?.map((model) => (
-                          <button
-                            key={model.id}
-                            type="button"
-                            onClick={() => {
-                              setModels((current) => ({ ...current, [selected.id]: model.id }));
-                              setDetailTestResult(null);
-                              setDropdownOpen(false);
-                            }}
-                            style={{
-                              width: '100%',
-                              padding: '8px 12px',
-                              textAlign: 'left',
-                              background: 'transparent',
-                              border: 'none',
-                              color: 'var(--text)',
-                              fontSize: '13px',
-                              cursor: 'pointer',
-                              outline: 'none',
-                            }}
-                            onMouseEnter={(e) => {
-                              e.currentTarget.style.background = 'var(--surface-hover)';
-                            }}
-                            onMouseLeave={(e) => {
-                              e.currentTarget.style.background = 'transparent';
-                            }}
-                          >
-                            {model.displayName ?? model.id}
-                          </button>
-                        ))}
-                      </div>
-                    </>
+              <div style={{ marginTop: '12px' }}>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="settings-control-label" htmlFor={`model-${selected.id}`}>
+                    {t(locale, 'assistant.defaultModel')}
+                  </label>
+                  {!isEditingModel && (
+                    <span className="text-[11px] text-[var(--text-disabled)] flex items-center gap-1 font-medium">
+                      <Lock size={10} />
+                      {zh ? '只读（点击右上方“编辑配置”进行修改）' : 'Read-only (click Edit above)'}
+                    </span>
                   )}
                 </div>
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={discoverModels}
-                  disabled={!selected.primaryKeyId || discovering}
-                  title={zh ? '获取可用模型列表' : 'Fetch available models'}
-                >
-                  {discovering ? <Loader size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                  {zh ? '获取模型' : 'Fetch'}
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={testModelConnection}
-                  disabled={!selected.primaryKeyId || testing}
-                  title={zh ? '测试模型连接' : 'Test model connection'}
-                >
-                  {testing ? <Loader size={14} className="animate-spin" /> : <Wifi size={14} />}
-                  {zh ? '测试' : 'Test'}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={saveModel}
-                  disabled={savingModel === selected.id}
-                  title={zh ? '保存默认模型' : 'Save default model'}
-                >
-                  {savingModel === selected.id ? <Loader size={14} className="animate-spin" /> : <Check size={14} />}
-                  {zh ? '保存' : 'Save'}
-                </button>
+
+                {!isEditingModel ? (
+                  /* 锁定只读显示态 */
+                  <div className="flex items-center justify-between p-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)]">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <code className="text-xs font-semibold text-[var(--text)] truncate">
+                        {currentModelDisplay || (zh ? '未设置默认模型' : 'No default model configured')}
+                      </code>
+                    </div>
+                    <button
+                      type="button"
+                      className="text-xs text-[var(--primary)] hover:underline font-medium shrink-0 ml-2"
+                      onClick={startEdit}
+                    >
+                      {zh ? '修改模型' : 'Change'}
+                    </button>
+                  </div>
+                ) : (
+                  /* 编辑激活态 */
+                  <div className="add-provider-connection-row" style={{ marginTop: '4px' }}>
+                    <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+                      <input
+                        id={`model-${selected.id}`}
+                        className="settings-input"
+                        value={currentModelDisplay}
+                        onChange={(event) => {
+                          setModels((current) => ({ ...current, [selected.id]: event.target.value }));
+                          setDetailTestResult(null);
+                        }}
+                        onFocus={() => {
+                          if ((discovered[selected.id]?.length ?? 0) > 0) setDropdownOpen(true);
+                        }}
+                        placeholder="gpt-4o"
+                        style={{ paddingRight: '32px' }}
+                        autoFocus
+                      />
+                      {(discovered[selected.id]?.length ?? 0) > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setDropdownOpen(!dropdownOpen)}
+                          style={{
+                            position: 'absolute',
+                            right: 0,
+                            top: 0,
+                            bottom: 0,
+                            width: '32px',
+                            background: 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: 'var(--text-secondary)',
+                          }}
+                        >
+                          <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        </button>
+                      )}
+
+                      {dropdownOpen && (discovered[selected.id]?.length ?? 0) > 0 && (
+                        <>
+                          <div
+                            style={{ position: 'fixed', inset: 0, zIndex: 998 }}
+                            onClick={() => setDropdownOpen(false)}
+                          />
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: '100%',
+                              left: 0,
+                              right: 0,
+                              marginTop: '4px',
+                              maxHeight: '200px',
+                              overflowY: 'auto',
+                              background: 'var(--surface)',
+                              border: '1px solid var(--border)',
+                              borderRadius: 'var(--radius-sm)',
+                              boxShadow: 'var(--shadow-popup)',
+                              zIndex: 999,
+                            }}
+                          >
+                            {discovered[selected.id]?.map((model) => (
+                              <button
+                                key={model.id}
+                                type="button"
+                                onClick={() => {
+                                  setModels((current) => ({ ...current, [selected.id]: model.id }));
+                                  setDetailTestResult(null);
+                                  setDropdownOpen(false);
+                                }}
+                                style={{
+                                  width: '100%',
+                                  padding: '8px 12px',
+                                  textAlign: 'left',
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: 'var(--text)',
+                                  fontSize: '13px',
+                                  cursor: 'pointer',
+                                  outline: 'none',
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.background = 'var(--surface-hover)';
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.background = 'transparent';
+                                }}
+                              >
+                                {model.displayName ?? model.id}
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={discoverModels}
+                      disabled={!selected.primaryKeyId || discovering}
+                      title={zh ? '获取可用模型列表' : 'Fetch available models'}
+                    >
+                      {discovering ? <Loader size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                      {zh ? '获取模型' : 'Fetch'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={testModelConnection}
+                      disabled={!selected.primaryKeyId || testing}
+                      title={zh ? '测试模型连接' : 'Test model connection'}
+                    >
+                      {testing ? <Loader size={14} className="animate-spin" /> : <Wifi size={14} />}
+                      {zh ? '测试' : 'Test'}
+                    </button>
+                  </div>
+                )}
               </div>
+
+              {saveSuccessMsg && (
+                <div className="add-provider-message success" style={{ marginTop: '8px' }}>
+                  <Check size={14} />
+                  {saveSuccessMsg}
+                </div>
+              )}
+
               {detailTestResult && (
                 <div
                   className={`add-provider-message ${detailTestResult.success ? 'success' : 'error'}`}
@@ -381,6 +560,7 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
               {modelErrors[selected.id] && <p className="settings-error">{modelErrors[selected.id]}</p>}
             </section>
 
+            {/* ── API Keys ── */}
             <section className="settings-section-card">
               <div className="settings-section-heading settings-section-heading-row">
                 <div><h4>API Keys</h4><p>{zh ? '测试连接后，可将可用的 Key 设为主 Key。' : 'Test a connection before setting a key as primary.'}</p></div>
@@ -411,7 +591,7 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
                         </div>
                         <div className="provider-key-actions">
                           <button type="button" onClick={() => testKey(key)} disabled={testing} className="settings-icon-button" title={zh ? '测试连接' : 'Test connection'}>{testing ? <Loader size={14} className="animate-spin" /> : <Wifi size={14} />}</button>
-                          {!key.isPrimary && <button type="button" onClick={() => onSetPrimaryKey(selected.id, key.id)} disabled={key.status !== 'valid'} className="settings-icon-button" title={key.status !== 'valid' ? (zh ? '请先测试连接' : 'Test first') : t(locale, 'assistant.setPrimaryKey')}><Star size={14} /></button>}
+                          {!key.isPrimary && <button type="button" onClick={() => handleSetPrimaryKey(key.id)} disabled={key.status !== 'valid'} className="settings-icon-button" title={key.status !== 'valid' ? (zh ? '请先测试连接' : 'Test first') : t(locale, 'assistant.setPrimaryKey')}><Star size={14} /></button>}
                           {!key.isPrimary && <button type="button" onClick={() => setDeleteTarget({ providerId: selected.id, keyId: key.id })} className="settings-icon-button danger" title={zh ? '删除 Key' : 'Delete key'}><Trash2 size={14} /></button>}
                         </div>
                       </div>
@@ -434,7 +614,7 @@ export default function ProviderDetail({ locale, providers, loading, showAddProv
         </div>
       )}
 
-      <ConfirmDialog open={deleteTarget !== null} title={zh ? '删除 Key' : 'Delete key'} message={zh ? '确定删除这个 API Key？此操作不可撤销。' : 'Delete this API key? This action cannot be undone.'} confirmLabel={zh ? '删除' : 'Delete'} cancelLabel={zh ? '取消' : 'Cancel'} danger onConfirm={() => { if (deleteTarget) onDeleteKey(deleteTarget.providerId, deleteTarget.keyId); setDeleteTarget(null); }} onCancel={() => setDeleteTarget(null)} />
+      <ConfirmDialog open={deleteTarget !== null} title={zh ? '删除 Key' : 'Delete key'} message={zh ? '确定删除这个 API Key？此操作不可撤销。' : 'Delete this API key? This action cannot be undone.'} confirmLabel={zh ? '删除' : 'Delete'} cancelLabel={zh ? '取消' : 'Cancel'} danger onConfirm={handleConfirmDeleteKey} onCancel={() => setDeleteTarget(null)} />
     </section>
   );
 }

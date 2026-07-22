@@ -63,6 +63,22 @@ export interface DaemonCapabilities {
   scheduler: boolean;
   eventReplay: boolean;
   credentialBroker: boolean;
+  /** Per-runtime honest status (REQ-T03). */
+  runtimes?: RuntimeCapability[];
+}
+
+export type RuntimeAvailability =
+  | 'executable'
+  | 'unavailable'
+  | 'undetermined'
+  | string;
+
+export interface RuntimeCapability {
+  id: string;
+  displayName: string;
+  status: RuntimeAvailability;
+  reason?: string | null;
+  methods?: string[];
 }
 
 // ─── Conversation / Message ──────────────────────────────
@@ -134,6 +150,8 @@ export interface ContentBlock {
   toolCallId?: string;
   toolName?: string;
   toolInput?: Record<string, unknown>;
+  /** Streaming partial JSON args for tool_call_delta before full input is available. */
+  toolPartialArgs?: string;
   toolStatus?: 'pending' | 'running' | 'completed' | 'failed' | 'rejected';
   toolOutput?: unknown;
   isError?: boolean;

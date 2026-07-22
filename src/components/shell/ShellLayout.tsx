@@ -3,8 +3,8 @@
 import { startTransition, useState, useEffect, useCallback, memo, lazy, Suspense } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { type Locale } from '@/i18n';
-import Sidebar, { SIDEBAR_COLLAPSED_WIDTH } from './Sidebar';
-import RightPanel from './RightPanel';
+import Sidebar, { SIDEBAR_COLLAPSED_WIDTH, clampSidebarWidth } from './Sidebar';
+import RightPanel, { clampRightPanelWidth } from './RightPanel';
 import type { RightPanelMode } from './RightPanel';
 import NotificationPanel from './NotificationPanel';
 import Header from './Header';
@@ -84,6 +84,13 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   // ── Event hooks ──
   useLayoutEvents({
     stateRef,
+    layoutPersist: {
+      sidebarWidth: state.sidebarWidth,
+      sidebarCollapsed: state.sidebarCollapsed,
+      terminalHeight: state.terminalHeight,
+      terminalCollapsed: state.terminalCollapsed,
+      rightPanelWidth: state.rightPanelWidth,
+    },
     toggleTerminal,
     setState,
     setLocale,
@@ -165,11 +172,15 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
             if (saved) {
               setState((prev) => ({
                 ...prev,
-                ...(typeof saved.sidebarWidth === 'number' && { sidebarWidth: saved.sidebarWidth }),
+                ...(typeof saved.sidebarWidth === 'number' && {
+                  sidebarWidth: clampSidebarWidth(saved.sidebarWidth),
+                }),
                 ...(typeof saved.sidebarCollapsed === 'boolean' && { sidebarCollapsed: saved.sidebarCollapsed }),
                 ...(typeof saved.terminalHeight === 'number' && { terminalHeight: saved.terminalHeight }),
                 ...(typeof saved.terminalCollapsed === 'boolean' && { terminalCollapsed: saved.terminalCollapsed }),
-                ...(typeof saved.rightPanelWidth === 'number' && { rightPanelWidth: saved.rightPanelWidth }),
+                ...(typeof saved.rightPanelWidth === 'number' && {
+                  rightPanelWidth: clampRightPanelWidth(saved.rightPanelWidth),
+                }),
               }));
             }
           }
@@ -309,11 +320,11 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
       <div className="w-full h-full" style={{ opacity: themeReady ? 1 : 0 }}>
       <div className="w-full h-full bg-[var(--background)] p-3 flex gap-3 overflow-visible box-border relative isolate">
-      {/* ── 全宽透明拖拽条（避开左上角 traffic lights 点击区） ── */}
+      {/* ── 全宽透明拖拽条（避开左上角系统/自绘窗口按钮点击区） ── */}
       <div
         data-tauri-drag-region
         className="absolute top-0 z-40"
-        style={{ left: '88px', right: '-12px', height: '28px' }}
+        style={{ left: '108px', right: '-12px', height: '40px' }}
       />
       {/* ── V1.0 已移除：wallpaper / liquid-blob / WebGL LiquidGlass 全局背景层 ── */}
 
@@ -322,14 +333,18 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         className="h-full shrink-0 transition-[width] duration-200 relative z-10"
         style={{
           width: effectiveSidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : state.sidebarWidth,
-          overflow: 'hidden',
+          // overflow visible so the right-edge drag handle is hit-testable
+          overflow: 'visible',
         }}
       >
         <MemoizedSidebar
           isCollapsed={effectiveSidebarCollapsed}
           onToggle={toggleSidebar}
           width={state.sidebarWidth}
-          onResize={(w) => setState((prev) => ({ ...prev, sidebarWidth: w }))}
+          onResize={(w) => setState((prev) => ({
+            ...prev,
+            sidebarWidth: clampSidebarWidth(w),
+          }))}
           activeModuleId={activeView}
           onModuleSelect={handleModuleSelect}
           onNotificationClick={() => toggleRightPanel('notifications')}
@@ -405,7 +420,10 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           previewSubMode={state.previewSubMode}
           onPreviewSubModeChange={setPreviewSubMode}
           width={state.rightPanelWidth}
-          onResize={(w) => setState((prev) => ({ ...prev, rightPanelWidth: w }))}
+          onResize={(w) => setState((prev) => ({
+            ...prev,
+            rightPanelWidth: clampRightPanelWidth(w),
+          }))}
           title={state.rightPanelMode === 'file-preview' && selectedFile ? selectedFile.name : undefined}
           extraHeaderContent={
             state.rightPanelMode === 'file-preview' && selectedFile && state.previewSubMode === 'preview'

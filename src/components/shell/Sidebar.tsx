@@ -29,10 +29,23 @@ import {
   Server,
   PanelLeft,
   PanelLeftClose,
+  Star,
+  Folder,
+  File,
+  X,
+  Minus,
+  Maximize2,
 } from 'lucide-react';
 import * as LucideIcons from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import { BUILTIN_TOOLS, seedAllBuiltinTools } from '@/lib/builtin-tools';
+import {
+  useFavorites,
+  favoritesNavTarget,
+  removeAndPersistFavorite,
+  FAVORITES_SIDEBAR_PREVIEW,
+  type FavoriteItem,
+} from '@/lib/favorites-client';
 import AssistantSidebarSection from '@/components/assistant/AssistantSidebarSection';
 import { useAssistantWorkspace } from '@/components/assistant/AssistantWorkspaceContext';
 import {
@@ -89,11 +102,6 @@ const QUICK_ACCESS_ITEMS: readonly QuickAccessItem[] = [
   },
 ];
 
-interface FavoriteItem {
-  path: string;
-  addedAt: number;
-}
-
 const SETTINGS_NAV_ITEMS = [
   { id: 'general', labelKey: 'settings.tabGeneral', icon: Settings },
   { id: 'appearance', labelKey: 'settings.tabAppearance', icon: Palette },
@@ -109,6 +117,34 @@ const SETTINGS_NAV_ITEMS = [
 
 /** Collapsed rail width — icon-only navigation, still interactive. */
 export const SIDEBAR_COLLAPSED_WIDTH = 64;
+/** Expanded sidebar floor — labels still readable. */
+export const SIDEBAR_MIN_WIDTH = 200;
+/** Hard cap; further limited by viewport so main content keeps a floor. */
+export const SIDEBAR_MAX_WIDTH = 420;
+/** Keep at least this much room for workspace + right panel when open. */
+const SIDEBAR_MAIN_FLOOR = 480;
+/** Default expanded width (also double-click reset). */
+export const SIDEBAR_DEFAULT_WIDTH = 248;
+
+export function clampSidebarWidth(
+  width: number,
+  viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1280,
+): number {
+  const maxByViewport = Math.max(SIDEBAR_MIN_WIDTH, viewportWidth - SIDEBAR_MAIN_FLOOR);
+  const max = Math.min(SIDEBAR_MAX_WIDTH, maxByViewport);
+  return Math.max(SIDEBAR_MIN_WIDTH, Math.min(max, Math.round(width)));
+}
+
+/** macOS builds overlay native traffic lights; other platforms paint fallback controls. */
+function detectNativeTrafficLights(): boolean {
+  if (typeof window === 'undefined') return false;
+  const nav = window.navigator;
+  const platform = (nav as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform
+    ?? nav.platform
+    ?? nav.userAgent
+    ?? '';
+  return /Mac|iPhone|iPad|iPod/i.test(platform);
+}
 
 interface SidebarProps {
   isCollapsed: boolean;
@@ -209,7 +245,7 @@ export default function Sidebar({
 }: SidebarProps) {
   const [modules, setModules] = useState<ModuleItem[]>([]);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
-  const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
+  const { favorites } = useFavorites();
   const [favoritesExpanded, setFavoritesExpanded] = useState(false);
   const [assistantExpanded, setAssistantExpanded] = useState(true);
   const [activeNavigationId, setActiveNavigationId] = useState<string | null>(
@@ -262,229 +298,97 @@ export default function Sidebar({
   const isSettingsMode = isSettingsView(activeModuleId);
   const activeSettingsSection = getSettingsSection(activeModuleId);
 
-  const loadFavorites = useCallback(async () => {
-    try {
-      const stored = await window.nativesAPI?.db?.get('settings:favorites');
-      if (!stored) { setFavorites([]); return; }
-      const parsed = JSON.parse(stored as string);
-      // Migrate old format: string[] → FavoriteItem[]
-      if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
-        const migrated: FavoriteItem[] = (parsed as string[]).map((p, i) => ({ path: p, addedAt: Date.now() + i }));
-        setFavorites(migrated);
-      } else {
-        setFavorites(parsed as FavoriteItem[]);
-      }
-    } catch {
-      setFavorites([]);
+  const visibleFavorites = favoritesExpanded
+    ? favorites
+    : favorites.slice(0, FAVORITES_SIDEBAR_PREVIEW);
+  const hiddenFavoriteCount = Math.max(0, favorites.length - FAVORITES_SIDEBAR_PREVIEW);
+
+  const handleFavoriteClick = useCallback(
+    (item: FavoriteItem) => {
+      const target = favoritesNavTarget(item);
+      selectNavigation(target, target);
+    },
+    [selectNavigation],
+  );
+
+  const handleFavoriteRemove = useCallback((item: FavoriteItem, e: ReactMouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    void removeAndPersistFavorite({ id: item.id });
+  }, []);
+
+  const favoriteIcon = (item: FavoriteItem) => {
+    if (item.kind === 'file') {
+      return item.isDir === false
+        ? <File size={15} className="shrink-0" />
+        : <Folder size={15} className="shrink-0" />;
     }
-  }, []);
+    if (item.kind === 'module') return <Square size={15} className="shrink-0" />;
+    return <Star size={15} className="shrink-0" />;
+  };
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadFavorites();
-    const handleFavoritesChanged = () => void loadFavorites();
-    window.addEventListener('favorites-changed', handleFavoritesChanged);
-    return () => window.removeEventListener('favorites-changed', handleFavoritesChanged);
-  }, [loadFavorites]);
-
-  // ── 窗口控制（关闭 / 最小化 / 最大化 / 全屏）──
-  const [isMaximized, setIsMaximized] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [windowActive, setWindowActive] = useState(true);
-  const longPressTriggeredRef = useRef(false);
-
-  const refreshWindowState = useCallback(async () => {
-    const ctrl = window.nativesAPI?.windowControls;
-    try {
-      if (ctrl?.isMaximized) setIsMaximized(await ctrl.isMaximized());
-      if (ctrl?.isFullscreen) setIsFullscreen(await ctrl.isFullscreen());
-    } catch { /* browser/dev fallback */ }
-  }, []);
-
-  useEffect(() => {
-    let unlistenResize: (() => void) | undefined;
-    let unlistenFocus: (() => void) | undefined;
-    let unlistenBlur: (() => void) | undefined;
-    let cancelled = false;
-
-    const setupListener = async () => {
-      try {
-        const { getCurrentWindow } = await import('@tauri-apps/api/window');
-        const activeWin = getCurrentWindow();
-
-        if (!cancelled) {
-          setIsMaximized(await activeWin.isMaximized());
-          setIsFullscreen(await activeWin.isFullscreen());
-          setWindowActive(await activeWin.isFocused());
-        }
-
-        const unsubResize = await activeWin.onResized(async () => {
-          if (cancelled) return;
-          setIsMaximized(await activeWin.isMaximized());
-          setIsFullscreen(await activeWin.isFullscreen());
-        });
-        unlistenResize = unsubResize;
-
-        const unsubFocus = await activeWin.onFocusChanged(({ payload: focused }) => {
-          if (!cancelled) setWindowActive(focused);
-        });
-        unlistenFocus = unsubFocus;
-      } catch {
-        // Fallback: polling only when Tauri API is unavailable (browser dev)
-        const poll = setInterval(async () => {
-          try {
-            const ctrl = window.nativesAPI?.windowControls;
-            if (!ctrl || cancelled) return;
-            if (ctrl.isMaximized) {
-              const m = await ctrl.isMaximized();
-              if (!cancelled) setIsMaximized(m);
-            }
-            if (ctrl.isFullscreen) {
-              const f = await ctrl.isFullscreen();
-              if (!cancelled) setIsFullscreen(f);
-            }
-          } catch { /* ignore */ }
-        }, 2000);
-        const onFocus = () => setWindowActive(true);
-        const onBlur = () => setWindowActive(false);
-        window.addEventListener('focus', onFocus);
-        window.addEventListener('blur', onBlur);
-        cleanup = () => {
-          clearInterval(poll);
-          window.removeEventListener('focus', onFocus);
-          window.removeEventListener('blur', onBlur);
-        };
-      }
-    };
-
-    let cleanup: (() => void) | undefined;
-    setupListener();
-
-    return () => {
-      cancelled = true;
-      if (unlistenResize) unlistenResize();
-      if (unlistenFocus) unlistenFocus();
-      if (unlistenBlur) unlistenBlur();
-      if (cleanup) cleanup();
-    };
-  }, []);
+  // macOS 使用系统原生 traffic lights（tauri.macos.conf.json Overlay）；
+  // Windows/Linux 仍为无边框窗口，需要自绘最小化/最大化/关闭。
+  const usesNativeTrafficLights = detectNativeTrafficLights();
 
   const handleWindowAction = useCallback(async (
-    action: 'minimize' | 'maximize' | 'close' | 'fullscreen',
+    action: 'minimize' | 'maximize' | 'close',
   ) => {
+    if (usesNativeTrafficLights) return;
     const ctrl = window.nativesAPI?.windowControls;
     if (!ctrl) return;
     try {
       if (action === 'minimize') await ctrl.minimize();
       else if (action === 'close') await ctrl.close();
-      else if (action === 'fullscreen') {
-        if (ctrl.toggleFullscreen) await ctrl.toggleFullscreen();
-        else await ctrl.tileWindow?.('fullscreen');
-      } else {
-        // macOS zoom: if fullscreen, exit; otherwise toggle maximize
-        await ctrl.maximize();
-      }
-      await refreshWindowState();
+      else await ctrl.maximize();
     } catch { /* ignore */ }
-  }, [refreshWindowState]);
+  }, [usesNativeTrafficLights]);
 
-  // ── 长按 Zoom 弹出菜单（macOS 原生行为）──
-  const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
-  const [zoomMenuPos, setZoomMenuPos] = useState<{ x: number; y: number } | null>(null);
-  const zoomTimerRef = useRef<number | null>(null);
-  const zoomPopupRef = useRef<HTMLDivElement>(null);
-  const zoomBtnRef = useRef<HTMLButtonElement>(null);
+  // ── Width resize (right-edge drag handle) ──
+  const [isResizing, setIsResizing] = useState(false);
+  const widthRef = useRef(width);
+  widthRef.current = width;
 
-  const handleTileWindow = useCallback(async (action: string) => {
-    const ctrl = window.nativesAPI?.windowControls;
-    if (!ctrl?.tileWindow) return;
-    try {
-      await ctrl.tileWindow(action);
-      await refreshWindowState();
-    } catch { /* fallback */ }
-  }, [refreshWindowState]);
-
-  // 当菜单打开时，document mouseup 检测鼠标下方元素
   useEffect(() => {
-    if (!zoomMenuOpen) return;
-    const handler = (e: globalThis.MouseEvent) => {
-      const target = document.elementFromPoint(e.clientX, e.clientY);
-      // 向上查找最近的 data-tile-action 元素
-      let el: Element | null = target;
-      while (el && el !== document.body) {
-        if (el instanceof HTMLElement && el.dataset.tileAction) {
-          void handleTileWindow(el.dataset.tileAction);
-          break;
-        }
-        el = el.parentElement;
-      }
-      setZoomMenuOpen(false);
+    if (isCollapsed) return;
+    const onWinResize = () => {
+      const next = clampSidebarWidth(widthRef.current);
+      if (next !== widthRef.current) onResize(next);
     };
-    document.addEventListener('mouseup', handler);
-    return () => document.removeEventListener('mouseup', handler);
-  }, [zoomMenuOpen, handleTileWindow]);
+    window.addEventListener('resize', onWinResize);
+    return () => window.removeEventListener('resize', onWinResize);
+  }, [isCollapsed, onResize]);
 
-  const clearZoomTimer = useCallback(() => {
-    if (zoomTimerRef.current) {
-      clearTimeout(zoomTimerRef.current);
-      zoomTimerRef.current = null;
-    }
-  }, []);
+  const handleSidebarDragStart = useCallback((e: ReactMouseEvent) => {
+    if (isCollapsed) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setIsResizing(true);
+    const startX = e.clientX;
+    const startW = widthRef.current;
 
-  const handleZoomClick = useCallback((e: ReactMouseEvent<HTMLButtonElement>) => {
-    // Long-press already handled the interaction
-    if (longPressTriggeredRef.current) {
-      longPressTriggeredRef.current = false;
-      return;
-    }
-    // Option/Alt-click → toggle native fullscreen (macOS convention)
-    if (e.altKey) {
-      void handleWindowAction('fullscreen');
-      return;
-    }
-    void handleWindowAction('maximize');
-  }, [handleWindowAction]);
+    const handleMove = (ev: MouseEvent) => {
+      // Handle sits on the right edge: moving right grows the sidebar.
+      const delta = ev.clientX - startX;
+      onResize(clampSidebarWidth(startW + delta));
+    };
+    const handleUp = () => {
+      setIsResizing(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', handleMove);
+      document.removeEventListener('mouseup', handleUp);
+    };
 
-  const handleZoomMouseDown = useCallback((e: ReactMouseEvent<HTMLButtonElement>) => {
-    if (e.button !== 0) return;
-    longPressTriggeredRef.current = false;
-    const cx = e.clientX;
-    const cy = e.clientY;
-    clearZoomTimer();
-    zoomTimerRef.current = window.setTimeout(() => {
-      longPressTriggeredRef.current = true;
-      setZoomMenuPos({ x: cx, y: cy });
-      setZoomMenuOpen(true);
-    }, 420);
-  }, [clearZoomTimer]);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', handleMove);
+    document.addEventListener('mouseup', handleUp);
+  }, [isCollapsed, onResize]);
 
-  // ── 弹窗内 SVG 图标组件 ──
-  const iconWrap = (svg: React.ReactNode) => <svg width="22" height="14" viewBox="0 0 22 14" fill="none" className="text-[var(--text-secondary)]">{svg}</svg>;
-
-  const leftHalfIcon = iconWrap(
-    <><rect x="0.5" y="0.5" width="21" height="13" rx="1.5" stroke="currentColor" strokeOpacity="0.3"/><rect x="0.5" y="0.5" width="10" height="13" rx="1.5" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/></>
-  );
-  const rightHalfIcon = iconWrap(
-    <><rect x="0.5" y="0.5" width="21" height="13" rx="1.5" stroke="currentColor" strokeOpacity="0.3"/><rect x="11.5" y="0.5" width="10" height="13" rx="1.5" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/></>
-  );
-  const topHalfIcon = iconWrap(
-    <><rect x="0.5" y="0.5" width="21" height="13" rx="1.5" stroke="currentColor" strokeOpacity="0.3"/><rect x="0.5" y="0.5" width="21" height="6" rx="1.5" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/></>
-  );
-  const bottomHalfIcon = iconWrap(
-    <><rect x="0.5" y="0.5" width="21" height="13" rx="1.5" stroke="currentColor" strokeOpacity="0.3"/><rect x="0.5" y="7.5" width="21" height="6" rx="1.5" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/></>
-  );
-  const fillIcon = iconWrap(
-    <rect x="0.5" y="0.5" width="21" height="13" rx="1.5" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/>
-  );
-  const leftFillIcon = iconWrap(
-    <><rect x="0.5" y="0.5" width="21" height="13" rx="1.5" stroke="currentColor" strokeOpacity="0.3"/><rect x="0.5" y="0.5" width="7" height="13" rx="1.5" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/></>
-  );
-  const rightFillIcon = iconWrap(
-    <><rect x="0.5" y="0.5" width="21" height="13" rx="1.5" stroke="currentColor" strokeOpacity="0.3"/><rect x="14.5" y="0.5" width="7" height="13" rx="1.5" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/></>
-  );
-  const tileIcon = iconWrap(
-    <><rect x="0.5" y="0.5" width="9.5" height="5.5" rx="1" stroke="currentColor" strokeOpacity="0.3"/><rect x="12" y="0.5" width="9.5" height="5.5" rx="1" stroke="currentColor" strokeOpacity="0.3"/><rect x="0.5" y="8" width="9.5" height="5.5" rx="1" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/><rect x="12" y="8" width="9.5" height="5.5" rx="1" fill="currentColor" fillOpacity="0.15" stroke="currentColor"/></>
-  );
+  const handleSidebarDragDoubleClick = useCallback(() => {
+    onResize(clampSidebarWidth(SIDEBAR_DEFAULT_WIDTH));
+  }, [onResize]);
 
   useEffect(() => {
     let cancelled = false;
@@ -552,147 +456,68 @@ export default function Sidebar({
   const sidebarWidth = isCollapsed ? SIDEBAR_COLLAPSED_WIDTH : width;
 
   return (
-    <div className="doppelrand-outer h-full">
+    <div className="doppelrand-outer h-full relative">
     <div className="doppelrand-inner h-full">
     <aside
-      className="flex flex-col h-full overflow-hidden"
+      className={`flex flex-col h-full overflow-hidden${isResizing ? ' is-resizing' : ''}`}
       style={{
         width: sidebarWidth,
         background: 'var(--sidebar)',
-        borderRight: '1px solid var(--border)'
+        borderRight: '1px solid var(--border)',
+        transition: isResizing ? 'none' : undefined,
       }}
       role="navigation"
       aria-label={t(locale, 'nav.modules')}
       data-sidebar
       data-collapsed={isCollapsed ? 'true' : 'false'}
+      data-resizing={isResizing ? 'true' : 'false'}
     >
-      {/* ── 窗口控制（macOS traffic lights） ── */}
+      {/* ── 标题栏：macOS 用系统 traffic lights；其它平台自绘按钮 ── */}
       <div className="shrink-0 relative z-[60]">
         <div
-          className="mac-traffic-row"
+          className="titlebar-row"
           data-collapsed={isCollapsed ? 'true' : 'false'}
+          data-native-traffic={usesNativeTrafficLights ? 'true' : 'false'}
           data-tauri-drag-region
         >
-          <div
-            className="mac-traffic-lights"
-            data-collapsed={isCollapsed ? 'true' : 'false'}
-            data-active={windowActive ? 'true' : 'false'}
-            data-force-glyphs={zoomMenuOpen ? 'true' : undefined}
-            role="toolbar"
-            aria-label={t(locale, 'header.windowControls')}
-          >
-            {/* 关闭 — macOS 红圆 */}
-            <button
-              type="button"
-              onClick={() => void handleWindowAction('close')}
-              className="mac-traffic-btn close"
-              aria-label={t(locale, 'header.close')}
-              title={t(locale, 'header.close')}
+          {usesNativeTrafficLights ? (
+            /* 为系统红黄绿按钮留位，避免与侧栏内容重叠 */
+            <div className="native-traffic-spacer" aria-hidden="true" />
+          ) : (
+            <div
+              className="window-controls"
+              role="toolbar"
+              aria-label={t(locale, 'header.windowControls')}
             >
-              <svg viewBox="0 0 10 10" fill="none" aria-hidden="true">
-                <path d="M2.2 2.2l5.6 5.6M7.8 2.2L2.2 7.8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
-            </button>
-            {/* 最小化 — macOS 黄圆 */}
-            <button
-              type="button"
-              onClick={() => void handleWindowAction('minimize')}
-              className="mac-traffic-btn minimize"
-              aria-label={t(locale, 'header.minimize')}
-              title={t(locale, 'header.minimize')}
-            >
-              <svg viewBox="0 0 10 10" fill="none" aria-hidden="true">
-                <path d="M2.2 5h5.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-              </svg>
-            </button>
-            {/* Zoom — 单击最大化/还原；Option 全屏；长按分屏菜单 */}
-            <div className="relative" ref={zoomPopupRef}>
               <button
                 type="button"
-                ref={zoomBtnRef}
-                onClick={handleZoomClick}
-                onMouseDown={handleZoomMouseDown}
-                onMouseUp={clearZoomTimer}
-                onMouseLeave={clearZoomTimer}
-                className="mac-traffic-btn zoom"
-                aria-label={
-                  isFullscreen || isMaximized
-                    ? t(locale, 'header.restore')
-                    : t(locale, 'header.maximize')
-                }
-                title={
-                  isFullscreen || isMaximized
-                    ? t(locale, 'header.restore')
-                    : t(locale, 'header.zoomHint')
-                }
+                onClick={() => void handleWindowAction('minimize')}
+                className="window-ctrl-btn"
+                aria-label={t(locale, 'header.minimize')}
+                title={t(locale, 'header.minimize')}
               >
-                {isFullscreen || isMaximized ? (
-                  <svg viewBox="0 0 10 10" fill="none" aria-hidden="true">
-                    <path d="M2 6.2V8h1.8M8 3.8V2H6.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                    <path d="M2 8l2.4-2.4M8 2L5.6 4.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                ) : (
-                  <svg viewBox="0 0 10 10" fill="none" aria-hidden="true">
-                    <path d="M3.5 1.8H1.8V3.5M6.5 1.8h1.7V3.5M3.5 8.2H1.8V6.5M6.5 8.2h1.7V6.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                )}
+                <Minus size={12} strokeWidth={2.25} />
               </button>
-
-              {/* 长按弹出菜单 — macOS 窗口管理，跟随鼠标位置 */}
-              {zoomMenuOpen && zoomMenuPos && (
-                <div
-                  className="fixed z-50 min-w-[180px] rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5 shadow-modal"
-                  style={{ left: zoomMenuPos.x, top: zoomMenuPos.y }}
-                >
-                  <p className="px-2.5 pb-1 pt-0.5 text-[0.625rem] font-medium uppercase tracking-[0.06em] text-[var(--text-disabled)]">
-                    {t(locale, 'header.tileMove')}
-                  </p>
-                  <div className="grid grid-cols-4 gap-1 px-1 pb-2">
-                    {[
-                      { id: 'left', label: t(locale, 'header.tileLeft'), icon: leftHalfIcon },
-                      { id: 'right', label: t(locale, 'header.tileRight'), icon: rightHalfIcon },
-                      { id: 'top', label: t(locale, 'header.tileTop'), icon: topHalfIcon },
-                      { id: 'bottom', label: t(locale, 'header.tileBottom'), icon: bottomHalfIcon },
-                    ].map((opt) => (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        data-tile-action={opt.id}
-                        className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-[0.625rem] text-[var(--text-secondary)] hover:bg-[var(--surface)] hover:text-[var(--text)] transition-all"
-                        title={opt.label}
-                      >
-                        {opt.icon}
-                        <span>{opt.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="mx-2 my-1 border-t border-[var(--border)]" />
-                  <p className="px-2.5 pb-1 pt-1.5 text-[0.625rem] font-medium uppercase tracking-[0.06em] text-[var(--text-disabled)]">
-                    {t(locale, 'header.tileFill')}
-                  </p>
-                  <div className="grid grid-cols-4 gap-1 px-1 pb-1">
-                    {[
-                      { id: 'fullscreen', label: t(locale, 'header.tileFullscreen'), icon: fillIcon },
-                      { id: 'left-half', label: t(locale, 'header.tileLeftHalf'), icon: leftFillIcon },
-                      { id: 'right-half', label: t(locale, 'header.tileRightHalf'), icon: rightFillIcon },
-                      { id: 'tile', label: t(locale, 'header.tileRestore'), icon: tileIcon },
-                    ].map((opt) => (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        data-tile-action={opt.id}
-                        className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-[0.625rem] text-[var(--text-secondary)] hover:bg-[var(--surface)] hover:text-[var(--text)] transition-all"
-                        title={opt.label}
-                      >
-                        {opt.icon}
-                        <span>{opt.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+              <button
+                type="button"
+                onClick={() => void handleWindowAction('maximize')}
+                className="window-ctrl-btn"
+                aria-label={t(locale, 'header.maximize')}
+                title={t(locale, 'header.maximize')}
+              >
+                <Maximize2 size={11} strokeWidth={2.25} />
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleWindowAction('close')}
+                className="window-ctrl-btn window-ctrl-close"
+                aria-label={t(locale, 'header.close')}
+                title={t(locale, 'header.close')}
+              >
+                <X size={12} strokeWidth={2.25} />
+              </button>
             </div>
-          </div>
+          )}
 
           {!isCollapsed && (
             <button
@@ -815,6 +640,34 @@ export default function Sidebar({
 
             <div className="my-1 h-px w-6 bg-[var(--border-subtle)]" />
 
+            {favorites.length === 0 ? (
+              <SidebarNavItem
+                collapsed
+                isActive={false}
+                icon={<Star size={15} />}
+                label={t(locale, 'sidebar.favorites')}
+                title={t(locale, 'sidebar.noFavorites')}
+                onClick={() => {}}
+              />
+            ) : (
+              favorites.slice(0, FAVORITES_SIDEBAR_PREVIEW).map((item) => {
+                const navTarget = favoritesNavTarget(item);
+                return (
+                  <SidebarNavItem
+                    key={item.id}
+                    collapsed
+                    isActive={activeNavigationId === navTarget}
+                    icon={favoriteIcon(item)}
+                    label={item.label}
+                    title={item.kind === 'file' ? item.target : item.label}
+                    onClick={() => handleFavoriteClick(item)}
+                  />
+                );
+              })
+            )}
+
+            <div className="my-1 h-px w-6 bg-[var(--border-subtle)]" />
+
             <SidebarNavItem
               collapsed
               isActive={activeNavigationId === '__assistant__'}
@@ -912,7 +765,7 @@ export default function Sidebar({
               </div>
             </div>
 
-            {/* Quick Access List */}
+            {/* Quick Access List — fixed system shortcuts */}
             <div className="px-3 pb-1 pt-0 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
               {t(locale, 'sidebar.quickAccess')}
             </div>
@@ -938,6 +791,71 @@ export default function Sidebar({
                   </button>
                 );
               })}
+            </div>
+
+            {/* Favorites — first-level shortcut rail (always visible; empty shows placeholder) */}
+            <div className="mb-3" data-sidebar-favorites>
+              <div className="px-3 pb-1 pt-0 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
+                {t(locale, 'sidebar.favorites')}
+              </div>
+              {favorites.length === 0 ? (
+                <div className="px-3 py-1.5 text-xs italic text-[var(--text-disabled)]">
+                  {t(locale, 'sidebar.noFavorites')}
+                </div>
+              ) : (
+                <div className="flex flex-col gap-0.5 px-3" role="list" aria-label={t(locale, 'sidebar.favorites')}>
+                  {visibleFavorites.map((item) => {
+                    const navTarget = favoritesNavTarget(item);
+                    const isActive = activeNavigationId === navTarget;
+                    const title = item.kind === 'file' ? item.target : item.label;
+                    return (
+                      <div
+                        key={item.id}
+                        role="listitem"
+                        className={`group flex w-full items-center gap-1 rounded-lg transition-all ${
+                          isActive
+                            ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+                            : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => handleFavoriteClick(item)}
+                          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-1.5 text-left"
+                          title={title}
+                        >
+                          {favoriteIcon(item)}
+                          <span className="truncate text-sm">{item.label}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => handleFavoriteRemove(item, e)}
+                          className={`mr-1.5 shrink-0 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 ${
+                            isActive
+                              ? 'text-[var(--accent-ink)]/70 hover:bg-[var(--accent-ink)]/10 hover:text-[var(--accent-ink)]'
+                              : 'text-[var(--text-disabled)] hover:bg-[var(--surface)] hover:text-[var(--text)]'
+                          }`}
+                          title={t(locale, 'fileBrowser.removeFromFavorites')}
+                          aria-label={t(locale, 'fileBrowser.removeFromFavorites')}
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                  {hiddenFavoriteCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setFavoritesExpanded((v) => !v)}
+                      className="rounded-lg px-3 py-1 text-left text-xs text-[var(--text-disabled)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+                    >
+                      {favoritesExpanded
+                        ? t(locale, 'sidebar.showLess')
+                        : t(locale, 'sidebar.showMore', { count: hiddenFavoriteCount })}
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Assistant is a first-level directory, parallel to Quick Access. */}
@@ -1093,6 +1011,21 @@ export default function Sidebar({
 
     </aside>
     </div>
+    {/* Right-edge resize handle — expanded only */}
+    {!isCollapsed && (
+      <div
+        className={`sidebar-drag-handle ${isResizing ? 'active' : ''}`}
+        onMouseDown={handleSidebarDragStart}
+        onDoubleClick={handleSidebarDragDoubleClick}
+        role="separator"
+        aria-orientation="vertical"
+        aria-valuenow={width}
+        aria-valuemin={SIDEBAR_MIN_WIDTH}
+        aria-valuemax={SIDEBAR_MAX_WIDTH}
+        aria-label={t(locale, 'sidebar.ariaResize')}
+        title={t(locale, 'sidebar.dragToResize')}
+      />
+    )}
     </div>
   );
 }

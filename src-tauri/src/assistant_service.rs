@@ -1,5 +1,6 @@
 use crate::daemon::data::DataStore;
 use crate::daemon_authority;
+use crate::runtime::AgentRuntime;
 
 use crate::Result;
 use serde::{Deserialize, Serialize};
@@ -85,6 +86,10 @@ pub async fn assistant_status(store: State<'_, Mutex<AssistantStore>>) -> Result
 
 /// Dispatch RPC method to the appropriate handler
 async fn dispatch_rpc(data_store: &Arc<DataStore>, method: &str, params: &Value) -> RpcResponse {
+    if method == "daemon.getCapabilities" {
+        return handle_host_get_capabilities().await;
+    }
+
     if daemon_owned_method(method) {
         return match daemon_authority::request(method, params.clone()).await {
             Ok(data) => success_response(data),
@@ -142,6 +147,76 @@ async fn dispatch_rpc(data_store: &Arc<DataStore>, method: &str, params: &Value)
     }
 }
 
+
+/// Honest per-runtime status for settings / RuntimePanel (REQ-T03).
+async fn handle_host_get_capabilities() -> RpcResponse {
+    use assistant_protocol::v2::{DaemonCapabilities, RuntimeAvailability, RuntimeCapability};
+
+    let mut runtimes = vec![RuntimeCapability {
+        id: "native".into(),
+        display_name: "Native Daemon".into(),
+        status: RuntimeAvailability::Executable,
+        reason: None,
+        methods: vec![],
+    }];
+
+    let meta = crate::runtime::registry::list_runtime_metadata().await;
+    let mut seen = std::collections::HashSet::new();
+    for m in &meta {
+        seen.insert(m.id.clone());
+        let (status, reason) = if m.id == "codex_cli" {
+            (
+                RuntimeAvailability::Unavailable,
+                Some("app-server not implemented".into()),
+            )
+        } else if m.available {
+            (RuntimeAvailability::Executable, None)
+        } else {
+            (
+                RuntimeAvailability::Unavailable,
+                Some(format!("{} binary not found", m.display_name)),
+            )
+        };
+        runtimes.push(RuntimeCapability {
+            id: m.id.clone(),
+            display_name: m.display_name.clone(),
+            status,
+            reason,
+            methods: vec![],
+        });
+    }
+    if !seen.contains("claude_cli") {
+        let claude = crate::runtime::claude_cli::ClaudeCliRuntime::new();
+        runtimes.push(RuntimeCapability {
+            id: "claude_cli".into(),
+            display_name: "Claude CLI".into(),
+            status: if claude.is_available() {
+                RuntimeAvailability::Executable
+            } else {
+                RuntimeAvailability::Unavailable
+            },
+            reason: if claude.is_available() {
+                None
+            } else {
+                Some("claude binary not found".into())
+            },
+            methods: vec![],
+        });
+    }
+    if !seen.contains("codex_cli") {
+        runtimes.push(RuntimeCapability {
+            id: "codex_cli".into(),
+            display_name: "Codex CLI".into(),
+            status: RuntimeAvailability::Unavailable,
+            reason: Some("app-server not implemented".into()),
+            methods: vec![],
+        });
+    }
+
+    let caps = DaemonCapabilities::host_mediated(runtimes);
+    success_response(serde_json::to_value(caps).unwrap_or_default())
+}
+
 fn daemon_owned_method(method: &str) -> bool {
     // provider.list is host-owned: it must read user-configured providers from
     // assistant.db (mirrored from Settings). Agent Daemon's provider.list only
@@ -149,9 +224,24 @@ fn daemon_owned_method(method: &str) -> bool {
     if method == "provider.list" {
         return false;
     }
-    (method.starts_with("conversation.") && daemon_authority::authority_mode_label() == "uds")
-        || (method.starts_with("run.")
-            && (method != "run.start" || daemon_authority::authority_mode_label() == "uds"))
+    if method == "daemon.getCapabilities" {
+        return false; // host-mediated honest runtimes
+    }
+    // Conversation CRUD lives in host assistant.db (assistant_conversations).
+    // Routing conversation.* to the UDS daemon in the past dual-stored sessions:
+    // UI listed host rows while delete hit daemon tables → "delete has no effect".
+    // Runs / engine still go through daemon authority.
+    if method.starts_with("conversation.") {
+        return false;
+    }
+    // run.start MUST stay host-owned even in UDS mode:
+    // host validates provider/model + project_path, writes user message to assistant.db,
+    // then orchestrates daemon create_run + start_run. Raw UDS run.start skips that and
+    // fails with run_start_failed (daemon conversation FK / missing host preflight).
+    if method == "run.start" {
+        return false;
+    }
+    method.starts_with("run.")
         || method.starts_with("daemon.")
         || method.starts_with("provider.")
         || method.starts_with("tool.")
@@ -184,10 +274,20 @@ fn success_response(data: Value) -> RpcResponse {
 // ─── Conversation handlers ───
 
 async fn handle_provider_list(data_store: &Arc<DataStore>, _params: &Value) -> RpcResponse {
-    // Always re-run the idempotent natives.db → assistant.db migration so
-    // providers added via Settings become visible without restarting the app.
-    let _ = data_store.migrate_legacy_provider_keys();
+    // Prefer natives.db (Settings SoT). Fall back to assistant.db mirror only when
+    // the main pool is unavailable (e.g. unit tests with :memory: DataStore).
+    match list_providers_from_natives_db() {
+        Ok(providers) => return success_response(serde_json::json!({ "providers": providers })),
+        Err(err) => {
+            // Soft fallback keeps fixture/unit tests working without a main pool.
+            eprintln!("provider.list natives.db unavailable, falling back to mirror: {err}");
+        }
+    }
 
+    // Fallback: assistant.db mirror (legacy / test paths). Still filter to
+    // providers that currently have an active key so deleted settings rows
+    // mirrored earlier do not reappear as selectable ghosts.
+    let _ = data_store.migrate_legacy_provider_keys();
     let conn = data_store.conn();
     let mut stmt = match conn.prepare(
         "SELECT id, provider_type, display_name, api_base_url, health_status, default_model, created_at, updated_at
@@ -234,6 +334,18 @@ async fn handle_provider_list(data_store: &Arc<DataStore>, _params: &Value) -> R
         updated_at,
     ) in provider_rows
     {
+        let has_active_key = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM assistant_provider_keys WHERE provider_id = ?1 AND is_active = 1)",
+                rusqlite::params![id],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap_or(false);
+        // Stale mirror rows without a live key must not appear in the picker.
+        if !has_active_key {
+            continue;
+        }
+
         let mut model_stmt = match conn.prepare(
             "SELECT model_id, display_name, capabilities, context_window, max_output, source, discovered_at
              FROM assistant_model_cache
@@ -242,7 +354,7 @@ async fn handle_provider_list(data_store: &Arc<DataStore>, _params: &Value) -> R
             Ok(stmt) => stmt,
             Err(e) => return error_response("DB_ERROR", &e.to_string()),
         };
-        let models: Vec<Value> = match model_stmt.query_map(rusqlite::params![id], |row| {
+        let mut models: Vec<Value> = match model_stmt.query_map(rusqlite::params![id], |row| {
             let capabilities = row.get::<_, String>(2)?;
             Ok(serde_json::json!({
                 "id": row.get::<_, String>(0)?,
@@ -259,13 +371,24 @@ async fn handle_provider_list(data_store: &Arc<DataStore>, _params: &Value) -> R
             Err(e) => return error_response("DB_QUERY_ERROR", &e.to_string()),
         };
 
-        let has_active_key = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM assistant_provider_keys WHERE provider_id = ?1 AND is_active = 1)",
-                rusqlite::params![id],
-                |row| row.get::<_, bool>(0),
-            )
-            .unwrap_or(false);
+        // Model cache empty → surface default_model only (never invent catalog entries).
+        if models.is_empty() {
+            if let Some(dm) = default_model
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                models.push(serde_json::json!({
+                    "id": dm,
+                    "display_name": dm,
+                    "capabilities": {},
+                    "context_window": 0,
+                    "max_output": 0,
+                    "source": "default_model",
+                    "discovered_at": created_at,
+                }));
+            }
+        }
 
         providers.push(serde_json::json!({
             "id": id,
@@ -274,7 +397,7 @@ async fn handle_provider_list(data_store: &Arc<DataStore>, _params: &Value) -> R
             "api_base_url": api_base_url,
             "health_status": health_status,
             "default_model": default_model,
-            "has_active_key": has_active_key,
+            "has_active_key": true,
             "models": models,
             "created_at": created_at,
             "updated_at": updated_at,
@@ -282,6 +405,252 @@ async fn handle_provider_list(data_store: &Arc<DataStore>, _params: &Value) -> R
     }
 
     success_response(serde_json::json!({ "providers": providers }))
+}
+
+/// Read providers exclusively from natives.db (`user_providers` + active keys).
+/// Model list prefers assistant_model_cache when present; otherwise uses `default_model`.
+fn list_providers_from_natives_db() -> std::result::Result<Vec<Value>, String> {
+    let natives = crate::db::get_main_conn().map_err(|e| e.to_string())?;
+
+    let mut pstmt = natives
+        .prepare(
+            "SELECT id, preset_name, api_protocol, name, website_url, base_url, default_model, created_at, updated_at
+             FROM user_providers ORDER BY name ASC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let provider_rows: Vec<(
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        String,
+        String,
+    )> = pstmt
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    // Active key presence from natives.db only.
+    let mut kstmt = natives
+        .prepare(
+            "SELECT provider_id FROM provider_api_keys WHERE COALESCE(is_active, 1) = 1",
+        )
+        .map_err(|e| e.to_string())?;
+    let active_providers: std::collections::HashSet<String> = kstmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    // Optional model cache from assistant.db (discovery results); never required.
+    let model_rows: std::collections::HashMap<String, Vec<Value>> = match crate::db::get_assistant_db_conn()
+    {
+        Ok(assistant) => {
+            let mut stmt = match assistant.prepare(
+                "SELECT provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at
+                 FROM assistant_model_cache ORDER BY model_id ASC",
+            ) {
+                Ok(s) => s,
+                Err(_) => {
+                    return Ok(assemble_natives_providers(provider_rows, &active_providers, &std::collections::HashMap::new()));
+                }
+            };
+            let mut grouped: std::collections::HashMap<String, Vec<Value>> =
+                std::collections::HashMap::new();
+            if let Ok(rows) = stmt.query_map([], |row| {
+                let capabilities = row.get::<_, String>(3).unwrap_or_else(|_| "{}".into());
+                Ok((
+                    row.get::<_, String>(0)?,
+                    serde_json::json!({
+                        "id": row.get::<_, String>(1)?,
+                        "display_name": row.get::<_, Option<String>>(2)?,
+                        "capabilities": serde_json::from_str::<Value>(&capabilities)
+                            .unwrap_or_else(|_| serde_json::json!({})),
+                        "context_window": row.get::<_, i64>(4).unwrap_or(0),
+                        "max_output": row.get::<_, i64>(5).unwrap_or(0),
+                        "source": row.get::<_, String>(6).unwrap_or_else(|_| "cache".into()),
+                        "discovered_at": row.get::<_, String>(7).unwrap_or_default(),
+                    }),
+                ))
+            }) {
+                for row in rows.flatten() {
+                    grouped.entry(row.0).or_default().push(row.1);
+                }
+            }
+            grouped
+        }
+        Err(_) => std::collections::HashMap::new(),
+    };
+
+    Ok(assemble_natives_providers(
+        provider_rows,
+        &active_providers,
+        &model_rows,
+    ))
+}
+
+fn assemble_natives_providers(
+    provider_rows: Vec<(
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        String,
+        String,
+    )>,
+    active_providers: &std::collections::HashSet<String>,
+    model_rows: &std::collections::HashMap<String, Vec<Value>>,
+) -> Vec<Value> {
+    let mut providers = Vec::new();
+    for (
+        id,
+        preset_name,
+        api_protocol,
+        name,
+        _website_url,
+        base_url,
+        default_model,
+        created_at,
+        updated_at,
+    ) in provider_rows
+    {
+        if !active_providers.contains(&id) {
+            continue;
+        }
+        let mut models = model_rows.get(&id).cloned().unwrap_or_default();
+        if models.is_empty() {
+            if let Some(dm) = default_model
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                models.push(serde_json::json!({
+                    "id": dm,
+                    "display_name": dm,
+                    "capabilities": {},
+                    "context_window": 0,
+                    "max_output": 0,
+                    "source": "default_model",
+                    "discovered_at": created_at,
+                }));
+            }
+        }
+        let provider_type = if !api_protocol.trim().is_empty() {
+            api_protocol
+        } else {
+            preset_name
+        };
+        providers.push(serde_json::json!({
+            "id": id,
+            "provider_type": provider_type,
+            "display_name": name,
+            "api_base_url": base_url,
+            "health_status": "unknown",
+            "default_model": default_model,
+            "has_active_key": true,
+            "models": models,
+            "created_at": created_at,
+            "updated_at": updated_at,
+        }));
+    }
+    providers
+}
+
+/// True when provider has an active key and model is either cached or the provider default.
+fn provider_model_pair_available(
+    provider_id: &str,
+    model_id: &str,
+    assistant_conn: &rusqlite::Connection,
+) -> bool {
+    // Prefer natives.db SoT.
+    if let Ok(natives) = crate::db::get_main_conn() {
+        let has_key: bool = natives
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM provider_api_keys
+                    WHERE provider_id = ?1 AND COALESCE(is_active, 1) = 1
+                )",
+                rusqlite::params![provider_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if !has_key {
+            return false;
+        }
+        let default_model: Option<String> = natives
+            .query_row(
+                "SELECT default_model FROM user_providers WHERE id = ?1",
+                rusqlite::params![provider_id],
+                |row| row.get(0),
+            )
+            .ok()
+            .flatten();
+        if default_model
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|dm| dm == model_id)
+        {
+            return true;
+        }
+        // Model cache is optional discovery data in assistant.db.
+        if let Ok(assistant) = crate::db::get_assistant_db_conn() {
+            return assistant
+                .query_row(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM assistant_model_cache
+                        WHERE provider_id = ?1 AND model_id = ?2
+                    )",
+                    rusqlite::params![provider_id, model_id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(false);
+        }
+        return false;
+    }
+
+    // Unit-test / no-main-pool fallback: assistant mirror tables.
+    assistant_conn
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM assistant_model_cache model
+                JOIN assistant_provider_keys key ON key.provider_id = model.provider_id AND key.is_active = 1
+                WHERE model.provider_id = ?1 AND model.model_id = ?2
+            )",
+            rusqlite::params![provider_id, model_id],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap_or(false)
+        || assistant_conn
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM assistant_provider_configs p
+                    JOIN assistant_provider_keys k ON k.provider_id = p.id AND k.is_active = 1
+                    WHERE p.id = ?1 AND p.default_model = ?2
+                )",
+                rusqlite::params![provider_id, model_id],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap_or(false)
 }
 
 async fn handle_conversation_list(data_store: &Arc<DataStore>, _params: &Value) -> RpcResponse {
@@ -713,7 +1082,11 @@ async fn handle_conversation_archive(data_store: &Arc<DataStore>, params: &Value
 }
 
 async fn handle_conversation_delete(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
-    let id = match params.get("id").and_then(|v| v.as_str()) {
+    let id = match params
+        .get("id")
+        .or_else(|| params.get("conversation_id"))
+        .and_then(|v| v.as_str())
+    {
         Some(i) => i,
         None => return error_response("MISSING_PARAM", "id is required"),
     };
@@ -760,6 +1133,19 @@ async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcRes
         .get("content")
         .and_then(Value::as_str)
         .filter(|content| !content.trim().is_empty());
+    let effort = params
+        .get("effort")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let runtime_id = params
+        .get("runtime_id")
+        .or_else(|| params.get("runtimeId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     let attachments = params
         .get("attachments")
         .and_then(Value::as_array)
@@ -845,17 +1231,9 @@ async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcRes
     // All DB work in a block so MutexGuard is dropped before any await (Send).
     let (trigger_message_id, permission_profile) = {
         let conn = data_store.conn();
-        let pair_available = conn
-            .query_row(
-                "SELECT EXISTS(
-            SELECT 1 FROM assistant_model_cache model
-            JOIN assistant_provider_keys key ON key.provider_id = model.provider_id AND key.is_active = 1
-            WHERE model.provider_id = ?1 AND model.model_id = ?2
-        )",
-                rusqlite::params![provider_id, model_id],
-                |row| row.get::<_, bool>(0),
-            )
-            .unwrap_or(false);
+        // Provider/model must be currently available in natives.db (or mirror fallback).
+        // Accept: active key + (model in cache OR model == default_model).
+        let pair_available = provider_model_pair_available(provider_id, model_id, &conn);
         if !pair_available {
             return error_response("INVALID_PARAM", "Provider/model pair is not available");
         }
@@ -994,6 +1372,8 @@ async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcRes
         parent_run_id: None,
         project_path: project_path.clone(),
         idempotency_key: Some(run_id.clone()),
+        effort: effort.clone(),
+        runtime_id: runtime_id.clone(),
     })
     .await
     {
@@ -1013,6 +1393,8 @@ async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcRes
         max_steps: Some(50),
         project_path,
         idempotency_key: None,
+        effort: effort.clone(),
+        runtime_id: runtime_id.clone(),
     };
     let db_run_id = run_id.clone();
     let daemon_run_id = daemon_run.id.clone();
@@ -1077,8 +1459,14 @@ async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcRes
         }
     });
 
+    // Prefer daemon run id for wire `id` so UI subscribe addresses EventSequencer key.
+    let response_id = if daemon_run_id_resp.is_empty() {
+        run_id.clone()
+    } else {
+        daemon_run_id_resp.clone()
+    };
     success_response(serde_json::json!({
-        "id": run_id,
+        "id": response_id,
         "conversation_id": conversation_id,
         "status": db_status,
         "provider_id": provider_id,
@@ -1088,6 +1476,7 @@ async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcRes
         "execution": "agent_daemon_run_manager",
         "authority_mode": mode_label,
         "daemon_run_id": daemon_run_id_resp,
+        "host_run_id": run_id,
     }))
 }
 
@@ -1232,7 +1621,9 @@ async fn handle_run_retry(data_store: &Arc<DataStore>, params: &Value) -> RpcRes
                     parent_run_id: None,
                     project_path: None,
                     idempotency_key: None,
-                },
+                        effort: None,
+        runtime_id: None,
+},
             )
             .await
             {
@@ -1252,7 +1643,9 @@ async fn handle_run_retry(data_store: &Arc<DataStore>, params: &Value) -> RpcRes
                 max_steps: Some(created.max_steps),
                 project_path: None,
                 idempotency_key: None,
-            })
+                    effort: None,
+        runtime_id: None,
+})
             .await
             {
                 Ok(r) => r,
@@ -1904,12 +2297,13 @@ mod tests {
     }
 
     #[test]
-    fn run_start_is_daemon_owned_only_in_uds_mode() {
+    fn run_start_is_always_host_owned() {
         let previous = std::env::var("NATIVES_DAEMON_MODE").ok();
         std::env::set_var("NATIVES_DAEMON_MODE", "embedded");
         assert!(!daemon_owned_method("run.start"));
         std::env::set_var("NATIVES_DAEMON_MODE", "uds");
-        assert!(daemon_owned_method("run.start"));
+        // Even in UDS, run.start stays host-owned for preflight + message write.
+        assert!(!daemon_owned_method("run.start"));
         if let Some(value) = previous {
             std::env::set_var("NATIVES_DAEMON_MODE", value);
         } else {
@@ -1919,6 +2313,10 @@ mod tests {
         assert!(daemon_owned_method("run.cancel"));
         assert!(daemon_owned_method("provider.test"));
         assert!(daemon_owned_method("mcp.list"));
+        // Conversation CRUD is always host-owned (assistant.db), never UDS dual-store.
+        assert!(!daemon_owned_method("conversation.list"));
+        assert!(!daemon_owned_method("conversation.delete"));
+        assert!(!daemon_owned_method("conversation.create"));
     }
 
     #[tokio::test]

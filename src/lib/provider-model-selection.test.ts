@@ -232,12 +232,12 @@ describe('resolveModelSelection', () => {
     assert.deepEqual(r, { providerId: 'p1', modelId: 'deepseek-v4-flash' });
   });
 
-  it('remaps collapsed provider ids via model host', () => {
+  it('blocks stale provider ids instead of remapping to another host', () => {
     const r = resolveModelSelection(providers, {
       providerId: 'ghost-id',
       modelId: 'gpt-4o',
     });
-    assert.deepEqual(r, { providerId: 'p2', modelId: 'gpt-4o' });
+    assert.equal(r, null);
   });
 
   it('defaults to first ready provider when preference empty', () => {

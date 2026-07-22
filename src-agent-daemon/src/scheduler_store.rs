@@ -424,7 +424,9 @@ fn fire_job(job: &SchedulerJob) -> Result<String, String> {
             job.id,
             Utc::now().timestamp()
         )),
-    })?;
+                effort: None,
+            runtime_id: None,
+        })?;
     let started = RunManager::start_detached_global(StartRunRequest {
         run_id: Some(run.id.clone()),
         conversation_id: Some(run.conversation_id.clone()),
@@ -438,7 +440,9 @@ fn fire_job(job: &SchedulerJob) -> Result<String, String> {
         max_steps: Some(run.max_steps),
         project_path: job.project_path.clone(),
         idempotency_key: None,
-    })?;
+                effort: None,
+            runtime_id: None,
+        })?;
     Ok(started.id)
 }
 

@@ -49,7 +49,11 @@ pub struct ListDirResult {
     pub project: Option<String>,
 }
 
+/// Wire format matches the frontend (`sortBy` / `sortDir` / … camelCase).
+/// Without rename_all, camelCase options were silently dropped and list always
+/// fell back to name/asc — Header sort clicks looked like “no feedback”.
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListDirOptions {
     #[serde(default = "default_sort_by")]
     pub sort_by: String,
@@ -1481,6 +1485,66 @@ mod tests {
         assert_eq!(result.project.as_deref(), Some("node"));
         // directories first
         assert!(result.entries[0].is_dir, "first entry should be a dir");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Frontend FileBrowser sends camelCase options via Tauri IPC.
+    /// Regression: without rename_all these fields were ignored → default sort only.
+    #[test]
+    fn list_dir_options_accepts_frontend_camel_case_json() {
+        let v = serde_json::json!({
+            "sortBy": "size",
+            "sortDir": "desc",
+            "showHidden": true,
+            "probeProjects": false
+        });
+        let opts: ListDirOptions = serde_json::from_value(v).expect("deserialize camelCase");
+        assert_eq!(opts.sort_by, "size");
+        assert_eq!(opts.sort_dir, "desc");
+        assert!(opts.show_hidden);
+        assert!(!opts.probe_projects);
+    }
+
+    #[test]
+    fn list_dir_sorts_by_size_and_mtime() {
+        let base = tmp_dir("sortkeys");
+        let small = base.join("small.txt");
+        let large = base.join("large.txt");
+        std::fs::write(&small, b"a").unwrap();
+        std::fs::write(&large, b"aaaaaaaaaa").unwrap();
+
+        // Rewrite small after a brief delay so mtime-desc puts it first.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&small, b"ab").unwrap();
+
+        let by_size = list_dir_detailed(
+            base.to_str().unwrap(),
+            &ListDirOptions {
+                sort_by: "size".into(),
+                sort_dir: "desc".into(),
+                show_hidden: false,
+                probe_projects: false,
+            },
+        )
+        .expect("list size");
+        let size_names: Vec<&str> = by_size.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(size_names, vec!["large.txt", "small.txt"], "size desc");
+
+        let by_mtime = list_dir_detailed(
+            base.to_str().unwrap(),
+            &ListDirOptions {
+                sort_by: "mtime".into(),
+                sort_dir: "desc".into(),
+                show_hidden: false,
+                probe_projects: false,
+            },
+        )
+        .expect("list mtime");
+        assert_eq!(
+            by_mtime.entries[0].name, "small.txt",
+            "mtime desc should put rewritten small first"
+        );
+
         let _ = std::fs::remove_dir_all(&base);
     }
 

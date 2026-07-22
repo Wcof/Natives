@@ -143,6 +143,32 @@ test('tool call updates in place (no duplicate tool blocks)', () => {
   assert.equal(tools[0]!.toolOutput, 'ok');
 });
 
+test('tool_call_delta streams args into one card by id', () => {
+  let state = withRun(createInitialWorkspaceState());
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 1, 'tool_call_delta', {
+      id: 't1',
+      name: 'list_dir',
+      index: 0,
+      arguments_delta: '{"path":',
+    }),
+  });
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 2, 'tool_call_delta', {
+      id: 't1',
+      index: 0,
+      arguments_delta: '"."}',
+    }),
+  });
+  const tools = state.liveByRun.r1!.blocks.filter((b) => b.type === 'tool_call');
+  assert.equal(tools.length, 1);
+  assert.equal(tools[0]!.toolStatus, 'running');
+  assert.equal(tools[0]!.toolPartialArgs, '{"path":"."}');
+  assert.deepEqual(tools[0]!.toolInput, { path: '.' });
+});
+
 test('permission queue binds to run and survives conversation switch', () => {
   let state = withRun(createInitialWorkspaceState(), 'r1', 'c1');
   state = workspaceReducer(state, {

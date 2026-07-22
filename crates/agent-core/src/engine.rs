@@ -210,6 +210,9 @@ impl AgentEngine {
         status = self.transition_emit(run_id, status, RunStatus::Running, RunEventKind::Started)?;
 
         let tool_schemas = tools.list_tool_schemas().await;
+        // History is prior turns; always ensure the current user prompt appears
+        // exactly once (append when history is empty or does not already end
+        // with the same user content).
         let mut messages = if config.messages.is_empty() {
             vec![EngineMessage {
                 role: "user".into(),
@@ -219,7 +222,20 @@ impl AgentEngine {
                 tool_calls: None,
             }]
         } else {
-            config.messages.clone()
+            let mut msgs = config.messages.clone();
+            let already_has_current = msgs.last().is_some_and(|m| {
+                m.role == "user" && m.content.trim() == config.user_content.trim()
+            });
+            if !already_has_current && !config.user_content.trim().is_empty() {
+                msgs.push(EngineMessage {
+                    role: "user".into(),
+                    content: config.user_content.clone(),
+                    tool_call_id: None,
+                    tool_name: None,
+                    tool_calls: None,
+                });
+            }
+            msgs
         };
         let mut doom = DoomLoopDetector::new();
         let mut step = 0u32;
@@ -1004,8 +1020,11 @@ mod tests {
             .await
             .unwrap();
         let seen = provider.seen.lock().unwrap();
-        assert_eq!(seen.len(), 2);
+        assert_eq!(seen.len(), 3);
         assert_eq!(seen[0].content, "first fact");
+        assert_eq!(seen[1].content, "ack");
+        assert_eq!(seen[2].content, "fallback should not be used");
+        assert_eq!(seen[2].role, "user");
     }
 
     #[tokio::test]

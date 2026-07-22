@@ -10,17 +10,23 @@ import FileContextMenu from './FileContextMenu';
 import DiskUsagePanel from './DiskUsagePanel';
 import FileNavShell from './FileNavShell';
 import FileSearch from './FileSearch';
+import { nextSortDir, nextSortForField, type FileSortBy } from './file-sort';
 import Skeleton from '@/components/ui/Skeleton';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Modal from '@/components/ui/Modal';
 import { pushRecentFile } from '@/lib/recent-files-client';
+import {
+  type FavoriteItem,
+  loadFavorites,
+  toggleFileFavorite,
+  saveFavorites,
+  isFavoritePath,
+  favoriteFilePaths,
+} from '@/lib/favorites-client';
 import { fmtSize } from '@/lib/format';
 import { useFileDrop } from '@/lib/use-file-drop';
 
-export interface FavoriteItem {
-  path: string;
-  addedAt: number;
-}
+export type { FavoriteItem };
 
 /** Tauri IPC 可用时用 nativesAPI.fs，否则抛出错误 */
 function getFsApi() {
@@ -41,6 +47,9 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const [sortBy, setSortBy] = useState<'name' | 'mtime' | 'size'>('name');
   const [trashTarget, setTrashTarget] = useState<FileEntry | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  // Snapshot for event handlers that shouldn't re-subscribe on every sort change.
+  const sortRef = useRef({ sortBy: 'name' as FileSortBy, sortDir: 'asc' as 'asc' | 'desc' });
+  sortRef.current = { sortBy, sortDir };
   const [showHidden, setShowHidden] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry: FileEntry; mode: 'file' | 'dir' | 'blank' } | null>(null);
@@ -181,17 +190,8 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   useEffect(() => {
     async function load() {
       try {
-        const stored = await window.nativesAPI?.db?.get?.('settings:favorites');
-        if (stored) {
-          const parsed = JSON.parse(stored as string);
-          // Migrate old format: string[] → FavoriteItem[]
-          if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
-            const migrated: FavoriteItem[] = (parsed as string[]).map((p, i) => ({ path: p, addedAt: Date.now() + i }));
-            setFavorites(migrated);
-          } else {
-            setFavorites(parsed as FavoriteItem[]);
-          }
-        }
+        const items = await loadFavorites();
+        setFavorites(items);
       } catch { /* ignore */ }
       try {
         const saved = await window.nativesAPI?.getLocale?.();
@@ -213,25 +213,41 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       } catch { /* ignore */ }
     }
     load();
+
+    const onFavoritesChanged = () => {
+      void loadFavorites().then(setFavorites);
+    };
+    window.addEventListener('favorites-changed', onFavoritesChanged);
+    return () => window.removeEventListener('favorites-changed', onFavoritesChanged);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const isFavorite = favorites.some((f) => f.path === currentPath);
+  const isFavorite = isFavoritePath(favorites, currentPath);
   const toggleFavorite = useCallback(async (targetPath?: string) => {
     const path = targetPath ?? currentPath;
-    const existing = favorites.find((f) => f.path === path);
-    const next = existing
-      ? favorites.filter((f) => f.path !== path)
-      : [...favorites, { path, addedAt: Date.now() }];
+    if (!path) return;
+
+    // Infer isDir from current entries / current folder when available
+    let isDir: boolean | undefined;
+    if (path === currentPath) {
+      isDir = true;
+    } else {
+      const entry = entries.find((e) => e.path === path);
+      if (entry) isDir = entry.isDir;
+    }
+
+    const { next, added } = toggleFileFavorite(favorites, path, {
+      isDir,
+      label: path.split(/[/\\]/).pop() || path,
+    });
     setFavorites(next);
     try {
-      await window.nativesAPI?.db?.set?.('settings:favorites', JSON.stringify(next));
-      window.dispatchEvent(new CustomEvent('favorites-changed'));
-      showToast(existing ? t(locale, 'fileBrowser.removedFromFavorites') : t(locale, 'fileBrowser.addedToFavorites'));
+      await saveFavorites(next);
+      showToast(added ? t(locale, 'fileBrowser.addedToFavorites') : t(locale, 'fileBrowser.removedFromFavorites'));
     } catch { /* ignore */ }
-  }, [currentPath, favorites, showToast, locale]);
+  }, [currentPath, favorites, entries, showToast, locale]);
 
-  const favoritePaths = useMemo(() => favorites.map((f) => f.path), [favorites]);
+  const favoritePaths = useMemo(() => favoriteFilePaths(favorites), [favorites]);
   const handleFavoriteToggle = useCallback((entry: FileEntry) => {
     void toggleFavorite(entry.path);
   }, [toggleFavorite]);
@@ -346,8 +362,21 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       const detail = (e as CustomEvent).detail;
       if (!detail) return;
       if (detail.type === 'viewMode') setViewMode(detail.value);
-      if (detail.type === 'sortBy') { setSortBy(detail.value); setSortDir('asc'); }
-      if (detail.type === 'sortDir') setSortDir((prev) => prev === 'asc' ? 'desc' : 'asc');
+      if (detail.type === 'sortBy') {
+        const next = detail.value as FileSortBy;
+        // Same field → toggle direction (so "按名称排序" is never a no-op).
+        // New field → natural default (name asc; mtime/size desc).
+        const resolved = nextSortForField(
+          sortRef.current.sortBy,
+          sortRef.current.sortDir,
+          next,
+        );
+        setSortBy(resolved.sortBy);
+        setSortDir(resolved.sortDir);
+      }
+      if (detail.type === 'sortDir') {
+        setSortDir(nextSortDir(sortRef.current.sortDir, detail.value));
+      }
       if (detail.type === 'showHidden') setShowHidden((prev) => !prev);
       if (detail.type === 'search') setSearchQuery(detail.value ?? '');
       if (detail.type === 'newFolder') {
@@ -375,25 +404,34 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     return () => window.removeEventListener('header-file-action', handler);
   }, [goBack, goForward, goUp, loadEntries, toggleFavorite, resolveAndNavigate]);
 
-  // Listen for external navigation events (from sidebar quick access)
+  // Listen for external navigation events (sidebar quick access / favorites)
   useEffect(() => {
+    const applyNav = (raw: unknown) => {
+      let path: string | undefined;
+      if (typeof raw === 'string') path = raw;
+      else if (raw && typeof raw === 'object') {
+        const d = raw as { path?: string; directory?: string };
+        path = d.path ?? d.directory;
+      }
+      if (!path) return;
+      // resolveAndNavigate: file → parent dir + soft-select; dir → open
+      void resolveAndNavigate(path);
+    };
+
     // Check for pending path set before mount (race condition fix)
     const pending = (window as any).__pendingNavigateFiles;
     if (typeof pending === 'string') {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-      navigateTo(pending);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      applyNav(pending);
       delete (window as any).__pendingNavigateFiles;
     }
 
     const handler = (e: Event) => {
-      const path = (e as CustomEvent).detail;
-      if (typeof path === 'string') {
-        navigateTo(path);
-      }
+      applyNav((e as CustomEvent).detail);
     };
     window.addEventListener('navigate-files', handler);
     return () => window.removeEventListener('navigate-files', handler);
-  }, []);
+  }, [resolveAndNavigate]);
 
   const filteredEntries = useMemo(() => {
     if (!searchQuery) return entries;
@@ -448,14 +486,17 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     navigateTo(path);
   };
 
-  const handleSort = (newSortBy: 'name' | 'mtime' | 'size') => {
-    if (newSortBy === sortBy) {
-      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortBy(newSortBy);
-      setSortDir('asc');
-    }
+  const handleSort = (newSortBy: FileSortBy) => {
+    const next = nextSortForField(sortBy, sortDir, newSortBy);
+    setSortBy(next.sortBy);
+    setSortDir(next.sortDir);
   };
+
+  /** Explicit field + direction setter (used by FileNavShell menu). */
+  const handleSortChange = useCallback((nextBy: FileSortBy, nextDir: 'asc' | 'desc') => {
+    setSortBy(nextBy);
+    setSortDir(nextDir);
+  }, []);
 
   const handleContextMenu = (e: React.MouseEvent, entry: FileEntry) => {
     e.preventDefault();
@@ -1060,6 +1101,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         onSearchChange={setSearchQuery}
         onOpenGlobalSearch={() => setGlobalSearchOpen(true)}
         onPathSubmit={(path) => { void resolveAndNavigate(path); }}
+        onSortChange={handleSortChange}
       />
 
       {/* File area — drop zone covers entire height including empty space */}

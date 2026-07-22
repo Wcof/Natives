@@ -150,4 +150,7 @@ export type WorkspaceAction =
   | { type: 'view/patch'; patch: Partial<AssistantViewState> }
   | { type: 'view/setBlockExpanded'; key: string; expanded: boolean }
   | { type: 'messages/appendOptimistic'; message: Message }
+  /** Drop a stuck optimistic user bubble / clear live run after send failure. */
+  | { type: 'messages/remove'; id: string; conversationId: string }
+  | { type: 'run/clearActive'; conversationId: string; runId?: string }
   | { type: 'disconnect/soft' };

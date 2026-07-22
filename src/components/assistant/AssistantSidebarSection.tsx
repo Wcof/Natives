@@ -322,13 +322,44 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
 
       {/* ── Delete Modal ── */}
       <Modal isOpen={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} title={t(locale, 'assistant.deleteConversation')} width={420}>
-        <p className="text-sm text-[var(--text-secondary)]">{t(locale, 'assistant.deleteConversationConfirm', { title: deleteTarget?.title ?? '' })}</p>
+        <p className="text-sm text-[var(--text-secondary)]">{t(locale, 'assistant.deleteConversationConfirm', { title: deleteTarget?.title || '' })}</p>
         <div className="mt-4 flex justify-end gap-2"><button type="button" disabled={deletingConversation} onClick={() => setDeleteTarget(null)} className="btn btn-sm">{t(locale, 'common.cancel')}</button><button type="button" disabled={deletingConversation} onClick={() => void confirmDeleteConversation()} className="btn btn-sm bg-[var(--danger)] text-white disabled:opacity-60">{deletingConversation ? (zh ? '删除中…' : 'Deleting…') : t(locale, 'common.delete')}</button></div>
       </Modal>
 
       <Modal isOpen={Boolean(removeProjectTarget)} onClose={() => setRemoveProjectTarget(null)} title={t(locale, 'assistant.removeProject')} width={420}>
-        <p className="text-sm text-[var(--text-secondary)]">{t(locale, 'assistant.removeProjectConfirm', { title: removeProjectTarget?.label ?? '' })}</p>
-        <div className="mt-4 flex justify-end gap-2"><button type="button" onClick={() => setRemoveProjectTarget(null)} className="btn btn-sm">{t(locale, 'common.cancel')}</button><button type="button" onClick={() => { if (removeProjectTarget) { actions?.removeProject(removeProjectTarget.path); const next = new Set(pinned); next.delete(removeProjectTarget.id); setPinned(next); void window.nativesAPI?.db?.set('assistant:pinnedProjects', JSON.stringify([...next])); } setRemoveProjectTarget(null); }} className="btn btn-sm bg-[var(--danger)] text-white">{t(locale, 'common.remove')}</button></div>
+        <p className="text-sm text-[var(--text-secondary)]">
+          {t(locale, 'assistant.removeProjectConfirm', {
+            title: removeProjectTarget?.label || removeProjectTarget?.path || '',
+          })}
+        </p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={() => setRemoveProjectTarget(null)} className="btn btn-sm">
+            {t(locale, 'common.cancel')}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (!removeProjectTarget) return;
+              if (!actions?.removeProject) {
+                toast(
+                  zh ? '工作台未就绪，无法移除项目' : 'Workbench not ready — cannot remove project',
+                  'error',
+                );
+                return;
+              }
+              actions.removeProject(removeProjectTarget.path);
+              const next = new Set(pinned);
+              next.delete(removeProjectTarget.id);
+              setPinned(next);
+              void window.nativesAPI?.db?.set('assistant:pinnedProjects', JSON.stringify([...next]));
+              setRemoveProjectTarget(null);
+              toast(zh ? '已移除项目' : 'Project removed', 'success');
+            }}
+            className="btn btn-sm bg-[var(--danger)] text-white"
+          >
+            {zh ? '移除' : 'Remove'}
+          </button>
+        </div>
       </Modal>
     </div>
   );

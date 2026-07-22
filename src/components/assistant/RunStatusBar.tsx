@@ -58,14 +58,17 @@ export default function RunStatusBar({
   onBackground,
 }: RunStatusBarProps) {
   const zh = locale.startsWith('zh');
-  // Only show for live runs or connection recovery — not for idle/terminal leftovers.
-  // Goal conversations render GoalStatusBar instead (see AssistantWorkbench).
   const active = run ? isActiveRunStatus(run.status) : false;
-  if (!connectionHint && !active) return null;
+  const terminal = run ? isTerminalRunStatus(run.status) : false;
+  // Idle / terminal leftovers must not paint 准备中 / 后台 / 停止.
+  if (!connectionHint && (!active || terminal)) return null;
 
   const status = run?.status ?? 'connecting';
-  const terminal = run ? isTerminalRunStatus(run.status) : false;
-  const showSpinner = (active && !terminal) || Boolean(connectionHint);
+  // Avoid flashing "准备中 0.0s" before the engine has a real start clock.
+  const displayStatus =
+    status === 'preparing' && !run?.startedAt && !connectionHint ? 'connecting' : status;
+  const showSpinner = Boolean(connectionHint) || (active && !terminal);
+  const elapsedLabel = run?.startedAt && active && !terminal ? elapsed(run.startedAt) : '';
 
   return (
     <div
@@ -73,25 +76,27 @@ export default function RunStatusBar({
       role="status"
       aria-live="polite"
       aria-atomic="true"
+      data-testid="run-status-bar"
+      data-run-status={status}
     >
-      {showSpinner && (
+      {showSpinner ? (
         <Loader2 size={14} className="animate-spin text-[var(--primary)] shrink-0" aria-hidden />
-      )}
+      ) : null}
       <span className="font-medium text-[var(--text)]">
-        {connectionHint ?? statusLabel(status, zh)}
+        {connectionHint ?? statusLabel(displayStatus, zh)}
         {run?.activity ? `：${run.activity}` : ''}
       </span>
-      {run?.startedAt && active && (
-        <span className="text-[var(--text-disabled)] tabular-nums">{elapsed(run.startedAt)}</span>
-      )}
-      {tokenLabel && <span className="text-[var(--text-disabled)]">{tokenLabel}</span>}
-      {queueCount > 0 && (
+      {elapsedLabel ? (
+        <span className="text-[var(--text-disabled)] tabular-nums">{elapsedLabel}</span>
+      ) : null}
+      {tokenLabel ? <span className="text-[var(--text-disabled)]">{tokenLabel}</span> : null}
+      {queueCount > 0 ? (
         <span className="rounded bg-[var(--surface-hover)] px-1.5 py-0.5">
           {zh ? `队列 ${queueCount}` : `Queue ${queueCount}`}
         </span>
-      )}
+      ) : null}
       <div className="ml-auto flex items-center gap-1">
-        {active && onBackground && (
+        {active && !terminal && onBackground ? (
           <button
             type="button"
             onClick={onBackground}
@@ -101,8 +106,8 @@ export default function RunStatusBar({
             <ArrowDownToLine size={12} />
             {zh ? '后台' : 'Background'}
           </button>
-        )}
-        {active && onStop && (
+        ) : null}
+        {active && !terminal && onStop ? (
           <button
             type="button"
             onClick={onStop}
@@ -112,7 +117,7 @@ export default function RunStatusBar({
             <Square size={12} />
             {zh ? '停止' : 'Stop'}
           </button>
-        )}
+        ) : null}
       </div>
     </div>
   );

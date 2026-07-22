@@ -43,6 +43,25 @@ test('assistant and Quick Access use the same first-level heading style', () => 
   assert.match(sidebar, /Assistant is a first-level[\s\S]*?<div className="mb-1">[\s\S]*?<div className="flex items-center px-3/);
 });
 
+test('sidebar owns Favorites as a first-level rail above Assistant', () => {
+  assert.match(sidebar, /useFavorites/);
+  assert.match(sidebar, /from '@\/lib\/favorites-client'/);
+  assert.match(sidebar, /data-sidebar-favorites/);
+  assert.match(sidebar, /sidebar\.favorites/);
+  assert.match(sidebar, /favoritesNavTarget/);
+  assert.match(sidebar, /removeAndPersistFavorite/);
+  // Always visible as a first-level section; empty shows placeholder
+  assert.match(sidebar, /sidebar\.noFavorites/);
+  assert.match(sidebar, /favorites\.length === 0/);
+  // Position: Quick Access → Favorites → Assistant
+  const qa = sidebar.indexOf('Quick Access List');
+  const fav = sidebar.indexOf('data-sidebar-favorites');
+  const asst = sidebar.indexOf('Assistant is a first-level');
+  assert.ok(qa >= 0 && fav > qa && asst > fav);
+  // Distinct from fixed Quick Access list
+  assert.match(sidebar, /QUICK_ACCESS_ITEMS/);
+});
+
 test('expanded sidebar owns collapse and header only restores it', () => {
   assert.match(sidebar, /onClick=\{onToggle\}/);
   assert.match(header, /sidebarCollapsed && onToggleSidebar/);
@@ -56,16 +75,68 @@ test('collapsed sidebar renders an icon rail with expand control', () => {
   assert.equal(sidebar.includes("style={{ width: 0, overflow: 'hidden' }}"), false);
 });
 
-test('sidebar exposes macOS traffic lights for window controls', () => {
-  assert.match(sidebar, /mac-traffic-lights/);
-  assert.match(sidebar, /mac-traffic-btn close/);
-  assert.match(sidebar, /mac-traffic-btn minimize/);
-  assert.match(sidebar, /mac-traffic-btn zoom/);
-  assert.match(sidebar, /data-active=\{windowActive/);
+test('sidebar uses native traffic lights on macOS and fallback controls elsewhere', () => {
+  assert.match(sidebar, /usesNativeTrafficLights/);
+  assert.match(sidebar, /native-traffic-spacer/);
+  assert.match(sidebar, /titlebar-row/);
+  assert.match(sidebar, /data-native-traffic/);
+  assert.match(sidebar, /window-controls/);
   assert.match(sidebar, /handleWindowAction\('close'\)/);
   assert.match(sidebar, /handleWindowAction\('minimize'\)/);
-  assert.match(sidebar, /handleZoomClick/);
-  assert.match(sidebar, /toggleFullscreen|fullscreen/);
+  assert.match(sidebar, /handleWindowAction\('maximize'\)/);
+  // Custom painted traffic lights / zoom long-press menu are gone
+  assert.equal(sidebar.includes('mac-traffic-lights'), false);
+  assert.equal(sidebar.includes('handleZoomClick'), false);
+});
+
+test('macOS window chrome keeps system traffic lights (decorations + Overlay)', () => {
+  const lib = readFileSync(new URL('../../../src-tauri/src/lib.rs', import.meta.url), 'utf8');
+  const widget = readFileSync(new URL('../../../src-tauri/src/commands/widget.rs', import.meta.url), 'utf8');
+  const macosConf = readFileSync(new URL('../../../src-tauri/tauri.macos.conf.json', import.meta.url), 'utf8');
+  const baseConf = readFileSync(new URL('../../../src-tauri/tauri.conf.json', import.meta.url), 'utf8');
+
+  // Platform override must enable decorations + Overlay title bar
+  assert.match(macosConf, /"decorations"\s*:\s*true/);
+  assert.match(macosConf, /"titleBarStyle"\s*:\s*"Overlay"/);
+  assert.match(macosConf, /"hiddenTitle"\s*:\s*true/);
+  assert.match(macosConf, /"trafficLightPosition"/);
+
+  // Base conf stays frameless for Win/Linux custom chrome
+  assert.match(baseConf, /"decorations"\s*:\s*false/);
+
+  // window-state must NOT restore decorations/visible (poisoned frameless state)
+  assert.match(lib, /with_state_flags/);
+  assert.match(lib, /StateFlags::SIZE/);
+  assert.match(lib, /StateFlags::POSITION/);
+  assert.match(lib, /StateFlags::MAXIMIZED/);
+  assert.match(lib, /StateFlags::FULLSCREEN/);
+  assert.equal(lib.includes('StateFlags::DECORATIONS'), false);
+  assert.equal(lib.includes('StateFlags::VISIBLE'), false);
+
+  // Runtime re-assert on setup + first paint
+  assert.match(lib, /apply_macos_traffic_lights/);
+  assert.match(lib, /set_decorations\(true\)/);
+  assert.match(lib, /TitleBarStyle::Overlay/);
+  assert.match(widget, /set_decorations\(true\)/);
+  assert.match(widget, /TitleBarStyle::Overlay/);
+});
+
+test('sidebar right-edge drag resizes width with clamp + double-click reset', () => {
+  assert.match(sidebar, /export function clampSidebarWidth/);
+  assert.match(sidebar, /SIDEBAR_MIN_WIDTH\s*=\s*200/);
+  assert.match(sidebar, /SIDEBAR_MAX_WIDTH\s*=\s*420/);
+  assert.match(sidebar, /sidebar-drag-handle/);
+  assert.match(sidebar, /handleSidebarDragStart/);
+  assert.match(sidebar, /handleSidebarDragDoubleClick/);
+  assert.match(sidebar, /SIDEBAR_DEFAULT_WIDTH/);
+  assert.match(sidebar, /ev\.clientX - startX/);
+});
+
+test('layout events debounce width persistence and flush on unload', () => {
+  assert.match(layoutEvents, /LAYOUT_PERSIST_DEBOUNCE_MS/);
+  assert.match(layoutEvents, /layoutPersist/);
+  assert.match(layoutEvents, /beforeunload/);
+  assert.match(layoutEvents, /_state:sidebar/);
 });
 
 test('assistant heading exposes only tree toggle and add project actions', () => {
@@ -87,7 +158,7 @@ test('assistant projects only toggle their conversations and have no separate se
 test('assistant project menu exposes pin, reveal, and remove actions', () => {
   assert.match(assistantSidebar, /assistant:pinnedProjects/);
   assert.match(assistantSidebar, /showItemInFolder\(group\.path/);
-  assert.match(assistantSidebar, /actions\?\.removeProject\(removeProjectTarget\.path\)/);
+  assert.match(assistantSidebar, /actions\.removeProject\(removeProjectTarget\.path\)/);
   assert.match(assistantSidebar, /PinOff/);
 });
 

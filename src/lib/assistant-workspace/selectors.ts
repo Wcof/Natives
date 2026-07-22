@@ -22,15 +22,18 @@ export function selectConversationMessages(
   const ids = state.messagesByConversation[conversationId] ?? [];
   const base = ids.map((id) => state.messages[id]).filter(Boolean) as Message[];
 
-  // Append live bubble for active non-terminal run if not already promoted
+  // Append live bubble for active non-terminal run if not already promoted.
+  // Even with empty blocks, surface a streaming placeholder so the UI can show
+  // "正在思考" instead of looking stuck with no assistant row.
   const runId = state.activeRunByConversation[conversationId];
   if (runId) {
     const run = state.runs[runId];
     const live = state.liveByRun[runId];
-    if (run && live && !isTerminalRunStatus(run.status)) {
-      if (!ids.includes(live.messageId)) {
+    if (run && !isTerminalRunStatus(run.status)) {
+      const liveId = live?.messageId ?? `live-${runId}`;
+      if (!ids.includes(liveId)) {
         base.push({
-          id: live.messageId,
+          id: liveId,
           conversationId,
           role: 'assistant',
           status:
@@ -41,7 +44,7 @@ export function selectConversationMessages(
               ? 'streaming'
               : run.status,
           createdAt: run.startedAt ?? new Date().toISOString(),
-          contentBlocks: live.blocks,
+          contentBlocks: live?.blocks ?? [],
           runId,
         });
       }

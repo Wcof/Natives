@@ -96,6 +96,104 @@ test('subscribe falls back to run.getEvents when subscribe fails', async () => {
   assert.equal(events[0]?.type, 'completed');
 });
 
+test('subscribe recovers terminal when server marks terminal without new events', async () => {
+  let subCalls = 0;
+  const adapter = new DaemonAssistantAdapter({
+    pollIntervalMs: 5,
+    requestFn: async (method, params) => {
+      if (method === 'daemon.ping') return { ok: true };
+      if (method === 'run.subscribe') {
+        subCalls += 1;
+        const after = Number((params as { after_sequence?: number }).after_sequence ?? 0);
+        if (after === 0) {
+          return {
+            events: [
+              {
+                run_id: 'r-term',
+                sequence: 1,
+                timestamp: new Date().toISOString(),
+                type: 'text_delta',
+                text: 'hi',
+              },
+            ],
+            terminal: false,
+          };
+        }
+        // After seq 1: server is terminal but event list after_sequence is empty
+        // (the bug that caused permanent reconnect banner).
+        return { events: [], terminal: true };
+      }
+      if (method === 'run.getEvents') {
+        return [
+          {
+            run_id: 'r-term',
+            sequence: 1,
+            timestamp: new Date().toISOString(),
+            type: 'text_delta',
+            text: 'hi',
+          },
+          {
+            run_id: 'r-term',
+            sequence: 2,
+            timestamp: new Date().toISOString(),
+            type: 'completed',
+            reason: 'stop',
+          },
+        ];
+      }
+      if (method === 'run.get') {
+        return { id: 'r-term', status: 'completed' };
+      }
+      if (method === 'run.list') {
+        return { runs: [{ id: 'r-term', status: 'completed' }] };
+      }
+      throw new Error(`unexpected ${method}`);
+    },
+  });
+  await adapter.connect();
+  const types: string[] = [];
+  for await (const e of adapter.subscribe('r-term', 0)) {
+    types.push(e.type);
+  }
+  assert.ok(types.includes('text_delta'));
+  assert.ok(types.includes('completed'), `expected completed, got ${types.join(',')}`);
+  assert.ok(subCalls >= 1);
+});
+
+test('subscribe synthesizes terminal from run.list when events missing', async () => {
+  const adapter = new DaemonAssistantAdapter({
+    pollIntervalMs: 5,
+    requestFn: async (method) => {
+      if (method === 'daemon.ping') return { ok: true };
+      if (method === 'run.subscribe') {
+        return { events: [], terminal: true };
+      }
+      if (method === 'run.getEvents') return [];
+      if (method === 'run.list') {
+        return {
+          runs: [
+            {
+              id: 'r-syn',
+              status: 'failed',
+              error_code: 'NO_CREDENTIALS',
+              error_message: 'No credentials',
+            },
+          ],
+        };
+      }
+      throw new Error(method);
+    },
+  });
+  await adapter.connect();
+  const events = [];
+  for await (const e of adapter.subscribe('r-syn', 0)) {
+    events.push(e);
+  }
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.type, 'failed');
+  assert.equal(events[0]?.payload.code, 'NO_CREDENTIALS');
+});
+
 test('request never invents streamChat path — only injected methods', async () => {
   const methods: string[] = [];
   const adapter = new DaemonAssistantAdapter({

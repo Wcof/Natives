@@ -88,13 +88,37 @@ pub struct JsonValue {
     pub value: serde_json::Value,
 }
 
+/// Ensure macOS system traffic lights (close/minimize/zoom) are visible.
+/// Requires decorations=true + TitleBarStyle::Overlay (tauri.macos.conf.json).
+#[cfg(target_os = "macos")]
+fn apply_macos_traffic_lights(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_decorations(true);
+        let _ = window.set_title_bar_style(tauri::TitleBarStyle::Overlay);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Persist size/position/maximized only.
+        // DECORATIONS must not be restored: an older frameless session would
+        // permanently hide macOS traffic lights. VISIBLE is also excluded so
+        // the FOUC guard (visible:false → theme_ready_signal → show) stays
+        // authoritative.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED
+                        | tauri_plugin_window_state::StateFlags::FULLSCREEN,
+                )
+                .build(),
+        )
         .plugin(tauri_plugin_log::Builder::default().build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Focus the existing window when a second instance is launched
@@ -279,6 +303,13 @@ pub fn run() {
 
             // FOUC guard: window starts hidden (tauri.conf.json has visible: false)
             // It will be shown by theme_ready_signal command from frontend
+            //
+            // macOS traffic lights require decorations + Overlay title bar
+            // (see tauri.macos.conf.json). Re-assert after plugins so an old
+            // window-state file or race cannot leave us frameless.
+            #[cfg(target_os = "macos")]
+            apply_macos_traffic_lights(app.handle());
+
             Ok(())
         })
         .on_window_event(|window, event| {

@@ -468,12 +468,14 @@ export default function Header({
               </div>
             )}
 
-            {/* Sort — dropdown with live status */}
+            {/* Sort — field + explicit direction */}
             <div ref={sortRef} className="relative">
               <button
                 className="btn-secondary-v1 !h-8 text-xs"
                 onClick={() => setSortOpen((v) => !v)}
                 title={t(locale, 'fileBrowser.sort')}
+                aria-haspopup="menu"
+                aria-expanded={sortOpen}
               >
                 <ArrowUpDown size={12} />
                 <span>
@@ -487,48 +489,73 @@ export default function Header({
               </button>
               {sortOpen && (
                 <div
-                  className="absolute right-0 top-full mt-1 z-50 min-w-[160px] rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-popup"
-
+                  role="menu"
+                  className="absolute right-0 top-full mt-1 z-50 min-w-[176px] rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-popup"
                 >
+                  <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-disabled)]">
+                    {t(locale, 'fileBrowser.sort')}
+                  </div>
                   {([
-                    { key: 'name', label: t(locale, 'fileBrowser.sortByName') },
-                    { key: 'mtime', label: t(locale, 'fileBrowser.sortByModified') },
-                    { key: 'size', label: t(locale, 'fileBrowser.sortBySize') },
-                  ] as const).map((opt) => (
-                    <button
-                      key={opt.key}
-                      className={`flex w-full items-center justify-between gap-3 rounded-md px-3 py-1.5 text-xs transition-all ${
-                        fs?.sortBy === opt.key
-                          ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
-                          : 'text-[var(--text-secondary)] hover:bg-[var(--surface)]'
-                      }`}
-                      onClick={() => {
-                        dispatchAction('sortBy', opt.key);
-                        setSortOpen(false);
-                      }}
-                    >
-                      <span>{opt.label}</span>
-                      {fs?.sortBy === opt.key && (
-                        <span className="text-[10px] opacity-60">
-                          {fs?.sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
-                        </span>
-                      )}
-                    </button>
-                  ))}
+                    { key: 'name' as const, label: t(locale, 'fileBrowser.sortByName') },
+                    { key: 'mtime' as const, label: t(locale, 'fileBrowser.sortByModified') },
+                    { key: 'size' as const, label: t(locale, 'fileBrowser.sortBySize') },
+                  ]).map((opt) => {
+                    const active = fs?.sortBy === opt.key;
+                    return (
+                      <button
+                        key={opt.key}
+                        role="menuitemradio"
+                        aria-checked={active}
+                        className={`flex w-full items-center justify-between gap-3 rounded-md px-3 py-1.5 text-xs transition-all ${
+                          active
+                            ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
+                            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-2)]'
+                        }`}
+                        onClick={() => {
+                          // Same field toggles direction; new field switches with natural default.
+                          dispatchAction('sortBy', opt.key);
+                          // Keep menu open when switching field so user can also pick direction.
+                          if (active) setSortOpen(false);
+                        }}
+                      >
+                        <span>{opt.label}</span>
+                        {active && (
+                          <span className="text-[10px] opacity-70">
+                            {fs?.sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
                   <div className="mx-2 my-1 border-t border-[var(--border)]" />
-                  <button
-                    className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface)] transition-all"
-                    onClick={() => {
-                      dispatchAction('sortDir');
-                      setSortOpen(false);
-                    }}
-                  >
-                    {fs?.sortDir === 'asc' ? (
-                      <><ArrowUp size={12} /> {t(locale, 'fileBrowser.ascending')}</>
-                    ) : (
-                      <><ArrowDown size={12} /> {t(locale, 'fileBrowser.descending')}</>
-                    )}
-                  </button>
+                  <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-disabled)]">
+                    {t(locale, 'fileBrowser.sortDirection')}
+                  </div>
+                  {([
+                    { key: 'asc' as const, label: t(locale, 'fileBrowser.ascending'), Icon: ArrowUp },
+                    { key: 'desc' as const, label: t(locale, 'fileBrowser.descending'), Icon: ArrowDown },
+                  ]).map((opt) => {
+                    const active = (fs?.sortDir ?? 'asc') === opt.key;
+                    return (
+                      <button
+                        key={opt.key}
+                        role="menuitemradio"
+                        aria-checked={active}
+                        className={`flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs transition-all ${
+                          active
+                            ? 'bg-[var(--primary-soft)] text-[var(--primary)]'
+                            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-2)]'
+                        }`}
+                        onClick={() => {
+                          dispatchAction('sortDir', opt.key);
+                          setSortOpen(false);
+                        }}
+                      >
+                        <opt.Icon size={12} />
+                        <span>{opt.label}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>

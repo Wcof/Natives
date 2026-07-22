@@ -27,6 +27,19 @@ function num(v: unknown): number | undefined {
 }
 
 export function mapWireCapabilities(raw: Record<string, unknown>): DaemonCapabilities {
+  const runtimesRaw = raw.runtimes;
+  const runtimes = Array.isArray(runtimesRaw)
+    ? runtimesRaw.map((item) => {
+        const r = (item ?? {}) as Record<string, unknown>;
+        return {
+          id: str(r.id),
+          displayName: str(r.display_name ?? r.displayName, str(r.id)),
+          status: str(r.status, 'undetermined'),
+          reason: optStr(r.reason) ?? undefined,
+          methods: Array.isArray(r.methods) ? r.methods.map(String) : undefined,
+        };
+      })
+    : undefined;
   return {
     protocolVersion: str(raw.protocol_version ?? raw.protocolVersion, '2.0.0'),
     methods: Array.isArray(raw.methods) ? raw.methods.map(String) : [],
@@ -39,6 +52,7 @@ export function mapWireCapabilities(raw: Record<string, unknown>): DaemonCapabil
     scheduler: Boolean(raw.scheduler),
     eventReplay: Boolean(raw.event_replay ?? raw.eventReplay),
     credentialBroker: Boolean(raw.credential_broker ?? raw.credentialBroker),
+    runtimes,
   };
 }
 
@@ -167,18 +181,36 @@ export function mapWireRun(raw: Record<string, unknown>): Run {
   };
 }
 
-/** Normalize daemon events: type may be top-level or nested; payload may be flat. */
+const RUN_EVENT_ENVELOPE_KEYS = new Set([
+  'run_id',
+  'runId',
+  'sequence',
+  'timestamp',
+  'type',
+  'event_type',
+  'eventType',
+  'emitted_at',
+  'emittedAt',
+]);
+
+/**
+ * Normalize daemon events. InteractionRequested has a field named payload;
+ * do not drop sibling fields like interaction_id/kind.
+ */
 export function mapWireRunEvent(raw: Record<string, unknown>): RunEvent {
   const type = str(raw.type ?? raw.event_type ?? raw.eventType, 'unknown');
-  let payload: Record<string, unknown> = {};
-  if (raw.payload && typeof raw.payload === 'object' && !Array.isArray(raw.payload)) {
-    payload = { ...(raw.payload as Record<string, unknown>) };
-  } else {
-    // Flattened wire (serde flatten): copy non-envelope keys
-    for (const [k, v] of Object.entries(raw)) {
-      if (['run_id', 'runId', 'sequence', 'timestamp', 'type', 'event_type', 'eventType'].includes(k)) continue;
-      payload[k] = v;
+  const payload: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (RUN_EVENT_ENVELOPE_KEYS.has(k)) continue;
+    if (k === 'payload' && v && typeof v === 'object' && !Array.isArray(v)) {
+      const nested = v as Record<string, unknown>;
+      payload.payload = nested;
+      for (const [nk, nv] of Object.entries(nested)) {
+        if (!(nk in payload)) payload[nk] = nv;
+      }
+      continue;
     }
+    payload[k] = v;
   }
   return {
     runId: str(raw.run_id ?? raw.runId),

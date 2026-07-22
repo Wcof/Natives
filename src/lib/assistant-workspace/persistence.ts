@@ -81,3 +81,30 @@ export function clearPersistedDraft(conversationId: string): void {
   delete all[conversationId];
   savePersistedDrafts(all);
 }
+
+
+/** Preferred execution runtime for new runs (native | claude_cli | …). UI-only pin. */
+const RUNTIME_PREF_KEY = 'natives.assistant.runtimePref.v1';
+
+export function loadPreferredRuntimeId(): string | null {
+  if (!canUseStorage()) return null;
+  try {
+    const v = window.localStorage.getItem(RUNTIME_PREF_KEY);
+    return v && v.trim() ? v.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function savePreferredRuntimeId(runtimeId: string | null | undefined): void {
+  if (!canUseStorage()) return;
+  try {
+    if (!runtimeId || !runtimeId.trim()) {
+      window.localStorage.removeItem(RUNTIME_PREF_KEY);
+      return;
+    }
+    window.localStorage.setItem(RUNTIME_PREF_KEY, runtimeId.trim());
+  } catch {
+    /* quota / private mode */
+  }
+}

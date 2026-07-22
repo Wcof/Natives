@@ -221,6 +221,8 @@ impl ExecutionAuthority for EmbeddedAuthority {
             max_steps: Some(new_run.max_steps),
             project_path: new_run.project_path.clone(),
             idempotency_key: None,
+                    effort: None,
+            runtime_id: None,
         })
         .map_err(Into::into)
     }
@@ -481,7 +483,9 @@ mod tests {
                 parent_run_id: None,
                 project_path: Some("/tmp".into()),
                 idempotency_key: Some(format!("auth-{}", uuid::Uuid::new_v4())),
-            })
+                        effort: None,
+            runtime_id: None,
+        })
             .await
             .unwrap();
         assert_eq!(run.project_path.as_deref(), Some("/tmp"));

@@ -131,6 +131,12 @@ pub struct RunV2 {
     pub last_event_sequence: u64,
     #[serde(default)]
     pub idempotency_key: Option<String>,
+    /// Optional reasoning / effort level (provider-specific; REQ-E04).
+    #[serde(default)]
+    pub effort: Option<String>,
+    /// Runtime selector: native | claude_cli | codex_cli (REQ-T01/T02).
+    #[serde(default)]
+    pub runtime_id: Option<String>,
 }
 
 /// Create a run without starting it.
@@ -151,6 +157,12 @@ pub struct CreateRunRequest {
     pub project_path: Option<String>,
     /// Client-supplied idempotency key for retries of the same create.
     pub idempotency_key: Option<String>,
+    /// Optional reasoning / effort level.
+    #[serde(default)]
+    pub effort: Option<String>,
+    /// Runtime selector: native | claude_cli | codex_cli.
+    #[serde(default)]
+    pub runtime_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,6 +190,12 @@ pub struct StartRunRequest {
     #[serde(default)]
     pub project_path: Option<String>,
     pub idempotency_key: Option<String>,
+    /// Optional reasoning / effort level for this run.
+    #[serde(default)]
+    pub effort: Option<String>,
+    /// Runtime selector: native | claude_cli | codex_cli.
+    #[serde(default)]
+    pub runtime_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

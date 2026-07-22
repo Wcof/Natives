@@ -18,7 +18,8 @@
     "i18n:check": "node scripts/i18n-check.mjs",
     "tauri": "tauri",
     "tauri:dev": "npm run dev",
-    "tauri:build": "npm run daemon:bundle && tauri build --config src-tauri/tauri.bundle.conf.json"
+    "tauri:build": "npm run daemon:bundle && tauri build --config src-tauri/tauri.bundle.conf.json",
+    "test:linkage": "node scripts/assistant-linkage-evidence.mjs"
   },
   "dependencies": {
     "@milkdown/crepe": "^7.21.2",

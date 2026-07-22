@@ -74,6 +74,7 @@ export async function subscribeRun(
   signal?: { aborted: boolean },
 ): Promise<void> {
   let last = afterSequence;
+  let sawTerminal = false;
   try {
     for await (const event of gateway.subscribe(runId, afterSequence)) {
       if (signal?.aborted) return;
@@ -87,19 +88,45 @@ export async function subscribeRun(
         });
         dispatch({ type: 'event/replay', runId, events: missing });
         last = getState().lastSequenceByRun[runId] ?? event.sequence;
-        continue;
+        // Do not skip the live event after replay — apply if still new.
+        if (event.sequence <= last) continue;
       }
       dispatch({ type: 'event/apply', event });
       last = event.sequence;
       if (
         event.type === 'completed' ||
         event.type === 'failed' ||
-        event.type === 'interrupted'
+        event.type === 'interrupted' ||
+        event.type === 'cancelled'
       ) {
+        sawTerminal = true;
+        // Clear any soft-recover banner now that we have a real terminal.
+        if (getState().recoveringRuns[runId]) {
+          dispatch({ type: 'recovering/set', runId, recovering: false });
+        }
+        if (
+          getState().connection === 'reconnecting' ||
+          getState().connection === 'recovering'
+        ) {
+          dispatch({ type: 'connection/set', connection: 'connected', error: null });
+        }
         return;
       }
     }
+    // Subscribe iterator ended without a terminal event.
+    // Quiet empty end is normal when the adapter is still mid-poll and the
+    // workbench will resubscribe. Do **not** flip connection/recovering banners
+    // — that showed permanent "正在重连 / 正在恢复事件" during normal answers.
+    // Workbench soft-resubscribes from lastSequence while the run stays active.
+    if (!sawTerminal && !signal?.aborted) {
+      // intentionally no-op on connection state
+    }
   } catch (err) {
+    const run = getState().runs[runId];
+    if (run && isActiveRunStatus(run.status)) {
+      dispatch({ type: 'recovering/set', runId, recovering: true });
+    }
+    // Real transport errors still surface as reconnecting.
     dispatch({
       type: 'disconnect/soft',
     });
@@ -151,6 +178,10 @@ export async function sendOrQueue(
     projectPath?: string | null;
     /** Force immediate send (cancel current first) */
     forceImmediate?: boolean;
+    /** Optional reasoning / effort level (REQ-E04). */
+    effort?: string | null;
+    /** Optional runtime id: native | claude_cli | … (REQ-T01). */
+    runtimeId?: string | null;
   },
 ): Promise<SendResult> {
   const {
@@ -161,6 +192,8 @@ export async function sendOrQueue(
     attachments = [],
     projectPath: projectPathParam,
     forceImmediate,
+    effort,
+    runtimeId,
   } = params;
   const runId = state.activeRunByConversation[conversationId];
   const run = runId ? state.runs[runId] : null;
@@ -182,54 +215,51 @@ export async function sendOrQueue(
         attachments,
       },
     });
-    const serverItem = await gateway.request<{
-      id: string;
-      content: string;
-      conversationId?: string;
-      source?: string;
-      createdAt?: string;
-      order?: number;
-    }>('promptQueue.enqueue', {
-      conversation_id: conversationId,
-      content,
-      client_temp_id: clientTempId,
-      attachments,
-    });
-    dispatch({
-      type: 'promptQueue/reassociate',
-      conversationId,
-      clientTempId,
-      serverItem: {
-        id: serverItem.id,
+    try {
+      const serverItem = await gateway.request<{
+        id: string;
+        content: string;
+        conversationId?: string;
+        source?: string;
+        createdAt?: string;
+        order?: number;
+      }>('promptQueue.enqueue', {
+        conversation_id: conversationId,
+        content,
+        client_temp_id: clientTempId,
+        attachments,
+      });
+      dispatch({
+        type: 'promptQueue/reassociate',
         conversationId,
-        content: serverItem.content ?? content,
-        source: 'user',
-        createdAt: serverItem.createdAt ?? new Date().toISOString(),
-        order: serverItem.order ?? 0,
-      },
-    });
-    dispatch({ type: 'composer/clear', conversationId });
-    return { queued: true, promptQueueItemId: serverItem.id };
+        clientTempId,
+        serverItem: {
+          id: serverItem.id,
+          conversationId,
+          content: serverItem.content ?? content,
+          source: 'user',
+          createdAt: serverItem.createdAt ?? new Date().toISOString(),
+          order: serverItem.order ?? 0,
+        },
+      });
+      dispatch({ type: 'composer/clear', conversationId });
+      return { queued: true, promptQueueItemId: serverItem.id };
+    } catch (err) {
+      // Drop optimistic queue row so the prompt-queue chrome does not stick open.
+      const remaining = (state.promptQueues[conversationId] ?? []).filter(
+        (item) => item.id !== clientTempId && item.clientTempId !== clientTempId,
+      );
+      dispatch({ type: 'promptQueue/set', conversationId, items: remaining });
+      throw err;
+    }
   }
 
   if (busy && forceImmediate && run) {
     await gateway.request('run.cancel', { run_id: run.id });
   }
 
-  dispatch({
-    type: 'messages/appendOptimistic',
-    message: {
-      id: `pending-user-${Date.now()}`,
-      conversationId,
-      role: 'user',
-      status: 'sending',
-      createdAt: new Date().toISOString(),
-      contentBlocks: [{ type: 'text', text: content }],
-    },
-  });
-
-  // project_path: workbench explicit → conversation.projectId → active project.
-  // Never invent daemon process cwd. Fixture conversations carry projectId.
+  // Resolve project BEFORE optimistic UI so a missing project does not leave
+  // a permanent "正在思考" live bubble with no run to complete.
   const projectPath = await resolveProjectPath({
     explicit: projectPathParam,
     conversationProjectId: conversation?.projectId ?? null,
@@ -241,29 +271,68 @@ export async function sendOrQueue(
     );
   }
 
-  const started = await gateway.request<Run | Record<string, unknown>>('run.start', {
-    conversation_id: conversationId,
-    provider_id: providerId,
-    model_id: modelId,
-    permission_profile: conversation?.permissionProfileId ?? 'ask',
-    content,
-    attachments: attachments.map((a) => ({
-      path: a.path,
-      name: a.name,
-      mime_type: a.mimeType,
-      mimeType: a.mimeType,
-      size: a.size,
-    })),
-    project_path: projectPath,
+  const optimisticUserId = `pending-user-${Date.now()}`;
+  dispatch({
+    type: 'messages/appendOptimistic',
+    message: {
+      id: optimisticUserId,
+      conversationId,
+      role: 'user',
+      status: 'sending',
+      createdAt: new Date().toISOString(),
+      contentBlocks: [{ type: 'text', text: content }],
+    },
   });
 
-  const mapped: Run =
+  let started: Run | Record<string, unknown>;
+  try {
+    started = await gateway.request<Run | Record<string, unknown>>('run.start', {
+      conversation_id: conversationId,
+      provider_id: providerId,
+      model_id: modelId,
+      permission_profile: conversation?.permissionProfileId ?? 'ask',
+      content,
+      attachments: attachments.map((a) => ({
+        path: a.path,
+        name: a.name,
+        mime_type: a.mimeType,
+        mimeType: a.mimeType,
+        size: a.size,
+      })),
+      project_path: projectPath,
+      ...(effort && effort.trim() ? { effort: effort.trim() } : {}),
+      ...(runtimeId && runtimeId.trim() ? { runtime_id: runtimeId.trim() } : {}),
+    });
+  } catch (err) {
+    dispatch({ type: 'messages/remove', id: optimisticUserId, conversationId });
+    dispatch({ type: 'run/clearActive', conversationId });
+    throw err;
+  }
+
+  // Prefer daemon_run_id when present so subscribe/getEvents hit engine id.
+  const wire =
+    started && typeof started === 'object'
+      ? (started as Record<string, unknown>)
+      : {};
+  const mappedBase: Run =
     started && typeof started === 'object' && 'providerId' in started
       ? (started as Run)
-      : mapWireRun(started as Record<string, unknown>);
-
-  // Prefer host/daemon status; only promote bare "queued" to "preparing" so the
-  // UI does not sit on "排队中" while the engine is already spinning up.
+      : mapWireRun(wire);
+  const daemonIdRaw = wire.daemon_run_id ?? wire.daemonRunId;
+  const preferredId =
+    typeof daemonIdRaw === 'string' && daemonIdRaw.trim()
+      ? daemonIdRaw.trim()
+      : mappedBase.id;
+  const mapped: Run = {
+    ...mappedBase,
+    id: preferredId || mappedBase.id,
+    conversationId: mappedBase.conversationId || conversationId,
+    startedAt: mappedBase.startedAt ?? new Date().toISOString(),
+  };
+  if (!mapped.id) {
+    dispatch({ type: 'messages/remove', id: optimisticUserId, conversationId });
+    throw new Error('run.start returned no run id');
+  }
   const nextStatus =
     mapped.status === 'queued' || mapped.status === 'created' ? 'preparing' : mapped.status;
   dispatch({ type: 'run/upsert', run: { ...mapped, status: nextStatus } });

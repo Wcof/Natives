@@ -5,6 +5,8 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
   RefreshCw,
   Star,
   Clock,
@@ -14,6 +16,13 @@ import {
 } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import { FONT_SIZE, SPACING, BORDER_RADIUS } from '@/lib/design-tokens';
+import {
+  nextSortForField,
+  type FileSortBy,
+  type FileSortDir,
+} from './file-sort';
+
+export type { FileSortBy, FileSortDir };
 
 export interface FileNavShellProps {
   currentPath: string;
@@ -23,8 +32,8 @@ export interface FileNavShellProps {
   isFavorite: boolean;
   recentMode: boolean;
   searchQuery: string;
-  sortBy: 'name' | 'mtime' | 'size';
-  sortDir: 'asc' | 'desc';
+  sortBy: FileSortBy;
+  sortDir: FileSortDir;
   loading?: boolean;
   onBack: () => void;
   onForward: () => void;
@@ -35,6 +44,8 @@ export interface FileNavShellProps {
   onSearchChange: (query: string) => void;
   onOpenGlobalSearch: () => void;
   onPathSubmit: (path: string) => void | Promise<void>;
+  /** Optional local sort control; when omitted, chip is display-only. */
+  onSortChange?: (sortBy: FileSortBy, sortDir: FileSortDir) => void;
 }
 
 export default function FileNavShell({
@@ -57,12 +68,15 @@ export default function FileNavShell({
   onSearchChange,
   onOpenGlobalSearch,
   onPathSubmit,
+  onSortChange,
 }: FileNavShellProps) {
   const [locale, setLocale] = useState<Locale>('zh');
   const [editingPath, setEditingPath] = useState(false);
   const [pathDraft, setPathDraft] = useState(currentPath);
+  const [sortOpen, setSortOpen] = useState(false);
   const pathInputRef = useRef<HTMLInputElement>(null);
   const filterRef = useRef<HTMLInputElement>(null);
+  const sortRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     async function loadLocale() {
@@ -85,6 +99,18 @@ export default function FileNavShell({
       pathInputRef.current?.select();
     }
   }, [editingPath]);
+
+  // Close sort menu on outside click
+  useEffect(() => {
+    if (!sortOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (sortRef.current && !sortRef.current.contains(e.target as Node)) {
+        setSortOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [sortOpen]);
 
   // ⌘L focuses path bar (browser-like); ⌘F focuses local filter; ⌘⇧F global search
   useEffect(() => {
@@ -114,16 +140,23 @@ export default function FileNavShell({
     return () => window.removeEventListener('keydown', onKey);
   }, [currentPath, onOpenGlobalSearch]);
 
-  const sortLabel = (() => {
-    const field =
-      sortBy === 'mtime'
-        ? t(locale, 'fileBrowser.sortByModified')
-        : sortBy === 'size'
-          ? t(locale, 'fileBrowser.sortBySize')
-          : t(locale, 'fileBrowser.sortByName');
-    const dir = sortDir === 'asc' ? '↑' : '↓';
-    return `${field} ${dir}`;
-  })();
+  const sortFieldLabel =
+    sortBy === 'mtime'
+      ? t(locale, 'fileBrowser.modified')
+      : sortBy === 'size'
+        ? t(locale, 'fileBrowser.size')
+        : t(locale, 'fileBrowser.name');
+  const sortLabel = `${sortFieldLabel} ${sortDir === 'asc' ? '↑' : '↓'}`;
+
+  const applySort = (nextBy: FileSortBy, nextDir?: FileSortDir) => {
+    if (!onSortChange) return;
+    if (nextDir) {
+      onSortChange(nextBy, nextDir);
+      return;
+    }
+    const next = nextSortForField(sortBy, sortDir, nextBy);
+    onSortChange(next.sortBy, next.sortDir);
+  };
 
   const commitPath = async () => {
     const next = pathDraft.trim() || '/';
@@ -287,21 +320,151 @@ export default function FileNavShell({
         )}
       </div>
 
-      {/* Sort status chip */}
-      <span
-        style={{
-          fontSize: FONT_SIZE.xs,
-          color: 'var(--text-secondary)',
-          padding: '3px 8px',
-          borderRadius: 999,
-          border: '1px solid var(--border)',
-          background: 'var(--bg-2)',
-          whiteSpace: 'nowrap',
-        }}
-        title={t(locale, 'fileBrowser.sort')}
-      >
-        {sortLabel}
-      </span>
+      {/* Sort control — interactive menu when onSortChange is provided */}
+      <div ref={sortRef} style={{ position: 'relative' }}>
+        <button
+          type="button"
+          onClick={() => {
+            if (!onSortChange) return;
+            setSortOpen((v) => !v);
+          }}
+          disabled={!onSortChange}
+          title={t(locale, 'fileBrowser.sort')}
+          aria-haspopup="menu"
+          aria-expanded={sortOpen}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            fontSize: FONT_SIZE.xs,
+            color: onSortChange ? 'var(--text)' : 'var(--text-secondary)',
+            padding: '3px 8px',
+            borderRadius: 999,
+            border: '1px solid var(--border)',
+            background: sortOpen ? 'var(--primary-soft)' : 'var(--bg-2)',
+            whiteSpace: 'nowrap',
+            cursor: onSortChange ? 'pointer' : 'default',
+            opacity: onSortChange ? 1 : 0.85,
+          }}
+        >
+          <ArrowUpDown size={11} style={{ opacity: 0.7 }} />
+          {sortLabel}
+        </button>
+        {sortOpen && onSortChange && (
+          <div
+            role="menu"
+            style={{
+              position: 'absolute',
+              right: 0,
+              top: '100%',
+              marginTop: 4,
+              zIndex: 50,
+              minWidth: 168,
+              borderRadius: BORDER_RADIUS.md,
+              border: '1px solid var(--border)',
+              background: 'var(--surface)',
+              boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+              padding: 4,
+            }}
+          >
+            <div
+              style={{
+                padding: '4px 8px',
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: '0.04em',
+                textTransform: 'uppercase',
+                color: 'var(--text-disabled)',
+              }}
+            >
+              {t(locale, 'fileBrowser.sort')}
+            </div>
+            {([
+              { key: 'name' as const, label: t(locale, 'fileBrowser.sortByName') },
+              { key: 'mtime' as const, label: t(locale, 'fileBrowser.sortByModified') },
+              { key: 'size' as const, label: t(locale, 'fileBrowser.sortBySize') },
+            ]).map((opt) => {
+              const active = sortBy === opt.key;
+              return (
+                <button
+                  key={opt.key}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={active}
+                  onClick={() => {
+                    applySort(opt.key);
+                    if (active) setSortOpen(false);
+                  }}
+                  style={{
+                    display: 'flex',
+                    width: '100%',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    border: 'none',
+                    borderRadius: BORDER_RADIUS.sm,
+                    padding: '6px 10px',
+                    fontSize: FONT_SIZE.xs,
+                    cursor: 'pointer',
+                    background: active ? 'var(--primary-soft)' : 'transparent',
+                    color: active ? 'var(--primary)' : 'var(--text-secondary)',
+                  }}
+                >
+                  <span>{opt.label}</span>
+                  {active && (sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}
+                </button>
+              );
+            })}
+            <div style={{ margin: '4px 8px', borderTop: '1px solid var(--border)' }} />
+            <div
+              style={{
+                padding: '4px 8px',
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: '0.04em',
+                textTransform: 'uppercase',
+                color: 'var(--text-disabled)',
+              }}
+            >
+              {t(locale, 'fileBrowser.sortDirection')}
+            </div>
+            {([
+              { key: 'asc' as const, label: t(locale, 'fileBrowser.ascending'), Icon: ArrowUp },
+              { key: 'desc' as const, label: t(locale, 'fileBrowser.descending'), Icon: ArrowDown },
+            ]).map((opt) => {
+              const active = sortDir === opt.key;
+              return (
+                <button
+                  key={opt.key}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={active}
+                  onClick={() => {
+                    applySort(sortBy, opt.key);
+                    setSortOpen(false);
+                  }}
+                  style={{
+                    display: 'flex',
+                    width: '100%',
+                    alignItems: 'center',
+                    gap: 8,
+                    border: 'none',
+                    borderRadius: BORDER_RADIUS.sm,
+                    padding: '6px 10px',
+                    fontSize: FONT_SIZE.xs,
+                    cursor: 'pointer',
+                    background: active ? 'var(--primary-soft)' : 'transparent',
+                    color: active ? 'var(--primary)' : 'var(--text-secondary)',
+                  }}
+                >
+                  <opt.Icon size={12} />
+                  <span>{opt.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* Recent + favorite */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>

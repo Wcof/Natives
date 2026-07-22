@@ -1,38 +1,95 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import type { Locale } from '@/i18n';
+
+export interface LayoutPersistSnapshot {
+  sidebarWidth: number;
+  sidebarCollapsed: boolean;
+  terminalHeight: number;
+  terminalCollapsed: boolean;
+  rightPanelWidth: number;
+}
 
 interface UseLayoutEventsOptions {
   stateRef: React.RefObject<any>;
+  /** Layout fields that should be debounced to `_state:sidebar`. */
+  layoutPersist: LayoutPersistSnapshot;
   toggleTerminal: () => void;
   setState: (fn: (prev: any) => any) => void;
   setLocale: (locale: Locale) => void;
 }
 
+const LAYOUT_PERSIST_DEBOUNCE_MS = 350;
+
+function persistLayoutState(snapshot: LayoutPersistSnapshot | null | undefined) {
+  try {
+    const api = window.nativesAPI;
+    if (!api?.db?.set || !snapshot) return;
+    api.db.set('_state:sidebar', JSON.stringify({
+      sidebarWidth: snapshot.sidebarWidth,
+      sidebarCollapsed: snapshot.sidebarCollapsed,
+      terminalHeight: snapshot.terminalHeight,
+      terminalCollapsed: snapshot.terminalCollapsed,
+      rightPanelWidth: snapshot.rightPanelWidth,
+    }));
+  } catch (err) {
+    console.warn('[Shell] Failed to save sidebar state:', err);
+  }
+}
+
 export function useLayoutEvents({
   stateRef,
+  layoutPersist,
   toggleTerminal,
   setState,
   setLocale,
 }: UseLayoutEventsOptions) {
-  // beforeunload persistence (reads stateRef for latest values, never re-binds)
+  const persistTimerRef = useRef<number | null>(null);
+  const skipFirstPersistRef = useRef(true);
+
+  // Debounced persist when the user drags / toggles layout chrome.
+  // Skip the initial mount so we don't overwrite DB with defaults before restore.
+  useEffect(() => {
+    if (skipFirstPersistRef.current) {
+      skipFirstPersistRef.current = false;
+      return;
+    }
+    if (persistTimerRef.current) window.clearTimeout(persistTimerRef.current);
+    persistTimerRef.current = window.setTimeout(() => {
+      persistTimerRef.current = null;
+      persistLayoutState(layoutPersist);
+    }, LAYOUT_PERSIST_DEBOUNCE_MS);
+    return () => {
+      if (persistTimerRef.current) {
+        window.clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = null;
+      }
+    };
+  }, [
+    layoutPersist.sidebarWidth,
+    layoutPersist.sidebarCollapsed,
+    layoutPersist.terminalHeight,
+    layoutPersist.terminalCollapsed,
+    layoutPersist.rightPanelWidth,
+  ]);
+
+  // Final flush on unload (covers kill-before-debounce-fires).
   useEffect(() => {
     const handleBeforeUnload = () => {
-      try {
-        const api = window.nativesAPI;
-        const s = stateRef.current;
-        if (api?.db?.set) {
-          api.db.set('_state:sidebar', JSON.stringify({
-            sidebarWidth: s.sidebarWidth,
-            sidebarCollapsed: s.sidebarCollapsed,
-            terminalHeight: s.terminalHeight,
-            terminalCollapsed: s.terminalCollapsed,
-            rightPanelWidth: s.rightPanelWidth,
-          }));
-        }
-      } catch (err) {
-        console.warn('[Shell] Failed to save sidebar state:', err);
+      if (persistTimerRef.current) {
+        window.clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = null;
+      }
+      const s = stateRef.current;
+      if (s) {
+        persistLayoutState({
+          sidebarWidth: s.sidebarWidth,
+          sidebarCollapsed: s.sidebarCollapsed,
+          terminalHeight: s.terminalHeight,
+          terminalCollapsed: s.terminalCollapsed,
+          rightPanelWidth: s.rightPanelWidth,
+        });
       }
     };
     window.addEventListener('beforeunload', handleBeforeUnload);

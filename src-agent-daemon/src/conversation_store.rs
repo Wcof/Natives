@@ -98,6 +98,64 @@ pub fn permission_profile(conversation_id: &str) -> Result<String, String> {
     .ok_or_else(|| "conversation not found".into())
 }
 
+/// Ensure a conversation row exists in the daemon DB for FK integrity.
+/// Host owns conversation CRUD (assistant.db); daemon only needs a stub so
+/// `run` / `message` foreign keys succeed when host-mediated runs land here.
+pub fn ensure_conversation_stub(
+    conversation_id: &str,
+    provider_id: &str,
+    model_id: &str,
+    permission_profile: Option<&str>,
+    project_id: Option<&str>,
+) -> Result<(), String> {
+    let id = conversation_id.trim();
+    if id.is_empty() {
+        return Err("conversation_id is required".into());
+    }
+    let store = store()?;
+    let conn = store.conn()?;
+    let exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM conversation WHERE id = ?1)",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if exists {
+        return Ok(());
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    let permission = permission_profile
+        .filter(|p| matches!(*p, "readonly" | "ask" | "full_access"))
+        .unwrap_or("ask");
+    let provider = if provider_id.trim().is_empty() {
+        "unknown"
+    } else {
+        provider_id.trim()
+    };
+    let model = if model_id.trim().is_empty() {
+        "unknown"
+    } else {
+        model_id.trim()
+    };
+    conn.execute(
+        "INSERT INTO conversation (id, mode, project_id, title, provider_id, model_id, permission_profile_id, created_at, updated_at)
+         VALUES (?1, 'agent', ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+         ON CONFLICT(id) DO NOTHING",
+        params![
+            id,
+            project_id,
+            "Host-mediated conversation",
+            provider,
+            model,
+            permission,
+            now,
+        ],
+    )
+    .map_err(|e| format!("ensure_conversation_stub failed: {e}"))?;
+    Ok(())
+}
+
 fn create(params: Value) -> Result<Value, String> {
     let mode = params
         .get("mode")
@@ -504,6 +562,65 @@ pub fn append_trigger_message(
         .get("id")
         .and_then(Value::as_str)
         .map(str::to_string))
+}
+
+/// Append the current user turn once per run. If `run_id` already has a
+/// `trigger_message_id` on the run row, returns that id without inserting.
+/// If the latest user message text matches `content`, reuses it (idempotent
+/// retry). Otherwise inserts a new daemon-owned message id.
+pub fn append_trigger_message_idempotent(
+    conversation_id: &str,
+    content: Option<&str>,
+    attachments: Option<&[AttachmentRef]>,
+    run_id: Option<&str>,
+) -> Result<Option<String>, String> {
+    if let Some(run_id) = run_id.filter(|s| !s.trim().is_empty()) {
+        if let Ok(store) = store() {
+            if let Ok(conn) = store.conn() {
+                if let Ok(Some(existing)) = conn
+                    .query_row(
+                        "SELECT trigger_message_id FROM run WHERE id = ?1 AND trigger_message_id IS NOT NULL",
+                        params![run_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()
+                {
+                    return Ok(Some(existing));
+                }
+            }
+        }
+    }
+
+    // If the latest user message already has the same text, reuse it (duplicate start).
+    if let Some(text) = content.filter(|s| !s.trim().is_empty()) {
+        if let Ok(messages) = get_messages(serde_json::json!({ "conversation_id": conversation_id }))
+        {
+            if let Some(rows) = messages.as_array() {
+                if let Some(last) = rows.iter().rev().find(|m| {
+                    m.get("role").and_then(Value::as_str) == Some("user")
+                }) {
+                    let last_text = last
+                        .get("content_blocks")
+                        .and_then(Value::as_array)
+                        .map(|blocks| {
+                            blocks
+                                .iter()
+                                .filter_map(block_text)
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        })
+                        .unwrap_or_default();
+                    if last_text.trim() == text.trim() {
+                        if let Some(id) = last.get("id").and_then(Value::as_str) {
+                            return Ok(Some(id.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    append_trigger_message(conversation_id, content, attachments)
 }
 
 pub fn delete_message(message_id: &str) -> Result<(), String> {

@@ -225,6 +225,54 @@ function applyEventToLive(
       });
       break;
     }
+    case 'tool_call_delta': {
+      // Streamed argument fragments: merge by tool id, or by index placeholder
+      // until the real id arrives on requested/started.
+      const id = String(p.id ?? p.tool_call_id ?? p.toolCallId ?? '');
+      const index =
+        typeof p.index === 'number'
+          ? p.index
+          : typeof p.index === 'string'
+            ? Number(p.index)
+            : NaN;
+      const placeholderId =
+        id || (Number.isFinite(index) ? `tool-index-${index}` : '');
+      if (!placeholderId) break;
+      const name =
+        p.name != null || p.tool_name != null || p.toolName != null
+          ? String(p.name ?? p.tool_name ?? p.toolName)
+          : undefined;
+      const delta = String(p.arguments_delta ?? p.argumentsDelta ?? p.delta ?? '');
+      const existing = live.blocks.find(
+        (b) => b.type === 'tool_call' && b.toolCallId === placeholderId,
+      );
+      const prevPartial =
+        existing && typeof (existing as { toolPartialArgs?: string }).toolPartialArgs === 'string'
+          ? (existing as { toolPartialArgs?: string }).toolPartialArgs!
+          : existing && typeof existing.toolInput === 'object' && existing.toolInput
+            ? JSON.stringify(existing.toolInput)
+            : '';
+      const merged = `${prevPartial}${delta}`;
+      let parsed: Record<string, unknown> = {};
+      try {
+        const t = JSON.parse(merged);
+        if (t && typeof t === 'object' && !Array.isArray(t)) {
+          parsed = t as Record<string, unknown>;
+        }
+      } catch {
+        // keep partial as raw under _partial until complete JSON arrives
+        parsed = { _partial: merged };
+      }
+      live.blocks = upsertTool(live.blocks, placeholderId, {
+        toolName: name,
+        toolInput: parsed,
+        toolStatus: 'running',
+        toolPartialArgs: merged,
+      } as Partial<ContentBlock>);
+      // If we later get a real id that differs from the placeholder, requested/started
+      // will upsert under the real id; index placeholder remains until then.
+      break;
+    }
     case 'tool_call_completed':
     case 'tool_completed':
     case 'tool_rejected': {
@@ -317,6 +365,22 @@ function applyEventToLive(
       );
       if (live.reasoningStartedAt && !live.reasoningFinishedAt) {
         live.reasoningFinishedAt = event.timestamp;
+      }
+      if (event.type === 'failed') {
+        const code = String(p.code ?? p.error_code ?? 'failed');
+        const message = String(p.error ?? p.message ?? 'Run failed');
+        const hasError = live.blocks.some((b) => b.type === 'error');
+        if (!hasError) {
+          live.blocks = [
+            ...live.blocks,
+            {
+              type: 'error',
+              errorCode: code,
+              errorMessage: message,
+              text: message,
+            },
+          ];
+        }
       }
       break;
     }
@@ -686,7 +750,8 @@ function applySnapshot(
     runs,
     activeRunByConversation: {
       ...next.activeRunByConversation,
-      [c.id]: snapshot.activeRunId ?? snapshot.runs[0]?.id ?? null,
+      // Never fall back to runs[0] (often completed).
+      [c.id]: snapshot.activeRunId ?? null,
     },
   };
 
@@ -998,6 +1063,44 @@ export function workspaceReducer(
         messagesByConversation: {
           ...state.messagesByConversation,
           [m.conversationId]: [...order, m.id],
+        },
+      };
+    }
+
+    case 'messages/remove': {
+      const order = state.messagesByConversation[action.conversationId] ?? [];
+      if (!order.includes(action.id) && !state.messages[action.id]) return state;
+      const messages = { ...state.messages };
+      delete messages[action.id];
+      return {
+        ...state,
+        messages,
+        messagesByConversation: {
+          ...state.messagesByConversation,
+          [action.conversationId]: order.filter((id) => id !== action.id),
+        },
+      };
+    }
+
+    case 'run/clearActive': {
+      const currentId = state.activeRunByConversation[action.conversationId];
+      if (action.runId && currentId && currentId !== action.runId) return state;
+      const runs = { ...state.runs };
+      const liveByRun = { ...state.liveByRun };
+      if (action.runId) {
+        delete runs[action.runId];
+        delete liveByRun[action.runId];
+      } else if (currentId) {
+        delete runs[currentId];
+        delete liveByRun[currentId];
+      }
+      return {
+        ...state,
+        runs,
+        liveByRun,
+        activeRunByConversation: {
+          ...state.activeRunByConversation,
+          [action.conversationId]: null,
         },
       };
     }

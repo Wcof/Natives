@@ -568,6 +568,13 @@ input[type="search"]::placeholder {
   opacity: 0.6;
 }
 
+/* Kill width transition while the user is dragging the left rail */
+[data-sidebar][data-resizing='true'],
+[data-sidebar].is-resizing {
+  transition: none !important;
+  will-change: width;
+}
+
 /* ── Content Area ── */
 
 .content-area {
@@ -595,17 +602,85 @@ input[type="search"]::placeholder {
   flex-shrink: 0;
   align-items: center;
   justify-content: space-between;
+  gap: 4px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .right-panel-content {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   padding: 12px 12px 16px;
+  overflow-x: hidden;
   overflow-y: auto;
+}
+
+/* Nested preview / notification bodies must shrink with the panel */
+.right-panel-content > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Left-edge drag handle (mirror .sidebar-drag-handle) */
+.right-panel-drag-handle {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: var(--z-dragbar);
+  opacity: 0;
+  transition: opacity var(--transition);
+  /* Hit target wider than visible bar */
+  touch-action: none;
+}
+
+.right-panel-drag-handle::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  border-radius: 1px;
+  background: var(--primary);
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+
+.right-panel-drag-handle:hover,
+.right-panel-drag-handle.active,
+.right-panel.is-resizing .right-panel-drag-handle {
+  opacity: 1;
+}
+
+.right-panel-drag-handle:hover::after,
+.right-panel-drag-handle.active::after,
+.right-panel.is-resizing .right-panel-drag-handle::after {
+  opacity: 0.6;
+}
+
+/* Density: elastic collapse of chrome padding when panel is narrow */
+.right-panel[data-density='compact'] .right-panel-header {
+  padding: 8px 10px;
+  gap: 2px;
+}
+
+.right-panel[data-density='compact'] .right-panel-content {
+  padding: 8px 8px 12px;
+}
+
+.right-panel[data-density='wide'] .right-panel-content {
+  padding: 14px 16px 18px;
+}
+
+/* While dragging: kill width transition so resize tracks the pointer */
+.right-panel.is-resizing {
+  transition: none !important;
+  will-change: width;
 }
 
 /* ── Terminal ── */
@@ -1708,160 +1783,96 @@ input[type="search"]::placeholder {
 .tb-xxs .btn-ghost { display: none !important; }
 .tb-min .btn-ghost { display: none !important; }
 
-/* ── macOS traffic lights (frameless window chrome) ── */
-.mac-traffic-lights {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 20px;
-  padding: 0;
-  position: relative;
-  z-index: 60;
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
-}
-
-.mac-traffic-lights[data-collapsed='true'] {
-  justify-content: center;
-  width: 100%;
-  gap: 6px;
-}
-
-.mac-traffic-btn {
-  --mac-btn-size: 12px;
-  width: var(--mac-btn-size);
-  height: var(--mac-btn-size);
-  border: none;
-  border-radius: 999px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  cursor: default;
-  position: relative;
-  color: rgba(0, 0, 0, 0.55);
-  transition:
-    background-color 100ms ease,
-    box-shadow 100ms ease,
-    filter 100ms ease,
-    transform 80ms ease;
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
-  /* Soft bevel like real macOS traffic lights */
-  box-shadow:
-    inset 0 0 0 0.5px rgba(0, 0, 0, 0.18),
-    inset 0 1px 0 rgba(255, 255, 255, 0.28);
-}
-
-.mac-traffic-btn::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.28) 0%,
-    rgba(255, 255, 255, 0.05) 42%,
-    rgba(0, 0, 0, 0.06) 100%
-  );
-  opacity: 0.9;
-}
-
-.mac-traffic-btn:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--primary) 35%, transparent);
-  outline-offset: 2px;
-}
-
-.mac-traffic-btn > svg {
-  width: 7px;
-  height: 7px;
-  opacity: 0;
-  transition: opacity 80ms ease;
-  pointer-events: none;
-  position: relative;
-  z-index: 1;
-}
-
-/* Glyphs appear on group hover / focus, matching macOS */
-.mac-traffic-lights:hover .mac-traffic-btn > svg,
-.mac-traffic-btn:focus-visible > svg,
-.mac-traffic-lights[data-force-glyphs='true'] .mac-traffic-btn > svg {
-  opacity: 0.78;
-}
-
-/* Inactive/unfocused window: gray dots like real macOS chrome */
-.mac-traffic-lights[data-active='false'] .mac-traffic-btn {
-  background: #DEDEDE !important;
-  color: transparent;
-  box-shadow:
-    inset 0 0 0 0.5px rgba(0, 0, 0, 0.12),
-    inset 0 1px 0 rgba(255, 255, 255, 0.35);
-  filter: none;
-}
-
-.mac-traffic-lights[data-active='false'] .mac-traffic-btn > svg {
-  opacity: 0 !important;
-}
-
-.mac-traffic-lights[data-active='false']:hover .mac-traffic-btn {
-  filter: none;
-}
-
-/* Active colors */
-.mac-traffic-btn.close {
-  background: var(--mac-red);
-}
-
-.mac-traffic-btn.minimize {
-  background: var(--mac-yellow);
-}
-
-.mac-traffic-btn.zoom {
-  background: var(--mac-green);
-}
-
-.mac-traffic-lights[data-active='true'] .mac-traffic-btn.close:hover {
-  background: var(--mac-red-hover);
-  filter: brightness(1.02);
-}
-
-.mac-traffic-lights[data-active='true'] .mac-traffic-btn.minimize:hover {
-  background: var(--mac-yellow-hover);
-  filter: brightness(1.02);
-}
-
-.mac-traffic-lights[data-active='true'] .mac-traffic-btn.zoom:hover {
-  background: var(--mac-green-hover);
-  filter: brightness(1.02);
-}
-
-.mac-traffic-btn:active {
-  transform: scale(0.92);
-  filter: brightness(0.96);
-}
-
-.mac-traffic-row {
+/* ── Titlebar row + native/fallback window chrome ── */
+/* ShellLayout uses p-3 (12px). trafficLightPosition is absolute to the
+   window, so spacer padding must cancel that outer inset and land the
+   system buttons inside the sidebar header. */
+.titlebar-row {
   display: flex;
   width: 100%;
   align-items: center;
-  min-height: 36px;
+  min-height: 40px;
   padding: 12px 14px 8px;
   box-sizing: border-box;
 }
 
-.mac-traffic-row[data-collapsed='true'] {
+.titlebar-row[data-native-traffic='true'] {
+  /* Leave a clear hit target under system traffic lights */
+  padding-top: 10px;
+  padding-left: 14px;
+}
+
+.titlebar-row[data-collapsed='true'] {
   flex-direction: column;
   align-items: center;
   gap: 8px;
   padding: 12px 6px 8px;
 }
 
-/* Keep collapsed traffic lights in one horizontal cluster */
-.mac-traffic-row[data-collapsed='true'] .mac-traffic-lights {
-  height: auto;
-  min-height: 20px;
+.titlebar-row[data-collapsed='true'][data-native-traffic='true'] {
+  padding-top: 10px;
+}
+
+/* Reserve space for system traffic lights (Overlay title bar) */
+.native-traffic-spacer {
+  width: 70px;
+  height: 16px;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.titlebar-row[data-collapsed='true'] .native-traffic-spacer {
+  width: 52px;
+  height: 20px;
+}
+
+/* Windows/Linux frameless fallback controls */
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  position: relative;
+  z-index: 60;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.window-ctrl-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: default;
+  color: var(--text-secondary);
+  background: transparent;
+  transition: background-color 100ms ease, color 100ms ease;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.window-ctrl-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.window-ctrl-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary) 35%, transparent);
+  outline-offset: 2px;
+}
+
+.window-ctrl-btn.window-ctrl-close:hover {
+  background: color-mix(in srgb, var(--mac-red, #FF5F57) 18%, transparent);
+  color: var(--mac-red, #FF5F57);
+}
+
+.window-ctrl-btn:active {
+  transform: scale(0.96);
 }
 .tb-min #btn-terminal { display: inline-flex !important; }
 
@@ -2010,8 +2021,11 @@ input[type="search"]::placeholder {
   flex-direction: column;
   overflow: hidden;
   width: 320px;
+  min-width: 0;
   flex-shrink: 0;
   transition: width var(--transition);
+  /* Allow children to elastically shrink instead of forcing panel wider */
+  contain: layout;
 }
 
 .right-panel.collapsed,

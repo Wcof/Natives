@@ -683,7 +683,9 @@ async fn handle_rpc(
                                 max_steps: Some(new_run.max_steps),
                                 project_path: new_run.project_path.clone(),
                                 idempotency_key: None,
-                            };
+                                        effort: None,
+            runtime_id: None,
+        };
                             match crate::run_manager::RunManager::start_detached_global(start_req) {
                                 Ok(run) => {
                                     send_success(

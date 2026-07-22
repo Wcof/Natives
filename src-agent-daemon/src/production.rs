@@ -36,6 +36,8 @@ pub struct ProductionRuntime {
     /// task_id → child run status/output
     pub task_outputs: Arc<Mutex<HashMap<String, TaskRecord>>>,
     pub engines: Arc<Mutex<HashMap<String, Arc<AgentEngine>>>>,
+    /// CLI runtime cancel flags (run_id → flag). Set by CLI bridge; flipped by cancel_run.
+    pub cli_cancel_flags: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -229,7 +231,21 @@ impl ProductionRuntime {
             // type: HashMap<permission_id, (run_id, oneshot)>
             task_outputs: Arc::new(Mutex::new(HashMap::new())),
             engines: Arc::new(Mutex::new(HashMap::new())),
+            cli_cancel_flags: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Register a cancel flag for a CLI-backed run (REQ-T01).
+    pub async fn register_cli_cancel(&self, run_id: &str, flag: Arc<AtomicBool>) {
+        self.cli_cancel_flags
+            .lock()
+            .await
+            .insert(run_id.to_string(), flag);
+    }
+
+    /// Drop CLI cancel flag after the turn ends.
+    pub async fn clear_cli_cancel(&self, run_id: &str) {
+        self.cli_cancel_flags.lock().await.remove(run_id);
     }
 
     pub async fn set_permission_profile(&self, profile: &str) {
@@ -414,6 +430,10 @@ impl ProductionRuntime {
 
     /// Alias for tree cancel — never cancel a single node without descendants.
     pub async fn cancel_run(&self, run_id: &str) {
+        // Flip CLI cancel flags first so claude child processes can be killed promptly.
+        if let Some(flag) = self.cli_cancel_flags.lock().await.get(run_id) {
+            flag.store(true, Ordering::SeqCst);
+        }
         self.cancel_run_tree(run_id).await;
     }
 

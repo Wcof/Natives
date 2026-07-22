@@ -8,6 +8,7 @@ use assistant_protocol::v2::{
     RunEventKind, RunEventV2, RunStatusV2, RunV2, StartRunRequest, PROTOCOL_V2,
 };
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
@@ -215,6 +216,8 @@ impl RunManager {
             ),
             last_event_sequence: 0,
             idempotency_key: row.get(18).map_err(|e| e.to_string())?,
+                    effort: None,
+            runtime_id: None,
         }))
     }
 
@@ -224,6 +227,42 @@ impl RunManager {
                 let _ = conn.execute("DELETE FROM run WHERE id = ?1", rusqlite::params![run_id]);
             }
         }
+    }
+
+    /// Idempotent fail-close: mark run failed, persist, and emit a terminal `failed` event.
+    /// No-op when the run is already terminal (completed/failed/cancelled/interrupted).
+    pub fn fail_run_if_active(&self, run_id: &str, error: impl Into<String>, code: &str) {
+        let error = assistant_protocol::v2::redact_secrets(&error.into());
+        let code = if code.trim().is_empty() {
+            "START_FAILED"
+        } else {
+            code
+        };
+        let result = {
+            let mut runs = match self.runs.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            let Some(run) = runs.get_mut(run_id) else {
+                return;
+            };
+            if run.status.is_terminal() {
+                return;
+            }
+            run.status = RunStatusV2::Failed;
+            run.finished_at = Some(chrono::Utc::now());
+            run.error_code = Some(code.to_string());
+            run.clone()
+        };
+        let _ = self.persist_run_row(&result);
+        self.runtime.events.append(
+            run_id,
+            RunEventKind::Failed {
+                error,
+                code: code.to_string(),
+            },
+        );
+        let _ = self.persist_runs_snapshot();
     }
 
     fn interrupt_active_sqlite_runs(&self) -> Result<usize, String> {
@@ -361,6 +400,15 @@ impl RunManager {
             }
         }
 
+        // Host owns conversation rows; daemon needs a stub for run/message FKs.
+        crate::conversation_store::ensure_conversation_stub(
+            &req.conversation_id,
+            &req.provider_id,
+            &req.model_id,
+            req.permission_profile.as_deref(),
+            req.project_path.as_deref(),
+        )?;
+
         // When the UI supplies an idempotency key, use it as the run id so
         // assistant.db rows and daemon events share one identifier.
         let id = req
@@ -389,6 +437,8 @@ impl RunManager {
             created_at: Some(chrono::Utc::now()),
             last_event_sequence: 0,
             idempotency_key: req.idempotency_key.clone(),
+            effort: req.effort.clone(),
+            runtime_id: req.runtime_id.clone().or_else(|| Some("native".into())),
         };
         self.persist_run_row(&run)?;
         {
@@ -468,11 +518,41 @@ impl RunManager {
     }
 
     /// Ensure a run row exists for `start` / `start_detached` (create if `run_id` absent).
+    ///
+    /// Always ensures the current user turn is recorded in the daemon conversation store
+    /// under a daemon-owned `trigger_message_id` (never reuses host message ids as FKs).
     pub fn ensure_run_for_start(&self, req: &StartRunRequest) -> Result<RunV2, String> {
+        // Existing run (host create_run + start path): still append daemon-local user message.
         if let Some(run_id) = &req.run_id {
-            return self
+            let mut run = self
                 .get_run(run_id)
-                .ok_or_else(|| "run not found".to_string());
+                .ok_or_else(|| "run not found".to_string())?;
+            if run.trigger_message_id.is_none()
+                && (req.content.as_ref().is_some_and(|c| !c.trim().is_empty())
+                    || req
+                        .attachments
+                        .as_ref()
+                        .is_some_and(|a| !a.is_empty()))
+            {
+                // Idempotent by content fingerprint so retry/duplicate start does not double-append.
+                if let Some(id) = crate::conversation_store::append_trigger_message_idempotent(
+                    &run.conversation_id,
+                    req.content.as_deref(),
+                    req.attachments.as_deref(),
+                    Some(run_id.as_str()),
+                )? {
+                    {
+                        let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
+                        if let Some(stored) = runs.get_mut(&run.id) {
+                            stored.trigger_message_id = Some(id.clone());
+                            run = stored.clone();
+                        }
+                    }
+                    self.persist_run_row(&run)?;
+                    self.persist_runs_snapshot()?;
+                }
+            }
+            return Ok(run);
         }
         if let Some(key) = &req.idempotency_key {
             let map = self.idempotency.lock().map_err(|e| e.to_string())?;
@@ -487,14 +567,12 @@ impl RunManager {
             .conversation_id
             .clone()
             .ok_or_else(|| "conversation_id required".to_string())?;
-        let trigger_message_id = match req.trigger_message_id.clone() {
-            Some(id) => Some(id),
-            None => crate::conversation_store::append_trigger_message(
-                &conversation_id,
-                req.content.as_deref(),
-                req.attachments.as_deref(),
-            )?,
-        };
+        // Always generate a daemon-local message id; never bind host message ids across DBs.
+        let trigger_message_id = crate::conversation_store::append_trigger_message(
+            &conversation_id,
+            req.content.as_deref(),
+            req.attachments.as_deref(),
+        )?;
         let mut run = match self.create_run(CreateRunRequest {
             conversation_id,
             provider_id: req.provider_id.clone().unwrap_or_default(),
@@ -512,13 +590,13 @@ impl RunManager {
             parent_run_id: None,
             project_path: req.project_path.clone(),
             idempotency_key: req.idempotency_key.clone(),
+            effort: req.effort.clone(),
+            runtime_id: req.runtime_id.clone(),
         }) {
             Ok(run) => run,
             Err(error) => {
-                if req.trigger_message_id.is_none() {
-                    if let Some(id) = trigger_message_id.as_deref() {
-                        let _ = crate::conversation_store::delete_message(id);
-                    }
+                if let Some(id) = trigger_message_id.as_deref() {
+                    let _ = crate::conversation_store::delete_message(id);
                 }
                 return Err(error);
             }
@@ -563,6 +641,29 @@ impl RunManager {
     /// second engine — returns the current row (duplicate Start is a no-op).
     pub fn start_detached(self: &Arc<Self>, req: StartRunRequest) -> Result<RunV2, String> {
         let run = self.ensure_run_for_start(&req)?;
+
+        // Honest runtime gate (REQ-T01/T02): codex never executable; claude_cli only if binary present.
+        if let Some(rt) = req.runtime_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            match rt {
+                "native" | "" => {}
+                "codex_cli" => {
+                    // Single source of truth for T02 red line.
+                    if !crate::codex_runtime_bridge::codex_cli_available() {
+                        return Err(
+                            "runtime codex_cli is unavailable (app-server not implemented)".into(),
+                        );
+                    }
+                }
+                "claude_cli" => {
+                    if !crate::cli_runtime_bridge::claude_cli_available() {
+                        return Err("runtime claude_cli unavailable (claude binary not found)".into());
+                    }
+                }
+                other => {
+                    return Err(format!("unknown runtime_id: {other}"));
+                }
+            }
+        }
         if run.status.is_active() {
             return Ok(run);
         }
@@ -585,8 +686,11 @@ impl RunManager {
         let preparing = self.mark_preparing(&run.id)?;
         self.persist_runs_snapshot()?;
         let rm = Arc::clone(self);
+        let run_id_for_fail = preparing.id.clone();
         tokio::spawn(async move {
-            let _ = rm.start(req).await;
+            if let Err(err) = rm.start(req).await {
+                rm.fail_run_if_active(&run_id_for_fail, err, "START_FAILED");
+            }
         });
         Ok(preparing)
     }
@@ -596,6 +700,29 @@ impl RunManager {
     pub fn start_detached_global(req: StartRunRequest) -> Result<RunV2, String> {
         let rm = global_run_manager();
         let run = rm.ensure_run_for_start(&req)?;
+
+        // Honest runtime gate (REQ-T01/T02): codex never executable; claude_cli only if binary present.
+        if let Some(rt) = req.runtime_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            match rt {
+                "native" | "" => {}
+                "codex_cli" => {
+                    // Single source of truth for T02 red line.
+                    if !crate::codex_runtime_bridge::codex_cli_available() {
+                        return Err(
+                            "runtime codex_cli is unavailable (app-server not implemented)".into(),
+                        );
+                    }
+                }
+                "claude_cli" => {
+                    if !crate::cli_runtime_bridge::claude_cli_available() {
+                        return Err("runtime claude_cli unavailable (claude binary not found)".into());
+                    }
+                }
+                other => {
+                    return Err(format!("unknown runtime_id: {other}"));
+                }
+            }
+        }
         if run.status.is_active() {
             return Ok(run);
         }
@@ -617,8 +744,12 @@ impl RunManager {
         rm.store_project_path(&run.id, req.project_path.as_deref());
         let preparing = rm.mark_preparing(&run.id)?;
         rm.persist_runs_snapshot()?;
+        let run_id_for_fail = preparing.id.clone();
         tokio::spawn(async move {
-            let _ = global_run_manager().start(req).await;
+            let rm = global_run_manager();
+            if let Err(err) = rm.start(req).await {
+                rm.fail_run_if_active(&run_id_for_fail, err, "START_FAILED");
+            }
         });
         Ok(preparing)
     }
@@ -666,6 +797,121 @@ impl RunManager {
             .permission_profile
             .unwrap_or_else(|| run.permission_profile.clone());
         let max_steps = req.max_steps.unwrap_or(run.max_steps);
+        let runtime_id = req
+            .runtime_id
+            .clone()
+            .or_else(|| run.runtime_id.clone())
+            .unwrap_or_else(|| "native".into());
+        // Persist selected runtime on the run row for UI / resume.
+        {
+            let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
+            if let Some(r) = runs.get_mut(&run.id) {
+                r.runtime_id = Some(runtime_id.clone());
+                r.effort = req.effort.clone().or_else(|| r.effort.clone());
+                self.persist_run_row(r)?;
+            }
+        }
+
+                // REQ-T02: Codex remains fail-closed (app-server not implemented).
+        if runtime_id == "codex_cli" {
+            let cancel = Arc::new(AtomicBool::new(false));
+            self.runtime
+                .register_cli_cancel(&run.id, cancel.clone())
+                .await;
+            let err = match crate::codex_runtime_bridge::run_codex_cli_turn(
+                &self.runtime,
+                &run.id,
+                &content,
+                &model_id,
+                request_project_path
+                    .as_deref()
+                    .or(run.project_path.as_deref())
+                    .map(std::path::PathBuf::from)
+                    .as_deref(),
+                &permission_profile,
+                cancel,
+            )
+            .await
+            {
+                Ok(s) => s,
+                Err(e) => e,
+            };
+            self.runtime.clear_cli_cancel(&run.id).await;
+            {
+                let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
+                if let Some(r) = runs.get_mut(&run.id) {
+                    r.status = RunStatusV2::Failed;
+                    r.finished_at = Some(chrono::Utc::now());
+                    r.error_code = Some("CODEX_UNAVAILABLE".into());
+                    self.persist_run_row(r)?;
+                }
+            }
+            self.persist_runs_snapshot()?;
+            return Err(if err.contains("unavailable") {
+                err
+            } else {
+                "runtime codex_cli is unavailable (app-server not implemented)".into()
+            });
+        }
+
+// REQ-T01: Claude CLI session main path (stream-json → v2 events).
+        if runtime_id == "claude_cli"
+            && std::env::var("NATIVES_DAEMON_FIXTURE").ok().as_deref() != Some("1")
+            && !cfg!(test)
+        {
+            let cancel = Arc::new(AtomicBool::new(false));
+            self.runtime
+                .register_cli_cancel(&run.id, cancel.clone())
+                .await;
+            let project = request_project_path
+                .as_deref()
+                .or(run.project_path.as_deref())
+                .map(std::path::PathBuf::from);
+            let terminal = match crate::cli_runtime_bridge::run_claude_cli_turn(
+                &self.runtime,
+                &run.id,
+                &content,
+                &model_id,
+                project.as_deref(),
+                &permission_profile,
+                cancel,
+            )
+            .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    self.runtime.events.append(
+                        &run.id,
+                        RunEventKind::Failed {
+                            error: e.clone(),
+                            code: "CLI_RUNTIME".into(),
+                        },
+                    );
+                    "failed".to_string()
+                }
+            };
+            self.runtime.clear_cli_cancel(&run.id).await;
+            let final_status = match terminal.as_str() {
+                "completed" => RunStatusV2::Completed,
+                "interrupted" | "cancelled" => RunStatusV2::Interrupted,
+                _ => RunStatusV2::Failed,
+            };
+            {
+                let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
+                if let Some(r) = runs.get_mut(&run.id) {
+                    r.status = final_status;
+                    r.finished_at = Some(chrono::Utc::now());
+                    if final_status == RunStatusV2::Failed {
+                        r.error_code = Some("CLI_RUNTIME".into());
+                    }
+                    self.persist_run_row(r)?;
+                }
+            }
+            self.persist_runs_snapshot()?;
+            return self
+                .get_run(&run.id)
+                .ok_or_else(|| "run missing after cli turn".to_string());
+        }
 
         // Prefer real provider when credentials exist; otherwise fixture (tests only).
         let use_fixture = std::env::var("NATIVES_DAEMON_FIXTURE")
@@ -685,9 +931,11 @@ impl RunManager {
                 if cfg!(test) {
                     // unit tests can use fixture
                 } else {
-                    return Err(format!(
-                        "No credentials for provider '{provider_id}'. Set NATIVES_TEST_* or broker."
-                    ));
+                    let err = format!(
+                        "No credentials for provider '{provider_id}'. Configure an active key in Settings."
+                    );
+                    self.fail_run_if_active(&run.id, err.clone(), "NO_CREDENTIALS");
+                    return Err(err);
                 }
             }
         }
@@ -854,7 +1102,9 @@ impl RunManager {
                 parent_run_id: None,
                 project_path: None,
                 idempotency_key: req.idempotency_key.clone(),
-            })?
+                        effort: None,
+            runtime_id: None,
+        })?
         };
 
         let content = req.content.clone().unwrap_or_else(|| "continue".into());
@@ -940,6 +1190,8 @@ impl RunManager {
             parent_run_id: None,
             project_path,
             idempotency_key: None,
+            effort: original.effort.clone(),
+            runtime_id: original.runtime_id.clone(),
         })?;
         if let Some(c) = content {
             self.last_content
@@ -1029,6 +1281,8 @@ mod tests {
             parent_run_id: None,
             project_path: None,
             idempotency_key: Some("idem-1".into()),
+                    effort: None,
+            runtime_id: None,
         };
         let a = rm.create_run(req.clone()).unwrap();
         let b = rm.create_run(req).unwrap();
@@ -1068,7 +1322,9 @@ mod tests {
                     parent_run_id: None,
                     project_path: None,
                     idempotency_key: Some(format!("sqlite-event-{}", Uuid::new_v4())),
-                })
+                            effort: None,
+            runtime_id: None,
+        })
                 .unwrap();
 
             let (count, event_type): (i64, String) = store
@@ -1125,7 +1381,9 @@ mod tests {
                     parent_run_id: Some("parent-run-1".into()),
                     project_path: Some("/tmp/natives-project".into()),
                     idempotency_key: Some(idempotency_key.clone()),
-                })
+                            effort: None,
+            runtime_id: None,
+        })
                 .unwrap();
 
             let row: (String, String, String, String, String, String, String, i64) = store
@@ -1193,7 +1451,9 @@ mod tests {
                 parent_run_id: None,
                 project_path: Some("/tmp/sqlite-idem".into()),
                 idempotency_key: Some(idempotency_key.clone()),
-            };
+                        effort: None,
+            runtime_id: None,
+        };
 
             let first = RunManager::new_with_store(store.clone())
                 .create_run(req.clone())
@@ -1261,7 +1521,9 @@ mod tests {
                     parent_run_id: None,
                     project_path: None,
                     idempotency_key: Some(run_id.clone()),
-                })
+                            effort: None,
+            runtime_id: None,
+        })
                 .unwrap_err();
             assert!(err.contains("PERSISTENCE_FAILED"), "{err}");
             assert!(rm.get_run(&run_id).is_none());
@@ -1321,7 +1583,9 @@ mod tests {
                     max_steps: None,
                     project_path: None,
                     idempotency_key: Some(format!("trigger-clean-{}", Uuid::new_v4())),
-                })
+                            effort: None,
+            runtime_id: None,
+        })
                 .unwrap_err();
             assert!(err.contains("PERSISTENCE_FAILED"), "{err}");
             let messages: i64 = store
@@ -1386,7 +1650,9 @@ mod tests {
                     max_steps: None,
                     project_path: None,
                     idempotency_key: Some("trigger-idem".into()),
-                })
+                            effort: None,
+            runtime_id: None,
+        })
                 .unwrap();
             assert_eq!(run.permission_profile, "readonly");
             assert!(run.trigger_message_id.is_some());
@@ -1510,7 +1776,9 @@ mod tests {
                     max_steps: Some(3),
                     project_path: None,
                     idempotency_key: Some("history-run".into()),
-                }).unwrap();
+                            effort: None,
+            runtime_id: None,
+        }).unwrap();
                 let run_id = run.id.clone();
                 rm.start_with_seams(
                     StartRunRequest {
@@ -1526,7 +1794,9 @@ mod tests {
                         max_steps: Some(3),
                         project_path: None,
                         idempotency_key: None,
-                    },
+                                effort: None,
+            runtime_id: None,
+        },
                     &provider,
                     &EmptyTools,
                 ).await.unwrap();
@@ -1590,7 +1860,9 @@ mod tests {
                 parent_run_id: None,
                 project_path: None,
                 idempotency_key: None,
-            })
+                        effort: None,
+            runtime_id: None,
+        })
             .unwrap();
         let retried = rm
             .retry(RetryRunRequest {
@@ -1632,7 +1904,9 @@ mod tests {
                 parent_run_id: None,
                 project_path: None,
                 idempotency_key: Some("detach-1".into()),
-            })
+                        effort: None,
+            runtime_id: None,
+        })
             .unwrap();
 
         let immediate = rm
@@ -1649,7 +1923,9 @@ mod tests {
                 max_steps: Some(5),
                 project_path: None,
                 idempotency_key: None,
-            })
+                        effort: None,
+            runtime_id: None,
+        })
             .unwrap();
         // Must not wait for engine terminal status.
         assert!(
@@ -1687,7 +1963,9 @@ mod tests {
                 max_steps: None,
                 project_path: None,
                 idempotency_key: None,
-            })
+                        effort: None,
+            runtime_id: None,
+        })
             .unwrap_err();
         assert!(
             err.contains("terminal") || err.contains("retry"),
@@ -1735,7 +2013,9 @@ mod tests {
                     parent_run_id: None,
                     project_path: Some("/tmp/proj".into()),
                     idempotency_key: Some(format!("restore-{}", Uuid::new_v4())),
-                })
+                            effort: None,
+            runtime_id: None,
+        })
                 .unwrap();
             // Force active status then snapshot.
             {
@@ -1851,7 +2131,9 @@ mod tests {
                     parent_run_id: None,
                     project_path: None,
                     idempotency_key: Some(format!("idem-start-{}", uuid::Uuid::new_v4())),
-                })
+                            effort: None,
+            runtime_id: None,
+        })
                 .unwrap();
             let req = StartRunRequest {
                 run_id: Some(created.id.clone()),
@@ -1866,7 +2148,9 @@ mod tests {
                 max_steps: Some(5),
                 project_path: None,
                 idempotency_key: None,
-            };
+                        effort: None,
+            runtime_id: None,
+        };
             let a = rm.start_detached(req.clone()).unwrap();
             let b = rm.start_detached(req).unwrap();
             assert_eq!(a.id, b.id);
@@ -1909,7 +2193,9 @@ mod tests {
                 max_steps: Some(5),
                 project_path: None,
                 idempotency_key: None,
-            })
+                        effort: None,
+            runtime_id: None,
+        })
             .await
             .unwrap();
         assert_eq!(run.status, RunStatusV2::Completed);
@@ -1974,7 +2260,9 @@ mod tests {
                 max_steps: Some(5),
                 project_path: None,
                 idempotency_key: None,
-            })
+                        effort: None,
+            runtime_id: None,
+        })
             .await
             .unwrap();
         assert_eq!(retried_done.status, RunStatusV2::Completed);
@@ -2025,7 +2313,9 @@ mod tests {
                 parent_run_id: None,
                 project_path: None,
                 idempotency_key: Some("tree-parent".into()),
-            })
+                        effort: None,
+            runtime_id: None,
+        })
             .unwrap();
 
         // Spawn real subagent identity under parent run_id.
@@ -2160,7 +2450,9 @@ mod tests {
                 parent_run_id: None,
                 project_path: None,
                 idempotency_key: Some("cancel-mid".into()),
-            })
+                        effort: None,
+            runtime_id: None,
+        })
             .unwrap();
 
         let cancel_flag_seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -2282,7 +2574,9 @@ mod tests {
                         max_steps: Some(5),
                         project_path: None,
                         idempotency_key: None,
-                    },
+                                effort: None,
+            runtime_id: None,
+        },
                     &ToolThenSlow,
                     &tools,
                 )
@@ -2375,7 +2669,9 @@ mod tests {
                 parent_run_id: None,
                 project_path: None,
                 idempotency_key: Some(run_key),
-            })
+                        effort: None,
+            runtime_id: None,
+        })
             .unwrap();
 
         // Tool-calling fixture provider + permission gated tools.
@@ -2440,7 +2736,9 @@ mod tests {
                     max_steps: Some(5),
                     project_path: None,
                     idempotency_key: None,
-                },
+                            effort: None,
+            runtime_id: None,
+        },
                 &provider,
                 &tools,
             ),
@@ -2871,5 +3169,331 @@ mod tests {
                 .unwrap_or_default(),
             );
         }
+    }
+
+    #[test]
+    fn start_detached_codex_runtime_is_fail_closed() {
+        // Gate runs before ensure/create — use existing run_id to avoid FK on new conversation.
+        let rm = Arc::new(RunManager::new());
+        let run = rm
+            .create_run(CreateRunRequest {
+                conversation_id: "c-codex".into(),
+                provider_id: "openai".into(),
+                model_id: "gpt".into(),
+                key_id: None,
+                agent_profile_id: None,
+                permission_profile: Some("ask".into()),
+                content: Some("hi".into()),
+                attachments: None,
+                max_steps: Some(3),
+                parent_run_id: None,
+                project_path: Some("/tmp".into()),
+                idempotency_key: None,
+                effort: None,
+                runtime_id: Some("native".into()),
+            })
+            .unwrap();
+        let err = rm
+            .start_detached(StartRunRequest {
+                run_id: Some(run.id),
+                conversation_id: Some("c-codex".into()),
+                provider_id: Some("openai".into()),
+                model_id: Some("gpt".into()),
+                key_id: None,
+                content: Some("hi".into()),
+                attachments: None,
+                trigger_message_id: None,
+                permission_profile: Some("ask".into()),
+                max_steps: Some(3),
+                project_path: Some("/tmp".into()),
+                idempotency_key: None,
+                effort: None,
+                runtime_id: Some("codex_cli".into()),
+            })
+            .unwrap_err();
+        assert!(
+            err.contains("codex_cli") && err.contains("unavailable"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn start_detached_unknown_runtime_is_fail_closed() {
+        let rm = Arc::new(RunManager::new());
+        let run = rm
+            .create_run(CreateRunRequest {
+                conversation_id: "c-rt".into(),
+                provider_id: "openai".into(),
+                model_id: "gpt".into(),
+                key_id: None,
+                agent_profile_id: None,
+                permission_profile: Some("ask".into()),
+                content: Some("hi".into()),
+                attachments: None,
+                max_steps: Some(3),
+                parent_run_id: None,
+                project_path: Some("/tmp".into()),
+                idempotency_key: None,
+                effort: None,
+                runtime_id: Some("native".into()),
+            })
+            .unwrap();
+        let err = rm
+            .start_detached(StartRunRequest {
+                run_id: Some(run.id),
+                conversation_id: Some("c-rt".into()),
+                provider_id: Some("openai".into()),
+                model_id: Some("gpt".into()),
+                key_id: None,
+                content: Some("hi".into()),
+                attachments: None,
+                trigger_message_id: None,
+                permission_profile: Some("ask".into()),
+                max_steps: Some(3),
+                project_path: Some("/tmp".into()),
+                idempotency_key: None,
+                effort: None,
+                runtime_id: Some("not_a_runtime".into()),
+            })
+            .unwrap_err();
+        assert!(err.contains("unknown runtime_id"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn create_run_preserves_runtime_id_and_effort() {
+        let rm = RunManager::new();
+        let run = rm
+            .create_run(CreateRunRequest {
+                conversation_id: "c-preserve".into(),
+                provider_id: "openai".into(),
+                model_id: "gpt".into(),
+                key_id: None,
+                agent_profile_id: None,
+                permission_profile: Some("ask".into()),
+                content: Some("x".into()),
+                attachments: None,
+                max_steps: Some(5),
+                parent_run_id: None,
+                project_path: Some("/tmp".into()),
+                idempotency_key: None,
+                effort: Some("high".into()),
+                runtime_id: Some("claude_cli".into()),
+            })
+            .unwrap();
+        assert_eq!(run.runtime_id.as_deref(), Some("claude_cli"));
+        assert_eq!(run.effort.as_deref(), Some("high"));
+        let got = rm.get_run(&run.id).unwrap();
+        assert_eq!(got.runtime_id.as_deref(), Some("claude_cli"));
+        assert_eq!(got.effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn retry_preserves_runtime_id() {
+        let rm = RunManager::new();
+        let run = rm
+            .create_run(CreateRunRequest {
+                conversation_id: "c-retry-rt".into(),
+                provider_id: "openai".into(),
+                model_id: "gpt".into(),
+                key_id: None,
+                agent_profile_id: None,
+                permission_profile: Some("ask".into()),
+                content: Some("retry me".into()),
+                attachments: None,
+                max_steps: Some(5),
+                parent_run_id: None,
+                project_path: Some("/tmp".into()),
+                idempotency_key: None,
+                effort: Some("medium".into()),
+                runtime_id: Some("native".into()),
+            })
+            .unwrap();
+        {
+            let mut runs = rm.runs.lock().unwrap();
+            if let Some(r) = runs.get_mut(&run.id) {
+                r.status = RunStatusV2::Failed;
+                r.finished_at = Some(chrono::Utc::now());
+            }
+        }
+        rm.last_content
+            .lock()
+            .unwrap()
+            .insert(run.id.clone(), "retry me".into());
+        let next = rm
+            .retry(RetryRunRequest {
+                run_id: run.id.clone(),
+            })
+            .unwrap();
+        assert_eq!(next.runtime_id.as_deref(), Some("native"));
+        assert_eq!(next.effort.as_deref(), Some("medium"));
+        assert_ne!(next.id, run.id);
+    }
+
+    #[test]
+    fn fail_run_if_active_is_idempotent_and_emits_failed_event() {
+        let rm = Arc::new(RunManager::new());
+        let run = rm
+            .create_run(CreateRunRequest {
+                conversation_id: "c-fail".into(),
+                provider_id: "missing-provider".into(),
+                model_id: "m".into(),
+                key_id: None,
+                agent_profile_id: None,
+                permission_profile: Some("ask".into()),
+                content: Some("hi".into()),
+                attachments: None,
+                max_steps: Some(3),
+                parent_run_id: None,
+                project_path: Some("/tmp".into()),
+                idempotency_key: None,
+                effort: None,
+                runtime_id: Some("native".into()),
+            })
+            .unwrap();
+        {
+            let mut runs = rm.runs.lock().unwrap();
+            if let Some(r) = runs.get_mut(&run.id) {
+                r.status = RunStatusV2::Preparing;
+            }
+        }
+        rm.fail_run_if_active(&run.id, "No credentials for provider", "NO_CREDENTIALS");
+        let after = rm.get_run(&run.id).unwrap();
+        assert_eq!(after.status, RunStatusV2::Failed);
+        assert_eq!(after.error_code.as_deref(), Some("NO_CREDENTIALS"));
+        assert!(after.finished_at.is_some());
+        let events = rm.runtime.events.replay_after(&run.id, 0);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(&e.payload, RunEventKind::Failed { code, .. } if code == "NO_CREDENTIALS")),
+            "expected failed event, got {:?}",
+            events.iter().map(|e| format!("{:?}", e.payload)).collect::<Vec<_>>()
+        );
+        // Second call is a no-op (already terminal).
+        rm.fail_run_if_active(&run.id, "again", "NO_CREDENTIALS");
+        let events2 = rm.runtime.events.replay_after(&run.id, 0);
+        let failed_count = events2
+            .iter()
+            .filter(|e| matches!(&e.payload, RunEventKind::Failed { .. }))
+            .count();
+        assert_eq!(failed_count, 1);
+    }
+
+    #[test]
+    fn ensure_run_for_start_with_run_id_appends_daemon_local_user_message() {
+        with_env_lock(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let previous_db = std::env::var("NATIVES_DB_PATH").ok();
+            let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
+            let db_path = dir.path().join("natives.db");
+            std::env::set_var("NATIVES_DB_PATH", &db_path);
+            std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+
+            let store = Arc::new(
+                crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
+            );
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                     VALUES ('host-conv', 'agent', 'Host', 'openai', 'gpt-4o')",
+                    [],
+                )
+                .unwrap();
+            let rm = RunManager::new_with_store(store.clone());
+            let run = rm
+                .create_run(CreateRunRequest {
+                    conversation_id: "host-conv".into(),
+                    provider_id: "openai".into(),
+                    model_id: "gpt-4o".into(),
+                    key_id: None,
+                    agent_profile_id: None,
+                    permission_profile: Some("ask".into()),
+                    content: Some("second question".into()),
+                    attachments: None,
+                    max_steps: Some(3),
+                    parent_run_id: None,
+                    project_path: Some("/tmp".into()),
+                    idempotency_key: Some(format!("host-key-{}", Uuid::new_v4())),
+                    effort: None,
+                    runtime_id: Some("native".into()),
+                })
+                .unwrap();
+            // Host path: run_id present, trigger_message_id is host UUID (ignored).
+            let ensured = rm
+                .ensure_run_for_start(&StartRunRequest {
+                    run_id: Some(run.id.clone()),
+                    conversation_id: Some("host-conv".into()),
+                    provider_id: Some("openai".into()),
+                    model_id: Some("gpt-4o".into()),
+                    key_id: None,
+                    content: Some("second question".into()),
+                    attachments: None,
+                    trigger_message_id: Some("host-message-uuid-not-in-daemon".into()),
+                    permission_profile: Some("ask".into()),
+                    max_steps: Some(3),
+                    project_path: Some("/tmp".into()),
+                    idempotency_key: None,
+                    effort: None,
+                    runtime_id: Some("native".into()),
+                })
+                .unwrap();
+            assert!(ensured.trigger_message_id.is_some());
+            let daemon_msg_id = ensured.trigger_message_id.unwrap();
+            assert_ne!(daemon_msg_id, "host-message-uuid-not-in-daemon");
+            let text: String = store
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT block_json FROM message_block WHERE message_id = ?1 LIMIT 1",
+                    rusqlite::params![daemon_msg_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(text.contains("second question"), "{text}");
+
+            // Idempotent: second ensure does not double-append.
+            let again = rm
+                .ensure_run_for_start(&StartRunRequest {
+                    run_id: Some(run.id.clone()),
+                    conversation_id: Some("host-conv".into()),
+                    provider_id: Some("openai".into()),
+                    model_id: Some("gpt-4o".into()),
+                    key_id: None,
+                    content: Some("second question".into()),
+                    attachments: None,
+                    trigger_message_id: None,
+                    permission_profile: Some("ask".into()),
+                    max_steps: Some(3),
+                    project_path: Some("/tmp".into()),
+                    idempotency_key: None,
+                    effort: None,
+                    runtime_id: Some("native".into()),
+                })
+                .unwrap();
+            assert_eq!(again.trigger_message_id.as_deref(), Some(daemon_msg_id.as_str()));
+            let count: i64 = store
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM message WHERE conversation_id = 'host-conv' AND role = 'user'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1);
+
+            if let Some(value) = previous_db {
+                std::env::set_var("NATIVES_DB_PATH", value);
+            } else {
+                std::env::remove_var("NATIVES_DB_PATH");
+            }
+            if let Some(value) = previous_runtime {
+                std::env::set_var("NATIVES_RUNTIME_DIR", value);
+            } else {
+                std::env::remove_var("NATIVES_RUNTIME_DIR");
+            }
+        });
     }
 }

@@ -47,6 +47,8 @@ import {
   selectRunEvents,
   type InspectorTab,
 } from '@/lib/assistant-workspace';
+// runtime pref loaded via persistence export
+import { loadPreferredRuntimeId } from '@/lib/assistant-workspace/persistence';
 import {
   cancelRun,
   connectWorkspace,
@@ -66,7 +68,6 @@ import { messagePlainText } from '@/lib/assistant-message-view';
 import ConversationTimeline from './ConversationTimeline';
 import MessageInput from './MessageInput';
 import PermissionRequestCard from './PermissionRequestCard';
-import RunStatusBar from './RunStatusBar';
 import GoalStatusBar from './GoalStatusBar';
 import PromptQueuePanel from './PromptQueuePanel';
 import ActivityInspector from './ActivityInspector';
@@ -99,6 +100,8 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const stateRef = useRef(state);
   stateRef.current = state;
   const subAbortRef = useRef<{ aborted: boolean }>({ aborted: false });
+  /** Quiet soft-resubscribe attempt counts per run (reset on terminal). */
+  const resubAttemptsRef = useRef<Record<string, number>>({});
 
   const [providers, setProviders] = useState<ProviderWithModels[]>([]);
   const [providerReadiness, setProviderReadiness] = useState<ProviderReadiness>('no_provider');
@@ -142,6 +145,9 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const permission = interactions.find((i) => i.kind === 'permission');
   const askUser = interactions.find((i) => i.kind === 'ask_user');
   const planApproval = interactions.find((i) => i.kind === 'plan_approval');
+  // Goal chrome is opt-in only: conversation.mode must be exactly 'goal'.
+  // Ordinary chat/agent runs have NO status bar — progress is timeline
+  // streaming / "正在思考" + MessageInput stop only.
   const isGoalMode = activeConversation?.mode === 'goal';
   const goalInstruction = useMemo(() => {
     if (!isGoalMode) return null;
@@ -151,7 +157,8 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     return text || activeConversation?.title || null;
   }, [isGoalMode, messages, activeConversation?.title]);
   const goalCanResume = Boolean(
-    activeRun &&
+    isGoalMode &&
+      activeRun &&
       (activeRun.status === 'interrupted' ||
         activeRun.status === 'cancelled' ||
         activeRun.status === 'failed'),
@@ -219,8 +226,33 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
           signal,
         );
       } catch {
-        // connection soft-fail handled in controller
+        // transport soft-fail handled in controller; resubscribe below if still active
       }
+      if (signal.aborted) return;
+      const run = stateRef.current.runs[runId];
+      if (!run || !isActiveRunStatus(run.status)) {
+        delete resubAttemptsRef.current[runId];
+        return;
+      }
+      // Quiet soft resubscribe with backoff. Do not flip ConnectionBanner on
+      // every empty poll — that caused permanent "正在重连" during normal answers.
+      const nextSeq = stateRef.current.lastSequenceByRun[runId] ?? afterSequence;
+      const n = (resubAttemptsRef.current[runId] ?? 0) + 1;
+      resubAttemptsRef.current[runId] = n;
+      if (n > 40) {
+        dispatch({
+          type: 'connection/set',
+          connection: 'reconnecting',
+          error: 'Still waiting for engine terminal event',
+        });
+        return;
+      }
+      const delay = Math.min(250 * n, 2000);
+      window.setTimeout(() => {
+        if (!subAbortRef.current.aborted) {
+          void startSubscription(runId, nextSeq);
+        }
+      }, delay);
     },
     [gateway, dispatch],
   );
@@ -292,16 +324,45 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       registeredProjects.map((p) => p.path),
       zh ? '未关联项目' : 'Unassigned',
     );
-    publishNavigation({
-      groups,
-      selectedId: activeId,
-      activeProjectPath,
-      loading: loadingConversations,
-      creationState: projectCreationState({
-        engine: state.connection === 'connected' ? 'ready' : state.connection === 'connecting' ? 'connecting' : 'unavailable',
-        providerReadiness,
-      }),
-      isCreatingConversation: false,
+    // Merge with projects already seeded by AssistantWorkspaceProvider so a
+    // late/empty workbench project.list cannot blank the sidebar on first paint.
+    publishNavigation((prev) => {
+      let nextGroups = groups;
+      if (registeredProjects.length === 0 && prev.groups.length > 0) {
+        const seedPaths = prev.groups
+          .map((g) => g.path)
+          .filter((p): p is string => Boolean(p));
+        if (seedPaths.length > 0) {
+          nextGroups = groupAssistantConversations(
+            conversations.map((c) => ({
+              id: c.id,
+              title: c.title,
+              mode: c.mode,
+              projectId: c.projectId ?? null,
+              updatedAt: c.updatedAt,
+            })),
+            seedPaths,
+            zh ? '未关联项目' : 'Unassigned',
+          );
+        }
+      }
+      return {
+        groups: nextGroups,
+        selectedId: activeId,
+        activeProjectPath: activeProjectPath ?? prev.activeProjectPath,
+        loading: loadingConversations,
+        creationState: projectCreationState({
+          engine:
+            state.connection === 'connected'
+              ? 'ready'
+              : state.connection === 'connecting'
+                ? 'connecting'
+                : 'unavailable',
+          providerReadiness,
+        }),
+        isCreatingConversation: false,
+        pendingCreateProjectPath: prev.pendingCreateProjectPath,
+      };
     });
   }, [
     state.conversations,
@@ -387,14 +448,61 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     }
   }, [navigation.selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Consume deferred "create conversation in project" from shell sidebar
+  // (issued before this lazy workbench mounted).
+  useEffect(() => {
+    const path = navigation.pendingCreateProjectPath;
+    if (path === undefined) return;
+    if (path) {
+      setActiveProjectPath(path);
+      void writeActiveProject(window.nativesAPI, path).catch(() => undefined);
+    }
+    // Only auto-create when engine/providers are ready; otherwise clear the flag.
+    if (providerReadiness === 'ready' && state.connection === 'connected') {
+      const id = `temp-${Date.now()}`;
+      const now = new Date().toISOString();
+      const pick = selectAssistantModel(toProviderInfo(providers));
+      if (pick) {
+        dispatch({
+          type: 'conversations/upsert',
+          conversation: {
+            id,
+            mode: 'agent',
+            title: t(locale, 'assistant.newConversation'),
+            providerId: pick.providerId,
+            modelId: pick.modelId,
+            projectId: path,
+            permissionProfileId: 'ask',
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+        dispatch({ type: 'conversations/setActive', id });
+      }
+    }
+    publishNavigation((prev) => ({ ...prev, pendingCreateProjectPath: undefined }));
+  }, [navigation.pendingCreateProjectPath]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleSend = useCallback(
     async (draft: AssistantDraft, forceImmediate = false): Promise<boolean> => {
       let conversationId = activeId;
-      const pick =
-        resolveModelSelection(providers, {
-          providerId: activeConversation?.providerId,
-          modelId: activeConversation?.modelId,
-        }) ?? selectAssistantModel(toProviderInfo(providers));
+      const pick = resolveModelSelection(providers, {
+        providerId: activeConversation?.providerId,
+        modelId: activeConversation?.modelId,
+      });
+      // Stale/deleted provider: block send and require explicit re-select (no ghost remap).
+      if (
+        activeConversation?.providerId &&
+        !providers.some((p) => p.id === activeConversation.providerId)
+      ) {
+        toast(
+          zh
+            ? '当前会话的供应商已失效，请重新选择供应商和模型'
+            : 'This conversation’s provider is no longer available. Re-select provider and model.',
+          'error',
+        );
+        return false;
+      }
       const providerId = pick?.providerId ?? '';
       const modelId = pick?.modelId ?? '';
       if (!providerId || !modelId || providerReadiness !== 'ready') {
@@ -448,6 +556,8 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             size: a.size,
           })),
           forceImmediate,
+          // Preferred runtime from RuntimePanel (persisted); omit → daemon default native.
+          runtimeId: loadPreferredRuntimeId(),
         });
 
         if (!result.queued && result.runId) {
@@ -571,13 +681,36 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         void (async () => {
           try {
             const projects = (await window.nativesAPI?.project?.list?.()) ?? [];
-            const match = projects.find((p) => p.path === path);
-            if (match?.id) await window.nativesAPI?.project?.remove?.(match.id);
-          } catch {
-            /* best-effort */
+            const match = projects.find((p) => p.path === path || p.id === path);
+            if (match?.id) {
+              await window.nativesAPI?.project?.remove?.(match.id);
+            } else if (path) {
+              await window.nativesAPI?.project?.remove?.(path);
+            }
+          } catch (err) {
+            toast(classifyError(err).userMessage, 'error');
           }
           const next = (await window.nativesAPI?.project?.list?.()) ?? [];
           setRegisteredProjects(next);
+          if (activeProjectPath === path) {
+            setActiveProjectPath(null);
+          }
+          // Host nulls project_id on remove — mirror locally so sessions move to Unassigned.
+          const current = stateRef.current;
+          for (const id of current.conversationOrder) {
+            const c = current.conversations[id];
+            if (c?.projectId === path) {
+              dispatch({
+                type: 'conversations/upsert',
+                conversation: { ...c, projectId: null },
+              });
+            }
+          }
+          const curId = current.activeConversationId;
+          const cur = curId ? current.conversations[curId] : null;
+          if (cur?.projectId === path) {
+            dispatch({ type: 'conversations/setActive', id: null });
+          }
         })();
       },
       renameConversation: (id, title) => {
@@ -592,9 +725,35 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         });
       },
       deleteConversation: async (id) => {
-        await gateway.request('conversation.delete', { id });
-        dispatch({ type: 'conversations/remove', id });
-        return true;
+        // Local-only temp sessions never hit the host DB.
+        if (id.startsWith('temp-')) {
+          dispatch({ type: 'conversations/remove', id });
+          if (stateRef.current.activeConversationId === id) {
+            dispatch({ type: 'conversations/setActive', id: null });
+          }
+          return true;
+        }
+        try {
+          await gateway.request('conversation.delete', { id });
+          dispatch({ type: 'conversations/remove', id });
+          if (stateRef.current.activeConversationId === id) {
+            dispatch({ type: 'conversations/setActive', id: null });
+          }
+          return true;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          // Host already gone (or dual-store ghost) — still drop from UI so delete
+          // is never a no-op after the user confirmed.
+          if (/not found|NOT_FOUND|conversation not found/i.test(message)) {
+            dispatch({ type: 'conversations/remove', id });
+            if (stateRef.current.activeConversationId === id) {
+              dispatch({ type: 'conversations/setActive', id: null });
+            }
+            return true;
+          }
+          toast(classifyError(err).userMessage, 'error');
+          return false;
+        }
       },
       retryRun: () => void handleRetry(),
       respondPermission: (requestId, approved) => void handlePermission(requestId, approved),
@@ -960,45 +1119,20 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
                 if (!ok) return;
                 void gateway
                   .request('conversation.delete', { id: activeId })
-                  .then(() => dispatch({ type: 'conversations/remove', id: activeId }))
+                  .then(() => {
+                    dispatch({ type: 'conversations/remove', id: activeId });
+                    if (stateRef.current.activeConversationId === activeId) {
+                      dispatch({ type: 'conversations/setActive', id: null });
+                    }
+                  })
                   .catch((err) => toast(classifyError(err).userMessage, 'error'));
               }}
             />
-          ) : (
-            <RunStatusBar
-              run={activeRun}
-              locale={locale}
-              queueCount={promptQueue.length}
-              tokenLabel={
-                contextUsage ? `${contextUsage.usedTokens} tokens` : undefined
-              }
-              connectionHint={
-                state.connection === 'recovering'
-                  ? zh
-                    ? '恢复中…'
-                    : 'Recovering…'
-                  : state.connection === 'reconnecting'
-                    ? zh
-                      ? '重连中…'
-                      : 'Reconnecting…'
-                    : null
-              }
-              onStop={() => void handleStop()}
-              onBackground={
-                activeRun
-                  ? () => {
-                      void startSubscription(
-                        activeRun.id,
-                        stateRef.current.lastSequenceByRun[activeRun.id] ?? 0,
-                      );
-                    }
-                  : undefined
-              }
-            />
-          )}
+          ) : null}
 
+          {/* Prompt queue is for in-flight multi-send, not goal chrome. */}
           <PromptQueuePanel
-            items={promptQueue}
+            items={isGoalMode ? [] : promptQueue}
             locale={locale}
             onEdit={(id, content) =>
               void gateway
