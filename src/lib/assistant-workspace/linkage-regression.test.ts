@@ -175,7 +175,7 @@ test('subscribeRun ending without terminal event stays quiet (no reconnect banne
     connect: async () => undefined,
     disconnect: async () => undefined,
     getCapabilities: async () => null,
-    request: async () => [],
+    request: async <T>(_method: string, _params?: unknown) => [] as unknown as T,
     subscribe: async function* (): AsyncGenerator<RunEvent> {
       // empty stream — engine silence / poll boundary
     },

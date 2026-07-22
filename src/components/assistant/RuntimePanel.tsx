@@ -468,9 +468,11 @@ const CAP_ROWS = [
   { key: 'media', zh: 'Media / 音视频', en: 'Media' },
   { key: 'dashboard', zh: 'Dashboard', en: 'Dashboard' },
   { key: 'cli', zh: 'CLI / 终端', en: 'CLI / Terminal' },
-];
+] as const;
 
-const CAP_MAP: Record<RuntimeId, Record<string, string>> = {
+type CapKey = (typeof CAP_ROWS)[number]['key'];
+
+const CAP_MAP: Record<RuntimeId, Record<CapKey, string>> = {
   claude_cli: { memory: '✅', widget: '✅', tasks: '✅', image: '✅', media: '⚠️', dashboard: '❌', cli: '✅' },
   codex_cli: { memory: '✅', widget: '✅', tasks: '✅', image: '❌', media: '❌', dashboard: '❌', cli: '⚠️' },
   native: { memory: '✅', widget: '✅', tasks: '✅', image: '✅', media: '✅', dashboard: '✅', cli: '✅' },

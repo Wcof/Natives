@@ -20,8 +20,11 @@ function extractArrayConst(src: string, name: string): string[] {
     `pub const ${name}: &\\[&str\\] = &\\[([\\s\\S]*?)\\];`,
   );
   const m = src.match(re);
-  if (!m) throw new Error(`const ${name} not found in methods.rs`);
-  return [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]!);
+  const body = m?.[1];
+  if (!body) throw new Error(`const ${name} not found in methods.rs`);
+  return [...body.matchAll(/"([^"]+)"/g)]
+    .map((x) => x[1])
+    .filter((value): value is string => Boolean(value));
 }
 
 /** Methods the assistant frontend actually invokes (audit 2026-07-21). */

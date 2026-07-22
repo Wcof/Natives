@@ -59,7 +59,8 @@ export interface ClassifiedError {
 // ── Classification context ──────────────────────────────────────
 
 export interface ErrorContext {
-  error: unknown;
+  /** Optional when passed as the second arg; classifyError always injects the primary error. */
+  error?: unknown;
   moduleId?: string;
   stderr?: string;
   /** Active UI locale. Defaults to Chinese. */
@@ -370,9 +371,11 @@ function buildRecoveryActions(category: ErrorCategory, locale: string): Recovery
  * Locale defaults to Chinese when omitted.
  */
 export function classifyError(error: unknown, moduleIdOrCtx?: string | ErrorContext): ClassifiedError {
+  // Second arg may be a legacy moduleId string or a partial context ({ locale }, …).
+  // Always prefer the primary `error` argument unless the context explicitly overrides it.
   const ctx: ErrorContext = typeof moduleIdOrCtx === 'string'
     ? { error, moduleId: moduleIdOrCtx }
-    : { error, ...(moduleIdOrCtx ?? {}) };
+    : { ...(moduleIdOrCtx ?? {}), error: moduleIdOrCtx?.error ?? error };
 
   const locale = resolveLocale(ctx);
 

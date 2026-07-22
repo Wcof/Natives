@@ -6,7 +6,7 @@ import {
   CONFIGURABLE_PROVIDER_PRESETS,
   DEFAULT_API_PROTOCOL,
   resolvePresetProtocol,
-} from './provider-presets.ts';
+} from './provider-presets';
 
 const dialog = readFileSync(new URL('../components/settings/AddProviderDialog.tsx', import.meta.url), 'utf8');
 const zh = readFileSync(new URL('../i18n/zh.ts', import.meta.url), 'utf8');
@@ -72,7 +72,7 @@ describe('provider preset protocol defaults', () => {
 
 describe('provider test failure UX', () => {
   it('classifies the raw 429 diagnostic dump into a friendly Chinese rate-limit message', async () => {
-    const { normalizeProviderTest } = await import('./tauri-adapter.ts');
+    const { normalizeProviderTest } = await import('./tauri-adapter');
     const raw =
       'Provider test failed: protocol=openai_chat_completions, model=deepseek-v4-flash, http_status=429, retryable=true, request_id=2e75f801-ffc9-42d0-aad5-22b9179b355b, message=Rate limited — too many requests';
 
@@ -87,7 +87,7 @@ describe('provider test failure UX', () => {
   });
 
   it('keeps non-rate-limit failures classified without dumping protocol metadata', async () => {
-    const { normalizeProviderTest } = await import('./tauri-adapter.ts');
+    const { normalizeProviderTest } = await import('./tauri-adapter');
     const raw =
       'Provider test failed: protocol=openai_chat_completions, model=deepseek-v4-flash, http_status=401, retryable=false, request_id=none, message=Authentication failed — invalid API key';
 
