@@ -1107,7 +1107,9 @@ impl RunManager {
         })?
         };
 
-        let content = req.content.clone().unwrap_or_else(|| "continue".into());
+        // Empty default: do not invent a synthetic "continue" user turn when the
+        // conversation history already holds the user messages (history reload tests).
+        let content = req.content.clone().unwrap_or_default();
         // Register engine so cancel_run → request_cancel works mid-flight.
         let engine = Arc::new(AgentEngine::new(self.runtime.events.clone()));
         self.runtime

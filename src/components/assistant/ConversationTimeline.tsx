@@ -76,7 +76,7 @@ const MessageRow = memo(function MessageRow({
       ...withLocale,
       durationMs: Math.max(
         0,
-        (Number.isFinite(reasoningEnd) ? reasoningEnd : now || Date.now()) - reasoningStart,
+        (Number.isFinite(reasoningEnd) ? reasoningEnd : now) - reasoningStart,
       ),
     };
   });
@@ -152,16 +152,14 @@ export default function ConversationTimeline({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState(0);
   const hasActive = messages.some(
     (message) => message.status === 'streaming' || message.status === 'running',
   );
-  const followingRef = useRef(following);
-  followingRef.current = following;
-
   // Elapsed timer: 1s cadence, isolated from stream chunk rate.
   useEffect(() => {
     if (!hasActive) return;
+    setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [hasActive]);

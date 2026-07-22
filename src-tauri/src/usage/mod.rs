@@ -58,7 +58,7 @@ mod opencode;
 pub mod snapshot;
 
 use crate::Error;
-use chrono::{DateTime, Utc, Datelike, Timelike, TimeZone};
+use chrono::{Utc, Datelike, Timelike, TimeZone};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

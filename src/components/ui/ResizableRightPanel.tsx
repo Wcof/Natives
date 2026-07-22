@@ -80,7 +80,10 @@ export default function ResizableRightPanel({
 }: ResizableRightPanelProps) {
   const [isDragging, setIsDragging] = useState(false);
   const widthRef = useRef(width);
-  widthRef.current = width;
+
+  useEffect(() => {
+    widthRef.current = width;
+  }, [width]);
 
   useEffect(() => {
     if (!open) return;
