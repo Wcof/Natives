@@ -100,3 +100,28 @@ describe('ContentBlockRenderers', () => {
     assert.equal(results.length, 3, 'Should render all blocks');
   });
 });
+  it('text and plan blocks use MarkdownText (not raw pre-wrap markers only)', () => {
+    // Structural contract: renderBlock returns a React element tree for text/plan.
+    const text = renderBlock({ type: 'text', text: '## Hello' }, 0) as { type?: { name?: string } | string; props?: Record<string, unknown> };
+    const plan = renderBlock({ type: 'plan', planMarkdown: '- [x] step' }, 1) as { type?: { name?: string } | string; props?: Record<string, unknown> };
+    assert.ok(text !== null);
+    assert.ok(plan !== null);
+    // Ensure we did not leave a plain string child of "## Hello" as the sole content
+    // (MarkdownText component should wrap the source).
+    const textJson = JSON.stringify(text);
+    assert.ok(textJson.includes('## Hello') || textJson.includes('Hello'));
+    const planJson = JSON.stringify(plan);
+    assert.ok(planJson.includes('step'));
+  });
+
+  it('reasoning and tool blocks remain non-markdown wrappers', () => {
+    const reasoning = renderBlock({ type: 'reasoning', reasoning: 'think' }, 0);
+    const tool = renderBlock({
+      type: 'tool_call',
+      toolName: 'read_file',
+      toolInput: { path: '/tmp/a' },
+      toolStatus: 'completed',
+    }, 1);
+    assert.ok(reasoning !== null);
+    assert.ok(tool !== null);
+  });

@@ -5,6 +5,7 @@
 
 import React from 'react';
 import { reasoningToggleLabel } from '@/lib/assistant-message-view';
+import MarkdownText from '../MarkdownText';
 
 // ─── Block Types ────────────────────────────────────────
 
@@ -53,8 +54,8 @@ export interface ContentBlock {
 
 function TextBlock({ block }: { block: ContentBlock }) {
   return (
-    <div className="whitespace-pre-wrap break-words text-[15px] leading-7 text-black dark:text-white">
-      {block.text}
+    <div className="min-w-0 max-w-full break-words text-[15px] leading-7 text-black dark:text-white">
+      <MarkdownText source={block.text} />
     </div>
   );
 }
@@ -317,9 +318,9 @@ function DiffBlock({ block }: { block: ContentBlock }) {
 
 function PlanBlock({ block }: { block: ContentBlock }) {
   return (
-    <div className="my-2 rounded-lg border border-[var(--border)] p-3 text-sm">
+    <div className="my-2 min-w-0 max-w-full rounded-lg border border-[var(--border)] p-3 text-sm">
       <div className="mb-1 text-xs font-medium text-[var(--text-secondary)]">Plan</div>
-      <div className="whitespace-pre-wrap">{block.planMarkdown ?? block.text}</div>
+      <MarkdownText source={block.planMarkdown ?? block.text} />
     </div>
   );
 }
