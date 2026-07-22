@@ -62,6 +62,43 @@ export async function openConversation(
   dispatch({ type: 'conversations/setActive', id: conversationId });
   const snapshot = await gateway.getSnapshot(conversationId);
   dispatch({ type: 'snapshot/apply', snapshot });
+  // Best-effort context usage when advertised (Phase 3).
+  try {
+    const caps = gateway.getCapabilities ? await gateway.getCapabilities() : null;
+    if (caps?.methods?.includes('conversation.getContextUsage')) {
+      const usage = await gateway.request<Record<string, unknown>>(
+        'conversation.getContextUsage',
+        { conversation_id: conversationId },
+      );
+      if (usage && typeof usage === 'object') {
+        const used = Number(
+          (usage as { usedTokens?: number; used_tokens?: number }).usedTokens ??
+            (usage as { used_tokens?: number }).used_tokens ??
+            0,
+        );
+        const max = Number(
+          (usage as { maxTokens?: number; max_tokens?: number }).maxTokens ??
+            (usage as { max_tokens?: number }).max_tokens ??
+            128000,
+        );
+        dispatch({
+          type: 'snapshot/apply',
+          snapshot: {
+            conversation: snapshot.conversation,
+            messages: snapshot.messages ?? [],
+            runs: snapshot.runs ?? [],
+            contextUsage: {
+              conversationId,
+              usedTokens: used,
+              maxTokens: max,
+            },
+          },
+        });
+      }
+    }
+  } catch {
+    /* optional */
+  }
 }
 
 /** Consume run events into the store; on gap set recovering and replay. */

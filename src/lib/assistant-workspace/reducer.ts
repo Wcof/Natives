@@ -583,6 +583,20 @@ function applyOneEvent(
     };
   }
 
+  if (event.type === 'context_usage_updated' && run.conversationId) {
+    next = {
+      ...next,
+      contextUsageByConversation: {
+        ...next.contextUsageByConversation,
+        [run.conversationId]: {
+          conversationId: run.conversationId,
+          usedTokens: Number(event.payload.used_tokens ?? event.payload.usedTokens ?? 0),
+          maxTokens: Number(event.payload.max_tokens ?? event.payload.maxTokens ?? 128000),
+        },
+      },
+    };
+  }
+
   // Subagent
   if (event.type === 'subagent_created') {
     const subId = String(event.payload.sub_run_id ?? event.payload.subRunId ?? '');
