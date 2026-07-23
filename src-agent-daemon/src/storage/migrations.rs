@@ -20,6 +20,7 @@ pub const ALL: &[(i64, &str)] = &[
     (13, MIGRATION_013),
     (14, MIGRATION_014),
     (15, MIGRATION_015),
+    (18, MIGRATION_018),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -545,4 +546,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_project_identity_path
 
 ALTER TABLE run ADD COLUMN project_id TEXT;
 ALTER TABLE conversation ADD COLUMN project_identity_id TEXT;
+";
+
+/// Migration 018: Side-effect ledger for workspace restore / rewind semantics (task-07).
+///
+/// Minimal durable records of tool side-effects. Not a universal transaction
+/// framework — only tracks what restore/preview can honestly claim.
+const MIGRATION_018: &str = "
+CREATE TABLE IF NOT EXISTS side_effect_record (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    tool_call_id TEXT,
+    category TEXT NOT NULL CHECK(category IN (
+        'workspace_file', 'database', 'process', 'network', 'git', 'mcp', 'external'
+    )),
+    target_summary TEXT NOT NULL DEFAULT '',
+    reversible INTEGER NOT NULL DEFAULT 0,
+    compensation_id TEXT,
+    checkpoint_id TEXT,
+    artifact_id TEXT,
+    coverage_note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_side_effect_run ON side_effect_record(run_id, created_at);
 ";
