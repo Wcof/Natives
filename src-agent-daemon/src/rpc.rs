@@ -2113,7 +2113,7 @@ async fn handle_rpc(
         // Unimplemented catalogue methods: fail closed (not empty success).
         // Method disposition: known→unsupported, unknown→unsupported (invalid only for bad shape).
         // promptQueue.* is handled above via prompt_queue_store (daemon DB + harness).
-        "run.rewindPreview" | "run.rewind" => {
+        "run.rewindPreview" | "run.rewind" | "workspace.restorePreview" | "workspace.restore" => {
             match handle_rewind_rpc(&request.method, &request.params) {
                 Ok(value) => {
                     send_success(
@@ -2192,19 +2192,35 @@ fn handle_rewind_rpc(method: &str, params: &serde_json::Value) -> Result<serde_j
         .get("run_id")
         .and_then(|v| v.as_str())
         .ok_or("run_id is required")?;
-    let project_path = params
-        .get("project_path")
-        .or_else(|| params.get("project_root"))
-        .and_then(|v| v.as_str())
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            crate::run_manager::global_run_manager()
-                .list_runs(None)
-                .into_iter()
-                .find(|r| r.id == run_id)
-                .and_then(|r| r.project_path.map(std::path::PathBuf::from))
-        })
-        .ok_or_else(|| "project_path required for rewind".to_string())?;
+    // Project path is taken from the bound run identity — callers cannot inject
+    // an arbitrary path to restore files into another project (task-07/10).
+    let bound_path = crate::run_manager::global_run_manager()
+        .get_run(run_id)
+        .and_then(|r| r.project_path.map(std::path::PathBuf::from));
+    let project_path = if let Some(bound) = bound_path {
+        if let Some(caller) = params
+            .get("project_path")
+            .or_else(|| params.get("project_root"))
+            .and_then(|v| v.as_str())
+        {
+            let caller_p = std::path::PathBuf::from(caller);
+            let b = bound.canonicalize().unwrap_or_else(|_| bound.clone());
+            let c = caller_p.canonicalize().unwrap_or(caller_p);
+            if b != c {
+                return Err(format!(
+                    "workspace.restore refused: caller project_path does not match run identity; restored=0"
+                ));
+            }
+        }
+        bound
+    } else {
+        params
+            .get("project_path")
+            .or_else(|| params.get("project_root"))
+            .and_then(|v| v.as_str())
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| "project_path required when run has no bound project".to_string())?
+    };
     let paths: Option<Vec<String>> = params.get("paths").and_then(|v| {
         v.as_array().map(|a| {
             a.iter()
@@ -2214,15 +2230,35 @@ fn handle_rewind_rpc(method: &str, params: &serde_json::Value) -> Result<serde_j
     });
     let mgr = global_checkpoint_manager();
     match method {
-        "run.rewindPreview" => {
+        "run.rewindPreview" | "run.rewind" => {
+            // Deprecated: ambiguous "whole run rewind". Prefer workspace.restore*.
+            let replacement = if method.contains("Preview") {
+                "workspace.restorePreview"
+            } else {
+                "workspace.restore"
+            };
+            Ok(serde_json::json!({
+                "deprecated": true,
+                "method": method,
+                "scope": "workspace_file_only",
+                "message": "run.rewind/run.rewindPreview are deprecated. Use workspace.restorePreview / workspace.restore for checkpoint-covered files only. Conversation rewind and execution replay are separate APIs. External side-effects are not rolled back.",
+                "replacement": replacement,
+            }))
+        }
+        "workspace.restorePreview" => {
             let preview = mgr.rewind_preview(
                 run_id,
                 &project_path,
                 paths.as_deref(),
             )?;
-            Ok(serde_json::to_value(preview).unwrap_or_default())
+            let mut value = serde_json::to_value(preview).unwrap_or_default();
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("coverage".into(), serde_json::json!("partial"));
+                obj.insert("scope".into(), serde_json::json!("workspace_file_only"));
+            }
+            Ok(value)
         }
-        "run.rewind" => {
+        "workspace.restore" => {
             let checkpoint_id = params
                 .get("checkpoint_id")
                 .and_then(|v| v.as_str())
@@ -2231,14 +2267,14 @@ fn handle_rewind_rpc(method: &str, params: &serde_json::Value) -> Result<serde_j
                 .get("conflict_policy")
                 .and_then(|v| v.as_str())
                 .unwrap_or("fail");
-            let restored = mgr.rewind(
+            let restored = mgr.workspace_restore(
                 run_id,
                 checkpoint_id,
                 &project_path,
                 paths.as_deref(),
                 policy,
             )?;
-            // Emit event best-effort
+            // Restore audit event — does not alter old Run terminal status.
             crate::run_manager::global_run_manager().events().append(
                 run_id,
                 assistant_protocol::v2::RunEventKind::CheckpointRewound {
@@ -2249,11 +2285,12 @@ fn handle_rewind_rpc(method: &str, params: &serde_json::Value) -> Result<serde_j
             );
             Ok(serde_json::json!({
                 "ok": true,
+                "scope": "workspace_file_only",
                 "checkpoint_id": checkpoint_id,
                 "restored_paths": restored,
             }))
         }
-        other => Err(format!("unsupported rewind method: {other}")),
+        other => Err(format!("unsupported restore method: {other}")),
     }
 }
 

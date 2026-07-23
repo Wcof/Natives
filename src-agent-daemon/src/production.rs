@@ -315,7 +315,10 @@ impl ProductionRuntime {
         let scope = normalize_permission_scope(scope.unwrap_or("once"));
         let mut map = self.permission_waiters.lock().await;
         let Some((bound_run, _tool_name, tx)) = map.remove(request_id) else {
-            return Err(format!("permission request not found: {request_id}"));
+            // Stable code for restart/orphan (task-04): never mint a grant.
+            return Err(format!(
+                "permission_orphaned: no live waiter for request_id={request_id}"
+            ));
         };
         if let Some(rid) = run_id {
             if !rid.is_empty() && rid != bound_run {

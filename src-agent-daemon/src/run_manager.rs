@@ -624,24 +624,100 @@ impl RunManager {
     }
 
 
+    /// Startup recovery (task-04): one transaction, no Engine Future restart.
+    ///
+    /// 1. Active runs → Interrupted (daemon_restarted)
+    /// 2. Related pending interactions → expired
+    /// 3. Related permission_request → expired
+    /// 4. session_actor active/pending fields cleared
     fn interrupt_active_sqlite_runs(&self) -> Result<usize, String> {
         let Some(store) = &self.data_store else {
             return Ok(0);
         };
         let conn = store.conn()?;
-        let changed = conn
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("PERSISTENCE_FAILED begin recovery tx: {e}"))?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let reason = r#"{"reason":"daemon_restarted"}"#;
+
+        // Collect active run ids first (for interaction/permission expiry filters).
+        let active_ids: Vec<String> = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id FROM run WHERE status IN (
+                        'created', 'queued', 'preparing', 'running', 'waiting_permission',
+                        'waiting_subagent', 'cancelling'
+                     )",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+
+        let changed = tx
             .execute(
                 "UPDATE run
                  SET status = 'interrupted',
                      error_code = 'daemon_restarted',
-                     finished_at = ?1
+                     finished_at = ?1,
+                     revision = COALESCE(revision, 0) + 1
                  WHERE status IN (
-                    'queued', 'preparing', 'running', 'waiting_permission',
+                    'created', 'queued', 'preparing', 'running', 'waiting_permission',
                     'waiting_subagent', 'cancelling'
                  )",
-                rusqlite::params![chrono::Utc::now().to_rfc3339()],
+                rusqlite::params![now],
             )
             .map_err(|e| format!("PERSISTENCE_FAILED interrupt active runs: {e}"))?;
+
+        // Expire pending interactions for those runs (history retained, listPending hides).
+        if !active_ids.is_empty() {
+            for rid in &active_ids {
+                let _ = tx.execute(
+                    "UPDATE interaction
+                     SET status = 'expired',
+                         response = ?1,
+                         responded_at = ?2
+                     WHERE status = 'pending' AND run_id = ?3",
+                    rusqlite::params![reason, now, rid],
+                );
+                let _ = tx.execute(
+                    "UPDATE permission_request
+                     SET status = 'expired'
+                     WHERE status = 'pending' AND run_id = ?1",
+                    rusqlite::params![rid],
+                );
+            }
+        } else {
+            // Still expire any pending interactions whose run is already interrupted/missing.
+            let _ = tx.execute(
+                "UPDATE interaction
+                 SET status = 'expired', response = ?1, responded_at = ?2
+                 WHERE status = 'pending'
+                   AND (run_id IS NULL OR run_id IN (
+                        SELECT id FROM run WHERE status = 'interrupted'
+                            AND error_code = 'daemon_restarted'
+                   ))",
+                rusqlite::params![reason, now],
+            );
+        }
+
+        // Clear session actor live pointers (no auto re-exec).
+        let _ = tx.execute(
+            "UPDATE session_actor
+             SET active_run_id = NULL,
+                 running_prompt_id = NULL,
+                 pending_interaction_id = NULL,
+                 cancel_and_send_id = NULL,
+                 cancel_requested = 0,
+                 updated_at = ?1",
+            rusqlite::params![now],
+        );
+
+        tx.commit()
+            .map_err(|e| format!("PERSISTENCE_FAILED commit recovery tx: {e}"))?;
         Ok(changed)
     }
 
