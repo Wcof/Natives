@@ -39,6 +39,10 @@ interface ConversationTimelineProps {
 }
 
 const NEAR_BOTTOM_PX = 80;
+/** Shared empty run events so MessageRow memo is not busted by `?? []` each render. */
+const EMPTY_RUN_EVENTS: RunEvent[] = [];
+/** Idle tool strip — avoid allocating `[]` on every finished MessageRow render. */
+const EMPTY_TOOL_ACTIVITY: ReturnType<typeof selectActiveToolActivity> = [];
 
 const MessageRow = memo(function MessageRow({
   message,
@@ -130,7 +134,7 @@ const MessageRow = memo(function MessageRow({
   ]);
 
   const toolActivity = useMemo(() => {
-    if (!messageLive) return [];
+    if (!messageLive) return EMPTY_TOOL_ACTIVITY;
     const all = deriveToolActivityFromEvents(runEvents);
     return selectActiveToolActivity(all);
   }, [runEvents, messageLive]);
@@ -325,7 +329,9 @@ export default function ConversationTimeline({
             onRetry={onRetry}
             copiedId={copiedId}
             onCopy={onCopy}
-            runEvents={message.runId ? eventsByRun[message.runId] ?? [] : []}
+            runEvents={
+              message.runId ? eventsByRun[message.runId] ?? EMPTY_RUN_EVENTS : EMPTY_RUN_EVENTS
+            }
           />
         ))}
       </div>

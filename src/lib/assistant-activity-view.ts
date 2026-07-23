@@ -15,6 +15,9 @@ export interface ActivityTodo {
 
 export type ArtifactBucket = 'created' | 'modified';
 
+/** Shared empty todos — effect / useMemo deps stay referentially stable. */
+const EMPTY_TODOS: ActivityTodo[] = [];
+
 export interface ArtifactFileItem {
   path: string;
   changeType: ArtifactBucket;
@@ -135,7 +138,7 @@ function todosFromPayload(payload: Record<string, unknown>): ActivityTodo[] | nu
  * Walks events in reverse so the last write wins.
  */
 export function extractTodosFromEvents(events: RunEvent[]): ActivityTodo[] {
-  if (!events?.length) return [];
+  if (!events?.length) return EMPTY_TODOS;
 
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event = events[i]!;
@@ -157,7 +160,7 @@ export function extractTodosFromEvents(events: RunEvent[]): ActivityTodo[] {
     const todos = todosFromPayload(p);
     if (todos) return todos;
   }
-  return [];
+  return EMPTY_TODOS;
 }
 
 /** Aggregate status: any in_progress → in_progress; all completed → completed; else pending. */
