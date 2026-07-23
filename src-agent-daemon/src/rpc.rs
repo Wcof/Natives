@@ -631,6 +631,10 @@ async fn handle_rpc(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             let run_id = request.params.get("run_id").and_then(|v| v.as_str());
+            let scope = request
+                .params
+                .get("scope")
+                .and_then(|v| v.as_str());
             if request_id.is_empty() {
                 send_error(
                     writer,
@@ -644,7 +648,7 @@ async fn handle_rpc(
                 .await;
             } else {
                 match run_manager()
-                    .respond_permission_for_run(request_id, approved, run_id)
+                    .respond_permission_for_run(request_id, approved, run_id, scope)
                     .await
                 {
                     Ok(()) => {
@@ -658,6 +662,7 @@ async fn handle_rpc(
                                 "approved": approved,
                                 "request_id": request_id,
                                 "run_id": run_id,
+                                "scope": scope.unwrap_or("once"),
                             }),
                         )
                         .await
@@ -1469,6 +1474,93 @@ async fn handle_rpc(
                 serde_json::json!({ "artifacts": items }),
             )
             .await;
+        }
+        names::TASK_LIST => {
+            let filter_run_id = request.params.get("run_id").and_then(|v| v.as_str());
+            let filter_conversation_id = request
+                .params
+                .get("conversation_id")
+                .and_then(|v| v.as_str());
+            let mut tasks = Vec::new();
+            for (task_id, rec) in run_manager().runtime.list_tasks().await {
+                if let Some(want) = filter_run_id {
+                    if rec.run_id != want {
+                        continue;
+                    }
+                }
+                let conversation_id = run_manager()
+                    .get_run(&rec.run_id)
+                    .map(|r| r.conversation_id);
+                if let Some(want) = filter_conversation_id {
+                    match conversation_id.as_deref() {
+                        Some(cid) if cid == want => {}
+                        _ => continue,
+                    }
+                }
+                tasks.push(serde_json::json!({
+                    "id": task_id,
+                    "run_id": rec.run_id,
+                    "conversation_id": conversation_id,
+                    "status": rec.status,
+                    "output": rec.output,
+                    "kind": "subagent",
+                }));
+            }
+            send_success(
+                writer,
+                &request.request_id,
+                &request.client_id,
+                &request.session_token,
+                serde_json::json!({ "tasks": tasks }),
+            )
+            .await;
+        }
+        names::TASK_CANCEL => {
+            let task_id = request
+                .params
+                .get("task_id")
+                .or_else(|| request.params.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if task_id.is_empty() {
+                send_error(
+                    writer,
+                    &DaemonError::new(
+                        error_codes::INVALID_INPUT,
+                        ErrorCategory::Validation,
+                        false,
+                        "task_id required for task.cancel",
+                    ),
+                )
+                .await;
+            } else {
+                let cancelled = run_manager().runtime.kill_task(task_id).await;
+                if cancelled {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        serde_json::json!({
+                            "ok": true,
+                            "cancelled": true,
+                            "task_id": task_id,
+                        }),
+                    )
+                    .await;
+                } else {
+                    send_error(
+                        writer,
+                        &DaemonError::new(
+                            error_codes::NOT_FOUND,
+                            ErrorCategory::NotFound,
+                            false,
+                            format!("unknown task_id: {task_id}"),
+                        ),
+                    )
+                    .await;
+                }
+            }
         }
         names::ARTIFACT_OPEN => {
             let id = request

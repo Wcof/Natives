@@ -141,41 +141,28 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "run.rewindPreview",
     "run.rewind",
     "conversation.getContextUsage",
+    "task.list",
+    "task.cancel",
 ];
 
-/// Methods implemented by the Tauri host (metadata, queue and OS actions).
+/// Methods the Tauri host still owns after Phase 0 cutover.
+///
+/// Production (`NATIVES_DAEMON_MODE=uds|sidecar|remote`): conversation / promptQueue /
+/// interaction / task are daemon-owned and must NOT be re-advertised here as host-primary.
+/// Embedded/test mode may still execute host fallbacks for in-process DataStore tests,
+/// but capability ads stay honest: only OS + run preflight / projection seams.
 pub const HOST_IMPLEMENTED_METHODS: &[&str] = &[
-    "conversation.create",
-    "conversation.list",
-    "conversation.get",
-    "conversation.getMessages",
-    "conversation.appendMessage",
-    "conversation.rename",
-    "conversation.update_model",
-    "conversation.update_permission",
-    "conversation.archive",
-    "conversation.delete",
-    "conversation.fork",
+    // Run preflight + host projection boundary
     "run.start",
-    "run.cancel",
-    "run.finish",
-    "run.retry",
-    "run.list",
+    "run.subscribe",
     "run.listChildren",
     "run.finish",
-    "run.getEvents",
-    "permission.respond",
+    // Permission UI may hit host while projecting; daemon also implements respond.
     "permission.listPending",
+    "permission.respond",
     "interaction.listPending",
     "interaction.respond",
-    // Host retains queue for UI until full cutover; daemon also implements.
-    "promptQueue.list",
-    "promptQueue.enqueue",
-    "promptQueue.update",
-    "promptQueue.remove",
-    "promptQueue.reorder",
-    "promptQueue.sendNow",
-    "artifact.list",
+    // OS-bound artifact actions
     "artifact.open",
     "artifact.reveal",
 ];
@@ -239,6 +226,8 @@ pub mod names {
     pub const MCP_AUTH_OAUTH_CALLBACK: &str = "mcp.auth.oauthCallback";
     pub const ARTIFACT_LIST: &str = "artifact.list";
     pub const ARTIFACT_OPEN: &str = "artifact.open";
+    pub const TASK_LIST: &str = "task.list";
+    pub const TASK_CANCEL: &str = "task.cancel";
     pub const SCHEDULER_LIST: &str = "scheduler.list";
     pub const SCHEDULER_CREATE: &str = "scheduler.create";
     pub const SCHEDULER_UPDATE: &str = "scheduler.update";
@@ -333,12 +322,7 @@ mod tests {
 
     #[test]
     fn known_but_unimplemented_methods_are_not_advertised() {
-        for method in [
-            "run.getActivity",
-            "task.list",
-            "task.cancel",
-            "mcp.auth.oauthStart",
-        ] {
+        for method in ["run.getActivity", "mcp.auth.oauthStart"] {
             assert!(is_known_method(method), "missing known: {method}");
             assert!(
                 !is_implemented_method(method),
@@ -350,5 +334,7 @@ mod tests {
         assert!(is_implemented_method("run.rewindPreview"));
         assert!(is_implemented_method("conversation.getContextUsage"));
         assert!(is_implemented_method("promptQueue.interject"));
+        assert!(is_implemented_method("task.list"));
+        assert!(is_implemented_method("task.cancel"));
     }
 }

@@ -21,10 +21,10 @@ use provider_adapters::capabilities::{
 use provider_adapters::stream::ProviderEvent;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{oneshot, Mutex};
+use tokio_util::sync::CancellationToken;
 
 /// Shared production runtime owned by the Daemon.
 pub struct ProductionRuntime {
@@ -33,13 +33,29 @@ pub struct ProductionRuntime {
     pub subagents: Arc<SubAgentManager>,
     pub hooks: Arc<Mutex<HookRegistry>>,
     /// permission_id → (run_id, resolver). run_id binding prevents cross-run responds.
-    pub permission_waiters: Arc<Mutex<HashMap<String, (String, oneshot::Sender<bool>)>>>,
+    pub permission_waiters: Arc<Mutex<HashMap<String, (String, String, oneshot::Sender<(bool, String)>)>>>,
     /// task_id → child run status/output
     pub task_outputs: Arc<Mutex<HashMap<String, TaskRecord>>>,
     pub engines: Arc<Mutex<HashMap<String, Arc<AgentEngine>>>>,
     /// CLI runtime cancel flags (run_id → flag). Set by CLI bridge; flipped by cancel_run.
-    pub cli_cancel_flags: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    pub cli_cancel_flags: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    /// In-memory tool grants (conversation_id, tool_name, pattern) -> scope.
+    /// Backed by tool_grant table when a DataStore is available.
+    pub tool_grants: Arc<Mutex<Vec<ToolGrant>>>,
 }
+
+/// Remembered tool approval (once is not stored; this_run/project are).
+#[derive(Debug, Clone)]
+pub struct ToolGrant {
+    pub conversation_id: String,
+    pub run_id: Option<String>,
+    pub tool_name: String,
+    /// Empty = any input; for run_terminal, command pattern when scoped.
+    pub pattern: String,
+    /// "this_run" | "project"
+    pub scope: String,
+}
+
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TaskRecord {
@@ -233,11 +249,12 @@ impl ProductionRuntime {
             task_outputs: Arc::new(Mutex::new(HashMap::new())),
             engines: Arc::new(Mutex::new(HashMap::new())),
             cli_cancel_flags: Arc::new(Mutex::new(HashMap::new())),
+            tool_grants: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     /// Register a cancel flag for a CLI-backed run (REQ-T01).
-    pub async fn register_cli_cancel(&self, run_id: &str, flag: Arc<AtomicBool>) {
+    pub async fn register_cli_cancel(&self, run_id: &str, flag: CancellationToken) {
         self.cli_cancel_flags
             .lock()
             .await
@@ -263,25 +280,87 @@ impl ProductionRuntime {
         request_id: &str,
         approved: bool,
         run_id: Option<&str>,
+        scope: Option<&str>,
     ) -> Result<(), String> {
         if request_id.trim().is_empty() {
             return Err("request_id required".into());
         }
+        let scope = normalize_permission_scope(scope.unwrap_or("once"));
         let mut map = self.permission_waiters.lock().await;
-        let Some((bound_run, tx)) = map.remove(request_id) else {
+        let Some((bound_run, _tool_name, tx)) = map.remove(request_id) else {
             return Err(format!("permission request not found: {request_id}"));
         };
         if let Some(rid) = run_id {
             if !rid.is_empty() && rid != bound_run {
                 // Re-insert so legitimate owner can still respond.
-                map.insert(request_id.to_string(), (bound_run.clone(), tx));
+                map.insert(
+                    request_id.to_string(),
+                    (bound_run.clone(), _tool_name, tx),
+                );
                 return Err(format!(
                     "permission run_id mismatch: expected {bound_run}, got {rid}"
                 ));
             }
         }
-        let _ = tx.send(approved);
+        let _ = tx.send((approved, scope));
         Ok(())
+    }
+
+    /// Record a durable/in-memory grant after approval.
+    pub async fn remember_tool_grant(
+        &self,
+        conversation_id: &str,
+        run_id: &str,
+        tool_name: &str,
+        pattern: &str,
+        scope: &str,
+    ) {
+        let scope = normalize_permission_scope(scope);
+        if scope == "once" || !matches!(scope.as_str(), "this_run" | "project") {
+            return;
+        }
+        let grant = ToolGrant {
+            conversation_id: conversation_id.to_string(),
+            run_id: if scope == "this_run" {
+                Some(run_id.to_string())
+            } else {
+                None
+            },
+            tool_name: tool_name.to_string(),
+            pattern: pattern.to_string(),
+            scope: scope.clone(),
+        };
+        self.tool_grants.lock().await.push(grant.clone());
+        // Best-effort SQLite persistence (tool_grant table).
+        if let Err(e) = persist_tool_grant_db(&grant) {
+            eprintln!("[agent-daemon] tool_grant persist failed: {e}");
+        }
+    }
+
+    pub async fn has_tool_grant(
+        &self,
+        conversation_id: &str,
+        run_id: &str,
+        tool_name: &str,
+        pattern: &str,
+    ) -> bool {
+        let grants = self.tool_grants.lock().await;
+        for g in grants.iter() {
+            if g.conversation_id != conversation_id || g.tool_name != tool_name {
+                continue;
+            }
+            if !g.pattern.is_empty() && g.pattern != pattern {
+                continue;
+            }
+            match g.scope.as_str() {
+                "project" => return true,
+                "this_run" if g.run_id.as_deref() == Some(run_id) => return true,
+                _ => {}
+            }
+        }
+        drop(grants);
+        // DB fallback for process restart within same conversation.
+        load_tool_grant_match(conversation_id, run_id, tool_name, pattern)
     }
 
     pub async fn start_run(
@@ -456,7 +535,7 @@ impl ProductionRuntime {
     pub async fn cancel_run(&self, run_id: &str) {
         // Flip CLI cancel flags first so claude child processes can be killed promptly.
         if let Some(flag) = self.cli_cancel_flags.lock().await.get(run_id) {
-            flag.store(true, Ordering::SeqCst);
+            flag.cancel();
         }
         self.cancel_run_tree(run_id).await;
     }
@@ -634,6 +713,16 @@ impl ProductionRuntime {
         self.task_outputs.lock().await.get(task_id).cloned()
     }
 
+    /// Snapshot of process-local background tasks (`task_id` → record).
+    pub async fn list_tasks(&self) -> Vec<(String, TaskRecord)> {
+        self.task_outputs
+            .lock()
+            .await
+            .iter()
+            .map(|(id, rec)| (id.clone(), rec.clone()))
+            .collect()
+    }
+
     pub async fn kill_task(&self, task_id: &str) -> bool {
         let child_run_id = self
             .task_outputs
@@ -657,6 +746,87 @@ impl ProductionRuntime {
     }
 }
 
+#[cfg(test)]
+mod task_surface_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn list_and_kill_task_roundtrip() {
+        let rt = ProductionRuntime::new();
+        rt.task_outputs.lock().await.insert(
+            "task-1".into(),
+            TaskRecord {
+                run_id: "run-child-1".into(),
+                status: "running".into(),
+                output: None,
+            },
+        );
+        rt.task_outputs.lock().await.insert(
+            "task-2".into(),
+            TaskRecord {
+                run_id: "run-child-2".into(),
+                status: "completed".into(),
+                output: Some("done".into()),
+            },
+        );
+
+        let listed = rt.list_tasks().await;
+        assert_eq!(listed.len(), 2);
+        assert!(listed.iter().any(|(id, r)| id == "task-1" && r.status == "running"));
+        assert!(listed
+            .iter()
+            .any(|(id, r)| id == "task-2" && r.output.as_deref() == Some("done")));
+
+        // Unknown task → false; known task flips status even without a live engine.
+        assert!(!rt.kill_task("missing").await);
+        assert!(rt.kill_task("task-1").await);
+        let rec = rt.task_output("task-1").await.expect("task-1 present");
+        assert_eq!(rec.status, "cancelled");
+    }
+}
+
+
+#[cfg(test)]
+mod tool_grant_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn project_grant_skips_second_ask() {
+        let rt = Arc::new(ProductionRuntime::new());
+        rt.remember_tool_grant("c1", "r1", "write_file", "", "project")
+            .await;
+        assert!(rt.has_tool_grant("c1", "r1", "write_file", "").await);
+        assert!(rt.has_tool_grant("c1", "r2", "write_file", "").await);
+        assert!(!rt.has_tool_grant("c1", "r1", "run_terminal", "ls").await);
+    }
+
+    #[tokio::test]
+    async fn this_run_grant_only_same_run() {
+        let rt = Arc::new(ProductionRuntime::new());
+        rt.remember_tool_grant("c1", "r1", "apply_patch", "", "this_run")
+            .await;
+        assert!(rt.has_tool_grant("c1", "r1", "apply_patch", "").await);
+        assert!(!rt.has_tool_grant("c1", "r2", "apply_patch", "").await);
+    }
+
+    #[tokio::test]
+    async fn once_does_not_persist() {
+        let rt = Arc::new(ProductionRuntime::new());
+        rt.remember_tool_grant("c1", "r1", "write_file", "", "once")
+            .await;
+        assert!(!rt.has_tool_grant("c1", "r1", "write_file", "").await);
+    }
+
+    #[tokio::test]
+    async fn terminal_pattern_is_honored() {
+        let rt = Arc::new(ProductionRuntime::new());
+        rt.remember_tool_grant("c1", "r1", "run_terminal", "cargo test", "project")
+            .await;
+        assert!(rt.has_tool_grant("c1", "r1", "run_terminal", "cargo test").await);
+        assert!(!rt.has_tool_grant("c1", "r1", "run_terminal", "rm -rf /").await);
+    }
+}
+
 impl Default for ProductionRuntime {
     fn default() -> Self {
         Self::new()
@@ -677,7 +847,7 @@ impl EngineProvider for RealProvider {
         messages: Vec<EngineMessage>,
         tools: &[ToolSchema],
         system_prompt: Option<&str>,
-        cancel: Arc<AtomicBool>,
+        cancel: CancellationToken,
     ) -> Result<EngineProviderEventStream, EngineError> {
         let credential = resolve_credential_for_run(
             &self.provider_id,
@@ -746,51 +916,49 @@ impl EngineProvider for RealProvider {
             let key_id = key_id.clone();
             let base_url = base_url.clone();
             async move {
-                loop {
-                    if cancel.load(Ordering::SeqCst) {
-                        return None;
+                if cancel.is_cancelled() {
+                    return None;
+                }
+                tokio::select! {
+                    ev = stream.next() => {
+                        ev.map(|ev| {
+                            let event = match ev {
+                                ProviderEvent::TextDelta(t) => EngineProviderEvent::TextDelta(t),
+                                ProviderEvent::ReasoningDelta(t) => EngineProviderEvent::ReasoningDelta(t),
+                                ProviderEvent::ToolCallDelta {
+                                    index,
+                                    id,
+                                    name,
+                                    arguments_delta,
+                                } => EngineProviderEvent::ToolCallDelta {
+                                    index,
+                                    id,
+                                    name,
+                                    arguments_delta,
+                                },
+                                ProviderEvent::Usage(u) => EngineProviderEvent::Usage {
+                                    input_tokens: u.input_tokens,
+                                    output_tokens: u.output_tokens,
+                                    reasoning_tokens: u.reasoning_tokens,
+                                },
+                                ProviderEvent::Completed => EngineProviderEvent::Completed,
+                                ProviderEvent::Error(e) => EngineProviderEvent::Error {
+                                    message: provider_error_message(
+                                        &e,
+                                        &provider_id,
+                                        &protocol,
+                                        &model,
+                                        key_id.as_deref(),
+                                        base_url.as_deref(),
+                                    ),
+                                    code: e.code,
+                                    retryable: e.retryable,
+                                },
+                            };
+                            (event, (stream, cancel))
+                        })
                     }
-                    tokio::select! {
-                        ev = stream.next() => {
-                            return ev.map(|ev| {
-                                let event = match ev {
-                                    ProviderEvent::TextDelta(t) => EngineProviderEvent::TextDelta(t),
-                                    ProviderEvent::ReasoningDelta(t) => EngineProviderEvent::ReasoningDelta(t),
-                                    ProviderEvent::ToolCallDelta {
-                                        index,
-                                        id,
-                                        name,
-                                        arguments_delta,
-                                    } => EngineProviderEvent::ToolCallDelta {
-                                        index,
-                                        id,
-                                        name,
-                                        arguments_delta,
-                                    },
-                                    ProviderEvent::Usage(u) => EngineProviderEvent::Usage {
-                                        input_tokens: u.input_tokens,
-                                        output_tokens: u.output_tokens,
-                                        reasoning_tokens: u.reasoning_tokens,
-                                    },
-                                    ProviderEvent::Completed => EngineProviderEvent::Completed,
-                                    ProviderEvent::Error(e) => EngineProviderEvent::Error {
-                                        message: provider_error_message(
-                                            &e,
-                                            &provider_id,
-                                            &protocol,
-                                            &model,
-                                            key_id.as_deref(),
-                                            base_url.as_deref(),
-                                        ),
-                                        code: e.code,
-                                        retryable: e.retryable,
-                                    },
-                                };
-                                (event, (stream, cancel))
-                            });
-                        }
-                        _ = tokio::time::sleep(Duration::from_millis(25)) => {}
-                    }
+                    _ = cancel.cancelled() => None,
                 }
             }
         });
@@ -1106,15 +1274,15 @@ mod permission_bind_tests {
         rt.permission_waiters
             .lock()
             .await
-            .insert("p1".into(), ("run-a".into(), tx));
+            .insert("p1".into(), ("run-a".into(), "tool".into(), tx));
         let err = rt
-            .respond_permission("p1", true, Some("run-b"))
+            .respond_permission("p1", true, Some("run-b"), Some("once"))
             .await
             .unwrap_err();
         assert!(err.contains("mismatch"), "{err}");
         // Still present for correct owner
         assert!(rt.permission_waiters.lock().await.contains_key("p1"));
-        let ok = rt.respond_permission("p1", false, Some("run-a")).await;
+        let ok = rt.respond_permission("p1", false, Some("run-a"), Some("once")).await;
         assert!(ok.is_ok());
         assert!(!rt.permission_waiters.lock().await.contains_key("p1"));
     }
@@ -1196,7 +1364,7 @@ pub struct PermissionGatedTools {
     pub gateway: Arc<CapabilityGateway>,
     pub permissions: Arc<PermissionManager>,
     pub events: EventSequencer,
-    pub waiters: Arc<Mutex<HashMap<String, (String, oneshot::Sender<bool>)>>>,
+    pub waiters: Arc<Mutex<HashMap<String, (String, String, oneshot::Sender<(bool, String)>)>>>,
     pub subagents: Arc<SubAgentManager>,
     pub task_outputs: Arc<Mutex<HashMap<String, TaskRecord>>>,
     /// Shared with ProductionRuntime so kill_task / cascade can cancel live engines.
@@ -1261,9 +1429,9 @@ impl EngineToolRuntime for PermissionGatedTools {
         &self,
         name: &str,
         input: Value,
-        cancel: &AtomicBool,
+        cancel: &CancellationToken,
     ) -> ToolExecutionResult {
-        if cancel.load(Ordering::SeqCst) {
+        if cancel.is_cancelled() {
             return ToolExecutionResult {
                 output: serde_json::json!({"error": "cancelled"}),
                 is_error: true,
@@ -1474,12 +1642,150 @@ fn extract_write_paths(name: &str, input: &Value) -> Vec<String> {
     paths
 }
 
+
+fn normalize_permission_scope(scope: &str) -> String {
+    match scope.trim().to_ascii_lowercase().as_str() {
+        "run" | "this_run" | "session" => "this_run".into(),
+        "project" | "always" | "forever" => "project".into(),
+        _ => "once".into(),
+    }
+}
+
+fn tool_pattern(name: &str, input: &Value) -> String {
+    if name == "run_terminal" {
+        input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn persist_tool_grant_db(grant: &ToolGrant) -> Result<(), String> {
+    // Prefer assistant.db path used by daemon stores.
+    let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| std::env::var("NATIVES_DB_PATH").ok().filter(|s| !s.trim().is_empty()));
+    let Some(db_path) = db_path else {
+        return Ok(());
+    };
+    let path = std::path::PathBuf::from(db_path);
+    if !path.exists() {
+        return Ok(());
+    }
+    let art = path
+        .parent()
+        .map(|p| p.join("artifacts"))
+        .unwrap_or_else(std::env::temp_dir);
+    let store = crate::storage::DataStore::new(&path, &art)?;
+    let conn = store.conn()?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let grant_type = match grant.scope.as_str() {
+        "this_run" => "session",
+        "project" => "always",
+        _ => "once",
+    };
+    conn.execute(
+        "INSERT OR REPLACE INTO tool_grant
+         (id, conversation_id, run_id, tool_name, scope, grant_type, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
+        rusqlite::params![
+            id,
+            grant.conversation_id,
+            grant.run_id,
+            grant.tool_name,
+            grant.pattern,
+            grant_type,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn load_tool_grant_match(
+    conversation_id: &str,
+    run_id: &str,
+    tool_name: &str,
+    pattern: &str,
+) -> bool {
+    let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| std::env::var("NATIVES_DB_PATH").ok().filter(|s| !s.trim().is_empty()));
+    let Some(db_path) = db_path else {
+        return false;
+    };
+    let path = std::path::PathBuf::from(db_path);
+    if !path.exists() {
+        return false;
+    }
+    let art = path
+        .parent()
+        .map(|p| p.join("artifacts"))
+        .unwrap_or_else(std::env::temp_dir);
+    let Ok(store) = crate::storage::DataStore::new(&path, &art) else {
+        return false;
+    };
+    let Ok(conn) = store.conn() else {
+        return false;
+    };
+    let mut stmt = match conn.prepare(
+        "SELECT run_id, scope, grant_type FROM tool_grant
+         WHERE conversation_id = ?1 AND tool_name = ?2
+           AND (scope IS NULL OR scope = '' OR scope = ?3)",
+    ) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let rows = stmt.query_map(
+        rusqlite::params![conversation_id, tool_name, pattern],
+        |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        },
+    );
+    let Ok(rows) = rows else {
+        return false;
+    };
+    for row in rows.flatten() {
+        let (rid, _scope_pat, grant_type) = row;
+        match grant_type.as_str() {
+            "always" => return true,
+            "session" if rid.as_deref() == Some(run_id) => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 impl PermissionGatedTools {
     async fn await_tool_permission(
         &self,
         name: &str,
         input: &Value,
     ) -> Option<ToolExecutionResult> {
+        let pattern = tool_pattern(name, input);
+        // Skip ask when this_run / project grant already covers this tool (+ pattern).
+        if let Some(rt) = &self.runtime {
+            if rt
+                .has_tool_grant(
+                    &self.conversation_id,
+                    &self.parent_run_id,
+                    name,
+                    &pattern,
+                )
+                .await
+            {
+                return None;
+            }
+        }
+
         let tool_call_id = uuid::Uuid::new_v4().to_string();
         let permission_id = self
             .permissions
@@ -1504,11 +1810,11 @@ impl PermissionGatedTools {
         // Install the waiter before publishing the event. Otherwise a fast UI
         // (or test responder) can observe PermissionRequested, respond, and
         // lose the race before the channel exists, leaving the engine blocked.
-        let (tx, rx) = oneshot::channel();
-        self.waiters
-            .lock()
-            .await
-            .insert(permission_id.clone(), (self.parent_run_id.clone(), tx));
+        let (tx, rx) = oneshot::channel::<(bool, String)>();
+        self.waiters.lock().await.insert(
+            permission_id.clone(),
+            (self.parent_run_id.clone(), name.to_string(), tx),
+        );
         self.events.append(
             &self.parent_run_id,
             RunEventKind::PermissionRequested {
@@ -1519,19 +1825,47 @@ impl PermissionGatedTools {
                 input: input.clone(),
             },
         );
-        let approved = tokio::time::timeout(Duration::from_secs(120), rx)
+        let (approved, scope) = tokio::time::timeout(Duration::from_secs(120), rx)
             .await
             .ok()
             .and_then(|r| r.ok())
-            .unwrap_or(false);
+            .unwrap_or((false, "once".into()));
+        let scope = normalize_permission_scope(&scope);
+        if approved {
+            if let Some(rt) = &self.runtime {
+                rt.remember_tool_grant(
+                    &self.conversation_id,
+                    &self.parent_run_id,
+                    name,
+                    &pattern,
+                    &scope,
+                )
+                .await;
+            }
+        }
         self.events.append(
             &self.parent_run_id,
             RunEventKind::PermissionResponded {
                 permission_id,
                 approved,
-                scope: "once".into(),
+                scope: scope.clone(),
             },
         );
+        // Phase 2: AfterPermissionResolved is a documented safe point. Message
+        // mutation lives in AgentEngine (apply_safe_point); the tool layer cannot
+        // push into provider history here. Call the harness so the seam is live,
+        // then re-queue any interjection so Engine's AfterTool/ProviderBatch can
+        // inject it into messages (on_safe_point consumes pending).
+        match crate::prompt_queue_store::on_safe_point(
+            &self.conversation_id,
+            agent_core::SafePoint::AfterPermissionResolved,
+        ) {
+            agent_core::HarnessAction::InjectInterjection { content } => {
+                crate::prompt_queue_store::global_harness()
+                    .interject(&self.conversation_id, content);
+            }
+            _ => {}
+        }
         if approved {
             None
         } else {
@@ -2015,7 +2349,7 @@ impl EngineProvider for FixtureProvider {
         messages: Vec<EngineMessage>,
         _tools: &[ToolSchema],
         _system_prompt: Option<&str>,
-        _cancel: Arc<AtomicBool>,
+        _cancel: CancellationToken,
     ) -> Result<EngineProviderEventStream, EngineError> {
         // If last message is a tool result, complete with text.
         if messages.last().map(|m| m.role == "tool").unwrap_or(false) {
@@ -2058,8 +2392,8 @@ impl EngineProvider for FixtureProvider {
 mod tool_allowlist_tests {
     use super::*;
     use agent_core::{EngineToolRuntime, SubAgentConfig, SubAgentManager};
-    use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
+    use tokio_util::sync::CancellationToken;
 
     fn gated_with_allowlist(list: Option<Vec<String>>) -> PermissionGatedTools {
         let rt = ProductionRuntime::new();
@@ -2106,7 +2440,7 @@ mod tool_allowlist_tests {
             .execute_tool(
                 "write_file",
                 serde_json::json!({"path":"/tmp/x","content":"y"}),
-                &AtomicBool::new(false),
+                &CancellationToken::new(),
             )
             .await;
         assert!(denied.is_error);
@@ -2121,7 +2455,7 @@ mod tool_allowlist_tests {
             .execute_tool(
                 "task",
                 serde_json::json!({"prompt":"nope","key_id":"k"}),
-                &AtomicBool::new(false),
+                &CancellationToken::new(),
             )
             .await;
         assert!(task_denied.is_error);
@@ -2139,7 +2473,7 @@ mod tool_allowlist_tests {
             .execute_tool(
                 "read_file",
                 serde_json::json!({"path":"Cargo.toml"}),
-                &AtomicBool::new(false),
+                &CancellationToken::new(),
             )
             .await;
         assert!(denied.is_error);
@@ -2148,7 +2482,7 @@ mod tool_allowlist_tests {
             .execute_tool(
                 "write_file",
                 serde_json::json!({"path":"/tmp/x","content":"y"}),
-                &AtomicBool::new(false),
+                &CancellationToken::new(),
             )
             .await;
         assert!(write_denied.is_error);
@@ -2174,6 +2508,7 @@ mod tool_allowlist_tests {
 
     #[tokio::test]
     async fn execute_task_caps_child_permission_and_sets_allowlist() {
+        let _env_guard = crate::storage::DataStore::env_test_lock();
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
         let tools = gated_with_allowlist(None);
         // Parent is full_access in helper; request full_access is allowed.
@@ -2188,7 +2523,7 @@ mod tool_allowlist_tests {
                     "permission_profile": "full_access",
                     "fixture": true
                 }),
-                &AtomicBool::new(false),
+                &CancellationToken::new(),
             )
             .await;
         assert!(!ok.is_error, "{:?}", ok.output);
@@ -2214,7 +2549,7 @@ mod tool_allowlist_tests {
                     "key_id": "child-key-2",
                     "fixture": true
                 }),
-                &AtomicBool::new(false),
+                &CancellationToken::new(),
             )
             .await;
         assert!(!defaulted.is_error, "{:?}", defaulted.output);
@@ -2247,7 +2582,7 @@ mod tool_allowlist_tests {
                     "tool_allowlist": [],
                     "fixture": true
                 }),
-                &AtomicBool::new(false),
+                &CancellationToken::new(),
             )
             .await;
         assert!(!empty.is_error, "{:?}", empty.output);
@@ -2269,7 +2604,7 @@ mod tool_allowlist_tests {
                     "permission_profile": "full_access",
                     "fixture": true
                 }),
-                &AtomicBool::new(false),
+                &CancellationToken::new(),
             )
             .await;
         assert!(capped.is_error);

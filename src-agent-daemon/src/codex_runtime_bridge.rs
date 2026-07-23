@@ -8,8 +8,8 @@
 //! Do not advertise Codex as executable based on binary detection alone.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 use assistant_protocol::v2::RunEventKind;
 
@@ -47,9 +47,9 @@ pub async fn run_codex_cli_turn(
     _model: &str,
     _project_path: Option<&Path>,
     _permission_profile: &str,
-    cancel: Arc<AtomicBool>,
+    cancel: CancellationToken,
 ) -> Result<String, String> {
-    let _ = cancel.load(Ordering::SeqCst);
+    let _ = cancel.is_cancelled();
     let msg = "runtime codex_cli is unavailable (app-server not implemented)".to_string();
     runtime.events.append(run_id, RunEventKind::Preparing);
     runtime.events.append(run_id, RunEventKind::Started);
@@ -75,7 +75,7 @@ mod tests {
     #[tokio::test]
     async fn run_codex_turn_fails_closed() {
         let rt = ProductionRuntime::new();
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = CancellationToken::new();
         let err = run_codex_cli_turn(&rt, "run-x", "hi", "m", None, "ask", cancel)
             .await
             .unwrap_err();

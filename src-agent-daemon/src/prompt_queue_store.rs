@@ -27,6 +27,15 @@ pub fn global_harness() -> Arc<SessionHarness> {
 }
 
 fn store() -> Result<DataStore, String> {
+    #[cfg(test)]
+    let _env_guard = crate::storage::DataStore::env_test_lock();
+    #[cfg(test)]
+    if let Some((db_path, artifact_dir)) = crate::storage::test_db_override() {
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        return DataStore::new(&db_path, &artifact_dir);
+    }
     let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -36,8 +45,13 @@ fn store() -> Result<DataStore, String> {
                 .ok()
                 .filter(|s| !s.trim().is_empty())
                 .map(PathBuf::from)
-        })
-        .unwrap_or_else(crate::default_assistant_db_path);
+        });
+    #[cfg(test)]
+    let db_path = db_path.ok_or_else(|| {
+        "test store() requires NATIVES_ASSISTANT_DB_PATH or NATIVES_DB_PATH (refusing ~/.natives default)".to_string()
+    })?;
+    #[cfg(not(test))]
+    let db_path = db_path.unwrap_or_else(crate::default_assistant_db_path);
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -498,54 +512,70 @@ pub fn queue_item_json(item: &QueueItem) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
+    
+    fn env_lock() -> crate::storage::EnvTestGuard {
+        crate::storage::DataStore::env_test_lock()
+    }
 
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|e| e.into_inner())
+    struct EnvRestore {
+        db: Option<String>,
+        asst: Option<String>,
+        rt: Option<String>,
+    }
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            if let Some(v) = self.db.take() {
+                std::env::set_var("NATIVES_DB_PATH", v);
+            } else {
+                std::env::remove_var("NATIVES_DB_PATH");
+            }
+            if let Some(v) = self.asst.take() {
+                std::env::set_var("NATIVES_ASSISTANT_DB_PATH", v);
+            } else {
+                std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
+            }
+            if let Some(v) = self.rt.take() {
+                std::env::set_var("NATIVES_RUNTIME_DIR", v);
+            } else {
+                std::env::remove_var("NATIVES_RUNTIME_DIR");
+            }
+        }
     }
 
     fn with_temp_db<F: FnOnce()>(f: F) {
         let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
         let dir = tempfile::tempdir().unwrap();
-        let prev_db = std::env::var("NATIVES_DB_PATH").ok();
-        let prev_asst = std::env::var("NATIVES_ASSISTANT_DB_PATH").ok();
-        let prev_rt = std::env::var("NATIVES_RUNTIME_DIR").ok();
-        let db = dir.path().join("assistant.db");
-        // store() prefers NATIVES_ASSISTANT_DB_PATH over NATIVES_DB_PATH.
+        let db = dir.path().join(format!("assistant-{}.db", Uuid::new_v4()));
         std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
         std::env::set_var("NATIVES_DB_PATH", &db);
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
-        // Force migrations before RPC handlers open the same path.
-        let _warm = crate::storage::DataStore::new(&db, &dir.path().join("artifacts"))
+        let art = dir.path().join("artifacts");
+        crate::storage::set_test_db_override(Some(db.clone()), Some(art.clone()));
+        let warm = crate::storage::DataStore::new(&db, &art)
             .expect("prompt_queue temp db migrate");
-        // Fresh harness isolation via unique conversation ids in each test.
+        assert!(
+            warm.has_table("conversation") && warm.has_table("prompt_queue"),
+            "temp db missing tables: {}",
+            db.display()
+        );
         f();
-        if let Some(v) = prev_db {
-            std::env::set_var("NATIVES_DB_PATH", v);
-        } else {
-            std::env::remove_var("NATIVES_DB_PATH");
-        }
-        if let Some(v) = prev_asst {
-            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", v);
-        } else {
-            std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
-        }
-        if let Some(v) = prev_rt {
-            std::env::set_var("NATIVES_RUNTIME_DIR", v);
-        } else {
-            std::env::remove_var("NATIVES_RUNTIME_DIR");
-        }
+        drop(warm);
+        crate::storage::set_test_db_override(None, None);
+        drop(dir);
+        // _restore drops here even on panic
     }
 
     #[test]
     fn db_enqueue_list_order() {
         with_temp_db(|| {
             let cid = format!("pq-{}", Uuid::new_v4());
-            conversation_store::ensure_conversation_stub(
-                &cid, "openai", "gpt-4o", None, None,
-            )
-            .unwrap();
+            conversation_store::ensure_conversation_stub(&cid, "openai", "gpt-4o", None, None)
+                .unwrap();
             let a = enqueue(json!({
                 "conversation_id": cid,
                 "content": "one",
@@ -570,10 +600,8 @@ mod tests {
     fn db_update_remove_reorder() {
         with_temp_db(|| {
             let cid = format!("pq-{}", Uuid::new_v4());
-            conversation_store::ensure_conversation_stub(
-                &cid, "openai", "gpt-4o", None, None,
-            )
-            .unwrap();
+            conversation_store::ensure_conversation_stub(&cid, "openai", "gpt-4o", None, None)
+                .unwrap();
             let a = enqueue(json!({"conversation_id": cid, "content": "a"})).unwrap();
             let b = enqueue(json!({"conversation_id": cid, "content": "b"})).unwrap();
             let id_a = a["id"].as_str().unwrap().to_string();
@@ -614,4 +642,105 @@ mod tests {
             ));
         });
     }
+
+    #[test]
+    fn send_now_cancels_active_and_starts_new_run() {
+        with_temp_db(|| {
+            // Fixture provider + same global RunManager that send_now cancels/starts.
+            std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async {
+                let cid = format!("pq-sendnow-{}", Uuid::new_v4());
+                conversation_store::ensure_conversation_stub(
+                    &cid, "openai", "gpt-4o", None, Some("/tmp"),
+                )
+                .unwrap();
+                // Use process-global manager: send_now cancels via global_run_manager().
+                // start_detached requires &Arc<Self>; use start_detached_global.
+                let rm = crate::run_manager::global_run_manager();
+                let active = rm
+                    .create_run(assistant_protocol::v2::CreateRunRequest {
+                        conversation_id: cid.clone(),
+                        provider_id: "openai".into(),
+                        model_id: "gpt-4o".into(),
+                        key_id: Some("k".into()),
+                        agent_profile_id: None,
+                        permission_profile: Some("ask".into()),
+                        content: Some("running".into()),
+                        attachments: None,
+                        max_steps: Some(3),
+                        parent_run_id: None,
+                        project_path: Some("/tmp".into()),
+                        idempotency_key: Some(format!("active-{}", Uuid::new_v4())),
+                        effort: None,
+                        runtime_id: Some("native".into()),
+                    })
+                    .unwrap();
+                let _ = crate::run_manager::RunManager::start_detached_global(
+                    assistant_protocol::v2::StartRunRequest {
+                        run_id: Some(active.id.clone()),
+                        conversation_id: Some(cid.clone()),
+                        provider_id: Some("openai".into()),
+                        model_id: Some("gpt-4o".into()),
+                        key_id: Some("k".into()),
+                        content: Some("running".into()),
+                        attachments: None,
+                        trigger_message_id: None,
+                        permission_profile: Some("ask".into()),
+                        max_steps: Some(3),
+                        project_path: Some("/tmp".into()),
+                        idempotency_key: None,
+                        effort: None,
+                        runtime_id: Some("native".into()),
+                    },
+                )
+                .unwrap();
+                global_harness().mark_running(&cid, &active.id, "running");
+
+                let queued = enqueue(json!({
+                    "conversation_id": cid,
+                    "content": "send me now",
+                }))
+                .unwrap();
+                let qid = queued["id"].as_str().unwrap().to_string();
+
+                let started = send_now(json!({ "id": qid })).await.unwrap();
+                assert!(
+                    started.get("id").and_then(|v| v.as_str()).is_some(),
+                    "send_now should return a run: {started}"
+                );
+                let new_id = started["id"].as_str().unwrap().to_string();
+                assert_ne!(new_id, active.id, "should start a new run id");
+
+                // Poll until original is terminal (cancel is async via global manager).
+                let mut orig_terminal = false;
+                for _ in 0..80 {
+                    if let Some(orig) = rm.get_run(&active.id) {
+                        if orig.status.is_terminal() {
+                            orig_terminal = true;
+                            break;
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+                assert!(
+                    orig_terminal,
+                    "active run should become terminal after send_now"
+                );
+
+                let listed = list(json!({ "conversation_id": cid })).unwrap();
+                let arr = listed.as_array().cloned().unwrap_or_default();
+                assert!(
+                    arr.iter()
+                        .all(|i| i.get("id").and_then(|v| v.as_str()) != Some(qid.as_str())),
+                    "queue should not contain send_now item: {listed}"
+                );
+            });
+        });
+    }
+
+
 }

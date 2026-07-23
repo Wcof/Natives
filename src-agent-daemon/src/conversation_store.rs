@@ -27,6 +27,15 @@ fn store() -> Result<DataStore, String> {
     // Phase 0: Daemon conversation/run authority is assistant.db.
     // Prefer NATIVES_ASSISTANT_DB_PATH; fall back to NATIVES_DB_PATH for tests that
     // still use a single temp file; finally default_assistant_db_path().
+    #[cfg(test)]
+    let _env_guard = crate::storage::DataStore::env_test_lock();
+    #[cfg(test)]
+    if let Some((db_path, artifact_dir)) = crate::storage::test_db_override() {
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        return DataStore::new(&db_path, &artifact_dir);
+    }
     let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -36,8 +45,13 @@ fn store() -> Result<DataStore, String> {
                 .ok()
                 .filter(|s| !s.trim().is_empty())
                 .map(PathBuf::from)
-        })
-        .unwrap_or_else(crate::default_assistant_db_path);
+        });
+    #[cfg(test)]
+    let db_path = db_path.ok_or_else(|| {
+        "test store() requires NATIVES_ASSISTANT_DB_PATH or NATIVES_DB_PATH (refusing ~/.natives default)".to_string()
+    })?;
+    #[cfg(not(test))]
+    let db_path = db_path.unwrap_or_else(crate::default_assistant_db_path);
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -163,7 +177,12 @@ pub fn ensure_conversation_stub(
             now,
         ],
     )
-    .map_err(|e| format!("ensure_conversation_stub failed: {e}"))?;
+    .map_err(|e| {
+        let path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
+            .or_else(|_| std::env::var("NATIVES_DB_PATH"))
+            .unwrap_or_else(|_| "<unset>".into());
+        format!("ensure_conversation_stub failed: {e} (db={path})")
+    })?;
     Ok(())
 }
 
@@ -734,24 +753,57 @@ fn required_str<'a>(params: &'a Value, key: &str) -> Result<&'a str, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
+    
+    fn env_lock() -> crate::storage::EnvTestGuard {
+        crate::storage::DataStore::env_test_lock()
+    }
 
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|e| e.into_inner())
+    struct ClearTestDb;
+    impl Drop for ClearTestDb {
+        fn drop(&mut self) {
+            crate::storage::set_test_db_override(None, None);
+        }
+    }
+
+    struct EnvRestore {
+        db: Option<String>,
+        asst: Option<String>,
+        rt: Option<String>,
+    }
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            match self.db.take() {
+                Some(v) => std::env::set_var("NATIVES_DB_PATH", v),
+                None => std::env::remove_var("NATIVES_DB_PATH"),
+            }
+            match self.asst.take() {
+                Some(v) => std::env::set_var("NATIVES_ASSISTANT_DB_PATH", v),
+                None => std::env::remove_var("NATIVES_ASSISTANT_DB_PATH"),
+            }
+            match self.rt.take() {
+                Some(v) => std::env::set_var("NATIVES_RUNTIME_DIR", v),
+                None => std::env::remove_var("NATIVES_RUNTIME_DIR"),
+            }
+        }
     }
 
     #[tokio::test]
     async fn conversation_round_trip_uses_daemon_tables() {
         let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
         let dir = tempfile::tempdir().unwrap();
-        let previous_db = std::env::var("NATIVES_DB_PATH").ok();
-        let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
-        let db = dir.path().join("natives.db");
+        let db = dir.path().join(format!("natives-{}.db", uuid::Uuid::new_v4()));
         std::env::set_var("NATIVES_DB_PATH", &db);
         std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
-        let _warm = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).expect("migrate");
+        let art = dir.path().join("artifacts");
+        crate::storage::set_test_db_override(Some(db.clone()), Some(art.clone()));
+        let _warm = crate::storage::DataStore::new(&db, &art).expect("migrate");
 
         let created = request(
             names::CONVERSATION_CREATE,
@@ -822,31 +874,25 @@ mod tests {
         assert!(history[1].content.contains("done"));
         assert!(history[1].content.contains("tool result: read_file"));
 
-        if let Some(value) = previous_db {
-            std::env::set_var("NATIVES_DB_PATH", &value);
-            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &value);
-        } else {
-            std::env::remove_var("NATIVES_DB_PATH");
-            std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
-        }
-        if let Some(value) = previous_runtime {
-            std::env::set_var("NATIVES_RUNTIME_DIR", &value);
-        } else {
-            std::env::remove_var("NATIVES_RUNTIME_DIR");
-        }
     }
 
     #[test]
     fn context_compression_events_persist_snapshot_and_reenter_history() {
         let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
         let dir = tempfile::tempdir().unwrap();
-        let previous_db = std::env::var("NATIVES_DB_PATH").ok();
-        let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
-        let db = dir.path().join("natives.db");
+        let db = dir.path().join(format!("natives-{}.db", uuid::Uuid::new_v4()));
         std::env::set_var("NATIVES_DB_PATH", &db);
         std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
-        let _warm = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).expect("migrate");
+        let art = dir.path().join("artifacts");
+        crate::storage::set_test_db_override(Some(db.clone()), Some(art.clone()));
+        let _warm = crate::storage::DataStore::new(&db, &art).expect("migrate");
 
         let store = store().unwrap();
         store
@@ -907,17 +953,5 @@ mod tests {
         assert_eq!(history[0].role, "system");
         assert!(history[0].content.contains("alpha survives"));
 
-        if let Some(value) = previous_db {
-            std::env::set_var("NATIVES_DB_PATH", &value);
-            std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &value);
-        } else {
-            std::env::remove_var("NATIVES_DB_PATH");
-            std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
-        }
-        if let Some(value) = previous_runtime {
-            std::env::set_var("NATIVES_RUNTIME_DIR", &value);
-        } else {
-            std::env::remove_var("NATIVES_RUNTIME_DIR");
-        }
     }
 }

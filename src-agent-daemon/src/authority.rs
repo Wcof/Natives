@@ -274,7 +274,7 @@ impl ExecutionAuthority for EmbeddedAuthority {
     ) -> Result<Value, AuthorityError> {
         self.install_broker();
         global_run_manager()
-            .respond_permission_for_run(request_id, approved, None)
+            .respond_permission_for_run(request_id, approved, None, None)
             .await
             .map(|_| serde_json::json!({ "ok": true }))
             .map_err(Into::into)

@@ -23,8 +23,8 @@ use assistant_protocol::v2::RunEventKind;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -414,10 +414,10 @@ async fn wait_host_permission(
     let (tx, rx) = oneshot::channel();
     {
         let mut map = runtime.permission_waiters.lock().await;
-        map.insert(permission_id.to_string(), (run_id.to_string(), tx));
+        map.insert(permission_id.to_string(), (run_id.to_string(), "cli".into(), tx));
     }
     match tokio::time::timeout(timeout, rx).await {
-        Ok(Ok(approved)) => approved,
+        Ok(Ok((approved, _scope))) => approved,
         _ => {
             // Timeout / cancel → deny
             let mut map = runtime.permission_waiters.lock().await;
@@ -436,7 +436,7 @@ pub async fn run_claude_cli_turn(
     model: &str,
     project_path: Option<&Path>,
     permission_profile: &str,
-    cancel: Arc<AtomicBool>,
+    cancel: CancellationToken,
 ) -> Result<String, String> {
     let bin = find_claude_binary().ok_or_else(|| {
         "runtime claude_cli unavailable (claude binary not found)".to_string()
@@ -513,7 +513,7 @@ pub async fn run_claude_cli_turn(
     let mut terminal: Option<String> = None;
 
     loop {
-        if cancel.load(Ordering::SeqCst) {
+        if cancel.is_cancelled() {
             let _ = child.kill().await;
             runtime.events.append(
                 run_id,

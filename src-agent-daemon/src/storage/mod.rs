@@ -21,6 +21,81 @@ pub mod migrations;
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
+#[cfg(test)]
+use std::sync::MutexGuard;
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+thread_local! {
+    static ENV_LOCK_DEPTH: Cell<u32> = Cell::new(0);
+}
+
+/// Re-entrant env lock for tests (same thread may nest).
+#[cfg(test)]
+pub struct EnvTestGuard {
+    // None when this acquisition was nested (outer guard still holds mutex).
+    #[allow(dead_code)]
+    inner: Option<MutexGuard<'static, ()>>,
+}
+
+#[cfg(test)]
+impl EnvTestGuard {
+    pub fn acquire() -> Self {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let nested = ENV_LOCK_DEPTH.with(|d| {
+            let n = d.get();
+            d.set(n + 1);
+            n > 0
+        });
+        if nested {
+            Self { inner: None }
+        } else {
+            let g = LOCK
+                .get_or_init(|| Mutex::new(()))
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            Self { inner: Some(g) }
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for EnvTestGuard {
+    fn drop(&mut self) {
+        ENV_LOCK_DEPTH.with(|d| {
+            let n = d.get().saturating_sub(1);
+            d.set(n);
+        });
+        // inner MutexGuard drops here if present
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Per-test DB path override — avoids process-global env races under multi-thread tests.
+    static TEST_DB_OVERRIDE: std::cell::RefCell<Option<std::path::PathBuf>> =
+        std::cell::RefCell::new(None);
+    static TEST_ARTIFACT_OVERRIDE: std::cell::RefCell<Option<std::path::PathBuf>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Install a thread-local DB path for the current test thread (cfg(test) only).
+#[cfg(test)]
+pub fn set_test_db_override(db: Option<std::path::PathBuf>, artifacts: Option<std::path::PathBuf>) {
+    TEST_DB_OVERRIDE.with(|c| *c.borrow_mut() = db);
+    TEST_ARTIFACT_OVERRIDE.with(|c| *c.borrow_mut() = artifacts);
+}
+
+#[cfg(test)]
+pub fn test_db_override() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let db = TEST_DB_OVERRIDE.with(|c| c.borrow().clone())?;
+    let art = TEST_ARTIFACT_OVERRIDE.with(|c| c.borrow().clone())
+        .unwrap_or_else(|| db.parent().map(|p| p.join("artifacts")).unwrap_or_else(std::env::temp_dir));
+    Some((db, art))
+}
+
+
 
 /// The data store — manages SQLite connection and artifact storage.
 pub struct DataStore {
@@ -57,12 +132,15 @@ impl DataStore {
         // Run migrations
         store.run_migrations()?;
         // Phase 0: merge Host assistant_* tables when present (idempotent).
-        if store.has_table("conversation") {
-            if let Err(e) = store.run_host_authority_migration() {
-                eprintln!("[agent-daemon] host authority migration failed: {e}");
-            }
-        } else {
-            eprintln!("[agent-daemon] warning: conversation table missing after migrations");
+        if !store.has_table("conversation") {
+            // Fail closed: a half-migrated DB must not be returned to callers.
+            return Err(format!(
+                "conversation table missing after migrations at {}",
+                db_path.display()
+            ));
+        }
+        if let Err(e) = store.run_host_authority_migration() {
+            eprintln!("[agent-daemon] host authority migration failed: {e}");
         }
 
         Ok(store)
@@ -97,6 +175,13 @@ impl DataStore {
         LOCK.get_or_init(|| Mutex::new(()))
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Process-wide lock for unit tests that mutate NATIVES_* env vars.
+    /// Re-entrant on the same thread so store() can nest under with_temp_db.
+    #[cfg(test)]
+    pub fn env_test_lock() -> EnvTestGuard {
+        EnvTestGuard::acquire()
     }
 
     /// Run all pending migrations.

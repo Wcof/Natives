@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 /// Soft budget for in-engine history characters before tool-output compaction.
 const HISTORY_COMPACT_CHARS: usize = 48_000;
@@ -51,7 +52,7 @@ pub trait EngineToolRuntime: Send + Sync {
         &self,
         name: &str,
         input: Value,
-        cancel: &AtomicBool,
+        cancel: &CancellationToken,
     ) -> ToolExecutionResult;
 }
 
@@ -78,7 +79,7 @@ pub trait EngineProvider: Send + Sync {
         messages: Vec<EngineMessage>,
         tools: &[ToolSchema],
         system_prompt: Option<&str>,
-        cancel: Arc<AtomicBool>,
+        cancel: CancellationToken,
     ) -> Result<EngineProviderEventStream, EngineError>;
 }
 
@@ -174,7 +175,7 @@ pub struct EngineRunConfig {
 /// Live run handle.
 pub struct AgentEngine {
     pub events: EventSequencer,
-    cancel: Arc<AtomicBool>,
+    cancel: CancellationToken,
     hooks: HookRegistry,
     /// Optional session harness for interjection / safe-point drain (Phase 2).
     session_harness: Option<Arc<crate::session_harness::SessionHarness>>,
@@ -184,7 +185,7 @@ impl AgentEngine {
     pub fn new(events: EventSequencer) -> Self {
         Self {
             events,
-            cancel: Arc::new(AtomicBool::new(false)),
+            cancel: CancellationToken::new(),
             hooks: HookRegistry::new(),
             session_harness: None,
         }
@@ -203,12 +204,23 @@ impl AgentEngine {
         self
     }
 
-    pub fn cancel_flag(&self) -> Arc<AtomicBool> {
+    /// Shared cancel token for this engine run (clone freely; cancel is cooperative).
+    pub fn cancel_token(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
+
+    /// Compatibility alias for [`Self::cancel_token`].
+    /// Prefer `cancel_token()` / `request_cancel()` / `is_cancelled()`.
+    pub fn cancel_flag(&self) -> CancellationToken {
         self.cancel.clone()
     }
 
     pub fn request_cancel(&self) {
-        self.cancel.store(true, Ordering::SeqCst);
+        self.cancel.cancel();
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.is_cancelled()
     }
 
     /// Apply harness action at a safe point: inject interjection into messages.
@@ -297,7 +309,7 @@ impl AgentEngine {
         let mut step = 0u32;
 
         loop {
-            if self.cancel.load(Ordering::SeqCst) {
+            if self.cancel.is_cancelled() {
                 self.events.append(
                     run_id,
                     RunEventKind::Interrupted {
@@ -349,7 +361,7 @@ impl AgentEngine {
                         );
                         return Ok(RunStatusV2::Interrupted);
                     }
-                    Err(_e) if self.cancel.load(Ordering::SeqCst) => {
+                    Err(_e) if self.cancel.is_cancelled() => {
                         self.events.append(
                             run_id,
                             RunEventKind::Interrupted {
@@ -399,7 +411,7 @@ impl AgentEngine {
                 tokio::pin!(provider_events);
 
                 while let Some(event) = provider_events.next().await {
-                    if self.cancel.load(Ordering::SeqCst) {
+                    if self.cancel.is_cancelled() {
                         self.events.append(
                             run_id,
                             RunEventKind::Interrupted {
@@ -519,7 +531,7 @@ impl AgentEngine {
                     }
                 }
 
-                if self.cancel.load(Ordering::SeqCst) {
+                if self.cancel.is_cancelled() {
                     self.events.append(
                         run_id,
                         RunEventKind::Interrupted {
@@ -1117,7 +1129,7 @@ mod tests {
             _messages: Vec<EngineMessage>,
             _tools: &[ToolSchema],
             _system_prompt: Option<&str>,
-            _cancel: Arc<AtomicBool>,
+            _cancel: CancellationToken,
         ) -> Result<EngineProviderEventStream, EngineError> {
             let mut rounds = self.rounds.lock().unwrap();
             let events = if rounds.is_empty() {
@@ -1147,7 +1159,7 @@ mod tests {
             &self,
             name: &str,
             input: Value,
-            _cancel: &AtomicBool,
+            _cancel: &CancellationToken,
         ) -> ToolExecutionResult {
             ToolExecutionResult {
                 output: serde_json::json!({"tool": name, "input": input}),
@@ -1206,7 +1218,7 @@ mod tests {
                 messages: Vec<EngineMessage>,
                 _tools: &[ToolSchema],
                 _system_prompt: Option<&str>,
-                _cancel: Arc<AtomicBool>,
+                _cancel: CancellationToken,
             ) -> Result<EngineProviderEventStream, EngineError> {
                 *self.seen.lock().unwrap() = messages;
                 Ok(Box::pin(futures_util::stream::iter(vec![
@@ -1313,7 +1325,7 @@ mod tests {
                 _messages: Vec<EngineMessage>,
                 _tools: &[ToolSchema],
                 _system_prompt: Option<&str>,
-                _cancel: Arc<AtomicBool>,
+                _cancel: CancellationToken,
             ) -> Result<EngineProviderEventStream, EngineError> {
                 Ok(Box::pin(futures_util::stream::unfold(0, |state| async move {
                     match state {
@@ -1383,7 +1395,7 @@ mod tests {
                 _messages: Vec<EngineMessage>,
                 _tools: &[ToolSchema],
                 _system_prompt: Option<&str>,
-                cancel: Arc<AtomicBool>,
+                cancel: CancellationToken,
             ) -> Result<EngineProviderEventStream, EngineError> {
                 let seen = self.seen.clone();
                 Ok(Box::pin(futures_util::stream::unfold(
@@ -1396,7 +1408,7 @@ mod tests {
                             ));
                         }
                         loop {
-                            if cancel.load(Ordering::SeqCst) {
+                            if cancel.is_cancelled() {
                                 seen.store(true, Ordering::SeqCst);
                                 return None;
                             }
@@ -1448,7 +1460,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         assert!(saw_text, "test must observe first text delta before cancelling");
-        cancel.store(true, Ordering::SeqCst);
+        cancel.cancel();
 
         let status = tokio::time::timeout(std::time::Duration::from_secs(1), handle)
             .await
@@ -1483,7 +1495,7 @@ mod tests {
                 _messages: Vec<EngineMessage>,
                 _tools: &[ToolSchema],
                 _system_prompt: Option<&str>,
-                _cancel: Arc<AtomicBool>,
+                _cancel: CancellationToken,
             ) -> Result<EngineProviderEventStream, EngineError> {
                 let attempt = self
                     .attempts

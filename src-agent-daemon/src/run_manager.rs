@@ -8,7 +8,7 @@ use assistant_protocol::v2::{
     RunEventKind, RunEventV2, RunStatusV2, RunV2, StartRunRequest, PROTOCOL_V2,
 };
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
+use tokio_util::sync::CancellationToken;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
@@ -98,6 +98,29 @@ impl RunManager {
         // current test (tempdir). Avoid picking up the developer's real assistant.db.
         #[cfg(test)]
         {
+            if let Some((db_path, artifact_dir)) = crate::storage::test_db_override() {
+                if let Some(parent) = db_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let store = DataStore::new(&db_path, &artifact_dir).ok()?;
+                let ok = store
+                    .conn()
+                    .ok()
+                    .and_then(|conn| {
+                        conn.query_row(
+                            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='run_event'",
+                            [],
+                            |row| row.get::<_, bool>(0),
+                        )
+                        .ok()
+                    })
+                    .unwrap_or(false);
+                if ok {
+                    return Some(Arc::new(store));
+                }
+                return None;
+            }
+            let _env_guard = crate::storage::DataStore::env_test_lock();
             let explicit = std::env::var("NATIVES_ASSISTANT_DB_PATH")
                 .ok()
                 .filter(|s| !s.trim().is_empty())
@@ -1026,7 +1049,7 @@ impl RunManager {
 
                 // REQ-T02: Codex remains fail-closed (app-server not implemented).
         if runtime_id == "codex_cli" {
-            let cancel = Arc::new(AtomicBool::new(false));
+            let cancel = CancellationToken::new();
             self.runtime
                 .register_cli_cancel(&run.id, cancel.clone())
                 .await;
@@ -1071,7 +1094,7 @@ impl RunManager {
             && std::env::var("NATIVES_DAEMON_FIXTURE").ok().as_deref() != Some("1")
             && !cfg!(test)
         {
-            let cancel = Arc::new(AtomicBool::new(false));
+            let cancel = CancellationToken::new();
             self.runtime
                 .register_cli_cancel(&run.id, cancel.clone())
                 .await;
@@ -1416,7 +1439,7 @@ impl RunManager {
     }
 
     pub async fn respond_permission(&self, request_id: &str, approved: bool) -> Result<(), String> {
-        self.respond_permission_for_run(request_id, approved, None)
+        self.respond_permission_for_run(request_id, approved, None, None)
             .await
     }
 
@@ -1425,9 +1448,10 @@ impl RunManager {
         request_id: &str,
         approved: bool,
         run_id: Option<&str>,
+        scope: Option<&str>,
     ) -> Result<(), String> {
         self.runtime
-            .respond_permission(request_id, approved, run_id)
+            .respond_permission(request_id, approved, run_id, scope)
             .await
     }
 }
@@ -1466,15 +1490,11 @@ mod tests {
     use assistant_protocol::v2::{
         CreateRunRequest, ReplayRunRequest, RetryRunRequest, StartRunRequest,
     };
-    use std::sync::{Mutex as StdMutex, OnceLock};
+    use std::sync::Mutex as StdMutex;
 
     /// Process-global lock for tests that mutate NATIVES_* env (fixture, runtime dir, keys).
     fn with_env_lock<R>(f: impl FnOnce() -> R) -> R {
-        static ENV_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
-        let _g = ENV_LOCK
-            .get_or_init(|| StdMutex::new(()))
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _g = crate::storage::DataStore::env_test_lock();
         f()
     }
 
@@ -1513,6 +1533,7 @@ mod tests {
             let db_path = dir.path().join("natives.db");
             std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
             std::env::set_var("NATIVES_DB_PATH", &db_path);
+            crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
@@ -1573,6 +1594,7 @@ mod tests {
             let db_path = dir.path().join("natives.db");
             std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
             std::env::set_var("NATIVES_DB_PATH", &db_path);
+            crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
@@ -1647,6 +1669,7 @@ mod tests {
             let db_path = dir.path().join("natives.db");
             std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
             std::env::set_var("NATIVES_DB_PATH", &db_path);
+            crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
@@ -1712,6 +1735,7 @@ mod tests {
             let db_path = dir.path().join("natives.db");
             std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
             std::env::set_var("NATIVES_DB_PATH", &db_path);
+            crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
@@ -1776,6 +1800,8 @@ mod tests {
             std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
             std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
 
+            std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+            crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
@@ -1849,6 +1875,8 @@ mod tests {
             std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
             std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
 
+            std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+            crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
             let store =
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap();
             let conversation_id = "trigger-conversation";
@@ -1930,6 +1958,8 @@ mod tests {
                 std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
                 std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
 
+                std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+                crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
                 let store = Arc::new(
                     crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts"))
                         .unwrap(),
@@ -1960,7 +1990,7 @@ mod tests {
                         &self,
                         _name: &str,
                         _input: serde_json::Value,
-                        _cancel: &std::sync::atomic::AtomicBool,
+                        _cancel: &CancellationToken,
                     ) -> agent_core::ToolExecutionResult {
                         agent_core::ToolExecutionResult {
                             output: serde_json::json!({}),
@@ -1978,7 +2008,7 @@ mod tests {
                         messages: Vec<agent_core::EngineMessage>,
                         _tools: &[agent_core::ToolSchema],
                         _system_prompt: Option<&str>,
-                        _cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+                        _cancel: CancellationToken,
                     ) -> Result<agent_core::EngineProviderEventStream, agent_core::EngineError>
                     {
                         *self.0.lock().unwrap() = messages;
@@ -2116,6 +2146,8 @@ mod tests {
         std::env::set_var("NATIVES_DB_PATH", &db_path);
         std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
         let store = Arc::new(
             crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
         );
@@ -2303,6 +2335,7 @@ mod tests {
             let db_path = dir.path().join("natives.db");
             std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
             std::env::set_var("NATIVES_DB_PATH", &db_path);
+            crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
@@ -2373,6 +2406,8 @@ mod tests {
             std::env::set_var("NATIVES_DB_PATH", &db_path);
             std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
             std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+            std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+            crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
@@ -2429,14 +2464,16 @@ mod tests {
 
     #[tokio::test]
     async fn start_cancel_retry_lifecycle_with_fixture() {
+        let _env = crate::storage::DataStore::env_test_lock();
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
         let dir = tempfile::tempdir().unwrap();
         let previous_db = std::env::var("NATIVES_DB_PATH").ok();
         let previous_runtime = std::env::var("NATIVES_RUNTIME_DIR").ok();
-        let db_path = dir.path().join("natives.db");
+        let db_path = dir.path().join(format!("natives-{}.db", Uuid::new_v4()));
         std::env::set_var("NATIVES_DB_PATH", &db_path);
         std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
         let store = Arc::new(
             crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
         );
@@ -2564,6 +2601,10 @@ mod tests {
     /// registered under child run_id (not metadata-only cascade).
     #[tokio::test]
     async fn parent_cancel_tree_cancels_child_engine() {
+        // Isolate from concurrent env-DB tests (store_from_env must stay None).
+        let _guard = crate::storage::DataStore::env_test_lock();
+        std::env::remove_var("NATIVES_ASSISTANT_DB_PATH");
+        std::env::remove_var("NATIVES_DB_PATH");
         std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
         let rm = Arc::new(RunManager::new());
         let parent = rm
@@ -2629,11 +2670,11 @@ mod tests {
         // Child tool observes cancel flag (same bar as cancel_mid).
         let seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let seen_bg = seen.clone();
-        let child_flag = child_engine.cancel_flag();
+        let child_flag = child_engine.cancel_token();
         let child_run = child.run_id.clone();
         let watch = tokio::spawn(async move {
             for _ in 0..200 {
-                if child_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                if child_flag.is_cancelled() {
                     seen_bg.store(true, std::sync::atomic::Ordering::SeqCst);
                     return;
                 }
@@ -2740,7 +2781,7 @@ mod tests {
                     _messages: Vec<agent_core::EngineMessage>,
                     _tools: &[agent_core::ToolSchema],
                     _system_prompt: Option<&str>,
-                    _cancel: Arc<std::sync::atomic::AtomicBool>,
+                    _cancel: CancellationToken,
                 ) -> Result<agent_core::EngineProviderEventStream, agent_core::EngineError>
                 {
                     // Stay in stream long enough for cancel to register.
@@ -2769,11 +2810,11 @@ mod tests {
                     &self,
                     _name: &str,
                     _input: serde_json::Value,
-                    cancel: &std::sync::atomic::AtomicBool,
+                    cancel: &CancellationToken,
                 ) -> agent_core::ToolExecutionResult {
-                    // Poll cancel flag while "working".
+                    // Poll cancel token while "working".
                     for _ in 0..40 {
-                        if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        if cancel.is_cancelled() {
                             self.seen.store(true, std::sync::atomic::Ordering::SeqCst);
                             return agent_core::ToolExecutionResult {
                                 output: serde_json::json!({"error": "cancelled"}),
@@ -2801,7 +2842,7 @@ mod tests {
                     messages: Vec<agent_core::EngineMessage>,
                     _tools: &[agent_core::ToolSchema],
                     _system_prompt: Option<&str>,
-                    _cancel: Arc<std::sync::atomic::AtomicBool>,
+                    _cancel: CancellationToken,
                 ) -> Result<agent_core::EngineProviderEventStream, agent_core::EngineError>
                 {
                     if messages.last().map(|m| m.role == "tool").unwrap_or(false) {
@@ -3175,7 +3216,7 @@ mod tests {
                     "key_id": "child-key-from-broker",
                     "permission_profile": "ask"
                 }),
-                &std::sync::atomic::AtomicBool::new(false),
+                &CancellationToken::new(),
             )
             .await;
         assert!(!result.is_error, "task error: {:?}", result.output);
@@ -3206,7 +3247,7 @@ mod tests {
             .execute_tool(
                 "task_output",
                 serde_json::json!({ "task_id": task_id }),
-                &std::sync::atomic::AtomicBool::new(false),
+                &CancellationToken::new(),
             )
             .await;
         assert!(!out.is_error);
@@ -3215,7 +3256,7 @@ mod tests {
             .execute_tool(
                 "kill_task",
                 serde_json::json!({ "task_id": task_id }),
-                &std::sync::atomic::AtomicBool::new(false),
+                &CancellationToken::new(),
             )
             .await;
         assert!(kill
@@ -3285,7 +3326,7 @@ mod tests {
                             "permission_profile": "full_access",
                             "fixture": true
                         }),
-                        &std::sync::atomic::AtomicBool::new(false),
+                        &CancellationToken::new(),
                     )
                     .await;
                 assert!(!result.is_error, "{:?}", result.output);
@@ -3315,7 +3356,7 @@ mod tests {
                         .execute_tool(
                             "task_output",
                             serde_json::json!({ "task_id": task_id }),
-                            &std::sync::atomic::AtomicBool::new(false),
+                            &CancellationToken::new(),
                         )
                         .await;
                     let status = out
@@ -3413,7 +3454,7 @@ mod tests {
                     "tool": "echo",
                     "arguments": {"x": 1}
                 }),
-                &std::sync::atomic::AtomicBool::new(false),
+                &CancellationToken::new(),
             )
             .await;
         // No live session → error, but still gated + evented.
@@ -3681,6 +3722,8 @@ mod tests {
             std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
             std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
 
+            std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+            crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );

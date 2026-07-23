@@ -99,7 +99,7 @@ struct ConversationActor {
     pending_interjection: Option<String>,
     /// Pending human interaction id (permission / ask), if any.
     pending_interaction: Option<String>,
-    /// Soft cancel flag for the active run (engine also owns AtomicBool).
+    /// Soft cancel flag for the active run (engine also owns CancellationToken).
     cancel_requested: bool,
     /// When the current run finishes, drain the next queue item automatically.
     drain_on_finish: bool,

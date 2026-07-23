@@ -13,8 +13,8 @@
 use agent_core::{AgentEngine, EngineRunConfig, EngineToolRuntime};
 use natives_agent_daemon::production::{FixtureMode, FixtureProvider, RealProvider};
 use natives_agent_daemon::{PermissionGatedTools, ProductionRuntime};
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 fn live_enabled() -> bool {
     std::env::var("NATIVES_LIVE_E2E")
@@ -283,7 +283,7 @@ async fn live_subagent_task_completes() {
                 "key_id": "live-child-key",
                 "permission_profile": "full_access"
             }),
-            &AtomicBool::new(false),
+            &CancellationToken::new(),
         )
         .await;
     assert!(!result.is_error, "task spawn failed: {}", result.output);
@@ -327,7 +327,7 @@ async fn live_subagent_task_completes() {
             .execute_tool(
                 "task_output",
                 serde_json::json!({ "task_id": task_id }),
-                &AtomicBool::new(false),
+                &CancellationToken::new(),
             )
             .await;
         let status = out
@@ -414,7 +414,7 @@ async fn live_engine_cancel_stream() {
     let rt = Arc::new(ProductionRuntime::new());
     rt.set_permission_profile("full_access").await;
     let engine = AgentEngine::new(rt.events.clone());
-    let cancel = engine.cancel_flag();
+    let cancel = engine.cancel_token();
     let events = engine.events.clone();
     let run_id_for_task = run_id.clone();
     let conversation_id_for_task = conversation_id.clone();
@@ -481,7 +481,7 @@ async fn live_engine_cancel_stream() {
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
     assert!(saw_text, "expected live stream text before cancelling");
-    cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+    cancel.cancel();
 
     let status = tokio::time::timeout(std::time::Duration::from_secs(3), handle)
         .await
@@ -589,7 +589,7 @@ async fn live_cross_provider_subagent_openai_parent_anthropic_child() {
                 "key_id": "live-anthropic-child",
                 "permission_profile": "full_access"
             }),
-            &AtomicBool::new(false),
+            &CancellationToken::new(),
         )
         .await;
     assert!(
@@ -712,7 +712,7 @@ async fn dual_provider_engine_fixture_subagent() {
                 "permission_profile": "full_access",
                 "fixture": true
             }),
-            &AtomicBool::new(false),
+            &CancellationToken::new(),
         )
         .await;
     assert!(
@@ -796,5 +796,5 @@ async fn fixture_engine_still_works_without_live() {
         .await
         .unwrap();
     assert_eq!(status, assistant_protocol::v2::RunStatusV2::Completed);
-    let _ = AtomicBool::new(false);
+    let _ = CancellationToken::new();
 }

@@ -152,6 +152,8 @@ export interface ContentBlock {
   toolInput?: Record<string, unknown>;
   /** Streaming partial JSON args for tool_call_delta before full input is available. */
   toolPartialArgs?: string;
+  /** True when live tool stdout was truncated for UI. */
+  toolStreamTruncated?: boolean;
   toolStatus?: 'pending' | 'running' | 'completed' | 'failed' | 'rejected';
   toolOutput?: unknown;
   isError?: boolean;
@@ -256,9 +258,13 @@ export type RunEventType =
   | 'tool_call_started'
   | 'tool_call_delta'
   | 'tool_call_completed'
+  | 'tool_output_delta'
   | 'permission_requested'
   | 'permission_responded'
   | 'file_changed'
+  | 'task_started'
+  | 'task_updated'
+  | 'task_completed'
   | 'usage_updated'
   | 'context_usage_updated'
   | 'context_compressed'

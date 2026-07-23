@@ -64,6 +64,10 @@ function statusFromEventType(type: string): RunStatus | null {
     case 'tool_call_started':
     case 'tool_call_delta':
     case 'tool_call_completed':
+    case 'tool_output_delta':
+    case 'task_started':
+    case 'task_updated':
+    case 'task_completed':
     case 'progress':
       // progress.message may signal background_watching from engine
       return 'running';
@@ -289,6 +293,41 @@ function applyEventToLive(
         isError,
         durationMs: typeof p.duration_ms === 'number' ? p.duration_ms : typeof p.durationMs === 'number' ? p.durationMs : undefined,
       });
+      break;
+    }
+    case 'tool_output_delta': {
+      // Terminal / long-tool stdout streaming: append delta under the tool card.
+      // Replays must not double-append: callers dedupe by sequence; here we only
+      // merge when the event carries a non-empty delta for a known tool_call_id.
+      const id = String(p.tool_call_id ?? p.toolCallId ?? p.id ?? '');
+      if (!id) break;
+      const delta = String(p.delta ?? p.chunk ?? p.text ?? p.output ?? '');
+      if (!delta) break;
+      const existing = live.blocks.find(
+        (b) => b.type === 'tool_call' && b.toolCallId === id,
+      );
+      const prev =
+        existing && typeof existing.toolOutput === 'string'
+          ? existing.toolOutput
+          : existing && existing.toolOutput != null
+            ? JSON.stringify(existing.toolOutput)
+            : '';
+      // Cap live card text (~1MB plan limit is for persisted events; UI keeps a
+      // smaller window so re-renders stay cheap).
+      const merged = `${prev}${delta}`;
+      const capped =
+        merged.length > 256_000 ? `…[truncated]\n${merged.slice(-256_000)}` : merged;
+      live.blocks = upsertTool(live.blocks, id, {
+        toolStatus: 'running',
+        toolOutput: capped,
+        toolStreamTruncated: merged.length > 256_000 || Boolean(p.truncated),
+      } as Partial<ContentBlock>);
+      break;
+    }
+    case 'task_started':
+    case 'task_updated':
+    case 'task_completed': {
+      // Activity panel derives tasks from events; keep run live while tasks move.
       break;
     }
     case 'permission_requested': {
