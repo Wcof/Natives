@@ -66,8 +66,9 @@ pub struct ProductionRuntime {
     pub cli_cancel_flags: Arc<Mutex<HashMap<String, CancellationToken>>>,
     /// Sole cancel-token + join/resource registry (task-03). Agent C relocates in task-01.
     pub execution: Arc<crate::runtime::ExecutionRegistry>,
-    /// In-memory tool grants (conversation_id, tool_name, pattern) -> scope.
-    /// Backed by tool_grant table when a DataStore is available.
+    /// Structured tool grant policy (task-09). Agent C relocates in task-01.
+    pub tool_policy: Arc<crate::runtime::ToolPolicyState>,
+    /// Legacy in-memory tool grants — retained for tests; production path uses tool_policy.
     pub tool_grants: Arc<Mutex<Vec<ToolGrant>>>,
     /// interaction_id → oneshot for subagent_assignment batch waits.
     /// std mutex so interaction.respond can wake without re-entering tokio runtime.
@@ -285,6 +286,7 @@ impl ProductionRuntime {
             engines: Arc::new(Mutex::new(HashMap::new())),
             cli_cancel_flags: Arc::new(Mutex::new(HashMap::new())),
             execution: Arc::new(crate::runtime::ExecutionRegistry::new()),
+            tool_policy: Arc::new(crate::runtime::ToolPolicyState::new()),
             tool_grants: Arc::new(Mutex::new(Vec::new())),
             assignment_waiters: Arc::new(std::sync::Mutex::new(HashMap::new())),
             assignment_inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -369,7 +371,10 @@ impl ProductionRuntime {
         Ok(())
     }
 
-    /// Record a durable/in-memory grant after approval.
+    /// Record a durable structured grant after approval (task-09).
+    ///
+    /// `pattern` is treated as a hint for terminal command when input is not passed;
+    /// prefer [`Self::remember_tool_grant_invocation`] when full input is available.
     pub async fn remember_tool_grant(
         &self,
         conversation_id: &str,
@@ -378,26 +383,38 @@ impl ProductionRuntime {
         pattern: &str,
         scope: &str,
     ) {
-        let scope = normalize_permission_scope(scope);
-        if scope == "once" || !matches!(scope.as_str(), "this_run" | "project") {
-            return;
-        }
-        let grant = ToolGrant {
-            conversation_id: conversation_id.to_string(),
-            run_id: if scope == "this_run" {
-                Some(run_id.to_string())
-            } else {
-                None
-            },
-            tool_name: tool_name.to_string(),
-            pattern: pattern.to_string(),
-            scope: scope.clone(),
+        let input = if tool_name == "run_terminal" && !pattern.is_empty() {
+            serde_json::json!({ "command": pattern, "cwd": "." })
+        } else if matches!(tool_name, "write_file" | "read_file" | "apply_patch")
+            && !pattern.is_empty()
+        {
+            serde_json::json!({ "path": pattern })
+        } else {
+            serde_json::json!({})
         };
-        self.tool_grants.lock().await.push(grant.clone());
-        // Best-effort SQLite persistence (tool_grant table).
-        if let Err(e) = persist_tool_grant_db(&grant) {
-            eprintln!("[agent-daemon] tool_grant persist failed: {e}");
-        }
+        let inv = crate::runtime::invocation_from_gate(
+            tool_name,
+            &input,
+            conversation_id,
+            run_id,
+            None,
+        );
+        let _ = self
+            .tool_policy
+            .remember(&inv, scope, Some("permission_respond"))
+            .await;
+    }
+
+    /// Remember grant from a full tool invocation (structured constraints).
+    pub async fn remember_tool_grant_invocation(
+        &self,
+        inv: &crate::runtime::ToolInvocation,
+        scope: &str,
+    ) {
+        let _ = self
+            .tool_policy
+            .remember(inv, scope, Some("permission_respond"))
+            .await;
     }
 
     pub async fn has_tool_grant(
@@ -407,23 +424,34 @@ impl ProductionRuntime {
         tool_name: &str,
         pattern: &str,
     ) -> bool {
-        let grants = self.tool_grants.lock().await;
-        for g in grants.iter() {
-            if g.conversation_id != conversation_id || g.tool_name != tool_name {
-                continue;
-            }
-            if !g.pattern.is_empty() && g.pattern != pattern {
-                continue;
-            }
-            match g.scope.as_str() {
-                "project" => return true,
-                "this_run" if g.run_id.as_deref() == Some(run_id) => return true,
-                _ => {}
-            }
-        }
-        drop(grants);
-        // DB fallback for process restart within same conversation.
-        load_tool_grant_match(conversation_id, run_id, tool_name, pattern)
+        let input = if tool_name == "run_terminal" && !pattern.is_empty() {
+            serde_json::json!({ "command": pattern, "cwd": "." })
+        } else if matches!(tool_name, "write_file" | "read_file" | "apply_patch")
+            && !pattern.is_empty()
+        {
+            serde_json::json!({ "path": pattern })
+        } else {
+            // Empty input for non-pattern tools: only exact empty-constraint grants match.
+            serde_json::json!({})
+        };
+        let inv = crate::runtime::invocation_from_gate(
+            tool_name,
+            &input,
+            conversation_id,
+            run_id,
+            None,
+        );
+        matches!(
+            self.tool_policy.check(&inv).await,
+            crate::runtime::GrantDecision::Allowed { .. }
+        )
+    }
+
+    pub async fn check_tool_grant_invocation(
+        &self,
+        inv: &crate::runtime::ToolInvocation,
+    ) -> crate::runtime::GrantDecision {
+        self.tool_policy.check(inv).await
     }
 
     pub async fn start_run(
@@ -2356,17 +2384,20 @@ impl PermissionGatedTools {
         input: &Value,
     ) -> Option<ToolExecutionResult> {
         let pattern = tool_pattern(name, input);
-        // Skip ask when this_run / project grant already covers this tool (+ pattern).
+        let project_root = self.gateway.project_root.as_deref();
+        let inv = crate::runtime::invocation_from_gate(
+            name,
+            input,
+            &self.conversation_id,
+            &self.parent_run_id,
+            project_root,
+        );
+        // Skip ask when structured grant already covers this invocation.
         if let Some(rt) = &self.runtime {
-            if rt
-                .has_tool_grant(
-                    &self.conversation_id,
-                    &self.parent_run_id,
-                    name,
-                    &pattern,
-                )
-                .await
-            {
+            if matches!(
+                rt.check_tool_grant_invocation(&inv).await,
+                crate::runtime::GrantDecision::Allowed { .. }
+            ) {
                 return None;
             }
         }
@@ -2450,14 +2481,9 @@ impl PermissionGatedTools {
         let scope = normalize_permission_scope(&scope);
         if approved {
             if let Some(rt) = &self.runtime {
-                rt.remember_tool_grant(
-                    &self.conversation_id,
-                    &self.parent_run_id,
-                    name,
-                    &pattern,
-                    &scope,
-                )
-                .await;
+                // Structured grant only — empty write_file pattern no longer means any path.
+                rt.remember_tool_grant_invocation(&inv, &scope).await;
+                let _ = pattern; // kept for legacy audit trails if needed
             }
         }
         crate::prompt_queue_store::global_harness()

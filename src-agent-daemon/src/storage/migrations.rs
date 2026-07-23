@@ -17,6 +17,9 @@ pub const ALL: &[(i64, &str)] = &[
     (10, MIGRATION_010),
     (11, MIGRATION_011),
     (12, MIGRATION_012),
+    // 013–015 reserved for Agent A (run revision / event seq / project identity).
+    // Agent B task-09: if A has not landed 013 yet, we still take 016 for grants.
+    (16, MIGRATION_016),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -497,4 +500,45 @@ CREATE INDEX IF NOT EXISTS idx_prompt_queue_status
     ON prompt_queue(conversation_id, status, position);
 CREATE INDEX IF NOT EXISTS idx_session_actor_updated
     ON session_actor(updated_at);
+";
+
+/// Migration 016 (Agent B / task-09): structured tool grants.
+///
+/// Legacy coarse `tool_grant` rows keep policy_version=0 and are ignored for
+/// reuse. New grants bind project identity, permission class, path/argument
+/// constraints, session/run scope, expiry, and policy version.
+const MIGRATION_016: &str = "
+-- Mark existing coarse grants as legacy so they cannot auto-authorize.
+UPDATE tool_grant SET scope = COALESCE(scope, '') WHERE 1=1;
+
+CREATE TABLE IF NOT EXISTS tool_grant_v2 (
+    id TEXT PRIMARY KEY,
+    project_id TEXT,
+    project_identity_version TEXT,
+    project_fingerprint TEXT,
+    tool_name TEXT NOT NULL,
+    permission_class TEXT NOT NULL DEFAULT 'unknown',
+    path_scope_json TEXT NOT NULL DEFAULT 'null',
+    argument_constraint_json TEXT NOT NULL DEFAULT 'null',
+    conversation_id TEXT,
+    run_id TEXT,
+    session_id TEXT,
+    scope TEXT NOT NULL DEFAULT 'once' CHECK(scope IN ('once', 'this_run', 'session', 'project')),
+    expires_at TEXT,
+    policy_version INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    revoked_at TEXT,
+    -- Audit-only; never stores secrets (constraint summary / redacted pattern).
+    constraint_summary TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tool_grant_v2_lookup
+    ON tool_grant_v2(tool_name, project_id, policy_version);
+CREATE INDEX IF NOT EXISTS idx_tool_grant_v2_conversation
+    ON tool_grant_v2(conversation_id, tool_name);
+
+-- Expire legacy coarse grants (policy_version 0 semantics via grant_type always + empty scope).
+UPDATE tool_grant SET expires_at = datetime('now')
+ WHERE expires_at IS NULL
+   AND (scope IS NULL OR scope = '' OR grant_type = 'always');
 ";
