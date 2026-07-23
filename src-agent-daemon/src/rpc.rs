@@ -922,6 +922,37 @@ async fn handle_rpc(
                 }
             }
         }
+        names::INTERACTION_LIST_PENDING | names::INTERACTION_RESPOND => {
+            match crate::interaction_store::request(&request.method, request.params.clone()).await {
+                Ok(value) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        value,
+                    )
+                    .await
+                }
+                Err(e) => {
+                    let code = if e.contains("not found") {
+                        error_codes::NOT_FOUND
+                    } else {
+                        error_codes::INVALID_INPUT
+                    };
+                    let category = if e.contains("not found") {
+                        ErrorCategory::NotFound
+                    } else {
+                        ErrorCategory::Validation
+                    };
+                    send_error(
+                        writer,
+                        &DaemonError::new(code, category, false, e),
+                    )
+                    .await
+                }
+            }
+        }
         names::TOOL_LIST => {
             let mut gateway = capability_gateway::CapabilityGateway::new();
             gateway.register_builtins();
@@ -1559,6 +1590,79 @@ async fn handle_rpc(
                         ),
                     )
                     .await;
+                }
+            }
+        }
+        names::TASK_WAIT => {
+            let task_id = request
+                .params
+                .get("task_id")
+                .or_else(|| request.params.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if task_id.is_empty() {
+                send_error(
+                    writer,
+                    &DaemonError::new(
+                        error_codes::INVALID_INPUT,
+                        ErrorCategory::Validation,
+                        false,
+                        "task_id required for task.wait",
+                    ),
+                )
+                .await;
+            } else {
+                let timeout_ms = request
+                    .params
+                    .get("timeout_ms")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(60_000);
+                match run_manager()
+                    .runtime
+                    .wait_task(&task_id, timeout_ms)
+                    .await
+                {
+                    Ok(rec) => {
+                        send_success(
+                            writer,
+                            &request.request_id,
+                            &request.client_id,
+                            &request.session_token,
+                            serde_json::json!({
+                                "id": task_id,
+                                "run_id": rec.run_id,
+                                "status": rec.status,
+                                "output": rec.output,
+                                "kind": "subagent",
+                            }),
+                        )
+                        .await;
+                    }
+                    Err(e) if e == "timeout" => {
+                        send_error(
+                            writer,
+                            &DaemonError::new(
+                                error_codes::TIMEOUT,
+                                ErrorCategory::Timeout,
+                                true,
+                                format!("task.wait timed out after {timeout_ms}ms: {task_id}"),
+                            ),
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        send_error(
+                            writer,
+                            &DaemonError::new(
+                                error_codes::NOT_FOUND,
+                                ErrorCategory::NotFound,
+                                false,
+                                e,
+                            ),
+                        )
+                        .await;
+                    }
                 }
             }
         }

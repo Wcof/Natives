@@ -58,9 +58,12 @@ const UI_CALLED_METHODS = [
   'promptQueue.remove',
   'promptQueue.reorder',
   'promptQueue.sendNow',
+  'promptQueue.interject',
   'artifact.list',
   'artifact.open',
   'artifact.reveal',
+  'task.list',
+  'task.cancel',
 ] as const;
 
 test('UI-called methods are in ALL_METHODS catalogue', () => {

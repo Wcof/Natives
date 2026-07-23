@@ -27,6 +27,11 @@ interface MessageInputProps {
   onSend: (draft: AssistantDraft) => Promise<boolean>;
   /** Cmd/Ctrl+Enter while streaming: cancel current run and send immediately. */
   onForceSend?: (draft: AssistantDraft) => Promise<boolean>;
+  /**
+   * When advertised and run is active: Cmd/Ctrl+Enter injects into the current run
+   * (promptQueue.interject) instead of cancel-and-send. Enter still queues.
+   */
+  onInterject?: (content: string) => Promise<boolean> | boolean;
   onStop: () => void;
   onBlockedSend?: () => void;
   isStreaming: boolean;
@@ -55,7 +60,7 @@ const permissionLabels = {
 
 export default function MessageInput(props: MessageInputProps) {
   const {
-    locale, onSend, onForceSend, onStop, onBlockedSend, isStreaming,
+    locale, onSend, onForceSend, onInterject, onStop, onBlockedSend, isStreaming,
     allowQueueWhileStreaming = false, disabled = false, inputDisabledReason = null,
     permissionProfile, onPermissionChange, providers, selectedProviderId, selectedModel, onSelectModel,
     draftText, onDraftChange, projectPath = null,
@@ -164,6 +169,16 @@ export default function MessageInput(props: MessageInputProps) {
     setAttachments([]);
     closeSlashMenu();
     try {
+      // Prefer interject into the active run when capability is wired (Cmd/Ctrl+Enter).
+      if (forceImmediate && isStreaming && onInterject && draft.content) {
+        const ok = await onInterject(draft.content);
+        if (!ok) {
+          setInput((current) => current || draft.content);
+          onDraftChange?.(draft.content);
+          setAttachments((current) => (current.length ? current : draft.attachments));
+        }
+        return;
+      }
       const sender = forceImmediate && onForceSend ? onForceSend : onSend;
       const sent = await sender(draft);
       if (!sent) {
@@ -327,7 +342,11 @@ export default function MessageInput(props: MessageInputProps) {
           onKeyDown={handleTextareaKeyDown}
           placeholder={
             isStreaming && allowQueueWhileStreaming
-              ? (zh ? '运行中：Enter 入队，⌘Enter 取消并立即发送' : 'Running: Enter queues, ⌘Enter cancel & send')
+              ? onInterject
+                ? (zh
+                    ? '运行中：Enter 入队，⌘Enter 插话到当前运行'
+                    : 'Running: Enter queues, ⌘Enter interjects into run')
+                : (zh ? '运行中：Enter 入队，⌘Enter 取消并立即发送' : 'Running: Enter queues, ⌘Enter cancel & send')
               : placeholder
           }
           disabled={effectiveDisabled}

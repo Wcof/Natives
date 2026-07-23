@@ -52,6 +52,14 @@ export function canListTaskDepth(caps: DaemonCapabilities | null | undefined): b
   return hasMethod(caps, 'task.list');
 }
 
+export function canCancelTask(caps: DaemonCapabilities | null | undefined): boolean {
+  return hasMethod(caps, 'task.cancel');
+}
+
+export function canInterject(caps: DaemonCapabilities | null | undefined): boolean {
+  return hasMethod(caps, 'promptQueue.interject');
+}
+
 /**
  * Blocking engine recovery: do not pretend chat/execution is available.
  * - fatal / incompatible always block

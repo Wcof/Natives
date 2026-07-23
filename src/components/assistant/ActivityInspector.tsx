@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Play,
   ListTree,
@@ -12,9 +12,11 @@ import {
   XCircle,
   Clock,
   AlertTriangle,
+  Square,
 } from 'lucide-react';
 import type {
   Artifact,
+  BackgroundTask,
   ChildRunSummary,
   ContextUsage,
   DaemonCapabilities,
@@ -22,8 +24,11 @@ import type {
   Run,
   RunEvent,
 } from '@/lib/assistant-protocol';
+import type { AssistantGateway } from '@/lib/assistant-gateway';
 import type { InspectorTab } from '@/lib/assistant-workspace';
 import {
+  canCancelTask,
+  canListTaskDepth,
   canListTasks,
   canRewind,
   canShowContextUsage,
@@ -52,6 +57,9 @@ interface ActivityInspectorProps {
   onRollbackFile?: (path: string) => void;
   /** daemon.getCapabilities result — gates rewind / context / tasks. */
   capabilities?: DaemonCapabilities | null;
+  /** Gateway for task.list / task.cancel when advertised. */
+  gateway?: AssistantGateway | null;
+  conversationId?: string | null;
 }
 
 const TABS: Array<{ id: InspectorTab; zh: string; en: string; icon: typeof Play; devOnly?: boolean }> = [
@@ -69,6 +77,53 @@ function StatusIcon({ status }: { status: string }) {
   if (status === 'waiting_permission' || status === 'waiting_user')
     return <AlertTriangle size={14} className="text-[var(--warning)]" />;
   return <Clock size={14} className="text-[var(--text-disabled)]" />;
+}
+
+function mapWireBackgroundTask(raw: Record<string, unknown>): BackgroundTask {
+  const id = String(raw.id ?? '');
+  const kindRaw = String(raw.kind ?? 'other');
+  const kind: BackgroundTask['kind'] =
+    kindRaw === 'subagent' ||
+    kindRaw === 'terminal' ||
+    kindRaw === 'monitor' ||
+    kindRaw === 'scheduler'
+      ? kindRaw
+      : 'other';
+  const output =
+    typeof raw.output === 'string'
+      ? raw.output
+      : raw.output == null
+        ? null
+        : String(raw.output);
+  const title =
+    typeof raw.title === 'string' && raw.title.trim()
+      ? raw.title
+      : output
+        ? output.slice(0, 80)
+        : id.slice(0, 8) || 'task';
+  return {
+    id,
+    kind,
+    runId: raw.run_id != null ? String(raw.run_id) : raw.runId != null ? String(raw.runId) : undefined,
+    conversationId:
+      raw.conversation_id != null
+        ? String(raw.conversation_id)
+        : raw.conversationId != null
+          ? String(raw.conversationId)
+          : undefined,
+    title,
+    status: String(raw.status ?? 'unknown'),
+    createdAt: String(raw.created_at ?? raw.createdAt ?? ''),
+    error: raw.error != null ? String(raw.error) : undefined,
+    output,
+  };
+}
+
+function snippet(text: string | null | undefined, max = 120): string {
+  if (!text) return '';
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  if (oneLine.length <= max) return oneLine;
+  return `${oneLine.slice(0, max)}…`;
 }
 
 export default function ActivityInspector({
@@ -90,17 +145,25 @@ export default function ActivityInspector({
   onOpenFile,
   onRollbackFile,
   capabilities = null,
+  gateway = null,
+  conversationId = null,
 }: ActivityInspectorProps) {
   const zh = locale.startsWith('zh');
   const allowRewind = canRewind(capabilities);
   const allowContextUsage = canShowContextUsage(capabilities);
   const allowTasks = canListTasks(capabilities);
+  const useTaskList = canListTaskDepth(capabilities);
+  const allowCancelTask = canCancelTask(capabilities);
   const tabs = TABS.filter((tab) => {
     if (tab.devOnly && !developerMode) return false;
     if (tab.id === 'tasks' && !allowTasks) return false;
     return true;
   });
   const [selectedChangePath, setSelectedChangePath] = useState<string | null>(null);
+  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [tasksError, setTasksError] = useState<string | null>(null);
+  const [cancellingTaskId, setCancellingTaskId] = useState<string | null>(null);
   const selectedContents = useMemo(() => {
     const path = selectedChangePath ?? fileChanges[0]?.path ?? null;
     if (!path) return null;
@@ -113,6 +176,58 @@ export default function ActivityInspector({
       : tabs.some((tab) => tab.id === activeTab)
         ? activeTab
         : (tabs[0]?.id ?? 'run');
+
+  const refreshTasks = useCallback(async () => {
+    if (!useTaskList || !gateway) {
+      setBackgroundTasks([]);
+      setTasksError(null);
+      return;
+    }
+    setTasksLoading(true);
+    setTasksError(null);
+    try {
+      const params: Record<string, string> = {};
+      if (run?.id) params.run_id = run.id;
+      if (conversationId) params.conversation_id = conversationId;
+      const raw = await gateway.request<unknown>('task.list', params);
+      const list = Array.isArray(raw)
+        ? raw
+        : raw && typeof raw === 'object' && Array.isArray((raw as { tasks?: unknown }).tasks)
+          ? ((raw as { tasks: unknown[] }).tasks)
+          : [];
+      setBackgroundTasks(
+        list
+          .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+          .map((item) => mapWireBackgroundTask(item)),
+      );
+    } catch (err) {
+      setTasksError(err instanceof Error ? err.message : String(err));
+      setBackgroundTasks([]);
+    } finally {
+      setTasksLoading(false);
+    }
+  }, [useTaskList, gateway, run?.id, conversationId]);
+
+  useEffect(() => {
+    if (effectiveTab !== 'tasks' || !useTaskList) return;
+    void refreshTasks();
+  }, [effectiveTab, useTaskList, refreshTasks, run?.id, run?.status]);
+
+  const handleCancelTask = useCallback(
+    async (taskId: string) => {
+      if (!gateway || !allowCancelTask || !taskId) return;
+      setCancellingTaskId(taskId);
+      try {
+        await gateway.request('task.cancel', { task_id: taskId, id: taskId });
+        await refreshTasks();
+      } catch {
+        // Keep list; user can refresh by reopening tab.
+      } finally {
+        setCancellingTaskId(null);
+      }
+    },
+    [gateway, allowCancelTask, refreshTasks],
+  );
 
   return (
     <div className="flex h-full flex-col border-l border-[var(--border)] bg-[var(--surface)]">
@@ -168,30 +283,102 @@ export default function ActivityInspector({
         )}
 
         {run && effectiveTab === 'tasks' && allowTasks && (
-          <div className="space-y-1">
-            <div className="mb-2 font-medium text-[var(--text-secondary)]">
-              {zh ? '父运行' : 'Parent'} · {run.id.slice(0, 8)}
-            </div>
-            {children.length === 0 ? (
-              <Empty zh={zh} zhMsg="无子任务" enMsg="No child tasks" />
-            ) : (
-              children.map((ch) => (
-                <button
-                  key={ch.id}
-                  type="button"
-                  onClick={() => onSelectChild?.(ch.id)}
-                  className="flex w-full items-start gap-2 rounded px-2 py-1.5 text-left hover:bg-[var(--surface-hover)]"
-                >
-                  <StatusIcon status={String(ch.status)} />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-medium">{ch.task || ch.id.slice(0, 8)}</div>
-                    <div className="text-[10px] text-[var(--text-disabled)]">
-                      {[ch.providerId, ch.modelId, ch.status].filter(Boolean).join(' · ')}
-                    </div>
+          <div className="space-y-3">
+            {useTaskList ? (
+              <div className="space-y-1" data-testid="background-tasks">
+                <div className="mb-2 flex items-center justify-between font-medium text-[var(--text-secondary)]">
+                  <span>{zh ? '后台任务' : 'Background tasks'}</span>
+                  <button
+                    type="button"
+                    className="text-[10px] text-[var(--primary)] hover:underline"
+                    onClick={() => void refreshTasks()}
+                  >
+                    {zh ? '刷新' : 'Refresh'}
+                  </button>
+                </div>
+                {tasksLoading && backgroundTasks.length === 0 ? (
+                  <Empty zh={zh} zhMsg="加载任务…" enMsg="Loading tasks…" />
+                ) : tasksError ? (
+                  <div className="rounded border border-red-400/30 bg-red-50 p-2 text-red-600 dark:bg-red-950/20">
+                    {tasksError}
                   </div>
-                </button>
-              ))
-            )}
+                ) : backgroundTasks.length === 0 ? (
+                  <Empty zh={zh} zhMsg="无后台任务" enMsg="No background tasks" />
+                ) : (
+                  backgroundTasks.map((task) => {
+                    const active =
+                      task.status === 'running' ||
+                      task.status === 'pending' ||
+                      task.status === 'in_progress' ||
+                      task.status === 'active';
+                    return (
+                      <div
+                        key={task.id}
+                        className="flex w-full items-start gap-2 rounded px-2 py-1.5 hover:bg-[var(--surface-hover)]"
+                      >
+                        <StatusIcon status={String(task.status)} />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-medium">{task.title}</div>
+                          <div className="text-[10px] text-[var(--text-disabled)]">
+                            {[task.kind, task.status, task.id.slice(0, 8)].filter(Boolean).join(' · ')}
+                          </div>
+                          {snippet(task.output || task.error) ? (
+                            <div className="mt-0.5 line-clamp-2 text-[10px] text-[var(--text-secondary)]">
+                              {snippet(task.output || task.error)}
+                            </div>
+                          ) : null}
+                        </div>
+                        {allowCancelTask && active ? (
+                          <button
+                            type="button"
+                            title={zh ? '取消任务' : 'Cancel task'}
+                            disabled={cancellingTaskId === task.id}
+                            className="shrink-0 rounded p-1 text-[var(--danger)] hover:bg-[var(--surface-hover)] disabled:opacity-40"
+                            onClick={() => void handleCancelTask(task.id)}
+                          >
+                            <Square size={12} fill="currentColor" />
+                          </button>
+                        ) : null}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            ) : null}
+
+            <div className="space-y-1">
+              <div className="mb-2 font-medium text-[var(--text-secondary)]">
+                {useTaskList
+                  ? zh
+                    ? '子运行'
+                    : 'Child runs'
+                  : `${zh ? '父运行' : 'Parent'} · ${run.id.slice(0, 8)}`}
+              </div>
+              {children.length === 0 ? (
+                <Empty
+                  zh={zh}
+                  zhMsg={useTaskList ? '无子运行' : '无子任务'}
+                  enMsg={useTaskList ? 'No child runs' : 'No child tasks'}
+                />
+              ) : (
+                children.map((ch) => (
+                  <button
+                    key={ch.id}
+                    type="button"
+                    onClick={() => onSelectChild?.(ch.id)}
+                    className="flex w-full items-start gap-2 rounded px-2 py-1.5 text-left hover:bg-[var(--surface-hover)]"
+                  >
+                    <StatusIcon status={String(ch.status)} />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-medium">{ch.task || ch.id.slice(0, 8)}</div>
+                      <div className="text-[10px] text-[var(--text-disabled)]">
+                        {[ch.providerId, ch.modelId, ch.status].filter(Boolean).join(' · ')}
+                      </div>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
           </div>
         )}
 

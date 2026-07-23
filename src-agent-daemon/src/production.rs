@@ -302,7 +302,12 @@ impl ProductionRuntime {
                 ));
             }
         }
-        let _ = tx.send((approved, scope));
+        let _ = tx.send((approved, scope.clone()));
+        // Best-effort: resolve any matching interaction row for restart recovery.
+        let _ = crate::interaction_store::mark_resolved(
+            request_id,
+            serde_json::json!({ "approved": approved, "scope": scope }),
+        );
         Ok(())
     }
 
@@ -744,6 +749,42 @@ impl ProductionRuntime {
         }
         false
     }
+
+    /// Poll `task_outputs` until the task reaches a terminal status or `timeout_ms` elapses.
+    ///
+    /// Terminal: completed / failed / cancelled / interrupted.
+    /// Returns the task record on success; `"timeout"` or `"unknown task_id: …"` on error.
+    pub async fn wait_task(&self, task_id: &str, timeout_ms: u64) -> Result<TaskRecord, String> {
+        fn is_terminal(status: &str) -> bool {
+            matches!(
+                status,
+                "completed" | "failed" | "cancelled" | "interrupted"
+            )
+        }
+
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms.max(1));
+        let mut saw_task = false;
+        loop {
+            if let Some(rec) = self.task_output(task_id).await {
+                saw_task = true;
+                if is_terminal(&rec.status) {
+                    return Ok(rec);
+                }
+            } else if saw_task {
+                // Task disappeared after we had seen it — treat as cancelled.
+                return Err(format!("unknown task_id: {task_id}"));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                if !saw_task {
+                    return Err(format!("unknown task_id: {task_id}"));
+                }
+                return Err("timeout".into());
+            }
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let sleep = remaining.min(Duration::from_millis(50));
+            tokio::time::sleep(sleep).await;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -782,6 +823,55 @@ mod task_surface_tests {
         assert!(rt.kill_task("task-1").await);
         let rec = rt.task_output("task-1").await.expect("task-1 present");
         assert_eq!(rec.status, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn wait_task_returns_completed() {
+        let rt = Arc::new(ProductionRuntime::new());
+        rt.task_outputs.lock().await.insert(
+            "wait-done".into(),
+            TaskRecord {
+                run_id: "run-w1".into(),
+                status: "running".into(),
+                output: None,
+            },
+        );
+        let rt_bg = rt.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            if let Some(rec) = rt_bg.task_outputs.lock().await.get_mut("wait-done") {
+                rec.status = "completed".into();
+                rec.output = Some("ok".into());
+            }
+        });
+        let rec = rt
+            .wait_task("wait-done", 2_000)
+            .await
+            .expect("should complete");
+        assert_eq!(rec.status, "completed");
+        assert_eq!(rec.output.as_deref(), Some("ok"));
+    }
+
+    #[tokio::test]
+    async fn wait_task_times_out_while_running() {
+        let rt = ProductionRuntime::new();
+        rt.task_outputs.lock().await.insert(
+            "wait-slow".into(),
+            TaskRecord {
+                run_id: "run-w2".into(),
+                status: "running".into(),
+                output: None,
+            },
+        );
+        let err = rt.wait_task("wait-slow", 80).await.unwrap_err();
+        assert_eq!(err, "timeout");
+    }
+
+    #[tokio::test]
+    async fn wait_task_unknown_id() {
+        let rt = ProductionRuntime::new();
+        let err = rt.wait_task("missing-task", 50).await.unwrap_err();
+        assert!(err.contains("unknown task_id"), "{err}");
     }
 }
 
@@ -1565,8 +1655,61 @@ impl EngineToolRuntime for PermissionGatedTools {
         }
 
         let started = Instant::now();
+        // Stable id for tool_output_delta correlation (engine also emits its own
+        // tool_call_* ids; UI merges by tool_call_id when present on deltas).
+        let stream_tool_call_id = uuid::Uuid::new_v4().to_string();
         match self.gateway.execute(name, input).await {
             Ok(out) => {
+                if name == "run_terminal" {
+                    emit_terminal_output_deltas(
+                        &self.events,
+                        &self.parent_run_id,
+                        &stream_tool_call_id,
+                        &out.result,
+                    );
+                    // Background shell tasks: surface on Activity task list.
+                    if out
+                        .result
+                        .get("background")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                    {
+                        let task_id = out
+                            .result
+                            .get("task_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(&stream_tool_call_id)
+                            .to_string();
+                        let label = out
+                            .result
+                            .get("display_command")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("terminal")
+                            .to_string();
+                        self.events.append(
+                            &self.parent_run_id,
+                            RunEventKind::TaskStarted {
+                                task_id: task_id.clone(),
+                                run_id: self.parent_run_id.clone(),
+                                label,
+                            },
+                        );
+                        if let Some(rt) = &self.runtime {
+                            rt.task_outputs.lock().await.insert(
+                                task_id,
+                                TaskRecord {
+                                    run_id: self.parent_run_id.clone(),
+                                    status: "running".into(),
+                                    output: out
+                                        .result
+                                        .get("output")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string()),
+                                },
+                            );
+                        }
+                    }
+                }
                 for rel in &write_paths {
                     let _ = crate::checkpoint::global_checkpoint_manager()
                         .capture_after(&self.parent_run_id, rel);
@@ -1610,6 +1753,64 @@ impl EngineToolRuntime for PermissionGatedTools {
 }
 
 /// Collect relative paths that a write-side tool is about to touch.
+
+/// Emit batched terminal stdout/stderr as ToolOutputDelta (≤8KB chunks, ≤1MB total).
+fn emit_terminal_output_deltas(
+    events: &EventSequencer,
+    run_id: &str,
+    tool_call_id: &str,
+    result: &Value,
+) {
+    const CHUNK: usize = 8 * 1024;
+    const MAX_PERSIST: usize = 1024 * 1024;
+    let stdout = result
+        .get("stdout")
+        .and_then(|v| v.as_str())
+        .or_else(|| result.get("output").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    let stderr = result.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+    let mut persisted = 0usize;
+    for (stream, text) in [("stdout", stdout), ("stderr", stderr)] {
+        if text.is_empty() {
+            continue;
+        }
+        let bytes = text.as_bytes();
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            if persisted >= MAX_PERSIST {
+                events.append(
+                    run_id,
+                    RunEventKind::ToolOutputDelta {
+                        tool_call_id: tool_call_id.to_string(),
+                        stream: stream.into(),
+                        text: String::new(),
+                        truncated: true,
+                    },
+                );
+                return;
+            }
+            let end = (offset + CHUNK).min(bytes.len());
+            let take = (end - offset).min(MAX_PERSIST - persisted);
+            let end = offset + take;
+            let chunk = String::from_utf8_lossy(&bytes[offset..end]).into_owned();
+            persisted += chunk.len();
+            events.append(
+                run_id,
+                RunEventKind::ToolOutputDelta {
+                    tool_call_id: tool_call_id.to_string(),
+                    stream: stream.into(),
+                    text: chunk,
+                    truncated: persisted >= MAX_PERSIST || end < bytes.len() && take < CHUNK,
+                },
+            );
+            offset = end;
+            if take == 0 {
+                break;
+            }
+        }
+    }
+}
+
 fn extract_write_paths(name: &str, input: &Value) -> Vec<String> {
     let mut paths = Vec::new();
     match name {
@@ -1814,6 +2015,19 @@ impl PermissionGatedTools {
         self.waiters.lock().await.insert(
             permission_id.clone(),
             (self.parent_run_id.clone(), name.to_string(), tx),
+        );
+        // Best-effort: persist interaction row for restart recovery.
+        let _ = crate::interaction_store::insert_pending(
+            &permission_id,
+            Some(&self.parent_run_id),
+            Some(&self.conversation_id),
+            "tool_permission",
+            serde_json::json!({
+                "tool_call_id": tool_call_id,
+                "tool_name": name,
+                "reason": format!("Approve tool `{name}`"),
+                "input": input,
+            }),
         );
         self.events.append(
             &self.parent_run_id,

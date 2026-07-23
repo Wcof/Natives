@@ -50,6 +50,7 @@ import {
 // runtime pref loaded via persistence export
 import { loadPreferredRuntimeId } from '@/lib/assistant-workspace/persistence';
 import {
+  canInterject,
   canRewind,
   buildDiagnosticsText,
   needsEngineRecovery,
@@ -1358,8 +1359,8 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
                 }}
                 locale={locale}
                 onApprove={(id, scope) => {
-                  const mapped = scope === 'this_run' ? 'run' : scope === 'project' ? 'project' : 'once';
-                  void handlePermission(id, true, mapped);
+                  // Send once | this_run | project as-is — daemon normalize_permission_scope accepts them.
+                  void handlePermission(id, true, scope);
                 }}
                 onReject={(id) => void handlePermission(id, false)}
               />
@@ -1509,6 +1510,22 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             locale={locale}
             onSend={(draft) => handleSend(draft, false)}
             onForceSend={(draft) => handleSend(draft, true)}
+            onInterject={
+              canInterject(state.capabilities) && isStreaming && activeId && !isTempConversationId(activeId)
+                ? async (content) => {
+                    try {
+                      await gateway.request('promptQueue.interject', {
+                        conversation_id: activeId,
+                        content,
+                      });
+                      return true;
+                    } catch (err) {
+                      toast(classifyError(err).userMessage, 'error');
+                      return false;
+                    }
+                  }
+                : undefined
+            }
             onStop={() => void handleStop()}
             isStreaming={isStreaming}
             allowQueueWhileStreaming
@@ -1678,6 +1695,8 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               fileContentsByPath={fileContentsByPath}
               onOpenFile={(path) => void gateway.request('artifact.open', { path })}
               capabilities={state.capabilities}
+              gateway={gateway}
+              conversationId={activeId}
               onRollbackFile={
                 allowRewind
                   ? (path) => {

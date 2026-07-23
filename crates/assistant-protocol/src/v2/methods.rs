@@ -70,6 +70,7 @@ pub const ALL_METHODS: &[&str] = &[
     "run.getActivity",
     "task.list",
     "task.cancel",
+    "task.wait",
     "scheduler.list",
     "scheduler.create",
     "scheduler.update",
@@ -143,6 +144,9 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "conversation.getContextUsage",
     "task.list",
     "task.cancel",
+    "task.wait",
+    "interaction.listPending",
+    "interaction.respond",
 ];
 
 /// Methods the Tauri host still owns after Phase 0 cutover.
@@ -228,6 +232,9 @@ pub mod names {
     pub const ARTIFACT_OPEN: &str = "artifact.open";
     pub const TASK_LIST: &str = "task.list";
     pub const TASK_CANCEL: &str = "task.cancel";
+    pub const TASK_WAIT: &str = "task.wait";
+    pub const INTERACTION_LIST_PENDING: &str = "interaction.listPending";
+    pub const INTERACTION_RESPOND: &str = "interaction.respond";
     pub const SCHEDULER_LIST: &str = "scheduler.list";
     pub const SCHEDULER_CREATE: &str = "scheduler.create";
     pub const SCHEDULER_UPDATE: &str = "scheduler.update";
@@ -336,5 +343,8 @@ mod tests {
         assert!(is_implemented_method("promptQueue.interject"));
         assert!(is_implemented_method("task.list"));
         assert!(is_implemented_method("task.cancel"));
+        assert!(is_implemented_method("task.wait"));
+        assert!(is_implemented_method("interaction.listPending"));
+        assert!(is_implemented_method("interaction.respond"));
     }
 }

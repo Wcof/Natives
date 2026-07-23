@@ -3,6 +3,9 @@ import test from 'node:test';
 import type { DaemonCapabilities } from '@/lib/assistant-protocol';
 import {
   buildDiagnosticsText,
+  canCancelTask,
+  canInterject,
+  canListTaskDepth,
   canListTasks,
   canRewind,
   canShowContextUsage,
@@ -57,6 +60,24 @@ test('canListTasks accepts task.list or run.listChildren', () => {
   assert.equal(canListTasks(caps(['run.start'])), false);
   assert.equal(canListTasks(caps(['task.list'])), true);
   assert.equal(canListTasks(caps(['run.listChildren'])), true);
+});
+
+test('canListTaskDepth requires task.list (not mere run.listChildren)', () => {
+  assert.equal(canListTaskDepth(null), false);
+  assert.equal(canListTaskDepth(caps(['run.listChildren'])), false);
+  assert.equal(canListTaskDepth(caps(['task.list'])), true);
+});
+
+test('canCancelTask requires task.cancel', () => {
+  assert.equal(canCancelTask(null), false);
+  assert.equal(canCancelTask(caps(['task.list'])), false);
+  assert.equal(canCancelTask(caps(['task.cancel'])), true);
+});
+
+test('canInterject requires promptQueue.interject', () => {
+  assert.equal(canInterject(null), false);
+  assert.equal(canInterject(caps(['promptQueue.enqueue'])), false);
+  assert.equal(canInterject(caps(['promptQueue.interject'])), true);
 });
 
 test('needsEngineRecovery blocks fatal/incompatible and offline without caps', () => {

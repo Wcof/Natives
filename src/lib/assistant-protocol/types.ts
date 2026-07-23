@@ -299,7 +299,8 @@ export interface RunEvent {
 
 // ─── Interaction / Permission ────────────────────────────
 
-export type PermissionScope = 'once' | 'run' | 'project' | 'global';
+/** Daemon normalizes `run`/`session` → `this_run`; prefer sending `this_run` from UI. */
+export type PermissionScope = 'once' | 'this_run' | 'run' | 'project' | 'global';
 
 export interface PermissionInteraction {
   kind: 'permission';
@@ -415,6 +416,8 @@ export interface BackgroundTask {
   status: string;
   createdAt: string;
   error?: string;
+  /** Latest output / result snippet when advertised by task.list. */
+  output?: string | null;
 }
 
 export interface ContextUsage {
@@ -502,6 +505,7 @@ export type AssistantMethod =
   | 'promptQueue.remove'
   | 'promptQueue.reorder'
   | 'promptQueue.sendNow'
+  | 'promptQueue.interject'
   | 'tool.list'
   | 'agent.list'
   | 'subagent.list'
