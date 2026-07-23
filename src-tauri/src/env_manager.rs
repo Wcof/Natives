@@ -20,7 +20,7 @@ lazy_static! {
 }
 
 #[cfg(test)]
-fn reset_env_key_cache_for_tests() {
+pub fn reset_env_key_cache_for_tests() {
     let mut cache = ENV_KEY_CACHE.lock().unwrap();
     *cache = None;
 }

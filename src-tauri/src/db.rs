@@ -198,7 +198,7 @@ pub fn init_db_pool(path: &Path) -> Result<DbPool> {
     Ok(pool)
 }
 
-fn create_tables(conn: &Connection) -> Result<()> {
+pub fn create_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
         -- 1. Installed plugin registry
@@ -339,7 +339,7 @@ fn create_tables(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn apply_migrations(conn: &Connection) -> Result<()> {
+pub fn apply_migrations(conn: &Connection) -> Result<()> {
     // Migration system: incremental ALTER TABLE ADD COLUMN only.
     // Never DROP TABLE or rebuild — that would lose user data.
     //
@@ -514,6 +514,85 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         )
         .map_err(Error::Database)?;
     }
+
+    // Migration v6→v7: external creative apps (GitHub container) + encrypted env.
+    // Does not alter `modules` — dual-source storage stays on separate tables (ADR-0013).
+    if current_version < 7 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS external_creative_apps (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                icon TEXT,
+                version TEXT NOT NULL,
+                owner TEXT NOT NULL,
+                repo TEXT NOT NULL,
+                repository_url TEXT NOT NULL,
+                release_tag TEXT NOT NULL,
+                release_id INTEGER,
+                runtime TEXT NOT NULL,
+                state TEXT NOT NULL,
+                open_url TEXT,
+                health_url TEXT,
+                host_port INTEGER,
+                runtime_config_json TEXT NOT NULL DEFAULT '{}',
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_external_creative_apps_state
+                ON external_creative_apps(state);
+            CREATE INDEX IF NOT EXISTS idx_external_creative_apps_updated
+                ON external_creative_apps(updated_at);
+
+            CREATE TABLE IF NOT EXISTS creative_app_env (
+                app_id TEXT NOT NULL REFERENCES external_creative_apps(id) ON DELETE CASCADE,
+                key TEXT NOT NULL,
+                value_encrypted TEXT NOT NULL,
+                PRIMARY KEY (app_id, key)
+            );
+
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '7');
+            ",
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // Repair path: ensure v7 tables exist even if marker was advanced without DDL.
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS external_creative_apps (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            description TEXT,
+            icon TEXT,
+            version TEXT NOT NULL,
+            owner TEXT NOT NULL,
+            repo TEXT NOT NULL,
+            repository_url TEXT NOT NULL,
+            release_tag TEXT NOT NULL,
+            release_id INTEGER,
+            runtime TEXT NOT NULL,
+            state TEXT NOT NULL,
+            open_url TEXT,
+            health_url TEXT,
+            host_port INTEGER,
+            runtime_config_json TEXT NOT NULL DEFAULT '{}',
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS creative_app_env (
+            app_id TEXT NOT NULL REFERENCES external_creative_apps(id) ON DELETE CASCADE,
+            key TEXT NOT NULL,
+            value_encrypted TEXT NOT NULL,
+            PRIMARY KEY (app_id, key)
+        );
+        ",
+    )
+    .map_err(Error::Database)?;
 
     Ok(())
 }

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "name": "fixture-run",
+  "runtime": "docker-run",
+  "image": "ghcr.io/example/app:1.2.3",
+  "port": 8080,
+  "openPath": "/",
+  "healthPath": "/health",
+  "env": [
+    { "key": "TOKEN", "required": true, "secret": true }
+  ]
+}

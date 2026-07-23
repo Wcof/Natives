@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "name": "fixture-compose-simple",
+  "runtime": "docker-compose",
+  "composeAsset": "docker-compose.yml",
+  "service": "web",
+  "port": 8080,
+  "openPath": "/",
+  "healthPath": "/health",
+  "env": [
+    { "key": "API_KEY", "required": false, "secret": true }
+  ]
+}

@@ -1,0 +1,11 @@
+services:
+  api:
+    image: ghcr.io/example/api:1
+    ports:
+      - "3001:3000"
+  web:
+    image: ghcr.io/example/web:1
+    ports:
+      - "8080:80"
+  worker:
+    image: ghcr.io/example/worker:1

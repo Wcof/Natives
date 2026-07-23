@@ -3,6 +3,7 @@
   "identifier": "default",
   "description": "Minimum required capabilities for Natives — each permission is scoped to the minimum needed. Keep this file reviewed.",
   "windows": ["main"],
+  "webview": ["main"],
   "permissions": [
     "core:default",
     "shell:allow-open",

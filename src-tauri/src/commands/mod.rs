@@ -2,6 +2,7 @@ pub mod agent;
 pub mod app;
 pub mod archive;
 pub mod assistant;
+pub mod creative_app;
 pub mod executor_settings;
 pub mod bridge;
 pub mod clipboard;

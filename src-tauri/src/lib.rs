@@ -29,6 +29,7 @@ pub mod key_lease;
 mod lid_guard;
 pub mod log_sanitizer;
 mod module_manager;
+pub mod creative_app;
 mod permission_center;
 pub mod provider_key_manager;
 pub mod credential_broker;
