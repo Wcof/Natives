@@ -1217,13 +1217,20 @@ async fn handle_rpc(
                 .or_else(|| request.params.get("server_id"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            // Optional inline register for trusted stdio/http
-            if let Some(cfg) = request.params.get("server") {
-                if let Ok(server) =
-                    serde_json::from_value::<agent_core::McpServerConfig>(cfg.clone())
-                {
-                    let _ = crate::mcp_runtime::global_mcp().register_server(server);
-                }
+            // task-06: refuse inline trusted server registration over RPC.
+            // Only start already-registered servers from trusted config sources.
+            if request.params.get("server").is_some() {
+                send_error(
+                    writer,
+                    &DaemonError::new(
+                        error_codes::INVALID_INPUT,
+                        ErrorCategory::Validation,
+                        false,
+                        "inline MCP server registration disabled; register via trusted config only",
+                    ),
+                )
+                .await;
+                return;
             }
             // Transport-aware start (stdio session or HTTP/SSE probe).
             match crate::mcp_runtime::global_mcp().start(id) {
@@ -1284,66 +1291,24 @@ async fn handle_rpc(
             }
         }
         names::MCP_CALL => {
-            let server_id = request
-                .params
-                .get("server_id")
-                .or_else(|| request.params.get("id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let tool_name = request
-                .params
-                .get("tool")
-                .or_else(|| request.params.get("name"))
-                .or_else(|| request.params.get("tool_name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let arguments = request
-                .params
-                .get("arguments")
-                .or_else(|| request.params.get("input"))
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({}));
-            if server_id.is_empty() || tool_name.is_empty() {
-                send_error(
-                    writer,
-                    &DaemonError::new(
-                        error_codes::INVALID_INPUT,
-                        ErrorCategory::Validation,
-                        false,
-                        "mcp.call requires server_id and tool",
-                    ),
-                )
-                .await;
-            } else {
-                match crate::mcp_runtime::global_mcp().call_tool(server_id, tool_name, arguments) {
-                    Ok(v) => {
-                        send_success(
-                            writer,
-                            &request.request_id,
-                            &request.client_id,
-                            &request.session_token,
-                            serde_json::json!({
-                                "server_id": server_id,
-                                "tool": tool_name,
-                                "result": v,
-                            }),
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        send_error(
-                            writer,
-                            &DaemonError::new(
-                                error_codes::INVALID_INPUT,
-                                ErrorCategory::Validation,
-                                false,
-                                e,
-                            ),
-                        )
-                        .await;
-                    }
-                }
-            }
+            // task-06 phase 1: close direct RPC MCP transport bypass.
+            // Never call global_mcp().call_tool from RPC. Agent path uses
+            // PermissionGatedTools -> shared invocation only.
+            let _ = (
+                request.params.get("server_id"),
+                request.params.get("tool"),
+                request.params.get("arguments"),
+            );
+            send_error(
+                writer,
+                &DaemonError::new(
+                    error_codes::INVALID_INPUT,
+                    ErrorCategory::Validation,
+                    false,
+                    "direct_mcp_call_disabled",
+                ),
+            )
+            .await;
         }
         names::MCP_LIVENESS => {
             let id = request

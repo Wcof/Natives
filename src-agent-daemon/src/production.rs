@@ -2636,7 +2636,22 @@ impl PermissionGatedTools {
                 name: display_name.clone(),
             },
         );
-        match crate::mcp_runtime::global_mcp().call_tool(&server_id, &tool_name, arguments) {
+        let cancel = if let Some(rt) = &self.runtime {
+            rt.execution
+                .token(&self.parent_run_id)
+                .await
+                .unwrap_or_else(CancellationToken::new)
+        } else {
+            CancellationToken::new()
+        };
+        match crate::runtime::mcp_invocation::invoke_mcp_tool(
+            &server_id,
+            &tool_name,
+            arguments,
+            &cancel,
+        )
+        .await
+        {
             Ok(result) => {
                 let duration_ms = started.elapsed().as_millis() as u64;
                 self.events.append(

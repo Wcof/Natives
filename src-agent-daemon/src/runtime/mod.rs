@@ -4,6 +4,7 @@
 //! Agent B implements correct behavior here without splitting ProductionRuntime.
 
 pub mod execution_registry;
+pub mod mcp_invocation;
 pub mod tool_policy;
 
 pub use execution_registry::{
