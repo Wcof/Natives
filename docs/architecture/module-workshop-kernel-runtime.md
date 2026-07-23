@@ -1,16 +1,18 @@
-# 🧬 Natives V3.2 Final：AI-Native 微内核运行时可行性报告
+# Natives V3.2：Workshop 微内核运行时（KI-1…KI-5）
 
-> **领域**: 模块管理 / 创意工坊 (Module Management / Creative Workshop)
-> **版本**: V3.2
-> **状态**: APPROVED FOR V3.2 FREEZE
-> **基石源码**: `src-tauri/src/module_manager.rs` · `src/lib/iframe-manager.ts`
-> **审计判定**: 通过 — V3.2 内核化收敛阶段唯一至高技术冻结依据
+> **领域**: 模块管理 / 创意工坊（Workshop 面 · web-module 轨）  
+> **版本**: V3.2  
+> **状态**: APPROVED FOR V3.2 FREEZE（领域技术冻结）  
+> **产品边界**: [ADR-0012](../adr/0012-product-identity-workshop-scope.md)（工坊为工作台子域；联网商店 P2）  
+> **约束映射**: [`standards/`](../standards/README.md) technical/02·03 · frontend/02  
+> **基石源码**: `src-tauri/src/module_manager.rs` · `src/lib/iframe-manager.ts`  
+> **说明**: 本文冻结 **Workshop 静态 SPA 沙箱** 不变量；外部 GitHub 容器应用见 [ADR-0013](../adr/0013-creative-app-dual-source.md)，**不得**套用本文件 KI 身份模型硬塞容器。
 
 ---
 
 ## 一、 背景 (Background)
 
-Natives 作为一款原生的 **macOS 客户端软件**，其核心地基采用 **Tauri v2 + Next.js 15 + SQLite** 技术栈构建。
+Natives 是本机 AI 工作台；Workshop 域地基采用 **Tauri v2 + Next.js + SQLite**。
 在此前的架构演进中，系统已经完成了两个具备工业级强度的物理防线基础设施：
 
 1. **底座事务级热拉起机制 (`module_manager.rs`)**：支持强类型 `Manifest` 规约，提供了成熟的磁盘静态资产扫描、SQLite 数据库增量热同步、动态权限重刷，以及基于 `atomic_write`（`.tmp` 临时文件落盘 ➔ `fsync` ➔ 原子覆盖重命名）的物理防断电落盘机制。

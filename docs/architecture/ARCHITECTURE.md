@@ -1,9 +1,12 @@
 # Natives 架构设计文档
 
-> **版本**: v0.2.0
-> **日期**: 2026-06-14
-> **状态**: 已评审
-> **设计讨论**: [DESIGN_DISCUSSION.md](./DESIGN_DISCUSSION.md)（43 个决策，Q1-Q43）
+> **版本**: v0.3.0  
+> **日期**: 2026-07-23（产品身份对齐 ADR-0012；进程模型含 Daemon）  
+> **状态**: 现状描述（**非**约束权威）  
+> **约束权威**: [`docs/standards/`](../standards/README.md)  
+> **产品身份**: [ADR-0012](../adr/0012-product-identity-workshop-scope.md)  
+> **历史讨论**: [DESIGN_DISCUSSION.md](./DESIGN_DISCUSSION.md)（Q1–Q43；与 ADR 冲突处以 ADR 为准）  
+> **文档索引**: [`docs/README.md`](../README.md)
 
 ---
 
@@ -11,31 +14,42 @@
 
 ### 1.1 产品定位
 
-**Natives** 是 "AI Steam Base" — 一个类似 Steam + 创意工坊的生态基座。它不是一个单体应用，而是一个**基座容器**，用户可以在其中浏览、订阅、安装各种 Web 页面模块，并通过内置终端运行 CLI 工具和 AI Agent。
+**Natives = 本机个人全能 AI 工作台**（历史曾称 AI Steam Base）。
 
-核心理念：
-- **Hub 聚合**: 统一入口，统一认证和环境管理
-- **应用商店**: 浏览/订阅模块
-- **创意工坊**: 开发者可以自己开发和分享模块
-- **OS 级管理**: 进程管理、资源共享、安全沙箱
+| 面 | 职责 |
+|----|------|
+| **Hub** | 凭证、环境、终端、Agent/CLI 接入与编排 |
+| **Workshop** | 本地 web-module：生成/安装/热上架/Unique Origin 沙箱 + 契约 |
+| **Embed** | 远程/官方 Web 或外部容器 GUI；弱/零 Bridge；不进 Workshop 沙箱模型 |
 
-### 1.2 设计哲学（继承自 CLAUDE.md）
+| 轨 | 形态 |
+|----|------|
+| **web-module** | 本地静态 SPA + manifest + Bridge |
+| **capability** | MCP / CLI / Agent；独立权限与生命周期 |
+
+- 创意工坊是工作台中的**一个域**，不是唯一中心。  
+- 联网 Steam 式分享 / 商店发现与上架为 **P2**，本地工坊跑通前不做。  
+- 约束细则：[`standards/product/01-positioning.md`](../standards/product/01-positioning.md)。
+
+### 1.2 设计哲学
 
 | 哲学 | 核心思想 |
 |------|----------|
-| 应用消亡论 | 未来不是单体应用的天下，而是可组合服务单元 |
-| UI 自生成 | 界面不应由开发者硬编码，应基于用户偏好动态生成 |
-| 用户主权 | 最终的审美和布局决策完全属于用户 |
-| 完全不写 | 不造轮子，直接调用或嵌入官方工具 |
+| 工作台优先 | 全能工作台是身份；工坊是子域 |
+| 双轨组合 | web-module 与 capability 分轨，禁止单 manifest 硬揉 |
+| UI 可生成 | 短寿模块可 AI 生成；长青的是 domain 数据与契约 |
+| 用户主权 | 审美和布局决策归用户 |
+| 不造领域轮子 | 租户层嵌入现成工具；宿主基础设施必须自建（ADR-0007） |
 
 ### 1.3 技术栈
 
 | 领域 | 技术 |
 |------|------|
-| 桌面框架 | Tauri v2 (Rust 后端) |
-| 前端框架 | Next.js (App Router) |
+| 桌面框架 | Tauri v2（Rust Host · `src-tauri/`） |
+| 执行引擎 | Native Agent Daemon（`src-agent-daemon/` + `crates/*`，UDS 协议 v2） |
+| 前端框架 | Next.js（App Router）+ 静态导出 |
 | 语言 | TypeScript + Rust |
-| 数据库 | SQLite (rusqlite, WAL 模式, 10 张表) |
+| 数据库 | SQLite（rusqlite，WAL；宿主库与引擎库权威分立） |
 | 终端 | portable-pty + @xterm/xterm |
 | 验证 | Zod |
 | 凭证加密 | AES-256-GCM |
@@ -67,7 +81,7 @@
 ```
 ┌─────────────────────────────────────────────────┐
 │               应用层 (Application)               │
-│   订阅应用 · 创意工坊模块 · 内置功能页              │
+│   本地模块 · 创意工坊 · Hub 内置页 · AI 工作台     │
 ├─────────────────────────────────────────────────┤
 │               框架层 (Framework)                 │
 │   Shell 布局 · iframe 管理 · Bridge API         │
@@ -116,26 +130,34 @@ SQLite (按 module_id 命名空间隔离)
 
 ### 4.1 进程模型
 
+生产执行主链：`UI → Tauri Host → UDS → Agent Daemon`。约束见 [`standards/technical/01-layering.md`](../standards/technical/01-layering.md)。
+
 ```
-Tauri v2 Main Process (Rust · src-tauri/)
-├── main.rs / lib.rs    — 入口: 窗口管理、FOUC 防护、端口分配
-├── commands/db.rs      — SQLite: 10 张表、WAL、外键、增量迁移
-├── module_manager.rs   — 模块生命周期: 安装/卸载/启用/禁用
-├── http_server.rs      — 本地 HTTP 服务: 静态文件 + Bridge API 路由
-├── terminal.rs         — Shell 管理: 多会话终端 + portable-pty
-├── env_manager.rs      — 环境注入: AES-256-GCM 凭证加密 + 环境配置管理
-├── agent.rs            — 子进程管理: 动态端口
-└── token_manager.rs    — Session Token: HMAC-SHA256 握手
+Tauri Host Main (Rust · src-tauri/)
+├── 窗口 / FOUC / 端口
+├── 宿主 SQLite（模块、环境、凭证 broker 等）
+├── module_manager / 创意应用生命周期
+├── 本地 HTTP（Workshop 静态 + Bridge）
+├── PTY 终端 / 环境注入
+├── Daemon 监督 + ExecutionAuthority façade
+└── Session Token 握手（Workshop）
 
-Renderer Process (Next.js)
-├── Shell UI (三栏布局)
-├── 内置功能页 (首页/商店/工坊/设置)
-└── iframe 容器管理
+Agent Daemon (src-agent-daemon/ + crates/*)
+├── Run / 会话权威存储
+├── Provider 适配 + 工具 Capability Gateway
+├── 事件序列与持久化
+└── 协议 v2 RPC（诚实 capability 表面）
 
-iframe (N 个, 同进程 sandbox 隔离)
-├── 插件 A (sandbox="allow-scripts allow-forms", 无 allow-same-origin)
-├── 插件 B (sandbox 隔离)
-└── ...
+Renderer (Next.js)
+├── Shell UI（三栏）
+├── Hub / 本地模块目录 / 工坊 / 设置 / AI 工作台
+└── iframe / 子 WebView 宿主编排
+
+Workshop iframe（Unique Origin 沙箱）
+└── sandbox="allow-scripts allow-forms"（无 allow-same-origin）
+
+Embed 子 WebView（可选 · ADR-0013）
+└── 外部容器 GUI；无 Workshop Bridge
 ```
 
 ### 4.2 五大防线
@@ -184,7 +206,7 @@ iframe (N 个, 同进程 sandbox 隔离)
 
 | 机制 | 实现 |
 |------|------|
-| 窗口隐藏 | `BrowserWindow({ show: false })` |
+| 窗口隐藏 | Tauri 窗口创建时 `visible: false`，主题就绪后再显示 |
 | 主题加载 | Next.js 读取配置 → 挂载 CSS 变量 |
 | 显示握手 | `theme-applied-ready` IPC → 显示窗口 |
 | 参数验证 | Zod 校验颜色 hex、边栏像素范围、布局参数 |
@@ -359,12 +381,12 @@ CREATE TABLE module_order (
 ├────────┬─────────────────────────────┬───────────────────┤
 │        │                             │                   │
 │  📱    │                             │   🔧 工坊面板     │
-│  订阅  │      主内容区                │   ├─ 浏览模块     │
-│  侧边栏│      (iframe Container)     │   ├─ 模块详情     │
+│  模块  │      主内容区                │   ├─ 本地模块     │
+│  侧边栏│      (iframe / 工作台页)     │   ├─ 模块详情     │
 │        │                             │   └─ 安装管理     │
-│  ├ App1│      当前激活的插件页面       │                   │
-│  ├ App2│      通过 iframe 渲染        │   ⚙️ 设置面板     │
-│  ├ App3│      本地 HTTP 服务提供文件   │   ├─ 主题设置     │
+│  ├ App1│      当前激活的租户/内置页    │                   │
+│  ├ App2│      Workshop: iframe 渲染   │   ⚙️ 设置面板     │
+│  ├ App3│      本地 HTTP 提供静态资源   │   ├─ 主题设置     │
 │  └ ... │                             │   ├─ API Key      │
 │        │                             │   ├─ 环境变量     │
 │  ──── │                             │   └─ 通用设置     │
@@ -486,7 +508,7 @@ interface NativesBridge {
      │    args: []                    │                              │
      │  })                            │                              │
      │ ─────────────────────────────→ │                              │
-     │                                │  ipcRenderer.invoke(         │
+     │                                │  tauri invoke(               │
      │                                │    'bridge:settings.getTheme' │
      │                                │  )                           │
      │                                │ ────────────────────────────→│
@@ -601,7 +623,7 @@ Tauri 显示窗口 (FOUC Guard 完成)
 | 页面 | 路由 | 功能 | 优先级 |
 |------|------|------|--------|
 | 首页 | `/` | 最近使用的模块、快捷入口 | P0 |
-| 应用商店 | `/store` | 浏览可安装的模块 (MVP: 本地目录扫描) | P0 |
+| 本地模块目录 | `/store`（路径历史命名） | 本地已装/可装模块与创意目录；**非**联网商店（P2） | P0 |
 | 创意工坊 | `/workshop` | 开发者工具：创建模块模板、测试 | P0 |
 | 模块管理 | `/modules` | 已安装模块列表，启用/禁用/卸载 | P0 |
 | 设置 | `/settings` | 主题、API Key、环境变量、语言 | P0 |
@@ -635,7 +657,7 @@ Natives/
 │   │   ├── page.tsx                 # 基座首页
 │   │   ├── layout.tsx               # Root Layout
 │   │   ├── globals.css              # 全局样式
-│   │   ├── store/page.tsx           # 应用商店
+│   │   ├── store/page.tsx           # 本地模块目录（路径名历史遗留）
 │   │   ├── workshop/page.tsx        # 创意工坊
 │   │   ├── modules/page.tsx         # 模块管理
 │   │   └── settings/page.tsx        # 设置

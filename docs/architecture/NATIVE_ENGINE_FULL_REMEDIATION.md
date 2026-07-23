@@ -1,10 +1,11 @@
-# Native 执行引擎全量整改 — 契约冻结与进度（Phase 0）
+# Native 执行引擎全量整改 — 契约冻结与进度
 
-> 冻结日期：2026-07-17  
-> 目标方案：用户 Goal「Native 执行引擎全量整改实施方案」  
-> 参考：`/Users/ldh/Downloads/project/grok-build`  
-> 基座：Natives 当前 `agent-core` / `provider-adapters` / `capability-gateway` / `assistant-protocol` / `src-agent-daemon` / `src-tauri`  
-> 状态语义：`not_started` | `in_progress` | `partial` | `done` | `blocked`
+> **唯一进度与契约源**（2026-07-23 文档清理后）：其它 `NATIVE_ENGINE_*` 快照 / task pack / linkage 状态文档已删除，请只更新本文件 + [`NATIVE-DAEMON-CAPABILITY-MAP.md`](./NATIVE-DAEMON-CAPABILITY-MAP.md) + [`NATIVE_ENGINE_ENV.md`](./NATIVE_ENGINE_ENV.md)。  
+> 冻结日期：2026-07-17（契约）；进度随代码更新  
+> 基座：`agent-core` / `provider-adapters` / `capability-gateway` / `assistant-protocol` / `src-agent-daemon` / `src-tauri`  
+> 分层约束：[`standards/technical/01-layering.md`](../standards/technical/01-layering.md)  
+> 状态语义：`not_started` | `in_progress` | `partial` | `done` | `blocked`  
+> 诚实原则：广告 ⊆ 可调；fixture 通过 ≠ 真桌面 done
 
 ## 0. 结论标签（禁止夸大）
 

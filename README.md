@@ -127,7 +127,7 @@ Natives2/
 │   │   ├── ai/             # AI 仪表盘 (Token 统计、技能面板)
 │   │   ├── files/          # 文件管理
 │   │   ├── modules/        # 模块管理
-│   │   ├── store/          # 创意工坊商店
+│   │   ├── store/          # 本地模块目录（路径历史命名，非联网商店）
 │   │   ├── tools/          # 工具页
 │   │   └── workshop/       # 插件工作区
 │   ├── components/         # 共享组件
@@ -141,12 +141,11 @@ Natives2/
 │   ├── i18n/               # 国际化（中/英）
 │   ├── lib/                # 前端工具库 (tauri-adapter, design-tokens, theme-engine)
 │   └── types/              # TypeScript 类型定义
-├── docs/
-│   ├── architecture/       # 架构设计文档
-│   │   └── ARCHITECTURE.md # 三层架构规格
+├── docs/                   # 见 docs/README.md
+│   ├── README.md           # 文档索引与权威优先级
+│   ├── standards/          # 约束唯一权威
 │   ├── adr/                # 架构决策记录
-│   ├── standards/          # 编码规范（MUST/SHOULD/MAY）
-│   └── PRD.md              # 产品需求文档
+│   └── architecture/       # 现状描述与领域设计
 ├── eslint.config.mjs       # ESLint flat config
 ├── next.config.ts           # Next.js 配置（静态导出）
 └── package.json             # 项目依赖和脚本
@@ -161,7 +160,7 @@ Natives2/
 ```
 ┌─────────────────────────────────────────────────┐
 │               应用层 (Application)               │
-│   订阅应用 · 创意工坊模块 · 内置功能页              │
+│   本地模块 · 创意工坊 · Hub 内置页 · AI 工作台     │
 ├─────────────────────────────────────────────────┤
 │               框架层 (Framework)                 │
 │   Shell 布局 · iframe 管理 · Bridge API         │
@@ -228,11 +227,12 @@ await window.natives.notification.send('Hello from plugin!');
 
 | 文档 | 说明 |
 |------|------|
-| [架构设计](docs/architecture/ARCHITECTURE.md) | 三层架构规格（整体 / 底层 / 前端） |
-| [设计讨论](docs/architecture/DESIGN_DISCUSSION.md) | 43 个架构决策的完整 Q&A 记录 |
-| [PRD](docs/PRD.md) | 产品需求文档（13 个模块，38+ 用户故事） |
-| [编码规范](docs/standards/README.md) | MUST/SHOULD/MAY 约束体系 |
-| [ADR](docs/adr/) | 架构决策记录 |
+| [文档索引](docs/README.md) | 权威优先级与目录地图 |
+| [编码规范](docs/standards/README.md) | **约束唯一权威**（MUST/SHOULD/MAY） |
+| [ADR-0012 产品身份](docs/adr/0012-product-identity-workshop-scope.md) | 工作台 / 三面 / 双轨 / P0–P2 |
+| [架构现状](docs/architecture/ARCHITECTURE.md) | 架构描述（非红线） |
+| [ADR 目录](docs/adr/) | 架构决策记录 |
+| [设计讨论（历史）](docs/architecture/DESIGN_DISCUSSION.md) | Q1–Q43 溯源；冲突以 ADR 为准 |
 
 ---
 

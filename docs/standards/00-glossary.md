@@ -1,7 +1,7 @@
 # 00 · 术语与关键词
 
-> 本篇定义**规范体系内部**使用的术语与关键词语义。
-> 项目领域的业务术语（Natives、模块、Bridge API、Session Token 等）以 [`CONTEXT.md`](../../CONTEXT.md) 为准，本篇不重复，只在需要精确化时补充。
+> 本篇定义**规范体系内部**使用的术语与关键词语义。  
+> 产品身份与面/轨以 [ADR-0012](../adr/0012-product-identity-workshop-scope.md) 与 [`product/01-positioning.md`](./product/01-positioning.md) 为准。
 
 ---
 
@@ -41,14 +41,14 @@
 | `主题` | 设计令牌、三皮肤、字体绑定 |
 | `交互` | toast/通知/模态的选用、空/加载态、快捷键 |
 | `反馈` | 动效、声音、聚焦环 |
-| `进程` | Main / Renderer / iframe / 子进程边界 |
+| `进程` | Host Main / Agent Daemon / Renderer / 租户（iframe·Embed）边界 |
 | `版本` | SemVer、minNativesVersion、插件更新 |
 
 ---
 
 ## 三、规范体系内的核心术语
 
-为避免与 `CONTEXT.md` 的业务术语混淆，以下术语**仅在规范语境**中使用。
+以下术语**仅在规范语境**中使用；产品业务术语以 ADR-0012 与 `product/01-positioning.md` 为准。
 
 ### 规范（Standard / 本目录）
 对后续所有更新的**约束**。本目录文档的总称。区别于「描述」（陈述当前怎么实现）和「决策」（ADR，记录为什么这么定）。
@@ -57,7 +57,11 @@
 **MUST** 级规则的俗称。例如「无假数据」「凭证必须加密」「iframe 禁止 allow-same-origin」都是红线。
 
 ### 现状描述（Description）
-`docs/architecture/`、`PRD*.md` 等文档的角色。它们陈述「当前系统是如何实现的」，但不构成约束。当描述与规范冲突，规范胜出，描述应被更新。
+`docs/architecture/` 等文档的角色。它们陈述「当前系统是如何实现的」，但不构成约束。当描述与规范冲突，规范胜出，描述应被更新。
+
+### 三面 / 双轨（Surface / Track）
+- **Hub / Workshop / Embed**：产品入口与安全模型分面（ADR-0012）。  
+- **web-module / capability**：物理实现双轨；禁止单 manifest 硬揉。
 
 ### 决策记录（ADR, Architecture Decision Record）
 记录「**为什么**在某个时间点做了某个架构选择」。ADR 不直接是约束，但规范中的 MUST/SHOULD 常常**源自**某个 ADR。规范篇会在「关联 ADR」处双向链接。
@@ -81,12 +85,14 @@
 | KV | Key-Value | `module_data` 表的存储模型 |
 | WAL | Write-Ahead Logging | SQLite 的并发写入模式 |
 | SemVer | Semantic Versioning | 主.次.修订 版本号规范 |
+| UDS | Unix Domain Socket | Host ↔ Agent Daemon 生产通信 |
+| KI | Kernel Invariant | Workshop 微内核不变量 KI-1…5 |
 
 ---
 
 ## 五、文档约定
 
-- 规范篇正文用中文为主、代码/标识符保留英文，与 `CONTEXT.md`、`ARCHITECTURE.md` 风格一致。
+- 规范篇正文用中文为主、代码/标识符保留英文，与 `ARCHITECTURE.md` 风格一致。
 - 跨篇引用用相对链接，如从 `00-glossary.md` 引用 `[分层规则](technical/01-layering.md)`（同目录下用相对路径，跨级用 `../`）。
 - 引用 ADR 用 `ADR-00XX` 代号，指向 `docs/adr/00XX-*.md`。
 - 每篇规范顶部固定四块元信息：版本、日期、关联 ADR、关联源文件。

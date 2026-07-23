@@ -1,7 +1,7 @@
 # Native Agent Daemon — 环境变量与运维契约
 
-> 与全量整改方案 §四 / Phase 2 对齐。  
-> 权威进度：`NATIVE_ENGINE_FULL_REMEDIATION.md`
+> 与全量整改契约同步。  
+> **权威进度 / 能力矩阵**：[`NATIVE_ENGINE_FULL_REMEDIATION.md`](./NATIVE_ENGINE_FULL_REMEDIATION.md) · [`NATIVE-DAEMON-CAPABILITY-MAP.md`](./NATIVE-DAEMON-CAPABILITY-MAP.md)
 
 ## 必读变量
 
