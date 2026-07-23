@@ -1,245 +1,169 @@
-//! Integration tests for the agent-core run state machine.
+//! Integration tests for the agent-core RunStatusV2 state machine.
 //!
-//! These tests verify the `transition` function with table-driven cases
-//! covering all legal transitions, illegal transitions, and terminal state
-//! rejection. They also verify that `DaemonError` conversion works correctly.
+//! Covers legal/illegal edges, terminal rejection, DaemonError conversion,
+//! EngineOutcome, and the RunLifecycleAuthority trait surface.
 
-use agent_core::run_state::transition;
-use agent_core::run_state::TransitionError;
-use assistant_protocol::v1::run::RunStatus;
+use agent_core::run_state::{
+    all_statuses, legal_next_states, outcome_commit_parts, transition, CommitError, EngineOutcome,
+    RunLifecycleAuthority, TransitionError, TransitionMetadata,
+};
+use assistant_protocol::error::error_codes;
 use assistant_protocol::error::DaemonError;
 use assistant_protocol::error::ErrorCategory;
-use assistant_protocol::error::error_codes;
+use assistant_protocol::v2::RunStatusV2;
 
-// ---------------------------------------------------------------------------
-// Legal transitions
-// ---------------------------------------------------------------------------
+use RunStatusV2::*;
 
 #[test]
-fn test_queued_to_preparing() {
-    assert!(transition(RunStatus::Queued, RunStatus::Preparing).is_ok());
+fn exhaustive_matrix() {
+    let legal = [
+        (Created, Queued),
+        (Created, Cancelling),
+        (Created, Failed),
+        (Queued, Preparing),
+        (Queued, Cancelling),
+        (Queued, Failed),
+        (Preparing, Running),
+        (Preparing, WaitingPermission),
+        (Preparing, Cancelling),
+        (Preparing, Failed),
+        (Preparing, Interrupted),
+        (Running, WaitingPermission),
+        (Running, WaitingSubagent),
+        (Running, Cancelling),
+        (Running, Completed),
+        (Running, Failed),
+        (Running, Interrupted),
+        (WaitingPermission, Running),
+        (WaitingPermission, Cancelling),
+        (WaitingPermission, Completed),
+        (WaitingPermission, Failed),
+        (WaitingPermission, Interrupted),
+        (WaitingSubagent, Running),
+        (WaitingSubagent, Cancelling),
+        (WaitingSubagent, Completed),
+        (WaitingSubagent, Failed),
+        (WaitingSubagent, Interrupted),
+        (Cancelling, Cancelled),
+        (Cancelling, Interrupted),
+        (Cancelling, Failed),
+    ];
+    let legal_set: std::collections::HashSet<_> = legal.into_iter().collect();
+
+    for (from, to) in legal {
+        assert!(
+            transition(from, to).is_ok(),
+            "expected OK: {from:?} -> {to:?}"
+        );
+    }
+
+    for from in all_statuses() {
+        for to in all_statuses() {
+            let ok = transition(from, to).is_ok();
+            let expected = legal_set.contains(&(from, to));
+            assert_eq!(ok, expected, "matrix mismatch {from:?} -> {to:?}");
+        }
+    }
 }
 
 #[test]
-fn test_queued_to_cancelling() {
-    assert!(transition(RunStatus::Queued, RunStatus::Cancelling).is_ok());
+fn terminal_rejects() {
+    for terminal in [Completed, Failed, Cancelled, Interrupted] {
+        for target in all_statuses() {
+            assert!(
+                transition(terminal, target).is_err(),
+                "{terminal:?} -> {target:?}"
+            );
+        }
+        assert!(legal_next_states(terminal).is_empty());
+    }
 }
 
 #[test]
-fn test_queued_to_failed() {
-    assert!(transition(RunStatus::Queued, RunStatus::Failed).is_ok());
+fn cancelled_path_only_from_cancelling() {
+    assert!(transition(Cancelling, Cancelled).is_ok());
+    assert!(transition(Running, Cancelled).is_err());
+    assert!(transition(Cancelling, Completed).is_err());
 }
 
 #[test]
-fn test_preparing_to_running() {
-    assert!(transition(RunStatus::Preparing, RunStatus::Running).is_ok());
-}
-
-#[test]
-fn test_preparing_to_waiting_permission() {
-    assert!(transition(RunStatus::Preparing, RunStatus::WaitingPermission).is_ok());
-}
-
-#[test]
-fn test_preparing_to_cancelling() {
-    assert!(transition(RunStatus::Preparing, RunStatus::Cancelling).is_ok());
-}
-
-#[test]
-fn test_preparing_to_failed() {
-    assert!(transition(RunStatus::Preparing, RunStatus::Failed).is_ok());
-}
-
-#[test]
-fn test_preparing_to_interrupted() {
-    assert!(transition(RunStatus::Preparing, RunStatus::Interrupted).is_ok());
-}
-
-#[test]
-fn test_running_to_waiting_permission() {
-    assert!(transition(RunStatus::Running, RunStatus::WaitingPermission).is_ok());
-}
-
-#[test]
-fn test_running_to_cancelling() {
-    assert!(transition(RunStatus::Running, RunStatus::Cancelling).is_ok());
-}
-
-#[test]
-fn test_running_to_completed() {
-    assert!(transition(RunStatus::Running, RunStatus::Completed).is_ok());
-}
-
-#[test]
-fn test_running_to_failed() {
-    assert!(transition(RunStatus::Running, RunStatus::Failed).is_ok());
-}
-
-#[test]
-fn test_running_to_interrupted() {
-    assert!(transition(RunStatus::Running, RunStatus::Interrupted).is_ok());
-}
-
-#[test]
-fn test_waiting_permission_to_running() {
-    assert!(transition(RunStatus::WaitingPermission, RunStatus::Running).is_ok());
-}
-
-#[test]
-fn test_waiting_permission_to_cancelling() {
-    assert!(transition(RunStatus::WaitingPermission, RunStatus::Cancelling).is_ok());
-}
-
-#[test]
-fn test_waiting_permission_to_completed() {
-    assert!(transition(RunStatus::WaitingPermission, RunStatus::Completed).is_ok());
-}
-
-#[test]
-fn test_waiting_permission_to_failed() {
-    assert!(transition(RunStatus::WaitingPermission, RunStatus::Failed).is_ok());
-}
-
-#[test]
-fn test_waiting_permission_to_interrupted() {
-    assert!(transition(RunStatus::WaitingPermission, RunStatus::Interrupted).is_ok());
-}
-
-#[test]
-fn test_cancelling_to_interrupted() {
-    assert!(transition(RunStatus::Cancelling, RunStatus::Interrupted).is_ok());
-}
-
-#[test]
-fn test_cancelling_to_failed() {
-    assert!(transition(RunStatus::Cancelling, RunStatus::Failed).is_ok());
-}
-
-// ---------------------------------------------------------------------------
-// Illegal transitions
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_queued_to_completed_illegal() {
-    let err = transition(RunStatus::Queued, RunStatus::Completed).unwrap_err();
+fn daemon_error_conversion() {
+    let err = transition(Queued, Completed).unwrap_err();
     assert!(matches!(err, TransitionError::IllegalTransition { .. }));
-}
-
-#[test]
-fn test_completed_to_running_illegal() {
-    let err = transition(RunStatus::Completed, RunStatus::Running).unwrap_err();
-    assert!(matches!(err, TransitionError::TerminalState { .. }));
-}
-
-#[test]
-fn test_failed_to_queued_illegal() {
-    let err = transition(RunStatus::Failed, RunStatus::Queued).unwrap_err();
-    assert!(matches!(err, TransitionError::TerminalState { .. }));
-}
-
-#[test]
-fn test_interrupted_to_running_illegal() {
-    let err = transition(RunStatus::Interrupted, RunStatus::Running).unwrap_err();
-    assert!(matches!(err, TransitionError::TerminalState { .. }));
-}
-
-// ---------------------------------------------------------------------------
-// DaemonError conversion
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_illegal_transition_converts_to_daemon_error() {
-    let err = transition(RunStatus::Queued, RunStatus::Completed).unwrap_err();
     let daemon_err: DaemonError = err.into();
     assert_eq!(daemon_err.code, error_codes::RUN_INVALID_STATE);
     assert_eq!(daemon_err.category, ErrorCategory::Validation);
-}
 
-#[test]
-fn test_terminal_transition_converts_to_daemon_error() {
-    let err = transition(RunStatus::Completed, RunStatus::Running).unwrap_err();
+    let err = transition(Completed, Running).unwrap_err();
+    assert!(matches!(err, TransitionError::TerminalState { .. }));
     let daemon_err: DaemonError = err.into();
     assert_eq!(daemon_err.code, error_codes::RUN_INVALID_STATE);
-    assert_eq!(daemon_err.category, ErrorCategory::Validation);
 }
 
-// ---------------------------------------------------------------------------
-// Bulk table-driven tests for completeness
-// ---------------------------------------------------------------------------
-
 #[test]
-fn test_all_legal_transitions_bulk() {
-    let legal: Vec<(RunStatus, RunStatus)> = vec![
-        (RunStatus::Queued, RunStatus::Preparing),
-        (RunStatus::Queued, RunStatus::Cancelling),
-        (RunStatus::Queued, RunStatus::Failed),
-        (RunStatus::Preparing, RunStatus::Running),
-        (RunStatus::Preparing, RunStatus::WaitingPermission),
-        (RunStatus::Preparing, RunStatus::Cancelling),
-        (RunStatus::Preparing, RunStatus::Failed),
-        (RunStatus::Preparing, RunStatus::Interrupted),
-        (RunStatus::Running, RunStatus::WaitingPermission),
-        (RunStatus::Running, RunStatus::Cancelling),
-        (RunStatus::Running, RunStatus::Completed),
-        (RunStatus::Running, RunStatus::Failed),
-        (RunStatus::Running, RunStatus::Interrupted),
-        (RunStatus::WaitingPermission, RunStatus::Running),
-        (RunStatus::WaitingPermission, RunStatus::Cancelling),
-        (RunStatus::WaitingPermission, RunStatus::Completed),
-        (RunStatus::WaitingPermission, RunStatus::Failed),
-        (RunStatus::WaitingPermission, RunStatus::Interrupted),
-        (RunStatus::Cancelling, RunStatus::Interrupted),
-        (RunStatus::Cancelling, RunStatus::Failed),
-    ];
+fn engine_outcome_and_metadata() {
+    let o = EngineOutcome::completed("stop");
+    let (target, meta) = outcome_commit_parts(&o);
+    assert_eq!(target, Completed);
+    assert_eq!(meta.reason.as_deref(), Some("stop"));
 
-    for (current, target) in &legal {
-        assert!(
-            transition(*current, *target).is_ok(),
-            "Expected OK: {:?} -> {:?}",
-            current,
-            target
-        );
+    let o = EngineOutcome::Cancelled;
+    assert_eq!(o.target_status(), Cancelled);
+
+    let o = EngineOutcome::failed("max_steps", "too many", false);
+    let meta = TransitionMetadata::from_outcome(&o);
+    assert_eq!(meta.error_code.as_deref(), Some("max_steps"));
+    assert_eq!(meta.extra["retryable"], false);
+
+    let o = EngineOutcome::interrupted("daemon_restarted");
+    assert_eq!(o.error_code(), Some("daemon_restarted"));
+}
+
+struct MemAuthority;
+
+impl RunLifecycleAuthority for MemAuthority {
+    fn commit_transition(
+        &self,
+        run_id: &str,
+        expected_revision: u64,
+        target: RunStatusV2,
+        _metadata: TransitionMetadata,
+    ) -> Result<agent_core::run_state::CommittedTransition, CommitError> {
+        if run_id == "missing" {
+            return Err(CommitError::NotFound {
+                run_id: run_id.into(),
+            });
+        }
+        // Simulate CAS: only revision 0 accepted for this stub.
+        if expected_revision != 0 {
+            return Err(CommitError::CasConflict {
+                run_id: run_id.into(),
+                expected: expected_revision,
+                current: 0,
+                status: Queued,
+            });
+        }
+        Ok(agent_core::run_state::CommittedTransition {
+            run_id: run_id.into(),
+            from: Queued,
+            to: target,
+            revision: 1,
+            idempotent: false,
+        })
     }
 }
 
 #[test]
-fn test_all_illegal_transitions_bulk() {
-    let illegal: Vec<(RunStatus, RunStatus)> = vec![
-        (RunStatus::Queued, RunStatus::Running),
-        (RunStatus::Queued, RunStatus::Completed),
-        (RunStatus::Queued, RunStatus::Interrupted),
-        (RunStatus::Queued, RunStatus::WaitingPermission),
-        (RunStatus::Preparing, RunStatus::Completed),
-        (RunStatus::Running, RunStatus::Queued),
-        (RunStatus::Running, RunStatus::Preparing),
-        (RunStatus::WaitingPermission, RunStatus::Queued),
-        (RunStatus::WaitingPermission, RunStatus::Preparing),
-        (RunStatus::Cancelling, RunStatus::Running),
-        (RunStatus::Cancelling, RunStatus::Completed),
-        (RunStatus::Cancelling, RunStatus::WaitingPermission),
-        (RunStatus::Cancelling, RunStatus::Queued),
-        (RunStatus::Cancelling, RunStatus::Preparing),
-        (RunStatus::Completed, RunStatus::Queued),
-        (RunStatus::Completed, RunStatus::Running),
-        (RunStatus::Completed, RunStatus::Failed),
-        (RunStatus::Completed, RunStatus::Interrupted),
-        (RunStatus::Failed, RunStatus::Queued),
-        (RunStatus::Failed, RunStatus::Running),
-        (RunStatus::Failed, RunStatus::Completed),
-        (RunStatus::Failed, RunStatus::Interrupted),
-        (RunStatus::Interrupted, RunStatus::Queued),
-        (RunStatus::Interrupted, RunStatus::Running),
-        (RunStatus::Interrupted, RunStatus::Completed),
-        (RunStatus::Interrupted, RunStatus::Failed),
-        (RunStatus::Interrupted, RunStatus::WaitingPermission),
-    ];
+fn commit_interface_shape() {
+    let auth = MemAuthority;
+    let committed = auth
+        .commit_transition("r1", 0, Preparing, TransitionMetadata::empty())
+        .unwrap();
+    assert_eq!(committed.revision, 1);
+    assert_eq!(committed.to, Preparing);
 
-    for (current, target) in &illegal {
-        assert!(
-            transition(*current, *target).is_err(),
-            "Expected Err: {:?} -> {:?}",
-            current,
-            target
-        );
-    }
+    let err = auth
+        .commit_transition("r1", 5, Preparing, TransitionMetadata::empty())
+        .unwrap_err();
+    assert!(err.is_cas_conflict());
 }

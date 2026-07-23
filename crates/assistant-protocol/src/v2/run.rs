@@ -64,7 +64,18 @@ impl RunStatusV2 {
         }
     }
 
+    /// Wire helper only — **not** the production state graph.
+    ///
+    /// Production transition validation lives exclusively in
+    /// `agent_core::run_state::transition`. This method is retained for
+    /// lightweight UI/schema introspection and may lag the authority; do not
+    /// use it to accept or reject daemon commits.
+    #[deprecated(
+        note = "use agent_core::run_state::transition — protocol no longer owns the state graph"
+    )]
     pub fn can_transition_to(self, next: Self) -> bool {
+        // Thin mirror kept for wire/UI introspection only. Source of truth:
+        // agent_core::run_state. Keep edges in sync when the authority changes.
         use RunStatusV2::*;
         matches!(
             (self, next),
@@ -137,6 +148,10 @@ pub struct RunV2 {
     /// Runtime selector: native | claude_cli | codex_cli (REQ-T01/T02).
     #[serde(default)]
     pub runtime_id: Option<String>,
+    /// Optimistic-concurrency revision for CAS commits (task-02).
+    /// Incremented on every successful status transition via RunManager.
+    #[serde(default)]
+    pub revision: u64,
 }
 
 /// Create a run without starting it.

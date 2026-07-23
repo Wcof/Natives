@@ -365,8 +365,9 @@ impl RunManager {
             ),
             last_event_sequence: 0,
             idempotency_key: row.get(18).map_err(|e| e.to_string())?,
-                    effort: None,
+            effort: None,
             runtime_id: None,
+            revision: 0,
         }))
     }
 
@@ -589,6 +590,7 @@ impl RunManager {
             idempotency_key: req.idempotency_key.clone(),
             effort: req.effort.clone(),
             runtime_id: req.runtime_id.clone().or_else(|| Some("native".into())),
+            revision: 0,
         };
         self.persist_run_row(&run)?;
         {
