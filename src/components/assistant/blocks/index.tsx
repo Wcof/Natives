@@ -81,7 +81,7 @@ function ReasoningBlock({ block }: { block: ContentBlock }) {
   });
 
   return (
-    <div className="my-3 border-y border-[var(--border-subtle)] py-2">
+    <div className="my-3 border-b border-[var(--border-subtle)] py-2">
       <button
         type="button"
         onClick={() => {

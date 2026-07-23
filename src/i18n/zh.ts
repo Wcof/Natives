@@ -1314,7 +1314,7 @@ export const zh = {
     unpinProject: '取消置顶',
     showProjectInFinder: '在访达中显示',
     removeProject: '移除项目',
-    removeProjectConfirm: '确定移除“{title}”吗？项目文件不会被删除，已有会话会移动到“未归类”。',
+    removeProjectConfirm: '确定移除”{title}”吗？项目文件不会被删除，已有会话将保留在项目中，重新添加项目后会自动恢复。',
     selectConversation: '请选择会话',
     unassignedProject: '未归类',
     newSession: '新建会话',

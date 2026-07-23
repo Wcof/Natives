@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Archive,
   Folder,
@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import Modal from '@/components/ui/Modal';
+import Portal from '@/components/ui/Portal';
 import { useToast } from '@/components/ui/Toast';
 import { createTempSession, isTempConversationId } from '@/lib/assistant-temp-conversation';
 import { useAssistantWorkspace } from './AssistantWorkspaceContext';
@@ -27,6 +28,26 @@ interface AssistantSidebarSectionProps {
   onNavigateAssistant: () => void;
 }
 
+const MENU_WIDTH = 160; // w-40
+const MENU_GAP = 4;
+const MENU_PAD = 8;
+const MENU_EST_HEIGHT = 168;
+
+function computeMenuPos(trigger: HTMLElement): { top: number; left: number; flip: boolean } {
+  const rect = trigger.getBoundingClientRect();
+  const left = Math.min(
+    Math.max(MENU_PAD, rect.right - MENU_WIDTH),
+    window.innerWidth - MENU_WIDTH - MENU_PAD,
+  );
+  const spaceBelow = window.innerHeight - rect.bottom - MENU_PAD;
+  const flip = spaceBelow < MENU_EST_HEIGHT && rect.top > MENU_EST_HEIGHT;
+  return {
+    top: flip ? rect.top - MENU_GAP : rect.bottom + MENU_GAP,
+    left,
+    flip,
+  };
+}
+
 export default function AssistantSidebarSection({ locale, activeNavigationId, onNavigateAssistant }: AssistantSidebarSectionProps) {
   const { navigation, actions, publishNavigation } = useAssistantWorkspace();
   const { toast } = useToast();
@@ -34,6 +55,9 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [pinned, setPinned] = useState<Set<string>>(new Set());
   const [menuId, setMenuId] = useState<string | null>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; flip: boolean } | null>(null);
+  const menuTriggerRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const menuPanelRef = useRef<HTMLDivElement>(null);
   const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
   const [deletingConversation, setDeletingConversation] = useState(false);
@@ -132,18 +156,63 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
     }
   }, [focusedIndex, flatItems]);
 
-  // Close menus on click outside
+  // Position the open menu against its trigger (viewport coords for fixed portal).
+  const repositionMenu = useCallback(() => {
+    if (!menuId) {
+      setMenuPos(null);
+      return;
+    }
+    const trigger = menuTriggerRefs.current.get(menuId);
+    if (!trigger) {
+      setMenuPos(null);
+      return;
+    }
+    setMenuPos(computeMenuPos(trigger));
+  }, [menuId]);
+
+  useLayoutEffect(() => {
+    repositionMenu();
+  }, [repositionMenu]);
+
   useEffect(() => {
     if (!menuId) return;
-    const handler = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('[data-assistant-menu]')) {
-        setMenuId(null);
-      }
+    const onScrollOrResize = () => repositionMenu();
+    window.addEventListener('resize', onScrollOrResize);
+    // capture: nested sidebar overflow scroll also moves the trigger
+    window.addEventListener('scroll', onScrollOrResize, true);
+    return () => {
+      window.removeEventListener('resize', onScrollOrResize);
+      window.removeEventListener('scroll', onScrollOrResize, true);
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+  }, [menuId, repositionMenu]);
+
+  // Close menus on outside pointerdown. Trigger + portaled panel both use
+  // [data-assistant-menu] so item clicks are not treated as outside.
+  useEffect(() => {
+    if (!menuId) return;
+    const handler = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.('[data-assistant-menu]')) return;
+      setMenuId(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuId(null);
+    };
+    document.addEventListener('pointerdown', handler, true);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', handler, true);
+      document.removeEventListener('keydown', onKey);
+    };
   }, [menuId]);
+
+  const openMenu = useCallback((id: string, trigger?: HTMLElement | null) => {
+    if (trigger) {
+      menuTriggerRefs.current.set(id, trigger as HTMLButtonElement);
+      setMenuPos(computeMenuPos(trigger));
+    }
+    setMenuId((value) => (value === id ? null : id));
+  }, []);
 
   // Build item index for `aria-activedescendant`
   const itemIndex = useMemo(() => {
@@ -203,7 +272,8 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                 if ((event.target as HTMLElement).closest('[id^="conv-"]')) return;
                 if (!group.path) return;
                 event.preventDefault();
-                setMenuId(`project:${group.id}`);
+                const trigger = menuTriggerRefs.current.get(`project:${group.id}`);
+                openMenu(`project:${group.id}`, trigger ?? (event.currentTarget as HTMLElement));
               }} className="mt-0.5">
               {/* ── Project Header ── */}
               <div className="group/project relative flex items-center gap-0.5 rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all">
@@ -247,29 +317,25 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                   >
                     {navigation.isCreatingConversation ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
                   </button>
-                  <div data-assistant-menu className="relative">
+                  <div data-assistant-menu className="relative shrink-0">
                     <button
+                      ref={(node) => {
+                        if (node) menuTriggerRefs.current.set(`project:${group.id}`, node);
+                        else menuTriggerRefs.current.delete(`project:${group.id}`);
+                      }}
                       type="button"
+                      data-assistant-menu
                       aria-label={t(locale, 'common.more')}
                       title={t(locale, 'common.more')}
-                      onClick={() => setMenuId(value => value === `project:${group.id}` ? null : `project:${group.id}`)}
+                      aria-expanded={menuId === `project:${group.id}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openMenu(`project:${group.id}`, event.currentTarget);
+                      }}
                       className="drag-none rounded-md p-1 text-inherit hover:bg-black/10 dark:hover:bg-white/10 transition-all"
                     >
                       <MoreHorizontal size={12} />
                     </button>
-                    {menuId === `project:${group.id}` && group.path && (
-                      <div className="absolute right-0 top-full z-50 mt-1 w-40 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-popup">
-                        <button type="button" onClick={() => { togglePinned(group.id); setMenuId(null); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
-                          {pinned.has(group.id) ? <PinOff size={12} /> : <Pin size={12} />}{pinned.has(group.id) ? t(locale, 'assistant.unpinProject') : t(locale, 'assistant.pinProject')}
-                        </button>
-                        <button type="button" onClick={() => { setMenuId(null); void window.nativesAPI?.shell.showItemInFolder(group.path!); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
-                          <FolderSearch size={12} />{t(locale, 'assistant.showProjectInFinder')}
-                        </button>
-                        <button type="button" onClick={() => { setMenuId(null); setRemoveProjectTarget({ id: group.id, label: group.label, path: group.path! }); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-all">
-                          <Trash2 size={12} />{t(locale, 'assistant.removeProject')}
-                        </button>
-                      </div>
-                    )}
                   </div>
                 </>}
               </div>
@@ -287,7 +353,10 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                     aria-selected={isSelected}
                     onContextMenu={(event) => {
                       event.preventDefault();
-                      setMenuId(`conversation:${conversation.id}`);
+                      const trigger =
+                        menuTriggerRefs.current.get(`conversation:${conversation.id}`) ??
+                        (event.currentTarget as HTMLElement);
+                      openMenu(`conversation:${conversation.id}`, trigger);
                     }}
                     className={`group relative ml-5 mt-0.5 flex min-h-8 items-center rounded-lg transition-colors ${
                           isSelected
@@ -319,31 +388,27 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                       <span className="truncate">{conversation.title}</span>
                       {conversation.pinned ? <Pin size={10} className="ml-auto shrink-0 opacity-70" aria-hidden /> : null}
                     </button>
-                    <button
-                      type="button"
-                      data-assistant-menu
-                      aria-label={t(locale, 'common.more')}
-                      onClick={() => setMenuId(value => value === `conversation:${conversation.id}` ? null : `conversation:${conversation.id}`)}
-                      className="drag-none mr-1 rounded p-0.5 opacity-0 hover:bg-[var(--surface)] group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150"
-                    >
-                      <MoreHorizontal size={11} />
-                    </button>
-                    {menuId === `conversation:${conversation.id}` && (
-                      <div className="absolute right-1 top-full z-50 w-40 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-popup">
-                        <button type="button" onClick={() => { setMenuId(null); actions?.pinConversation?.(conversation.id, conversation.projectId ?? group.path, !conversation.pinned); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
-                          {conversation.pinned ? <PinOff size={12} /> : <Pin size={12} />}{conversation.pinned ? t(locale, 'assistant.unpinConversation') : t(locale, 'assistant.pinConversation')}
-                        </button>
-                        <button type="button" onClick={() => { setMenuId(null); setRenameTarget({ id: conversation.id, title: conversation.title }); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
-                          <Pencil size={12} />{t(locale, 'assistant.renameConversation')}
-                        </button>
-                        <button type="button" onClick={() => { setMenuId(null); actions?.archiveConversation(conversation.id); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
-                          <Archive size={12} />{t(locale, 'assistant.archive')}
-                        </button>
-                        <button type="button" onClick={() => { setMenuId(null); setDeleteTarget({ id: conversation.id, title: conversation.title }); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-all">
-                          <Trash2 size={12} />{t(locale, 'assistant.deleteConversation')}
-                        </button>
-                      </div>
-                    )}
+                    {/* Trigger only; panel is portaled to body so overflow/z-index parents cannot clip it. */}
+                    <div data-assistant-menu className="relative mr-1 shrink-0">
+                      <button
+                        ref={(node) => {
+                          const key = `conversation:${conversation.id}`;
+                          if (node) menuTriggerRefs.current.set(key, node);
+                          else menuTriggerRefs.current.delete(key);
+                        }}
+                        type="button"
+                        data-assistant-menu
+                        aria-label={t(locale, 'common.more')}
+                        aria-expanded={menuId === `conversation:${conversation.id}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openMenu(`conversation:${conversation.id}`, event.currentTarget);
+                        }}
+                        className="drag-none rounded p-0.5 opacity-0 hover:bg-[var(--surface)] group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150"
+                      >
+                        <MoreHorizontal size={11} />
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -351,6 +416,73 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
           );
         })}
       </div>
+
+      {/* Portaled action menu — always on top of sidebar / content layers. */}
+      {menuId && menuPos && (
+        <Portal>
+          <div
+            ref={menuPanelRef}
+            data-assistant-menu
+            role="menu"
+            className="fixed w-40 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-1 shadow-popup"
+            style={{
+              top: menuPos.top,
+              left: menuPos.left,
+              zIndex: 'var(--z-context-menu)',
+              transform: menuPos.flip ? 'translateY(-100%)' : undefined,
+            }}
+          >
+            {menuId.startsWith('project:') && (() => {
+              const projectId = menuId.slice('project:'.length);
+              const group = orderedGroups.find((g) => g.id === projectId);
+              if (!group?.path) return null;
+              return (
+                <>
+                  <button type="button" role="menuitem" onClick={() => { togglePinned(group.id); setMenuId(null); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
+                    {pinned.has(group.id) ? <PinOff size={12} /> : <Pin size={12} />}{pinned.has(group.id) ? t(locale, 'assistant.unpinProject') : t(locale, 'assistant.pinProject')}
+                  </button>
+                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); void window.nativesAPI?.shell.showItemInFolder(group.path!); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
+                    <FolderSearch size={12} />{t(locale, 'assistant.showProjectInFinder')}
+                  </button>
+                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); setRemoveProjectTarget({ id: group.id, label: group.label, path: group.path! }); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-all">
+                    <Trash2 size={12} />{t(locale, 'assistant.removeProject')}
+                  </button>
+                </>
+              );
+            })()}
+            {menuId.startsWith('conversation:') && (() => {
+              const conversationId = menuId.slice('conversation:'.length);
+              let conversation: (typeof orderedGroups)[number]['conversations'][number] | null = null;
+              let groupPath: string | null | undefined;
+              for (const group of orderedGroups) {
+                const found = group.conversations.find((c) => c.id === conversationId);
+                if (found) {
+                  conversation = found;
+                  groupPath = group.path;
+                  break;
+                }
+              }
+              if (!conversation) return null;
+              return (
+                <>
+                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); actions?.pinConversation?.(conversation!.id, conversation!.projectId ?? groupPath ?? null, !conversation!.pinned); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
+                    {conversation.pinned ? <PinOff size={12} /> : <Pin size={12} />}{conversation.pinned ? t(locale, 'assistant.unpinConversation') : t(locale, 'assistant.pinConversation')}
+                  </button>
+                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); setRenameTarget({ id: conversation!.id, title: conversation!.title }); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
+                    <Pencil size={12} />{t(locale, 'assistant.renameConversation')}
+                  </button>
+                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); actions?.archiveConversation(conversation!.id); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
+                    <Archive size={12} />{t(locale, 'assistant.archive')}
+                  </button>
+                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); setDeleteTarget({ id: conversation!.id, title: conversation!.title }); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-all">
+                    <Trash2 size={12} />{t(locale, 'assistant.deleteConversation')}
+                  </button>
+                </>
+              );
+            })()}
+          </div>
+        </Portal>
+      )}
 
       {/* ── Rename Modal ── */}
       <Modal isOpen={Boolean(renameTarget)} onClose={() => setRenameTarget(null)} title={t(locale, 'assistant.renameConversation')} width={400}>

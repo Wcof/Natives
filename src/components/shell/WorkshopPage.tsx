@@ -3,10 +3,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import {
+  AlertTriangle,
+  ArrowRight,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Code2,
+  ExternalLink,
   Github,
+  HelpCircle,
   Layers,
+  Loader,
   Package,
   Pause,
   Play,
@@ -14,8 +21,10 @@ import {
   RefreshCw,
   RotateCcw,
   ScrollText,
+  Terminal,
   Trash2,
   X,
+  XCircle,
 } from 'lucide-react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 import { t, type Locale } from '@/i18n';
@@ -69,6 +78,30 @@ function runtimeLabel(locale: Locale, runtime: CreativeAppSummary['runtime']): s
   return t(locale, 'workshop.runtimeWorkshop');
 }
 
+function renderStatusDot(state: CreativeAppSummary['state']) {
+  switch (state) {
+    case 'running':
+      return <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />;
+    case 'starting':
+    case 'installing':
+    case 'stopping':
+    case 'deleting':
+      return <RefreshCw size={12} className="animate-spin text-[var(--primary)] shrink-0" />;
+    case 'installed_stopped':
+    case 'available':
+      return <span className="h-2 w-2 rounded-full bg-zinc-400 dark:bg-zinc-500 shrink-0" />;
+    case 'disabled':
+      return <span className="h-2 w-2 rounded-full bg-zinc-300 dark:bg-zinc-600 shrink-0" />;
+    case 'install_failed':
+    case 'start_failed':
+    case 'delete_failed':
+    case 'runtime_unavailable':
+      return <span className="h-2 w-2 rounded-full bg-rose-500 shrink-0" />;
+    default:
+      return <span className="h-2 w-2 rounded-full bg-zinc-400 shrink-0" />;
+  }
+}
+
 export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
   void onInstall;
   const prefersReducedMotion = useReducedMotion();
@@ -77,7 +110,6 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
   const [toast, setToast] = useState<string | null>(null);
   const [addMenu, setAddMenu] = useState<AddMenu>('closed');
 
-  // Internal create / import (existing flows)
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [templateName, setTemplateName] = useState('');
   const [templateId, setTemplateId] = useState('');
@@ -91,12 +123,10 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
   const [installing, setInstalling] = useState(false);
   const [dragOver, setDragOver] = useState(false);
 
-  // Delete
   const [deleteTarget, setDeleteTarget] = useState<CreativeAppSummary | null>(null);
   const [deleteVolumes, setDeleteVolumes] = useState(false);
   const [deleteImages, setDeleteImages] = useState(false);
 
-  // GitHub wizard
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardStep, setWizardStep] = useState<WizardStep>('url');
   const [repoUrl, setRepoUrl] = useState('');
@@ -116,12 +146,10 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
   const [progress, setProgress] = useState<CreativeAppProgressEvent | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
 
-  // External browser surface
   const [browserApp, setBrowserApp] = useState<CreativeAppSummary | null>(null);
   const [browserUrl, setBrowserUrl] = useState('');
   const browserHostRef = useRef<HTMLDivElement | null>(null);
 
-  // Logs
   const [logsFor, setLogsFor] = useState<CreativeAppSummary | null>(null);
   const [logsText, setLogsText] = useState('');
 
@@ -148,7 +176,6 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
     return api.onProgress((ev) => setProgress(ev));
   }, []);
 
-  // Report browser bounds
   useEffect(() => {
     if (!browserApp) return;
     const el = browserHostRef.current;
@@ -191,10 +218,8 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
         return;
       }
       const el = browserHostRef.current;
-      // ensure state first so ref mounts
       setBrowserApp(app);
       setBrowserUrl(target.url);
-      // next frame for layout
       requestAnimationFrame(() => {
         const host = browserHostRef.current ?? el;
         const r = host?.getBoundingClientRect();
@@ -288,7 +313,6 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
     }
   };
 
-  // ── Import local package ──
   const beginImport = async (source: string, fileName: string) => {
     try {
       const api = window.nativesAPI;
@@ -339,7 +363,6 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
       await window.nativesAPI?.module?.install?.(permDialog.source);
       for (const p of selectedPerms) {
         await window.nativesAPI?.module?.grantPermission?.(
-          // module id unknown until install — approve path still works after list refresh
           permDialog.moduleName,
           p,
         );
@@ -381,7 +404,6 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
     }
   };
 
-  // ── GitHub wizard ──
   const resetWizard = () => {
     setWizardStep('url');
     setRepoUrl('');
@@ -406,61 +428,58 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
   };
 
   const runInspect = async (oneClick: boolean) => {
-    setInspecting(true);
     setInstallError(null);
+    if (!repoUrl.trim()) return;
+    setInspecting(true);
     try {
-      const result = await window.nativesAPI?.creativeApp?.inspectGithub?.({
+      const api = window.nativesAPI?.creativeApp;
+      const res = await api?.inspectGithub?.({
         repositoryUrl: repoUrl.trim(),
         token: tokenForRequest(),
-        saveToken: saveToken && tokenMode === 'once',
+        saveToken: tokenMode === 'once' ? saveToken : false,
         oneClick,
         releaseTag: oneClick ? null : selectedTag || null,
       });
-      if (!result) throw new Error('inspect failed');
-      setInspect(result);
-      setSelectedTag(result.releaseTag);
-      const top = result.candidates[0] ?? null;
-      setSelectedCandidate(top);
-      if (top) {
-        setHostPort(top.suggestedHostPort ? String(top.suggestedHostPort) : '');
-        setOpenPath(top.openPath || '/');
-        setHealthPath(top.healthPath || '');
-        setService(top.service || '');
+      if (!res) throw new Error('Inspect failed');
+      setInspect(res);
+      const tag = res.availableTags[0]?.tag || res.releaseTag || '';
+      setSelectedTag(tag);
+      const cand = res.candidates[0] || null;
+      setSelectedCandidate(cand);
+      if (cand) {
+        setHostPort(cand.suggestedHostPort ? String(cand.suggestedHostPort) : '');
+        setOpenPath(cand.openPath || '/');
+        setHealthPath(cand.healthPath || '');
+        setService(cand.service || '');
         const env: Record<string, string> = {};
-        for (const e of top.envRequirements) env[e.key] = '';
+        for (const e of cand.envRequirements) env[e.key] = '';
         setEnvValues(env);
       }
-      if (oneClick && result.oneClickEligible && result.oneClickCandidateId) {
-        const cand =
-          result.candidates.find((c) => c.id === result.oneClickCandidateId) || top;
-        if (cand) {
-          await runInstall(result, cand, true);
-          return;
-        }
+      if (oneClick && res.candidates.length > 0 && res.blockers.length === 0 && res.candidates[0]) {
+        await runInstall(res, res.candidates[0], true);
+      } else {
+        setWizardStep('manual');
       }
-      setWizardStep('manual');
     } catch (err) {
       setInstallError(classifyError(err).userMessage);
-      setWizardStep('manual');
     } finally {
       setInspecting(false);
-      // clear one-shot token from UI state after use
-      if (tokenMode === 'once') setTokenInput('');
     }
   };
 
   const runInstall = async (
-    ins: CreativeAppInspectResult,
+    inspectResult: CreativeAppInspectResult,
     cand: CreativeAppInstallCandidate,
-    fromOneClick: boolean,
+    oneClick: boolean,
   ) => {
-    setWizardStep('installing');
     setInstallError(null);
+    setWizardStep('installing');
     try {
-      const summary = await window.nativesAPI?.creativeApp?.installGithub?.({
-        repositoryUrl: ins.repositoryUrl,
-        releaseTag: selectedTag || ins.releaseTag,
-        releaseId: ins.releaseId,
+      const api = window.nativesAPI?.creativeApp;
+      await api?.installGithub?.({
+        repositoryUrl: inspectResult.repositoryUrl,
+        releaseTag: selectedTag || inspectResult.releaseTag,
+        releaseId: inspectResult.releaseId,
         candidateId: cand.id,
         token: tokenForRequest(),
         hostPort: hostPort ? Number(hostPort) : cand.suggestedHostPort,
@@ -468,83 +487,75 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
         healthPath: healthPath || cand.healthPath,
         service: service || cand.service,
         env: Object.entries(envValues).map(([key, value]) => ({ key, value })),
-        confirmBindMounts: confirmBinds || fromOneClick,
+        confirmBindMounts: confirmBinds || oneClick,
       });
-      setTokenInput('');
+      showToast(t(locale, 'workshop.githubInstallSuccess'));
       setWizardOpen(false);
       resetWizard();
       await reload();
-      if (summary) {
-        showToast(t(locale, 'workshop.installSuccess'));
-        if (summary.state === 'running') {
-          await openExternal(summary);
-        }
-      }
     } catch (err) {
       setInstallError(classifyError(err).userMessage);
-      setWizardStep('manual');
+      setWizardStep(oneClick ? 'url' : 'manual');
     }
   };
 
-  const stageLabel = (stage: string) => {
+  const stageLabel = (stage: CreativeAppProgressEvent['stage']) => {
     const map: Record<string, string> = {
-      inspecting_release: 'workshop.githubStageInspect',
-      downloading_assets: 'workshop.githubStageDownload',
-      pulling_image: 'workshop.githubStagePull',
-      creating: 'workshop.githubStageCreate',
-      starting: 'workshop.githubStageStart',
-      health_check: 'workshop.githubStageHealth',
-      ready: 'workshop.githubStageReady',
-      failed: 'workshop.githubStageFailed',
+      download: 'workshop.githubStageDownload',
+      extract: 'workshop.githubStageExtract',
+      prepare: 'workshop.githubStagePrepare',
+      compose: 'workshop.githubStageCompose',
+      build: 'workshop.githubStageBuild',
+      start: 'workshop.githubStageStart',
+      health: 'workshop.githubStageHealth',
     };
     return t(locale, map[stage] || 'workshop.githubStageInstall');
   };
 
-  // If browser open, render browser chrome over list
   if (browserApp) {
     return (
-      <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '8px 12px',
-            borderBottom: '1px solid var(--border)',
-            background: 'var(--surface)',
-          }}
-        >
-          <button type="button" className="btn btn-ghost" onClick={() => void window.nativesAPI?.creativeApp?.browserBack?.()} title={t(locale, 'workshop.browserBack')}>
+      <div className="flex flex-col h-full bg-[var(--background)]">
+        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-[var(--border)] bg-[var(--surface)] shrink-0">
+          <button
+            type="button"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all"
+            onClick={() => void window.nativesAPI?.creativeApp?.browserBack?.()}
+            title={t(locale, 'workshop.browserBack')}
+          >
             <ChevronLeft size={14} />
           </button>
-          <button type="button" className="btn btn-ghost" onClick={() => void window.nativesAPI?.creativeApp?.browserForward?.()} title={t(locale, 'workshop.browserForward')}>
+          <button
+            type="button"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all"
+            onClick={() => void window.nativesAPI?.creativeApp?.browserForward?.()}
+            title={t(locale, 'workshop.browserForward')}
+          >
             <ChevronRight size={14} />
           </button>
-          <button type="button" className="btn btn-ghost" onClick={() => void window.nativesAPI?.creativeApp?.browserReload?.()} title={t(locale, 'workshop.browserReload')}>
+          <button
+            type="button"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all"
+            onClick={() => void window.nativesAPI?.creativeApp?.browserReload?.()}
+            title={t(locale, 'workshop.browserReload')}
+          >
             <RefreshCw size={14} />
           </button>
           <div
-            style={{
-              flex: 1,
-              fontSize: FONT_SIZE.xs,
-              fontFamily: 'var(--font-mono)',
-              color: 'var(--text-secondary)',
-              padding: '4px 8px',
-              border: '1px solid var(--border)',
-              borderRadius: BORDER_RADIUS.md,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
+            className="flex-1 text-xs font-mono text-[var(--text-secondary)] px-3 py-1.5 border border-[var(--border)] rounded-lg bg-[var(--surface-subtle)] truncate"
             title={browserUrl}
           >
             {browserUrl || t(locale, 'workshop.browserAddress')}
           </div>
-          <button type="button" className="btn btn-secondary" onClick={() => void closeBrowser()}>
+          <button
+            type="button"
+            className="flex h-8 items-center gap-1.5 px-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-xs font-medium text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all"
+            onClick={() => void closeBrowser()}
+          >
+            <X size={14} />
             {t(locale, 'workshop.browserBackToList')}
           </button>
         </div>
-        <div ref={browserHostRef} style={{ flex: 1, minHeight: 0, background: 'var(--background)' }} />
+        <div ref={browserHostRef} className="flex-1 min-h-0 bg-[var(--background)]" />
       </div>
     );
   }
@@ -554,7 +565,7 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
       initial={prefersReducedMotion ? undefined : { opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={prefersReducedMotion ? undefined : { type: 'spring', stiffness: 60, damping: 16, mass: 1 }}
-      style={{ height: '100%', overflow: 'auto' }}
+      className="flex flex-col h-full overflow-y-auto"
       onDragOver={(e) => {
         e.preventDefault();
         setDragOver(true);
@@ -562,111 +573,93 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
       onDragLeave={() => setDragOver(false)}
       onDrop={handleDrop}
     >
-      <div
-        style={{
-          padding: `${SPACING.md}px ${SPACING.xl}px`,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          borderBottom: '1px solid var(--border)',
-        }}
-      >
+      <div className="px-6 py-4 border-b border-[var(--border)] flex items-center justify-between shrink-0 bg-[var(--surface)]">
         <div>
-          <div style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)' }}>
+          <h2 className="text-base font-bold text-[var(--text)] tracking-tight">
             {t(locale, 'workshop.title')}
-          </div>
-          <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)', marginTop: 2 }}>
+          </h2>
+          <p className="text-xs text-[var(--text-secondary)] mt-0.5">
             {t(locale, 'workshop.subtitle')}
-          </div>
+          </p>
         </div>
-        <div style={{ display: 'flex', gap: 8, position: 'relative' }}>
-          <button type="button" className="btn btn-ghost" onClick={() => void reload()} title="Refresh">
-            <RefreshCw size={14} />
-          </button>
+        <div className="flex items-center gap-2 relative">
           <button
             type="button"
-            className="btn btn-primary"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all"
+            onClick={() => void reload()}
+            title={t(locale, 'common.refresh')}
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          </button>
+
+          <button
+            type="button"
+            className="flex h-8 items-center gap-1.5 px-3 rounded-lg bg-[var(--primary)] text-white text-xs font-medium hover:opacity-90 active:scale-95 transition-all shadow-sm"
             onClick={() => setAddMenu((m) => (m === 'open' ? 'closed' : 'open'))}
           >
-            <Plus size={14} /> {t(locale, 'workshop.add')}
+            <Plus size={14} />
+            <span>{t(locale, 'workshop.add')}</span>
           </button>
+
           {addMenu === 'open' && (
-            <div
-              style={{
-                position: 'absolute',
-                right: 0,
-                top: '110%',
-                minWidth: 220,
-                background: 'var(--surface)',
-                border: '1px solid var(--border)',
-                borderRadius: BORDER_RADIUS.md,
-                boxShadow: '0 8px 24px rgba(0,0,0,.12)',
-                zIndex: 20,
-                padding: 6,
-              }}
-            >
-              <button
-                type="button"
-                className="btn btn-ghost"
-                style={{ width: '100%', justifyContent: 'flex-start' }}
-                onClick={() => {
-                  setAddMenu('closed');
-                  setShowCreateDialog(true);
-                }}
-              >
-                <Layers size={14} /> {t(locale, 'workshop.addMenuCreate')}
-              </button>
-              <label
-                className="btn btn-ghost"
-                style={{ width: '100%', justifyContent: 'flex-start', cursor: 'pointer' }}
-              >
-                <Package size={14} /> {t(locale, 'workshop.addMenuImport')}
-                <input
-                  type="file"
-                  accept=".zip"
-                  style={{ display: 'none' }}
-                  onChange={async (e) => {
+            <>
+              <div
+                className="fixed inset-0 z-10"
+                onClick={() => setAddMenu('closed')}
+              />
+              <div className="absolute right-0 top-full mt-1.5 w-52 bg-[var(--surface)] border border-[var(--border)] rounded-xl shadow-lg p-1 z-20 flex flex-col gap-0.5">
+                <button
+                  type="button"
+                  className="flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all w-full text-left"
+                  onClick={() => {
                     setAddMenu('closed');
-                    const f = e.target.files?.[0];
-                    if (!f) return;
-                    const source = (f as { path?: string }).path || f.name;
-                    await beginImport(source, f.name);
+                    setShowCreateDialog(true);
                   }}
-                />
-              </label>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                style={{ width: '100%', justifyContent: 'flex-start' }}
-                onClick={() => {
-                  setAddMenu('closed');
-                  resetWizard();
-                  setWizardOpen(true);
-                }}
-              >
-                <Github size={14} /> {t(locale, 'workshop.addMenuGithub')}
-              </button>
-            </div>
+                >
+                  <Layers size={14} className="text-[var(--text-secondary)]" />
+                  <span>{t(locale, 'workshop.addMenuCreate')}</span>
+                </button>
+                <label className="flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all w-full cursor-pointer">
+                  <Package size={14} className="text-[var(--text-secondary)]" />
+                  <span>{t(locale, 'workshop.addMenuImport')}</span>
+                  <input
+                    type="file"
+                    accept=".zip"
+                    className="hidden"
+                    onChange={async (e) => {
+                      setAddMenu('closed');
+                      const f = e.target.files?.[0];
+                      if (!f) return;
+                      const source = (f as { path?: string }).path || f.name;
+                      await beginImport(source, f.name);
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all w-full text-left"
+                  onClick={() => {
+                    setAddMenu('closed');
+                    resetWizard();
+                    setWizardOpen(true);
+                  }}
+                >
+                  <Github size={14} className="text-[var(--text-secondary)]" />
+                  <span>{t(locale, 'workshop.addMenuGithub')}</span>
+                </button>
+              </div>
+            </>
           )}
         </div>
       </div>
 
       {dragOver && (
-        <div
-          style={{
-            margin: SPACING.xl,
-            padding: 32,
-            border: '2px dashed var(--primary)',
-            borderRadius: BORDER_RADIUS.lg,
-            textAlign: 'center',
-            color: 'var(--primary)',
-          }}
-        >
+        <div className="m-6 p-8 border-2 border-dashed border-[var(--primary)] rounded-xl text-center text-xs font-semibold text-[var(--primary)] bg-[var(--primary-soft)] animate-pulse">
           {t(locale, 'workshop.releaseToInstall')}
         </div>
       )}
 
-      <div style={{ padding: SPACING.xl }}>
+      <div className="p-6 flex-1">
         {loading && <LoadingState />}
         {error && (
           <EmptyState
@@ -681,13 +674,8 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
             description={t(locale, 'workshop.emptyUnified')}
           />
         )}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-            gap: 12,
-          }}
-        >
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {apps.map((app) => {
             const busy = busyIds.has(app.id) || isActionBusy(app.state);
             const actions = mergeActionsWithBusy(app.actions, busy);
@@ -695,76 +683,116 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
             return (
               <div
                 key={app.id}
-                style={{
-                  border: '1px solid var(--border)',
-                  borderRadius: BORDER_RADIUS.lg,
-                  padding: 14,
-                  background: 'var(--surface)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 10,
-                }}
+                className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-4 flex flex-col justify-between transition-all hover:border-[var(--border-hover)] hover:shadow-sm"
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                  <div style={{ fontWeight: 600, color: 'var(--text)' }}>{app.title}</div>
-                  <span
-                    style={{
-                      fontSize: 10,
-                      padding: '2px 8px',
-                      borderRadius: 999,
-                      border: '1px solid var(--border)',
-                      color: 'var(--text-secondary)',
-                    }}
-                  >
-                    {badge === 'github'
-                      ? t(locale, 'workshop.sourceGithub')
-                      : t(locale, 'workshop.sourceInternal')}
-                  </span>
+                <div>
+                  <div className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] pb-2.5 mb-2.5">
+                    <div className="font-semibold text-sm text-[var(--text)] truncate" title={app.title}>
+                      {app.title}
+                    </div>
+                    <span
+                      className={`text-[10px] font-medium px-2 py-0.5 rounded-full flex items-center gap-1 border shrink-0 ${
+                        badge === 'github'
+                          ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20'
+                          : 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20'
+                      }`}
+                    >
+                      {badge === 'github' ? <Github size={10} /> : <Code2 size={10} />}
+                      <span>
+                        {badge === 'github'
+                          ? t(locale, 'workshop.sourceGithub')
+                          : t(locale, 'workshop.sourceInternal')}
+                      </span>
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)] mb-2">
+                    <div className="flex items-center gap-1.5 font-medium">
+                      {renderStatusDot(app.state)}
+                      <span className="text-[var(--text)]">{stateLabel(locale, app.state)}</span>
+                    </div>
+                    <span className="text-[var(--border)]">•</span>
+                    <span className="truncate">{runtimeLabel(locale, app.runtime)}</span>
+                    {app.version && (
+                      <>
+                        <span className="text-[var(--border)]">•</span>
+                        <span className="font-mono text-[11px]">{app.version}</span>
+                      </>
+                    )}
+                  </div>
+
+                  {app.lastError && (
+                    <div className="text-[11px] text-rose-500 bg-rose-500/10 border border-rose-500/20 p-2 rounded-lg mb-3 flex items-start gap-1.5">
+                      <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                      <span className="line-clamp-2">{app.lastError}</span>
+                    </div>
+                  )}
                 </div>
-                <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)' }}>
-                  {runtimeLabel(locale, app.runtime)} · {app.version} · {stateLabel(locale, app.state)}
-                </div>
-                {app.lastError && (
-                  <div style={{ fontSize: 11, color: 'var(--danger)' }}>{app.lastError}</div>
-                )}
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 'auto' }}>
+
+                <div className="flex items-center gap-1.5 mt-3 pt-3 border-t border-[var(--border-subtle)] flex-wrap">
                   {actions.canOpen && (
-                    <button type="button" className="btn btn-primary" onClick={() => void handleOpen(app)}>
-                      {t(locale, 'workshop.actionOpen')}
+                    <button
+                      type="button"
+                      className="h-8 px-3 text-xs font-medium rounded-lg bg-[var(--primary)] text-white hover:opacity-90 active:scale-95 transition-all flex items-center justify-center gap-1.5 shrink-0"
+                      onClick={() => void handleOpen(app)}
+                    >
+                      <ExternalLink size={13} />
+                      <span>{t(locale, 'workshop.actionOpen')}</span>
                     </button>
                   )}
                   {actions.canStart && (
-                    <button type="button" className="btn btn-secondary" onClick={() => void handleStart(app)}>
-                      <Play size={12} /> {t(locale, 'workshop.actionStart')}
+                    <button
+                      type="button"
+                      className="h-8 px-3 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all flex items-center justify-center gap-1.5 shrink-0"
+                      onClick={() => void handleStart(app)}
+                    >
+                      <Play size={13} />
+                      <span>{t(locale, 'workshop.actionStart')}</span>
                     </button>
                   )}
                   {actions.canStop && (
-                    <button type="button" className="btn btn-secondary" onClick={() => void handleStop(app)}>
-                      <Pause size={12} /> {t(locale, 'workshop.actionStop')}
+                    <button
+                      type="button"
+                      className="h-8 px-3 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all flex items-center justify-center gap-1.5 shrink-0"
+                      onClick={() => void handleStop(app)}
+                    >
+                      <Pause size={13} />
+                      <span>{t(locale, 'workshop.actionStop')}</span>
                     </button>
                   )}
                   {actions.canRetry && (
-                    <button type="button" className="btn btn-secondary" onClick={() => void handleStart(app)}>
-                      <RotateCcw size={12} /> {t(locale, 'workshop.actionRetry')}
+                    <button
+                      type="button"
+                      className="h-8 px-3 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all flex items-center justify-center gap-1.5 shrink-0"
+                      onClick={() => void handleStart(app)}
+                    >
+                      <RotateCcw size={13} />
+                      <span>{t(locale, 'workshop.actionRetry')}</span>
                     </button>
                   )}
                   {app.source === 'external_github' && (
-                    <button type="button" className="btn btn-ghost" onClick={() => void openLogs(app)}>
-                      <ScrollText size={12} /> {t(locale, 'workshop.actionLogs')}
+                    <button
+                      type="button"
+                      className="h-8 px-2.5 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-secondary)] hover:text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all flex items-center justify-center gap-1.5 shrink-0"
+                      onClick={() => void openLogs(app)}
+                      title={t(locale, 'workshop.actionLogs')}
+                    >
+                      <ScrollText size={13} />
                     </button>
                   )}
                   {actions.canDelete && (
                     <button
                       type="button"
-                      className="btn btn-ghost"
+                      className="h-8 px-2.5 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-rose-500 hover:bg-rose-500/10 hover:border-rose-500/20 transition-all flex items-center justify-center gap-1.5 shrink-0 ml-auto"
                       onClick={() => {
                         setDeleteTarget(app);
                         const d = defaultDeleteOptions();
                         setDeleteVolumes(d.removeVolumes);
                         setDeleteImages(d.removeImages);
                       }}
+                      title={t(locale, 'workshop.actionDelete')}
                     >
-                      <Trash2 size={12} /> {t(locale, 'workshop.actionDelete')}
+                      <Trash2 size={13} />
                     </button>
                   )}
                 </div>
@@ -775,25 +803,11 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
       </div>
 
       {toast && (
-        <div
-          style={{
-            position: 'fixed',
-            bottom: 24,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            background: 'var(--text)',
-            color: 'var(--bg)',
-            padding: '8px 14px',
-            borderRadius: 8,
-            fontSize: 12,
-            zIndex: 50,
-          }}
-        >
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-[var(--text)] text-[var(--bg)] px-4 py-2 rounded-lg text-xs font-medium shadow-lg z-50 animate-fade-in">
           {toast}
         </div>
       )}
 
-      {/* Create internal */}
       {showCreateDialog && (
         <Modal
           isOpen
@@ -801,43 +815,51 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
           title={t(locale, 'workshop.createModule')}
           width={420}
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <label style={{ fontSize: 12 }}>
-              {t(locale, 'workshop.templateName')}
+          <div className="flex flex-col gap-4 py-2">
+            <div>
+              <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">
+                {t(locale, 'workshop.templateName')}
+              </label>
               <input
                 value={templateName}
                 onChange={(e) => setTemplateName(e.target.value)}
                 placeholder={t(locale, 'workshop.templateNamePlaceholder')}
-                style={inputStyle}
+                className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
               />
-            </label>
-            <label style={{ fontSize: 12 }}>
-              {t(locale, 'workshop.templateId')}
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">
+                {t(locale, 'workshop.templateId')}
+              </label>
               <input
                 value={templateId}
                 onChange={(e) => setTemplateId(e.target.value)}
                 placeholder={t(locale, 'workshop.templateIdPlaceholder')}
-                style={inputStyle}
+                className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
               />
-            </label>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button type="button" className="btn btn-secondary" onClick={() => setShowCreateDialog(false)}>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                className="h-9 px-4 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all"
+                onClick={() => setShowCreateDialog(false)}
+              >
                 {t(locale, 'common.cancel')}
               </button>
               <button
                 type="button"
-                className="btn btn-primary"
+                className="h-9 px-4 text-xs font-medium rounded-lg bg-[var(--primary)] text-white hover:opacity-90 transition-all flex items-center gap-1.5"
                 disabled={creating}
                 onClick={() => void createTemplate()}
               >
-                {creating ? t(locale, 'workshop.creating') : t(locale, 'workshop.createTemplate')}
+                {creating ? <Loader size={14} className="animate-spin" /> : null}
+                <span>{creating ? t(locale, 'workshop.creating') : t(locale, 'workshop.createTemplate')}</span>
               </button>
             </div>
           </div>
         </Modal>
       )}
 
-      {/* Permission dialog */}
       {permDialog && (
         <Modal
           isOpen
@@ -845,47 +867,57 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
           title={t(locale, 'workshop.permissionTitle')}
           width={440}
         >
-          <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            {t(locale, 'workshop.permissionDesc').replace('{name}', permDialog.moduleName)}
-          </p>
-          <ul style={{ fontSize: 12, margin: '12px 0' }}>
-            {permDialog.permissions.map((p) => (
-              <li key={p}>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={selectedPerms.has(p)}
-                    onChange={(e) => {
-                      setSelectedPerms((prev) => {
-                        const n = new Set(prev);
-                        if (e.target.checked) n.add(p);
-                        else n.delete(p);
-                        return n;
-                      });
-                    }}
-                  />{' '}
-                  {p}
-                </label>
-              </li>
-            ))}
-          </ul>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <button type="button" className="btn btn-secondary" onClick={() => setPermDialog(null)}>
-              {t(locale, 'common.cancel')}
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={installing}
-              onClick={() => void confirmImport()}
-            >
-              {t(locale, 'workshop.permissionAllowAll')}
-            </button>
+          <div className="flex flex-col gap-3 py-1">
+            <p className="text-xs text-[var(--text-secondary)]">
+              {t(locale, 'workshop.permissionDesc').replace('{name}', permDialog.moduleName)}
+            </p>
+            <div className="bg-[var(--surface-subtle)] p-3 rounded-lg border border-[var(--border)] max-h-48 overflow-y-auto">
+              <ul className="space-y-2 text-xs text-[var(--text)]">
+                {permDialog.permissions.map((p) => (
+                  <li key={p} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id={`perm-${p}`}
+                      checked={selectedPerms.has(p)}
+                      onChange={(e) => {
+                        setSelectedPerms((prev) => {
+                          const n = new Set(prev);
+                          if (e.target.checked) n.add(p);
+                          else n.delete(p);
+                          return n;
+                        });
+                      }}
+                      className="rounded border-[var(--border)] text-[var(--primary)] focus:ring-0"
+                    />
+                    <label htmlFor={`perm-${p}`} className="cursor-pointer font-mono text-[11px]">
+                      {p}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                className="h-9 px-4 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all"
+                onClick={() => setPermDialog(null)}
+              >
+                {t(locale, 'common.cancel')}
+              </button>
+              <button
+                type="button"
+                className="h-9 px-4 text-xs font-medium rounded-lg bg-[var(--primary)] text-white hover:opacity-90 transition-all flex items-center gap-1.5"
+                disabled={installing}
+                onClick={() => void confirmImport()}
+              >
+                {installing ? <Loader size={14} className="animate-spin" /> : null}
+                <span>{t(locale, 'workshop.permissionAllowAll')}</span>
+              </button>
+            </div>
           </div>
         </Modal>
       )}
 
-      {/* Delete dialog */}
       {deleteTarget && (
         <Modal
           isOpen
@@ -893,61 +925,68 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
           title={t(locale, 'workshop.deleteTitle')}
           width={420}
         >
-          <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            {t(locale, 'workshop.deleteDesc')}
-          </p>
-          <p style={{ fontSize: 13, fontWeight: 600 }}>{deleteTarget.title}</p>
-          {deleteTarget.source === 'external_github' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
-              <label style={{ fontSize: 12 }}>
-                <input
-                  type="checkbox"
-                  checked={deleteVolumes}
-                  onChange={(e) => setDeleteVolumes(e.target.checked)}
-                />{' '}
-                {t(locale, 'workshop.deleteRemoveVolumes')}
-              </label>
-              <label style={{ fontSize: 12 }}>
-                <input
-                  type="checkbox"
-                  checked={deleteImages}
-                  onChange={(e) => setDeleteImages(e.target.checked)}
-                />{' '}
-                {t(locale, 'workshop.deleteRemoveImages')}
-              </label>
+          <div className="flex flex-col gap-3 py-1">
+            <p className="text-xs text-[var(--text-secondary)]">
+              {t(locale, 'workshop.deleteDesc')}
+            </p>
+            <div className="p-3 bg-[var(--surface-subtle)] border border-[var(--border)] rounded-lg font-semibold text-sm text-[var(--text)]">
+              {deleteTarget.title}
             </div>
-          )}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
-            <button type="button" className="btn btn-secondary" onClick={() => setDeleteTarget(null)}>
-              {t(locale, 'common.cancel')}
-            </button>
-            <button type="button" className="btn btn-primary" onClick={() => void doDelete()}>
-              {t(locale, 'workshop.deleteConfirm')}
-            </button>
+
+            {deleteTarget.source === 'external_github' && (
+              <div className="flex flex-col gap-2 pt-1">
+                <label className="flex items-center gap-2 text-xs text-[var(--text)] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={deleteVolumes}
+                    onChange={(e) => setDeleteVolumes(e.target.checked)}
+                    className="rounded border-[var(--border)]"
+                  />
+                  <span>{t(locale, 'workshop.deleteRemoveVolumes')}</span>
+                </label>
+                <label className="flex items-center gap-2 text-xs text-[var(--text)] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={deleteImages}
+                    onChange={(e) => setDeleteImages(e.target.checked)}
+                    className="rounded border-[var(--border)]"
+                  />
+                  <span>{t(locale, 'workshop.deleteRemoveImages')}</span>
+                </label>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-3">
+              <button
+                type="button"
+                className="h-9 px-4 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all"
+                onClick={() => setDeleteTarget(null)}
+              >
+                {t(locale, 'common.cancel')}
+              </button>
+              <button
+                type="button"
+                className="h-9 px-4 text-xs font-medium rounded-lg bg-rose-500 text-white hover:bg-rose-600 transition-all flex items-center gap-1.5"
+                onClick={() => void doDelete()}
+              >
+                <Trash2 size={14} />
+                <span>{t(locale, 'workshop.deleteConfirm')}</span>
+              </button>
+            </div>
           </div>
         </Modal>
       )}
 
-      {/* Logs */}
       {logsFor && (
         <Modal isOpen onClose={() => setLogsFor(null)} title={t(locale, 'workshop.logsTitle')} width={640}>
-          <pre
-            style={{
-              maxHeight: 360,
-              overflow: 'auto',
-              fontSize: 11,
-              fontFamily: 'var(--font-mono)',
-              background: 'var(--bg-2)',
-              padding: 12,
-              borderRadius: 8,
-            }}
-          >
-            {logsText}
-          </pre>
+          <div className="py-1">
+            <pre className="max-h-96 overflow-auto text-[11px] font-mono bg-zinc-950 text-zinc-200 p-4 rounded-xl border border-zinc-800 leading-relaxed">
+              {logsText}
+            </pre>
+          </div>
         </Modal>
       )}
 
-      {/* GitHub wizard */}
       {wizardOpen && (
         <Modal
           isOpen
@@ -959,58 +998,77 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
           width={520}
         >
           {wizardStep === 'url' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <label style={{ fontSize: 12 }}>
-                {t(locale, 'workshop.githubRepoUrl')}
+            <div className="flex flex-col gap-4 py-1">
+              <div>
+                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">
+                  {t(locale, 'workshop.githubRepoUrl')}
+                </label>
                 <input
                   value={repoUrl}
                   onChange={(e) => setRepoUrl(e.target.value)}
                   placeholder={t(locale, 'workshop.githubRepoPlaceholder')}
-                  style={inputStyle}
+                  className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
                 />
-              </label>
-              <div style={{ display: 'flex', gap: 8, fontSize: 12 }}>
-                {(['public', 'saved', 'once'] as const).map((m) => (
-                  <label key={m}>
-                    <input
-                      type="radio"
-                      checked={tokenMode === m}
-                      onChange={() => setTokenMode(m)}
-                    />{' '}
-                    {m === 'public'
-                      ? t(locale, 'workshop.githubPublicAccess')
-                      : m === 'saved'
-                        ? t(locale, 'workshop.githubUseSavedToken')
-                        : t(locale, 'workshop.githubOneShotToken')}
-                  </label>
-                ))}
               </div>
+
+              <div>
+                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">
+                  {t(locale, 'settings.githubToken')}
+                </label>
+                <div className="grid grid-cols-3 gap-1.5 p-1 bg-[var(--surface-subtle)] border border-[var(--border)] rounded-lg">
+                  {(['public', 'saved', 'once'] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setTokenMode(m)}
+                      className={`h-7 text-[11px] font-medium rounded-md transition-all ${
+                        tokenMode === m
+                          ? 'bg-[var(--surface)] text-[var(--primary)] shadow-sm font-semibold'
+                          : 'text-[var(--text-secondary)] hover:text-[var(--text)]'
+                      }`}
+                    >
+                      {m === 'public'
+                        ? t(locale, 'workshop.githubPublicAccess')
+                        : m === 'saved'
+                          ? t(locale, 'workshop.githubUseSavedToken')
+                          : t(locale, 'workshop.githubOneShotToken')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {tokenMode === 'once' && (
-                <>
+                <div className="space-y-2">
                   <input
                     type="password"
                     value={tokenInput}
                     onChange={(e) => setTokenInput(e.target.value)}
                     placeholder={t(locale, 'workshop.githubTokenPlaceholder')}
-                    style={inputStyle}
+                    className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
                   />
-                  <label style={{ fontSize: 12 }}>
+                  <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)] cursor-pointer">
                     <input
                       type="checkbox"
                       checked={saveToken}
                       onChange={(e) => setSaveToken(e.target.checked)}
-                    />{' '}
-                    {t(locale, 'workshop.githubSaveToken')}
+                      className="rounded border-[var(--border)]"
+                    />
+                    <span>{t(locale, 'workshop.githubSaveToken')}</span>
                   </label>
-                </>
+                </div>
               )}
+
               {installError && (
-                <div style={{ color: 'var(--danger)', fontSize: 12 }}>{installError}</div>
+                <div className="text-xs text-rose-500 bg-rose-500/10 border border-rose-500/20 p-2.5 rounded-lg flex items-start gap-2">
+                  <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                  <span>{installError}</span>
+                </div>
               )}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+
+              <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  className="btn btn-secondary"
+                  className="h-9 px-4 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all"
                   disabled={inspecting || !repoUrl.trim()}
                   onClick={() => void runInspect(false)}
                 >
@@ -1018,44 +1076,49 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
                 </button>
                 <button
                   type="button"
-                  className="btn btn-primary"
+                  className="h-9 px-4 text-xs font-medium rounded-lg bg-[var(--primary)] text-white hover:opacity-90 transition-all flex items-center gap-1.5"
                   disabled={inspecting || !repoUrl.trim()}
                   onClick={() => void runInspect(true)}
                 >
-                  {inspecting ? '…' : t(locale, 'workshop.githubOneClick')}
+                  {inspecting ? <Loader size={14} className="animate-spin" /> : null}
+                  <span>{inspecting ? '…' : t(locale, 'workshop.githubOneClick')}</span>
                 </button>
               </div>
             </div>
           )}
 
           {wizardStep === 'manual' && inspect && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 480, overflow: 'auto' }}>
+            <div className="flex flex-col gap-3 py-1 max-h-[460px] overflow-y-auto pr-1">
               {inspect.blockers.length > 0 && (
-                <div style={{ color: 'var(--danger)', fontSize: 12 }}>
-                  <strong>{t(locale, 'workshop.githubBlockers')}</strong>
-                  <ul>
+                <div className="text-xs text-rose-500 bg-rose-500/10 border border-rose-500/20 p-3 rounded-lg">
+                  <strong className="block mb-1 font-semibold">{t(locale, 'workshop.githubBlockers')}</strong>
+                  <ul className="list-disc list-inside space-y-1">
                     {inspect.blockers.map((b) => (
                       <li key={b}>{b}</li>
                     ))}
                   </ul>
                 </div>
               )}
+
               {inspect.warnings.length > 0 && (
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                  <strong>{t(locale, 'workshop.githubWarnings')}</strong>
-                  <ul>
+                <div className="text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 p-3 rounded-lg">
+                  <strong className="block mb-1 font-semibold">{t(locale, 'workshop.githubWarnings')}</strong>
+                  <ul className="list-disc list-inside space-y-1">
                     {inspect.warnings.map((w) => (
                       <li key={w}>{w}</li>
                     ))}
                   </ul>
                 </div>
               )}
-              <label style={{ fontSize: 12 }}>
-                {t(locale, 'workshop.githubSelectTag')}
+
+              <div>
+                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                  {t(locale, 'workshop.githubSelectTag')}
+                </label>
                 <select
                   value={selectedTag}
                   onChange={(e) => setSelectedTag(e.target.value)}
-                  style={inputStyle}
+                  className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
                 >
                   {(inspect.availableTags.length
                     ? inspect.availableTags
@@ -1067,9 +1130,12 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
                     </option>
                   ))}
                 </select>
-              </label>
-              <label style={{ fontSize: 12 }}>
-                {t(locale, 'workshop.githubSelectCandidate')}
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                  {t(locale, 'workshop.githubSelectCandidate')}
+                </label>
                 <select
                   value={selectedCandidate?.id || ''}
                   onChange={(e) => {
@@ -1082,7 +1148,7 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
                       setService(c.service || '');
                     }
                   }}
-                  style={inputStyle}
+                  className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
                 >
                   {inspect.candidates.map((c) => (
                     <option key={c.id} value={c.id}>
@@ -1090,87 +1156,130 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
                     </option>
                   ))}
                 </select>
-              </label>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                <label style={{ fontSize: 12 }}>
-                  {t(locale, 'workshop.githubHostPort')}
-                  <input value={hostPort} onChange={(e) => setHostPort(e.target.value)} style={inputStyle} />
-                </label>
-                <label style={{ fontSize: 12 }}>
-                  {t(locale, 'workshop.githubService')}
-                  <input value={service} onChange={(e) => setService(e.target.value)} style={inputStyle} />
-                </label>
-                <label style={{ fontSize: 12 }}>
-                  {t(locale, 'workshop.githubOpenPath')}
-                  <input value={openPath} onChange={(e) => setOpenPath(e.target.value)} style={inputStyle} />
-                </label>
-                <label style={{ fontSize: 12 }}>
-                  {t(locale, 'workshop.githubHealthPath')}
-                  <input value={healthPath} onChange={(e) => setHealthPath(e.target.value)} style={inputStyle} />
-                </label>
               </div>
-              {selectedCandidate && selectedCandidate.envRequirements.length > 0 && (
+
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>{t(locale, 'workshop.githubEnvTitle')}</div>
-                  {selectedCandidate.envRequirements.map((e) => (
-                    <label key={e.key} style={{ fontSize: 12, display: 'block', marginTop: 6 }}>
-                      {e.key}
-                      {e.required ? ' *' : ''}
-                      <input
-                        type={e.secret ? 'password' : 'text'}
-                        value={envValues[e.key] || ''}
-                        onChange={(ev) =>
-                          setEnvValues((prev) => ({ ...prev, [e.key]: ev.target.value }))
-                        }
-                        style={inputStyle}
-                      />
-                    </label>
-                  ))}
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                    {t(locale, 'workshop.githubHostPort')}
+                  </label>
+                  <input
+                    value={hostPort}
+                    onChange={(e) => setHostPort(e.target.value)}
+                    className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                    {t(locale, 'workshop.githubService')}
+                  </label>
+                  <input
+                    value={service}
+                    onChange={(e) => setService(e.target.value)}
+                    className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                    {t(locale, 'workshop.githubOpenPath')}
+                  </label>
+                  <input
+                    value={openPath}
+                    onChange={(e) => setOpenPath(e.target.value)}
+                    className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                    {t(locale, 'workshop.githubHealthPath')}
+                  </label>
+                  <input
+                    value={healthPath}
+                    onChange={(e) => setHealthPath(e.target.value)}
+                    className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
+                  />
+                </div>
+              </div>
+
+              {selectedCandidate && selectedCandidate.envRequirements.length > 0 && (
+                <div className="space-y-2 pt-1">
+                  <div className="text-xs font-semibold text-[var(--text)]">{t(locale, 'workshop.githubEnvTitle')}</div>
+                  <div className="space-y-2">
+                    {selectedCandidate.envRequirements.map((e) => (
+                      <div key={e.key}>
+                        <label className="block text-[11px] font-medium text-[var(--text-secondary)] mb-1">
+                          {e.key} {e.required ? <span className="text-rose-500">*</span> : null}
+                        </label>
+                        <input
+                          type={e.secret ? 'password' : 'text'}
+                          value={envValues[e.key] || ''}
+                          onChange={(ev) =>
+                            setEnvValues((prev) => ({ ...prev, [e.key]: ev.target.value }))
+                          }
+                          className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] text-[var(--text)] focus:outline-none focus:border-[var(--primary)] transition-all"
+                        />
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
+
               {selectedCandidate && selectedCandidate.riskSummary.length > 0 && (
-                <div style={{ fontSize: 12 }}>
-                  <strong>{t(locale, 'workshop.githubRiskTitle')}</strong>
-                  <ul>
+                <div className="text-xs bg-[var(--surface-subtle)] p-3 rounded-lg border border-[var(--border)] space-y-2">
+                  <strong className="block font-semibold text-[var(--text)]">{t(locale, 'workshop.githubRiskTitle')}</strong>
+                  <ul className="list-disc list-inside text-[var(--text-secondary)] space-y-1">
                     {selectedCandidate.riskSummary.map((r) => (
                       <li key={r}>{r}</li>
                     ))}
                   </ul>
-                  <label>
+                  <label className="flex items-center gap-2 pt-1 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={confirmBinds}
                       onChange={(e) => setConfirmBinds(e.target.checked)}
-                    />{' '}
-                    confirm bind mounts
+                      className="rounded border-[var(--border)]"
+                    />
+                    <span className="font-medium text-[var(--text)]">confirm bind mounts</span>
                   </label>
                 </div>
               )}
+
               {installError && (
-                <div style={{ color: 'var(--danger)', fontSize: 12 }}>{installError}</div>
+                <div className="text-xs text-rose-500 bg-rose-500/10 border border-rose-500/20 p-2.5 rounded-lg flex items-start gap-2">
+                  <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                  <span>{installError}</span>
+                </div>
               )}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                <button type="button" className="btn btn-secondary" onClick={() => setWizardStep('url')}>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  className="h-9 px-4 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all"
+                  onClick={() => setWizardStep('url')}
+                >
                   {t(locale, 'common.back')}
                 </button>
                 <button
                   type="button"
-                  className="btn btn-primary"
+                  className="h-9 px-4 text-xs font-medium rounded-lg bg-[var(--primary)] text-white hover:opacity-90 transition-all flex items-center gap-1.5"
                   disabled={!selectedCandidate || inspect.blockers.length > 0}
                   onClick={() => {
                     if (inspect && selectedCandidate) void runInstall(inspect, selectedCandidate, false);
                   }}
                 >
-                  {t(locale, 'workshop.githubInstall')}
+                  <span>{t(locale, 'workshop.githubInstall')}</span>
                 </button>
               </div>
             </div>
           )}
 
           {wizardStep === 'installing' && (
-            <div style={{ fontSize: 13 }}>
-              <div style={{ marginBottom: 8 }}>{progress ? stageLabel(progress.stage) : '…'}</div>
-              <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
+            <div className="py-6 flex flex-col items-center justify-center text-center space-y-3">
+              <Loader size={28} className="animate-spin text-[var(--primary)]" />
+              <div className="text-sm font-semibold text-[var(--text)]">
+                {progress ? stageLabel(progress.stage) : '…'}
+              </div>
+              <div className="text-xs text-[var(--text-secondary)] max-w-sm">
                 {progress?.message}
               </div>
             </div>
@@ -1180,15 +1289,3 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
     </motion.div>
   );
 }
-
-const inputStyle: React.CSSProperties = {
-  display: 'block',
-  width: '100%',
-  marginTop: 4,
-  padding: '8px 10px',
-  borderRadius: 6,
-  border: '1px solid var(--border)',
-  background: 'var(--bg-2)',
-  color: 'var(--text)',
-  fontSize: 12,
-};

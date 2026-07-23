@@ -25,6 +25,7 @@ pub fn project_list() -> Result<Vec<ProjectInfo>> {
                 (SELECT COUNT(*) FROM assistant_conversations c WHERE c.project_id = p.path AND c.archived_at IS NULL),
                 p.last_opened_at
              FROM assistant_projects p
+             WHERE p.deleted_at IS NULL
              ORDER BY p.last_opened_at DESC, p.label COLLATE NOCASE",
         )
         .map_err(|e| format!("Failed to prepare project list query: {e}"))?;
@@ -92,12 +93,31 @@ pub fn project_register(path: String) -> Result<ProjectInfo> {
 
     let now = chrono::Utc::now().to_rfc3339();
     let conn = db::get_assistant_db_conn().map_err(|e| e.to_string())?;
-    conn.execute(
-        "INSERT INTO assistant_projects (id, path, label, created_at, last_opened_at)
-         VALUES (?1, ?2, ?3, ?4, ?4)
-         ON CONFLICT(path) DO UPDATE SET label = excluded.label, last_opened_at = excluded.last_opened_at",
-        rusqlite::params![canonical_str, canonical_str, label, now],
-    ).map_err(|e| format!("Failed to register project: {e}"))?;
+
+    // Check if a soft-deleted project exists with the same path — restore it.
+    let was_deleted: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM assistant_projects WHERE path = ?1 AND deleted_at IS NOT NULL",
+            rusqlite::params![canonical_str],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+
+    if was_deleted {
+        // Restore the soft-deleted project: clear deleted_at, update label and timestamp.
+        conn.execute(
+            "UPDATE assistant_projects SET deleted_at = NULL, label = ?1, last_opened_at = ?2 WHERE path = ?3",
+            rusqlite::params![label, now, canonical_str],
+        ).map_err(|e| format!("Failed to restore project: {e}"))?;
+    } else {
+        conn.execute(
+            "INSERT INTO assistant_projects (id, path, label, created_at, last_opened_at)
+             VALUES (?1, ?2, ?3, ?4, ?4)
+             ON CONFLICT(path) DO UPDATE SET label = excluded.label, last_opened_at = excluded.last_opened_at, deleted_at = NULL",
+            rusqlite::params![canonical_str, canonical_str, label, now],
+        ).map_err(|e| format!("Failed to register project: {e}"))?;
+    }
     Ok(ProjectInfo {
         id: canonical_str.clone(),
         path: canonical_str,
@@ -123,22 +143,15 @@ pub fn project_open(id: String) -> Result<()> {
     Ok(())
 }
 
-/// Remove a project registration without deleting its conversations.
-/// Existing conversations are moved to the explicit unassigned group.
+/// Soft-remove a project registration (logical delete).
+/// Sessions keep their project_id so they reappear when the project is re-added.
 #[tauri::command]
 pub fn project_remove(id: String) -> Result<()> {
-    let mut conn = db::get_assistant_db_conn().map_err(|e| e.to_string())?;
-    let transaction = conn.transaction()
-        .map_err(|e| format!("Failed to start project removal: {e}"))?;
-    transaction.execute(
-        "UPDATE assistant_conversations SET project_id = NULL WHERE project_id = ?1",
-        rusqlite::params![id],
-    ).map_err(|e| format!("Failed to unassign project conversations: {e}"))?;
-    transaction.execute(
-        "DELETE FROM assistant_projects WHERE id = ?1 OR path = ?1",
-        rusqlite::params![id],
+    let conn = db::get_assistant_db_conn().map_err(|e| e.to_string())?;
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE assistant_projects SET deleted_at = ?1 WHERE (id = ?2 OR path = ?2) AND deleted_at IS NULL",
+        rusqlite::params![now, id],
     ).map_err(|e| format!("Failed to remove project: {e}"))?;
-    transaction.commit()
-        .map_err(|e| format!("Failed to commit project removal: {e}"))?;
     Ok(())
 }

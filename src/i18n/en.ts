@@ -1326,7 +1326,7 @@ export const en = {
     unpinProject: 'Unpin project',
     showProjectInFinder: 'Show in Finder',
     removeProject: 'Remove project',
-    removeProjectConfirm: 'Remove “{title}”? Project files stay on disk and existing conversations move to Unassigned.',
+    removeProjectConfirm: 'Remove “{title}”? Project files stay on disk. Existing conversations stay linked and will reappear when the project is re-added.',
     selectConversation: 'Select a conversation',
     unassignedProject: 'Unassigned',
     newSession: 'New Session',

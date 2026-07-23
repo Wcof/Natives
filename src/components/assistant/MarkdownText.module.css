@@ -103,10 +103,19 @@
   color: var(--text-secondary, #656d76);
 }
 
-.root :global(hr) {
-  border: none;
-  border-top: 1px solid var(--border-subtle, var(--border, #d0d7de));
+/* Override @uiw/react-markdown-preview's thick GitHub-style hr (height:0.25em + bg).
+   `.root .wmde-markdown hr` raises specificity above the library's `.wmde-markdown hr`. */
+.root :global(hr),
+.root :global(.wmde-markdown hr) {
+  box-sizing: content-box;
+  height: 0;
+  padding: 0;
   margin: 1em 0;
+  overflow: hidden;
+  background: transparent;
+  background-color: transparent;
+  border: 0;
+  border-top: 1px solid var(--border-subtle, var(--border, #d0d7de));
 }
 
 .root :global(a) {
