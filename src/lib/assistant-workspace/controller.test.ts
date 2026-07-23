@@ -12,6 +12,7 @@ import { FixtureAssistantAdapter } from '../assistant-gateway/fixture-adapter';
 import type { AssistantGateway } from '../assistant-gateway/gateway';
 import type { AssistantMethod } from '../assistant-protocol';
 import { goldenPermission, goldenTextStream } from '../assistant-fixtures/golden';
+import { isActiveRunStatus } from '../assistant-protocol';
 import { createInitialWorkspaceState, workspaceReducer } from './reducer';
 
 test('resolveProjectPath prefers explicit then conversation then null without window', async () => {
@@ -541,4 +542,255 @@ test('run.getEvents replay after sequence gap returns later events only', async 
   });
   assert.ok(tail.every((e) => e.sequence > mid));
   assert.equal(tail.length, all.length - 1);
+});
+
+test('subscribeRun quiet end without terminal does not set reconnecting', async () => {
+  const adapter = new FixtureAssistantAdapter({
+    id: 'quiet-end',
+    conversations: [goldenTextStream.conversations![0]!],
+    eventsByRun: {
+      __next__: [
+        {
+          runId: 'run-template',
+          sequence: 1,
+          timestamp: '2026-07-17T12:00:00.000Z',
+          type: 'started',
+          payload: {},
+        },
+        {
+          runId: 'run-template',
+          sequence: 2,
+          timestamp: '2026-07-17T12:00:00.000Z',
+          type: 'text_delta',
+          payload: { text: 'partial' },
+        },
+        // no completed — iterator ends quietly (normal long-poll)
+      ],
+    },
+  });
+  await adapter.connect();
+  let state = createInitialWorkspaceState();
+  state = workspaceReducer(state, {
+    type: 'connection/set',
+    connection: 'connected',
+    error: null,
+    reconnectAttempts: 0,
+  });
+  const dispatch = (a: import('./state').WorkspaceAction) => {
+    state = workspaceReducer(state, a);
+  };
+  state = workspaceReducer(state, {
+    type: 'conversations/upsert',
+    conversation: {
+      id: 'conv-1',
+      mode: 'agent',
+      title: 'quiet',
+      providerId: 'openai',
+      modelId: 'gpt-4o',
+      projectId: '/tmp/project',
+      createdAt: 't',
+      updatedAt: 't',
+    },
+  });
+  const started = await sendOrQueue(adapter, dispatch, state, {
+    conversationId: 'conv-1',
+    content: 'hi',
+    providerId: 'openai',
+    modelId: 'gpt-4o',
+    projectPath: '/tmp/project',
+  });
+  const runId = started.runId!;
+  await subscribeRun(adapter, dispatch, () => state, runId, 0);
+  assert.notEqual(state.connection, 'reconnecting');
+  assert.notEqual(state.connection, 'recovering');
+  assert.equal(state.connection, 'connected');
+  assert.equal(state.connectionError, null);
+  assert.ok(isActiveRunStatus(state.runs[runId]?.status ?? 'queued') || state.runs[runId]);
+});
+
+test('subscribeRun transport error sets reconnecting; next event clears it', async () => {
+  const adapter = new FixtureAssistantAdapter({
+    ...goldenTextStream,
+    disconnectAfterEvents: 1,
+  });
+  await adapter.connect();
+  let state = createInitialWorkspaceState();
+  state = workspaceReducer(state, {
+    type: 'connection/set',
+    connection: 'connected',
+    error: null,
+    reconnectAttempts: 0,
+  });
+  const dispatch = (a: import('./state').WorkspaceAction) => {
+    state = workspaceReducer(state, a);
+  };
+  state = workspaceReducer(state, {
+    type: 'conversations/upsert',
+    conversation: {
+      id: 'conv-1',
+      mode: 'agent',
+      title: 'disconnect',
+      providerId: 'openai',
+      modelId: 'gpt-4o',
+      projectId: '/tmp/project',
+      createdAt: 't',
+      updatedAt: 't',
+    },
+  });
+  const started = await sendOrQueue(adapter, dispatch, state, {
+    conversationId: 'conv-1',
+    content: 'hi',
+    providerId: 'openai',
+    modelId: 'gpt-4o',
+    projectPath: '/tmp/project',
+  });
+  const runId = started.runId!;
+  await assert.rejects(
+    () => subscribeRun(adapter, dispatch, () => state, runId, 0),
+    /disconnected/,
+  );
+  assert.equal(state.connection, 'reconnecting');
+  assert.ok(state.connectionError);
+
+  // Simulate recovery: reconnect and consume remaining events.
+  await adapter.connect();
+  // Clear forceDisconnect path by reloading remaining events via getEvents + live apply.
+  const remaining = await adapter.request<
+    Array<{ sequence: number; type: string; payload?: Record<string, unknown>; timestamp?: string }>
+  >('run.getEvents', { run_id: runId, after_sequence: state.lastSequenceByRun[runId] ?? 0 });
+  for (const e of remaining) {
+    state = workspaceReducer(state, {
+      type: 'event/apply',
+      event: {
+        runId,
+        sequence: e.sequence,
+        timestamp: e.timestamp ?? new Date().toISOString(),
+        type: e.type,
+        payload: e.payload ?? {},
+      },
+    });
+  }
+  // Live path clears reconnecting when events flow again through subscribeRun.
+  adapter.loadScenario({
+    id: 'recover-live',
+    eventsByRun: {
+      [runId]: remaining.map((e) => ({
+        runId,
+        sequence: e.sequence,
+        timestamp: e.timestamp ?? new Date().toISOString(),
+        type: e.type,
+        payload: e.payload ?? {},
+      })),
+    },
+  });
+  // Seed last sequence so subscribe sees progress from afterSequence.
+  const after = Math.max(0, (state.lastSequenceByRun[runId] ?? 1) - 1);
+  // Force connection back to reconnecting then prove a live event clears it.
+  state = workspaceReducer(state, {
+    type: 'connection/set',
+    connection: 'reconnecting',
+    error: 'disconnected',
+    reconnectAttempts: 3,
+  });
+  // Use a tiny live stream with one new event after current last.
+  const last = state.lastSequenceByRun[runId] ?? 0;
+  const liveAdapter = new FixtureAssistantAdapter({
+    id: 'live-clear',
+    eventsByRun: {
+      [runId]: [
+        {
+          runId,
+          sequence: last + 1,
+          timestamp: new Date().toISOString(),
+          type: 'text_delta',
+          payload: { text: 'x' },
+        },
+      ],
+    },
+  });
+  await liveAdapter.connect();
+  state = workspaceReducer(state, {
+    type: 'run/upsert',
+    run: {
+      ...(state.runs[runId]!),
+      status: 'running',
+    },
+  });
+  await subscribeRun(liveAdapter, dispatch, () => state, runId, last);
+  assert.equal(state.connection, 'connected');
+  assert.equal(state.connectionError, null);
+  assert.equal(state.reconnectAttempts, 0);
+});
+
+test('subscribeRun sequence gap marks recoveringRuns only (global stays connected)', async () => {
+  const runId = 'run-gap-1';
+  const adapter = new FixtureAssistantAdapter({
+    id: 'gap',
+    skipSequences: { [runId]: [2] },
+    eventsByRun: {
+      [runId]: [
+        {
+          runId,
+          sequence: 1,
+          timestamp: '2026-07-17T12:00:00.000Z',
+          type: 'started',
+          payload: {},
+        },
+        {
+          runId,
+          sequence: 2,
+          timestamp: '2026-07-17T12:00:00.000Z',
+          type: 'text_delta',
+          payload: { text: 'mid' },
+        },
+        {
+          runId,
+          sequence: 3,
+          timestamp: '2026-07-17T12:00:00.000Z',
+          type: 'text_delta',
+          payload: { text: 'tail' },
+        },
+        {
+          runId,
+          sequence: 4,
+          timestamp: '2026-07-17T12:00:00.000Z',
+          type: 'completed',
+          payload: { reason: 'ok' },
+        },
+      ],
+    },
+  });
+  await adapter.connect();
+  let state = createInitialWorkspaceState();
+  state = workspaceReducer(state, {
+    type: 'connection/set',
+    connection: 'connected',
+    error: null,
+    reconnectAttempts: 0,
+  });
+  state = workspaceReducer(state, {
+    type: 'run/upsert',
+    run: {
+      id: runId,
+      conversationId: 'conv-1',
+      status: 'running',
+      providerId: 'openai',
+      modelId: 'gpt-4o',
+      permissionProfile: 'ask',
+      startedAt: 't',
+      lastEventSequence: 0,
+    },
+  });
+  const connections: string[] = [];
+  const dispatch = (a: import('./state').WorkspaceAction) => {
+    state = workspaceReducer(state, a);
+    connections.push(state.connection);
+  };
+  await subscribeRun(adapter, dispatch, () => state, runId, 0);
+  // Global must never stick on reconnecting for a sequence gap.
+  assert.equal(state.connection, 'connected');
+  assert.ok(!connections.includes('reconnecting'));
+  // recovering may flash briefly via recovering/set side-effect then be cleared.
+  assert.equal(state.recoveringRuns[runId], undefined);
+  assert.ok((state.lastSequenceByRun[runId] ?? 0) >= 3);
 });

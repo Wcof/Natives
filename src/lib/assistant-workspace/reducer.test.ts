@@ -85,6 +85,7 @@ test('ignores duplicate and out-of-order sequences (idempotent)', () => {
 
 test('sequence gap enters recovering and replay fills without duplicates', () => {
   let state = withRun(createInitialWorkspaceState());
+  state = workspaceReducer(state, { type: 'connection/set', connection: 'connected', error: null });
   state = workspaceReducer(state, { type: 'event/apply', event: ev('r1', 1, 'started') });
   // gap: jump to 3
   state = workspaceReducer(state, {
@@ -92,7 +93,8 @@ test('sequence gap enters recovering and replay fills without duplicates', () =>
     event: ev('r1', 3, 'text_delta', { text: 'C' }),
   });
   assert.equal(state.recoveringRuns.r1, true);
-  assert.equal(state.connection, 'recovering');
+  // Global connection must stay connected (run-level recovering only).
+  assert.equal(state.connection, 'connected');
   // live last still 1
   assert.equal(state.lastSequenceByRun.r1, 1);
 
@@ -106,6 +108,7 @@ test('sequence gap enters recovering and replay fills without duplicates', () =>
     ],
   });
   assert.ok(!state.recoveringRuns.r1);
+  assert.equal(state.connection, 'connected');
   assert.equal(state.lastSequenceByRun.r1, 4);
   assert.equal(state.runs.r1!.status, 'completed');
   // no duplicate seq 3

@@ -351,7 +351,7 @@ function applyEventToLive(
     }
     case 'interaction_requested': {
       const kind = String(p.kind ?? 'ask_user');
-      const id = String(p.id ?? p.interaction_id ?? '');
+      const id = String(p.id ?? p.interaction_id ?? p.interactionId ?? '');
       if (kind === 'plan_approval') {
         interaction = {
           kind: 'plan_approval',
@@ -370,6 +370,24 @@ function applyEventToLive(
           conversationId: run.conversationId,
           createdAt: event.timestamp,
           files: Array.isArray(p.files) ? (p.files as ConflictFiles) : [],
+        };
+      } else if (kind === 'subagent_assignment') {
+        const nested =
+          p.payload && typeof p.payload === 'object'
+            ? (p.payload as Record<string, unknown>)
+            : p;
+        interaction = {
+          kind: 'subagent_assignment',
+          id,
+          runId: event.runId,
+          conversationId: String(
+            nested.conversation_id ?? nested.conversationId ?? run.conversationId ?? '',
+          ),
+          createdAt: event.timestamp,
+          reason: nested.reason != null ? String(nested.reason) : undefined,
+          tasks: Array.isArray(nested.tasks)
+            ? (nested.tasks as Array<{ prompt?: string | null }>)
+            : undefined,
         };
       } else {
         interaction = {
@@ -492,16 +510,10 @@ function applyOneEvent(
 
   // Sequence gap detection (expected last+1)
   if (event.sequence > last + 1 && last > 0) {
+    // Run-level only — do not flip global ConnectionBanner to "recovering".
     return {
       ...state,
       recoveringRuns: { ...state.recoveringRuns, [runId]: true },
-      // Gap is always a recover path; keep offline/fatal/incompatible as-is
-      connection:
-        state.connection === 'offline' ||
-        state.connection === 'fatal' ||
-        state.connection === 'incompatible'
-          ? state.connection
-          : 'recovering',
     };
   }
 
@@ -983,15 +995,16 @@ export function workspaceReducer(
     }
 
     case 'recovering/set': {
+      // Run-level only: sequence-gap / soft recovery must not flip the global
+      // ConnectionBanner to "recovering" (that looked like a full disconnect).
       const recoveringRuns = { ...state.recoveringRuns };
       if (action.recovering) recoveringRuns[action.runId] = true;
       else delete recoveringRuns[action.runId];
       return {
         ...state,
         recoveringRuns,
-        connection: action.recovering
-          ? 'recovering'
-          : Object.keys(recoveringRuns).length === 0 && state.connection === 'recovering'
+        connection:
+          Object.keys(recoveringRuns).length === 0 && state.connection === 'recovering'
             ? 'connected'
             : state.connection,
       };

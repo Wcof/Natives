@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Archive,
+  Copy,
   Folder,
   FolderOpen,
   FolderSearch,
@@ -20,6 +21,7 @@ import Modal from '@/components/ui/Modal';
 import Portal from '@/components/ui/Portal';
 import { useToast } from '@/components/ui/Toast';
 import { createTempSession, isTempConversationId } from '@/lib/assistant-temp-conversation';
+import { copyToClipboard } from '@/lib/clipboard';
 import { useAssistantWorkspace } from './AssistantWorkspaceContext';
 
 interface AssistantSidebarSectionProps {
@@ -31,7 +33,8 @@ interface AssistantSidebarSectionProps {
 const MENU_WIDTH = 160; // w-40
 const MENU_GAP = 4;
 const MENU_PAD = 8;
-const MENU_EST_HEIGHT = 168;
+/** Approx panel height for flip (pin/rename/archive/copy-id/delete). */
+const MENU_EST_HEIGHT = 196;
 
 function computeMenuPos(trigger: HTMLElement): { top: number; left: number; flip: boolean } {
   const rect = trigger.getBoundingClientRect();
@@ -473,6 +476,21 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                   </button>
                   <button type="button" role="menuitem" onClick={() => { setMenuId(null); actions?.archiveConversation(conversation!.id); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
                     <Archive size={12} />{t(locale, 'assistant.archive')}
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      const id = conversation!.id;
+                      setMenuId(null);
+                      void copyToClipboard(id).then((ok) => {
+                        if (ok) toast(t(locale, 'assistant.conversationIdCopied'), 'success');
+                        else toast(t(locale, 'assistant.copyConversationIdFailed'), 'error');
+                      });
+                    }}
+                    className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all"
+                  >
+                    <Copy size={12} />{t(locale, 'assistant.copyConversationId')}
                   </button>
                   <button type="button" role="menuitem" onClick={() => { setMenuId(null); setDeleteTarget({ id: conversation!.id, title: conversation!.title }); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-all">
                     <Trash2 size={12} />{t(locale, 'assistant.deleteConversation')}

@@ -173,7 +173,24 @@ export async function subscribeRun(
       const prevLast = state.lastSequenceByRun[runId] ?? last;
       if (event.sequence > prevLast + 1 && prevLast > 0) {
         flush();
+        // Sequence gap: run-level recovering only. Do not leave the global
+        // assistant connection on "recovering" (banner would look like a disconnect).
         dispatch({ type: 'recovering/set', runId, recovering: true });
+        if (getState().connection === 'recovering') {
+          dispatch({
+            type: 'connection/set',
+            connection: 'connected',
+            error: null,
+          });
+        }
+        if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+          console.debug('[assistant] sequence gap recovery', {
+            runId,
+            lastSequence: prevLast,
+            liveSequence: event.sequence,
+            reason: 'sequence_gap',
+          });
+        }
         const missing = await gateway.request<RunEvent[]>('run.getEvents', {
           run_id: runId,
           after_sequence: prevLast,
@@ -186,6 +203,17 @@ export async function subscribeRun(
       const immediate = isImmediateEvent(event.type);
       applyEvent(event, immediate);
       last = event.sequence;
+      // Any successful live event clears a real reconnect banner / backoff count.
+      // Sequence gaps only touch recoveringRuns (run-level), never global connection.
+      const conn = getState().connection;
+      if (conn === 'reconnecting' || conn === 'recovering' || conn === 'offline') {
+        dispatch({
+          type: 'connection/set',
+          connection: 'connected',
+          error: null,
+          reconnectAttempts: 0,
+        });
+      }
       if (
         event.type === 'completed' ||
         event.type === 'failed' ||
@@ -198,12 +226,6 @@ export async function subscribeRun(
         if (getState().recoveringRuns[runId]) {
           dispatch({ type: 'recovering/set', runId, recovering: false });
         }
-        if (
-          getState().connection === 'reconnecting' ||
-          getState().connection === 'recovering'
-        ) {
-          dispatch({ type: 'connection/set', connection: 'connected', error: null });
-        }
         return;
       }
     }
@@ -214,22 +236,39 @@ export async function subscribeRun(
     // — that showed permanent "正在重连 / 正在恢复事件" during normal answers.
     // Workbench soft-resubscribes from lastSequence while the run stays active.
     if (!sawTerminal && !signal?.aborted) {
+      if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+        console.debug('[assistant] subscribe quiet end', {
+          runId,
+          lastSequence: last,
+          reason: 'iterator_ended_without_terminal',
+        });
+      }
       // intentionally no-op on connection state
     }
   } catch (err) {
     flush();
     const run = getState().runs[runId];
     if (run && isActiveRunStatus(run.status)) {
+      // Run-level recovering only; global reconnecting is set below for transport errors.
       dispatch({ type: 'recovering/set', runId, recovering: true });
     }
-    // Real transport errors still surface as reconnecting.
+    // Real transport / IPC / daemon-unavailable errors surface as reconnecting.
+    const message = err instanceof Error ? err.message : String(err);
+    if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+      console.debug('[assistant] subscribe transport error', {
+        runId,
+        lastSequence: last,
+        reason: 'transport_error',
+        error: message,
+      });
+    }
     dispatch({
       type: 'disconnect/soft',
     });
     dispatch({
       type: 'connection/set',
       connection: 'reconnecting',
-      error: err instanceof Error ? err.message : String(err),
+      error: message,
     });
     throw err;
   }
