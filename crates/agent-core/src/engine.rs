@@ -13,7 +13,6 @@ use futures_util::{Stream, StreamExt};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
