@@ -62,7 +62,7 @@ pub fn validate_launch_plan(root: &Path, mut plan: LaunchPlan) -> Result<LaunchP
             let p = plan.port.value.ok_or_else(|| {
                 Error::InvalidInput("fixed port requires value".into())
             })?;
-            if p == 0 || p > 65535 {
+            if p == 0 {
                 return Err(Error::InvalidInput("invalid fixed port".into()));
             }
         }

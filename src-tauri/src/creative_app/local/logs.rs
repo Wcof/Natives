@@ -130,7 +130,7 @@ impl LocalLogStore {
     fn write_file(&self, stream: LogStream, ts_ms: i64, text: &str) -> std::io::Result<()> {
         let path = self.dir.join("current.log");
         {
-            let mut size = self.current_size.lock().unwrap_or_else(|e| e.into_inner());
+            let size = self.current_size.lock().unwrap_or_else(|e| e.into_inner());
             if *size >= MAX_FILE_BYTES {
                 drop(size);
                 self.rotate()?;

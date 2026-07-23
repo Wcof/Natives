@@ -8,7 +8,6 @@ use super::model::*;
 use crate::Result;
 use rusqlite::Connection;
 use std::sync::Arc;
-use tauri::AppHandle;
 use tokio::sync::Mutex;
 
 /// Global async mutation lock (v1: one install/lifecycle write at a time).
