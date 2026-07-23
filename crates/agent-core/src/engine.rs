@@ -1133,6 +1133,7 @@ fn values_to_engine_messages(values: &[Value]) -> Vec<EngineMessage> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
     use super::*;
     use std::sync::Mutex;
 

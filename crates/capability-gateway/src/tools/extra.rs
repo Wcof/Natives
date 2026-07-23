@@ -243,7 +243,7 @@ impl ToolHandler for MemoryTool {
     async fn execute(
         &self,
         input: serde_json::Value,
-        context: &ToolCallContext,
+        _context: &ToolCallContext,
     ) -> Result<ToolOutput, ToolError> {
         let op = input.get("op").and_then(|v| v.as_str()).unwrap_or("get");
         let start = std::time::Instant::now();
@@ -507,7 +507,7 @@ impl ToolHandler for NotificationTool {
     async fn execute(
         &self,
         input: serde_json::Value,
-        context: &ToolCallContext,
+        _context: &ToolCallContext,
     ) -> Result<ToolOutput, ToolError> {
         Ok(ToolOutput {
             result: serde_json::json!({
@@ -526,7 +526,7 @@ impl ToolHandler for SkillTool {
     async fn execute(
         &self,
         input: serde_json::Value,
-        context: &ToolCallContext,
+        _context: &ToolCallContext,
     ) -> Result<ToolOutput, ToolError> {
         Ok(ToolOutput {
             result: serde_json::json!({
@@ -546,7 +546,7 @@ impl ToolHandler for McpCallTool {
     async fn execute(
         &self,
         input: serde_json::Value,
-        context: &ToolCallContext,
+        _context: &ToolCallContext,
     ) -> Result<ToolOutput, ToolError> {
         Ok(ToolOutput {
             result: serde_json::json!({
