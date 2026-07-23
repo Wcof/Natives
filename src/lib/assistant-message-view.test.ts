@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
   extractReasoningStage,
   formatElapsed,
@@ -10,9 +12,21 @@ import {
 
 test('formats reasoning elapsed time', () => {
   assert.equal(formatElapsed(850), '0.9s');
+  assert.equal(formatElapsed(100), '0.1s');
+  assert.equal(formatElapsed(700), '0.7s');
   assert.equal(formatElapsed(65_000), '1m 5s');
   assert.equal(formatReasoningDuration(3200, 'zh'), '3.2 秒');
   assert.equal(formatReasoningDuration(3200, 'en'), '3.2s');
+});
+
+test('timeline live clock ticks at 100ms for 0.1s elapsed precision', () => {
+  const timeline = readFileSync(
+    resolve(process.cwd(), 'src/components/assistant/ConversationTimeline.tsx'),
+    'utf8',
+  );
+  // Must not use a 1s interval — formatElapsed shows tenths of a second.
+  assert.match(timeline, /setInterval\(\(\) => setNow\(Date\.now\(\)\), 100\)/);
+  assert.equal(timeline.includes('setInterval(() => setNow(Date.now()), 1000)'), false);
 });
 
 test('extracts a stage title from reasoning headings and steps', () => {

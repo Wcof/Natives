@@ -197,7 +197,9 @@ export default function ConversationTimeline({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [now, setNow] = useState(0);
+  // Wall-clock for live elapsed labels. Must tick faster than formatElapsed's
+  // 0.1s precision or "思考过程 · 0.7s" freezes between whole-second jumps.
+  const [now, setNow] = useState(() => Date.now());
   const hasActive = messages.some(
     (message) => message.status === 'streaming' || message.status === 'running',
   );
@@ -205,7 +207,8 @@ export default function ConversationTimeline({
   useEffect(() => {
     if (!hasActive) return;
     setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    // 100ms ≈ one update per 0.1s display step; rAF would re-render every frame.
+    const timer = window.setInterval(() => setNow(Date.now()), 100);
     return () => window.clearInterval(timer);
   }, [hasActive]);
 
