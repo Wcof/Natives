@@ -12,7 +12,7 @@ use crate::run_manager::global_run_manager;
 use crate::storage::DataStore;
 use agent_core::{
     CoordinatorAction, HarnessAction, PromptSource, QueueItem, QueueItemStatus, SafePoint,
-    SessionActorSnapshot, SessionCoordinator, SessionHarness,
+    SessionActorSnapshot, SessionCoordinator,
 };
 use assistant_protocol::v2::methods::names;
 use assistant_protocol::v2::{CancelRunRequest, StartRunRequest};
@@ -152,17 +152,14 @@ fn value_to_queue_item(item: &Value) -> Option<QueueItem> {
     })
 }
 
-/// Persist SessionCoordinator snapshot for one conversation (best-effort).
-pub fn persist_actor_snapshot(conversation_id: &str) {
+/// Persist SessionCoordinator snapshot for one conversation.
+/// Returns error on store/SQL failure so callers can fail closed.
+pub fn persist_actor_snapshot(conversation_id: &str) -> Result<(), String> {
     let snap = global_harness().snapshot(conversation_id);
-    let Ok(store) = store() else {
-        return;
-    };
-    let Ok(conn) = store.conn() else {
-        return;
-    };
+    let store = store()?;
+    let conn = store.conn()?;
     let now = chrono::Utc::now().to_rfc3339();
-    let _ = conn.execute(
+    conn.execute(
         "INSERT INTO session_actor (
             conversation_id, active_run_id, running_prompt_id, pending_interjection,
             pending_interaction_id, cancel_and_send_id, cancel_requested, drain_on_finish,
@@ -190,7 +187,16 @@ pub fn persist_actor_snapshot(conversation_id: &str) {
             snap.version as i64,
             now,
         ],
-    );
+    )
+    .map_err(|e| format!("persist session_actor failed: {e}"))?;
+    Ok(())
+}
+
+/// Best-effort wrapper for non-critical paths that historically ignored errors.
+fn persist_actor_snapshot_best_effort(conversation_id: &str) {
+    if let Err(e) = persist_actor_snapshot(conversation_id) {
+        eprintln!("[prompt_queue] persist_actor_snapshot: {e}");
+    }
 }
 
 fn load_actor_snapshot(conversation_id: &str) -> Option<SessionActorSnapshot> {
@@ -438,7 +444,7 @@ fn enqueue(params: Value) -> Result<Value, String> {
         client_temp_id.clone(),
         Some(id.clone()),
     );
-    persist_actor_snapshot(conversation_id);
+    persist_actor_snapshot(conversation_id)?;
 
     Ok(json!({
         "id": item.id,
@@ -486,7 +492,7 @@ fn update(params: Value) -> Result<Value, String> {
     }
 
     let _ = global_harness().update(&conversation_id, id, content);
-    persist_actor_snapshot(&conversation_id);
+    persist_actor_snapshot(&conversation_id)?;
     Ok(json!({ "id": id, "updated": true }))
 }
 
@@ -514,7 +520,7 @@ fn remove(params: Value) -> Result<Value, String> {
     }
     if let Some(cid) = conversation_id {
         let _ = global_harness().remove(&cid, id);
-        persist_actor_snapshot(&cid);
+        persist_actor_snapshot(&cid)?;
     }
     Ok(json!({ "id": id, "removed": true }))
 }
@@ -552,7 +558,7 @@ fn reorder(params: Value) -> Result<Value, String> {
     tx.commit().map_err(|e| e.to_string())?;
 
     let _ = global_harness().reorder(conversation_id, &id_list);
-    persist_actor_snapshot(conversation_id);
+    persist_actor_snapshot(conversation_id)?;
     Ok(json!({ "conversation_id": conversation_id, "reordered": true }))
 }
 
@@ -571,7 +577,7 @@ fn interject(params: Value) -> Result<Value, String> {
     ensure_conversation_for_queue(conversation_id, &params)?;
     global_harness().interject(conversation_id, content);
     // Durable: session_actor.pending_interjection (latest wins across restart).
-    persist_actor_snapshot(conversation_id);
+    persist_actor_snapshot(conversation_id)?;
     Ok(json!({
         "conversation_id": conversation_id,
         "interjected": true,
@@ -634,21 +640,27 @@ async fn send_now(params: Value) -> Result<Value, String> {
     let action = harness
         .send_now(&conversation_id, id)
         .map_err(|e| e)?;
-    persist_actor_snapshot(&conversation_id);
+    persist_actor_snapshot(&conversation_id)?;
 
-    // Cancel active runs when needed.
+    // Cancel active runs when needed. Only the winner of finish_run(expected_run_id)
+    // may start the next prompt — either us (after cancel settles) or on_run_terminal.
     if matches!(action, CoordinatorAction::CancelThenStart { .. }) {
         let rm = global_run_manager();
-        let runs = rm.list_runs(Some(&conversation_id));
-        for run in runs.into_iter().filter(|r| !r.status.is_terminal()) {
+        let active_ids: Vec<String> = rm
+            .list_runs(Some(&conversation_id))
+            .into_iter()
+            .filter(|r| !r.status.is_terminal())
+            .map(|r| r.id)
+            .collect();
+        for run_id in &active_ids {
             let _ = rm
                 .cancel(CancelRunRequest {
-                    run_id: run.id.clone(),
+                    run_id: run_id.clone(),
                 })
                 .await;
             for _ in 0..20 {
                 if rm
-                    .get_run(&run.id)
+                    .get_run(run_id)
                     .map(|r| r.status.is_terminal())
                     .unwrap_or(true)
                 {
@@ -657,11 +669,75 @@ async fn send_now(params: Value) -> Result<Value, String> {
                 tokio::time::sleep(std::time::Duration::from_millis(25)).await;
             }
         }
-        let _ = harness.mark_finished(&conversation_id);
-        persist_actor_snapshot(&conversation_id);
+
+        // Prefer the coordinator's recorded active run id (exact match for finish_run).
+        let expected = harness
+            .snapshot(&conversation_id)
+            .active_run_id
+            .or_else(|| active_ids.first().cloned());
+
+        if let Some(expected_run_id) = expected {
+            if let Some(next) = harness.finish_run(&conversation_id, &expected_run_id, false) {
+                if let CoordinatorAction::StartPrompt { item } = next {
+                    {
+                        let conn = store.conn()?;
+                        let now = chrono::Utc::now().to_rfc3339();
+                        let _ = conn.execute(
+                            "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
+                            params![now, item.id],
+                        );
+                        let _ =
+                            conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id]);
+                    }
+                    let start_req = StartRunRequest {
+                        run_id: None,
+                        conversation_id: Some(conversation_id.clone()),
+                        provider_id: Some(provider_id.clone()),
+                        model_id: Some(model_id.clone()),
+                        key_id: None,
+                        content: Some(item.content.clone()),
+                        attachments: None,
+                        trigger_message_id: None,
+                        permission_profile: None,
+                        max_steps: None,
+                        project_path: project_path.clone(),
+                        idempotency_key: Some(format!("prompt-queue:{}", item.id)),
+                        effort: None,
+                        runtime_id: None,
+                    };
+                    let run = crate::run_manager::RunManager::start_detached_global(start_req)?;
+                    harness.mark_running_item(
+                        &conversation_id,
+                        &run.id,
+                        Some(&item.id),
+                        &item.content,
+                    );
+                    persist_actor_snapshot(&conversation_id)?;
+                    return Ok(serde_json::to_value(run).unwrap_or_else(|_| {
+                        json!({
+                            "conversation_id": conversation_id,
+                            "content": item.content,
+                            "started": true,
+                            "queue_item_id": item.id,
+                        })
+                    }));
+                }
+            }
+        }
+
+        // on_run_terminal already claimed finish and started next (or still mid-cancel).
+        persist_actor_snapshot(&conversation_id)?;
+        return Ok(json!({
+            "conversation_id": conversation_id,
+            "content": content,
+            "started": false,
+            "cancelling": true,
+            "queue_item_id": id,
+            "note": "cancel requested; next prompt starts via sole finish_run winner",
+        }));
     }
 
-    // Mark sent then delete from DB before starting so list no longer shows it.
+    // Idle path: StartPrompt immediately.
     {
         let conn = store.conn()?;
         let now = chrono::Utc::now().to_rfc3339();
@@ -673,7 +749,7 @@ async fn send_now(params: Value) -> Result<Value, String> {
             .map_err(|e| e.to_string())?;
     }
 
-    let attachments = attachments_raw
+    let _ = attachments_raw
         .as_ref()
         .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
 
@@ -689,15 +765,15 @@ async fn send_now(params: Value) -> Result<Value, String> {
         permission_profile: None,
         max_steps: None,
         project_path,
-        idempotency_key: Some(format!("prompt-queue-{id}")),
+        // Unified queue idempotency key (also used by drain / cancel-and-send).
+        idempotency_key: Some(format!("prompt-queue:{id}")),
         effort: None,
         runtime_id: None,
     };
-    let _ = attachments;
 
     let run = crate::run_manager::RunManager::start_detached_global(start_req)?;
     harness.mark_running_item(&conversation_id, &run.id, Some(id), &content);
-    persist_actor_snapshot(&conversation_id);
+    persist_actor_snapshot(&conversation_id)?;
 
     Ok(serde_json::to_value(run).unwrap_or_else(|_| {
         json!({
@@ -713,31 +789,25 @@ async fn send_now(params: Value) -> Result<Value, String> {
 pub fn on_safe_point(conversation_id: &str, point: SafePoint) -> HarnessAction {
     let action = global_harness().on_safe_point(conversation_id, point);
     if !matches!(action, CoordinatorAction::None) {
-        persist_actor_snapshot(conversation_id);
+        persist_actor_snapshot_best_effort(conversation_id);
     }
     action
 }
 
 /// Called when a run reaches a real terminal state.
-/// Marks the active prompt finished and optionally starts the next queued item
-/// (cancel-and-send first, else drain-on-finish). Never restarts interrupted
-/// mid-flight runs — only starts a *new* run from a queued item.
+/// Atomically claims finish via `finish_run(expected_run_id)` so concurrent
+/// send_now / duplicate terminals never double-advance the queue.
 pub async fn on_run_terminal(
     conversation_id: &str,
     run_id: &str,
     success: bool,
 ) -> Result<Option<String>, String> {
     let harness = global_harness();
-    let snap = harness.snapshot(conversation_id);
-    if let Some(active) = &snap.active_run_id {
-        if active != run_id {
-            // Stale terminal (e.g. cancelled run after send_now already advanced).
-            return Ok(None);
-        }
-    }
-
-    let action = harness.mark_finished_with_outcome(conversation_id, success);
-    persist_actor_snapshot(conversation_id);
+    let Some(action) = harness.finish_run(conversation_id, run_id, success) else {
+        // Stale terminal (wrong run id, already finished, or empty active).
+        return Ok(None);
+    };
+    persist_actor_snapshot(conversation_id)?;
 
     match action {
         CoordinatorAction::StartPrompt { item } => {
@@ -762,6 +832,11 @@ pub async fn on_run_terminal(
 
             {
                 let conn = store.conn()?;
+                let now = chrono::Utc::now().to_rfc3339();
+                let _ = conn.execute(
+                    "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
+                    params![now, item.id],
+                );
                 let _ = conn.execute(
                     "DELETE FROM prompt_queue WHERE id = ?1",
                     params![item.id],
@@ -780,7 +855,8 @@ pub async fn on_run_terminal(
                 permission_profile: None,
                 max_steps: None,
                 project_path,
-                idempotency_key: Some(format!("prompt-queue-drain-{}", item.id)),
+                // Unified with send_now: prompt-queue:{item_id}
+                idempotency_key: Some(format!("prompt-queue:{}", item.id)),
                 effort: None,
                 runtime_id: None,
             };
@@ -791,7 +867,7 @@ pub async fn on_run_terminal(
                 Some(&item.id),
                 &item.content,
             );
-            persist_actor_snapshot(conversation_id);
+            persist_actor_snapshot(conversation_id)?;
             Ok(Some(run.id))
         }
         _ => Ok(None),

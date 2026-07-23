@@ -108,32 +108,83 @@ impl ContextBudget {
         }
     }
 
+    /// Resolve budget from Profile tokenBudget and model context_window.
+    /// Uses `min(profile, model)` when both present; missing → 128K default.
+    ///
+    /// `chars/4` is an explicit fallback only when Provider usage is unavailable.
+    pub fn resolve(profile_token_budget: Option<u64>, model_context_window: Option<u64>) -> Self {
+        let resolved = match (profile_token_budget, model_context_window) {
+            (Some(p), Some(m)) => p.min(m),
+            (Some(p), None) => p,
+            (None, Some(m)) => m,
+            (None, None) => 128_000,
+        };
+        Self::from_token_budget(resolved.max(1_024))
+    }
+
+    /// chars/4 heuristic — use only when Provider does not report usage tokens.
     pub fn estimate_tokens(text_chars: usize) -> u64 {
         (text_chars as u64 / 4).max(1)
     }
 }
 
-/// Compact history when over budget: keep system + last N user/assistant pairs.
+/// Compact history when over budget.
+///
+/// Retention policy:
+/// 1. Always keep the last complete user/assistant dialogue turn (at least 2 msgs).
+/// 2. Prefer keeping tool-call / tool-result adjacent pairs when dropping.
+/// 3. Prepend a system summary for omitted messages.
 pub fn compact_messages(
     messages: &[(String, String)],
     token_budget: u64,
 ) -> (Vec<(String, String)>, Option<String>) {
     let estimate: u64 = messages
         .iter()
-        .map(|(_, c)| (c.len() as u64 / 4).max(1))
+        .map(|(_, c)| ContextBudget::estimate_tokens(c.len()))
         .sum();
     if estimate <= token_budget {
         return (messages.to_vec(), None);
     }
-    // Keep last 4 messages when over budget (deterministic minimum retention).
-    let keep = messages.len().saturating_sub(4);
-    let dropped = &messages[..keep];
+
+    // Find a cut that keeps the last dialogue turn and tool pairings.
+    let mut keep_from = messages.len().saturating_sub(4);
+    // Extend cut leftward if we would split a tool_call/tool_result pair:
+    // treat roles containing "tool" as pair-sensitive; never start mid-pair.
+    while keep_from > 0 {
+        let role = messages[keep_from].0.to_ascii_lowercase();
+        if role.contains("tool") && !role.contains("result") && !role.contains("output") {
+            // Starting at a tool_call is ok; if previous is tool_call and this is
+            // tool_result we already skipped. Break when cut is clean.
+            break;
+        }
+        let prev_role = messages[keep_from.saturating_sub(1)]
+            .0
+            .to_ascii_lowercase();
+        if prev_role.contains("tool")
+            && !prev_role.contains("result")
+            && (role.contains("result") || role.contains("output") || role.contains("tool"))
+        {
+            // Would split call/result — include the call.
+            keep_from = keep_from.saturating_sub(1);
+            continue;
+        }
+        break;
+    }
+    // Always keep at least the last user/assistant turn (2 msgs) when available.
+    if messages.len() >= 2 {
+        keep_from = keep_from.min(messages.len().saturating_sub(2));
+    }
+
+    let dropped = &messages[..keep_from];
+    if dropped.is_empty() {
+        return (messages.to_vec(), None);
+    }
     let summary = format!(
-        "Previous conversation summary ({} messages omitted for context budget; budget={token_budget} tokens).",
+        "Previous conversation summary ({} messages omitted for context budget; budget={token_budget} tokens; estimate via chars/4 fallback when provider usage unavailable).",
         dropped.len()
     );
     let mut kept = vec![("system".into(), summary.clone())];
-    kept.extend(messages[keep..].iter().cloned());
+    kept.extend(messages[keep_from..].iter().cloned());
     (kept, Some(summary))
 }
 

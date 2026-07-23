@@ -28,12 +28,46 @@ interface MessagesSelectorCacheEntry {
 }
 const messagesSelectorCache = new Map<string, MessagesSelectorCacheEntry>();
 
+/** Max entries for each global selector cache (conversation / run keyed). */
+const SELECTOR_CACHE_MAX = 128;
+
+function cacheSet<K, V>(map: Map<K, V>, key: K, value: V): void {
+  if (map.has(key)) {
+    map.set(key, value);
+    return;
+  }
+  if (map.size >= SELECTOR_CACHE_MAX) {
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) map.delete(oldest);
+  }
+  map.set(key, value);
+}
+
 interface PendingInteractionsCacheEntry {
   order: string[];
   interactions: AssistantWorkspaceState['interactions'];
   result: InteractionRequest[];
 }
 const pendingInteractionsCache = new Map<string, PendingInteractionsCacheEntry>();
+
+/**
+ * Drop selector cache entries for a conversation (and optional run ids).
+ * Call when a conversation is deleted so the 128-cap does not retain stale rows.
+ */
+export function clearSelectorCachesForConversation(
+  conversationId: string,
+  runIds: string[] = [],
+): void {
+  messagesSelectorCache.delete(conversationId);
+  pendingInteractionsCache.delete(conversationId);
+  pendingInteractionsCache.delete('__all__');
+  for (const runId of runIds) {
+    childRunsCache.delete(runId);
+    artifactsTreeCache.delete(runId);
+    fileChangesTreeCache.delete(runId);
+    eventsTreeCache.delete(runId);
+  }
+}
 
 export function selectActiveConversation(state: AssistantWorkspaceState) {
   const id = state.activeConversationId;
@@ -69,7 +103,7 @@ export function selectConversationMessages(
 
   // No messages and no streaming placeholder → shared EMPTY (effect-dep stable).
   if (ids.length === 0 && !includeLive) {
-    messagesSelectorCache.set(conversationId, {
+    cacheSet(messagesSelectorCache, conversationId, {
       ids,
       messages: state.messages,
       runId,
@@ -109,7 +143,7 @@ export function selectConversationMessages(
   }
 
   const result = base.length === 0 ? EMPTY : base;
-  messagesSelectorCache.set(conversationId, {
+  cacheSet(messagesSelectorCache, conversationId, {
     ids,
     messages: state.messages,
     runId,
@@ -162,7 +196,7 @@ export function selectPendingInteractions(
       return !i.conversationId || i.conversationId === conversationId;
     });
   const stable = result.length === 0 ? (EMPTY as InteractionRequest[]) : result;
-  pendingInteractionsCache.set(cacheKey, {
+  cacheSet(pendingInteractionsCache, cacheKey, {
     order: state.interactionOrder,
     interactions: state.interactions,
     result: stable,
@@ -242,7 +276,7 @@ export function selectChildRuns(state: AssistantWorkspaceState, parentRunId: str
     .map((id) => state.childSummaries[id])
     .filter((c): c is NonNullable<typeof c> => Boolean(c));
   const stable = result.length === 0 ? EMPTY : result;
-  childRunsCache.set(parentRunId, {
+  cacheSet(childRunsCache, parentRunId, {
     ids,
     summaries: state.childSummaries,
     result: stable as ChildRunsCacheEntry['result'],
@@ -317,7 +351,7 @@ export function selectArtifactsForRunTree(
     }
   }
   const result = out.length === 0 ? EMPTY : out;
-  artifactsTreeCache.set(rootRunId, { childIds, arrays, result });
+  cacheSet(artifactsTreeCache, rootRunId, { childIds, arrays, result });
   return result;
 }
 
@@ -363,7 +397,7 @@ export function selectFileChangesForRunTree(
     }
   }
   const result = out.length === 0 ? EMPTY : out;
-  fileChangesTreeCache.set(rootRunId, { childIds, arrays, result });
+  cacheSet(fileChangesTreeCache, rootRunId, { childIds, arrays, result });
   return result;
 }
 
@@ -406,7 +440,7 @@ export function selectEventsForRunTree(
     out.push(...(state.eventsByRun[id] ?? EMPTY));
   }
   if (out.length === 0) {
-    eventsTreeCache.set(rootRunId, { childIds, eventArrays, result: EMPTY });
+    cacheSet(eventsTreeCache, rootRunId, { childIds, eventArrays, result: EMPTY });
     return EMPTY;
   }
   out.sort((a, b) => {
@@ -416,6 +450,6 @@ export function selectEventsForRunTree(
     if (a.runId !== b.runId) return a.runId.localeCompare(b.runId);
     return a.sequence - b.sequence;
   });
-  eventsTreeCache.set(rootRunId, { childIds, eventArrays, result: out });
+  cacheSet(eventsTreeCache, rootRunId, { childIds, eventArrays, result: out });
   return out;
 }

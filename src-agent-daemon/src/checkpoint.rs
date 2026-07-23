@@ -181,8 +181,12 @@ impl CheckpointManager {
                 entry.after_content = None;
             }
         }
-        // Best-effort durable flush so mid-run crash still has after images.
-        let _ = self.flush_live_to_store(run_id);
+        // Durable flush when a store is configured. Without a store (unit tests /
+        // pure in-memory) keep live-only success. With a store, fail closed so
+        // side-effecting writes are not half-recorded.
+        if self.store.is_some() {
+            self.flush_live_to_store(run_id)?;
+        }
         Ok(())
     }
 
@@ -436,16 +440,19 @@ impl CheckpointManager {
             .store
             .as_ref()
             .ok_or_else(|| "no checkpoint for run".to_string())?;
-        let conn = store.conn()?;
-        let id: String = conn
-            .query_row(
+        // Resolve id then drop the MutexGuard before load_checkpoint (which also
+        // needs store.conn()) — nested conn() on std::sync::Mutex deadlocks.
+        let id: String = {
+            let conn = store.conn()?;
+            conn.query_row(
                 "SELECT id FROM checkpoint WHERE run_id = ?1 ORDER BY created_at DESC LIMIT 1",
                 params![run_id],
                 |row| row.get(0),
             )
             .optional()
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("no checkpoint for run {run_id}"))?;
+            .ok_or_else(|| format!("no checkpoint for run {run_id}"))?
+        };
         self.load_checkpoint(&id)
     }
 
@@ -597,5 +604,60 @@ mod tests {
         let v = estimate_context_usage(400, 800, 400, 128_000);
         assert_eq!(v["used_tokens"], 400);
         assert_eq!(v["max_tokens"], 128_000);
+    }
+
+    #[test]
+    fn checkpoint_survives_manager_restart_via_sqlite() {
+        let root = std::env::temp_dir().join(format!("cp-restart-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("persist.txt");
+        std::fs::write(&file, "v1").unwrap();
+
+        let db = std::env::temp_dir().join(format!("cp-db-{}.sqlite", Uuid::new_v4()));
+        let art = std::env::temp_dir().join(format!("cp-art-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&art).unwrap();
+        let store = Arc::new(DataStore::new(&db, &art).expect("store"));
+        // FK: checkpoint → run → conversation
+        {
+            let conn = store.conn().unwrap();
+            conn.execute(
+                "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+                 VALUES ('c1', 'agent', 't', 'p', 'm')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO run (id, conversation_id, status, provider_id, model_id)
+                 VALUES ('run-persist', 'c1', 'running', 'p', 'm')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let mgr1 = CheckpointManager::with_store(Arc::clone(&store));
+        let cp_id = mgr1.begin_run("run-persist", "c1", &root).unwrap();
+        mgr1.capture_before("run-persist", "persist.txt").unwrap();
+        std::fs::write(&file, "v2").unwrap();
+        mgr1.capture_after("run-persist", "persist.txt").unwrap();
+        let rec = mgr1.finalize_run("run-persist").unwrap();
+        assert_eq!(rec.id, cp_id);
+        assert_eq!(rec.files.len(), 1);
+
+        // New manager instance = process restart; live map empty, load from SQLite.
+        let mgr2 = CheckpointManager::with_store(store);
+        let preview = mgr2
+            .rewind_preview("run-persist", &root, None)
+            .expect("preview after restart");
+        assert_eq!(preview.checkpoint_id, cp_id);
+        assert!(preview.conflicts.is_empty());
+        let restored = mgr2
+            .rewind("run-persist", &cp_id, &root, None, "fail")
+            .expect("rewind after restart");
+        assert_eq!(restored, vec!["persist.txt".to_string()]);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "v1");
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_dir_all(&art);
     }
 }

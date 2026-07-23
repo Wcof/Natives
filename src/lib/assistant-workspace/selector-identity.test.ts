@@ -47,7 +47,7 @@ describe('selector identity (update-depth regression)', () => {
     );
 
     // Root exists but has zero events / zero children → must not allocate a fresh [] every call.
-    let withRun = workspaceReducer(state, {
+    const withRun = workspaceReducer(state, {
       type: 'run/upsert',
       run: {
         id: 'r1',

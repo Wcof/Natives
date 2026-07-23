@@ -172,7 +172,8 @@ pub async fn restart(
             "restart is only supported for local/external creative apps".into(),
         )),
         ResolvedSource::ExternalGithub => {
-            let _ = external::stop(conn, &ctx.app, id).await;
+            // Stop failure must propagate — never start a new container on a half-stop.
+            external::stop(conn, &ctx.app, id).await?;
             external::start(conn, &ctx.app, id).await
         }
         ResolvedSource::LocalProject => {

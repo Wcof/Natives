@@ -680,21 +680,24 @@ pub async fn stop_app(conn: &Connection, app: &AppHandle, id: &str) -> Result<Cr
             let ts = now();
             store::set_state(conn, id, CreativeAppState::InstalledStopped, None, &ts)?;
             broadcast(app, "stopped", id);
+            rec = store::get_app(conn, id)?.unwrap();
+            Ok(summary_from_external(&rec))
         }
         Err(e) => {
             let ts = now();
+            let msg = e.to_string();
             store::set_state(
                 conn,
                 id,
                 CreativeAppState::StartFailed,
-                Some(&e.to_string()),
+                Some(&msg),
                 &ts,
             )?;
             broadcast(app, "stop_failed", id);
+            // Fail closed: restart must not start a new container after stop failure.
+            Err(Error::Internal(format!("stop failed: {msg}")))
         }
     }
-    rec = store::get_app(conn, id)?.unwrap();
-    Ok(summary_from_external(&rec))
 }
 
 pub async fn delete_app(

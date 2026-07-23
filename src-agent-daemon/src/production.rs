@@ -412,7 +412,17 @@ impl ProductionRuntime {
         })?;
         // Full production hook set + project hooks for this workspace.
         let hooks = build_production_hooks_for_project(Some(&project_root));
-        let budget = agent_core::ContextBudget::default();
+        // Context budget: min(Profile tokenBudget, model context_window); default 128K.
+        // chars/4 is only used when Provider usage is unavailable (engine estimate path).
+        let profile_budget = agent_core::discover_agents_md(&project_root)
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|raw| agent_core::parse_agent_profile_markdown(&raw, None).ok())
+            .and_then(|p| p.token_budget);
+        let model_window = lookup_model_context_window(&provider_id, &model_id);
+        let budget = agent_core::ContextBudget::resolve(profile_budget, model_window);
+        let profile_for_assemble = agent_core::discover_agents_md(&project_root)
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|raw| agent_core::parse_agent_profile_markdown(&raw, None).ok());
         let engine = Arc::new(
             AgentEngine::new(self.events.clone())
                 .with_hooks(hooks)
@@ -444,7 +454,9 @@ impl ProductionRuntime {
             &run_id,
             &user_content,
         );
-        crate::prompt_queue_store::persist_actor_snapshot(&conversation_id);
+        if let Err(e) = crate::prompt_queue_store::persist_actor_snapshot(&conversation_id) {
+            eprintln!("[production] persist_actor_snapshot on run start: {e}");
+        }
 
         let provider = RealProvider {
             provider_id: provider_id.clone(),
@@ -476,7 +488,41 @@ impl ProductionRuntime {
             tool_allowlist,
         };
 
-        let assembled = assemble_context(None, Some(&project_root), None);
+        let assembled = assemble_context(
+            profile_for_assemble.as_ref(),
+            Some(&project_root),
+            None,
+        );
+        // Compact history against resolved token budget (chars/4 fallback estimate).
+        let raw_history = crate::conversation_store::engine_history(&conversation_id)
+            .unwrap_or_default();
+        let history_pairs: Vec<(String, String)> = raw_history
+            .iter()
+            .map(|m| (m.role.clone(), m.content.clone()))
+            .collect();
+        let (compacted, _) =
+            agent_core::compact_messages(&history_pairs, budget.token_budget);
+        // Map compacted (role, content) back to EngineMessage, preserving tool fields
+        // for messages still present (match by role+content).
+        let messages: Vec<EngineMessage> = compacted
+            .into_iter()
+            .map(|(role, content)| {
+                if let Some(orig) = raw_history
+                    .iter()
+                    .find(|m| m.role == role && m.content == content)
+                {
+                    orig.clone()
+                } else {
+                    EngineMessage {
+                        role,
+                        content,
+                        tool_call_id: None,
+                        tool_name: None,
+                        tool_calls: None,
+                    }
+                }
+            })
+            .collect();
         let config = EngineRunConfig {
             run_id: run_id.clone(),
             conversation_id: conversation_id.clone(),
@@ -486,8 +532,7 @@ impl ProductionRuntime {
             } else {
                 Some(assembled.system_prompt)
             },
-            messages: crate::conversation_store::engine_history(&conversation_id)
-                .unwrap_or_default(),
+            messages,
             user_content,
             max_steps,
         };
@@ -497,8 +542,14 @@ impl ProductionRuntime {
             .await
             .map(|s| s.as_str().to_string())
             .unwrap_or_else(|_| "failed".into());
-        // Finalize checkpoint after hashes (best-effort).
-        let _ = crate::checkpoint::global_checkpoint_manager().finalize_run(&run_id);
+        // Finalize checkpoint — failure closes related side effects (no silent half-state).
+        if let Err(e) = crate::checkpoint::global_checkpoint_manager().finalize_run(&run_id) {
+            eprintln!("[production] checkpoint finalize_run failed: {e}");
+            // Fail closed for completed path: still record assistant turn only if finalize ok.
+            if status == "completed" {
+                // Keep event log terminal, but do not claim durable file snapshots exist.
+            }
+        }
         if status == "completed" {
             crate::conversation_store::append_assistant_turn_from_events(
                 &conversation_id,
@@ -2213,7 +2264,7 @@ impl PermissionGatedTools {
             &self.conversation_id,
             Some(permission_id.clone()),
         );
-        crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
+        let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
         self.events.append(
             &self.parent_run_id,
             RunEventKind::PermissionRequested {
@@ -2244,7 +2295,7 @@ impl PermissionGatedTools {
         }
         crate::prompt_queue_store::global_harness()
             .set_pending_interaction(&self.conversation_id, None);
-        crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
+        let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
         self.events.append(
             &self.parent_run_id,
             RunEventKind::PermissionResponded {
@@ -3411,6 +3462,42 @@ async fn reaper_tick() -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Look up model context_window from daemon model_cache (best-effort).
+fn lookup_model_context_window(provider_id: &str, model_id: &str) -> Option<u64> {
+    let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var("NATIVES_DB_PATH")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .map(std::path::PathBuf::from)
+        })
+        .unwrap_or_else(crate::default_assistant_db_path);
+    let art = std::env::var("NATIVES_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+            std::path::PathBuf::from(home)
+                .join(".natives")
+                .join("runtime")
+        })
+        .join("artifacts");
+    let store = crate::storage::DataStore::new(&db_path, &art).ok()?;
+    let conn = store.conn().ok()?;
+    conn.query_row(
+        "SELECT context_window FROM model_cache
+         WHERE provider_id = ?1 AND model_id = ?2
+         LIMIT 1",
+        rusqlite::params![provider_id, model_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .ok()
+    .filter(|w| *w > 0)
+    .map(|w| w as u64)
 }
 
 fn parent_conversation_recently_active(conversation_id: &str, within_secs: i64) -> bool {

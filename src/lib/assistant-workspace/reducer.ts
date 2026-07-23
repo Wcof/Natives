@@ -19,6 +19,7 @@ import {
   type LiveBubble,
   type WorkspaceAction,
 } from './state';
+import { clearSelectorCachesForConversation } from './selectors';
 
 /** Lifecycle rank — higher means further along; used to prevent status regression. */
 function runStatusRank(status: RunStatus | string): number {
@@ -878,7 +879,7 @@ function applySnapshot(
   };
 
   if (snapshot.eventsByRun) {
-    for (const [runId, events] of Object.entries(snapshot.eventsByRun)) {
+    for (const events of Object.values(snapshot.eventsByRun)) {
       // Apply via event pipeline for consistency (sorted)
       const sorted = [...events].sort((a, b) => a.sequence - b.sequence);
       for (const e of sorted) {
@@ -982,6 +983,11 @@ export function workspaceReducer(
     case 'conversations/remove': {
       const conversations = { ...state.conversations };
       delete conversations[action.id];
+      // Drop selector memo entries for this conversation + its known runs.
+      const runIds = Object.values(state.runs)
+        .filter((r) => r.conversationId === action.id)
+        .map((r) => r.id);
+      clearSelectorCachesForConversation(action.id, runIds);
       return {
         ...state,
         conversations,

@@ -377,52 +377,77 @@ impl SessionCoordinator {
         self.mark_finished_with_outcome(conversation_id, true)
     }
 
+    /// Atomically claim the terminal transition for `expected_run_id`.
+    ///
+    /// Returns `None` (stale) when:
+    /// - no active run is recorded, or
+    /// - the active run id does not match `expected_run_id`.
+    ///
+    /// Only the caller that receives `Some(action)` may start the next prompt.
+    pub fn finish_run(
+        &self,
+        conversation_id: &str,
+        expected_run_id: &str,
+        success: bool,
+    ) -> Option<CoordinatorAction> {
+        self.with_actor(conversation_id, |actor| {
+            match actor.running_run_id.as_deref() {
+                Some(active) if active == expected_run_id => {
+                    Some(Self::finish_actor(actor, success))
+                }
+                _ => None,
+            }
+        })
+    }
+
     pub fn mark_finished_with_outcome(
         &self,
         conversation_id: &str,
         success: bool,
     ) -> CoordinatorAction {
-        self.with_actor(conversation_id, |actor| {
-            if let Some(pid) = actor.running_prompt_id.take() {
-                if let Some(q) = actor.prompt_queue.iter_mut().find(|q| q.id == pid) {
-                    q.status = if success {
-                        QueueItemStatus::Sent
-                    } else {
-                        QueueItemStatus::Failed
-                    };
-                }
-                actor
-                    .prompt_queue
-                    .retain(|q| q.status == QueueItemStatus::Queued);
-            }
-            actor.running_prompt = None;
-            actor.running_run_id = None;
-            actor.cancel_requested = false;
-            actor.pending_interaction = None;
+        self.with_actor(conversation_id, |actor| Self::finish_actor(actor, success))
+    }
 
-            if let Some(item) = actor.pending_after_cancel.take() {
+    fn finish_actor(actor: &mut ConversationActor, success: bool) -> CoordinatorAction {
+        if let Some(pid) = actor.running_prompt_id.take() {
+            if let Some(q) = actor.prompt_queue.iter_mut().find(|q| q.id == pid) {
+                q.status = if success {
+                    QueueItemStatus::Sent
+                } else {
+                    QueueItemStatus::Failed
+                };
+            }
+            actor
+                .prompt_queue
+                .retain(|q| q.status == QueueItemStatus::Queued);
+        }
+        actor.running_prompt = None;
+        actor.running_run_id = None;
+        actor.cancel_requested = false;
+        actor.pending_interaction = None;
+
+        if let Some(item) = actor.pending_after_cancel.take() {
+            actor.running_prompt = Some(item.content.clone());
+            actor.version = actor.version.saturating_add(1);
+            return CoordinatorAction::StartPrompt { item };
+        }
+
+        if actor.drain_on_finish {
+            if let Some(item) = actor
+                .prompt_queue
+                .iter()
+                .position(|q| q.status == QueueItemStatus::Queued)
+                .map(|idx| actor.prompt_queue.remove(idx).expect("index valid"))
+            {
+                for (i, q) in actor.prompt_queue.iter_mut().enumerate() {
+                    q.position = i as i64;
+                }
                 actor.running_prompt = Some(item.content.clone());
                 actor.version = actor.version.saturating_add(1);
                 return CoordinatorAction::StartPrompt { item };
             }
-
-            if actor.drain_on_finish {
-                if let Some(item) = actor
-                    .prompt_queue
-                    .iter()
-                    .position(|q| q.status == QueueItemStatus::Queued)
-                    .map(|idx| actor.prompt_queue.remove(idx).expect("index valid"))
-                {
-                    for (i, q) in actor.prompt_queue.iter_mut().enumerate() {
-                        q.position = i as i64;
-                    }
-                    actor.running_prompt = Some(item.content.clone());
-                    actor.version = actor.version.saturating_add(1);
-                    return CoordinatorAction::StartPrompt { item };
-                }
-            }
-            CoordinatorAction::None
-        })
+        }
+        CoordinatorAction::None
     }
 
     pub fn send_now(
@@ -769,5 +794,36 @@ mod tests {
             CoordinatorAction::StartPrompt { item } => assert_eq!(item.id, "q2"),
             other => panic!("expected next after fail, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn finish_run_rejects_stale_run_id() {
+        let h = SessionCoordinator::new();
+        h.mark_running("c1", "run-live", "prompt");
+        assert!(h.finish_run("c1", "run-stale", true).is_none());
+        assert!(h.is_running("c1"));
+        let action = h.finish_run("c1", "run-live", true);
+        assert!(matches!(action, Some(CoordinatorAction::None)));
+        assert!(!h.is_running("c1"));
+    }
+
+    #[test]
+    fn finish_run_and_send_now_race_starts_exactly_one() {
+        // Model: send_now claims CancelThenStart + pending; only one finish_run
+        // may advance. Second terminal with same or different id is stale.
+        let h = SessionCoordinator::new();
+        h.mark_running("c1", "run-old", "old");
+        let item = h.enqueue("c1", "urgent", PromptSource::User, None, Some("q-u".into()));
+        let action = h.send_now("c1", &item.id).unwrap();
+        assert!(matches!(action, CoordinatorAction::CancelThenStart { .. }));
+
+        // First terminal for the cancelled run wins and yields StartPrompt.
+        let first = h.finish_run("c1", "run-old", false);
+        match first {
+            Some(CoordinatorAction::StartPrompt { item: i }) => assert_eq!(i.id, "q-u"),
+            other => panic!("expected StartPrompt, got {other:?}"),
+        }
+        // Second terminal (duplicate) must be stale even if run id matches a ghost.
+        assert!(h.finish_run("c1", "run-old", false).is_none());
     }
 }

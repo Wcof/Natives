@@ -319,7 +319,8 @@ pub async fn restart_app(
     host_http_port: u16,
     id: &str,
 ) -> Result<CreativeAppSummary> {
-    let _ = stop_app(conn, app, runtime, id).await;
+    // Stop failure must propagate — never start a new process on a half-stopped app.
+    stop_app(conn, app, runtime, id).await?;
     start_app(conn, app, runtime, host_http_port, id).await
 }
 
