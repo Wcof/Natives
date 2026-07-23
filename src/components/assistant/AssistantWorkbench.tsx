@@ -37,14 +37,18 @@ import {
   useAssistantStore,
   selectActiveRun,
   selectArtifacts,
+  selectArtifactsForRunTree,
   selectChildRuns,
   selectComposerDraft,
   selectConversationMessages,
+  selectEventsForRunTree,
   selectFileChanges,
+  selectFileChangesForRunTree,
   selectIsRunActive,
   selectPendingInteractions,
   selectPromptQueue,
   selectRunEvents,
+  selectSurfaceConversationId,
   type InspectorTab,
 } from '@/lib/assistant-workspace';
 // runtime pref loaded via persistence export
@@ -69,7 +73,11 @@ import { hydrateFileDiffContents } from '@/lib/assistant-workspace/file-diff-con
 import { createDefaultGateway, FixtureAssistantAdapter } from '@/lib/assistant-gateway';
 import { goldenTextStream } from '@/lib/assistant-fixtures/golden';
 import { isActiveRunStatus, mapWireConversation } from '@/lib/assistant-protocol';
-import type { Conversation } from '@/lib/assistant-protocol';
+import type {
+  Conversation,
+  SubagentAssignmentInteraction,
+  SubagentSession,
+} from '@/lib/assistant-protocol';
 import { messagePlainText } from '@/lib/assistant-message-view';
 import { copyToClipboard } from '@/lib/clipboard';
 import ConversationTimeline from './ConversationTimeline';
@@ -78,6 +86,10 @@ import PermissionRequestCard from './PermissionRequestCard';
 import GoalStatusBar from './GoalStatusBar';
 import PromptQueuePanel from './PromptQueuePanel';
 import ActivityInspector from './ActivityInspector';
+import SubagentAssignmentModal, {
+  type AssignmentKeyOption,
+} from './SubagentAssignmentModal';
+import type { ActivitySubagentView } from './ActivityInspector';
 import ResizableRightPanel from '@/components/ui/ResizableRightPanel';
 import ConnectionBanner from './ConnectionBanner';
 import EngineRecoveryPage from './EngineRecoveryPage';
@@ -106,6 +118,58 @@ interface AssistantWorkbenchProps {
   preferFixture?: boolean;
 }
 
+function mapSubagentSessions(raw: unknown): SubagentSession[] {
+  const sessionsRaw =
+    raw && typeof raw === 'object' && Array.isArray((raw as { sessions?: unknown }).sessions)
+      ? (raw as { sessions: unknown[] }).sessions
+      : Array.isArray(raw)
+        ? raw
+        : [];
+  return sessionsRaw
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    .map((r) => ({
+      id: String(r.id ?? ''),
+      parentConversationId: String(
+        r.parent_conversation_id ?? r.parentConversationId ?? '',
+      ),
+      childConversationId: String(
+        r.child_conversation_id ?? r.childConversationId ?? '',
+      ),
+      parentRunId:
+        r.parent_run_id != null || r.parentRunId != null
+          ? String(r.parent_run_id ?? r.parentRunId)
+          : null,
+      taskCallId:
+        r.task_call_id != null || r.taskCallId != null
+          ? String(r.task_call_id ?? r.taskCallId)
+          : null,
+      name: String(r.name ?? r.task ?? r.id ?? ''),
+      task: String(r.task ?? ''),
+      status: String(r.status ?? 'open'),
+      providerId: String(r.provider_id ?? r.providerId ?? ''),
+      keyId: String(r.key_id ?? r.keyId ?? ''),
+      modelId: String(r.model_id ?? r.modelId ?? ''),
+      lastActivityAt:
+        r.last_activity_at != null || r.lastActivityAt != null
+          ? String(r.last_activity_at ?? r.lastActivityAt)
+          : undefined,
+      closedAt:
+        r.closed_at != null || r.closedAt != null
+          ? String(r.closed_at ?? r.closedAt)
+          : null,
+      error: r.error != null ? String(r.error) : null,
+      createdAt:
+        r.created_at != null || r.createdAt != null
+          ? String(r.created_at ?? r.createdAt)
+          : undefined,
+      updatedAt:
+        r.updated_at != null || r.updatedAt != null
+          ? String(r.updated_at ?? r.updatedAt)
+          : undefined,
+    }))
+    .filter((s) => s.id.length > 0);
+}
+
 function WorkbenchInner({ locale }: { locale: Locale }) {
   const zh = locale.startsWith('zh');
   const { toast } = useToast();
@@ -116,8 +180,8 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
 
   const stateRef = useRef(state);
   stateRef.current = state;
-  const subAbortRef = useRef<{ aborted: boolean }>({ aborted: false });
-  /** Quiet soft-resubscribe attempt counts per run (reset on terminal). */
+  /** Per-run soft-resubscribe abort + attempt counts (multi-run table). */
+  const subSignalsRef = useRef<Record<string, { aborted: boolean }>>({});
   const resubAttemptsRef = useRef<Record<string, number>>({});
 
   const [providers, setProviders] = useState<ProviderWithModels[]>([]);
@@ -132,37 +196,136 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const [fileContentsByPath, setFileContentsByPath] = useState<
     Record<string, { before: string; after: string }>
   >({});
+  /** Project list / navigation always use root; timeline/input use surface. */
+  const [selectedRootConversationId, setSelectedRootConversationId] = useState<string | null>(
+    null,
+  );
+  const [selectedChildConversationId, setSelectedChildConversationId] = useState<string | null>(
+    null,
+  );
+  const [subagentSessions, setSubagentSessions] = useState<SubagentSession[]>([]);
+  const [switchKeySessionId, setSwitchKeySessionId] = useState<string | null>(null);
+  const [assignmentKeyOptions, setAssignmentKeyOptions] = useState<AssignmentKeyOption[]>([]);
 
-  const activeId = state.activeConversationId;
-  const activeConversation = activeId ? state.conversations[activeId] : null;
+  // Keep root selection aligned with store activeConversationId (which is always the root).
+  const storeActiveId = state.activeConversationId;
+  useEffect(() => {
+    if (storeActiveId !== selectedRootConversationId) {
+      setSelectedRootConversationId(storeActiveId);
+      // Switching another root conversation exits child view.
+      setSelectedChildConversationId(null);
+    }
+  }, [storeActiveId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const surfaceConversationId = selectSurfaceConversationId(
+    selectedRootConversationId ?? storeActiveId,
+    selectedChildConversationId,
+  );
+  const rootConversationId = selectedRootConversationId ?? storeActiveId;
+  const activeId = surfaceConversationId;
+  const rootConversation = rootConversationId
+    ? state.conversations[rootConversationId] ?? null
+    : null;
+  const activeConversation = activeId ? state.conversations[activeId] ?? rootConversation : null;
   // Picker selection is resolved against the live provider list so collapsed
   // /stale provider ids still highlight and empty wire fields still show a model.
   const modelSelection = useMemo(
     () =>
       resolveModelSelection(providers, {
-        providerId: activeConversation?.providerId,
-        modelId: activeConversation?.modelId,
+        providerId: activeConversation?.providerId ?? rootConversation?.providerId,
+        modelId: activeConversation?.modelId ?? rootConversation?.modelId,
       }),
-    [providers, activeConversation?.providerId, activeConversation?.modelId],
+    [
+      providers,
+      activeConversation?.providerId,
+      activeConversation?.modelId,
+      rootConversation?.providerId,
+      rootConversation?.modelId,
+    ],
   );
   const messages = useMemo(
     () => selectConversationMessages(state, activeId),
     [state, activeId],
   );
-  const activeRun = selectActiveRun(state, activeId);
+  const rootRun = selectActiveRun(state, rootConversationId);
+  const surfaceRun = selectActiveRun(state, activeId);
+  // Timeline / input / pause track surface; activity inspector prefers root tree.
+  const activeRun = surfaceRun ?? rootRun;
   const activeRunId = activeRun?.id;
   const activeRunStatus = activeRun?.status;
   const isStreaming = selectIsRunActive(state, activeId);
-  const interactions = selectPendingInteractions(state, activeId);
+  // Permissions / assignments for the root conversation (batch waiters are parent-scoped).
+  const interactions = selectPendingInteractions(state, rootConversationId);
   const promptQueue = selectPromptQueue(state, activeId);
-  const events = selectRunEvents(state, activeRun?.id ?? null);
-  const artifacts = selectArtifacts(state, activeRun?.id ?? null);
-  const children = selectChildRuns(state, activeRun?.id ?? null);
-  const fileChanges = selectFileChanges(state, activeRun?.id ?? null);
-  const contextUsage = activeId ? state.contextUsageByConversation[activeId] ?? null : null;
+  const rootRunId = rootRun?.id ?? null;
+  const events = useMemo(
+    () =>
+      selectedChildConversationId
+        ? selectRunEvents(state, surfaceRun?.id ?? null)
+        : selectEventsForRunTree(state, rootRunId),
+    [state, selectedChildConversationId, surfaceRun?.id, rootRunId],
+  );
+  const artifacts = useMemo(
+    () =>
+      selectedChildConversationId
+        ? selectArtifacts(state, surfaceRun?.id ?? null)
+        : selectArtifactsForRunTree(state, rootRunId),
+    [state, selectedChildConversationId, surfaceRun?.id, rootRunId],
+  );
+  const children = selectChildRuns(state, rootRunId);
+  const fileChanges = useMemo(
+    () =>
+      selectedChildConversationId
+        ? selectFileChanges(state, surfaceRun?.id ?? null)
+        : selectFileChangesForRunTree(state, rootRunId),
+    [state, selectedChildConversationId, surfaceRun?.id, rootRunId],
+  );
+  const contextUsage = rootConversationId
+    ? state.contextUsageByConversation[rootConversationId] ?? null
+    : null;
   const permission = interactions.find((i) => i.kind === 'permission');
   const askUser = interactions.find((i) => i.kind === 'ask_user');
   const planApproval = interactions.find((i) => i.kind === 'plan_approval');
+  const subagentAssignment = interactions.find(
+    (i): i is SubagentAssignmentInteraction => i.kind === 'subagent_assignment',
+  );
+  const activitySubagents = useMemo<ActivitySubagentView[]>(() => {
+    if (subagentSessions.length > 0) {
+      return subagentSessions.map((s) => ({
+        id: s.id,
+        name: s.name || s.task || s.id.slice(0, 8),
+        status: s.status,
+        providerId: s.providerId,
+        keyLabel: s.keyId ? s.keyId.slice(0, 8) : undefined,
+        childConversationId: s.childConversationId,
+        task: s.task,
+      }));
+    }
+    return children.map((ch) => ({
+      id: ch.id,
+      name: ch.task || ch.agentProfileId || ch.id.slice(0, 8),
+      status: String(ch.status),
+      providerId: ch.providerId,
+      keyLabel: ch.keyLabel,
+      task: ch.task,
+    }));
+  }, [subagentSessions, children]);
+  const fileEvents = useMemo(
+    () =>
+      events
+        .filter((e) => e.type === 'file_changed')
+        .map((e) => {
+          const p = (e.payload ?? {}) as Record<string, unknown>;
+          return {
+            path: String(p.path ?? ''),
+            changeType: String(p.change_type ?? p.changeType ?? 'modified'),
+            at: e.timestamp,
+            runId: e.runId,
+          };
+        })
+        .filter((f) => f.path),
+    [events],
+  );
   // Goal chrome is opt-in only: conversation.mode must be exactly 'goal'.
   // Ordinary chat/agent runs have NO status bar — progress is timeline
   // streaming / "正在思考" + MessageInput stop only.
@@ -238,9 +401,11 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
 
   const startSubscription = useCallback(
     async (runId: string, afterSequence: number) => {
-      subAbortRef.current.aborted = true;
+      // Abort only this run's previous soft-resub loop; other runs keep polling.
+      const prev = subSignalsRef.current[runId];
+      if (prev) prev.aborted = true;
       const signal = { aborted: false };
-      subAbortRef.current = signal;
+      subSignalsRef.current[runId] = signal;
       try {
         await subscribeRun(
           gateway,
@@ -251,36 +416,132 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
           signal,
         );
       } catch {
-        // transport soft-fail handled in controller; resubscribe below if still active
+        // Real transport/IPC errors flip connection in controller; soft-resub below if still active.
       }
       if (signal.aborted) return;
       const run = stateRef.current.runs[runId];
       if (!run || !isActiveRunStatus(run.status)) {
         delete resubAttemptsRef.current[runId];
+        delete subSignalsRef.current[runId];
         return;
       }
-      // Quiet soft resubscribe with backoff. Do not flip ConnectionBanner on
-      // every empty poll — that caused permanent "正在重连" during normal answers.
+      // Quiet soft resubscribe with backoff only. Normal long-poll / iterator end
+      // without a terminal event must NOT promote the global connection to
+      // "reconnecting" (that mis-fired after ~40 quiet polls during healthy runs).
       const nextSeq = stateRef.current.lastSequenceByRun[runId] ?? afterSequence;
+      // Progress (received events) resets quiet-resub delay; no progress only stretches delay.
+      if (nextSeq > afterSequence) {
+        resubAttemptsRef.current[runId] = 0;
+      }
       const n = (resubAttemptsRef.current[runId] ?? 0) + 1;
       resubAttemptsRef.current[runId] = n;
-      if (n > 40) {
-        dispatch({
-          type: 'connection/set',
-          connection: 'reconnecting',
-          error: 'Still waiting for engine terminal event',
-        });
-        return;
-      }
       const delay = Math.min(250 * n, 2000);
+      if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+        console.debug('[assistant] soft-resubscribe', {
+          runId,
+          lastSequence: nextSeq,
+          quietAttempt: n,
+          reason: 'subscribe_ended_without_terminal',
+        });
+      }
       window.setTimeout(() => {
-        if (!subAbortRef.current.aborted) {
+        if (!signal.aborted && subSignalsRef.current[runId] === signal) {
           void startSubscription(runId, nextSeq);
         }
       }, delay);
     },
     [gateway, dispatch],
   );
+
+  const ensureRunSubscription = useCallback(
+    (runId: string | null | undefined) => {
+      if (!runId) return;
+      const run = stateRef.current.runs[runId];
+      if (!run || !isActiveRunStatus(run.status)) return;
+      // Already tracking this run — leave the soft-resub loop alone.
+      if (subSignalsRef.current[runId] && !subSignalsRef.current[runId]!.aborted) return;
+      void startSubscription(runId, stateRef.current.lastSequenceByRun[runId] ?? 0);
+    },
+    [startSubscription],
+  );
+
+  const refreshSubagentSessions = useCallback(
+    async (parentConversationId: string | null | undefined) => {
+      if (!parentConversationId || isTempConversationId(parentConversationId)) {
+        setSubagentSessions([]);
+        return;
+      }
+      try {
+        const raw = await gateway.request<unknown>('subagent.list', {
+          conversation_id: parentConversationId,
+          include_closed: true,
+        });
+        setSubagentSessions(mapSubagentSessions(raw));
+      } catch {
+        // Method may be unavailable on older daemons — fall back to child runs.
+      }
+    },
+    [gateway],
+  );
+
+  const loadAssignmentKeys = useCallback(async () => {
+    try {
+      const list = await window.nativesAPI?.provider?.list?.();
+      if (!Array.isArray(list)) {
+        // Fall back to gateway provider list (has_active_key only).
+        const opts: AssignmentKeyOption[] = [];
+        for (const p of providers) {
+          if (!p.keys?.length) continue;
+          for (const k of p.keys) {
+            opts.push({
+              providerId: p.id,
+              providerName: p.name,
+              keyId: k.id,
+              keyLabel: k.label || k.maskedKey || k.id,
+              modelId: p.defaultModel || p.models[0]?.id || '',
+              models: p.models,
+            });
+          }
+        }
+        setAssignmentKeyOptions(opts);
+        return;
+      }
+      const opts: AssignmentKeyOption[] = [];
+      for (const p of list) {
+        const provider = p as {
+          id: string;
+          displayName?: string;
+          name?: string;
+          defaultModel?: string | null;
+          models?: Array<{ id: string; displayName?: string | null }>;
+          keys?: Array<{
+            id: string;
+            label?: string;
+            maskedKey?: string;
+            isActive?: boolean;
+          }>;
+        };
+        const models = (provider.models ?? []).map((m) => ({
+          id: m.id,
+          displayName: m.displayName ?? undefined,
+        }));
+        for (const k of provider.keys ?? []) {
+          if (k.isActive === false) continue;
+          opts.push({
+            providerId: provider.id,
+            providerName: provider.displayName || provider.name || provider.id,
+            keyId: k.id,
+            keyLabel: k.label || k.maskedKey || k.id,
+            modelId: provider.defaultModel || models[0]?.id || '',
+            models,
+          });
+        }
+      }
+      setAssignmentKeyOptions(opts);
+    } catch {
+      setAssignmentKeyOptions([]);
+    }
+  }, [providers]);
 
   // Boot: connect + list conversations + providers
   useEffect(() => {
@@ -341,10 +602,79 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     })();
     return () => {
       cancelled = true;
-      subAbortRef.current.aborted = true;
+      for (const signal of Object.values(subSignalsRef.current)) {
+        signal.aborted = true;
+      }
+      subSignalsRef.current = {};
       void gateway.disconnect();
     };
   }, [gateway, dispatch, toast]);
+
+  // Multi-run subscription: keep root + active child runs subscribed without cancelling others.
+  useEffect(() => {
+    const wanted = new Set<string>();
+    if (rootRun && isActiveRunStatus(rootRun.status)) wanted.add(rootRun.id);
+    for (const ch of children) {
+      if (isActiveRunStatus(String(ch.status))) wanted.add(ch.id);
+    }
+    for (const s of subagentSessions) {
+      const childRunId = state.activeRunByConversation[s.childConversationId];
+      if (childRunId) {
+        const run = state.runs[childRunId];
+        if (run && isActiveRunStatus(run.status)) wanted.add(childRunId);
+      }
+    }
+    for (const runId of wanted) {
+      ensureRunSubscription(runId);
+    }
+  }, [
+    rootRun?.id,
+    rootRun?.status,
+    children,
+    subagentSessions,
+    state.activeRunByConversation,
+    state.runs,
+    ensureRunSubscription,
+  ]);
+
+  // Load subagent.list when root conversation is visible.
+  useEffect(() => {
+    void refreshSubagentSessions(rootConversationId);
+  }, [rootConversationId, refreshSubagentSessions, rootRun?.status]);
+
+  // Heartbeat: touch active subagent sessions every 30s while assistant page is visible.
+  useEffect(() => {
+    if (!rootConversationId || isTempConversationId(rootConversationId)) return;
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      const targets = subagentSessions.filter(
+        (s) => s.status === 'open' || s.status === 'running' || s.status === 'idle',
+      );
+      for (const s of targets) {
+        void gateway
+          .request('subagent.touch', {
+            id: s.id,
+            child_conversation_id: s.childConversationId,
+          })
+          .catch(() => undefined);
+      }
+    };
+    tick();
+    const handle = window.setInterval(tick, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, [rootConversationId, subagentSessions, gateway]);
+
+  // Prefetch assignment keys when an assignment interaction appears.
+  useEffect(() => {
+    if (subagentAssignment || switchKeySessionId) {
+      void loadAssignmentKeys();
+    }
+  }, [subagentAssignment, switchKeySessionId, loadAssignmentKeys]);
 
   // Publish navigation snapshot for shell sidebar
   useEffect(() => {
@@ -388,13 +718,17 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         }
       }
       // Prefer root-level temp shell (survives workbench remount) when store has none.
-      const storeTempId = isTempConversationId(activeId) ? activeId : null;
+      const storeTempId = isTempConversationId(rootConversationId)
+        ? rootConversationId
+        : isTempConversationId(activeId)
+          ? activeId
+          : null;
       const rootTemp = prev.tempSession;
       const selectedId =
         storeTempId ??
-        (rootTemp && activeId === null ? rootTemp.conversation.id : activeId) ??
+        (rootTemp && rootConversationId === null ? rootTemp.conversation.id : rootConversationId) ??
         rootTemp?.conversation.id ??
-        activeId;
+        rootConversationId;
       return {
         groups: nextGroups,
         selectedId,
@@ -415,9 +749,9 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         tempSession:
           storeTempId && rootTemp && rootTemp.conversation.id === storeTempId
             ? rootTemp
-            : isTempConversationId(activeId)
+            : isTempConversationId(rootConversationId)
               ? rootTemp
-              : activeId
+              : rootConversationId
                 ? null
                 : rootTemp,
       };
@@ -426,7 +760,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     state.conversations,
     state.conversationOrder,
     state.connection,
-    activeId,
+    rootConversationId,
     activeProjectPath,
     registeredProjects,
     pinnedConversationIds,
@@ -439,11 +773,11 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   // Publish runtime for shell
   useEffect(() => {
     publishRuntime({
-      conversationId: activeId,
-      conversationTitle: activeConversation?.title ?? null,
-      conversationMode: activeConversation?.mode ?? 'agent',
-      providerId: activeConversation?.providerId ?? '',
-      modelId: activeConversation?.modelId ?? '',
+      conversationId: rootConversationId,
+      conversationTitle: rootConversation?.title ?? activeConversation?.title ?? null,
+      conversationMode: rootConversation?.mode ?? activeConversation?.mode ?? 'agent',
+      providerId: activeConversation?.providerId ?? rootConversation?.providerId ?? '',
+      modelId: activeConversation?.modelId ?? rootConversation?.modelId ?? '',
       runId: activeRun?.id ?? null,
       runStatus: activeRun?.status ?? 'idle',
       runStartedAt: activeRun?.startedAt ?? null,
@@ -470,7 +804,8 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       },
     });
   }, [
-    activeId,
+    rootConversationId,
+    rootConversation,
     activeConversation,
     activeRun,
     events,
@@ -482,28 +817,41 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
 
   const selectConversation = useCallback(
     async (id: string) => {
-      if (id === stateRef.current.activeConversationId) return;
+      // Project list always selects a root conversation.
+      setSelectedChildConversationId(null);
+      setSelectedRootConversationId(id);
+      if (id === stateRef.current.activeConversationId) {
+        // Re-open still refreshes snapshot so artifacts recover after completed runs.
+        setLoadingMessages(true);
+        try {
+          await openConversation(gateway, dispatch, id);
+          ensureRunSubscription(stateRef.current.activeRunByConversation[id]);
+          void refreshSubagentSessions(id);
+        } catch (err) {
+          toast(classifyError(err).userMessage, 'error');
+        } finally {
+          setLoadingMessages(false);
+        }
+        return;
+      }
       setLoadingMessages(true);
       try {
         await openConversation(gateway, dispatch, id);
-        const runId = stateRef.current.activeRunByConversation[id];
-        const run = runId ? stateRef.current.runs[runId] : null;
-        if (run && isActiveRunStatus(run.status)) {
-          void startSubscription(run.id, stateRef.current.lastSequenceByRun[run.id] ?? 0);
-        }
+        ensureRunSubscription(stateRef.current.activeRunByConversation[id]);
+        void refreshSubagentSessions(id);
       } catch (err) {
         toast(classifyError(err).userMessage, 'error');
       } finally {
         setLoadingMessages(false);
       }
     },
-    [gateway, dispatch, toast, startSubscription],
+    [gateway, dispatch, toast, ensureRunSubscription, refreshSubagentSessions],
   );
 
   // Sync external sidebar selection (persisted sessions only — temps hydrate below).
   useEffect(() => {
     const selected = navigation.selectedId;
-    if (!selected || selected === activeId) return;
+    if (!selected || selected === rootConversationId) return;
     if (isTempConversationId(selected)) return;
     void selectConversation(selected);
   }, [navigation.selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -624,6 +972,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
 
   const handleSend = useCallback(
     async (draft: AssistantDraft, forceImmediate = false): Promise<boolean> => {
+      // Sends always target the surface conversation (child when selected).
       let conversationId = activeId;
       const pick = resolveModelSelection(providers, {
         providerId: activeConversation?.providerId,
@@ -698,6 +1047,8 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             dispatch({ type: 'conversations/remove', id: previousTempId });
           }
           // Clear root-level temp shell so sidebar/remount do not resurrect it.
+          setSelectedRootConversationId(conversation.id);
+          setSelectedChildConversationId(null);
           publishNavigation((prev) => ({
             ...prev,
             tempSession: null,
@@ -728,7 +1079,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         });
 
         if (!result.queued && result.runId) {
-          void startSubscription(result.runId, 0);
+          ensureRunSubscription(result.runId);
         }
         return true;
       } catch (err) {
@@ -748,7 +1099,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       zh,
       locale,
       activeProjectPath,
-      startSubscription,
+      ensureRunSubscription,
       publishNavigation,
     ],
   );
@@ -770,34 +1121,109 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     if (!activeRunId) return;
     try {
       const newId = await retryRun(gateway, dispatch, activeRunId);
-      void startSubscription(newId, 0);
+      ensureRunSubscription(newId);
     } catch (err) {
       toast(classifyError(err).userMessage, 'error');
     }
   }, [
     // eslint-disable-next-line react-hooks/preserve-manual-memoization
-    activeRunId, gateway, dispatch, toast, startSubscription,
+    activeRunId, gateway, dispatch, toast, ensureRunSubscription,
   ]);
 
   const handlePermission = useCallback(
     async (requestId: string, approved: boolean, scope?: string) => {
-      try {
-        await respondPermission(
-          gateway,
-          dispatch,
-          requestId,
-          approved,
-          scope ?? 'once',
-          activeRunId,
-        );
-      } catch (err) {
-        toast(classifyError(err).userMessage, 'error');
-      }
+      // Throw so PermissionRequestCard can unlock + show in-card error.
+      await respondPermission(
+        gateway,
+        dispatch,
+        requestId,
+        approved,
+        scope ?? 'once',
+        activeRunId,
+      );
     },
     [
       gateway, dispatch,
       // eslint-disable-next-line react-hooks/preserve-manual-memoization
-      activeRunId, toast,
+      activeRunId,
+    ],
+  );
+
+  const handleSelectSubagent = useCallback(
+    async (id: string) => {
+      const session = subagentSessions.find((s) => s.id === id);
+      const childId = session?.childConversationId;
+      if (!childId) {
+        // Legacy child-run id without session row — still mark selection for tasks panel.
+        setSelectedChildConversationId(null);
+        return;
+      }
+      setSelectedChildConversationId(childId);
+      setLoadingMessages(true);
+      try {
+        // Load hidden child conversation history without flipping sidebar root.
+        const snapshot = await gateway.getSnapshot(childId);
+        dispatch({ type: 'snapshot/apply', snapshot });
+        ensureRunSubscription(stateRef.current.activeRunByConversation[childId]);
+      } catch (err) {
+        toast(classifyError(err).userMessage, 'error');
+      } finally {
+        setLoadingMessages(false);
+      }
+    },
+    [subagentSessions, gateway, dispatch, toast, ensureRunSubscription],
+  );
+
+  const handleBackToMain = useCallback(() => {
+    setSelectedChildConversationId(null);
+  }, []);
+
+  const handleAssignmentConfirm = useCallback(
+    async (payload: {
+      mode: 'default' | 'random' | 'custom';
+      bindings: Array<{ providerId: string; keyId: string; modelId: string }>;
+      sessionId?: string | null;
+    }) => {
+      const wireBindings = payload.bindings.map((b) => ({
+        provider_id: b.providerId,
+        key_id: b.keyId,
+        model_id: b.modelId,
+      }));
+      if (payload.sessionId) {
+        await gateway.request('subagent.switchRoute', {
+          conversation_id: rootConversationId,
+          session_id: payload.sessionId,
+          mode: payload.mode,
+          bindings: wireBindings,
+        });
+        setSwitchKeySessionId(null);
+        void refreshSubagentSessions(rootConversationId);
+        return;
+      }
+      if (!subagentAssignment) {
+        throw new Error(t(locale, 'assistant.subagentAssignment.errorFallback'));
+      }
+      await gateway.request('interaction.respond', {
+        id: subagentAssignment.id,
+        run_id: subagentAssignment.runId,
+        response: {
+          approved: true,
+          mode: payload.mode,
+          bindings: wireBindings,
+          conversation_id:
+            subagentAssignment.conversationId ?? rootConversationId ?? undefined,
+        },
+      });
+      dispatch({ type: 'interaction/remove', id: subagentAssignment.id });
+      void refreshSubagentSessions(rootConversationId);
+    },
+    [
+      gateway,
+      rootConversationId,
+      subagentAssignment,
+      dispatch,
+      refreshSubagentSessions,
+      locale,
     ],
   );
 
@@ -1186,10 +1612,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
           // Background mode is represented by the live subscription/event stream;
           // it is not a separate engine RPC.
           if (activeRunId) {
-            void startSubscription(
-              activeRunId,
-              stateRef.current.lastSequenceByRun[activeRunId] ?? 0,
-            );
+            ensureRunSubscription(activeRunId);
           }
         },
       },
@@ -1227,6 +1650,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     locale,
     activeProjectPath,
     publishNavigation,
+    ensureRunSubscription,
   ]);
 
   const timelineMessages = useMemo(
@@ -1363,10 +1787,10 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
                 }}
                 locale={locale}
                 onApprove={(id, scope) => {
-                  // Send once | this_run | project as-is — daemon normalize_permission_scope accepts them.
-                  void handlePermission(id, true, scope);
+                  // Must return the Promise so the card can await + recover on failure.
+                  return handlePermission(id, true, scope);
                 }}
-                onReject={(id) => void handlePermission(id, false)}
+                onReject={(id) => handlePermission(id, false)}
               />
             </div>
           )}
@@ -1678,7 +2102,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             scrollBody={false}
           >
             <ActivityInspector
-              run={activeRun}
+              run={rootRun ?? activeRun}
               events={events}
               artifacts={artifacts}
               children={children}
@@ -1700,13 +2124,30 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               onOpenFile={(path) => void gateway.request('artifact.open', { path })}
               capabilities={state.capabilities}
               gateway={gateway}
-              conversationId={activeId}
+              conversationId={rootConversationId}
+              subagents={activitySubagents}
+              selectedSubagentId={
+                selectedChildConversationId
+                  ? activitySubagents.find(
+                      (s) => s.childConversationId === selectedChildConversationId,
+                    )?.id ?? null
+                  : null
+              }
+              fileEvents={fileEvents}
+              onSelectSubagent={(id) => void handleSelectSubagent(id)}
+              onBackToMain={handleBackToMain}
+              onSwitchSubagentKey={(id) => {
+                setSwitchKeySessionId(id);
+                void loadAssignmentKeys();
+              }}
+              onRefreshTasks={() => void refreshSubagentSessions(rootConversationId)}
+              showingChildSession={Boolean(selectedChildConversationId)}
               onRollbackFile={
                 allowRewind
                   ? (path) => {
                       // Rollback must go through engine permission/events — intent only.
                       void gateway
-                        .request('run.rewind', { path, run_id: activeRun?.id })
+                        .request('run.rewind', { path, run_id: (rootRun ?? activeRun)?.id })
                         .catch((err) => {
                           toast(classifyError(err).userMessage, 'error');
                         });
@@ -1718,6 +2159,38 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         )}
       </div>
       )}
+
+      <SubagentAssignmentModal
+        open={Boolean(subagentAssignment) || Boolean(switchKeySessionId)}
+        locale={locale}
+        interaction={subagentAssignment ?? null}
+        keys={assignmentKeyOptions}
+        switchSessionId={switchKeySessionId}
+        onClose={() => {
+          if (switchKeySessionId) {
+            setSwitchKeySessionId(null);
+            return;
+          }
+          if (subagentAssignment) {
+            void gateway
+              .request('interaction.respond', {
+                id: subagentAssignment.id,
+                run_id: subagentAssignment.runId,
+                response: {
+                  approved: false,
+                  cancelled: true,
+                  conversation_id:
+                    subagentAssignment.conversationId ?? rootConversationId ?? undefined,
+                },
+              })
+              .then(() => dispatch({ type: 'interaction/remove', id: subagentAssignment.id }))
+              .catch(() => {
+                // Keep card/modal open on failure so user can retry or dismiss again.
+              });
+          }
+        }}
+        onConfirm={handleAssignmentConfirm}
+      />
     </div>
   );
 }

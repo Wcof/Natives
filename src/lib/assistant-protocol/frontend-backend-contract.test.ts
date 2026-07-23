@@ -64,6 +64,9 @@ const UI_CALLED_METHODS = [
   'artifact.reveal',
   'task.list',
   'task.cancel',
+  'subagent.list',
+  'subagent.touch',
+  'subagent.switchRoute',
 ] as const;
 
 test('UI-called methods are in ALL_METHODS catalogue', () => {

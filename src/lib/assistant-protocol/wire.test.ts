@@ -158,18 +158,25 @@ test('mapWireRunEvent + reducer: tool_call_delta merges into one card then compl
   for (const event of events) {
     state = workspaceReducer(state, { type: 'event/apply', event });
   }
-  // After terminal, live bubble is promoted; tools live on the message.
-  const toolsLive = state.liveByRun.r1?.blocks.filter((b) => b.type === 'tool_call') ?? [];
-  const msgId = Object.keys(state.messages).find((id) => state.messages[id]?.runId === 'r1');
-  const toolsMsg =
-    msgId != null
-      ? (state.messages[msgId]?.contentBlocks.filter((b) => b.type === 'tool_call') ?? [])
-      : [];
-  const tools = toolsMsg.length > 0 ? toolsMsg : toolsLive;
-  assert.equal(tools.length, 1);
-  assert.equal(tools[0]!.toolStatus, 'completed');
-  assert.equal(tools[0]!.toolName, 'list_dir');
+  // Tools remain on the live bubble until terminal; after completed they stay in
+  // eventsByRun (activity panel) and are filtered out of the promoted message body.
+  // Assert via intermediate non-terminal state instead of the promoted message.
+  let mid = withRun();
+  for (const event of events.slice(0, 5)) {
+    mid = workspaceReducer(mid, { type: 'event/apply', event });
+  }
+  const toolsLive = mid.liveByRun.r1?.blocks.filter((b) => b.type === 'tool_call') ?? [];
+  assert.equal(toolsLive.length, 1);
+  assert.equal(toolsLive[0]!.toolStatus, 'completed');
+  assert.equal(toolsLive[0]!.toolName, 'list_dir');
   assert.equal(state.runs.r1?.status, 'completed');
+  // Promoted message must not re-embed tool cards.
+  const msgId = Object.keys(state.messages).find((id) => state.messages[id]?.runId === 'r1');
+  if (msgId) {
+    const toolsMsg =
+      state.messages[msgId]?.contentBlocks.filter((b) => b.type === 'tool_call') ?? [];
+    assert.equal(toolsMsg.length, 0);
+  }
 });
 
 test('mapWireRunEvent + reducer: failed event surfaces error (no permanent thinking)', () => {

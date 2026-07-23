@@ -23,6 +23,9 @@ export const HOST_METHODS_UI = [
   'artifact.open',
   'artifact.reveal',
   'run.listChildren',
+  'subagent.list',
+  'subagent.touch',
+  'subagent.switchRoute',
 ] as const;
 
 export type CapabilityMethodName = string;

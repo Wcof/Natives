@@ -159,3 +159,78 @@ export function selectFileChanges(state: AssistantWorkspaceState, runId: string 
   if (!runId) return EMPTY;
   return state.fileChangesByRun[runId] ?? EMPTY;
 }
+
+/**
+ * Surface conversation: child session when selected, otherwise the root.
+ * Project list / navigation keep root; timeline/input/permission use surface.
+ */
+export function selectSurfaceConversationId(
+  selectedRootConversationId: string | null | undefined,
+  selectedChildConversationId: string | null | undefined,
+): string | null {
+  const child = selectedChildConversationId?.trim() || null;
+  if (child) return child;
+  const root = selectedRootConversationId?.trim() || null;
+  return root;
+}
+
+/** Merge artifacts across a main run and its known child runs. */
+export function selectArtifactsForRunTree(
+  state: AssistantWorkspaceState,
+  rootRunId: string | null,
+): import('@/lib/assistant-protocol').Artifact[] {
+  if (!rootRunId) return EMPTY;
+  const ids = [rootRunId, ...(state.childRunsByParent[rootRunId] ?? [])];
+  const seen = new Set<string>();
+  const out: import('@/lib/assistant-protocol').Artifact[] = [];
+  for (const id of ids) {
+    for (const a of state.artifactsByRun[id] ?? []) {
+      const key = a.id || `${a.runId}:${a.path}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(a);
+    }
+  }
+  return out;
+}
+
+/** Merge file changes across a main run and its known child runs. */
+export function selectFileChangesForRunTree(
+  state: AssistantWorkspaceState,
+  rootRunId: string | null,
+): import('@/lib/assistant-protocol').FileChange[] {
+  if (!rootRunId) return EMPTY;
+  const ids = [rootRunId, ...(state.childRunsByParent[rootRunId] ?? [])];
+  const seen = new Set<string>();
+  const out: import('@/lib/assistant-protocol').FileChange[] = [];
+  for (const id of ids) {
+    for (const f of state.fileChangesByRun[id] ?? []) {
+      const key = `${f.runId ?? id}:${f.path}:${f.changeType}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(f);
+    }
+  }
+  return out;
+}
+
+/** Merge events for root + child runs (ordered by timestamp then sequence). */
+export function selectEventsForRunTree(
+  state: AssistantWorkspaceState,
+  rootRunId: string | null,
+): import('@/lib/assistant-protocol').RunEvent[] {
+  if (!rootRunId) return EMPTY;
+  const ids = [rootRunId, ...(state.childRunsByParent[rootRunId] ?? [])];
+  const out: import('@/lib/assistant-protocol').RunEvent[] = [];
+  for (const id of ids) {
+    out.push(...(state.eventsByRun[id] ?? []));
+  }
+  out.sort((a, b) => {
+    const ta = a.timestamp || '';
+    const tb = b.timestamp || '';
+    if (ta !== tb) return ta.localeCompare(tb);
+    if (a.runId !== b.runId) return a.runId.localeCompare(b.runId);
+    return a.sequence - b.sequence;
+  });
+  return out;
+}

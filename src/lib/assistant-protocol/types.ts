@@ -350,11 +350,65 @@ export interface ConflictResolutionInteraction {
   files: Array<{ path: string; base?: string; ours?: string; theirs?: string }>;
 }
 
+/** One-shot pool assignment before subagent tasks can start (daemon `subagent_assignment`). */
+export type SubagentAssignmentMode = 'default' | 'random' | 'custom';
+
+export interface SubagentRouteBinding {
+  providerId: string;
+  keyId: string;
+  modelId: string;
+}
+
+export interface SubagentAssignmentInteraction {
+  kind: 'subagent_assignment';
+  id: string;
+  runId: string;
+  conversationId?: string;
+  createdAt: string;
+  reason?: string;
+  /** Optional task previews from the interaction payload. */
+  tasks?: Array<{ prompt?: string | null }>;
+}
+
 export type InteractionRequest =
   | PermissionInteraction
   | AskUserInteraction
   | PlanApprovalInteraction
-  | ConflictResolutionInteraction;
+  | ConflictResolutionInteraction
+  | SubagentAssignmentInteraction;
+
+/** Wire session from `subagent.list`. */
+export interface SubagentSession {
+  id: string;
+  parentConversationId: string;
+  childConversationId: string;
+  parentRunId?: string | null;
+  taskCallId?: string | null;
+  name: string;
+  task: string;
+  status: string;
+  providerId: string;
+  keyId: string;
+  modelId: string;
+  lastActivityAt?: string;
+  closedAt?: string | null;
+  error?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface SubagentRoutePolicy {
+  parentConversationId: string;
+  mode: string;
+  bindings: SubagentRouteBinding[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface SubagentListResult {
+  sessions: SubagentSession[];
+  routePolicy?: SubagentRoutePolicy | null;
+}
 
 // ─── Prompt queue ────────────────────────────────────────
 
@@ -495,6 +549,8 @@ export type AssistantMethod =
   | 'run.finish'
   | 'run.getActivity'
   | 'run.rewind'
+  | 'run.rewindPreview'
+  | 'task.wait'
   | 'permission.respond'
   | 'permission.listPending'
   | 'interaction.listPending'
@@ -509,6 +565,8 @@ export type AssistantMethod =
   | 'tool.list'
   | 'agent.list'
   | 'subagent.list'
+  | 'subagent.touch'
+  | 'subagent.switchRoute'
   | 'extension.list'
   | 'extension.enable'
   | 'mcp.list'

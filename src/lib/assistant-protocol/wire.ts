@@ -234,3 +234,28 @@ export function mapWireArtifact(raw: Record<string, unknown>): Artifact {
     staleReason: raw.stale_reason != null || raw.staleReason != null ? str(raw.stale_reason ?? raw.staleReason) : undefined,
   };
 }
+
+/**
+ * Accept both bare artifact arrays and envelopes `{ artifacts: [...] }`.
+ * Production daemons may wrap; fixtures often return a bare array.
+ */
+export function unwrapArtifactListPayload(payload: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(payload)) {
+    return payload.filter(
+      (item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object',
+    );
+  }
+  if (payload && typeof payload === 'object') {
+    const rec = payload as Record<string, unknown>;
+    if (Array.isArray(rec.artifacts)) {
+      return rec.artifacts.filter(
+        (item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object',
+      );
+    }
+  }
+  return [];
+}
+
+export function mapWireArtifactList(payload: unknown): Artifact[] {
+  return unwrapArtifactListPayload(payload).map((a) => mapWireArtifact(a));
+}

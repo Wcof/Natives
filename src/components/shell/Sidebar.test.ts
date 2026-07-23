@@ -25,8 +25,14 @@ test('assistant workbench is a composition layer over Gateway + Store', () => {
   assert.equal(/assistantV2\.request\(/.test(workbench), false);
 });
 
-test('reselecting the active conversation is a no-op (state preserved in store)', () => {
-  assert.match(workbench, /if \(id === stateRef\.current\.activeConversationId\) return;/);
+test('reselecting the active conversation refreshes snapshot without re-setActive', () => {
+  // Agent E: re-open still loads snapshot so artifacts recover after completed runs;
+  // child selection is cleared, store activeConversationId stays the same root id.
+  assert.match(
+    workbench,
+    /if \(id === stateRef\.current\.activeConversationId\) \{[\s\S]*?openConversation\([\s\S]*?return;/,
+  );
+  assert.match(workbench, /setSelectedChildConversationId\(null\)/);
 });
 
 test('assistant sidebar does not default to a permanent loading spinner', () => {

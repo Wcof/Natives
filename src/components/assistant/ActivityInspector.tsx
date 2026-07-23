@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Play,
   ListTree,
@@ -13,6 +13,9 @@ import {
   Clock,
   AlertTriangle,
   Square,
+  ArrowLeft,
+  RefreshCw,
+  KeyRound,
 } from 'lucide-react';
 import type {
   Artifact,
@@ -33,8 +36,30 @@ import {
   canRewind,
   canShowContextUsage,
 } from '@/lib/assistant-workspace/capability-gate';
+import {
+  aggregateArtifactFiles,
+  extractTodosFromEvents,
+  mapSubagentUiStatus,
+  summarizeTodoStatus,
+  todoStatusLabel,
+  type ActivityTodo,
+  type ArtifactFileItem,
+  type FileEventInput,
+  type TodoStatus,
+} from '@/lib/assistant-activity-view';
 import { t } from '@/i18n';
 import DiffViewer from './DiffViewer';
+
+export interface ActivitySubagentView {
+  id: string;
+  name: string;
+  status: string;
+  providerId?: string;
+  keyLabel?: string;
+  childConversationId?: string;
+  task?: string;
+  todos?: Array<{ id: string; content: string; status: TodoStatus }>;
+}
 
 interface ActivityInspectorProps {
   run: Run | null;
@@ -60,6 +85,18 @@ interface ActivityInspectorProps {
   /** Gateway for task.list / task.cancel when advertised. */
   gateway?: AssistantGateway | null;
   conversationId?: string | null;
+
+  // ── Optional props for 《任务》/《产物》 (Agent E wires these; empty defaults) ──
+  mainTodos?: Array<{ id: string; content: string; status: TodoStatus }>;
+  mainTaskStatus?: TodoStatus;
+  subagents?: ActivitySubagentView[];
+  selectedSubagentId?: string | null;
+  fileEvents?: FileEventInput[];
+  onSelectSubagent?: (id: string) => void;
+  onBackToMain?: () => void;
+  onSwitchSubagentKey?: (id: string) => void;
+  onRefreshTasks?: () => void;
+  showingChildSession?: boolean;
 }
 
 const TABS: Array<{ id: InspectorTab; zh: string; en: string; icon: typeof Play; devOnly?: boolean }> = [
@@ -73,9 +110,11 @@ const TABS: Array<{ id: InspectorTab; zh: string; en: string; icon: typeof Play;
 
 function StatusIcon({ status }: { status: string }) {
   if (status === 'completed') return <CheckCircle size={14} className="text-[var(--success)]" />;
-  if (status === 'failed') return <XCircle size={14} className="text-[var(--danger)]" />;
-  if (status === 'waiting_permission' || status === 'waiting_user')
+  if (status === 'failed' || status === 'closed') return <XCircle size={14} className="text-[var(--danger)]" />;
+  if (status === 'waiting_permission' || status === 'waiting_user' || status === 'pending_assignment')
     return <AlertTriangle size={14} className="text-[var(--warning)]" />;
+  if (status === 'in_progress' || status === 'running' || status === 'queued')
+    return <Clock size={14} className="text-[var(--primary)]" />;
   return <Clock size={14} className="text-[var(--text-disabled)]" />;
 }
 
@@ -126,6 +165,55 @@ function snippet(text: string | null | undefined, max = 120): string {
   return `${oneLine.slice(0, max)}…`;
 }
 
+function TodoList({
+  todos,
+  zh,
+  emptyZh,
+  emptyEn,
+}: {
+  todos: ActivityTodo[];
+  zh: boolean;
+  emptyZh: string;
+  emptyEn: string;
+}) {
+  if (todos.length === 0) {
+    return <Empty zh={zh} zhMsg={emptyZh} enMsg={emptyEn} compact />;
+  }
+  return (
+    <ul className="space-y-1" data-testid="todo-list">
+      {todos.map((todo) => (
+        <li
+          key={todo.id}
+          className="flex items-start gap-2 rounded px-2 py-1 hover:bg-[var(--surface-hover)]"
+        >
+          <StatusIcon status={todo.status} />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[var(--text-secondary)]">{todo.content}</div>
+            <div className="text-[10px] text-[var(--text-disabled)]">
+              {todoStatusLabel(todo.status, zh)}
+            </div>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function SectionTitle({
+  title,
+  actions,
+}: {
+  title: string;
+  actions?: ReactNode;
+}) {
+  return (
+    <div className="mb-1.5 flex items-center justify-between gap-2 font-medium text-[var(--text-secondary)]">
+      <span>{title}</span>
+      {actions ? <div className="flex shrink-0 items-center gap-1.5">{actions}</div> : null}
+    </div>
+  );
+}
+
 export default function ActivityInspector({
   run,
   events,
@@ -147,6 +235,16 @@ export default function ActivityInspector({
   capabilities = null,
   gateway = null,
   conversationId = null,
+  mainTodos,
+  mainTaskStatus,
+  subagents,
+  selectedSubagentId = null,
+  fileEvents,
+  onSelectSubagent,
+  onBackToMain,
+  onSwitchSubagentKey,
+  onRefreshTasks,
+  showingChildSession = false,
 }: ActivityInspectorProps) {
   const zh = locale.startsWith('zh');
   const allowRewind = canRewind(capabilities);
@@ -164,6 +262,8 @@ export default function ActivityInspector({
   const [tasksLoading, setTasksLoading] = useState(false);
   const [tasksError, setTasksError] = useState<string | null>(null);
   const [cancellingTaskId, setCancellingTaskId] = useState<string | null>(null);
+  const [artifactSubTab, setArtifactSubTab] = useState<'created' | 'modified'>('created');
+
   const selectedContents = useMemo(() => {
     const path = selectedChangePath ?? fileChanges[0]?.path ?? null;
     if (!path) return null;
@@ -177,7 +277,77 @@ export default function ActivityInspector({
         ? activeTab
         : (tabs[0]?.id ?? 'run');
 
+  // ── Task view model (props preferred, events fallback) ──
+  const resolvedMainTodos = useMemo<ActivityTodo[]>(() => {
+    // Explicit prop (including empty array) wins; only undefined falls back to events.
+    if (mainTodos !== undefined) return mainTodos;
+    return extractTodosFromEvents(events);
+  }, [mainTodos, events]);
+
+  const resolvedMainStatus = useMemo<TodoStatus>(() => {
+    if (mainTaskStatus) return mainTaskStatus;
+    return summarizeTodoStatus(resolvedMainTodos);
+  }, [mainTaskStatus, resolvedMainTodos]);
+
+  const resolvedSubagents = useMemo<ActivitySubagentView[]>(() => {
+    // Explicit prop (including empty) wins; undefined falls back to child runs.
+    if (subagents !== undefined) return subagents;
+    return children.map((ch) => ({
+      id: ch.id,
+      name: ch.task || ch.agentProfileId || ch.id.slice(0, 8),
+      status: String(ch.status),
+      providerId: ch.providerId,
+      keyLabel: ch.keyLabel,
+      task: ch.task,
+    }));
+  }, [subagents, children]);
+
+  const selectedSubagent = useMemo(() => {
+    if (!selectedSubagentId) return null;
+    return resolvedSubagents.find((s) => s.id === selectedSubagentId) ?? null;
+  }, [resolvedSubagents, selectedSubagentId]);
+
+  const selectedSubTodos = useMemo<ActivityTodo[]>(() => {
+    if (!selectedSubagent) return [];
+    if (selectedSubagent.todos && selectedSubagent.todos.length > 0) {
+      return selectedSubagent.todos;
+    }
+    if (selectedSubagent.task) {
+      return [
+        {
+          id: `${selectedSubagent.id}-task`,
+          content: selectedSubagent.task,
+          status: mapSubagentUiStatus(selectedSubagent.status).key === 'completed'
+            ? 'completed'
+            : mapSubagentUiStatus(selectedSubagent.status).key === 'in_progress'
+              ? 'in_progress'
+              : 'pending',
+        },
+      ];
+    }
+    return [];
+  }, [selectedSubagent]);
+
+  // Background execution: terminal / async tasks only — never mix with subagents
+  const backgroundExecTasks = useMemo(
+    () => backgroundTasks.filter((task) => task.kind !== 'subagent'),
+    [backgroundTasks],
+  );
+
+  // ── Artifact view model ──
+  const artifactBuckets = useMemo(
+    () =>
+      aggregateArtifactFiles({
+        fileChanges,
+        fileEvents,
+        artifacts,
+        events,
+      }),
+    [fileChanges, fileEvents, artifacts, events],
+  );
+
   const refreshTasks = useCallback(async () => {
+    onRefreshTasks?.();
     if (!useTaskList || !gateway) {
       setBackgroundTasks([]);
       setTasksError(null);
@@ -206,7 +376,7 @@ export default function ActivityInspector({
     } finally {
       setTasksLoading(false);
     }
-  }, [useTaskList, gateway, run?.id, conversationId]);
+  }, [useTaskList, gateway, run?.id, conversationId, onRefreshTasks]);
 
   useEffect(() => {
     if (effectiveTab !== 'tasks' || !useTaskList) return;
@@ -227,6 +397,25 @@ export default function ActivityInspector({
       }
     },
     [gateway, allowCancelTask, refreshTasks],
+  );
+
+  const openArtifactPath = useCallback(
+    (item: ArtifactFileItem) => {
+      // Jump to 《变更》 detail — do not re-implement Diff here.
+      setSelectedChangePath(item.path);
+      onTabChange('changes');
+      onOpenFile?.(item.path);
+    },
+    [onOpenFile, onTabChange],
+  );
+
+  const handleSelectSubagent = useCallback(
+    (id: string) => {
+      onSelectSubagent?.(id);
+      // Legacy fallback: also notify child-run selection when no dedicated handler
+      if (!onSelectSubagent) onSelectChild?.(id);
+    },
+    [onSelectSubagent, onSelectChild],
   );
 
   return (
@@ -283,29 +472,82 @@ export default function ActivityInspector({
         )}
 
         {run && effectiveTab === 'tasks' && allowTasks && (
-          <div className="space-y-3">
-            {useTaskList ? (
-              <div className="space-y-1" data-testid="background-tasks">
-                <div className="mb-2 flex items-center justify-between font-medium text-[var(--text-secondary)]">
-                  <span>{zh ? '后台任务' : 'Background tasks'}</span>
-                  <button
-                    type="button"
-                    className="text-[10px] text-[var(--primary)] hover:underline"
-                    onClick={() => void refreshTasks()}
-                  >
-                    {zh ? '刷新' : 'Refresh'}
-                  </button>
-                </div>
-                {tasksLoading && backgroundTasks.length === 0 ? (
-                  <Empty zh={zh} zhMsg="加载任务…" enMsg="Loading tasks…" />
+          <div className="space-y-4" data-testid="tasks-panel">
+            {/* ── 主任务 ── */}
+            <section data-testid="main-task-section">
+              <SectionTitle
+                title={t(locale, 'assistant.activity.mainTask')}
+                actions={
+                  <>
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-0.5 text-[10px] text-[var(--primary)] hover:underline"
+                      onClick={() => void refreshTasks()}
+                      title={t(locale, 'assistant.activity.refresh')}
+                    >
+                      <RefreshCw size={10} />
+                      {t(locale, 'assistant.activity.refresh')}
+                    </button>
+                    {showingChildSession && onBackToMain ? (
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-0.5 text-[10px] text-[var(--primary)] hover:underline"
+                        onClick={onBackToMain}
+                        data-testid="back-to-main"
+                      >
+                        <ArrowLeft size={10} />
+                        {t(locale, 'assistant.activity.backToMain')}
+                      </button>
+                    ) : null}
+                  </>
+                }
+              />
+              <div className="mb-2 flex items-center gap-2 rounded bg-[var(--surface-hover)] px-2 py-1.5">
+                <StatusIcon status={resolvedMainStatus} />
+                <span className="text-[var(--text-secondary)]">
+                  {todoStatusLabel(resolvedMainStatus, zh)}
+                </span>
+                {run.status ? (
+                  <span className="ml-auto font-mono text-[10px] text-[var(--text-disabled)]">
+                    {run.id.slice(0, 8)} · {run.status}
+                  </span>
+                ) : null}
+              </div>
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-[var(--text-disabled)]">
+                {t(locale, 'assistant.activity.sessionTodos')}
+              </div>
+              <TodoList
+                todos={resolvedMainTodos}
+                zh={zh}
+                emptyZh={t(locale, 'assistant.activity.noTodos')}
+                emptyEn={t(locale, 'assistant.activity.noTodos')}
+              />
+            </section>
+
+            {/* ── 后台执行 ── */}
+            <section data-testid="background-tasks">
+              <SectionTitle title={t(locale, 'assistant.activity.background')} />
+              {useTaskList ? (
+                tasksLoading && backgroundExecTasks.length === 0 ? (
+                  <Empty
+                    zh={zh}
+                    zhMsg={t(locale, 'assistant.activity.loadingTasks')}
+                    enMsg={t(locale, 'assistant.activity.loadingTasks')}
+                    compact
+                  />
                 ) : tasksError ? (
                   <div className="rounded border border-red-400/30 bg-red-50 p-2 text-red-600 dark:bg-red-950/20">
                     {tasksError}
                   </div>
-                ) : backgroundTasks.length === 0 ? (
-                  <Empty zh={zh} zhMsg="无后台任务" enMsg="No background tasks" />
+                ) : backgroundExecTasks.length === 0 ? (
+                  <Empty
+                    zh={zh}
+                    zhMsg={t(locale, 'assistant.activity.noBackground')}
+                    enMsg={t(locale, 'assistant.activity.noBackground')}
+                    compact
+                  />
                 ) : (
-                  backgroundTasks.map((task) => {
+                  backgroundExecTasks.map((task) => {
                     const active =
                       task.status === 'running' ||
                       task.status === 'pending' ||
@@ -342,43 +584,92 @@ export default function ActivityInspector({
                       </div>
                     );
                   })
-                )}
-              </div>
-            ) : null}
-
-            <div className="space-y-1">
-              <div className="mb-2 font-medium text-[var(--text-secondary)]">
-                {useTaskList
-                  ? zh
-                    ? '子运行'
-                    : 'Child runs'
-                  : `${zh ? '父运行' : 'Parent'} · ${run.id.slice(0, 8)}`}
-              </div>
-              {children.length === 0 ? (
+                )
+              ) : (
                 <Empty
                   zh={zh}
-                  zhMsg={useTaskList ? '无子运行' : '无子任务'}
-                  enMsg={useTaskList ? 'No child runs' : 'No child tasks'}
+                  zhMsg={t(locale, 'assistant.activity.backgroundNotReady')}
+                  enMsg={t(locale, 'assistant.activity.backgroundNotReady')}
+                  compact
+                />
+              )}
+            </section>
+
+            {/* ── 子智能体 ── */}
+            <section data-testid="subagents-section">
+              <SectionTitle title={t(locale, 'assistant.activity.subagents')} />
+              {resolvedSubagents.length === 0 ? (
+                <Empty
+                  zh={zh}
+                  zhMsg={t(locale, 'assistant.activity.noSubagents')}
+                  enMsg={t(locale, 'assistant.activity.noSubagents')}
+                  compact
                 />
               ) : (
-                children.map((ch) => (
-                  <button
-                    key={ch.id}
-                    type="button"
-                    onClick={() => onSelectChild?.(ch.id)}
-                    className="flex w-full items-start gap-2 rounded px-2 py-1.5 text-left hover:bg-[var(--surface-hover)]"
-                  >
-                    <StatusIcon status={String(ch.status)} />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-medium">{ch.task || ch.id.slice(0, 8)}</div>
-                      <div className="text-[10px] text-[var(--text-disabled)]">
-                        {[ch.providerId, ch.modelId, ch.status].filter(Boolean).join(' · ')}
+                <div className="space-y-0.5">
+                  {resolvedSubagents.map((agent) => {
+                    const ui = mapSubagentUiStatus(agent.status);
+                    const selected = selectedSubagentId === agent.id;
+                    return (
+                      <div
+                        key={agent.id}
+                        className={`flex w-full items-start gap-2 rounded px-2 py-1.5 ${
+                          selected ? 'bg-[var(--surface-hover)] ring-1 ring-[var(--primary)]/30' : 'hover:bg-[var(--surface-hover)]'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          className="flex min-w-0 flex-1 items-start gap-2 text-left"
+                          onClick={() => handleSelectSubagent(agent.id)}
+                          data-testid={`subagent-row-${agent.id}`}
+                        >
+                          <StatusIcon status={ui.key} />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-medium">{agent.name}</div>
+                            <div className="text-[10px] text-[var(--text-disabled)]">
+                              {[
+                                t(locale, `assistant.activity.subagentStatus.${ui.key}`),
+                                agent.providerId,
+                                agent.keyLabel,
+                              ]
+                                .filter(Boolean)
+                                .join(' · ')}
+                            </div>
+                          </div>
+                        </button>
+                        {onSwitchSubagentKey ? (
+                          <button
+                            type="button"
+                            title={t(locale, 'assistant.activity.switchKey')}
+                            className="inline-flex shrink-0 items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] text-[var(--primary)] hover:bg-[var(--surface)]"
+                            onClick={() => onSwitchSubagentKey(agent.id)}
+                            data-testid={`switch-key-${agent.id}`}
+                          >
+                            <KeyRound size={10} />
+                            {t(locale, 'assistant.activity.switchKey')}
+                          </button>
+                        ) : null}
                       </div>
-                    </div>
-                  </button>
-                ))
+                    );
+                  })}
+                </div>
               )}
-            </div>
+            </section>
+
+            {/* ── 子任务（选中子智能体后） ── */}
+            {selectedSubagent ? (
+              <section data-testid="sub-task-section">
+                <SectionTitle
+                  title={`${t(locale, 'assistant.activity.subTasks')} · ${selectedSubagent.name}`}
+                />
+                <TodoList
+                  todos={selectedSubTodos}
+                  zh={zh}
+                  emptyZh={t(locale, 'assistant.activity.noSubTasks')}
+                  emptyEn={t(locale, 'assistant.activity.noSubTasks')}
+                />
+              </section>
+            ) : null}
           </div>
         )}
 
@@ -428,31 +719,113 @@ export default function ActivityInspector({
         )}
 
         {run && effectiveTab === 'artifacts' && (
-          <div className="space-y-1">
-            {artifacts.length === 0 ? (
-              <Empty zh={zh} zhMsg="无产物" enMsg="No artifacts" />
-            ) : (
-              artifacts.map((a) => (
-                <div
-                  key={a.id}
-                  className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-[var(--surface-hover)]"
+          <div className="space-y-2" data-testid="artifacts-panel">
+            <div className="flex gap-1 border-b border-[var(--border)] pb-1">
+              {(
+                [
+                  {
+                    id: 'created' as const,
+                    label: t(locale, 'assistant.activity.artifactsCreated'),
+                    count: artifactBuckets.created.length,
+                  },
+                  {
+                    id: 'modified' as const,
+                    label: t(locale, 'assistant.activity.artifactsEdited'),
+                    count: artifactBuckets.modified.length,
+                  },
+                ] as const
+              ).map((sub) => (
+                <button
+                  key={sub.id}
+                  type="button"
+                  onClick={() => setArtifactSubTab(sub.id)}
+                  className={`rounded px-2 py-1 text-[11px] font-medium ${
+                    artifactSubTab === sub.id
+                      ? 'bg-[var(--surface-hover)] text-[var(--primary)]'
+                      : 'text-[var(--text-disabled)] hover:text-[var(--text-secondary)]'
+                  }`}
+                  data-testid={`artifact-subtab-${sub.id}`}
                 >
-                  <Package size={12} className="shrink-0 text-[var(--text-disabled)]" />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate">{a.label || a.path}</div>
-                    {a.staleReason && (
-                      <div className="text-[10px] text-[var(--danger)]">{a.staleReason}</div>
-                    )}
-                  </div>
-                  <button type="button" className="text-[var(--primary)]" onClick={() => onOpenArtifact?.(a)}>
-                    {zh ? '打开' : 'Open'}
-                  </button>
-                  <button type="button" onClick={() => onRevealArtifact?.(a)}>
-                    {zh ? '显示' : 'Reveal'}
-                  </button>
+                  {sub.label}
+                  <span className="ml-1 text-[10px] text-[var(--text-disabled)]">{sub.count}</span>
+                </button>
+              ))}
+            </div>
+
+            {(() => {
+              const list =
+                artifactSubTab === 'created' ? artifactBuckets.created : artifactBuckets.modified;
+              if (list.length === 0) {
+                return (
+                  <Empty
+                    zh={zh}
+                    zhMsg={
+                      artifactSubTab === 'created'
+                        ? t(locale, 'assistant.activity.noCreatedFiles')
+                        : t(locale, 'assistant.activity.noEditedFiles')
+                    }
+                    enMsg={
+                      artifactSubTab === 'created'
+                        ? t(locale, 'assistant.activity.noCreatedFiles')
+                        : t(locale, 'assistant.activity.noEditedFiles')
+                    }
+                  />
+                );
+              }
+              return (
+                <div className="space-y-0.5">
+                  {list.map((item) => (
+                    <button
+                      key={item.path}
+                      type="button"
+                      onClick={() => openArtifactPath(item)}
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left font-mono hover:bg-[var(--surface-hover)]"
+                      data-testid={`artifact-file-${item.path}`}
+                    >
+                      <Package size={12} className="shrink-0 text-[var(--text-disabled)]" />
+                      <span className="min-w-0 flex-1 truncate">{item.path}</span>
+                      <span className="shrink-0 text-[10px] text-[var(--text-disabled)]">
+                        {item.changeType === 'created'
+                          ? zh
+                            ? '新增'
+                            : 'new'
+                          : zh
+                            ? '编辑'
+                            : 'edit'}
+                      </span>
+                    </button>
+                  ))}
                 </div>
-              ))
-            )}
+              );
+            })()}
+
+            {/* Legacy non-path artifact actions remain available under buckets empty / mixed */}
+            {artifacts.length > 0 &&
+            artifactBuckets.created.length === 0 &&
+            artifactBuckets.modified.length === 0 ? (
+              <div className="space-y-1 border-t border-[var(--border)] pt-2">
+                {artifacts.map((a) => (
+                  <div
+                    key={a.id}
+                    className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-[var(--surface-hover)]"
+                  >
+                    <Package size={12} className="shrink-0 text-[var(--text-disabled)]" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate">{a.label || a.path}</div>
+                      {a.staleReason && (
+                        <div className="text-[10px] text-[var(--danger)]">{a.staleReason}</div>
+                      )}
+                    </div>
+                    <button type="button" className="text-[var(--primary)]" onClick={() => onOpenArtifact?.(a)}>
+                      {zh ? '打开' : 'Open'}
+                    </button>
+                    <button type="button" onClick={() => onRevealArtifact?.(a)}>
+                      {zh ? '显示' : 'Reveal'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         )}
 
@@ -514,6 +887,22 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Empty({ zh, zhMsg, enMsg }: { zh: boolean; zhMsg: string; enMsg: string }) {
-  return <div className="py-8 text-center text-[var(--text-disabled)]">{zh ? zhMsg : enMsg}</div>;
+function Empty({
+  zh,
+  zhMsg,
+  enMsg,
+  compact = false,
+}: {
+  zh: boolean;
+  zhMsg: string;
+  enMsg: string;
+  compact?: boolean;
+}) {
+  return (
+    <div
+      className={`${compact ? 'py-3' : 'py-8'} text-center text-[var(--text-disabled)]`}
+    >
+      {zh ? zhMsg : enMsg}
+    </div>
+  );
 }

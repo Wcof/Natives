@@ -10,7 +10,7 @@ import type {
   RunEvent,
 } from '@/lib/assistant-protocol';
 import {
-  mapWireArtifact,
+  mapWireArtifactList,
   mapWireCapabilities,
   mapWireConversation,
   mapWireMessage,
@@ -351,21 +351,44 @@ export class DaemonAssistantAdapter implements AssistantGateway {
       }),
     );
 
-    let artifacts: ConversationSnapshot['artifacts'] = [];
-    if (active) {
-      try {
-        const raw = (await fn('artifact.list', { run_id: active.id })) as unknown[];
-        artifacts = (Array.isArray(raw) ? raw : []).map((a) =>
-          mapWireArtifact((a ?? {}) as Record<string, unknown>),
+    // Load artifacts for recent main runs + any child runs we already know about.
+    // Prefer the active run first, then remaining recent runs (including completed)
+    // so finished sessions still recover file/artifact history after refresh.
+    const artifactRunIds: string[] = [];
+    if (active) artifactRunIds.push(active.id);
+    for (const run of runs.slice(0, 8)) {
+      if (!artifactRunIds.includes(run.id)) artifactRunIds.push(run.id);
+    }
+    // Collect child run ids from loaded events (subagent_created).
+    for (const events of Object.values(eventsByRun)) {
+      for (const event of events) {
+        if (event.type !== 'subagent_created') continue;
+        const subId = String(
+          event.payload.sub_run_id ?? event.payload.subRunId ?? event.payload.child_run_id ?? '',
         );
-      } catch {
-        artifacts = [];
+        if (subId && !artifactRunIds.includes(subId)) artifactRunIds.push(subId);
       }
     }
 
+    const artifacts: NonNullable<ConversationSnapshot['artifacts']> = [];
+    await Promise.all(
+      artifactRunIds.slice(0, 12).map(async (runId) => {
+        try {
+          const raw = await fn('artifact.list', { run_id: runId });
+          for (const a of mapWireArtifactList(raw)) {
+            artifacts.push(a.runId ? a : { ...a, runId });
+          }
+        } catch {
+          /* optional */
+        }
+      }),
+    );
+
     let interactions: ConversationSnapshot['interactions'] = [];
     try {
-      const raw = (await fn('permission.listPending', { conversation_id: conversationId })) as unknown[];
+      const raw = (await fn('permission.listPending', {
+        conversation_id: conversationId,
+      })) as unknown[];
       if (Array.isArray(raw)) {
         interactions = raw.map((item) => {
           const r = (item ?? {}) as Record<string, unknown>;
@@ -384,6 +407,59 @@ export class DaemonAssistantAdapter implements AssistantGateway {
       }
     } catch {
       // Method may be unimplemented on older daemons.
+    }
+
+    // Also pull pending interactions (subagent_assignment / ask_user / plan).
+    try {
+      const raw = (await fn('interaction.listPending', {
+        conversation_id: conversationId,
+      })) as unknown;
+      const list = Array.isArray(raw)
+        ? raw
+        : raw && typeof raw === 'object' && Array.isArray((raw as { interactions?: unknown[] }).interactions)
+          ? (raw as { interactions: unknown[] }).interactions
+          : [];
+      for (const item of list) {
+        if (!item || typeof item !== 'object') continue;
+        const r = item as Record<string, unknown>;
+        const kind = String(r.kind ?? '');
+        const id = String(r.id ?? r.interaction_id ?? r.interactionId ?? '');
+        if (!id) continue;
+        if (interactions.some((i) => i.id === id)) continue;
+        if (kind === 'subagent_assignment') {
+          const payload =
+            r.payload && typeof r.payload === 'object'
+              ? (r.payload as Record<string, unknown>)
+              : r;
+          interactions.push({
+            kind: 'subagent_assignment',
+            id,
+            runId: String(r.run_id ?? r.runId ?? payload.run_id ?? ''),
+            conversationId: String(
+              r.conversation_id ?? r.conversationId ?? payload.conversation_id ?? conversationId,
+            ),
+            createdAt: String(r.created_at ?? r.createdAt ?? new Date().toISOString()),
+            reason: payload.reason != null ? String(payload.reason) : undefined,
+            tasks: Array.isArray(payload.tasks)
+              ? (payload.tasks as Array<{ prompt?: string | null }>)
+              : undefined,
+          });
+        } else if (kind === 'tool_permission' || kind === 'permission') {
+          interactions.push({
+            kind: 'permission',
+            id,
+            runId: String(r.run_id ?? r.runId ?? ''),
+            conversationId,
+            toolCallId: String(r.tool_call_id ?? r.toolCallId ?? ''),
+            toolName: String(r.tool_name ?? r.toolName ?? 'tool'),
+            reason: String(r.reason ?? ''),
+            input: (r.input ?? r.args ?? {}) as Record<string, unknown>,
+            createdAt: String(r.created_at ?? r.createdAt ?? new Date().toISOString()),
+          });
+        }
+      }
+    } catch {
+      /* optional */
     }
 
     return {
