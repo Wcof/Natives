@@ -1,109 +1,323 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
-import { Layers, Pause, Play, RefreshCw, Trash2, Package, Rocket } from 'lucide-react';
-import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Github,
+  Layers,
+  Package,
+  Pause,
+  Play,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  ScrollText,
+  Trash2,
+  X,
+} from 'lucide-react';
+import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { EmptyState, LoadingState } from '@/components/ui/EmptyState';
-import { useModuleCatalog } from '@/hooks/useModuleCatalog';
 import Modal from '@/components/ui/Modal';
-import { classifyError } from '@/lib/error-classifier'; // classifyError for errors
-
-interface ModuleInfo {
-  id: string;
-  name: string;
-  version: string;
-  enabled: number;
-  state: string;
-  description?: string;
-  author?: string;
-}
+import { classifyError } from '@/lib/error-classifier';
+import { useCreativeAppCatalog } from '@/hooks/useCreativeAppCatalog';
+import {
+  defaultDeleteOptions,
+  isActionBusy,
+  mergeActionsWithBusy,
+  sourceBadge,
+} from '@/lib/creative-app';
+import type {
+  CreativeAppBrowserBounds,
+  CreativeAppInspectResult,
+  CreativeAppInstallCandidate,
+  CreativeAppProgressEvent,
+  CreativeAppSummary,
+} from '@/lib/tauri-adapter';
 
 interface WorkshopPageProps {
   onInstall: (source: string) => void;
 }
 
+type AddMenu = 'closed' | 'open';
+type WizardStep = 'url' | 'manual' | 'installing';
+
+function stateLabel(locale: Locale, state: CreativeAppSummary['state']): string {
+  const key = {
+    available: 'workshop.stateAvailable',
+    disabled: 'workshop.stateDisabled',
+    installing: 'workshop.stateInstalling',
+    installed_stopped: 'workshop.stateInstalledStopped',
+    starting: 'workshop.stateStarting',
+    running: 'workshop.stateRunning',
+    stopping: 'workshop.stateStopping',
+    runtime_unavailable: 'workshop.stateRuntimeUnavailable',
+    install_failed: 'workshop.stateInstallFailed',
+    start_failed: 'workshop.stateStartFailed',
+    deleting: 'workshop.stateDeleting',
+    delete_failed: 'workshop.stateDeleteFailed',
+  }[state];
+  return t(locale, key);
+}
+
+function runtimeLabel(locale: Locale, runtime: CreativeAppSummary['runtime']): string {
+  if (runtime === 'docker_compose') return t(locale, 'workshop.runtimeCompose');
+  if (runtime === 'docker_run') return t(locale, 'workshop.runtimeRun');
+  return t(locale, 'workshop.runtimeWorkshop');
+}
+
 export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
-  const prefersReducedMotion = useReducedMotion();
-  // onInstall (legacy direct-install callback) is intentionally unused: all
-  // installs now flow through the permission dialog to avoid bypassing
-  // authorization. Kept in the props type for ShellLayout compatibility.
   void onInstall;
-  const [dragOver, setDragOver] = useState(false);
-  const [activeTab, setActiveTab] = useState<'installed' | 'browse'>('installed');
-  const [searchQuery, setSearchQuery] = useState('');
+  const prefersReducedMotion = useReducedMotion();
+  const { apps, loading, error, reload, busyIds, withBusy } = useCreativeAppCatalog();
+  const [locale, setLocale] = useState<Locale>('zh');
+  const [toast, setToast] = useState<string | null>(null);
+  const [addMenu, setAddMenu] = useState<AddMenu>('closed');
 
-  const { modules: catalogModules, loading, error, reload: loadModules } = useModuleCatalog<ModuleInfo>({
-    source: 'list',
-  });
-  const modules = catalogModules;
-
-  const filteredModules = (modules ?? []).filter((m) => {
-    if (!searchQuery) return true;
-    const q = searchQuery.toLowerCase();
-    return (
-      m.name.toLowerCase().includes(q) ||
-      m.id.toLowerCase().includes(q) ||
-      (m.description && m.description.toLowerCase().includes(q))
-    );
-  });
+  // Internal create / import (existing flows)
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [templateName, setTemplateName] = useState('');
   const [templateId, setTemplateId] = useState('');
   const [creating, setCreating] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
-  const [locale, setLocale] = useState<Locale>('zh');
-  const [currentUser, setCurrentUser] = useState('You');
-
-  // Permission dialog state (US12)
   const [permDialog, setPermDialog] = useState<{
     source: string;
     moduleName: string;
     permissions: string[];
   } | null>(null);
-  const [installing, setInstalling] = useState(false);
-  // P1-3: Track which permissions the user has selected (checkboxes)
   const [selectedPerms, setSelectedPerms] = useState<Set<string>>(new Set());
-  const [uninstallTarget, setUninstallTarget] = useState<ModuleInfo | null>(null);
+  const [installing, setInstalling] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
 
+  // Delete
+  const [deleteTarget, setDeleteTarget] = useState<CreativeAppSummary | null>(null);
+  const [deleteVolumes, setDeleteVolumes] = useState(false);
+  const [deleteImages, setDeleteImages] = useState(false);
 
+  // GitHub wizard
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardStep, setWizardStep] = useState<WizardStep>('url');
+  const [repoUrl, setRepoUrl] = useState('');
+  const [tokenMode, setTokenMode] = useState<'saved' | 'once' | 'public'>('public');
+  const [tokenInput, setTokenInput] = useState('');
+  const [saveToken, setSaveToken] = useState(false);
+  const [inspecting, setInspecting] = useState(false);
+  const [inspect, setInspect] = useState<CreativeAppInspectResult | null>(null);
+  const [selectedTag, setSelectedTag] = useState('');
+  const [selectedCandidate, setSelectedCandidate] = useState<CreativeAppInstallCandidate | null>(null);
+  const [hostPort, setHostPort] = useState('');
+  const [openPath, setOpenPath] = useState('/');
+  const [healthPath, setHealthPath] = useState('');
+  const [service, setService] = useState('');
+  const [envValues, setEnvValues] = useState<Record<string, string>>({});
+  const [confirmBinds, setConfirmBinds] = useState(false);
+  const [progress, setProgress] = useState<CreativeAppProgressEvent | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
 
-  // areaRipple animation state (STYLE-1)
-  const [showRipple, setShowRipple] = useState(false);
+  // External browser surface
+  const [browserApp, setBrowserApp] = useState<CreativeAppSummary | null>(null);
+  const [browserUrl, setBrowserUrl] = useState('');
+  const browserHostRef = useRef<HTMLDivElement | null>(null);
+
+  // Logs
+  const [logsFor, setLogsFor] = useState<CreativeAppSummary | null>(null);
+  const [logsText, setLogsText] = useState('');
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(null), 2200);
+    setTimeout(() => setToast(null), 2400);
   }, []);
 
-  // Load locale & current user
   useEffect(() => {
     async function loadLocale() {
       try {
         const saved = await window.nativesAPI?.getLocale?.();
         if (saved) setLocale(saved === 'en' ? 'en' : 'zh');
-      } catch { /* browser dev mode */ }
-    }
-    async function loadUser() {
-      try {
-        const name = await window.nativesAPI?.db?.get?.('settings:username');
-        if (name) setCurrentUser(name as string);
-      } catch { /* ignore */ }
+      } catch {
+        /* browser dev */
+      }
     }
     loadLocale();
-    loadUser();
   }, []);
 
-  // Drag & drop
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(true);
+  useEffect(() => {
+    const api = window.nativesAPI?.creativeApp;
+    if (!api?.onProgress) return;
+    return api.onProgress((ev) => setProgress(ev));
+  }, []);
+
+  // Report browser bounds
+  useEffect(() => {
+    if (!browserApp) return;
+    const el = browserHostRef.current;
+    if (!el) return;
+    const report = () => {
+      const r = el.getBoundingClientRect();
+      const bounds: CreativeAppBrowserBounds = {
+        x: r.left,
+        y: r.top,
+        width: r.width,
+        height: r.height,
+      };
+      void window.nativesAPI?.creativeApp?.browserSetBounds?.(bounds);
+    };
+    report();
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    window.addEventListener('resize', report);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', report);
+    };
+  }, [browserApp]);
+
+  useEffect(() => {
+    return () => {
+      void window.nativesAPI?.creativeApp?.browserClose?.();
+    };
+  }, []);
+
+  const openInternalModule = async (id: string) => {
+    window.dispatchEvent(new CustomEvent('navigate', { detail: `module:${id}` }));
   };
 
-  const handleDragLeave = () => {
-    setDragOver(false);
+  const openExternal = async (app: CreativeAppSummary) => {
+    try {
+      const target = await window.nativesAPI?.creativeApp?.getOpenTarget?.(app.id);
+      if (!target || target.kind !== 'local_url') {
+        showToast(t(locale, 'workshop.stateStartFailed'));
+        return;
+      }
+      const el = browserHostRef.current;
+      // ensure state first so ref mounts
+      setBrowserApp(app);
+      setBrowserUrl(target.url);
+      // next frame for layout
+      requestAnimationFrame(() => {
+        const host = browserHostRef.current ?? el;
+        const r = host?.getBoundingClientRect();
+        const bounds: CreativeAppBrowserBounds = r
+          ? { x: r.left, y: r.top, width: r.width, height: r.height }
+          : { x: 280, y: 80, width: 900, height: 640 };
+        void window.nativesAPI?.creativeApp?.browserShow?.(app.id, target.url, bounds);
+      });
+    } catch (err) {
+      showToast(classifyError(err).userMessage);
+    }
+  };
+
+  const closeBrowser = async () => {
+    await window.nativesAPI?.creativeApp?.browserClose?.();
+    setBrowserApp(null);
+    setBrowserUrl('');
+  };
+
+  const handleOpen = async (app: CreativeAppSummary) => {
+    if (app.source === 'internal') {
+      await openInternalModule(app.id);
+    } else {
+      await openExternal(app);
+    }
+  };
+
+  const handleStart = async (app: CreativeAppSummary) => {
+    if (busyIds.has(app.id)) return;
+    await withBusy(app.id, async () => {
+      try {
+        if (app.source === 'internal') {
+          await window.nativesAPI?.module?.enable?.(app.id);
+        } else {
+          await window.nativesAPI?.creativeApp?.start?.(app.id);
+        }
+      } catch (err) {
+        showToast(classifyError(err).userMessage);
+      }
+    });
+  };
+
+  const handleStop = async (app: CreativeAppSummary) => {
+    if (busyIds.has(app.id)) return;
+    if (browserApp?.id === app.id) await closeBrowser();
+    await withBusy(app.id, async () => {
+      try {
+        if (app.source === 'internal') {
+          await window.nativesAPI?.module?.disable?.(app.id);
+        } else {
+          await window.nativesAPI?.creativeApp?.stop?.(app.id);
+        }
+      } catch (err) {
+        showToast(classifyError(err).userMessage);
+      }
+    });
+  };
+
+  const doDelete = async () => {
+    if (!deleteTarget) return;
+    const id = deleteTarget.id;
+    if (browserApp?.id === id) await closeBrowser();
+    await withBusy(id, async () => {
+      try {
+        if (deleteTarget.source === 'internal') {
+          await window.nativesAPI?.module?.uninstall?.(id);
+        } else {
+          await window.nativesAPI?.creativeApp?.delete?.(id, {
+            removeVolumes: deleteVolumes,
+            removeImages: deleteImages,
+          });
+        }
+      } catch (err) {
+        showToast(classifyError(err).userMessage);
+      } finally {
+        setDeleteTarget(null);
+        setDeleteVolumes(false);
+        setDeleteImages(false);
+      }
+    });
+  };
+
+  const openLogs = async (app: CreativeAppSummary) => {
+    setLogsFor(app);
+    setLogsText('…');
+    try {
+      const text = await window.nativesAPI?.creativeApp?.logs?.(app.id, 200);
+      setLogsText(text || '');
+    } catch (err) {
+      setLogsText(classifyError(err).userMessage);
+    }
+  };
+
+  // ── Import local package ──
+  const beginImport = async (source: string, fileName: string) => {
+    try {
+      const api = window.nativesAPI;
+      const result = (await api?.module?.readManifest?.(source)) as
+        | { manifest?: { name: string; permissions: string[] }; error?: string }
+        | undefined;
+      if (result?.manifest) {
+        const perms = result.manifest.permissions || [];
+        setPermDialog({
+          source,
+          moduleName: result.manifest.name,
+          permissions: perms,
+        });
+        setSelectedPerms(new Set(perms));
+      } else {
+        showToast(
+          result?.error
+            ? t(locale, 'errors.installFailed').replace('{reason}', result.error)
+            : t(locale, 'workshop.invalidPackage').replace('{name}', fileName),
+        );
+      }
+    } catch (err) {
+      showToast(
+        t(locale, 'errors.installFailed').replace(
+          '{reason}',
+          classifyError(err).userMessage,
+        ),
+      );
+    }
   };
 
   const handleDrop = async (e: React.DragEvent) => {
@@ -112,760 +326,869 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
     const files = Array.from(e.dataTransfer.files);
     for (const file of files) {
       if (file.name.endsWith('.zip') || file.type === '') {
-        // In Tauri v2, drag-and-drop File objects may have `.path` (from Tauri's
-        // native drag-drop event) or only `.name` (browser fallback).
-        // For browser fallback, we'd need to read via FileReader and pass content
-        // to the installer — for now use name-based fallback and let the installer
-        // surface an appropriate error if the path is not real.
         const source = (file as { path?: string }).path || file.name;
-        // Read manifest to show the permission dialog (US12).
-        // If the manifest cannot be read (corrupt zip / missing manifest.json)
-        // we must NOT silently install — that would bypass the permission
-        // confirmation. Instead surface the error and abort. See BUG-2.
-        try {
-          const api = window.nativesAPI;
-          const result = await api?.module?.readManifest?.(source) as { manifest?: { name: string; permissions: string[] }; error?: string } | undefined;
-          if (result?.manifest) {
-            const perms = result.manifest.permissions || [];
-            setPermDialog({
-              source,
-              moduleName: result.manifest.name,
-              permissions: perms,
-            });
-            // P1-3: Default all permissions selected
-            setSelectedPerms(new Set(perms));
-          } else {
-            // Manifest unreadable: refuse to install rather than bypassing
-            // the permission step. Surface the error reason if available.
-            const reason = result?.error;
-            showToast(
-              reason
-                ? t(locale, 'errors.installFailed').replace('{reason}', reason)
-                : t(locale, 'workshop.invalidPackage').replace('{name}', file.name)
-            );
-          }
-        } catch (err) {
-          const classified = classifyError(err);
-          showToast(t(locale, 'errors.installFailed').replace('{reason}', classified.userMessage));
-        }
+        await beginImport(source, file.name);
       }
     }
   };
 
-  const handlePermInstall = async (allowAll: boolean) => {
+  const confirmImport = async () => {
     if (!permDialog) return;
     setInstalling(true);
     try {
-      const api = window.nativesAPI;
-      const installResult = await api?.module?.install?.(permDialog.source) as { success?: boolean; moduleId?: string } | undefined;
-      if (installResult?.success) {
-        // Grant only selected permissions (or all if allowAll)
-        const toGrant = allowAll ? permDialog.permissions : Array.from(selectedPerms);
-        for (const perm of toGrant) {
-          await api?.module?.grantPermission?.(installResult.moduleId!, perm);
-        }
-        showToast(t(locale, 'workshop.installSuccess'));
-        setShowRipple(true);
-        setTimeout(() => setShowRipple(false), 1200);
-        await loadModules();
-      } else {
-        showToast(t(locale, 'workshop.installFailed'));
+      await window.nativesAPI?.module?.install?.(permDialog.source);
+      for (const p of selectedPerms) {
+        await window.nativesAPI?.module?.grantPermission?.(
+          // module id unknown until install — approve path still works after list refresh
+          permDialog.moduleName,
+          p,
+        );
       }
+      showToast(t(locale, 'workshop.installSuccess'));
+      setPermDialog(null);
+      await reload();
     } catch (err) {
-      showToast(t(locale, 'workshop.installFailed'));
+      showToast(
+        t(locale, 'workshop.installFailed') + ': ' + classifyError(err).userMessage,
+      );
     } finally {
       setInstalling(false);
-      setPermDialog(null);
     }
   };
 
-  // Module actions
-  const handleToggle = async (mod: ModuleInfo) => {
-    try {
-      const api = window.nativesAPI;
-      if (mod.enabled) {
-        await api?.module?.disable?.(mod.id);
-      } else {
-        await api?.module?.enable?.(mod.id);
-      }
-      await loadModules();
-    } catch {
-      showToast(t(locale, 'workshop.installFailed'));
-    }
-  };
-
-  const handleUninstall = (mod: ModuleInfo) => {
-    setUninstallTarget(mod);
-  };
-
-  const doUninstall = async () => {
-    if (!uninstallTarget) return;
-    try {
-      await window.nativesAPI?.module?.uninstall?.(uninstallTarget.id);
-      await loadModules();
-      showToast(t(locale, 'modules.uninstall'));
-    } catch {
-      showToast(t(locale, 'workshop.installFailed'));
-    } finally {
-      setUninstallTarget(null);
-    }
-  };
-
-  const handleScan = async () => {
-    try {
-      await window.nativesAPI?.module?.scan?.();
-      await loadModules();
-      showToast(t(locale, 'workshop.modulesFound').replace('{count}', String((modules ?? []).length)));
-    } catch {
-      showToast(t(locale, 'workshop.scanFailed'));
-    }
-  };
-
-  // Template creation
-  const handleCreateTemplate = async () => {
-    const name = templateName.trim();
-    const id = templateId.trim();
-    if (!name || !id) return;
-
+  const createTemplate = async () => {
+    if (!templateName.trim() || !templateId.trim()) return;
     setCreating(true);
     try {
-      // Create module directory via fs API
-      const api = window.nativesAPI;
-      const home = await api?.db?.get?.('settings:home_dir') || '~/.natives';
-      const modulePath = `${home}/modules/${id}`;
-
-      // Create the module structure
-      await api?.fs?.createEntry?.(modulePath, 'directory');
-
-      // Write manifest.json
-      const manifest = {
-        id,
-        name,
-        version: '0.1.0',
-        entry: 'index.html',
-        type: 'page',
-        permissions: ['db', 'settings', 'lifecycle'],
-        description: `${name} - A Natives module`,
-        author: currentUser || 'Anonymous',
-        lifecycle: {
-          heartbeatInterval: 5000,
-          loadTimeout: 10000,
-        },
-      };
-      await api?.fs?.writeFileAtomic?.(
-        `${modulePath}/manifest.json`,
-        JSON.stringify(manifest, null, 2)
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${templateName}</title></head><body><h1>${templateName}</h1><p>Generated by Natives Personal Creations.</p></body></html>`;
+      await window.nativesAPI?.module?.writeGenerated?.(
+        templateId.trim(),
+        templateName.trim(),
+        html,
+        [],
       );
-
-      // Write index.html
-      const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${name}</title>
-  <style>
-    body { font-family: -apple-system, sans-serif; padding: 20px; color: #f2f2ea; background: #0b0c0a; }
-    h1 { color: #cdf24b; }
-    .card { background: #131410; border: 1px solid #262920; border-radius: 8px; padding: 16px; margin: 12px 0; }
-    button { background: #cdf24b; color: #0b0c0a; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; }
-    button:hover { filter: brightness(1.1); }
-  </style>
-</head>
-<body>
-  <h1>${name}</h1>
-  <p>Your Natives module is ready!</p>
-  <div class="card">
-    <h3>Bridge API Demo</h3>
-    <p>Module ID: <code id="moduleId">loading...</code></p>
-    <button onclick="testStorage()">Test Data Storage</button>
-    <p id="result"></p>
-  </div>
-  <script>
-    // Wait for Bridge SDK to load
-    window.addEventListener('message', (e) => {
-      if (e.data?.type === 'lifecycle:ready') {
-        document.getElementById('moduleId').textContent = window.natives?.meta?.moduleId || 'unknown';
-      }
-    });
-    async function testStorage() {
-      const key = 'test-key';
-      const value = 'Hello from ${name}! ' + new Date().toLocaleTimeString();
-      await window.natives?.db?.set(key, value);
-      const stored = await window.natives?.db?.get(key);
-      document.getElementById('result').textContent = 'Stored: ' + stored;
-    }
-  </script>
-</body>
-</html>`;
-      await api?.fs?.writeFileAtomic?.(`${modulePath}/index.html`, html);
-
-      // Write README.md
-      const readme = `# ${name}
-
-A Natives module.
-
-## Development
-
-Edit \`index.html\` to customize your module. The Bridge API is available via \`window.natives.*\`.
-
-## Bridge API
-
-- \`window.natives.db.get(key)\` - Read data
-- \`window.natives.db.set(key, value)\` - Write data
-- \`window.natives.settings.getTheme()\` - Get current theme
-- \`window.natives.lifecycle.ready()\` - Signal ready state
-`;
-      await api?.fs?.writeFileAtomic?.(`${modulePath}/README.md`, readme);
-
       showToast(t(locale, 'workshop.templateCreated'));
       setShowCreateDialog(false);
       setTemplateName('');
       setTemplateId('');
-
-      // Re-scan to pick up the new module
-      await api?.module?.scan?.();
-      await loadModules();
-    } catch {
-      showToast(t(locale, 'workshop.templateFailed'));
+      await reload();
+    } catch (err) {
+      showToast(
+        t(locale, 'workshop.templateFailed') + ': ' + classifyError(err).userMessage,
+      );
     } finally {
       setCreating(false);
     }
   };
 
-  // Auto-generate ID from name
-  const handleNameChange = (name: string) => {
-    setTemplateName(name);
-    if (!templateId || templateId === generateId(templateName)) {
-      setTemplateId(generateId(name));
+  // ── GitHub wizard ──
+  const resetWizard = () => {
+    setWizardStep('url');
+    setRepoUrl('');
+    setTokenInput('');
+    setSaveToken(false);
+    setInspect(null);
+    setSelectedCandidate(null);
+    setSelectedTag('');
+    setHostPort('');
+    setOpenPath('/');
+    setHealthPath('');
+    setService('');
+    setEnvValues({});
+    setConfirmBinds(false);
+    setProgress(null);
+    setInstallError(null);
+  };
+
+  const tokenForRequest = (): string | undefined => {
+    if (tokenMode === 'once' && tokenInput.trim()) return tokenInput.trim();
+    return undefined;
+  };
+
+  const runInspect = async (oneClick: boolean) => {
+    setInspecting(true);
+    setInstallError(null);
+    try {
+      const result = await window.nativesAPI?.creativeApp?.inspectGithub?.({
+        repositoryUrl: repoUrl.trim(),
+        token: tokenForRequest(),
+        saveToken: saveToken && tokenMode === 'once',
+        oneClick,
+        releaseTag: oneClick ? null : selectedTag || null,
+      });
+      if (!result) throw new Error('inspect failed');
+      setInspect(result);
+      setSelectedTag(result.releaseTag);
+      const top = result.candidates[0] ?? null;
+      setSelectedCandidate(top);
+      if (top) {
+        setHostPort(top.suggestedHostPort ? String(top.suggestedHostPort) : '');
+        setOpenPath(top.openPath || '/');
+        setHealthPath(top.healthPath || '');
+        setService(top.service || '');
+        const env: Record<string, string> = {};
+        for (const e of top.envRequirements) env[e.key] = '';
+        setEnvValues(env);
+      }
+      if (oneClick && result.oneClickEligible && result.oneClickCandidateId) {
+        const cand =
+          result.candidates.find((c) => c.id === result.oneClickCandidateId) || top;
+        if (cand) {
+          await runInstall(result, cand, true);
+          return;
+        }
+      }
+      setWizardStep('manual');
+    } catch (err) {
+      setInstallError(classifyError(err).userMessage);
+      setWizardStep('manual');
+    } finally {
+      setInspecting(false);
+      // clear one-shot token from UI state after use
+      if (tokenMode === 'once') setTokenInput('');
     }
   };
 
-  return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* Header */}
-      <div style={{
-        padding: `${SPACING.lg}px 20px`,
-        borderBottom: '0.0625rem solid var(--border)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexShrink: 0,
-      }}>
-        <div>
-          <p style={{ fontSize: FONT_SIZE.md, color: 'var(--text-secondary)', margin: 0 }}>
-            {t(locale, 'workshop.subtitle')}
-          </p>
+  const runInstall = async (
+    ins: CreativeAppInspectResult,
+    cand: CreativeAppInstallCandidate,
+    fromOneClick: boolean,
+  ) => {
+    setWizardStep('installing');
+    setInstallError(null);
+    try {
+      const summary = await window.nativesAPI?.creativeApp?.installGithub?.({
+        repositoryUrl: ins.repositoryUrl,
+        releaseTag: selectedTag || ins.releaseTag,
+        releaseId: ins.releaseId,
+        candidateId: cand.id,
+        token: tokenForRequest(),
+        hostPort: hostPort ? Number(hostPort) : cand.suggestedHostPort,
+        openPath: openPath || cand.openPath,
+        healthPath: healthPath || cand.healthPath,
+        service: service || cand.service,
+        env: Object.entries(envValues).map(([key, value]) => ({ key, value })),
+        confirmBindMounts: confirmBinds || fromOneClick,
+      });
+      setTokenInput('');
+      setWizardOpen(false);
+      resetWizard();
+      await reload();
+      if (summary) {
+        showToast(t(locale, 'workshop.installSuccess'));
+        if (summary.state === 'running') {
+          await openExternal(summary);
+        }
+      }
+    } catch (err) {
+      setInstallError(classifyError(err).userMessage);
+      setWizardStep('manual');
+    }
+  };
+
+  const stageLabel = (stage: string) => {
+    const map: Record<string, string> = {
+      inspecting_release: 'workshop.githubStageInspect',
+      downloading_assets: 'workshop.githubStageDownload',
+      pulling_image: 'workshop.githubStagePull',
+      creating: 'workshop.githubStageCreate',
+      starting: 'workshop.githubStageStart',
+      health_check: 'workshop.githubStageHealth',
+      ready: 'workshop.githubStageReady',
+      failed: 'workshop.githubStageFailed',
+    };
+    return t(locale, map[stage] || 'workshop.githubStageInstall');
+  };
+
+  // If browser open, render browser chrome over list
+  if (browserApp) {
+    return (
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '8px 12px',
+            borderBottom: '1px solid var(--border)',
+            background: 'var(--surface)',
+          }}
+        >
+          <button type="button" className="btn btn-ghost" onClick={() => void window.nativesAPI?.creativeApp?.browserBack?.()} title={t(locale, 'workshop.browserBack')}>
+            <ChevronLeft size={14} />
+          </button>
+          <button type="button" className="btn btn-ghost" onClick={() => void window.nativesAPI?.creativeApp?.browserForward?.()} title={t(locale, 'workshop.browserForward')}>
+            <ChevronRight size={14} />
+          </button>
+          <button type="button" className="btn btn-ghost" onClick={() => void window.nativesAPI?.creativeApp?.browserReload?.()} title={t(locale, 'workshop.browserReload')}>
+            <RefreshCw size={14} />
+          </button>
+          <div
+            style={{
+              flex: 1,
+              fontSize: FONT_SIZE.xs,
+              fontFamily: 'var(--font-mono)',
+              color: 'var(--text-secondary)',
+              padding: '4px 8px',
+              border: '1px solid var(--border)',
+              borderRadius: BORDER_RADIUS.md,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+            title={browserUrl}
+          >
+            {browserUrl || t(locale, 'workshop.browserAddress')}
+          </div>
+          <button type="button" className="btn btn-secondary" onClick={() => void closeBrowser()}>
+            {t(locale, 'workshop.browserBackToList')}
+          </button>
         </div>
-        <div style={{ display: 'flex', gap: SPACING.sm }}>
-          {activeTab === 'installed' && (
-            <>
-              <button className="btn" onClick={handleScan} style={{ fontSize: FONT_SIZE.md, display: 'inline-flex', alignItems: 'center', gap: SPACING.xs }}>
-                <RefreshCw size={14} /> {t(locale, 'workshop.scanModules')}
+        <div ref={browserHostRef} style={{ flex: 1, minHeight: 0, background: 'var(--background)' }} />
+      </div>
+    );
+  }
+
+  return (
+    <motion.div
+      initial={prefersReducedMotion ? undefined : { opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={prefersReducedMotion ? undefined : { type: 'spring', stiffness: 60, damping: 16, mass: 1 }}
+      style={{ height: '100%', overflow: 'auto' }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={handleDrop}
+    >
+      <div
+        style={{
+          padding: `${SPACING.md}px ${SPACING.xl}px`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          borderBottom: '1px solid var(--border)',
+        }}
+      >
+        <div>
+          <div style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)' }}>
+            {t(locale, 'workshop.title')}
+          </div>
+          <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)', marginTop: 2 }}>
+            {t(locale, 'workshop.subtitle')}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, position: 'relative' }}>
+          <button type="button" className="btn btn-ghost" onClick={() => void reload()} title="Refresh">
+            <RefreshCw size={14} />
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setAddMenu((m) => (m === 'open' ? 'closed' : 'open'))}
+          >
+            <Plus size={14} /> {t(locale, 'workshop.add')}
+          </button>
+          {addMenu === 'open' && (
+            <div
+              style={{
+                position: 'absolute',
+                right: 0,
+                top: '110%',
+                minWidth: 220,
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
+                borderRadius: BORDER_RADIUS.md,
+                boxShadow: '0 8px 24px rgba(0,0,0,.12)',
+                zIndex: 20,
+                padding: 6,
+              }}
+            >
+              <button
+                type="button"
+                className="btn btn-ghost"
+                style={{ width: '100%', justifyContent: 'flex-start' }}
+                onClick={() => {
+                  setAddMenu('closed');
+                  setShowCreateDialog(true);
+                }}
+              >
+                <Layers size={14} /> {t(locale, 'workshop.addMenuCreate')}
               </button>
-              <button className="btn btn-primary" onClick={() => setShowCreateDialog(true)} style={{ fontSize: FONT_SIZE.md }}>
-                + {t(locale, 'workshop.createModule')}
+              <label
+                className="btn btn-ghost"
+                style={{ width: '100%', justifyContent: 'flex-start', cursor: 'pointer' }}
+              >
+                <Package size={14} /> {t(locale, 'workshop.addMenuImport')}
+                <input
+                  type="file"
+                  accept=".zip"
+                  style={{ display: 'none' }}
+                  onChange={async (e) => {
+                    setAddMenu('closed');
+                    const f = e.target.files?.[0];
+                    if (!f) return;
+                    const source = (f as { path?: string }).path || f.name;
+                    await beginImport(source, f.name);
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                style={{ width: '100%', justifyContent: 'flex-start' }}
+                onClick={() => {
+                  setAddMenu('closed');
+                  resetWizard();
+                  setWizardOpen(true);
+                }}
+              >
+                <Github size={14} /> {t(locale, 'workshop.addMenuGithub')}
               </button>
-            </>
+            </div>
           )}
         </div>
       </div>
 
-      {/* Tabs */}
-      <div style={{
-        display: 'flex',
-        gap: SPACING.lg,
-        padding: '0 20px',
-        borderBottom: '0.0625rem solid var(--border)',
-        flexShrink: 0,
-      }}>
-        <button
-          onClick={() => setActiveTab('installed')}
+      {dragOver && (
+        <div
           style={{
-            padding: '10px 4px',
-            border: 'none',
-            background: 'none',
-            color: activeTab === 'installed' ? 'var(--primary)' : 'var(--text-secondary)',
-            borderBottom: activeTab === 'installed' ? '2px solid var(--primary)' : '2px solid transparent',
-            fontSize: FONT_SIZE.lg,
-            fontWeight: 600,
-            cursor: 'pointer',
-            transition: 'all 0.12s',
+            margin: SPACING.xl,
+            padding: 32,
+            border: '2px dashed var(--primary)',
+            borderRadius: BORDER_RADIUS.lg,
+            textAlign: 'center',
+            color: 'var(--primary)',
           }}
         >
-          {t(locale, 'workshop.tabInstalled')}
-        </button>
-        <button
-          onClick={() => setActiveTab('browse')}
+          {t(locale, 'workshop.releaseToInstall')}
+        </div>
+      )}
+
+      <div style={{ padding: SPACING.xl }}>
+        {loading && <LoadingState />}
+        {error && (
+          <EmptyState
+            title={t(locale, 'common.error')}
+            description={typeof error === 'string' ? error : classifyError(error).userMessage}
+            action={{ label: t(locale, 'common.retry'), onClick: () => { void reload(); } }}
+          />
+        )}
+        {!loading && !error && apps.length === 0 && (
+          <EmptyState
+            title={t(locale, 'workshop.emptyState')}
+            description={t(locale, 'workshop.emptyUnified')}
+          />
+        )}
+        <div
           style={{
-            padding: '10px 4px',
-            border: 'none',
-            background: 'none',
-            color: activeTab === 'browse' ? 'var(--primary)' : 'var(--text-secondary)',
-            borderBottom: activeTab === 'browse' ? '2px solid var(--primary)' : '2px solid transparent',
-            fontSize: FONT_SIZE.lg,
-            fontWeight: 600,
-            cursor: 'pointer',
-            transition: 'all 0.12s',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+            gap: 12,
           }}
         >
-          {t(locale, 'workshop.tabBrowse')}
-        </button>
-      </div>
-
-      {/* Content */}
-      <div style={{ flex: 1, overflow: 'auto', padding: `${SPACING.lg}px 20px`, position: 'relative' }}>
-        {activeTab === 'installed' ? (
-          <>
-            {/* Drop zone */}
-            <div
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-              style={{
-                padding: dragOver ? 36 : 28,
-                border: `2px dashed ${dragOver ? 'var(--primary)' : 'var(--border)'}`,
-                borderRadius: BORDER_RADIUS.lg,
-                textAlign: 'center',
-                color: 'var(--text-secondary)',
-                fontSize: FONT_SIZE.lg,
-                transition: 'all 0.16s cubic-bezier(0.2,0.7,0.3,1)',
-                background: dragOver ? 'var(--primary-soft)' : 'transparent',
-                marginBottom: SPACING.xl,
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              {dragOver ? (
-                <span style={{ color: 'var(--primary)', fontWeight: 600 }}>
-                  {t(locale, 'workshop.releaseToInstall')}
-                </span>
-              ) : (
-                <>
-                  <div style={{ marginBottom: 6, display: 'flex', justifyContent: 'center', color: 'var(--text-disabled)' }}>
-                    <Package size={24} />
-                  </div>
-                  <div>{t(locale, 'workshop.dragToInstall')}</div>
-                </>
-              )}
-            </div>
-
-            {/* areaRipple overlay on install success (STYLE-1) */}
-            {showRipple && (
-              <div className="anim-areaRipple" style={{
-                position: 'absolute', inset: 0, borderRadius: BORDER_RADIUS.lg,
-                pointerEvents: 'none', zIndex: 5,
-              }} />
-            )}
-
-            {/* Module grid */}
-            {loading ? (
-              <LoadingState message={t(locale, 'common.loading')} />
-            ) : (modules ?? []).length === 0 ? (
-              <EmptyState title={t(locale, 'workshop.emptyState')} />
-            ) : (
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-                gap: SPACING.md,
-              }}>
-                {(modules ?? []).map((mod) => (
-                  <ModuleCard
-                    key={mod.id}
-                    module={mod}
-                    locale={locale}
-                    onToggle={() => handleToggle(mod)}
-                    onUninstall={() => handleUninstall(mod)}
-                  />
-                ))}
-              </div>
-            )}
-          </>
-        ) : (
-          /* Browse Online Workshop Tab (merged from StorePage) */
-          <>
-            {/* Search bar */}
-            <div style={{ marginBottom: SPACING.lg }}>
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={t(locale, 'store.searchPlaceholder')}
+          {apps.map((app) => {
+            const busy = busyIds.has(app.id) || isActionBusy(app.state);
+            const actions = mergeActionsWithBusy(app.actions, busy);
+            const badge = sourceBadge(app.source);
+            return (
+              <div
+                key={app.id}
                 style={{
-                  width: '100%',
-                  padding: `${SPACING.sm}px ${SPACING.md}px`,
-                  background: 'var(--surface)',
                   border: '1px solid var(--border)',
-                  borderRadius: BORDER_RADIUS.md,
-                  color: 'var(--text)',
-                  fontSize: FONT_SIZE.lg,
-                  outline: 'none',
+                  borderRadius: BORDER_RADIUS.lg,
+                  padding: 14,
+                  background: 'var(--surface)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
                 }}
-              />
-            </div>
-
-            {/* Coming soon banner */}
-            <div style={{
-              padding: `${SPACING.lg}px 20px`,
-              background: 'linear-gradient(135deg, var(--primary-soft), transparent)',
-              border: '1px solid var(--border)',
-              borderRadius: BORDER_RADIUS.lg,
-              marginBottom: SPACING.xl,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: SPACING.lg,
-            }}>
-              <div>
-                <div style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Rocket size={14} style={{ color: 'var(--primary)' }} />
-                  <span>{t(locale, 'store.comingSoon')}</span>
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                  <div style={{ fontWeight: 600, color: 'var(--text)' }}>{app.title}</div>
+                  <span
+                    style={{
+                      fontSize: 10,
+                      padding: '2px 8px',
+                      borderRadius: 999,
+                      border: '1px solid var(--border)',
+                      color: 'var(--text-secondary)',
+                    }}
+                  >
+                    {badge === 'github'
+                      ? t(locale, 'workshop.sourceGithub')
+                      : t(locale, 'workshop.sourceInternal')}
+                  </span>
                 </div>
-                <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)' }}>
-                  {t(locale, 'store.comingSoonDesc')}
+                <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)' }}>
+                  {runtimeLabel(locale, app.runtime)} · {app.version} · {stateLabel(locale, app.state)}
+                </div>
+                {app.lastError && (
+                  <div style={{ fontSize: 11, color: 'var(--danger)' }}>{app.lastError}</div>
+                )}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 'auto' }}>
+                  {actions.canOpen && (
+                    <button type="button" className="btn btn-primary" onClick={() => void handleOpen(app)}>
+                      {t(locale, 'workshop.actionOpen')}
+                    </button>
+                  )}
+                  {actions.canStart && (
+                    <button type="button" className="btn btn-secondary" onClick={() => void handleStart(app)}>
+                      <Play size={12} /> {t(locale, 'workshop.actionStart')}
+                    </button>
+                  )}
+                  {actions.canStop && (
+                    <button type="button" className="btn btn-secondary" onClick={() => void handleStop(app)}>
+                      <Pause size={12} /> {t(locale, 'workshop.actionStop')}
+                    </button>
+                  )}
+                  {actions.canRetry && (
+                    <button type="button" className="btn btn-secondary" onClick={() => void handleStart(app)}>
+                      <RotateCcw size={12} /> {t(locale, 'workshop.actionRetry')}
+                    </button>
+                  )}
+                  {app.source === 'external_github' && (
+                    <button type="button" className="btn btn-ghost" onClick={() => void openLogs(app)}>
+                      <ScrollText size={12} /> {t(locale, 'workshop.actionLogs')}
+                    </button>
+                  )}
+                  {actions.canDelete && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => {
+                        setDeleteTarget(app);
+                        const d = defaultDeleteOptions();
+                        setDeleteVolumes(d.removeVolumes);
+                        setDeleteImages(d.removeImages);
+                      }}
+                    >
+                      <Trash2 size={12} /> {t(locale, 'workshop.actionDelete')}
+                    </button>
+                  )}
                 </div>
               </div>
-            </div>
-
-            {/* Catalog Modules List */}
-            {loading ? (
-              <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-disabled)', fontSize: FONT_SIZE.lg }}>
-                {t(locale, 'common.loading')}
-              </div>
-            ) : filteredModules.length === 0 ? (
-              <EmptyState title={t(locale, 'store.noModules')} />
-            ) : (
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
-                gap: SPACING.md,
-              }}>
-                {filteredModules.map((mod) => (
-                  <StoreModuleCard key={mod.id} module={mod} locale={locale} />
-                ))}
-              </div>
-            )}
-          </>
-        )}
+            );
+          })}
+        </div>
       </div>
 
-      {/* Create template dialog */}
-      <Modal
-        isOpen={showCreateDialog}
-        onClose={() => setShowCreateDialog(false)}
-        title={t(locale, 'workshop.createModule')}
-        width={400}
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.md }}>
-          <div>
-            <label style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: SPACING.xs, display: 'block' }}>
-              {t(locale, 'workshop.templateName')}
-            </label>
-            <input
-              type="text"
-              value={templateName}
-              onChange={(e) => handleNameChange(e.target.value)}
-              placeholder={t(locale, 'workshop.templateNamePlaceholder')}
-              className="input"
-              autoFocus
-            />
-          </div>
-
-          <div>
-            <label style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: SPACING.xs, display: 'block' }}>
-              {t(locale, 'workshop.templateId')}
-            </label>
-            <input
-              type="text"
-              value={templateId}
-              onChange={(e) => setTemplateId(e.target.value)}
-              placeholder={t(locale, 'workshop.templateIdPlaceholder')}
-              className="input"
-            />
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: SPACING.sm, marginTop: SPACING.xl, justifyContent: 'flex-end' }}>
-          <button className="btn" onClick={() => setShowCreateDialog(false)}>
-            {t(locale, 'common.cancel')}
-          </button>
-          <button
-            className="btn btn-primary"
-            onClick={handleCreateTemplate}
-            disabled={creating || !templateName.trim() || !templateId.trim()}
-          >
-            {creating ? t(locale, 'workshop.creating') : t(locale, 'workshop.createTemplate')}
-          </button>
-        </div>
-      </Modal>
-
-      {/* Permission dialog (US12) */}
-      <Modal
-        isOpen={!!permDialog}
-        onClose={() => { setPermDialog(null); setInstalling(false); }}
-        title={t(locale, 'workshop.permissionTitle')}
-        width={420}
-      >
-        {permDialog && (
-          <>
-            <p style={{ fontSize: FONT_SIZE.md, color: 'var(--text-secondary)', marginBottom: SPACING.lg }}>
-              {t(locale, 'workshop.permissionDesc').replace('{name}', permDialog.moduleName)}
-            </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.sm, marginBottom: SPACING.xl }}>
-              {permDialog.permissions.map((perm) => (
-                <label key={perm} style={{
-                  display: 'flex', alignItems: 'center', gap: SPACING.sm, cursor: 'pointer',
-                  padding: `${SPACING.sm}px 10px`,
-                  background: selectedPerms.has(perm) ? 'var(--primary-soft)' : 'var(--surface)',
-                  borderRadius: BORDER_RADIUS.md,
-                  fontSize: FONT_SIZE.md,
-                  transition: 'background 0.12s',
-                }}>
-                  <input
-                    type="checkbox"
-                    checked={selectedPerms.has(perm)}
-                    onChange={() => {
-                      setSelectedPerms((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(perm)) next.delete(perm); else next.add(perm);
-                        return next;
-                      });
-                    }}
-                  />
-                  <span style={{ color: 'var(--text)', fontFamily: 'var(--font-mono)', fontSize: FONT_SIZE.sm }}>
-                    {perm}
-                  </span>
-                  <span style={{ color: 'var(--text-disabled)', marginLeft: 'auto', fontSize: FONT_SIZE.sm }}>
-                    {PERMISSION_DESC[perm as keyof typeof PERMISSION_DESC] || perm}
-                  </span>
-                </label>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: SPACING.sm, justifyContent: 'flex-end' }}>
-              <button className="btn" onClick={() => { setPermDialog(null); setInstalling(false); }} disabled={installing}>
-                {t(locale, 'common.cancel')}
-              </button>
-              <button className="btn" onClick={() => handlePermInstall(false)} disabled={installing || selectedPerms.size === 0}>
-                {installing ? t(locale, 'common.loading') : `Allow Selected (${selectedPerms.size})`}
-              </button>
-              <button className="btn btn-primary" onClick={() => handlePermInstall(true)} disabled={installing}>
-                {installing ? t(locale, 'common.loading') : t(locale, 'workshop.permissionAllowAll')}
-              </button>
-            </div>
-          </>
-        )}
-      </Modal>
-
-      {/* Confirm uninstall dialog */}
-      <ConfirmDialog
-        open={!!uninstallTarget}
-        danger
-        title={t(locale, 'workshop.confirmUninstallTitle')}
-        message={
-          uninstallTarget
-            ? t(locale, 'workshop.confirmUninstallDesc').replace('{name}', uninstallTarget.name)
-            : ''
-        }
-        confirmLabel={t(locale, 'common.confirm')}
-        cancelLabel={t(locale, 'common.cancel')}
-        onConfirm={doUninstall}
-        onCancel={() => setUninstallTarget(null)}
-      />
-
-      {/* Toast */}
       {toast && (
-        <div style={{
-          position: 'fixed', bottom: SPACING.xl, left: '50%', transform: 'translateX(-50%)',
-          background: 'var(--surface)', border: '1px solid var(--border)',
-          padding: '10px 18px', borderRadius: BORDER_RADIUS.xl, fontSize: FONT_SIZE.lg, color: 'var(--text)',
-          zIndex: 200, animation: 'fadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
-        }}>
+        <div
+          style={{
+            position: 'fixed',
+            bottom: 24,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: 'var(--text)',
+            color: 'var(--bg)',
+            padding: '8px 14px',
+            borderRadius: 8,
+            fontSize: 12,
+            zIndex: 50,
+          }}
+        >
           {toast}
         </div>
       )}
-    </div>
-  );
-}
 
-
-// ── Module Card ──
-
-function ModuleCard({
-  module: mod,
-  locale,
-  onToggle,
-  onUninstall,
-}: {
-  module: ModuleInfo;
-  locale: Locale;
-  onToggle: () => void;
-  onUninstall: () => void;
-}) {
-  const [hovered, setHovered] = useState(false);
-
-  return (
-    <div className="doppelrand-outer"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{ transition: 'border-color 0.15s', borderColor: hovered ? 'var(--primary)' : undefined }}
-    >
-      <div className="doppelrand-inner" style={{ padding: '14px 12px' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: SPACING.sm }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{
-              fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>
-              {mod.name}
-            </div>
-            <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)', fontFamily: 'var(--font-mono)', marginTop: 2 }}>
-              {mod.id} · v{mod.version}
+      {/* Create internal */}
+      {showCreateDialog && (
+        <Modal
+          isOpen
+          onClose={() => setShowCreateDialog(false)}
+          title={t(locale, 'workshop.createModule')}
+          width={420}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <label style={{ fontSize: 12 }}>
+              {t(locale, 'workshop.templateName')}
+              <input
+                value={templateName}
+                onChange={(e) => setTemplateName(e.target.value)}
+                placeholder={t(locale, 'workshop.templateNamePlaceholder')}
+                style={inputStyle}
+              />
+            </label>
+            <label style={{ fontSize: 12 }}>
+              {t(locale, 'workshop.templateId')}
+              <input
+                value={templateId}
+                onChange={(e) => setTemplateId(e.target.value)}
+                placeholder={t(locale, 'workshop.templateIdPlaceholder')}
+                style={inputStyle}
+              />
+            </label>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button type="button" className="btn btn-secondary" onClick={() => setShowCreateDialog(false)}>
+                {t(locale, 'common.cancel')}
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={creating}
+                onClick={() => void createTemplate()}
+              >
+                {creating ? t(locale, 'workshop.creating') : t(locale, 'workshop.createTemplate')}
+              </button>
             </div>
           </div>
-          <span style={{
-            fontSize: FONT_SIZE.xs, padding: '1px 5px', borderRadius: BORDER_RADIUS.sm,
-            background: mod.enabled ? 'var(--primary-soft)' : 'var(--surface)',
-            color: mod.enabled ? 'var(--primary)' : 'var(--text-disabled)',
-            fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0,
-          }}>
-            {mod.enabled ? t(locale, 'workshop.enabled') : t(locale, 'workshop.disabled')}
-          </span>
-        </div>
-
-      {mod.description && (
-        <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)', marginBottom: 10, lineHeight: 1.4 }}>
-          {mod.description}
-        </div>
+        </Modal>
       )}
 
-      <div style={{ display: 'flex', gap: 6, paddingTop: 10, borderTop: '1px solid var(--border)',
-        opacity: hovered ? 1 : 0.3,
-        transition: 'opacity 0.12s',
-      }}>
-        <button
-          className="btn"
-          onClick={onToggle}
-          style={{ flex: 1, fontSize: FONT_SIZE.sm, padding: `${SPACING.xs}px ${SPACING.sm}px`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: SPACING.xs }}
-          title={t(locale, 'workshop.toggleModule')}
+      {/* Permission dialog */}
+      {permDialog && (
+        <Modal
+          isOpen
+          onClose={() => setPermDialog(null)}
+          title={t(locale, 'workshop.permissionTitle')}
+          width={440}
         >
-          {mod.enabled ? <Pause size={10} /> : <Play size={10} />} {mod.enabled ? t(locale, 'modules.disable') : t(locale, 'modules.enable')}
-        </button>
-        <button
-          className="btn"
-          onClick={onUninstall}
-          style={{ fontSize: FONT_SIZE.sm, padding: `${SPACING.xs}px ${SPACING.sm}px`, color: 'var(--danger)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-          title={t(locale, 'workshop.uninstallModule')}
+          <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            {t(locale, 'workshop.permissionDesc').replace('{name}', permDialog.moduleName)}
+          </p>
+          <ul style={{ fontSize: 12, margin: '12px 0' }}>
+            {permDialog.permissions.map((p) => (
+              <li key={p}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={selectedPerms.has(p)}
+                    onChange={(e) => {
+                      setSelectedPerms((prev) => {
+                        const n = new Set(prev);
+                        if (e.target.checked) n.add(p);
+                        else n.delete(p);
+                        return n;
+                      });
+                    }}
+                  />{' '}
+                  {p}
+                </label>
+              </li>
+            ))}
+          </ul>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <button type="button" className="btn btn-secondary" onClick={() => setPermDialog(null)}>
+              {t(locale, 'common.cancel')}
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={installing}
+              onClick={() => void confirmImport()}
+            >
+              {t(locale, 'workshop.permissionAllowAll')}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Delete dialog */}
+      {deleteTarget && (
+        <Modal
+          isOpen
+          onClose={() => setDeleteTarget(null)}
+          title={t(locale, 'workshop.deleteTitle')}
+          width={420}
         >
-          <Trash2 size={10} />
-        </button>
-      </div>
-      </div>
-    </div>
+          <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            {t(locale, 'workshop.deleteDesc')}
+          </p>
+          <p style={{ fontSize: 13, fontWeight: 600 }}>{deleteTarget.title}</p>
+          {deleteTarget.source === 'external_github' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10 }}>
+              <label style={{ fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={deleteVolumes}
+                  onChange={(e) => setDeleteVolumes(e.target.checked)}
+                />{' '}
+                {t(locale, 'workshop.deleteRemoveVolumes')}
+              </label>
+              <label style={{ fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={deleteImages}
+                  onChange={(e) => setDeleteImages(e.target.checked)}
+                />{' '}
+                {t(locale, 'workshop.deleteRemoveImages')}
+              </label>
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+            <button type="button" className="btn btn-secondary" onClick={() => setDeleteTarget(null)}>
+              {t(locale, 'common.cancel')}
+            </button>
+            <button type="button" className="btn btn-primary" onClick={() => void doDelete()}>
+              {t(locale, 'workshop.deleteConfirm')}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Logs */}
+      {logsFor && (
+        <Modal isOpen onClose={() => setLogsFor(null)} title={t(locale, 'workshop.logsTitle')} width={640}>
+          <pre
+            style={{
+              maxHeight: 360,
+              overflow: 'auto',
+              fontSize: 11,
+              fontFamily: 'var(--font-mono)',
+              background: 'var(--bg-2)',
+              padding: 12,
+              borderRadius: 8,
+            }}
+          >
+            {logsText}
+          </pre>
+        </Modal>
+      )}
+
+      {/* GitHub wizard */}
+      {wizardOpen && (
+        <Modal
+          isOpen
+          onClose={() => {
+            setWizardOpen(false);
+            resetWizard();
+          }}
+          title={t(locale, 'workshop.githubWizardTitle')}
+          width={520}
+        >
+          {wizardStep === 'url' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <label style={{ fontSize: 12 }}>
+                {t(locale, 'workshop.githubRepoUrl')}
+                <input
+                  value={repoUrl}
+                  onChange={(e) => setRepoUrl(e.target.value)}
+                  placeholder={t(locale, 'workshop.githubRepoPlaceholder')}
+                  style={inputStyle}
+                />
+              </label>
+              <div style={{ display: 'flex', gap: 8, fontSize: 12 }}>
+                {(['public', 'saved', 'once'] as const).map((m) => (
+                  <label key={m}>
+                    <input
+                      type="radio"
+                      checked={tokenMode === m}
+                      onChange={() => setTokenMode(m)}
+                    />{' '}
+                    {m === 'public'
+                      ? t(locale, 'workshop.githubPublicAccess')
+                      : m === 'saved'
+                        ? t(locale, 'workshop.githubUseSavedToken')
+                        : t(locale, 'workshop.githubOneShotToken')}
+                  </label>
+                ))}
+              </div>
+              {tokenMode === 'once' && (
+                <>
+                  <input
+                    type="password"
+                    value={tokenInput}
+                    onChange={(e) => setTokenInput(e.target.value)}
+                    placeholder={t(locale, 'workshop.githubTokenPlaceholder')}
+                    style={inputStyle}
+                  />
+                  <label style={{ fontSize: 12 }}>
+                    <input
+                      type="checkbox"
+                      checked={saveToken}
+                      onChange={(e) => setSaveToken(e.target.checked)}
+                    />{' '}
+                    {t(locale, 'workshop.githubSaveToken')}
+                  </label>
+                </>
+              )}
+              {installError && (
+                <div style={{ color: 'var(--danger)', fontSize: 12 }}>{installError}</div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={inspecting || !repoUrl.trim()}
+                  onClick={() => void runInspect(false)}
+                >
+                  {t(locale, 'workshop.githubManual')}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={inspecting || !repoUrl.trim()}
+                  onClick={() => void runInspect(true)}
+                >
+                  {inspecting ? '…' : t(locale, 'workshop.githubOneClick')}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {wizardStep === 'manual' && inspect && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 480, overflow: 'auto' }}>
+              {inspect.blockers.length > 0 && (
+                <div style={{ color: 'var(--danger)', fontSize: 12 }}>
+                  <strong>{t(locale, 'workshop.githubBlockers')}</strong>
+                  <ul>
+                    {inspect.blockers.map((b) => (
+                      <li key={b}>{b}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {inspect.warnings.length > 0 && (
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  <strong>{t(locale, 'workshop.githubWarnings')}</strong>
+                  <ul>
+                    {inspect.warnings.map((w) => (
+                      <li key={w}>{w}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <label style={{ fontSize: 12 }}>
+                {t(locale, 'workshop.githubSelectTag')}
+                <select
+                  value={selectedTag}
+                  onChange={(e) => setSelectedTag(e.target.value)}
+                  style={inputStyle}
+                >
+                  {(inspect.availableTags.length
+                    ? inspect.availableTags
+                    : [{ tag: inspect.releaseTag, releaseId: 0, isPrerelease: inspect.isPrerelease }]
+                  ).map((tg) => (
+                    <option key={tg.tag} value={tg.tag}>
+                      {tg.tag}
+                      {tg.isPrerelease ? ' (pre)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ fontSize: 12 }}>
+                {t(locale, 'workshop.githubSelectCandidate')}
+                <select
+                  value={selectedCandidate?.id || ''}
+                  onChange={(e) => {
+                    const c = inspect.candidates.find((x) => x.id === e.target.value) || null;
+                    setSelectedCandidate(c);
+                    if (c) {
+                      setHostPort(c.suggestedHostPort ? String(c.suggestedHostPort) : '');
+                      setOpenPath(c.openPath || '/');
+                      setHealthPath(c.healthPath || '');
+                      setService(c.service || '');
+                    }
+                  }}
+                  style={inputStyle}
+                >
+                  {inspect.candidates.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.title} ({c.runtime}, conf {c.confidence})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <label style={{ fontSize: 12 }}>
+                  {t(locale, 'workshop.githubHostPort')}
+                  <input value={hostPort} onChange={(e) => setHostPort(e.target.value)} style={inputStyle} />
+                </label>
+                <label style={{ fontSize: 12 }}>
+                  {t(locale, 'workshop.githubService')}
+                  <input value={service} onChange={(e) => setService(e.target.value)} style={inputStyle} />
+                </label>
+                <label style={{ fontSize: 12 }}>
+                  {t(locale, 'workshop.githubOpenPath')}
+                  <input value={openPath} onChange={(e) => setOpenPath(e.target.value)} style={inputStyle} />
+                </label>
+                <label style={{ fontSize: 12 }}>
+                  {t(locale, 'workshop.githubHealthPath')}
+                  <input value={healthPath} onChange={(e) => setHealthPath(e.target.value)} style={inputStyle} />
+                </label>
+              </div>
+              {selectedCandidate && selectedCandidate.envRequirements.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>{t(locale, 'workshop.githubEnvTitle')}</div>
+                  {selectedCandidate.envRequirements.map((e) => (
+                    <label key={e.key} style={{ fontSize: 12, display: 'block', marginTop: 6 }}>
+                      {e.key}
+                      {e.required ? ' *' : ''}
+                      <input
+                        type={e.secret ? 'password' : 'text'}
+                        value={envValues[e.key] || ''}
+                        onChange={(ev) =>
+                          setEnvValues((prev) => ({ ...prev, [e.key]: ev.target.value }))
+                        }
+                        style={inputStyle}
+                      />
+                    </label>
+                  ))}
+                </div>
+              )}
+              {selectedCandidate && selectedCandidate.riskSummary.length > 0 && (
+                <div style={{ fontSize: 12 }}>
+                  <strong>{t(locale, 'workshop.githubRiskTitle')}</strong>
+                  <ul>
+                    {selectedCandidate.riskSummary.map((r) => (
+                      <li key={r}>{r}</li>
+                    ))}
+                  </ul>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={confirmBinds}
+                      onChange={(e) => setConfirmBinds(e.target.checked)}
+                    />{' '}
+                    confirm bind mounts
+                  </label>
+                </div>
+              )}
+              {installError && (
+                <div style={{ color: 'var(--danger)', fontSize: 12 }}>{installError}</div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setWizardStep('url')}>
+                  {t(locale, 'common.back')}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={!selectedCandidate || inspect.blockers.length > 0}
+                  onClick={() => {
+                    if (inspect && selectedCandidate) void runInstall(inspect, selectedCandidate, false);
+                  }}
+                >
+                  {t(locale, 'workshop.githubInstall')}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {wizardStep === 'installing' && (
+            <div style={{ fontSize: 13 }}>
+              <div style={{ marginBottom: 8 }}>{progress ? stageLabel(progress.stage) : '…'}</div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
+                {progress?.message}
+              </div>
+            </div>
+          )}
+        </Modal>
+      )}
+    </motion.div>
   );
 }
 
-// ── Permission descriptions (US12) ──
-
-const PERMISSION_DESC: Record<string, string> = {
-  'db:read': '读取数据存储',
-  'db:write': '写入数据存储',
-  'env:read': '读取环境变量',
-  'notification': '发送通知',
-  'ipc:send': '模块间通信',
-  'lifecycle': '生命周期管理',
-  'settings': '访问设置',
-};
-
-// ── Helpers ──
-
-function generateId(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    || 'my-module';
-}
-
-const dialogInputStyle: React.CSSProperties = {
+const inputStyle: React.CSSProperties = {
+  display: 'block',
   width: '100%',
-  padding: `${SPACING.sm}px 10px`,
-  background: 'var(--surface)',
+  marginTop: 4,
+  padding: '8px 10px',
+  borderRadius: 6,
   border: '1px solid var(--border)',
-  borderRadius: BORDER_RADIUS.md,
+  background: 'var(--bg-2)',
   color: 'var(--text)',
-  fontSize: FONT_SIZE.lg,
-  outline: 'none',
+  fontSize: 12,
 };
-
-// ── Store Module Card ──
-
-function StoreModuleCard({ module: mod, locale }: { module: ModuleInfo; locale: Locale }) {
-  const [hovered, setHovered] = useState(false);
-
-  return (
-    <div className="doppelrand-outer"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{ transition: 'border-color 0.15s', borderColor: hovered ? 'var(--primary)' : undefined }}
-    >
-      <div className="doppelrand-inner" style={{ padding: '14px 14px 12px' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: SPACING.sm }}>
-        {/* Default module icon */}
-        <div style={{
-          width: 36, height: 36, borderRadius: BORDER_RADIUS.lg,
-          background: 'var(--surface)',
-          border: '1px solid var(--border)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: FONT_SIZE.lg, flexShrink: 0,
-        }}>
-          {mod.name.charAt(0).toUpperCase()}
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{
-            fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)',
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>
-            {mod.name}
-          </div>
-          <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)', fontFamily: 'var(--font-mono)', marginTop: 1 }}>
-            v{mod.version}
-          </div>
-        </div>
-        <span style={{
-          fontSize: FONT_SIZE.xs, padding: '1px 5px', borderRadius: BORDER_RADIUS.sm,
-          background: mod.enabled ? 'var(--primary-soft)' : 'var(--surface)',
-          color: mod.enabled ? 'var(--primary)' : 'var(--text-disabled)',
-          fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0,
-        }}>
-          {mod.enabled ? t(locale, 'workshop.enabled') : t(locale, 'workshop.disabled')}
-        </span>
-      </div>
-
-      {mod.description && (
-        <div style={{ fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)', lineHeight: 1.4, marginBottom: SPACING.sm }}>
-          {mod.description}
-        </div>
-      )}
-
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)',
-      }}>
-        <span style={{ fontFamily: 'var(--font-mono)' }}>{mod.id}</span>
-        <span style={{
-          padding: '2px 6px',
-          borderRadius: BORDER_RADIUS.sm,
-          background: 'var(--surface)',
-          border: '1px solid var(--border)',
-          fontSize: FONT_SIZE.xs,
-          textTransform: 'uppercase',
-        }}>
-          {t(locale, 'store.installed')}
-        </span>
-      </div>
-      </div>
-    </div>
-  );
-}

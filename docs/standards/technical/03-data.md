@@ -106,9 +106,9 @@
 
 ---
 
-## 附录：当前表清单（11 张）
+## 附录：当前表清单
 
-> 新增表请在此登记，并补 `ALTER` 迁移逻辑。
+> 新增表请在此登记，并补 `ALTER` 迁移逻辑。schema 版本见 `settings._schema_version`（当前 v7）。
 
 | 表 | 用途 |
 |----|------|
@@ -118,6 +118,8 @@
 | `module_data` | 插件数据（按 module_id 隔离） |
 | `workshop_cache` | 创意工坊元数据缓存 |
 | `env_profiles` | 环境配置组 |
+| `external_creative_apps` | 外部 GitHub 容器创意应用（ADR-0013，v7） |
+| `creative_app_env` | 外部应用 env（AES-GCM，级联删除） |
 | `env_variables` | 环境变量（加密） |
 | `notifications` | 通知历史 |
 | `module_order` | 侧边栏排序 |

@@ -1,0 +1,69 @@
+/**
+ * Pure helpers for Creative App UI mapping / action availability.
+ * Kept free of React for node:test coverage.
+ */
+
+import type {
+  CreativeAppActions,
+  CreativeAppSource,
+  CreativeAppState,
+  CreativeAppSummary,
+} from '@/lib/tauri-adapter';
+
+export function shouldReloadCreativeCatalog(channel: string): boolean {
+  return channel === 'creative-app' || channel === 'module';
+}
+
+export function sourceBadge(source: CreativeAppSource): 'internal' | 'github' {
+  return source === 'external_github' ? 'github' : 'internal';
+}
+
+export function isActionBusy(state: CreativeAppState): boolean {
+  return (
+    state === 'installing' ||
+    state === 'starting' ||
+    state === 'stopping' ||
+    state === 'deleting'
+  );
+}
+
+export function mergeActionsWithBusy(
+  actions: CreativeAppActions,
+  busy: boolean,
+): CreativeAppActions {
+  if (!busy) return actions;
+  return {
+    canOpen: false,
+    canStart: false,
+    canStop: false,
+    canDelete: false,
+    canRetry: false,
+  };
+}
+
+export function sortCreativeApps(apps: CreativeAppSummary[]): CreativeAppSummary[] {
+  const rank = (s: CreativeAppState): number => {
+    switch (s) {
+      case 'running':
+        return 0;
+      case 'available':
+        return 1;
+      case 'installed_stopped':
+        return 2;
+      case 'start_failed':
+      case 'install_failed':
+        return 3;
+      default:
+        return 4;
+    }
+  };
+  return [...apps].sort((a, b) => {
+    const d = rank(a.state) - rank(b.state);
+    if (d !== 0) return d;
+    return a.title.localeCompare(b.title);
+  });
+}
+
+export function defaultDeleteOptions() {
+  return { removeVolumes: false, removeImages: false };
+}

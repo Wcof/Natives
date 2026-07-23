@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { normalizeThemeId, applyTheme } from '@/lib/theme-engine';
 import { t, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
@@ -16,12 +16,132 @@ import type { ProviderSummary, TestKeyResult } from '@/types/provider';
 import {
   type SettingsSection,
 } from './settings-navigation';
+import type { CreativeAppDockerStatus, CreativeAppGithubTokenStatus } from '@/lib/tauri-adapter';
 
 // ── Theme skins — only light/dark as supported by the theme engine ──
 const THEMES = [
   { id: 'light', labelKey: 'settings.themeJasmine', icon: <Sun size={20} /> },
   { id: 'dark', labelKey: 'settings.themeTerminal', icon: <Terminal size={20} /> },
 ];
+
+function CreativeRuntimeSettings({ locale }: { locale: Locale }) {
+  const { toast } = useToast();
+  const [docker, setDocker] = useState<CreativeAppDockerStatus | null>(null);
+  const [token, setToken] = useState<CreativeAppGithubTokenStatus | null>(null);
+  const [tokenInput, setTokenInput] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setBusy(true);
+    try {
+      const api = window.nativesAPI?.creativeApp;
+      const [d, tstat] = await Promise.all([
+        api?.dockerStatus?.() ?? null,
+        api?.githubTokenStatus?.() ?? null,
+      ]);
+      setDocker(d);
+      setToken(tstat);
+    } catch (e) {
+      toast(classifyError(e).userMessage, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  return (
+    <div className="settings-section-card" style={{ marginTop: 16 }}>
+      <div className="settings-section-heading">
+        <div>
+          <h4>{t(locale, 'settings.creativeRuntime')}</h4>
+          <p>{t(locale, 'settings.creativeRuntimeDesc')}</p>
+        </div>
+        <button type="button" className="btn btn-secondary" onClick={() => void refresh()} disabled={busy}>
+          <RefreshCw size={12} /> {t(locale, 'settings.dockerRefresh')}
+        </button>
+      </div>
+      <div style={{ display: 'grid', gap: 10, fontSize: 13 }}>
+        <div>
+          <strong>{t(locale, 'settings.dockerEngine')}</strong>:{' '}
+          {docker?.available
+            ? `${t(locale, 'settings.dockerAvailable')}${docker.version ? ` (${docker.version})` : ''}`
+            : t(locale, 'settings.dockerUnavailable')}
+          {docker?.error ? (
+            <div style={{ color: 'var(--danger)', fontSize: 12 }}>{docker.error}</div>
+          ) : null}
+        </div>
+        <div>
+          <strong>{t(locale, 'settings.dockerCompose')}</strong>:{' '}
+          {docker?.composeAvailable
+            ? `${t(locale, 'settings.dockerAvailable')}${docker.composeVersion ? ` (${docker.composeVersion})` : ''}`
+            : t(locale, 'settings.dockerUnavailable')}
+        </div>
+        <div>
+          <strong>{t(locale, 'settings.githubToken')}</strong>:{' '}
+          {token?.configured
+            ? token.masked
+            : t(locale, 'settings.githubTokenNotSet')}
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
+            {t(locale, 'settings.githubTokenHint')}
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <input
+              type="password"
+              value={tokenInput}
+              onChange={(e) => setTokenInput(e.target.value)}
+              placeholder="ghp_…"
+              style={{
+                flex: 1,
+                padding: '6px 8px',
+                borderRadius: 6,
+                border: '1px solid var(--border)',
+                background: 'var(--bg-2)',
+                color: 'var(--text)',
+                fontSize: 12,
+              }}
+            />
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={!tokenInput.trim() || busy}
+              onClick={async () => {
+                try {
+                  const st = await window.nativesAPI?.creativeApp?.githubTokenSet?.(tokenInput.trim());
+                  setToken(st ?? null);
+                  setTokenInput('');
+                  toast(t(locale, 'settings.githubTokenSaved'), 'success');
+                } catch (e) {
+                  toast(classifyError(e).userMessage, 'error');
+                }
+              }}
+            >
+              {t(locale, 'settings.githubTokenSet')}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={!token?.configured || busy}
+              onClick={async () => {
+                try {
+                  const st = await window.nativesAPI?.creativeApp?.githubTokenClear?.();
+                  setToken(st ?? null);
+                  toast(t(locale, 'settings.githubTokenCleared'), 'success');
+                } catch (e) {
+                  toast(classifyError(e).userMessage, 'error');
+                }
+              }}
+            >
+              {t(locale, 'settings.githubTokenClear')}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ── Local components ──
 
@@ -495,7 +615,12 @@ export default function SettingsPage({
       case 'providers':
         return renderProviders();
       case 'runtime':
-        return <RuntimePanel locale={locale} />;
+        return (
+          <>
+            <RuntimePanel locale={locale} />
+            <CreativeRuntimeSettings locale={locale} />
+          </>
+        );
       case 'engine':
         return renderEngineCaps();
       case 'plugins':

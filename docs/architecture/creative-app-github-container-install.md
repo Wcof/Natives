@@ -1,9 +1,9 @@
 # 个人创意 · 外部应用安装（GitHub Release → 容器）设计冻结
 
-> **状态**: 设计讨论冻结（供实施方案拆解，尚未升格为 ADR）  
+> **状态**: 已升格实施（见 [ADR-0013](../adr/0013-creative-app-dual-source.md)）  
 > **日期**: 2026-07-22  
 > **来源**: grill-me 会话（个人创意增强 / GitHub 安装 / 内置浏览器展示）  
-> **关联**: [ADR-0012](../adr/0012-product-identity-workshop-scope.md)、[module-workshop-kernel-runtime.md](./module-workshop-kernel-runtime.md)、`docs/standards/product/01-positioning.md`  
+> **关联**: [ADR-0012](../adr/0012-product-identity-workshop-scope.md)、[ADR-0013](../adr/0013-creative-app-dual-source.md)、[module-workshop-kernel-runtime.md](./module-workshop-kernel-runtime.md)、`docs/standards/product/01-positioning.md`  
 > **归类**: **Workshop 面（目录与管理）** + **Embed 面（外部运行时展示）**；**非** Workshop 静态沙箱租户扩展
 
 ---

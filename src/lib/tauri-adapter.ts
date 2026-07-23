@@ -34,6 +34,165 @@ export interface WriteGeneratedModuleResult {
   contentHash?: string;
 }
 
+// ── Creative App (dual-source Personal Creations) ──
+
+export type CreativeAppSource = 'internal' | 'external_github';
+export type CreativeAppRuntime = 'workshop_static' | 'docker_compose' | 'docker_run';
+export type CreativeAppState =
+  | 'available'
+  | 'disabled'
+  | 'installing'
+  | 'installed_stopped'
+  | 'starting'
+  | 'running'
+  | 'stopping'
+  | 'runtime_unavailable'
+  | 'install_failed'
+  | 'start_failed'
+  | 'deleting'
+  | 'delete_failed';
+
+export interface CreativeAppActions {
+  canOpen: boolean;
+  canStart: boolean;
+  canStop: boolean;
+  canDelete: boolean;
+  canRetry: boolean;
+}
+
+export interface CreativeAppSummary {
+  id: string;
+  source: CreativeAppSource;
+  runtime: CreativeAppRuntime;
+  title: string;
+  description?: string;
+  icon?: string;
+  version: string;
+  state: CreativeAppState;
+  openUrl?: string;
+  repositoryUrl?: string;
+  lastError?: string;
+  actions: CreativeAppActions;
+}
+
+export interface CreativeAppDeleteOptions {
+  removeVolumes?: boolean;
+  removeImages?: boolean;
+}
+
+export interface CreativeAppDeleteResult {
+  ok: boolean;
+  warnings: string[];
+}
+
+export type CreativeAppOpenTarget =
+  | { kind: 'workshop_module'; moduleId: string }
+  | { kind: 'local_url'; url: string; appId: string };
+
+export interface CreativeAppInspectRequest {
+  repositoryUrl: string;
+  token?: string | null;
+  saveToken?: boolean;
+  oneClick?: boolean;
+  releaseTag?: string | null;
+}
+
+export interface CreativeAppInstallRequest {
+  repositoryUrl: string;
+  releaseTag: string;
+  releaseId?: number | null;
+  candidateId: string;
+  token?: string | null;
+  hostPort?: number | null;
+  openPath?: string | null;
+  healthPath?: string | null;
+  service?: string | null;
+  env?: Array<{ key: string; value: string }>;
+  confirmBindMounts?: boolean;
+}
+
+export interface CreativeAppEnvRequirement {
+  key: string;
+  required: boolean;
+  secret: boolean;
+}
+
+export interface CreativeAppInstallCandidate {
+  id: string;
+  runtime: CreativeAppRuntime;
+  confidence: number;
+  title: string;
+  description: string;
+  primaryAsset: string;
+  service?: string | null;
+  image?: string | null;
+  suggestedHostPort?: number | null;
+  containerPort?: number | null;
+  openPath: string;
+  healthPath?: string | null;
+  envRequirements: CreativeAppEnvRequirement[];
+  riskSummary: string[];
+  hardBlockers: string[];
+  requiresManual: boolean;
+}
+
+export interface CreativeAppReleaseTagInfo {
+  tag: string;
+  releaseId: number;
+  isPrerelease: boolean;
+}
+
+export interface CreativeAppInspectResult {
+  repositoryUrl: string;
+  owner: string;
+  repo: string;
+  releaseTag: string;
+  releaseId?: number | null;
+  isPrerelease: boolean;
+  candidates: CreativeAppInstallCandidate[];
+  oneClickEligible: boolean;
+  oneClickCandidateId?: string | null;
+  warnings: string[];
+  blockers: string[];
+  availableTags: CreativeAppReleaseTagInfo[];
+}
+
+export interface CreativeAppGithubTokenStatus {
+  configured: boolean;
+  masked?: string | null;
+}
+
+export interface CreativeAppDockerStatus {
+  available: boolean;
+  version?: string | null;
+  composeAvailable: boolean;
+  composeVersion?: string | null;
+  error?: string | null;
+}
+
+export interface CreativeAppBrowserBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type CreativeAppProgressStage =
+  | 'inspecting_release'
+  | 'downloading_assets'
+  | 'pulling_image'
+  | 'creating'
+  | 'starting'
+  | 'health_check'
+  | 'ready'
+  | 'failed';
+
+export interface CreativeAppProgressEvent {
+  appId: string;
+  stage: CreativeAppProgressStage;
+  message: string;
+}
+
 // --- Types matching the Electron preload contract ---
 
 // Provider domain types
@@ -229,6 +388,31 @@ export interface NativesAPI {
       permissions: string[],
     ) => Promise<WriteGeneratedModuleResult>;
     rollback: (params: { moduleId: string; oldContent: string }) => Promise<void>;
+  };
+  /** Dual-source Personal Creations (internal workshop + external GitHub container). */
+  creativeApp: {
+    list: () => Promise<CreativeAppSummary[]>;
+    start: (id: string) => Promise<CreativeAppSummary>;
+    stop: (id: string) => Promise<CreativeAppSummary>;
+    delete: (id: string, options?: CreativeAppDeleteOptions) => Promise<CreativeAppDeleteResult>;
+    getOpenTarget: (id: string) => Promise<CreativeAppOpenTarget>;
+    inspectGithub: (request: CreativeAppInspectRequest) => Promise<CreativeAppInspectResult>;
+    installGithub: (request: CreativeAppInstallRequest) => Promise<CreativeAppSummary>;
+    logs: (id: string, tail?: number) => Promise<string>;
+    reconcile: () => Promise<number>;
+    githubTokenStatus: () => Promise<CreativeAppGithubTokenStatus>;
+    githubTokenSet: (token: string) => Promise<CreativeAppGithubTokenStatus>;
+    githubTokenClear: () => Promise<CreativeAppGithubTokenStatus>;
+    dockerStatus: () => Promise<CreativeAppDockerStatus>;
+    browserShow: (appId: string, url: string, bounds: CreativeAppBrowserBounds) => Promise<void>;
+    browserSetBounds: (bounds: CreativeAppBrowserBounds) => Promise<void>;
+    browserBack: () => Promise<void>;
+    browserForward: () => Promise<void>;
+    browserReload: () => Promise<void>;
+    browserHide: () => Promise<void>;
+    browserClose: () => Promise<void>;
+    browserCurrent: () => Promise<{ appId?: string | null; url?: string | null }>;
+    onProgress: (callback: (event: CreativeAppProgressEvent) => void) => () => void;
   };
   env: {
     getVariables: (profileId: string) => Promise<unknown>;
@@ -688,6 +872,49 @@ const nativesAPI: NativesAPI = {
       }),
     rollback: (params: { moduleId: string; oldContent: string }) =>
       cmd('rollback_module', params),
+  },
+
+  // Creative App (dual-source)
+  creativeApp: {
+    list: () => cmd<CreativeAppSummary[]>('creative_app_list'),
+    start: (id: string) => cmd<CreativeAppSummary>('creative_app_start', { id }),
+    stop: (id: string) => cmd<CreativeAppSummary>('creative_app_stop', { id }),
+    delete: (id: string, options?: CreativeAppDeleteOptions) =>
+      cmd<CreativeAppDeleteResult>('creative_app_delete', { id, options }),
+    getOpenTarget: (id: string) =>
+      cmd<CreativeAppOpenTarget>('creative_app_get_open_target', { id }),
+    inspectGithub: (request: CreativeAppInspectRequest) =>
+      cmd<CreativeAppInspectResult>('creative_app_inspect_github', { request }),
+    installGithub: (request: CreativeAppInstallRequest) =>
+      cmd<CreativeAppSummary>('creative_app_install_github', { request }),
+    logs: (id: string, tail?: number) => cmd<string>('creative_app_logs', { id, tail }),
+    reconcile: () => cmd<number>('creative_app_reconcile'),
+    githubTokenStatus: () =>
+      cmd<CreativeAppGithubTokenStatus>('creative_app_github_token_status'),
+    githubTokenSet: (token: string) =>
+      cmd<CreativeAppGithubTokenStatus>('creative_app_github_token_set', { token }),
+    githubTokenClear: () =>
+      cmd<CreativeAppGithubTokenStatus>('creative_app_github_token_clear'),
+    dockerStatus: () => cmd<CreativeAppDockerStatus>('creative_app_docker_status'),
+    browserShow: (appId: string, url: string, bounds: CreativeAppBrowserBounds) =>
+      cmd('creative_app_browser_show', { appId, url, bounds }),
+    browserSetBounds: (bounds: CreativeAppBrowserBounds) =>
+      cmd('creative_app_browser_set_bounds', { bounds }),
+    browserBack: () => cmd('creative_app_browser_back'),
+    browserForward: () => cmd('creative_app_browser_forward'),
+    browserReload: () => cmd('creative_app_browser_reload'),
+    browserHide: () => cmd('creative_app_browser_hide'),
+    browserClose: () => cmd('creative_app_browser_close'),
+    browserCurrent: () =>
+      cmd<{ appId?: string | null; url?: string | null }>('creative_app_browser_current'),
+    onProgress: (callback) => {
+      const unlisten = listen<CreativeAppProgressEvent>('creative-app-progress', (event) => {
+        callback(event.payload);
+      });
+      return () => {
+        unlisten.then((fn) => fn());
+      };
+    },
   },
 
   // Environment
