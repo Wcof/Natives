@@ -8,7 +8,6 @@
 //! Do not advertise Codex as executable based on binary detection alone.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use assistant_protocol::v2::RunEventKind;

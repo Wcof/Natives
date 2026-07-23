@@ -2330,6 +2330,7 @@ fn tool_pattern(name: &str, input: &Value) -> String {
     }
 }
 
+#[allow(dead_code)]
 fn persist_tool_grant_db(grant: &ToolGrant) -> Result<(), String> {
     // Prefer assistant.db path used by daemon stores.
     let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
@@ -2372,6 +2373,7 @@ fn persist_tool_grant_db(grant: &ToolGrant) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn load_tool_grant_match(
     conversation_id: &str,
     run_id: &str,
@@ -3764,6 +3766,7 @@ fn lookup_model_context_window(provider_id: &str, model_id: &str) -> Option<u64>
     .map(|w| w as u64)
 }
 
+#[allow(dead_code)]
 fn parent_conversation_recently_active(conversation_id: &str, within_secs: i64) -> bool {
     let Ok(store) = (|| -> Result<crate::storage::DataStore, String> {
         #[cfg(test)]
