@@ -9,7 +9,6 @@ use crate::doom_loop::DoomLoopDetector;
 use crate::event_seq::EventSequencer;
 use crate::hooks::{HookDecision, HookEvent, HookRegistry, HookRequest};
 use crate::run_state::transition;
-use assistant_protocol::v1::run::RunStatus;
 use assistant_protocol::v2::{RunEventKind, RunStatusV2};
 use futures_util::{Stream, StreamExt};
 use serde_json::{json, Value};
@@ -301,8 +300,13 @@ impl AgentEngine {
         tools: &dyn EngineToolRuntime,
     ) -> Result<RunStatusV2, EngineError> {
         let run_id = &config.run_id;
-        let mut status = RunStatus::Queued;
-        status = self.transition_emit(run_id, status, RunStatus::Preparing, RunEventKind::Preparing)?;
+        let mut status = RunStatusV2::Queued;
+        status = self.transition_emit(
+            run_id,
+            status,
+            RunStatusV2::Preparing,
+            RunEventKind::Preparing,
+        )?;
         let _ = self
             .hooks
             .dispatch(HookRequest {
@@ -321,7 +325,8 @@ impl AgentEngine {
                 input: serde_json::json!({ "content": config.user_content }),
             })
             .await;
-        status = self.transition_emit(run_id, status, RunStatus::Running, RunEventKind::Started)?;
+        status =
+            self.transition_emit(run_id, status, RunStatusV2::Running, RunEventKind::Started)?;
 
         let tool_schemas = tools.list_tool_schemas().await;
         // History is prior turns; always ensure the current user prompt appears
@@ -648,7 +653,7 @@ impl AgentEngine {
 
             if tool_acc.is_empty() {
                 // No tools — complete.
-                let _ = transition(status, RunStatus::Completed);
+                let _ = transition(status, RunStatusV2::Completed);
                 let _ = self
                     .hooks
                     .dispatch(HookRequest {
@@ -1210,10 +1215,10 @@ impl AgentEngine {
     fn transition_emit(
         &self,
         run_id: &str,
-        current: RunStatus,
-        next: RunStatus,
+        current: RunStatusV2,
+        next: RunStatusV2,
         event: RunEventKind,
-    ) -> Result<RunStatus, EngineError> {
+    ) -> Result<RunStatusV2, EngineError> {
         transition(current, next).map_err(|e| EngineError::Message(e.to_string()))?;
         self.events.append(run_id, event);
         Ok(next)
