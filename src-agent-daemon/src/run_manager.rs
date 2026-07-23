@@ -1199,10 +1199,16 @@ impl RunManager {
             let provider = FixtureProvider {
                 mode: FixtureMode::TextOnly,
             };
+            let tool_allowlist = self.runtime.take_run_tool_allowlist(&run.id).await;
             let tools = crate::production::PermissionGatedTools {
                 gateway: {
                     let mut g = capability_gateway::CapabilityGateway::new();
                     g.register_builtins();
+                    if let Some(ref list) = tool_allowlist {
+                        // Restrict fixture gateway surface to allowlist names when present.
+                        // Builtins still registered; PermissionGatedTools enforces allowlist.
+                        let _ = list;
+                    }
                     Arc::new(g)
                 },
                 permissions: self.runtime.permissions.clone(),
@@ -1218,7 +1224,7 @@ impl RunManager {
                 conversation_id: run.conversation_id.clone(),
                 model_id: model_id.clone(),
                 permission_profile: permission_profile.clone(),
-                tool_allowlist: None,
+                tool_allowlist,
             };
             let config = EngineRunConfig {
                 run_id: run.id.clone(),

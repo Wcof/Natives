@@ -47,6 +47,9 @@ pub struct ProductionRuntime {
     pub assignment_waiters: Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<Value>>>>,
     /// Ensure only one assignment interaction is pending per parent conversation.
     pub assignment_inflight: Arc<std::sync::Mutex<HashMap<String, String>>>,
+    /// Per-run tool allowlist registered before RunManager starts a child run.
+    /// `Some(list)` = hard allowlist; entry removed once the run starts.
+    pub run_tool_allowlists: Arc<Mutex<HashMap<String, Vec<String>>>>,
 }
 
 /// Remembered tool approval (once is not stored; this_run/project are).
@@ -257,10 +260,24 @@ impl ProductionRuntime {
             tool_grants: Arc::new(Mutex::new(Vec::new())),
             assignment_waiters: Arc::new(std::sync::Mutex::new(HashMap::new())),
             assignment_inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            run_tool_allowlists: Arc::new(Mutex::new(HashMap::new())),
         };
         // Background reaper: idle subagent sessions.
         spawn_subagent_reaper();
         rt
+    }
+
+    /// Register a hard tool allowlist for a run that will be started via RunManager.
+    /// Consumed once by [`Self::start_run`] / fixture start path.
+    pub async fn set_run_tool_allowlist(&self, run_id: &str, allowlist: Vec<String>) {
+        self.run_tool_allowlists
+            .lock()
+            .await
+            .insert(run_id.to_string(), allowlist);
+    }
+
+    pub async fn take_run_tool_allowlist(&self, run_id: &str) -> Option<Vec<String>> {
+        self.run_tool_allowlists.lock().await.remove(run_id)
     }
 
     /// Register a cancel flag for a CLI-backed run (REQ-T01).
@@ -424,11 +441,13 @@ impl ProductionRuntime {
             provider_id: provider_id.clone(),
             key_id: key_id.clone(),
         };
+        // Child subagent runs may have pre-registered a readonly (or custom) surface.
+        let tool_allowlist = self.take_run_tool_allowlist(&run_id).await;
         let tools = PermissionGatedTools {
             gateway: {
                 let mut g = CapabilityGateway::new();
                 g.set_project_root(project_root.to_string_lossy().to_string());
-                register_tools_for_surface(&mut g, None);
+                register_tools_for_surface(&mut g, tool_allowlist.as_deref());
                 Arc::new(g)
             },
             permissions: self.permissions.clone(),
@@ -445,8 +464,7 @@ impl ProductionRuntime {
             conversation_id: conversation_id.clone(),
             model_id: model_id.clone(),
             permission_profile: permission_profile.clone(),
-            // Parent run: unrestricted tool surface (permission profile still gates).
-            tool_allowlist: None,
+            tool_allowlist,
         };
 
         let assembled = assemble_context(None, Some(&project_root), None);
@@ -2417,7 +2435,6 @@ impl PermissionGatedTools {
             };
         }
         // Credential fields from the model are intentionally ignored (route policy assigns).
-        // Includes key_id: "auto" and any provider_id/model_id the model may invent.
         let _ignored_provider = input.get("provider_id");
         let _ignored_key = input.get("key_id");
         let _ignored_model = input.get("model_id");
@@ -2435,7 +2452,6 @@ impl PermissionGatedTools {
             .unwrap_or("ask");
         let child_perm = cap_child_permission(&self.permission_profile, requested_perm);
         // Explicit tool_allowlist on task input, else default readonly surface.
-        // Empty array remains empty (deny-all) — fail closed.
         let child_allowlist: Vec<String> = if let Some(arr) = input.get("tool_allowlist") {
             arr.as_array()
                 .map(|items| {
@@ -2475,7 +2491,7 @@ impl PermissionGatedTools {
         let child_key = binding.key_id.clone();
         let child_model = binding.model_id.clone();
 
-        // Persist hidden child conversation + subagent_session (real IDs, not sub-*/subagent-*).
+        // Persist hidden child conversation + subagent_session (real IDs).
         let _ = crate::conversation_store::ensure_conversation_stub(
             &self.conversation_id,
             &self.provider_id,
@@ -2500,7 +2516,6 @@ impl PermissionGatedTools {
             ) {
                 Ok(v) => v,
                 Err(e) => {
-                    // Fixture/offline tests may lack a migrated DB — still avoid pseudo sub-* ids.
                     if use_fixture_flag(&input) {
                         let sid = uuid::Uuid::new_v4().to_string();
                         let cid = uuid::Uuid::new_v4().to_string();
@@ -2517,9 +2532,48 @@ impl PermissionGatedTools {
                 }
             };
 
+        // Standard RunManager path: create_run + start_detached (no embedded Engine).
+        let project_path = self.gateway.project_root.clone();
+        let created = match crate::global_run_manager().create_run(
+            assistant_protocol::v2::CreateRunRequest {
+                conversation_id: child_conversation_id.clone(),
+                provider_id: child_provider.clone(),
+                model_id: child_model.clone(),
+                key_id: Some(child_key.clone()),
+                agent_profile_id: None,
+                permission_profile: Some(child_perm.clone()),
+                content: Some(prompt.clone()),
+                attachments: None,
+                max_steps: Some(15),
+                parent_run_id: Some(self.parent_run_id.clone()),
+                project_path: project_path.clone(),
+                idempotency_key: None,
+                effort: None,
+                runtime_id: Some("native".into()),
+            },
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = crate::subagent_store::close_subagent_session(
+                    &session_id,
+                    "failed",
+                    Some(&e),
+                );
+                return ToolExecutionResult {
+                    output: serde_json::json!({"error": format!("create child run failed: {e}")}),
+                    is_error: true,
+                    duration_ms: 0,
+                };
+            }
+        };
+        let child_run_id = created.id.clone();
+
+        // Metadata shares real run_id + persistent session id as task_id.
         let child = match self
             .subagents
-            .spawn(
+            .register(
+                session_id.clone(),
+                child_run_id.clone(),
                 &self.parent_run_id,
                 prompt.clone(),
                 1,
@@ -2530,7 +2584,7 @@ impl PermissionGatedTools {
                 child_allowlist.clone(),
                 None,
                 Some("none".into()),
-                None,
+                project_path.clone(),
             )
             .await
         {
@@ -2548,57 +2602,29 @@ impl PermissionGatedTools {
                 };
             }
         };
-        // Align task_id with persistent session id when possible by re-keying.
-        // SubAgentManager still uses its own id; we expose session_id as task_id.
         let _ = self
             .subagents
             .update_status(&child.id, SubAgentStatus::Running)
             .await;
         let _ = crate::subagent_store::update_subagent_session_status(&session_id, "running", None);
 
+        // Apply child tool surface before RunManager starts the engine.
+        crate::global_run_manager()
+            .runtime
+            .set_run_tool_allowlist(&child_run_id, child_allowlist.clone())
+            .await;
+
         self.events.append(
             &self.parent_run_id,
             RunEventKind::SubagentCreated {
-                sub_run_id: child.run_id.clone(),
+                sub_run_id: child_run_id.clone(),
                 agent_profile_id: None,
                 task: prompt.clone(),
             },
         );
 
-        let task_id = child.id.clone();
-        let mem_task_id = child.id.clone();
-        let child_run_id = child.run_id.clone();
-        let child_run_id_ret = child_run_id.clone();
-        let child_conversation_ret = child_conversation_id.clone();
-        let events = self.events.clone();
-        let subagents = self.subagents.clone();
-        let task_outputs = self.task_outputs.clone();
-        let permissions = self.permissions.clone();
-        let waiters = self.waiters.clone();
-        let parent_run_id = self.parent_run_id.clone();
-        let task_id_bg = task_id.clone();
-        let mem_task_id_bg = mem_task_id.clone();
-        let session_id_bg = session_id.clone();
-        let session_id_ret = session_id.clone();
-        let child_conversation_bg = child_conversation_id.clone();
-        let child_provider_id = child.provider_id.clone();
-        let child_key_id = child.key_id.clone();
-        let child_model_id = child.model_id.clone();
-        let child_perm_profile = child.permission_profile.clone();
-        let child_provider_bg = child_provider.clone();
-        let child_key_bg = child_key;
-        let child_model_bg = child_model;
-        let child_perm_bg = child_perm;
-        let child_allowlist_bg = child_allowlist;
-        let prompt_bg = prompt;
-        let project_root = self.gateway.project_root.clone();
-        let engines = self.engines.clone();
-        let child_provider_for_tools = child_provider_id.clone();
-        let policy_for_failover = crate::subagent_store::get_route_policy(&self.conversation_id)
-            .ok()
-            .flatten();
-
-        task_outputs.lock().await.insert(
+        let task_id = session_id.clone();
+        self.task_outputs.lock().await.insert(
             task_id.clone(),
             TaskRecord {
                 run_id: child_run_id.clone(),
@@ -2606,204 +2632,134 @@ impl PermissionGatedTools {
                 output: None,
             },
         );
-        // Also index by persistent session id for subagent.list / kill by session.
-        if session_id != task_id {
-            task_outputs.lock().await.insert(
-                session_id.clone(),
-                TaskRecord {
-                    run_id: child_run_id.clone(),
-                    status: "running".into(),
-                    output: None,
-                },
+
+        let start_result = crate::run_manager::RunManager::start_detached_global(
+            assistant_protocol::v2::StartRunRequest {
+                run_id: Some(child_run_id.clone()),
+                conversation_id: Some(child_conversation_id.clone()),
+                provider_id: Some(child_provider.clone()),
+                model_id: Some(child_model.clone()),
+                key_id: Some(child_key.clone()),
+                content: Some(prompt.clone()),
+                attachments: None,
+                trigger_message_id: None,
+                permission_profile: Some(child_perm.clone()),
+                max_steps: Some(15),
+                project_path: project_path.clone(),
+                idempotency_key: None,
+                effort: None,
+                runtime_id: Some("native".into()),
+            },
+        );
+        if let Err(e) = start_result {
+            let _ = crate::subagent_store::close_subagent_session(
+                &session_id,
+                "failed",
+                Some(&e),
             );
+            if let Some(rec) = self.task_outputs.lock().await.get_mut(&task_id) {
+                rec.status = "failed".into();
+                rec.output = Some(e.clone());
+            }
+            return ToolExecutionResult {
+                output: serde_json::json!({"error": format!("start child run failed: {e}")}),
+                is_error: true,
+                duration_ms: 0,
+            };
         }
 
-        let use_fixture = input
-            .get("fixture")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-            || std::env::var("NATIVES_DAEMON_FIXTURE")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false);
-
+        // Background watcher: when RunManager marks the run terminal, update session/task.
+        let session_id_bg = session_id.clone();
+        let task_id_bg = task_id.clone();
+        let child_run_id_bg = child_run_id.clone();
+        let parent_run_id = self.parent_run_id.clone();
+        let events = self.events.clone();
+        let subagents = self.subagents.clone();
+        let task_outputs = self.task_outputs.clone();
+        let mem_task_id_bg = child.id.clone();
         tokio::spawn(async move {
-            let tools = PermissionGatedTools {
-                gateway: {
-                    let mut g = CapabilityGateway::new();
-                    if let Some(root) = project_root {
-                        g.set_project_root(root);
-                    }
-                    register_tools_for_surface(&mut g, Some(&child_allowlist_bg));
-                    Arc::new(g)
-                },
-                permissions,
-                events: events.clone(),
-                waiters,
-                subagents: subagents.clone(),
-                task_outputs: task_outputs.clone(),
-                engines: engines.clone(),
-                runtime: None,
-                provider_id: child_provider_for_tools,
-                key_id: None,
-                parent_run_id: child_run_id.clone(),
-                // Real child conversation id (not pseudo sub-*).
-                conversation_id: child_conversation_bg.clone(),
-                model_id: child_model_bg.clone(),
-                permission_profile: child_perm_bg,
-                tool_allowlist: Some(child_allowlist_bg),
-            };
-            let hooks = build_production_hooks();
-            let engine = Arc::new(
-                AgentEngine::new(events.clone())
-                    .with_hooks(hooks)
-                    .with_session_harness(crate::prompt_queue_store::global_harness()),
-            );
-            engines
-                .lock()
-                .await
-                .insert(child_run_id.clone(), engine.clone());
-
-            let mut attempted = vec![crate::subagent_store::RouteBinding {
-                provider_id: child_provider_bg.clone(),
-                key_id: child_key_bg.clone(),
-                model_id: child_model_bg.clone(),
-            }];
-            let mut active_provider = child_provider_bg;
-            let mut active_key = child_key_bg;
-            let mut active_model = child_model_bg.clone();
-
-            let (status, output) = loop {
-                let config = EngineRunConfig {
-                    run_id: child_run_id.clone(),
-                    conversation_id: child_conversation_bg.clone(),
-                    model: active_model.clone(),
-                    system_prompt: Some(
-                        "Independent subagent. Do not assume parent permissions.".into(),
-                    ),
-                    messages: Vec::new(),
-                    user_content: prompt_bg.clone(),
-                    max_steps: 15,
+            for _ in 0..3_600 {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                let Some(run) = crate::global_run_manager().get_run(&child_run_id_bg) else {
+                    continue;
                 };
-                let result = if use_fixture {
-                    let provider = FixtureProvider {
-                        mode: FixtureMode::TextOnly,
-                    };
-                    engine.run(config, &provider, &tools).await
-                } else {
-                    let provider = RealProvider {
-                        provider_id: active_provider.clone(),
-                        key_id: Some(active_key.clone()),
-                    };
-                    engine.run(config, &provider, &tools).await
-                };
-                match result {
-                    Ok(s) => {
-                        let text = events
-                            .replay_after(&child_run_id, 0)
-                            .into_iter()
-                            .filter_map(|e| match e.payload {
-                                RunEventKind::TextDelta { text } => Some(text),
-                                _ => None,
-                            })
-                            .collect::<String>();
-                        break (s.as_str().to_string(), Some(text));
-                    }
-                    Err(e) => {
-                        let err = e.to_string();
-                        if crate::subagent_store::is_failover_eligible_error(&err) {
-                            if let Some(ref policy) = policy_for_failover {
-                                match crate::subagent_store::pick_binding(policy, &attempted) {
-                                    Ok(next) => {
-                                        attempted.push(next.clone());
-                                        let _ = crate::subagent_store::update_session_binding(
-                                            &session_id_bg,
-                                            &next,
-                                            &attempted,
-                                        );
-                                        active_provider = next.provider_id;
-                                        active_key = next.key_id;
-                                        active_model = next.model_id;
-                                        let _ = crate::subagent_store::touch_subagent_session(
-                                            &session_id_bg,
-                                        );
-                                        continue;
-                                    }
-                                    Err(_) => {
-                                        break (
-                                            "failed".into(),
-                                            Some(format!(
-                                                "route binding pool exhausted: {err}"
-                                            )),
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        break ("failed".into(), Some(err));
-                    }
+                let status = run.status.as_str().to_string();
+                if !run.status.is_terminal() {
+                    continue;
                 }
-            };
-
-            engines.lock().await.remove(&child_run_id);
-            if status == "completed" {
-                let _ = subagents
-                    .update_status(&mem_task_id_bg, SubAgentStatus::Completed)
-                    .await;
-                let _ = crate::subagent_store::update_subagent_session_status(
-                    &session_id_bg,
-                    "completed",
-                    None,
-                );
-                events.append(
-                    &parent_run_id,
-                    RunEventKind::SubagentCompleted {
-                        sub_run_id: child_run_id.clone(),
-                        result: output.clone().unwrap_or_default(),
-                    },
-                );
-            } else {
-                let err_msg = output.clone().unwrap_or_else(|| status.clone());
-                let _ = subagents
-                    .update_status(
-                        &mem_task_id_bg,
-                        SubAgentStatus::Failed(err_msg.clone()),
-                    )
-                    .await;
-                let _ = crate::subagent_store::close_subagent_session(
-                    &session_id_bg,
-                    "failed",
-                    Some(&err_msg),
-                );
-                events.append(
-                    &parent_run_id,
-                    RunEventKind::SubagentFailed {
-                        sub_run_id: child_run_id.clone(),
-                        error: err_msg,
-                    },
-                );
-            }
-            let rec = TaskRecord {
-                run_id: child_run_id,
-                status,
-                output,
-            };
-            task_outputs.lock().await.insert(task_id_bg, rec.clone());
-            if session_id_bg != mem_task_id_bg {
-                task_outputs.lock().await.insert(session_id_bg, rec);
+                let text = events
+                    .replay_after(&child_run_id_bg, 0)
+                    .into_iter()
+                    .filter_map(|e| match e.payload {
+                        RunEventKind::TextDelta { text } => Some(text),
+                        _ => None,
+                    })
+                    .collect::<String>();
+                if status == "completed" {
+                    let _ = subagents
+                        .update_status(&mem_task_id_bg, SubAgentStatus::Completed)
+                        .await;
+                    let _ = crate::subagent_store::update_subagent_session_status(
+                        &session_id_bg,
+                        "completed",
+                        None,
+                    );
+                    events.append(
+                        &parent_run_id,
+                        RunEventKind::SubagentCompleted {
+                            sub_run_id: child_run_id_bg.clone(),
+                            result: text.clone(),
+                        },
+                    );
+                } else {
+                    let err_msg = run
+                        .error_code
+                        .clone()
+                        .unwrap_or_else(|| status.clone());
+                    let _ = subagents
+                        .update_status(
+                            &mem_task_id_bg,
+                            SubAgentStatus::Failed(err_msg.clone()),
+                        )
+                        .await;
+                    let _ = crate::subagent_store::close_subagent_session(
+                        &session_id_bg,
+                        if status == "cancelled" || status == "interrupted" {
+                            "cancelled"
+                        } else {
+                            "failed"
+                        },
+                        Some(&err_msg),
+                    );
+                    events.append(
+                        &parent_run_id,
+                        RunEventKind::SubagentFailed {
+                            sub_run_id: child_run_id_bg.clone(),
+                            error: err_msg,
+                        },
+                    );
+                }
+                let rec = TaskRecord {
+                    run_id: child_run_id_bg.clone(),
+                    status,
+                    output: if text.is_empty() { None } else { Some(text) },
+                };
+                task_outputs.lock().await.insert(task_id_bg, rec);
+                break;
             }
         });
 
         ToolExecutionResult {
             output: serde_json::json!({
                 "task_id": task_id,
-                "run_id": child_run_id_ret,
-                "conversation_id": child_conversation_ret,
-                "session_id": session_id_ret,
+                "run_id": child_run_id,
+                "conversation_id": child_conversation_id,
+                "session_id": session_id,
                 "status": "running",
-                "provider_id": child_provider_id,
-                "key_id": child_key_id,
-                "model_id": child_model_id,
-                "permission_profile": child_perm_profile,
+                "provider_id": child_provider,
+                "key_id": child_key,
+                "model_id": child_model,
+                "permission_profile": child_perm,
             }),
             is_error: false,
             duration_ms: 0,

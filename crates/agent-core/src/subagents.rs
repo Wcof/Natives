@@ -109,8 +109,48 @@ impl SubAgentManager {
 
     /// Spawn a new sub-agent with independent provider/key/model identity.
     /// Does **not** inherit parent key or permission profile.
+    ///
+    /// Generates new `id` / `run_id`. Prefer [`register`] when the child run is
+    /// created by RunManager so metadata shares the real run id.
     pub async fn spawn(
         &self,
+        parent_run_id: &str,
+        task: String,
+        depth: u32,
+        provider_id: String,
+        key_id: String,
+        model_id: String,
+        permission_profile: String,
+        tool_allowlist: Vec<String>,
+        agent_profile_id: Option<String>,
+        isolation_mode: Option<String>,
+        working_directory: Option<String>,
+    ) -> Result<SubAgent, String> {
+        self.register(
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+            parent_run_id,
+            task,
+            depth,
+            provider_id,
+            key_id,
+            model_id,
+            permission_profile,
+            tool_allowlist,
+            agent_profile_id,
+            isolation_mode,
+            working_directory,
+        )
+        .await
+    }
+
+    /// Register a sub-agent whose `run_id` was already allocated by RunManager.
+    ///
+    /// `id` is typically the persistent `subagent_session` id (also used as task_id).
+    pub async fn register(
+        &self,
+        id: String,
+        run_id: String,
         parent_run_id: &str,
         task: String,
         depth: u32,
@@ -127,6 +167,9 @@ impl SubAgentManager {
             return Err(
                 "Subagent requires independent provider_id + key_id + model_id".into(),
             );
+        }
+        if id.trim().is_empty() || run_id.trim().is_empty() {
+            return Err("Subagent register requires non-empty id and run_id".into());
         }
         // Check depth limit
         if depth > self.config.max_depth {
@@ -146,8 +189,6 @@ impl SubAgentManager {
             ));
         }
 
-        let id = uuid::Uuid::new_v4().to_string();
-        let run_id = uuid::Uuid::new_v4().to_string();
         let sub = SubAgent {
             id: id.clone(),
             run_id,
