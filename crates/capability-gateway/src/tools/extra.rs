@@ -601,16 +601,14 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
         },
         Tool {
             name: "task",
-            description: "Spawn a subagent task with independent identity",
+            description: "Spawn a subagent task. Credentials are assigned by the host route policy — do not pass provider/key/model ids.",
             schema: serde_json::json!({
                 "type":"object",
                 "properties":{
                     "prompt":{"type":"string","description":"Task prompt for the subagent"},
                     "task":{"type":"string","description":"Alias for prompt"},
-                    "provider_id":{"type":"string","description":"Provider id for the child run"},
-                    "key_id":{"type":"string","description":"Credential key id (required for independent identity)"},
-                    "model_id":{"type":"string","description":"Model id for the child run"},
-                    "permission_profile":{"type":"string","description":"ask | full_access"}
+                    "name":{"type":"string","description":"Optional short label for the subagent"},
+                    "permission_profile":{"type":"string","description":"ask | full_access (capped by parent)"}
                 },
                 "required":["prompt"]
             }),

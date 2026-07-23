@@ -9,7 +9,7 @@ use std::path::PathBuf;
 pub async fn request(method: &str, params: Value) -> Result<Value, String> {
     match method {
         names::CONVERSATION_CREATE => create(params),
-        names::CONVERSATION_LIST => list(),
+        names::CONVERSATION_LIST => list(params),
         names::CONVERSATION_GET => get(params),
         names::CONVERSATION_FORK => fork(params),
         names::CONVERSATION_GET_MESSAGES => get_messages(params),
@@ -21,6 +21,11 @@ pub async fn request(method: &str, params: Value) -> Result<Value, String> {
         names::CONVERSATION_DELETE => delete(params).await,
         _ => Err(format!("unsupported conversation method: {method}")),
     }
+}
+
+/// Public wrapper for internal message append (used by subagent_store).
+pub fn append_message_public(params: Value) -> Result<Value, String> {
+    append_message(params)
 }
 
 fn store() -> Result<DataStore, String> {
@@ -77,18 +82,31 @@ fn row_to_conversation(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         "created_at": row.get::<_, String>(7)?,
         "updated_at": row.get::<_, String>(8)?,
         "archived_at": row.get::<_, Option<String>>(9)?,
+        "parent_conversation_id": row.get::<_, Option<String>>(10)?,
     }))
 }
 
-fn list() -> Result<Value, String> {
+/// List conversations. Default hides child (subagent) conversations
+/// (`parent_conversation_id IS NULL`). Pass `include_children: true` to include them.
+fn list(params: Value) -> Result<Value, String> {
+    let include_children = params
+        .get("include_children")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let store = store()?;
     let conn = store.conn()?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, mode, project_id, title, provider_id, model_id, permission_profile_id, created_at, updated_at, archived_at
-             FROM conversation ORDER BY updated_at DESC",
-        )
-        .map_err(|e| e.to_string())?;
+    let sql = if include_children {
+        "SELECT id, mode, project_id, title, provider_id, model_id, permission_profile_id,
+                created_at, updated_at, archived_at, parent_conversation_id
+         FROM conversation ORDER BY updated_at DESC"
+    } else {
+        "SELECT id, mode, project_id, title, provider_id, model_id, permission_profile_id,
+                created_at, updated_at, archived_at, parent_conversation_id
+         FROM conversation
+         WHERE parent_conversation_id IS NULL
+         ORDER BY updated_at DESC"
+    };
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], row_to_conversation)
         .map_err(|e| e.to_string())?;
@@ -100,7 +118,8 @@ fn get(params: Value) -> Result<Value, String> {
     let store = store()?;
     let conn = store.conn()?;
     conn.query_row(
-        "SELECT id, mode, project_id, title, provider_id, model_id, permission_profile_id, created_at, updated_at, archived_at
+        "SELECT id, mode, project_id, title, provider_id, model_id, permission_profile_id,
+                created_at, updated_at, archived_at, parent_conversation_id
          FROM conversation WHERE id = ?1",
         params![id],
         row_to_conversation,
@@ -713,6 +732,7 @@ fn archive(params: Value) -> Result<Value, String> {
 
 async fn delete(params: Value) -> Result<Value, String> {
     let id = id_param(&params)?;
+    // Cancel active runs on the parent conversation.
     for run in crate::global_run_manager()
         .list_runs(Some(id))
         .into_iter()
@@ -722,6 +742,40 @@ async fn delete(params: Value) -> Result<Value, String> {
             .cancel(assistant_protocol::v2::CancelRunRequest { run_id: run.id })
             .await;
     }
+    // Cancel active child subagent runs (runtime) before SQL CASCADE removes rows.
+    if let Ok(sessions) = crate::subagent_store::list_subagent_sessions(Some(id), true) {
+        for sess in sessions {
+            if matches!(sess.status.as_str(), "open" | "running" | "idle") {
+                if let Some(parent_run) = sess.parent_run_id.as_deref() {
+                    // Best-effort: cancel any live engine under known task outputs.
+                    let _ = crate::global_run_manager()
+                        .runtime
+                        .kill_task(&sess.id)
+                        .await;
+                    let _ = crate::global_run_manager()
+                        .runtime
+                        .cancel_run(parent_run)
+                        .await;
+                }
+                let _ = crate::subagent_store::close_subagent_session(
+                    &sess.id,
+                    "cancelled",
+                    Some("parent conversation deleted"),
+                );
+            }
+            // Also cancel runs on the child conversation.
+            for run in crate::global_run_manager()
+                .list_runs(Some(&sess.child_conversation_id))
+                .into_iter()
+                .filter(|run| run.status.is_active())
+            {
+                let _ = crate::global_run_manager()
+                    .cancel(assistant_protocol::v2::CancelRunRequest { run_id: run.id })
+                    .await;
+            }
+        }
+    }
+    // SQL CASCADE removes child conversations / subagent_session / route_policy via FK.
     exec_update("DELETE FROM conversation WHERE id = ?1", params![id])?;
     Ok(serde_json::json!({ "deleted": true }))
 }
@@ -829,7 +883,7 @@ mod tests {
         .await
         .unwrap();
 
-        let list = request(names::CONVERSATION_LIST, Value::Null)
+        let list = request(names::CONVERSATION_LIST, serde_json::json!({}))
             .await
             .unwrap();
         assert_eq!(list[0]["permission_profile_id"], "readonly");
@@ -953,5 +1007,51 @@ mod tests {
         assert_eq!(history[0].role, "system");
         assert!(history[0].content.contains("alpha survives"));
 
+    }
+
+    #[test]
+    fn list_hides_child_conversations_by_default() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join(format!("natives-{}.db", uuid::Uuid::new_v4()));
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        let art = dir.path().join("artifacts");
+        crate::storage::set_test_db_override(Some(db.clone()), Some(art.clone()));
+        let _warm = crate::storage::DataStore::new(&db, &art).expect("migrate");
+
+        ensure_conversation_stub("parent-list", "openai", "gpt-4o", None, None).unwrap();
+        let binding = crate::subagent_store::RouteBinding {
+            provider_id: "openai".into(),
+            key_id: "k1".into(),
+            model_id: "gpt-4o".into(),
+        };
+        let (_sid, child) = crate::subagent_store::create_hidden_child_session(
+            "parent-list",
+            None,
+            None,
+            "w",
+            "task",
+            &binding,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let listed = list(serde_json::json!({})).unwrap();
+        let arr = listed.as_array().unwrap();
+        assert!(arr.iter().any(|c| c["id"] == "parent-list"));
+        assert!(!arr.iter().any(|c| c["id"] == child));
+
+        let with_children = list(serde_json::json!({ "include_children": true })).unwrap();
+        let arr2 = with_children.as_array().unwrap();
+        assert!(arr2.iter().any(|c| c["id"] == child));
     }
 }

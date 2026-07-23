@@ -14,6 +14,7 @@ pub const ALL: &[(i64, &str)] = &[
     (7, MIGRATION_007),
     (8, MIGRATION_008),
     (9, MIGRATION_009),
+    (10, MIGRATION_010),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -362,4 +363,52 @@ CREATE TABLE IF NOT EXISTS _host_authority_migration (
     detail TEXT,
     applied_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+";
+
+/// Migration 010: hidden subagent conversations + route policy + session registry.
+/// Stores only provider/key/model *IDs* — never plaintext credentials.
+const MIGRATION_010: &str = "
+ALTER TABLE conversation ADD COLUMN parent_conversation_id TEXT
+    REFERENCES conversation(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_conversation_parent
+    ON conversation(parent_conversation_id);
+
+CREATE TABLE IF NOT EXISTS subagent_route_policy (
+    parent_conversation_id TEXT PRIMARY KEY
+        REFERENCES conversation(id) ON DELETE CASCADE,
+    mode TEXT NOT NULL DEFAULT 'default' CHECK(mode IN ('default', 'random', 'custom')),
+    bindings_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS subagent_session (
+    id TEXT PRIMARY KEY,
+    parent_conversation_id TEXT NOT NULL
+        REFERENCES conversation(id) ON DELETE CASCADE,
+    child_conversation_id TEXT NOT NULL
+        REFERENCES conversation(id) ON DELETE CASCADE,
+    parent_run_id TEXT,
+    task_call_id TEXT,
+    name TEXT NOT NULL DEFAULT '',
+    task TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN (
+        'open', 'running', 'idle', 'closed', 'failed', 'cancelled'
+    )),
+    provider_id TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    attempted_bindings_json TEXT NOT NULL DEFAULT '[]',
+    last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
+    closed_at TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_subagent_session_parent
+    ON subagent_session(parent_conversation_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_subagent_session_parent_run
+    ON subagent_session(parent_run_id);
+CREATE INDEX IF NOT EXISTS idx_subagent_session_activity
+    ON subagent_session(status, last_activity_at);
 ";

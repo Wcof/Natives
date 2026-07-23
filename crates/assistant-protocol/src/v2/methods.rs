@@ -47,6 +47,8 @@ pub const ALL_METHODS: &[&str] = &[
     "tool.list",
     "agent.list",
     "subagent.list",
+    "subagent.touch",
+    "subagent.switchRoute",
     "extension.list",
     "extension.enable",
     "skill.list",
@@ -147,6 +149,9 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "task.wait",
     "interaction.listPending",
     "interaction.respond",
+    "subagent.list",
+    "subagent.touch",
+    "subagent.switchRoute",
 ];
 
 /// Methods the Tauri host still owns after Phase 0 cutover.
@@ -212,6 +217,8 @@ pub mod names {
     pub const CONVERSATION_GET_CONTEXT_USAGE: &str = "conversation.getContextUsage";
     pub const AGENT_LIST: &str = "agent.list";
     pub const SUBAGENT_LIST: &str = "subagent.list";
+    pub const SUBAGENT_TOUCH: &str = "subagent.touch";
+    pub const SUBAGENT_SWITCH_ROUTE: &str = "subagent.switchRoute";
     pub const EXTENSION_LIST: &str = "extension.list";
     pub const EXTENSION_ENABLE: &str = "extension.enable";
     pub const SKILL_LIST: &str = "skill.list";

@@ -10,7 +10,6 @@ use assistant_protocol::v2::RunEventKind;
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use uuid::Uuid;
 
 fn store() -> Result<DataStore, String> {
     #[cfg(test)]
@@ -212,26 +211,27 @@ pub async fn respond(params: Value) -> Result<Value, String> {
     let now = chrono::Utc::now().to_rfc3339();
 
     let store = store()?;
-    let (run_id, kind) = {
+    let (run_id, conversation_id, kind) = {
         let conn = store.conn()?;
 
         // Load current row (for run_id / kind) before update.
-        let existing: Option<(Option<String>, String, String)> = conn
+        let existing: Option<(Option<String>, Option<String>, String, String)> = conn
             .query_row(
-                "SELECT run_id, kind, status FROM interaction WHERE id = ?1",
+                "SELECT run_id, conversation_id, kind, status FROM interaction WHERE id = ?1",
                 params![id],
                 |row| {
                     Ok((
                         row.get::<_, Option<String>>(0)?,
-                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(1)?,
                         row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
                     ))
                 },
             )
             .optional()
             .map_err(|e| e.to_string())?;
 
-        let Some((run_id, kind, status)) = existing else {
+        let Some((run_id, conversation_id, kind, status)) = existing else {
             return Err(format!("interaction not found: {id}"));
         };
         if status != "pending" {
@@ -249,7 +249,7 @@ pub async fn respond(params: Value) -> Result<Value, String> {
         if changed == 0 {
             return Err(format!("interaction not pending: {id}"));
         }
-        (run_id, kind)
+        (run_id, conversation_id, kind)
     }; // drop MutexGuard before any .await
 
     // Emit InteractionResponded on the run bus when we know the run.
@@ -277,6 +277,34 @@ pub async fn respond(params: Value) -> Result<Value, String> {
             .await;
     }
 
+    // subagent_assignment: wake batch waiters (NOT permission.respond).
+    if kind == "subagent_assignment" {
+        let _ = crate::production::wake_assignment_waiter(&id, response.clone());
+        // Persist route policy when bindings are present.
+        let cid = response
+            .get("conversation_id")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string())
+            .or(conversation_id.clone());
+        if let Some(cid) = cid {
+            if let Some(bindings) = response.get("bindings") {
+                if let Ok(list) =
+                    serde_json::from_value::<Vec<crate::subagent_store::RouteBinding>>(
+                        bindings.clone(),
+                    )
+                {
+                    if !list.is_empty() {
+                        let mode = response
+                            .get("mode")
+                            .and_then(Value::as_str)
+                            .unwrap_or("default");
+                        let _ = crate::subagent_store::upsert_route_policy(&cid, mode, &list);
+                    }
+                }
+            }
+        }
+    }
+
     Ok(json!({
         "ok": true,
         "id": id,
@@ -301,6 +329,7 @@ pub async fn request(method: &str, params: Value) -> Result<Value, String> {
 mod tests {
     use super::*;
     use crate::conversation_store;
+    use uuid::Uuid;
 
     fn env_lock() -> crate::storage::EnvTestGuard {
         crate::storage::DataStore::env_test_lock()

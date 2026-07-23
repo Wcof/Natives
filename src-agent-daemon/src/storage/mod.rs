@@ -469,7 +469,7 @@ mod tests {
                 )
                 .unwrap();
             assert!(
-                daemon_version >= 9,
+                daemon_version >= 10,
                 "daemon migrations should record in _daemon_schema_version, got {daemon_version}"
             );
 
@@ -552,6 +552,8 @@ mod tests {
             "model_cache",
             "extension",
             "extension_permission",
+            "subagent_route_policy",
+            "subagent_session",
         ];
         for table in &required_tables {
             let count: i32 = conn

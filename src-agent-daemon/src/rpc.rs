@@ -953,6 +953,37 @@ async fn handle_rpc(
                 }
             }
         }
+        names::SUBAGENT_LIST | names::SUBAGENT_TOUCH | names::SUBAGENT_SWITCH_ROUTE => {
+            match crate::subagent_store::request(&request.method, request.params.clone()).await {
+                Ok(value) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        value,
+                    )
+                    .await
+                }
+                Err(e) => {
+                    let code = if e.contains("not found") {
+                        error_codes::NOT_FOUND
+                    } else {
+                        error_codes::INVALID_INPUT
+                    };
+                    let category = if e.contains("not found") {
+                        ErrorCategory::NotFound
+                    } else {
+                        ErrorCategory::Validation
+                    };
+                    send_error(
+                        writer,
+                        &DaemonError::new(code, category, false, e),
+                    )
+                    .await
+                }
+            }
+        }
         names::TOOL_LIST => {
             let mut gateway = capability_gateway::CapabilityGateway::new();
             gateway.register_builtins();
