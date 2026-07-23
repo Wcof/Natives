@@ -1658,7 +1658,23 @@ impl EngineToolRuntime for PermissionGatedTools {
         // Stable id for tool_output_delta correlation (engine also emits its own
         // tool_call_* ids; UI merges by tool_call_id when present on deltas).
         let stream_tool_call_id = uuid::Uuid::new_v4().to_string();
-        match self.gateway.execute(name, input).await {
+
+        // Create tool call context
+        let project_root = self
+            .gateway
+            .project_root
+            .as_ref()
+            .map(|s| std::path::PathBuf::from(s))
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+        let tool_context = capability_gateway::ToolCallContext::new(
+            project_root,
+            self.parent_run_id.clone(),
+            self.conversation_id.clone(),
+            stream_tool_call_id.clone(),
+            self.permission_profile.clone(),
+        );
+
+        match self.gateway.execute(name, input, &tool_context).await {
             Ok(out) => {
                 if name == "run_terminal" {
                     emit_terminal_output_deltas(

@@ -20,7 +20,92 @@ pub use process_supervisor::{
 };
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
+
+/// Context passed to tool handlers during execution.
+#[derive(Debug, Clone)]
+pub struct ToolCallContext {
+    /// The project root directory (canonical, absolute).
+    pub project_root: PathBuf,
+    /// The current working directory for the tool call.
+    pub working_dir: PathBuf,
+    /// The run ID for this execution.
+    pub run_id: String,
+    /// The conversation ID.
+    pub conversation_id: String,
+    /// The tool call ID (from provider).
+    pub tool_call_id: String,
+    /// Permission profile for this run.
+    pub permission_profile: String,
+}
+
+impl ToolCallContext {
+    /// Create a new context with required fields.
+    pub fn new(
+        project_root: PathBuf,
+        run_id: String,
+        conversation_id: String,
+        tool_call_id: String,
+        permission_profile: String,
+    ) -> Self {
+        let working_dir = project_root.clone();
+        Self {
+            project_root,
+            working_dir,
+            run_id,
+            conversation_id,
+            tool_call_id,
+            permission_profile,
+        }
+    }
+
+    /// Resolve a path relative to working_dir, then validate it's within project_root.
+    pub fn resolve_path(&self, input_path: &str) -> Result<PathBuf, ToolError> {
+        use std::path::Path;
+        let path = Path::new(input_path);
+        let resolved = if path.is_relative() {
+            self.working_dir.join(path)
+        } else {
+            path.to_path_buf()
+        };
+        // Canonicalize if exists, otherwise check parent
+        let canonical = if resolved.exists() {
+            resolved.canonicalize().map_err(|e| ToolError {
+                code: "PATH_ERROR".into(),
+                message: format!("Failed to canonicalize path: {e}"),
+                retryable: false,
+            })?
+        } else {
+            // For new files, canonicalize parent and append filename
+            let parent = resolved.parent().unwrap_or(Path::new("."));
+            let file_name = resolved.file_name().ok_or_else(|| ToolError {
+                code: "PATH_ERROR".into(),
+                message: "Invalid path: no filename".into(),
+                retryable: false,
+            })?;
+            let canonical_parent = parent.canonicalize().map_err(|e| ToolError {
+                code: "PATH_ERROR".into(),
+                message: format!("Failed to canonicalize parent path: {e}"),
+                retryable: false,
+            })?;
+            canonical_parent.join(file_name)
+        };
+        // Verify within project root
+        if !canonical.starts_with(&self.project_root) {
+            return Err(ToolError {
+                code: "PATH_ESCAPE".into(),
+                message: format!(
+                    "Path {} escapes project root {}",
+                    canonical.display(),
+                    self.project_root.display()
+                ),
+                retryable: false,
+            });
+        }
+        Ok(canonical)
+    }
+}
 
 /// A registered tool.
 pub struct Tool {
@@ -71,7 +156,11 @@ pub enum PathScope {
 /// Tool handler trait.
 #[async_trait::async_trait]
 pub trait ToolHandler: Send + Sync {
-    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError>;
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError>;
 }
 
 /// Tool output.
@@ -141,6 +230,7 @@ impl CapabilityGateway {
         &self,
         name: &str,
         input: serde_json::Value,
+        context: &ToolCallContext,
     ) -> Result<ToolOutput, ToolError> {
         let tool = self.get_tool(name).ok_or_else(|| ToolError {
             code: "unknown_tool".into(),
@@ -151,7 +241,7 @@ impl CapabilityGateway {
         self.enforce_input_policy(tool, &input)?;
 
         let timeout = std::time::Duration::from_millis(tool.timeout_ms.max(1));
-        let result = tokio::time::timeout(timeout, tool.handler.execute(input))
+        let result = tokio::time::timeout(timeout, tool.handler.execute(input, context))
             .await
             .map_err(|_| ToolError {
                 code: "timeout".into(),

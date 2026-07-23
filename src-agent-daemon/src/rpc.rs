@@ -1512,8 +1512,22 @@ async fn handle_rpc(
                 .params
                 .get("conversation_id")
                 .and_then(|v| v.as_str());
-            let mut tasks = Vec::new();
+
+            // Get tasks from database (persistent)
+            let mut tasks = match crate::task_store::list_all_tasks() {
+                Ok(db_tasks) => db_tasks,
+                Err(e) => {
+                    eprintln!("Failed to list tasks from DB: {e}");
+                    Vec::new()
+                }
+            };
+
+            // Also get in-memory tasks (for running tasks not yet persisted)
             for (task_id, rec) in run_manager().runtime.list_tasks().await {
+                // Skip if already in DB results
+                if tasks.iter().any(|t| t["id"].as_str() == Some(&task_id)) {
+                    continue;
+                }
                 if let Some(want) = filter_run_id {
                     if rec.run_id != want {
                         continue;
@@ -1537,6 +1551,24 @@ async fn handle_rpc(
                     "kind": "subagent",
                 }));
             }
+
+            // Apply filters to DB results
+            if filter_run_id.is_some() || filter_conversation_id.is_some() {
+                tasks.retain(|t| {
+                    if let Some(want) = filter_run_id {
+                        if t["run_id"].as_str() != Some(want) {
+                            return false;
+                        }
+                    }
+                    if let Some(want) = filter_conversation_id {
+                        if t["conversation_id"].as_str() != Some(want) {
+                            return false;
+                        }
+                    }
+                    true
+                });
+            }
+
             send_success(
                 writer,
                 &request.request_id,

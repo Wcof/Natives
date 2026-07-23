@@ -1,7 +1,7 @@
 //! Additional built-in tools required by the Native engine plan.
 
 use super::apply_patch_parser::{parse_patch_input, PatchOp};
-use crate::{PermissionClass, PathScope, SideEffect, Tool, ToolError, ToolHandler, ToolOutput};
+use crate::{PermissionClass, PathScope, SideEffect, Tool, ToolError, ToolHandler, ToolOutput, ToolCallContext};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -9,14 +9,13 @@ use std::sync::Arc;
 pub struct ApplyPatchTool;
 #[async_trait::async_trait]
 impl ToolHandler for ApplyPatchTool {
-    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError> {
         let ops = parse_patch_input(&input)?;
-        let root = input
-            .get("project_root")
-            .or_else(|| input.get("cwd"))
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let root = context.project_root.clone();
 
         // Resolve all paths first; capture before-images for rollback.
         let mut planned: Vec<Planned> = Vec::new();
@@ -241,7 +240,11 @@ async fn rollback_planned(p: &Planned) -> Result<(), ToolError> {
 pub struct MemoryTool;
 #[async_trait::async_trait]
 impl ToolHandler for MemoryTool {
-    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError> {
         let op = input.get("op").and_then(|v| v.as_str()).unwrap_or("get");
         let start = std::time::Instant::now();
         match op {
@@ -410,20 +413,33 @@ mod memory_tool_tests {
         let dir = std::env::temp_dir().join(format!("gw-mem-{}", uuid::Uuid::new_v4()));
         std::env::set_var("NATIVES_RUNTIME_DIR", &dir);
         let tool = MemoryTool;
+        let context = ToolCallContext::new(
+            std::path::PathBuf::from("/tmp"),
+            "run-test".into(),
+            "conv-test".into(),
+            "tc-test".into(),
+            "ask".into(),
+        );
         let put = tool
-            .execute(serde_json::json!({
-                "op": "put",
-                "key": "deploy",
-                "text": "deploy token rotated weekly"
-            }))
+            .execute(
+                serde_json::json!({
+                    "op": "put",
+                    "key": "deploy",
+                    "text": "deploy token rotated weekly"
+                }),
+                &context,
+            )
             .await
             .unwrap();
         assert_eq!(put.result["ok"], true);
         let search = tool
-            .execute(serde_json::json!({
-                "op": "search",
-                "query": "deploy token"
-            }))
+            .execute(
+                serde_json::json!({
+                    "op": "search",
+                    "query": "deploy token"
+                }),
+                &context,
+            )
             .await
             .unwrap();
         let matches = search.result["matches"].as_array().unwrap();
@@ -439,7 +455,11 @@ mod memory_tool_tests {
 pub struct TaskTool;
 #[async_trait::async_trait]
 impl ToolHandler for TaskTool {
-    async fn execute(&self, _input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError> {
         Err(ToolError {
             code: "orchestrator_required".into(),
             message: "task requires Agent Daemon PermissionGatedTools (real SubAgent child run)"
@@ -452,7 +472,11 @@ impl ToolHandler for TaskTool {
 pub struct TaskOutputTool;
 #[async_trait::async_trait]
 impl ToolHandler for TaskOutputTool {
-    async fn execute(&self, _input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError> {
         Err(ToolError {
             code: "orchestrator_required".into(),
             message: "task_output requires Agent Daemon PermissionGatedTools".into(),
@@ -464,7 +488,11 @@ impl ToolHandler for TaskOutputTool {
 pub struct KillTaskTool;
 #[async_trait::async_trait]
 impl ToolHandler for KillTaskTool {
-    async fn execute(&self, _input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(
+        &self,
+        _input: serde_json::Value,
+        _context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError> {
         Err(ToolError {
             code: "orchestrator_required".into(),
             message: "kill_task requires Agent Daemon PermissionGatedTools".into(),
@@ -476,7 +504,11 @@ impl ToolHandler for KillTaskTool {
 pub struct NotificationTool;
 #[async_trait::async_trait]
 impl ToolHandler for NotificationTool {
-    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError> {
         Ok(ToolOutput {
             result: serde_json::json!({
                 "delivered": true,
@@ -491,7 +523,11 @@ impl ToolHandler for NotificationTool {
 pub struct SkillTool;
 #[async_trait::async_trait]
 impl ToolHandler for SkillTool {
-    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError> {
         Ok(ToolOutput {
             result: serde_json::json!({
                 "skill": input.get("name"),
@@ -507,7 +543,11 @@ impl ToolHandler for SkillTool {
 pub struct McpCallTool;
 #[async_trait::async_trait]
 impl ToolHandler for McpCallTool {
-    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError> {
         Ok(ToolOutput {
             result: serde_json::json!({
                 "server": input.get("server"),

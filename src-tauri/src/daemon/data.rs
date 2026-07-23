@@ -84,6 +84,7 @@ impl DataStore {
                 for (column, definition) in [
                     ("parent_run_id", "TEXT REFERENCES assistant_runs(id) ON DELETE CASCADE"),
                     ("subagent_definition_id", "TEXT"),
+                    ("effort", "TEXT"),
                 ] {
                     let exists = conn
                         .prepare("PRAGMA table_info(assistant_runs)")
@@ -148,6 +149,7 @@ impl DataStore {
                 (11, MIGRATION_011),
                 (12, MIGRATION_012),
                 (13, MIGRATION_013),
+                (14, MIGRATION_014),
             ];
 
             for (version, sql) in migrations {
@@ -1141,6 +1143,11 @@ CREATE INDEX IF NOT EXISTS idx_conversations_updated ON assistant_conversations(
 PRAGMA foreign_keys=ON;
 ";
 
+/// v14: Soft-delete support for assistant_projects (logical delete, keep sessions).
+const MIGRATION_014: &str = "
+ALTER TABLE assistant_projects ADD COLUMN deleted_at TEXT;
+";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1197,7 +1204,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
     }
 
     #[test]

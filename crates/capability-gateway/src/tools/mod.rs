@@ -7,15 +7,19 @@ mod ssrf;
 pub use apply_patch_parser::{parse_patch_input, PatchOp};
 pub use ssrf::validate_fetch_url;
 
-use crate::{Tool, SideEffect, PermissionClass, PathScope, ToolHandler, ToolOutput, ToolError};
+use crate::{Tool, SideEffect, PermissionClass, PathScope, ToolHandler, ToolOutput, ToolError, ToolCallContext};
 use std::sync::Arc;
 
 /// Read a file from the filesystem (offset/limit, binary-safe metadata).
 pub struct ReadFileTool;
 #[async_trait::async_trait]
 impl ToolHandler for ReadFileTool {
-    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
-        let path = input
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let path_str = input
             .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError {
@@ -23,6 +27,7 @@ impl ToolHandler for ReadFileTool {
                 message: "Missing 'path' field".into(),
                 retryable: false,
             })?;
+        let path = context.resolve_path(path_str)?;
         let offset = input
             .get("offset")
             .and_then(|v| v.as_u64())
@@ -36,7 +41,7 @@ impl ToolHandler for ReadFileTool {
             .and_then(|v| v.as_u64())
             .unwrap_or(200_000) as usize;
 
-        let meta = tokio::fs::metadata(path).await.map_err(|e| ToolError {
+        let meta = tokio::fs::metadata(&path).await.map_err(|e| ToolError {
             code: "read_error".into(),
             message: e.to_string(),
             retryable: true,
@@ -44,7 +49,7 @@ impl ToolHandler for ReadFileTool {
         let size = meta.len();
 
         // Sample head for binary detection
-        let mut file = tokio::fs::File::open(path).await.map_err(|e| ToolError {
+        let mut file = tokio::fs::File::open(&path).await.map_err(|e| ToolError {
             code: "read_error".into(),
             message: e.to_string(),
             retryable: true,
@@ -61,7 +66,7 @@ impl ToolHandler for ReadFileTool {
         if is_binary {
             return Ok(ToolOutput {
                 result: serde_json::json!({
-                    "path": path,
+                    "path": path.to_string_lossy(),
                     "binary": true,
                     "size": size,
                     "content": null,
@@ -72,7 +77,7 @@ impl ToolHandler for ReadFileTool {
             });
         }
 
-        let full = tokio::fs::read_to_string(path).await.map_err(|e| ToolError {
+        let full = tokio::fs::read_to_string(&path).await.map_err(|e| ToolError {
             code: "read_error".into(),
             message: e.to_string(),
             retryable: true,
@@ -91,7 +96,7 @@ impl ToolHandler for ReadFileTool {
         }
         Ok(ToolOutput {
             result: serde_json::json!({
-                "path": path,
+                "path": path.to_string_lossy(),
                 "binary": false,
                 "size": size,
                 "total_lines": total_lines,
@@ -110,7 +115,11 @@ impl ToolHandler for ReadFileTool {
 pub struct SearchFilesTool;
 #[async_trait::async_trait]
 impl ToolHandler for SearchFilesTool {
-    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError> {
         let pattern = input.get("pattern")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError {
@@ -140,7 +149,11 @@ impl ToolHandler for SearchFilesTool {
 pub struct WriteFileTool;
 #[async_trait::async_trait]
 impl ToolHandler for WriteFileTool {
-    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError> {
         let path = input.get("path").and_then(|v| v.as_str())
             .ok_or_else(|| ToolError { code: "invalid_input".into(), message: "Missing 'path'".into(), retryable: false })?;
         let content = input.get("content").and_then(|v| v.as_str())
@@ -155,7 +168,11 @@ impl ToolHandler for WriteFileTool {
 pub struct ListDirTool;
 #[async_trait::async_trait]
 impl ToolHandler for ListDirTool {
-    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError> {
         let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
         let limit = input
             .get("limit")
@@ -223,7 +240,11 @@ impl ToolHandler for ListDirTool {
 pub struct GrepTool;
 #[async_trait::async_trait]
 impl ToolHandler for GrepTool {
-    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError> {
         let pattern = input
             .get("pattern")
             .and_then(|v| v.as_str())
@@ -361,7 +382,11 @@ async fn try_ripgrep_json(
 pub struct EditFileTool;
 #[async_trait::async_trait]
 impl ToolHandler for EditFileTool {
-    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError> {
         let path = input.get("path").and_then(|v| v.as_str()).ok_or_else(|| ToolError {
             code: "invalid_input".into(),
             message: "Missing path".into(),
@@ -412,7 +437,11 @@ impl ToolHandler for EditFileTool {
 pub struct RunTerminalTool;
 #[async_trait::async_trait]
 impl ToolHandler for RunTerminalTool {
-    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError> {
         let command = input
             .get("command")
             .and_then(|v| v.as_str())
@@ -640,7 +669,11 @@ fn terminal_result(
 pub struct WebFetchTool;
 #[async_trait::async_trait]
 impl ToolHandler for WebFetchTool {
-    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError> {
         let url = input
             .get("url")
             .and_then(|v| v.as_str())
@@ -714,7 +747,11 @@ impl ToolHandler for WebFetchTool {
 pub struct TodoWriteTool;
 #[async_trait::async_trait]
 impl ToolHandler for TodoWriteTool {
-    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, ToolError> {
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolCallContext,
+    ) -> Result<ToolOutput, ToolError> {
         Ok(ToolOutput {
             result: serde_json::json!({ "ok": true, "todos": input.get("todos").cloned().unwrap_or(serde_json::json!([])) }),
             truncated: false,

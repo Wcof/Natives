@@ -5,7 +5,7 @@
 
 use capability_gateway::policy::*;
 use capability_gateway::tools::builtin_tools;
-use capability_gateway::{CapabilityGateway, PathScope};
+use capability_gateway::{CapabilityGateway, PathScope, ToolCallContext};
 
 #[test]
 fn test_traversal_escape_fails() {
@@ -17,14 +17,21 @@ fn test_traversal_escape_fails() {
 async fn gateway_execute_denies_traversal_and_etc() {
     let mut gateway = CapabilityGateway::new().with_project_root("/tmp/safe-project");
     gateway.register_builtins();
+    let context = ToolCallContext::new(
+        std::path::PathBuf::from("/tmp/safe-project"),
+        "run-test".into(),
+        "conv-test".into(),
+        "tc-test".into(),
+        "ask".into(),
+    );
     let err = gateway
-        .execute("read_file", serde_json::json!({"path": "../etc/passwd"}))
+        .execute("read_file", serde_json::json!({"path": "../etc/passwd"}), &context)
         .await
         .unwrap_err();
     assert_eq!(err.code, "path_traversal");
 
     let err2 = gateway
-        .execute("read_file", serde_json::json!({"path": "/etc/passwd"}))
+        .execute("read_file", serde_json::json!({"path": "/etc/passwd"}), &context)
         .await
         .unwrap_err();
     assert!(

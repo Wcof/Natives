@@ -24,6 +24,7 @@ pub mod session_harness;
 pub mod checkpoint;
 pub mod prompt_queue_store;
 pub mod interaction_store;
+pub mod task_store;
 
 pub use run_manager::*;
 pub use production::*;
