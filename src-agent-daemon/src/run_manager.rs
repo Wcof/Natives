@@ -1793,21 +1793,24 @@ impl RunLifecycleAuthority for RunManager {
                     |row| row.get(0),
                 )
                 .map_err(|e| CommitError::Storage(e.to_string()))?;
-            let event = RunEventV2::new(run_id, next_seq as u64, lifecycle.clone());
+            let mut event = RunEventV2::new(run_id, next_seq as u64, lifecycle.clone());
             let payload = serde_json::to_string(&event)
                 .map_err(|e| CommitError::Storage(e.to_string()))?;
             tx.execute(
-                "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp, event_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 rusqlite::params![
                     run_id,
                     next_seq,
                     event.payload.type_name(),
                     payload,
                     event.timestamp.to_rfc3339(),
+                    event.event_id,
                 ],
             )
             .map_err(|e| CommitError::Storage(e.to_string()))?;
+            let global = tx.last_insert_rowid() as u64;
+            event.global_sequence = global;
             tx.commit()
                 .map_err(|e| CommitError::Storage(e.to_string()))?;
             event
@@ -2926,7 +2929,7 @@ mod tests {
                 .map(|e| {
                     serde_json::json!({
                         "run_id": e.run_id,
-                        "sequence": e.sequence,
+                        "sequence": e.effective_run_sequence(),
                         "type": e.payload.type_name(),
                     })
                 })
@@ -3484,7 +3487,7 @@ mod tests {
                 .iter()
                 .map(|e| {
                     serde_json::json!({
-                        "sequence": e.sequence,
+                        "sequence": e.effective_run_sequence(),
                         "type": e.payload.type_name(),
                     })
                 })

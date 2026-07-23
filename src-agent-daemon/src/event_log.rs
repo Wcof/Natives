@@ -64,23 +64,42 @@ impl EventLog {
         self.append(&event.run_id, &event_type, &payload)
     }
 
-    /// Append a Protocol v2 event with the already assigned sequence.
-    pub fn append_event_v2(&self, event: &RunEventV2) -> Result<(), String> {
+    /// Append a Protocol v2 event. `run_sequence` must be set; DB assigns `global_sequence`.
+    /// Duplicate `event_id` is idempotent (returns existing global id, no second broadcast).
+    pub fn append_event_v2(&self, event: &RunEventV2) -> Result<u64, String> {
+        let event_id = if event.event_id.trim().is_empty() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            event.event_id.clone()
+        };
         let conn = self.data_store.conn()?;
-        let payload =
-            serde_json::to_string(event).map_err(|e| format!("Failed to serialize event: {e}"))?;
+        if let Ok(existing) = conn.query_row(
+            "SELECT id FROM run_event WHERE event_id = ?1 LIMIT 1",
+            params![&event_id],
+            |row| row.get::<_, i64>(0),
+        ) {
+            return Ok(existing as u64);
+        }
+        let mut stored = event.clone();
+        stored.event_id = event_id.clone();
+        let run_seq = stored.effective_run_sequence();
+        stored.set_run_sequence(run_seq);
+        let payload = serde_json::to_string(&stored)
+            .map_err(|e| format!("Failed to serialize event: {e}"))?;
         conn.execute(
-            "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp, event_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
-                event.run_id,
-                event.sequence as i64,
-                event.payload.type_name(),
+                stored.run_id,
+                run_seq as i64,
+                stored.payload.type_name(),
                 payload,
-                event.timestamp.to_rfc3339()
+                stored.timestamp.to_rfc3339(),
+                event_id,
             ],
         )
         .map_err(|e| format!("PERSISTENCE_FAILED insert run_event: {e}"))?;
+        let global = conn.last_insert_rowid() as u64;
 
         // Project usage totals so the dashboard can read Natives usage without
         // an external CLI (native-first design).
@@ -150,7 +169,7 @@ impl EventLog {
                 params![date, model, input, output],
             );
         }
-        Ok(())
+        Ok(global)
     }
 
     /// Replay events for a run starting after the given sequence number.
@@ -253,7 +272,7 @@ impl EventLog {
         let conn = self.data_store.conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT sequence, event_type, payload, timestamp
+                "SELECT id, sequence, event_type, payload, timestamp, COALESCE(event_id, '')
                  FROM run_event
                  WHERE run_id = ?1 AND sequence > ?2
                  ORDER BY sequence ASC",
@@ -269,25 +288,86 @@ impl EventLog {
             .next()
             .map_err(|e| format!("Failed to read row: {e}"))?
         {
-            let sequence: i64 = row
+            let global_sequence: i64 = row
                 .get(0)
+                .map_err(|e| format!("Failed to get global_sequence: {e}"))?;
+            let sequence: i64 = row
+                .get(1)
                 .map_err(|e| format!("Failed to get sequence: {e}"))?;
             let event_type: String = row
-                .get(1)
+                .get(2)
                 .map_err(|e| format!("Failed to get event_type: {e}"))?;
             let payload_str: String = row
-                .get(2)
+                .get(3)
                 .map_err(|e| format!("Failed to get payload: {e}"))?;
             let timestamp: String = row
-                .get(3)
+                .get(4)
                 .map_err(|e| format!("Failed to get timestamp: {e}"))?;
-            events.push(decode_event_v2(
+            let event_id: String = row
+                .get(5)
+                .map_err(|e| format!("Failed to get event_id: {e}"))?;
+            let mut event = decode_event_v2(
                 run_id,
                 sequence as u64,
                 &event_type,
                 &payload_str,
                 &timestamp,
-            )?);
+            )?;
+            event.global_sequence = global_sequence as u64;
+            if !event_id.is_empty() {
+                event.event_id = event_id;
+            } else if event.event_id.is_empty() {
+                event.event_id = format!("legacy:{run_id}:{sequence}");
+            }
+            events.push(event);
+        }
+        Ok(events)
+    }
+
+    /// Global audit replay: events with global_sequence > after, paginated.
+    pub fn replay_global_after(
+        &self,
+        after_global: u64,
+        limit: usize,
+    ) -> Result<Vec<RunEventV2>, String> {
+        let limit = limit.clamp(1, 500);
+        let conn = self.data_store.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, run_id, sequence, event_type, payload, timestamp, COALESCE(event_id, '')
+                 FROM run_event
+                 WHERE id > ?1
+                 ORDER BY id ASC
+                 LIMIT ?2",
+            )
+            .map_err(|e| format!("Failed to prepare global replay: {e}"))?;
+        let mut rows = stmt
+            .query(params![after_global as i64, limit as i64])
+            .map_err(|e| format!("Failed to query global replay: {e}"))?;
+        let mut events = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .map_err(|e| format!("Failed to read row: {e}"))?
+        {
+            let global_sequence: i64 = row.get(0).map_err(|e| e.to_string())?;
+            let run_id: String = row.get(1).map_err(|e| e.to_string())?;
+            let sequence: i64 = row.get(2).map_err(|e| e.to_string())?;
+            let event_type: String = row.get(3).map_err(|e| e.to_string())?;
+            let payload_str: String = row.get(4).map_err(|e| e.to_string())?;
+            let timestamp: String = row.get(5).map_err(|e| e.to_string())?;
+            let event_id: String = row.get(6).map_err(|e| e.to_string())?;
+            let mut event = decode_event_v2(
+                &run_id,
+                sequence as u64,
+                &event_type,
+                &payload_str,
+                &timestamp,
+            )?;
+            event.global_sequence = global_sequence as u64;
+            if !event_id.is_empty() {
+                event.event_id = event_id;
+            }
+            events.push(event);
         }
         Ok(events)
     }
@@ -303,7 +383,7 @@ impl EventLog {
 
 impl EventPersistence for EventLog {
     fn append(&self, event: &RunEventV2) -> Result<(), String> {
-        self.append_event_v2(event)
+        self.append_event_v2(event).map(|_| ())
     }
 
     fn replay_after(&self, run_id: &str, after_sequence: u64) -> Result<Vec<RunEventV2>, String> {
@@ -351,7 +431,7 @@ fn decode_event_v2(
 ) -> Result<RunEventV2, String> {
     if let Ok(mut event) = serde_json::from_str::<RunEventV2>(payload_str) {
         event.run_id = run_id.to_string();
-        event.sequence = sequence;
+        event.set_run_sequence(sequence);
         return Ok(event);
     }
     let payload = decode_payload_v2(event_type, payload_str)?;
@@ -363,7 +443,10 @@ fn decode_event_v2(
         })
         .unwrap_or_else(|_| chrono::Utc::now());
     Ok(RunEventV2 {
+        event_id: format!("legacy:{run_id}:{sequence}"),
+        global_sequence: 0,
         run_id: run_id.to_string(),
+        run_sequence: sequence,
         sequence,
         timestamp: dt,
         payload,
@@ -576,7 +659,7 @@ mod tests {
         let (log, run_id) = setup_event_log();
         let event = RunEvent {
             run_id: run_id.clone(),
-            sequence: 0, // Will be overwritten
+sequence: 0, // Will be overwritten
             timestamp: chrono::Utc::now(),
             payload: RunEventPayload::TextDelta {
                 text: "Hello, world!".to_string(),
@@ -598,8 +681,11 @@ mod tests {
         use assistant_protocol::v2::{RunEventKind, RunEventV2};
         let (log, run_id) = setup_event_log();
         let event = RunEventV2 {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            global_sequence: 0,
+            run_sequence: 0,
             run_id: run_id.clone(),
-            sequence: 1,
+sequence: 1,
             timestamp: chrono::Utc::now(),
             payload: RunEventKind::UsageUpdated {
                 input_tokens: 10,

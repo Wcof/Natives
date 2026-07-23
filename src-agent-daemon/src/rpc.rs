@@ -830,11 +830,11 @@ async fn handle_rpc(
                         break;
                     }
                     match tokio::time::timeout(left, rx.recv()).await {
-                        Ok(Ok(ev)) if ev.sequence > after => {
+                        Ok(Ok(ev)) if ev.effective_run_sequence() > after => {
                             events.push(ev);
                             // Drain a small batch without extra waits.
                             while let Ok(more) = rx.try_recv() {
-                                if more.sequence > after {
+                                if more.effective_run_sequence() > after {
                                     events.push(more);
                                 }
                             }

@@ -92,7 +92,7 @@ impl EventSequencer {
         if let Some(persistence) = &self.persistence {
             if let Ok(loaded) = persistence.replay_after(run_id, 0) {
                 if !loaded.is_empty() {
-                    let max_seq = loaded.iter().map(|ev| ev.sequence).max().unwrap_or(0);
+                    let max_seq = loaded.iter().map(|ev| ev.effective_run_sequence()).max().unwrap_or(0);
                     inner.sequences.insert(run_id.to_string(), max_seq);
                     inner.events.insert(run_id.to_string(), loaded);
                     return;
@@ -119,7 +119,7 @@ impl EventSequencer {
                 continue;
             }
             if let Ok(ev) = serde_json::from_str::<RunEventV2>(line) {
-                max_seq = max_seq.max(ev.sequence);
+                max_seq = max_seq.max(ev.effective_run_sequence());
                 loaded.push(ev);
             }
         }
@@ -195,7 +195,7 @@ impl EventSequencer {
     pub fn inject_committed(&self, event: RunEventV2) {
         let mut inner = self.inner.lock().expect("event sequencer lock");
         self.ensure_loaded(&mut inner, &event.run_id);
-        let seq = event.sequence;
+        let seq = event.effective_run_sequence();
         let entry = inner
             .sequences
             .entry(event.run_id.clone())
@@ -204,11 +204,11 @@ impl EventSequencer {
             *entry = seq;
         }
         let events = inner.events.entry(event.run_id.clone()).or_default();
-        if events.iter().any(|e| e.sequence == seq) {
+        if events.iter().any(|e| e.effective_run_sequence() == seq) {
             return;
         }
         events.push(event.clone());
-        events.sort_by_key(|e| e.sequence);
+        events.sort_by_key(|e| e.effective_run_sequence());
         let sender = inner
             .buses
             .entry(event.run_id.clone())
@@ -225,7 +225,7 @@ impl EventSequencer {
             .map(|events| {
                 events
                     .iter()
-                    .filter(|e| e.sequence > after_sequence)
+                    .filter(|e| e.effective_run_sequence() > after_sequence)
                     .cloned()
                     .collect()
             })
@@ -379,7 +379,7 @@ mod tests {
         let mut rx = log.subscribe(&run_id);
         let event = log.append(&run_id, RunEventKind::Started);
 
-        assert_eq!(event.sequence, 1);
+        assert_eq!(event.effective_run_sequence(), 1);
         assert!(matches!(
             event.payload,
             RunEventKind::Failed { ref code, .. } if code == "PERSISTENCE_FAILED"

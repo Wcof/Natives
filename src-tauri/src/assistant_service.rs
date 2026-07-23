@@ -472,7 +472,7 @@ fn mirror_daemon_events_to_host(run_id: &str, events: &[assistant_protocol::v2::
              VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![
                 run_id,
-                event.sequence as i64,
+                event.effective_run_sequence() as i64,
                 event.timestamp.to_rfc3339(),
                 event.payload.type_name(),
                 payload
@@ -728,7 +728,7 @@ async fn project_run_until_terminal(host_run_id: String, daemon_run_id: String, 
         let effective_id = run.id.clone();
         if let Ok(events) = daemon_authority::replay_events(&effective_id, last_seq).await {
             if !events.is_empty() {
-                if let Some(max) = events.iter().map(|e| e.sequence).max() {
+                if let Some(max) = events.iter().map(|e| e.effective_run_sequence()).max() {
                     last_seq = max;
                 }
                 mirror_daemon_events_to_host(&host_run_id, &events);
@@ -2364,7 +2364,7 @@ async fn handle_run_subscribe(_data_store: &Arc<DataStore>, params: &Value) -> R
                         .map(|e| {
                             serde_json::json!({
                                 "run_id": e.run_id,
-                                "sequence": e.sequence,
+                                "sequence": e.effective_run_sequence(),
                                 "timestamp": e.timestamp.to_rfc3339(),
                                 "type": e.payload.type_name(),
                                 "payload": e.payload,
@@ -2474,7 +2474,7 @@ async fn handle_run_get_events(data_store: &Arc<DataStore>, params: &Value) -> R
                 .map(|e| {
                     serde_json::json!({
                         "run_id": e.run_id,
-                        "sequence": e.sequence,
+                        "sequence": e.effective_run_sequence(),
                         "timestamp": e.timestamp.to_rfc3339(),
                         "type": e.payload.type_name(),
                         "payload": e.payload,

@@ -18,6 +18,7 @@ pub const ALL: &[(i64, &str)] = &[
     (11, MIGRATION_011),
     (12, MIGRATION_012),
     (13, MIGRATION_013),
+    (14, MIGRATION_014),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -507,4 +508,17 @@ CREATE INDEX IF NOT EXISTS idx_session_actor_updated
 /// Cancelling/Cancelled/other terminals.
 const MIGRATION_013: &str = "
 ALTER TABLE run ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+";
+
+/// Migration 014: Event identity + dual sequences (task-08).
+///
+/// - `event_id` stable UUID/ULID idempotency key
+/// - `run_event.id` remains `global_sequence` (AUTOINCREMENT)
+/// - existing `sequence` column is the per-run sequence (`run_sequence` on wire)
+const MIGRATION_014: &str = "
+ALTER TABLE run_event ADD COLUMN event_id TEXT;
+UPDATE run_event
+   SET event_id = 'legacy:' || run_id || ':' || sequence
+ WHERE event_id IS NULL OR event_id = '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_run_event_event_id ON run_event(event_id);
 ";

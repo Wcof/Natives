@@ -6,17 +6,48 @@ use serde::{Deserialize, Serialize};
 /// A single event within a run's execution timeline.
 ///
 /// Rules:
-/// - Each run has a strictly increasing `sequence` starting at 1.
+/// - `event_id` is a stable UUID/ULID idempotency key (`UNIQUE`).
+/// - `global_sequence` is SQLite AUTOINCREMENT (`run_event.id`) — authority-wide.
+/// - `run_sequence` (wire: also accept legacy `sequence`) is per-run, starting at 1.
 /// - Events are persisted before being pushed to subscribers.
 /// - Payloads must never contain API keys, Authorization headers, or full raw
 ///   provider response bodies.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RunEventV2 {
+    /// Stable idempotency key. Empty only for pre-migration synthetic rows.
+    #[serde(default)]
+    pub event_id: String,
+    /// Authority-wide strictly increasing sequence (SQLite `run_event.id`).
+    #[serde(default)]
+    pub global_sequence: u64,
     pub run_id: String,
+    /// Per-run strictly increasing sequence (preferred wire name).
+    #[serde(default)]
+    pub run_sequence: u64,
+    /// Deprecated wire alias of [`Self::run_sequence`]. Still serialized so
+    /// older clients can read `sequence`; new producers should set both equal.
+    #[serde(default)]
     pub sequence: u64,
     pub timestamp: DateTime<Utc>,
     #[serde(flatten)]
     pub payload: RunEventKind,
+}
+
+impl RunEventV2 {
+    /// Effective per-run sequence (prefers `run_sequence`, falls back to legacy `sequence`).
+    pub fn effective_run_sequence(&self) -> u64 {
+        if self.run_sequence > 0 {
+            self.run_sequence
+        } else {
+            self.sequence
+        }
+    }
+
+    /// Keep dual-cursor fields aligned after assignment.
+    pub fn set_run_sequence(&mut self, seq: u64) {
+        self.run_sequence = seq;
+        self.sequence = seq;
+    }
 }
 
 /// Discriminated event payload for Protocol v2.
@@ -249,13 +280,26 @@ impl RunEventKind {
 }
 
 impl RunEventV2 {
-    pub fn new(run_id: impl Into<String>, sequence: u64, payload: RunEventKind) -> Self {
+    pub fn new(run_id: impl Into<String>, run_sequence: u64, payload: RunEventKind) -> Self {
         Self {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            global_sequence: 0,
             run_id: run_id.into(),
-            sequence,
+            run_sequence,
+            sequence: run_sequence,
             timestamp: Utc::now(),
             payload,
         }
+    }
+
+    pub fn with_event_id(mut self, event_id: impl Into<String>) -> Self {
+        self.event_id = event_id.into();
+        self
+    }
+
+    pub fn with_global_sequence(mut self, global_sequence: u64) -> Self {
+        self.global_sequence = global_sequence;
+        self
     }
 }
 
