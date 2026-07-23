@@ -681,6 +681,15 @@ pub fn run() {
             crate::sidecar_supervisor::daemon_supervisor_poll,
             crate::sidecar_supervisor::daemon_supervisor_shutdown,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running natives");
+        .build(tauri::generate_context!())
+        .expect("error while building natives")
+        .run(|_app_handle, event| {
+            // Window CloseRequested is not the only exit path (menu quit, app exit, etc.).
+            match event {
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                    let _ = crate::sidecar_supervisor::global_supervisor().shutdown();
+                }
+                _ => {}
+            }
+        });
 }
