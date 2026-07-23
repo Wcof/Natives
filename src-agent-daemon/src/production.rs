@@ -537,11 +537,17 @@ impl ProductionRuntime {
             max_steps,
         };
 
-        let status = engine
-            .run(config, &provider, &tools)
-            .await
-            .map(|s| s.as_str().to_string())
-            .unwrap_or_else(|_| "failed".into());
+        let outcome = match engine.run(config, &provider, &tools).await {
+            Ok(o) => o,
+            Err(e) => agent_core::EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
+        };
+        // RunManager owns lifecycle status; production only maps outcome for local control flow.
+        let status = match &outcome {
+            agent_core::EngineOutcome::Completed { .. } => "completed".to_string(),
+            agent_core::EngineOutcome::Failed { .. } => "failed".to_string(),
+            agent_core::EngineOutcome::Cancelled => "cancelled".to_string(),
+            agent_core::EngineOutcome::Interrupted { .. } => "interrupted".to_string(),
+        };
         // Finalize checkpoint — failure closes related side effects (no silent half-state).
         if let Err(e) = crate::checkpoint::global_checkpoint_manager().finalize_run(&run_id) {
             eprintln!("[production] checkpoint finalize_run failed: {e}");
@@ -557,6 +563,8 @@ impl ProductionRuntime {
                 &self.events.replay_after(&run_id, 0),
             )?;
         }
+        // Best-effort commit through RunManager (sole status authority).
+        let _ = crate::run_manager::global_run_manager().commit_outcome(&run_id, &outcome);
         self.events.append(
             &run_id,
             if status == "completed" {
@@ -782,7 +790,7 @@ impl ProductionRuntime {
             let result = engine.run(config, &provider, &tools).await;
             engines.lock().await.remove(&child_run_id);
             let (status, output) = match &result {
-                Ok(s) => {
+                Ok(o) => {
                     let text = events
                         .replay_after(&child_run_id, 0)
                         .into_iter()
@@ -791,9 +799,26 @@ impl ProductionRuntime {
                             _ => None,
                         })
                         .collect::<String>();
-                    (s.as_str().to_string(), Some(text))
+                    let status = match o {
+                        agent_core::EngineOutcome::Completed { .. } => "completed".to_string(),
+                        agent_core::EngineOutcome::Failed { .. } => "failed".to_string(),
+                        agent_core::EngineOutcome::Cancelled => "cancelled".to_string(),
+                        agent_core::EngineOutcome::Interrupted { .. } => "interrupted".to_string(),
+                    };
+                    let _ = crate::run_manager::global_run_manager()
+                        .commit_outcome(&child_run_id, o);
+                    (status, Some(text))
                 }
-                Err(e) => ("failed".into(), Some(e.to_string())),
+                Err(e) => {
+                    let outcome = agent_core::EngineOutcome::failed(
+                        e.code(),
+                        e.to_string(),
+                        e.retryable(),
+                    );
+                    let _ = crate::run_manager::global_run_manager()
+                        .commit_outcome(&child_run_id, &outcome);
+                    ("failed".into(), Some(e.to_string()))
+                }
             };
             if status == "completed" {
                 let _ = subagents

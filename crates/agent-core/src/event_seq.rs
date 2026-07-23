@@ -187,6 +187,35 @@ impl EventSequencer {
         event
     }
 
+    /// Inject an already-persisted (or memory-CAS-committed) event into the
+    /// sequencer memory + broadcast without re-persisting.
+    ///
+    /// Used by `RunManager::commit_transition` after the SQLite run+lifecycle
+    /// transaction succeeds. Sequence must be monotonic for the run.
+    pub fn inject_committed(&self, event: RunEventV2) {
+        let mut inner = self.inner.lock().expect("event sequencer lock");
+        self.ensure_loaded(&mut inner, &event.run_id);
+        let seq = event.sequence;
+        let entry = inner
+            .sequences
+            .entry(event.run_id.clone())
+            .or_insert(0);
+        if seq > *entry {
+            *entry = seq;
+        }
+        let events = inner.events.entry(event.run_id.clone()).or_default();
+        if events.iter().any(|e| e.sequence == seq) {
+            return;
+        }
+        events.push(event.clone());
+        events.sort_by_key(|e| e.sequence);
+        let sender = inner
+            .buses
+            .entry(event.run_id.clone())
+            .or_insert_with(|| broadcast::channel(256).0);
+        let _ = sender.send(event);
+    }
+
     pub fn replay_after(&self, run_id: &str, after_sequence: u64) -> Vec<RunEventV2> {
         let mut inner = self.inner.lock().expect("event sequencer lock");
         self.ensure_loaded(&mut inner, run_id);

@@ -17,6 +17,7 @@ pub const ALL: &[(i64, &str)] = &[
     (10, MIGRATION_010),
     (11, MIGRATION_011),
     (12, MIGRATION_012),
+    (13, MIGRATION_013),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -497,4 +498,13 @@ CREATE INDEX IF NOT EXISTS idx_prompt_queue_status
     ON prompt_queue(conversation_id, status, position);
 CREATE INDEX IF NOT EXISTS idx_session_actor_updated
     ON session_actor(updated_at);
+";
+
+/// Migration 013: Run revision for CAS commits (task-02).
+///
+/// Every status transition increments `revision`. `RunManager::commit_transition`
+/// updates with `WHERE id=? AND revision=?` so late outcomes cannot overwrite
+/// Cancelling/Cancelled/other terminals.
+const MIGRATION_013: &str = "
+ALTER TABLE run ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
 ";
