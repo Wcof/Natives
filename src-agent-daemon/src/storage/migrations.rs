@@ -19,6 +19,7 @@ pub const ALL: &[(i64, &str)] = &[
     (12, MIGRATION_012),
     (13, MIGRATION_013),
     (14, MIGRATION_014),
+    (15, MIGRATION_015),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -521,4 +522,27 @@ UPDATE run_event
    SET event_id = 'legacy:' || run_id || ':' || sequence
  WHERE event_id IS NULL OR event_id = '';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_run_event_event_id ON run_event(event_id);
+";
+
+/// Migration 015: Stable ProjectIdentity (task-10).
+///
+/// Paths are attributes. Runs/conversations gain `project_id` UUID column;
+/// `project_path` remains a diagnostic snapshot.
+const MIGRATION_015: &str = "
+CREATE TABLE IF NOT EXISTS project_identity (
+    project_id TEXT PRIMARY KEY,
+    canonical_path TEXT NOT NULL,
+    filesystem_fingerprint TEXT NOT NULL,
+    identity_version INTEGER NOT NULL DEFAULT 1,
+    verified_at INTEGER NOT NULL DEFAULT 0,
+    orphaned INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_identity_path
+    ON project_identity(canonical_path)
+    WHERE orphaned = 0;
+
+ALTER TABLE run ADD COLUMN project_id TEXT;
+ALTER TABLE conversation ADD COLUMN project_identity_id TEXT;
 ";

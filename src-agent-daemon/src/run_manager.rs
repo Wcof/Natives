@@ -373,6 +373,8 @@ impl RunManager {
             effort: None,
             runtime_id: None,
             revision: row.get::<_, i64>(19).unwrap_or(0) as u64,
+            project_id: None,
+            project_identity_version: None,
         }))
     }
 
@@ -757,14 +759,45 @@ impl RunManager {
             }
         }
 
+
+        // Resolve stable ProjectIdentity when a path is provided (task-10).
+        // Never store raw path as conversation.project_id.
+        let mut bound_project_id: Option<String> = None;
+        let mut bound_identity_version: Option<u32> = None;
+        let mut bound_canonical: Option<String> = None;
+        if let Some(pp) = req.project_path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            if let Some(store) = &self.data_store {
+                if let Ok(conn) = store.conn() {
+                    match crate::project_identity::store::register_or_get(&conn, pp) {
+                        Ok(identity) => {
+                            bound_project_id = Some(identity.project_id.clone());
+                            bound_identity_version = Some(identity.identity_version);
+                            bound_canonical = Some(identity.canonical_path.clone());
+                        }
+                        Err(e) => {
+                            // Missing path: keep diagnostic snapshot path, leave project_id
+                            // unbound (orphaned). Side-effect tools must re-bind first.
+                            eprintln!(
+                                "[run_manager] project identity not bound for '{pp}': {e}"
+                            );
+                            bound_canonical = Some(pp.to_string());
+                        }
+                    }
+                }
+            } else {
+                bound_canonical = Some(pp.to_string());
+            }
+        }
+
         // Host-mediated or daemon-owned: ensure conversation row exists for FK integrity
         // on the SAME store used by persist_run_row (never a different env path).
+        // conversation.project_id stores stable ProjectIdentity UUID (not path).
         self.ensure_conversation_for_run(
             &req.conversation_id,
             &req.provider_id,
             &req.model_id,
             req.permission_profile.as_deref(),
-            req.project_path.as_deref(),
+            bound_project_id.as_deref(),
         )?;
 
         // When the UI supplies an idempotency key, use it as the run id so
@@ -790,7 +823,9 @@ impl RunManager {
             error_code: None,
             step_count: 0,
             max_steps: req.max_steps.unwrap_or(50),
-            project_path: req.project_path.clone(),
+            project_path: bound_canonical.clone().or(req.project_path.clone()),
+            project_id: bound_project_id.clone(),
+            project_identity_version: bound_identity_version,
             retry_count: 0,
             created_at: Some(chrono::Utc::now()),
             last_event_sequence: 0,

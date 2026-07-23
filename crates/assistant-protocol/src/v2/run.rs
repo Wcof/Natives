@@ -134,6 +134,12 @@ pub struct RunV2 {
     /// Explicit project root for tools/hooks (never daemon process cwd).
     #[serde(default)]
     pub project_path: Option<String>,
+    /// Stable ProjectIdentity UUID (task-10). Path is not identity.
+    #[serde(default)]
+    pub project_id: Option<String>,
+    /// Identity version observed when the run was created/bound.
+    #[serde(default)]
+    pub project_identity_version: Option<u32>,
     #[serde(default)]
     pub retry_count: u32,
     #[serde(default)]

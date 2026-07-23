@@ -5,6 +5,7 @@
 
 pub mod storage;
 pub mod event_log;
+pub mod project_identity;
 pub mod run_manager;
 pub mod production;
 pub mod cli_runtime_bridge;
