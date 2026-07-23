@@ -339,6 +339,7 @@ pub fn summary_from_local(rec: &LocalCreativeAppRecord) -> CreativeAppSummary {
             package_manager,
             device_id: rec.device_id.clone(),
             device_name: rec.device_name.clone(),
+            auto_open: rec.auto_open,
         }),
         actions: CreativeAppActions::for_state(CreativeAppSource::LocalProject, rec.state),
     }
@@ -435,7 +436,9 @@ mod tests {
         let s = summary_from_local(&got);
         assert_eq!(s.source, CreativeAppSource::LocalProject);
         assert_eq!(s.runtime, CreativeAppRuntime::LocalStatic);
-        assert!(s.local_project.is_some());
+        let lp = s.local_project.expect("local_project projection");
+        assert_eq!(lp.project_root, "/tmp/proj-a");
+        assert!(lp.auto_open);
 
         delete_app(&conn, "loc1").unwrap();
         assert!(get_app(&conn, "loc1").unwrap().is_none());

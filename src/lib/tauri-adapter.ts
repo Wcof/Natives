@@ -91,6 +91,8 @@ export interface LocalProjectSummary {
   packageManager?: PackageManager;
   deviceId: string;
   deviceName: string;
+  /** Host should open the app GUI after a successful start. */
+  autoOpen: boolean;
 }
 
 export interface CreativeAppActions {

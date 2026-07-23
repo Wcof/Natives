@@ -69,3 +69,33 @@ export function sortCreativeApps(apps: CreativeAppSummary[]): CreativeAppSummary
 export function defaultDeleteOptions() {
   return { removeVolumes: false, removeImages: false };
 }
+
+/**
+ * Whether starting this app should open its GUI automatically.
+ * Only local projects carry autoOpen; external/github never auto-open from list.
+ */
+export function shouldAutoOpenAfterStart(app: CreativeAppSummary): boolean {
+  if (app.source !== 'local_project') return false;
+  return Boolean(app.localProject?.autoOpen);
+}
+
+/** Open surface for a summary — workshop iframe vs child webview URL. */
+export function openSurfaceKind(
+  app: CreativeAppSummary,
+): 'workshop' | 'local_url' {
+  return app.source === 'internal' ? 'workshop' : 'local_url';
+}
+
+/** Delete dialog needs Docker volume/image options only for external containers. */
+export function deleteNeedsDockerOptions(source: CreativeAppSource): boolean {
+  return source === 'external_github';
+}
+
+/**
+ * Unified lifecycle prefers creativeApp.* for all sources.
+ * Internal enable/disable/uninstall used to bypass creativeApp; adapters now
+ * own that path so the command layer is one entry.
+ */
+export function prefersUnifiedLifecycleApi(): boolean {
+  return true;
+}

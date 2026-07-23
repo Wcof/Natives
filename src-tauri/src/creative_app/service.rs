@@ -1,10 +1,11 @@
 //! High-level Creative App service: unified list + lifecycle dispatch.
+//!
+//! Dispatch is owned by [`crate::creative_app::adapters`] — three real source
+//! adapters hide Workshop / Docker / Local Process differences.
 
-use super::install;
+use super::adapters::{self, LifecycleCtx};
 use super::model::*;
-use super::store;
-use crate::module_manager;
-use crate::{Error, Result};
+use crate::Result;
 use rusqlite::Connection;
 use std::sync::Arc;
 use tauri::AppHandle;
@@ -21,209 +22,66 @@ pub struct CreativeAppService;
 
 impl CreativeAppService {
     pub fn list(conn: &Connection) -> Result<Vec<CreativeAppSummary>> {
-        let mut out = Vec::new();
-
-        // Internal modules — reuse module_manager, do not reimplement
-        let modules = module_manager::list_modules(conn)?;
-        for m in modules {
-            // Prefer richer columns when present
-            let (description, icon) = load_module_meta(conn, &m.id);
-            out.push(install::summary_from_internal(
-                &m.id,
-                &m.name,
-                &m.version,
-                m.enabled,
-                description,
-                icon,
-            ));
-        }
-
-        for rec in store::list_apps(conn)? {
-            out.push(install::summary_from_external(&rec));
-        }
-
-        for rec in crate::creative_app::local::list_apps(conn)? {
-            out.push(crate::creative_app::local::summary_from_local(&rec));
-        }
-
-        // Sort: running first, then title
-        out.sort_by(|a, b| {
-            let rank = |s: &CreativeAppSummary| match s.state {
-                CreativeAppState::Running => 0,
-                CreativeAppState::Available => 1,
-                CreativeAppState::InstalledStopped => 2,
-                CreativeAppState::StartFailed | CreativeAppState::InstallFailed => 3,
-                _ => 4,
-            };
-            rank(a)
-                .cmp(&rank(b))
-                .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
-        });
-        Ok(out)
+        adapters::list_all(conn)
     }
 
     pub async fn start(
         conn: &Connection,
-        app: &AppHandle,
+        ctx: &LifecycleCtx,
         lock: &MutationLock,
         id: &str,
     ) -> Result<CreativeAppSummary> {
         let _guard = lock.lock().await;
-        if let Some(rec) = store::get_app(conn, id)? {
-            let _ = rec;
-            return install::start_app(conn, app, id).await;
-        }
-        // Internal: enable
-        module_manager::enable_module(conn, id)?;
-        crate::emit_db_state_changed(
-            app,
-            "module",
-            serde_json::json!({ "action": "enable", "moduleId": id }),
-        );
-        crate::emit_db_state_changed(
-            app,
-            "creative-app",
-            serde_json::json!({ "action": "start", "id": id }),
-        );
-        Self::get_summary(conn, id)
+        adapters::start(conn, ctx, id).await
     }
 
     pub async fn stop(
         conn: &Connection,
-        app: &AppHandle,
+        ctx: &LifecycleCtx,
         lock: &MutationLock,
         id: &str,
     ) -> Result<CreativeAppSummary> {
         let _guard = lock.lock().await;
-        if store::get_app(conn, id)?.is_some() {
-            return install::stop_app(conn, app, id).await;
-        }
-        module_manager::disable_module(conn, id)?;
-        crate::emit_db_state_changed(
-            app,
-            "module",
-            serde_json::json!({ "action": "disable", "moduleId": id }),
-        );
-        crate::emit_db_state_changed(
-            app,
-            "creative-app",
-            serde_json::json!({ "action": "stop", "id": id }),
-        );
-        Self::get_summary(conn, id)
+        adapters::stop(conn, ctx, id).await
     }
 
     pub async fn delete(
         conn: &Connection,
-        app: &AppHandle,
+        ctx: &LifecycleCtx,
         lock: &MutationLock,
         id: &str,
         opts: DeleteOptions,
-        modules_dir: &std::path::Path,
     ) -> Result<DeleteResult> {
         let _guard = lock.lock().await;
-        if store::get_app(conn, id)?.is_some() {
-            return install::delete_app(conn, app, id, opts).await;
-        }
-        module_manager::uninstall_module(conn, modules_dir, id)?;
-        crate::emit_db_state_changed(
-            app,
-            "module",
-            serde_json::json!({ "action": "uninstall", "moduleId": id }),
-        );
-        crate::emit_db_state_changed(
-            app,
-            "creative-app",
-            serde_json::json!({ "action": "deleted", "id": id }),
-        );
-        Ok(DeleteResult {
-            ok: true,
-            warnings: vec![],
-        })
+        adapters::delete(conn, ctx, id, opts).await
+    }
+
+    pub async fn restart(
+        conn: &Connection,
+        ctx: &LifecycleCtx,
+        lock: &MutationLock,
+        id: &str,
+    ) -> Result<CreativeAppSummary> {
+        let _guard = lock.lock().await;
+        adapters::restart(conn, ctx, id).await
     }
 
     pub fn get_open_target(conn: &Connection, id: &str) -> Result<OpenTarget> {
-        if let Some(rec) = store::get_app(conn, id)? {
-            if rec.state != CreativeAppState::Running {
-                return Err(Error::InvalidInput(
-                    "external app is not running".into(),
-                ));
-            }
-            let url = rec
-                .open_url
-                .ok_or_else(|| Error::InvalidInput("missing openUrl".into()))?;
-            validate_local_url(&url)?;
-            return Ok(OpenTarget::LocalUrl {
-                url,
-                app_id: id.to_string(),
-            });
-        }
-        if let Some(rec) = crate::creative_app::local::get_app(conn, id)? {
-            if rec.state != CreativeAppState::Running {
-                return Err(Error::InvalidInput(
-                    "local creative app is not running".into(),
-                ));
-            }
-            let url = rec
-                .open_url
-                .ok_or_else(|| Error::InvalidInput("missing openUrl".into()))?;
-            validate_local_url(&url)?;
-            return Ok(OpenTarget::LocalUrl {
-                url,
-                app_id: id.to_string(),
-            });
-        }
-        // Internal module must be enabled
-        let modules = module_manager::list_modules(conn)?;
-        let m = modules
-            .into_iter()
-            .find(|m| m.id == id)
-            .ok_or_else(|| Error::NotFound(id.into()))?;
-        if m.enabled == 0 {
-            return Err(Error::InvalidInput("module is disabled".into()));
-        }
-        Ok(OpenTarget::WorkshopModule {
-            module_id: id.to_string(),
-        })
+        adapters::open_target(conn, id)
     }
 
     pub fn get_summary(conn: &Connection, id: &str) -> Result<CreativeAppSummary> {
-        if let Some(rec) = store::get_app(conn, id)? {
-            return Ok(install::summary_from_external(&rec));
-        }
-        if let Some(rec) = crate::creative_app::local::get_app(conn, id)? {
-            return Ok(crate::creative_app::local::summary_from_local(&rec));
-        }
-        let modules = module_manager::list_modules(conn)?;
-        let m = modules
-            .into_iter()
-            .find(|m| m.id == id)
-            .ok_or_else(|| Error::NotFound(id.into()))?;
-        let (description, icon) = load_module_meta(conn, &m.id);
-        Ok(install::summary_from_internal(
-            &m.id,
-            &m.name,
-            &m.version,
-            m.enabled,
-            description,
-            icon,
-        ))
+        adapters::get_summary(conn, id)
     }
-}
 
-fn load_module_meta(conn: &Connection, id: &str) -> (Option<String>, Option<String>) {
-    let mut stmt = match conn.prepare(
-        "SELECT description, icon FROM modules WHERE id = ?1",
-    ) {
-        Ok(s) => s,
-        Err(_) => return (None, None),
-    };
-    stmt.query_row(rusqlite::params![id], |row| {
-        Ok((
-            row.get::<_, Option<String>>(0)?,
-            row.get::<_, Option<String>>(1)?,
-        ))
-    })
-    .unwrap_or((None, None))
+    /// Resolve source for callers that need source-specific non-lifecycle APIs
+    /// (logs, local config, …) without re-implementing lookup order.
+    pub fn resolve_source(
+        conn: &Connection,
+        id: &str,
+    ) -> Result<adapters::ResolvedSource> {
+        adapters::resolve(conn, id)
+    }
 }
 
 /// Only allow http://127.0.0.1:{port}{path} (or localhost).
@@ -234,14 +92,14 @@ pub fn validate_local_url(url: &str) -> Result<()> {
     } else if let Some(r) = u.strip_prefix("https://") {
         r
     } else {
-        return Err(Error::InvalidInput(
+        return Err(crate::Error::InvalidInput(
             "only http/https open URLs are allowed".into(),
         ));
     };
     let hostport = rest.split('/').next().unwrap_or("");
     let host = hostport.split(':').next().unwrap_or("");
     if host != "127.0.0.1" && host != "localhost" {
-        return Err(Error::InvalidInput(
+        return Err(crate::Error::InvalidInput(
             "open URL must target 127.0.0.1".into(),
         ));
     }
