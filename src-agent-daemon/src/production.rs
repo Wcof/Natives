@@ -3675,10 +3675,15 @@ pub async fn restart_subagent_with_binding(
 }
 
 /// Background reaper: close idle subagent sessions.
+/// Safe to call without a Tokio runtime (unit tests / sync constructors): no-ops until a
+/// runtime exists; production daemon always constructs under tokio::main.
 fn spawn_subagent_reaper() {
     static STARTED: std::sync::Once = std::sync::Once::new();
     STARTED.call_once(|| {
-        tokio::spawn(async {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        handle.spawn(async {
             let mut interval = tokio::time::interval(Duration::from_secs(30));
             loop {
                 interval.tick().await;

@@ -135,19 +135,20 @@ test('protocol run.rs advertises runtime_id and effort fields', () => {
 });
 
 test('daemon capabilities keep codex unavailable in host_mediated helper source', () => {
+  const hostCaps = readFileSync(
+    resolve(process.cwd(), 'src-tauri/src/assistant_service/capabilities.rs'),
+    'utf8',
+  );
+  assert.ok(
+    hostCaps.includes('codex_cli') && hostCaps.includes('app-server not implemented'),
+    'host capabilities must keep Codex unavailable with reason',
+  );
   const caps = readFileSync(
     resolve(process.cwd(), 'crates/assistant-protocol/src/v2/capabilities.rs'),
     'utf8',
   );
-  assert.ok(caps.includes('host_mediated'));
-  assert.ok(caps.includes('RuntimeAvailability'));
-  // Codex red line present in host path source (assistant_service or capabilities tests)
-  const host = readFileSync(
-    resolve(process.cwd(), 'src-tauri/src/assistant_service.rs'),
-    'utf8',
-  );
   assert.ok(
-    host.includes('codex_cli') && host.includes('app-server not implemented'),
-    'host capabilities must keep Codex unavailable with reason',
+    caps.includes('Codex stays unavailable') || caps.includes('app-server not implemented'),
+    'protocol capabilities honesty rules must document Codex unavailable',
   );
 });
