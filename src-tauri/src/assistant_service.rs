@@ -124,8 +124,15 @@ async fn dispatch_rpc(data_store: &Arc<DataStore>, method: &str, params: &Value)
         "run.subscribe" => handle_run_subscribe(data_store, params).await,
         "permission.respond" => handle_permission_respond(data_store, params).await,
         "permission.listPending" => handle_permission_list_pending(data_store, params).await,
-        "interaction.listPending" => handle_permission_list_pending(data_store, params).await,
-        "interaction.respond" => handle_permission_respond(data_store, params).await,
+        // interaction.* is NOT permission — always go through daemon Interaction Store
+        // (subagent_assignment, ask_user, etc.). Embedded mode must not route these to
+        // handle_permission_respond.
+        "interaction.listPending" | "interaction.respond" => {
+            match daemon_authority::request(method, params.clone()).await {
+                Ok(data) => success_response(data),
+                Err(error) => error_response("DAEMON_RPC_ERROR", &error),
+            }
+        }
         "promptQueue.list" => handle_prompt_queue_list(data_store, params).await,
         "promptQueue.enqueue" => handle_prompt_queue_enqueue(data_store, params).await,
         "promptQueue.update" => handle_prompt_queue_update(data_store, params).await,

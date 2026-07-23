@@ -340,7 +340,10 @@ pub fn update_subagent_session_status(
     error: Option<&str>,
 ) -> Result<(), String> {
     let now = chrono::Utc::now().to_rfc3339();
-    let closed = matches!(status, "closed" | "failed" | "cancelled");
+    let closed = matches!(
+        status,
+        "closed" | "failed" | "cancelled" | "interrupted" | "completed"
+    );
     let s = store()?;
     let conn = s.conn().map_err(|e| format!("conn lock: {e}"))?;
     conn.execute(
@@ -407,7 +410,7 @@ pub fn touch_by_child_conversation(child_conversation_id: &str) -> Result<(), St
     let conn = s.conn().map_err(|e| format!("conn lock: {e}"))?;
     conn.execute(
         "UPDATE subagent_session SET last_activity_at = ?1, updated_at = ?1
-         WHERE child_conversation_id = ?2 AND status IN ('open','running','idle')",
+         WHERE child_conversation_id = ?2 AND status IN ('pending_assignment','open','queued','running','waiting','idle')",
         params![now, child_conversation_id],
     )
     .map_err(|e| format!("touch_by_child_conversation failed: {e}"))?;
@@ -418,6 +421,8 @@ pub fn close_subagent_session(id: &str, status: &str, error: Option<&str>) -> Re
     let status = match status {
         "failed" => "failed",
         "cancelled" => "cancelled",
+        "interrupted" => "interrupted",
+        "completed" => "completed",
         _ => "closed",
     };
     update_subagent_session_status(id, status, error)
@@ -489,7 +494,7 @@ pub fn list_subagent_sessions(
                 .prepare(&format!(
                     "{SESSION_SELECT}
                      WHERE parent_conversation_id = ?1
-                       AND status IN ('open','running','idle')
+                       AND status IN ('pending_assignment','open','queued','running','waiting','idle')
                      ORDER BY created_at DESC"
                 ))
                 .map_err(|e| e.to_string())?;
@@ -515,7 +520,7 @@ pub fn list_subagent_sessions(
             let mut stmt = conn
                 .prepare(&format!(
                     "{SESSION_SELECT}
-                     WHERE status IN ('open','running','idle')
+                     WHERE status IN ('pending_assignment','open','queued','running','waiting','idle')
                      ORDER BY created_at DESC"
                 ))
                 .map_err(|e| e.to_string())?;
@@ -532,6 +537,111 @@ pub fn list_subagent_sessions(
 
 pub fn list_active_for_reaper() -> Result<Vec<SubagentSession>, String> {
     list_subagent_sessions(None, false)
+}
+
+/// Parent conversation heartbeat (independent of child `last_activity_at`).
+///
+/// Stored on `subagent_route_policy.last_parent_heartbeat_at`. If no policy row
+/// exists yet, creates a placeholder row with empty bindings so the heartbeat
+/// column can still be updated (bindings must be filled later by assignment).
+pub fn touch_parent_heartbeat(parent_conversation_id: &str) -> Result<(), String> {
+    let parent = parent_conversation_id.trim();
+    if parent.is_empty() {
+        return Err("conversation_id required for parent heartbeat".into());
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    let s = store()?;
+    let conn = s.conn().map_err(|e| format!("conn lock: {e}"))?;
+
+    // Ensure parent conversation exists (FK on route policy).
+    let parent_exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM conversation WHERE id = ?1)",
+            params![parent],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if !parent_exists {
+        return Err(format!("parent conversation not found: {parent}"));
+    }
+
+    let changed = conn
+        .execute(
+            "UPDATE subagent_route_policy
+             SET last_parent_heartbeat_at = ?1, updated_at = ?1
+             WHERE parent_conversation_id = ?2",
+            params![now, parent],
+        )
+        .map_err(|e| format!("touch_parent_heartbeat update failed: {e}"))?;
+    if changed == 0 {
+        // No policy yet: insert a stub row so reaper/UI can still see heartbeat.
+        // Empty bindings are rejected by upsert_route_policy; use a sentinel that
+        // is never used for pick_binding (empty list is filtered by CHECK? none).
+        // Store "[]" — pick_binding will fail until real assignment.
+        conn.execute(
+            "INSERT INTO subagent_route_policy (
+                parent_conversation_id, mode, bindings_json,
+                created_at, updated_at, last_parent_heartbeat_at
+             ) VALUES (?1, 'default', '[]', ?2, ?2, ?2)
+             ON CONFLICT(parent_conversation_id) DO UPDATE SET
+               last_parent_heartbeat_at = excluded.last_parent_heartbeat_at,
+               updated_at = excluded.updated_at",
+            params![parent, now],
+        )
+        .map_err(|e| format!("touch_parent_heartbeat insert failed: {e}"))?;
+    }
+    Ok(())
+}
+
+/// True when parent heartbeat is fresher than `within_secs`.
+pub fn parent_heartbeat_recent(parent_conversation_id: &str, within_secs: i64) -> bool {
+    let parent = parent_conversation_id.trim();
+    if parent.is_empty() {
+        return false;
+    }
+    let Ok(s) = store() else {
+        return false;
+    };
+    let Ok(conn) = s.conn() else {
+        return false;
+    };
+    let ts: Option<String> = conn
+        .query_row(
+            "SELECT last_parent_heartbeat_at FROM subagent_route_policy
+             WHERE parent_conversation_id = ?1",
+            params![parent],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    let Some(ts) = ts.filter(|s| !s.trim().is_empty()) else {
+        return false;
+    };
+    let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&ts) else {
+        return false;
+    };
+    let age = chrono::Utc::now().signed_duration_since(parsed.with_timezone(&chrono::Utc));
+    age.num_seconds() <= within_secs
+}
+
+/// Look up session by child conversation id (most recent open-ish row).
+pub fn get_session_by_child_conversation(
+    child_conversation_id: &str,
+) -> Result<Option<SubagentSession>, String> {
+    let child = child_conversation_id.trim();
+    if child.is_empty() {
+        return Ok(None);
+    }
+    let s = store()?;
+    let conn = s.conn().map_err(|e| format!("conn lock: {e}"))?;
+    conn.query_row(
+        &format!("{SESSION_SELECT} WHERE child_conversation_id = ?1 ORDER BY created_at DESC LIMIT 1"),
+        params![child],
+        row_to_session,
+    )
+    .optional()
+    .map_err(|e| format!("get_session_by_child_conversation failed: {e}"))
 }
 
 /// Classify provider/engine errors for failover eligibility.
@@ -588,29 +698,52 @@ pub async fn request(method: &str, params: Value) -> Result<Value, String> {
             }))
         }
         "subagent.touch" => {
-            let id = params
-                .get("id")
+            let subagent_id = params
+                .get("subagent_id")
+                .or_else(|| params.get("id"))
                 .or_else(|| params.get("session_id"))
                 .and_then(Value::as_str)
                 .unwrap_or("")
-                .trim();
-            if id.is_empty() {
-                // Also allow touching by child conversation.
-                if let Some(cid) = params
-                    .get("child_conversation_id")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-                {
-                    touch_by_child_conversation(cid)?;
-                    return Ok(json!({ "ok": true, "child_conversation_id": cid }));
+                .trim()
+                .to_string();
+            let child_conversation_id = params
+                .get("child_conversation_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let conversation_id = params
+                .get("conversation_id")
+                .or_else(|| params.get("parent_conversation_id"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+
+            // Parent-only heartbeat: conversation_id without subagent/child id.
+            if subagent_id.is_empty() && child_conversation_id.is_empty() {
+                if conversation_id.is_empty() {
+                    return Err(
+                        "conversation_id required for parent heartbeat, or pass subagent_id/child_conversation_id"
+                            .into(),
+                    );
                 }
-                return Err("id or child_conversation_id required for subagent.touch".into());
+                touch_parent_heartbeat(&conversation_id)?;
+                return Ok(json!({
+                    "ok": true,
+                    "parent_heartbeat": true,
+                    "conversation_id": conversation_id,
+                }));
             }
-            touch_subagent_session(id)?;
-            Ok(json!({ "ok": true, "id": id }))
+
+            if !subagent_id.is_empty() {
+                touch_subagent_session(&subagent_id)?;
+                return Ok(json!({ "ok": true, "id": subagent_id }));
+            }
+            touch_by_child_conversation(&child_conversation_id)?;
+            Ok(json!({ "ok": true, "child_conversation_id": child_conversation_id }))
         }
         "subagent.switchRoute" => {
-            // Full signature; may update policy and/or active session binding.
             let parent = params
                 .get("conversation_id")
                 .or_else(|| params.get("parent_conversation_id"))
@@ -629,22 +762,44 @@ pub async fn request(method: &str, params: Value) -> Result<Value, String> {
                 .get("bindings")
                 .cloned()
                 .and_then(|v| serde_json::from_value(v).ok())
+                .or_else(|| {
+                    params
+                        .get("pool")
+                        .cloned()
+                        .and_then(|v| serde_json::from_value(v).ok())
+                })
                 .unwrap_or_default();
             if bindings.is_empty() {
                 return Err("bindings required for subagent.switchRoute".into());
             }
-            let policy = upsert_route_policy(&parent, mode, &bindings)?;
-            // Optional: rebind a specific session.
-            if let Some(sid) = params.get("session_id").and_then(Value::as_str) {
-                if let Some(mut sess) = get_subagent_session(sid)? {
-                    let next = pick_binding(&policy, &[])?;
-                    sess.attempted_bindings.push(next.clone());
-                    update_session_binding(sid, &next, &sess.attempted_bindings)?;
-                }
+            // Validate bindings before persisting.
+            for b in &bindings {
+                crate::production::validate_route_binding(b)?;
             }
+            let policy = upsert_route_policy(&parent, mode, &bindings)?;
+
+            let mut restarted_run_id: Option<String> = None;
+            if let Some(sid) = params
+                .get("session_id")
+                .or_else(|| params.get("subagent_id"))
+                .and_then(Value::as_str)
+            {
+                let next = if let Some(explicit) = params.get("binding").cloned().and_then(|v| {
+                    serde_json::from_value::<RouteBinding>(v).ok()
+                }) {
+                    crate::production::validate_route_binding(&explicit)?;
+                    explicit
+                } else {
+                    pick_binding(&policy, &[])?
+                };
+                restarted_run_id =
+                    crate::production::restart_subagent_with_binding(sid, &next).await?;
+            }
+
             Ok(json!({
                 "ok": true,
                 "route_policy": policy,
+                "restarted_run_id": restarted_run_id,
             }))
         }
         _ => Err(format!("unsupported subagent method: {method}")),
@@ -815,5 +970,68 @@ mod tests {
             // Fourth would exhaust under exclusive attempt tracking.
             assert!(pick_binding(&policy, &attempted).is_err());
         });
+    }
+
+    #[test]
+    fn migration_011_status_completed_and_parent_heartbeat() {
+        with_temp_db(|| {
+            let s = store().unwrap();
+            let conn = s.conn().unwrap();
+            // completed is accepted by CHECK
+            let binding = RouteBinding {
+                provider_id: "openai".into(),
+                key_id: "k1".into(),
+                model_id: "gpt-4o".into(),
+            };
+            let (sid, _) = create_hidden_child_session(
+                "parent-1",
+                Some("run-1"),
+                Some("call-1"),
+                "worker",
+                "do",
+                &binding,
+                Some("ask"),
+                None,
+            )
+            .unwrap();
+            update_subagent_session_status(&sid, "completed", None).unwrap();
+            let sess = get_subagent_session(&sid).unwrap().unwrap();
+            assert_eq!(sess.status, "completed");
+
+            touch_parent_heartbeat("parent-1").unwrap();
+            assert!(parent_heartbeat_recent("parent-1", 90));
+            let before = get_subagent_session(&sid).unwrap().unwrap().last_activity_at;
+            // Parent touch must not bump child activity.
+            touch_parent_heartbeat("parent-1").unwrap();
+            let after = get_subagent_session(&sid).unwrap().unwrap().last_activity_at;
+            assert_eq!(before, after);
+        });
+    }
+
+    #[tokio::test]
+    async fn touch_parent_only_rpc_does_not_require_subagent_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("t.db");
+        let art = dir.path().join("a");
+        std::fs::create_dir_all(&art).unwrap();
+        let _ = crate::storage::DataStore::new(&db, &art).unwrap();
+        crate::storage::set_test_db_override(Some(db.clone()), Some(art.clone()));
+        crate::conversation_store::ensure_conversation_stub(
+            "parent-1",
+            "openai",
+            "gpt-4o",
+            Some("ask"),
+            None,
+        )
+        .unwrap();
+        let out = request(
+            "subagent.touch",
+            json!({ "conversation_id": "parent-1" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out["ok"], true);
+        assert_eq!(out["parent_heartbeat"], true);
+        crate::storage::set_test_db_override(None, None);
     }
 }

@@ -15,6 +15,7 @@ pub const ALL: &[(i64, &str)] = &[
     (8, MIGRATION_008),
     (9, MIGRATION_009),
     (10, MIGRATION_010),
+    (11, MIGRATION_011),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -411,4 +412,58 @@ CREATE INDEX IF NOT EXISTS idx_subagent_session_parent_run
     ON subagent_session(parent_run_id);
 CREATE INDEX IF NOT EXISTS idx_subagent_session_activity
     ON subagent_session(status, last_activity_at);
+";
+
+/// Migration 011: subagent status vocabulary + parent heartbeat.
+///
+/// - Allow `completed` (success terminal; `idle` kept for legacy rows).
+/// - Expand intermediate statuses used by assignment / resume.
+/// - Track parent conversation heartbeat independently of child activity.
+const MIGRATION_011: &str = "
+PRAGMA foreign_keys=OFF;
+PRAGMA legacy_alter_table=ON;
+
+CREATE TABLE subagent_session_new (
+    id TEXT PRIMARY KEY,
+    parent_conversation_id TEXT NOT NULL
+        REFERENCES conversation(id) ON DELETE CASCADE,
+    child_conversation_id TEXT NOT NULL
+        REFERENCES conversation(id) ON DELETE CASCADE,
+    parent_run_id TEXT,
+    task_call_id TEXT,
+    name TEXT NOT NULL DEFAULT '',
+    task TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN (
+        'pending_assignment', 'open', 'queued', 'running', 'waiting',
+        'completed', 'idle', 'failed', 'cancelled', 'interrupted', 'closed'
+    )),
+    provider_id TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    attempted_bindings_json TEXT NOT NULL DEFAULT '[]',
+    last_activity_at TEXT NOT NULL DEFAULT (datetime('now')),
+    closed_at TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+INSERT INTO subagent_session_new
+    SELECT id, parent_conversation_id, child_conversation_id, parent_run_id, task_call_id,
+           name, task, status, provider_id, key_id, model_id, attempted_bindings_json,
+           last_activity_at, closed_at, error, created_at, updated_at
+    FROM subagent_session;
+DROP TABLE subagent_session;
+ALTER TABLE subagent_session_new RENAME TO subagent_session;
+CREATE INDEX IF NOT EXISTS idx_subagent_session_parent
+    ON subagent_session(parent_conversation_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_subagent_session_parent_run
+    ON subagent_session(parent_run_id);
+CREATE INDEX IF NOT EXISTS idx_subagent_session_activity
+    ON subagent_session(status, last_activity_at);
+
+ALTER TABLE subagent_route_policy
+    ADD COLUMN last_parent_heartbeat_at TEXT;
+
+PRAGMA legacy_alter_table=OFF;
+PRAGMA foreign_keys=ON;
 ";

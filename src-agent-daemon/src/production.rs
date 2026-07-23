@@ -437,8 +437,10 @@ impl ProductionRuntime {
             subagents: self.subagents.clone(),
             task_outputs: self.task_outputs.clone(),
             engines: self.engines.clone(),
-            runtime: None,
+            // Assignment waiters live on the process-wide runtime.
+            runtime: Some(crate::global_run_manager().runtime.clone()),
             provider_id: provider_id.clone(),
+            key_id: key_id.clone(),
             parent_run_id: run_id.clone(),
             conversation_id: conversation_id.clone(),
             model_id: model_id.clone(),
@@ -664,6 +666,7 @@ impl ProductionRuntime {
                 engines: engines.clone(),
                 runtime: None,
                 provider_id: provider_id.clone(),
+                key_id: None,
                 parent_run_id: child_run_id.clone(),
                 conversation_id: child_conversation_bg.clone(),
                 model_id: model_id.clone(),
@@ -1494,6 +1497,8 @@ pub struct PermissionGatedTools {
     pub engines: Arc<Mutex<HashMap<String, Arc<AgentEngine>>>>,
     pub runtime: Option<Arc<ProductionRuntime>>,
     pub provider_id: String,
+    /// Real parent run key_id when known (never `"auto"`).
+    pub key_id: Option<String>,
     pub parent_run_id: String,
     pub conversation_id: String,
     pub model_id: String,
@@ -1798,6 +1803,99 @@ impl EngineToolRuntime for PermissionGatedTools {
                 duration_ms: started.elapsed().as_millis() as u64,
             },
         }
+    }
+
+    async fn execute_task_batch(
+        &self,
+        tasks: Vec<(String, Value)>,
+        cancel: &CancellationToken,
+    ) -> Vec<ToolExecutionResult> {
+        if tasks.is_empty() {
+            return Vec::new();
+        }
+        // Single-item path still goes through batch assignment so payload is consistent.
+        let batch_specs: Vec<(String, Value, String, String)> = tasks
+            .into_iter()
+            .map(|(call_id, input)| {
+                let prompt = input
+                    .get("prompt")
+                    .or_else(|| input.get("task"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let name = input
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                (call_id, input, name, prompt)
+            })
+            .collect();
+
+        // Resolve one assignment for the whole batch (full tasks[] + default_binding).
+        let assignment_map = match self
+            .resolve_batch_assignment(
+                &batch_specs
+                    .iter()
+                    .map(|(call_id, _input, name, prompt)| {
+                        (
+                            call_id.clone(),
+                            name.clone(),
+                            prompt.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .await
+        {
+            Ok(m) => m,
+            Err(e) => {
+                return batch_specs
+                    .iter()
+                    .map(|_| ToolExecutionResult {
+                        output: serde_json::json!({
+                            "error": e,
+                            "code": "subagent_assignment_failed",
+                        }),
+                        is_error: true,
+                        duration_ms: 0,
+                    })
+                    .collect();
+            }
+        };
+
+        let mut out = Vec::with_capacity(batch_specs.len());
+        for (call_id, input, _name, _prompt) in batch_specs {
+            if cancel.is_cancelled() {
+                out.push(ToolExecutionResult {
+                    output: serde_json::json!({"error": "cancelled"}),
+                    is_error: true,
+                    duration_ms: 0,
+                });
+                continue;
+            }
+            let binding = assignment_map
+                .get(&call_id)
+                .cloned()
+                .or_else(|| assignment_map.values().next().cloned());
+            let mut input = input;
+            if let Some(b) = binding {
+                // Inject resolved binding for execute_task (model credentials still ignored).
+                if let Some(obj) = input.as_object_mut() {
+                    obj.insert(
+                        "_resolved_binding".into(),
+                        serde_json::json!({
+                            "provider_id": b.provider_id,
+                            "key_id": b.key_id,
+                            "model_id": b.model_id,
+                        }),
+                    );
+                    obj.insert("task_call_id".into(), Value::String(call_id.clone()));
+                }
+            }
+            out.push(self.execute_task(input).await);
+        }
+        out
     }
 }
 
@@ -2351,18 +2449,26 @@ impl PermissionGatedTools {
             default_subagent_tool_allowlist()
         };
 
-        // Resolve binding via route policy (or wait for assignment interaction).
-        let binding = match self.resolve_task_binding(&input).await {
-            Ok(b) => b,
-            Err(e) => {
-                return ToolExecutionResult {
-                    output: serde_json::json!({
-                        "error": e,
-                        "code": "subagent_assignment_failed",
-                    }),
-                    is_error: true,
-                    duration_ms: 0,
-                };
+        // Prefer binding injected by execute_task_batch; else resolve (single-task path).
+        let binding = if let Some(b) = input
+            .get("_resolved_binding")
+            .cloned()
+            .and_then(|v| serde_json::from_value::<crate::subagent_store::RouteBinding>(v).ok())
+        {
+            b
+        } else {
+            match self.resolve_task_binding(&input).await {
+                Ok(b) => b,
+                Err(e) => {
+                    return ToolExecutionResult {
+                        output: serde_json::json!({
+                            "error": e,
+                            "code": "subagent_assignment_failed",
+                        }),
+                        is_error: true,
+                        duration_ms: 0,
+                    };
+                }
             }
         };
         let child_provider = binding.provider_id.clone();
@@ -2377,11 +2483,15 @@ impl PermissionGatedTools {
             Some(&self.permission_profile),
             None,
         );
+        let task_call_id = input
+            .get("task_call_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
         let (session_id, child_conversation_id) =
             match crate::subagent_store::create_hidden_child_session(
                 &self.conversation_id,
                 Some(&self.parent_run_id),
-                None,
+                task_call_id,
                 &name,
                 &prompt,
                 &binding,
@@ -2534,6 +2644,7 @@ impl PermissionGatedTools {
                 engines: engines.clone(),
                 runtime: None,
                 provider_id: child_provider_for_tools,
+                key_id: None,
                 parent_run_id: child_run_id.clone(),
                 // Real child conversation id (not pseudo sub-*).
                 conversation_id: child_conversation_bg.clone(),
@@ -2640,7 +2751,7 @@ impl PermissionGatedTools {
                     .await;
                 let _ = crate::subagent_store::update_subagent_session_status(
                     &session_id_bg,
-                    "idle",
+                    "completed",
                     None,
                 );
                 events.append(
@@ -2699,64 +2810,99 @@ impl PermissionGatedTools {
         }
     }
 
-    /// Resolve provider/key/model via route policy. Ignores model-supplied credentials.
-    /// When no policy exists, emits one `subagent_assignment` interaction and waits.
-    async fn resolve_task_binding(
+    fn default_binding(&self) -> crate::subagent_store::RouteBinding {
+        crate::subagent_store::RouteBinding {
+            provider_id: self.provider_id.clone(),
+            key_id: self
+                .key_id
+                .clone()
+                .filter(|k| !k.trim().is_empty() && !k.eq_ignore_ascii_case("auto"))
+                .unwrap_or_default(),
+            model_id: self.model_id.clone(),
+        }
+    }
+
+    /// One assignment interaction for the entire task batch (full tasks[] + default_binding).
+    /// Returns call_id → binding map (default mode maps every call_id to default_binding).
+    async fn resolve_batch_assignment(
         &self,
-        _input: &Value,
-    ) -> Result<crate::subagent_store::RouteBinding, String> {
-        // Test/fixture path: allow explicit env-bound key without UI assignment.
+        tasks: &[(String, String, String)],
+    ) -> Result<std::collections::HashMap<String, crate::subagent_store::RouteBinding>, String>
+    {
+        use std::collections::HashMap;
+
         let use_fixture = std::env::var("NATIVES_DAEMON_FIXTURE")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-            || _input
-                .get("fixture")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            .unwrap_or(false);
 
+        let default_binding = self.default_binding();
+
+        // Existing policy: assign from pool without UI.
         if let Some(policy) =
             crate::subagent_store::get_route_policy(&self.conversation_id).ok().flatten()
         {
-            return crate::subagent_store::pick_binding(&policy, &[]);
+            let mut map = HashMap::new();
+            let mut attempted = Vec::new();
+            for (call_id, _, _) in tasks {
+                let b = crate::subagent_store::pick_binding(&policy, &attempted)?;
+                attempted.push(b.clone());
+                // Prefer not repeating until pool exhausted (pick_binding already cycles).
+                map.insert(call_id.clone(), b);
+            }
+            return Ok(map);
         }
 
         if use_fixture {
-            // Deterministic offline identity for unit tests (still ignores model key_id).
-            return Ok(crate::subagent_store::RouteBinding {
-                provider_id: _input
-                    .get("provider_id")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or(&self.provider_id)
-                    .to_string(),
-                key_id: _input
-                    .get("key_id")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("auto"))
-                    .unwrap_or("fixture-key")
-                    .to_string(),
-                model_id: _input
-                    .get("model_id")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or(&self.model_id)
-                    .to_string(),
-            });
+            // Offline unit tests: still ignore model-supplied credentials unless
+            // NATIVES_DAEMON_FIXTURE_HONOR_TASK_CREDS=1 (legacy identity tests).
+            let honor = std::env::var("NATIVES_DAEMON_FIXTURE_HONOR_TASK_CREDS")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            let mut map = HashMap::new();
+            for (call_id, _, _) in tasks {
+                let b = if honor {
+                    // Caller may pass creds via ambient: use default_binding only;
+                    // honor path is for resolve_task_binding single-task tests that
+                    // still set fixture env — fall through to default.
+                    default_binding.clone()
+                } else {
+                    crate::subagent_store::RouteBinding {
+                        provider_id: if default_binding.provider_id.is_empty() {
+                            "fixture".into()
+                        } else {
+                            default_binding.provider_id.clone()
+                        },
+                        key_id: if default_binding.key_id.is_empty() {
+                            "fixture-key".into()
+                        } else {
+                            default_binding.key_id.clone()
+                        },
+                        model_id: if default_binding.model_id.is_empty() {
+                            "fixture-model".into()
+                        } else {
+                            default_binding.model_id.clone()
+                        },
+                    }
+                };
+                map.insert(call_id.clone(), b);
+            }
+            return Ok(map);
         }
 
-        // No policy: wait for a single batch assignment interaction for this conversation.
         let Some(rt) = self.runtime.clone() else {
             return Err(
                 "no route policy and no runtime for subagent_assignment interaction".into(),
             );
         };
 
+        // Only one assignment interaction per parent conversation at a time.
         let interaction_id = {
             let mut inflight = rt
                 .assignment_inflight
                 .lock()
                 .map_err(|e| format!("assignment_inflight lock: {e}"))?;
             if let Some(existing) = inflight.get(&self.conversation_id) {
+                // Another batch already waiting — still wait on same interaction.
                 existing.clone()
             } else {
                 let id = uuid::Uuid::new_v4().to_string();
@@ -2766,20 +2912,40 @@ impl PermissionGatedTools {
         };
 
         let (tx, rx) = oneshot::channel::<Value>();
+        let mut installed = false;
         {
             let mut waiters = rt
                 .assignment_waiters
                 .lock()
                 .map_err(|e| format!("assignment_waiters lock: {e}"))?;
-            // Only the first waiter installs the channel; later tasks share the same response.
             if !waiters.contains_key(&interaction_id) {
                 waiters.insert(interaction_id.clone(), tx);
+                installed = true;
+                let batch_id = uuid::Uuid::new_v4().to_string();
+                let tasks_payload: Vec<Value> = tasks
+                    .iter()
+                    .map(|(call_id, name, prompt)| {
+                        serde_json::json!({
+                            "call_id": call_id,
+                            "name": name,
+                            "prompt": prompt,
+                        })
+                    })
+                    .collect();
                 let payload = serde_json::json!({
                     "kind": "subagent_assignment",
+                    "batch_id": batch_id,
+                    "parent_conversation_id": self.conversation_id,
+                    "parent_run_id": self.parent_run_id,
                     "conversation_id": self.conversation_id,
                     "run_id": self.parent_run_id,
-                    "reason": "Assign provider/key/model pool for subagent tasks in this conversation",
-                    "tasks": [{ "prompt": _input.get("prompt").or_else(|| _input.get("task")) }],
+                    "default_binding": {
+                        "provider_id": default_binding.provider_id,
+                        "key_id": default_binding.key_id,
+                        "model_id": default_binding.model_id,
+                    },
+                    "tasks": tasks_payload,
+                    "reason": "Assign provider/key/model for subagent tasks in this conversation",
                 });
                 let _ = crate::interaction_store::insert_pending(
                     &interaction_id,
@@ -2797,21 +2963,19 @@ impl PermissionGatedTools {
                     },
                 );
             } else {
-                // Additional task in same batch: park on a shared broadcast via polling policy.
                 drop(tx);
             }
         }
 
-        // If we own the oneshot, wait on it; otherwise poll for policy appearance.
-        let owns_waiter = rt
-            .assignment_waiters
-            .lock()
-            .map(|g| g.contains_key(&interaction_id))
-            .unwrap_or(false);
-        let response = if owns_waiter {
+        let response = if installed {
             match tokio::time::timeout(Duration::from_secs(120), rx).await {
-                Ok(Ok(v)) => Some(v),
-                Ok(Err(_)) => None,
+                Ok(Ok(v)) => v,
+                Ok(Err(_)) => {
+                    if let Ok(mut i) = rt.assignment_inflight.lock() {
+                        i.remove(&self.conversation_id);
+                    }
+                    return Err("subagent assignment cancelled".into());
+                }
                 Err(_) => {
                     if let Ok(mut w) = rt.assignment_waiters.lock() {
                         w.remove(&interaction_id);
@@ -2823,25 +2987,131 @@ impl PermissionGatedTools {
                 }
             }
         } else {
-            None
+            // Wait for policy written by the owner of the oneshot.
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+            loop {
+                if let Some(policy) =
+                    crate::subagent_store::get_route_policy(&self.conversation_id).ok().flatten()
+                {
+                    let mut map = HashMap::new();
+                    let mut attempted = Vec::new();
+                    for (call_id, _, _) in tasks {
+                        let b = crate::subagent_store::pick_binding(&policy, &attempted)?;
+                        attempted.push(b.clone());
+                        map.insert(call_id.clone(), b);
+                    }
+                    return Ok(map);
+                }
+                let still = rt
+                    .assignment_inflight
+                    .lock()
+                    .map(|g| g.contains_key(&self.conversation_id))
+                    .unwrap_or(false);
+                if !still {
+                    return Err("subagent assignment cancelled".into());
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return Err("subagent assignment timed out".into());
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
         };
 
-        if let Some(resp) = response {
-            // Cancel / deny → fail the batch (no silent default key).
-            if resp.get("cancelled").and_then(|v| v.as_bool()).unwrap_or(false)
-                || resp.get("approved").and_then(|v| v.as_bool()) == Some(false)
-            {
+        // Cancel / deny → fail the batch (no silent default key).
+        if response
+            .get("cancelled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+            || response.get("approved").and_then(|v| v.as_bool()) == Some(false)
+        {
+            if let Ok(mut i) = rt.assignment_inflight.lock() {
+                i.remove(&self.conversation_id);
+            }
+            return Err("subagent assignment cancelled".into());
+        }
+
+        let mode = response
+            .get("mode")
+            .and_then(Value::as_str)
+            .unwrap_or("default");
+
+        // Prefer per-call assignments; fall back to pool/bindings.
+        let assignments: Vec<Value> = response
+            .get("assignments")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let mut map = HashMap::new();
+        if mode == "default" {
+            if default_binding.key_id.trim().is_empty() {
                 if let Ok(mut i) = rt.assignment_inflight.lock() {
                     i.remove(&self.conversation_id);
                 }
-                return Err("subagent assignment cancelled".into());
+                return Err(
+                    "default_binding.key_id missing on parent run; cannot confirm default mode"
+                        .into(),
+                );
             }
-            let mode = resp
-                .get("mode")
-                .and_then(Value::as_str)
-                .unwrap_or("default");
-            let bindings: Vec<crate::subagent_store::RouteBinding> = resp
-                .get("bindings")
+            validate_route_binding(&default_binding)?;
+            for (call_id, _, _) in tasks {
+                map.insert(call_id.clone(), default_binding.clone());
+            }
+        } else if !assignments.is_empty() {
+            for a in assignments {
+                let call_id = a
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let b = crate::subagent_store::RouteBinding {
+                    provider_id: a
+                        .get("provider_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    key_id: a
+                        .get("key_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    model_id: a
+                        .get("model_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                };
+                validate_route_binding(&b)?;
+                if !call_id.is_empty() {
+                    map.insert(call_id, b);
+                }
+            }
+            // Fill any missing call_ids from pool if present.
+            if map.len() < tasks.len() {
+                let pool: Vec<crate::subagent_store::RouteBinding> = response
+                    .get("pool")
+                    .or_else(|| response.get("bindings"))
+                    .cloned()
+                    .and_then(|v| serde_json::from_value(v).ok())
+                    .unwrap_or_default();
+                let mut pi = 0usize;
+                for (call_id, _, _) in tasks {
+                    if map.contains_key(call_id) {
+                        continue;
+                    }
+                    if pool.is_empty() {
+                        break;
+                    }
+                    let b = pool[pi % pool.len()].clone();
+                    validate_route_binding(&b)?;
+                    map.insert(call_id.clone(), b);
+                    pi += 1;
+                }
+            }
+        } else {
+            let bindings: Vec<crate::subagent_store::RouteBinding> = response
+                .get("pool")
+                .or_else(|| response.get("bindings"))
                 .cloned()
                 .and_then(|v| serde_json::from_value(v).ok())
                 .unwrap_or_default();
@@ -2851,38 +3121,82 @@ impl PermissionGatedTools {
                 }
                 return Err("subagent assignment response missing bindings".into());
             }
-            let policy = crate::subagent_store::upsert_route_policy(
-                &self.conversation_id,
-                mode,
-                &bindings,
-            )?;
+            for b in &bindings {
+                validate_route_binding(b)?;
+            }
+            let mut pi = 0usize;
+            for (call_id, _, _) in tasks {
+                map.insert(call_id.clone(), bindings[pi % bindings.len()].clone());
+                pi += 1;
+            }
+        }
+
+        if map.is_empty() {
             if let Ok(mut i) = rt.assignment_inflight.lock() {
                 i.remove(&self.conversation_id);
             }
-            return crate::subagent_store::pick_binding(&policy, &[]);
+            return Err("subagent assignment produced empty binding map".into());
         }
 
-        // Shared waiters (additional tasks in batch): poll policy until present or timeout.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
-        loop {
-            if let Some(policy) =
-                crate::subagent_store::get_route_policy(&self.conversation_id).ok().flatten()
-            {
-                return crate::subagent_store::pick_binding(&policy, &[]);
-            }
-            let still = rt
-                .assignment_inflight
-                .lock()
-                .map(|g| g.contains_key(&self.conversation_id))
-                .unwrap_or(false);
-            if !still {
-                return Err("subagent assignment cancelled".into());
-            }
-            if tokio::time::Instant::now() >= deadline {
-                return Err("subagent assignment timed out".into());
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+        // Persist pool for subsequent subagents (random/custom pool or default singleton).
+        let pool_for_policy: Vec<crate::subagent_store::RouteBinding> = response
+            .get("pool")
+            .or_else(|| response.get("bindings"))
+            .cloned()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_else(|| {
+                map.values()
+                    .cloned()
+                    .fold(Vec::new(), |mut acc, b| {
+                        if !acc.iter().any(|x| x == &b) {
+                            acc.push(b);
+                        }
+                        acc
+                    })
+            });
+        if !pool_for_policy.is_empty() {
+            let _ = crate::subagent_store::upsert_route_policy(
+                &self.conversation_id,
+                mode,
+                &pool_for_policy,
+            );
         }
+
+        if let Ok(mut i) = rt.assignment_inflight.lock() {
+            i.remove(&self.conversation_id);
+        }
+        Ok(map)
+    }
+
+    /// Single-task path: resolve one binding (uses batch assignment with one task).
+    async fn resolve_task_binding(
+        &self,
+        _input: &Value,
+    ) -> Result<crate::subagent_store::RouteBinding, String> {
+        let call_id = _input
+            .get("task_call_id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let name = _input
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let prompt = _input
+            .get("prompt")
+            .or_else(|| _input.get("task"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let map = self
+            .resolve_batch_assignment(&[(call_id.clone(), name, prompt)])
+            .await?;
+        map.get(&call_id)
+            .cloned()
+            .or_else(|| map.into_values().next())
+            .ok_or_else(|| "subagent assignment produced no binding".into())
     }
 }
 
@@ -2906,6 +3220,162 @@ pub fn wake_assignment_waiter(interaction_id: &str, response: Value) -> bool {
         }
     }
     false
+}
+
+/// Validate a route binding before it is persisted or used to restart a subagent.
+/// IDs only — never accepts plaintext credentials.
+pub fn validate_route_binding(binding: &crate::subagent_store::RouteBinding) -> Result<(), String> {
+    let provider = binding.provider_id.trim();
+    let key = binding.key_id.trim();
+    let model = binding.model_id.trim();
+    if provider.is_empty() {
+        return Err("route binding provider_id is required".into());
+    }
+    if key.is_empty() {
+        return Err("route binding key_id is required".into());
+    }
+    if model.is_empty() {
+        return Err("route binding model_id is required".into());
+    }
+    // Reject values that look like secrets rather than IDs.
+    for (label, v) in [("provider_id", provider), ("key_id", key), ("model_id", model)] {
+        if v.len() > 256 {
+            return Err(format!("route binding {label} is too long"));
+        }
+        if v.contains('\0') || v.contains('\n') || v.contains('\r') {
+            return Err(format!("route binding {label} contains invalid characters"));
+        }
+    }
+    Ok(())
+}
+
+/// Update binding; if a child run is active, cancel it and start a new child run
+/// on the same hidden conversation with the unfinished task. Returns the new run id
+/// when a restart was performed (or cancelled id when only cancel happened).
+pub async fn restart_subagent_with_binding(
+    session_id: &str,
+    binding: &crate::subagent_store::RouteBinding,
+) -> Result<Option<String>, String> {
+    validate_route_binding(binding)?;
+    let sid = session_id.trim();
+    if sid.is_empty() {
+        return Err("session_id required".into());
+    }
+
+    let sess = crate::subagent_store::get_subagent_session(sid)?
+        .ok_or_else(|| format!("subagent session not found: {sid}"))?;
+
+    let previous = crate::subagent_store::RouteBinding {
+        provider_id: sess.provider_id.clone(),
+        key_id: sess.key_id.clone(),
+        model_id: sess.model_id.clone(),
+    };
+    let mut attempted = sess.attempted_bindings.clone();
+    if !attempted.iter().any(|b| b == &previous) {
+        attempted.push(previous);
+    }
+    crate::subagent_store::update_session_binding(sid, binding, &attempted)?;
+
+    // Merge new binding into parent route pool for subsequent random assignment.
+    if let Ok(Some(mut policy)) =
+        crate::subagent_store::get_route_policy(&sess.parent_conversation_id)
+    {
+        if !policy.bindings.iter().any(|b| b == binding) {
+            policy.bindings.push(binding.clone());
+            let _ = crate::subagent_store::upsert_route_policy(
+                &sess.parent_conversation_id,
+                &policy.mode,
+                &policy.bindings,
+            );
+        }
+    }
+
+    let was_running = matches!(
+        sess.status.as_str(),
+        "running" | "queued" | "waiting" | "open" | "pending_assignment"
+    ) || crate::global_run_manager()
+        .runtime
+        .task_output(sid)
+        .await
+        .map(|r| r.status == "running")
+        .unwrap_or(false);
+
+    // Cancel any live task keyed by session / known child run.
+    if let Some(rec) = crate::global_run_manager().runtime.task_output(sid).await {
+        if !rec.run_id.is_empty() {
+            crate::global_run_manager()
+                .runtime
+                .cancel_run_tree(&rec.run_id)
+                .await;
+        }
+    }
+
+    if !was_running {
+        // Idle / completed / closed: only binding update for next send.
+        let _ = crate::subagent_store::touch_subagent_session(sid);
+        return Ok(None);
+    }
+
+    // Start a new child run on the same hidden conversation via RunManager.
+    let prompt = if sess.task.trim().is_empty() {
+        "Continue the previous subagent task with the updated credentials.".to_string()
+    } else {
+        sess.task.clone()
+    };
+    let rm = crate::global_run_manager();
+    let created = rm.create_run(assistant_protocol::v2::CreateRunRequest {
+        conversation_id: sess.child_conversation_id.clone(),
+        provider_id: binding.provider_id.clone(),
+        model_id: binding.model_id.clone(),
+        key_id: Some(binding.key_id.clone()),
+        agent_profile_id: None,
+        permission_profile: Some("ask".into()),
+        content: Some(prompt.clone()),
+        attachments: None,
+        max_steps: Some(15),
+        parent_run_id: sess.parent_run_id.clone(),
+        project_path: None,
+        idempotency_key: None,
+        effort: None,
+        runtime_id: Some("native".into()),
+    })?;
+    let run = crate::run_manager::RunManager::start_detached_global(
+        assistant_protocol::v2::StartRunRequest {
+            run_id: Some(created.id.clone()),
+            conversation_id: Some(sess.child_conversation_id.clone()),
+            provider_id: Some(binding.provider_id.clone()),
+            model_id: Some(binding.model_id.clone()),
+            key_id: Some(binding.key_id.clone()),
+            content: Some(prompt),
+            attachments: None,
+            trigger_message_id: None,
+            permission_profile: Some("ask".into()),
+            max_steps: Some(15),
+            project_path: None,
+            idempotency_key: None,
+            effort: None,
+            runtime_id: Some("native".into()),
+        },
+    )?;
+
+    // Index task_output so reaper / kill see the new run.
+    crate::global_run_manager()
+        .runtime
+        .task_outputs
+        .lock()
+        .await
+        .insert(
+            sid.to_string(),
+            TaskRecord {
+                run_id: run.id.clone(),
+                status: "running".into(),
+                output: None,
+            },
+        );
+    let _ = crate::subagent_store::update_subagent_session_status(sid, "running", None);
+    let _ = crate::subagent_store::touch_subagent_session(sid);
+
+    Ok(Some(run.id))
 }
 
 /// Background reaper: close idle subagent sessions.
@@ -2944,8 +3414,9 @@ async fn reaper_tick() -> Result<(), String> {
             .unwrap_or(now);
         let idle = now.signed_duration_since(last);
 
-        // Parent conversation activity: if parent updated recently → 5min idle; else 2min.
-        let parent_active = parent_conversation_recently_active(&sess.parent_conversation_id, 300);
+        // Parent heartbeat (frontend touch) fresh within 90s → 5min idle; else 2min.
+        let parent_active =
+            crate::subagent_store::parent_heartbeat_recent(&sess.parent_conversation_id, 90);
         let limit_secs = if parent_active { 300i64 } else { 120i64 };
         if idle.num_seconds() >= limit_secs {
             if let Some(rec) = crate::global_run_manager().runtime.task_output(&sess.id).await {
@@ -3091,6 +3562,7 @@ mod tool_allowlist_tests {
             engines: rt.engines.clone(),
             runtime: None,
             provider_id: "openai".into(),
+            key_id: None,
             parent_run_id: "allowlist-parent".into(),
             conversation_id: "c-allow".into(),
             model_id: "m".into(),

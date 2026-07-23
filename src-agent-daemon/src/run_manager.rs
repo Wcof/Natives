@@ -1211,8 +1211,9 @@ impl RunManager {
                 subagents: self.runtime.subagents.clone(),
                 task_outputs: self.runtime.task_outputs.clone(),
                 engines: self.runtime.engines.clone(),
-                runtime: None,
+                runtime: Some(self.runtime.clone()),
                 provider_id: provider_id.clone(),
+                key_id: key_id.clone(),
                 parent_run_id: run.id.clone(),
                 conversation_id: run.conversation_id.clone(),
                 model_id: model_id.clone(),
@@ -2998,6 +2999,7 @@ mod tests {
             engines: rm.runtime.engines.clone(),
             runtime: None,
             provider_id: "openai".into(),
+            key_id: None,
             parent_run_id: run.id.clone(),
             conversation_id: "c-perm".into(),
             model_id: "gpt-4o".into(),
@@ -3200,6 +3202,7 @@ mod tests {
             engines: rt.engines.clone(),
             runtime: None,
             provider_id: "openai".into(),
+            key_id: Some("parent-run-key".into()),
             parent_run_id: "parent-run".into(),
             conversation_id: "c".into(),
             model_id: "gpt-4o".into(),
@@ -3230,11 +3233,12 @@ mod tests {
             .get("key_id")
             .and_then(|v| v.as_str())
             .unwrap();
-        assert_eq!(child_key, "child-key-from-broker");
-        assert_ne!(child_key, "parent-key");
+        // Model-supplied credentials must be ignored; parent run key is used.
+        assert_eq!(child_key, "parent-run-key");
+        assert_ne!(child_key, "child-key-from-broker");
         assert_eq!(
             result.output.get("provider_id").and_then(|v| v.as_str()),
-            Some("anthropic")
+            Some("openai")
         );
         // Parent should have SubagentCreated event
         let evs = rt.events.replay_after("parent-run", 0);
@@ -3309,6 +3313,7 @@ mod tests {
                     engines: prt.engines.clone(),
                     runtime: None,
                     provider_id: "openai".into(),
+                    key_id: Some("parent-key-A".into()),
                     parent_run_id: parent_id.clone(),
                     conversation_id: "c-dual".into(),
                     model_id: "gpt-4o".into(),
@@ -3330,17 +3335,18 @@ mod tests {
                     )
                     .await;
                 assert!(!result.is_error, "{:?}", result.output);
+                // Credentials come from parent run, not model-supplied child fields.
                 assert_eq!(
                     result.output.get("provider_id").and_then(|v| v.as_str()),
-                    Some("anthropic")
+                    Some("openai")
                 );
                 assert_eq!(
                     result.output.get("key_id").and_then(|v| v.as_str()),
-                    Some("child-key-B")
+                    Some("parent-key-A")
                 );
                 assert_eq!(
                     result.output.get("model_id").and_then(|v| v.as_str()),
-                    Some("claude-3-haiku")
+                    Some("gpt-4o")
                 );
                 let task_id = result
                     .output
@@ -3440,6 +3446,7 @@ mod tests {
             engines: rt.engines.clone(),
             runtime: None,
             provider_id: "openai".into(),
+            key_id: None,
             parent_run_id: "mcp-parent".into(),
             conversation_id: "c".into(),
             model_id: "m".into(),

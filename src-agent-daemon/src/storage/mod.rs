@@ -245,9 +245,14 @@ impl DataStore {
             if has_canonical_core {
                 // Preserve applied state when Daemon previously wrote into the
                 // shared table, or when an earlier recovery already created
-                // the core tables. Only mark versions that are actually in
-                // migrations::ALL so future additions still run.
+                // the core tables. Only mark historical versions that created
+                // the original core (1..=10). Later migrations (11+) must still
+                // execute when upgrading an already-bootstrapped Host DB.
+                const BOOTSTRAP_MAX: i64 = 10;
                 for (version, _) in migrations::ALL {
+                    if *version > BOOTSTRAP_MAX {
+                        continue;
+                    }
                     conn.execute(
                         "INSERT OR IGNORE INTO _daemon_schema_version (version) VALUES (?1)",
                         params![version],
@@ -273,8 +278,8 @@ impl DataStore {
             // legacy_alter_table and interacts poorly with nested transactions.
             if let Err(e) = conn.execute_batch(sql) {
                 let msg = e.to_string();
-                // Tolerate additive column re-runs.
-                if *version == 7 && msg.contains("duplicate column") {
+                // Tolerate additive column re-runs / partial rebuilds.
+                if (*version == 7 || *version == 11) && msg.contains("duplicate column") {
                     let _ = conn.execute(
                         "INSERT OR IGNORE INTO _daemon_schema_version (version) VALUES (?1)",
                         params![version],

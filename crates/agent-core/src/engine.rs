@@ -54,6 +54,31 @@ pub trait EngineToolRuntime: Send + Sync {
         input: Value,
         cancel: &CancellationToken,
     ) -> ToolExecutionResult;
+
+    /// Optional batch entry for same-turn `task` tool calls.
+    ///
+    /// Default falls back to sequential `execute_tool("task", ...)`.
+    /// Native Runtime overrides this to emit **one** `subagent_assignment`
+    /// interaction for the whole batch, then start children by `call_id`.
+    async fn execute_task_batch(
+        &self,
+        tasks: Vec<(String, Value)>,
+        cancel: &CancellationToken,
+    ) -> Vec<ToolExecutionResult> {
+        let mut out = Vec::with_capacity(tasks.len());
+        for (_call_id, input) in tasks {
+            if cancel.is_cancelled() {
+                out.push(ToolExecutionResult {
+                    output: json!({"error": "cancelled"}),
+                    is_error: true,
+                    duration_ms: 0,
+                });
+                continue;
+            }
+            out.push(self.execute_tool("task", input, cancel).await);
+        }
+        out
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -783,6 +808,7 @@ impl AgentEngine {
     }
 
     /// Execute prepared tool calls with parallel_safe batching (max concurrency 4).
+    /// Contiguous same-turn `task` tools are executed via `execute_task_batch`.
     /// Non-parallel tools and denied hooks stay serial. Results keep original order.
     async fn execute_prepared_tools(
         &self,
@@ -805,6 +831,63 @@ impl AgentEngine {
                     result: None,
                 });
                 i += 1;
+                continue;
+            }
+
+            // Contiguous non-denied `task` tools → one batch assignment.
+            if prepared[i].name == "task" {
+                let mut batch = Vec::new();
+                while i < prepared.len()
+                    && prepared[i].name == "task"
+                    && !prepared[i].denied
+                {
+                    batch.push(prepared[i].clone());
+                    i += 1;
+                }
+                let cancel = self.cancel.clone();
+                let task_inputs: Vec<(String, Value)> = batch
+                    .iter()
+                    .map(|c| (c.id.clone(), c.input.clone()))
+                    .collect();
+                let results = tools.execute_task_batch(task_inputs, &cancel).await;
+                for (idx, call) in batch.into_iter().enumerate() {
+                    let result = results.get(idx).cloned().unwrap_or(ToolExecutionResult {
+                        output: json!({"error": "missing task batch result"}),
+                        is_error: true,
+                        duration_ms: 0,
+                    });
+                    let post_event = if result.is_error {
+                        HookEvent::PostToolUseFailure
+                    } else {
+                        HookEvent::PostToolUse
+                    };
+                    let _ = self
+                        .hooks
+                        .dispatch(HookRequest {
+                            event: post_event,
+                            run_id: run_id.to_string(),
+                            tool_name: Some(call.name.clone()),
+                            input: json!({ "input": call.input, "output": result.output }),
+                        })
+                        .await;
+                    self.events.append(
+                        run_id,
+                        RunEventKind::ToolCallCompleted {
+                            id: call.id.clone(),
+                            name: call.name.clone(),
+                            output: result.output.clone(),
+                            is_error: result.is_error,
+                            duration_ms: result.duration_ms,
+                        },
+                    );
+                    out.push(ExecutedToolCall {
+                        id: call.id,
+                        name: call.name,
+                        args: call.args,
+                        denied: false,
+                        result: Some(result),
+                    });
+                }
                 continue;
             }
 
@@ -1167,6 +1250,129 @@ mod tests {
                 duration_ms: 1,
             }
         }
+    }
+
+    #[tokio::test]
+    async fn executes_task_batch_collects_all_call_ids() {
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+        struct BatchTools {
+            batch_calls: AtomicUsize,
+            single_task_calls: AtomicUsize,
+        }
+
+        #[async_trait::async_trait]
+        impl EngineToolRuntime for BatchTools {
+            async fn list_tool_schemas(&self) -> Vec<ToolSchema> {
+                vec![ToolSchema {
+                    name: "task".into(),
+                    description: "task".into(),
+                    input_schema: serde_json::json!({"type":"object"}),
+                }]
+            }
+            async fn execute_tool(
+                &self,
+                name: &str,
+                input: Value,
+                _cancel: &CancellationToken,
+            ) -> ToolExecutionResult {
+                if name == "task" {
+                    self.single_task_calls.fetch_add(1, AtomicOrdering::SeqCst);
+                }
+                ToolExecutionResult {
+                    output: serde_json::json!({"tool": name, "input": input}),
+                    is_error: false,
+                    duration_ms: 1,
+                }
+            }
+            async fn execute_task_batch(
+                &self,
+                tasks: Vec<(String, Value)>,
+                _cancel: &CancellationToken,
+            ) -> Vec<ToolExecutionResult> {
+                self.batch_calls.fetch_add(1, AtomicOrdering::SeqCst);
+                tasks
+                    .into_iter()
+                    .map(|(call_id, input)| ToolExecutionResult {
+                        output: serde_json::json!({
+                            "task_id": call_id,
+                            "prompt": input.get("prompt"),
+                            "status": "running",
+                        }),
+                        is_error: false,
+                        duration_ms: 1,
+                    })
+                    .collect()
+            }
+        }
+
+        let tools = BatchTools {
+            batch_calls: AtomicUsize::new(0),
+            single_task_calls: AtomicUsize::new(0),
+        };
+        let engine = AgentEngine::new(EventSequencer::new());
+        let provider = FakeProvider {
+            rounds: Mutex::new(vec![
+                vec![
+                    EngineProviderEvent::ToolCallDelta {
+                        index: 0,
+                        id: Some("c1".into()),
+                        name: Some("task".into()),
+                        arguments_delta: r#"{"prompt":"a"}"#.into(),
+                    },
+                    EngineProviderEvent::ToolCallDelta {
+                        index: 1,
+                        id: Some("c2".into()),
+                        name: Some("task".into()),
+                        arguments_delta: r#"{"prompt":"b"}"#.into(),
+                    },
+                    EngineProviderEvent::ToolCallDelta {
+                        index: 2,
+                        id: Some("c3".into()),
+                        name: Some("task".into()),
+                        arguments_delta: r#"{"prompt":"c"}"#.into(),
+                    },
+                    EngineProviderEvent::Completed,
+                ],
+                vec![
+                    EngineProviderEvent::TextDelta("done".into()),
+                    EngineProviderEvent::Completed,
+                ],
+            ]),
+        };
+        let status = engine
+            .run(
+                EngineRunConfig {
+                    run_id: "r-batch".into(),
+                    conversation_id: "c-batch".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    messages: Vec::new(),
+                    user_content: "spawn 3".into(),
+                    max_steps: 5,
+                },
+                &provider,
+                &tools,
+            )
+            .await
+            .unwrap();
+        assert_eq!(status, RunStatusV2::Completed);
+        assert_eq!(tools.batch_calls.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(tools.single_task_calls.load(AtomicOrdering::SeqCst), 0);
+        let events = engine.events.replay_after("r-batch", 0);
+        let completed: Vec<_> = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                RunEventKind::ToolCallCompleted { id, output, .. } => {
+                    Some((id.clone(), output.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(completed.len(), 3);
+        assert_eq!(completed[0].0, "c1");
+        assert_eq!(completed[1].0, "c2");
+        assert_eq!(completed[2].0, "c3");
     }
 
     #[tokio::test]

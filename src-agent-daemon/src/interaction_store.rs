@@ -280,14 +280,40 @@ pub async fn respond(params: Value) -> Result<Value, String> {
     // subagent_assignment: wake batch waiters (NOT permission.respond).
     if kind == "subagent_assignment" {
         let _ = crate::production::wake_assignment_waiter(&id, response.clone());
-        // Persist route policy when bindings are present.
+        // Persist route policy when pool/bindings/assignments are present.
         let cid = response
             .get("conversation_id")
+            .or_else(|| response.get("parent_conversation_id"))
             .and_then(Value::as_str)
             .map(|s| s.to_string())
             .or(conversation_id.clone());
         if let Some(cid) = cid {
-            if let Some(bindings) = response.get("bindings") {
+            let bindings_val = response
+                .get("pool")
+                .or_else(|| response.get("bindings"))
+                .cloned()
+                .or_else(|| {
+                    // Derive pool from assignments when pool omitted.
+                    response.get("assignments").and_then(|arr| {
+                        let list: Vec<crate::subagent_store::RouteBinding> = arr
+                            .as_array()?
+                            .iter()
+                            .filter_map(|a| {
+                                Some(crate::subagent_store::RouteBinding {
+                                    provider_id: a.get("provider_id")?.as_str()?.to_string(),
+                                    key_id: a.get("key_id")?.as_str()?.to_string(),
+                                    model_id: a.get("model_id")?.as_str()?.to_string(),
+                                })
+                            })
+                            .collect();
+                        if list.is_empty() {
+                            None
+                        } else {
+                            serde_json::to_value(list).ok()
+                        }
+                    })
+                });
+            if let Some(bindings) = bindings_val {
                 if let Ok(list) =
                     serde_json::from_value::<Vec<crate::subagent_store::RouteBinding>>(
                         bindings.clone(),
