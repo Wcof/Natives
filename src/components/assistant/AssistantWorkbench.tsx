@@ -75,6 +75,7 @@ import { goldenTextStream } from '@/lib/assistant-fixtures/golden';
 import { isActiveRunStatus, mapWireConversation } from '@/lib/assistant-protocol';
 import type {
   Conversation,
+  RunEvent,
   SubagentAssignmentInteraction,
   SubagentSession,
 } from '@/lib/assistant-protocol';
@@ -117,6 +118,9 @@ import {
   isTempConversationId,
   resolveRegisteredProjectPath,
 } from '@/lib/assistant-temp-conversation';
+
+/** Shared empty child-event list — avoid `[]` literal thrashing useMemo deps. */
+const EMPTY_CHILD_EVENTS: RunEvent[] = [];
 
 interface AssistantWorkbenchProps {
   locale: Locale;
@@ -252,9 +256,19 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       rootConversation?.modelId,
     ],
   );
+  // Slice deps (not whole `state`) so composer/view ticks recompute only when
+  // the underlying maps change. Selectors themselves are also identity-cached.
   const messages = useMemo(
     () => selectConversationMessages(state, activeId),
-    [state, activeId],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- maps + live/run tables are the true inputs
+    [
+      activeId,
+      state.messagesByConversation,
+      state.messages,
+      state.activeRunByConversation,
+      state.runs,
+      state.liveByRun,
+    ],
   );
   const rootRun = selectActiveRun(state, rootConversationId);
   const surfaceRun = selectActiveRun(state, activeId);
@@ -271,14 +285,16 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   // flips when the user inspects a subagent session.
   const rootEvents = useMemo(
     () => selectEventsForRunTree(state, rootRunId),
-    [state, rootRunId],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rootRunId, state.eventsByRun, state.childRunsByParent],
   );
   const selectedChildEvents = useMemo(
     () =>
       selectedChildConversationId
         ? selectRunEvents(state, surfaceRun?.id ?? null)
-        : [],
-    [state, selectedChildConversationId, surfaceRun?.id],
+        : EMPTY_CHILD_EVENTS,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedChildConversationId, surfaceRun?.id, state.eventsByRun],
   );
   // Timeline / file events follow the surface (child when selected).
   const events = selectedChildConversationId ? selectedChildEvents : rootEvents;
@@ -287,7 +303,14 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       selectedChildConversationId
         ? selectArtifacts(state, surfaceRun?.id ?? null)
         : selectArtifactsForRunTree(state, rootRunId),
-    [state, selectedChildConversationId, surfaceRun?.id, rootRunId],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      selectedChildConversationId,
+      surfaceRun?.id,
+      rootRunId,
+      state.artifactsByRun,
+      state.childRunsByParent,
+    ],
   );
   const children = selectChildRuns(state, rootRunId);
   const fileChanges = useMemo(
@@ -295,7 +318,14 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       selectedChildConversationId
         ? selectFileChanges(state, surfaceRun?.id ?? null)
         : selectFileChangesForRunTree(state, rootRunId),
-    [state, selectedChildConversationId, surfaceRun?.id, rootRunId],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      selectedChildConversationId,
+      surfaceRun?.id,
+      rootRunId,
+      state.fileChangesByRun,
+      state.childRunsByParent,
+    ],
   );
   const mainTodos = useMemo(() => extractTodosFromEvents(rootEvents), [rootEvents]);
   const selectedChildTodos = useMemo(
@@ -701,6 +731,17 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       if (childRunId) {
         const run = stateRef.current.runs[childRunId];
         if (run && isActiveRunStatus(run.status)) wanted.add(childRunId);
+      }
+    }
+    // Drop soft-resub loops for runs no longer in the wanted set (switch session /
+    // terminal child / parent left). Without this, every historical active run kept
+    // polling → multi-subscription thrash and wasted gateway traffic.
+    for (const runId of Object.keys(subSignalsRef.current)) {
+      if (!wanted.has(runId)) {
+        const signal = subSignalsRef.current[runId];
+        if (signal) signal.aborted = true;
+        delete subSignalsRef.current[runId];
+        delete resubAttemptsRef.current[runId];
       }
     }
     for (const runId of wanted) {
