@@ -16,8 +16,10 @@ fn host_owned_router_table() {
     assert!(is_host_owned_method("daemon.getCapabilities"));
     assert!(is_host_owned_method("run.start"));
     assert!(is_host_owned_method("run.subscribe"));
-    assert!(is_host_owned_method("permission.respond"));
-    assert!(is_host_owned_method("permission.listPending"));
+    assert!(!is_host_owned_method("permission.respond"));
+    assert!(!is_host_owned_method("permission.listPending"));
+assert!(daemon_owned_method("permission.respond"));
+assert!(daemon_owned_method("permission.listPending"));
     assert!(is_host_owned_method("artifact.open"));
     assert!(is_host_owned_method("artifact.reveal"));
     assert!(is_host_owned_method("artifact.list"));

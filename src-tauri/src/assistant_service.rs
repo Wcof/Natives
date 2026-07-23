@@ -1,4 +1,4 @@
-//! Assistant Host RPC facade: wire types, router, temporary permission dual-write.
+//! Assistant Host RPC facade: wire types and host-owned router (capabilities/provider/run/artifacts).
 //! Capability modules live under `assistant_service/`.
 use crate::daemon::data::DataStore;
 use crate::daemon_authority;
@@ -95,8 +95,6 @@ async fn dispatch_rpc(data_store: &Arc<DataStore>, method: &str, params: &Value)
             "provider.list" => provider_catalog::handle_provider_list(data_store, params).await,
             "run.start" => run_gateway::handle_run_start(data_store, params).await,
             "run.subscribe" => run_gateway::handle_run_subscribe(data_store, params).await,
-            "permission.respond" => handle_permission_respond(data_store, params).await,
-            "permission.listPending" => handle_permission_list_pending(data_store, params).await,
             "artifact.list" => artifacts::handle_artifact_list(data_store, params).await,
             "artifact.open" | "artifact.reveal" => artifacts::handle_artifact_open(data_store, params).await,
             _ => error_response("METHOD_NOT_FOUND", &format!("Unknown host-owned method: {method}")),
@@ -107,6 +105,7 @@ async fn dispatch_rpc(data_store: &Arc<DataStore>, method: &str, params: &Value)
         || method.starts_with("conversation.")
         || method.starts_with("promptQueue.")
         || method.starts_with("interaction.")
+        || method.starts_with("permission.")
         || method.starts_with("task.")
         || method.starts_with("run.")
         || method.starts_with("daemon.")
@@ -142,8 +141,6 @@ pub(crate) fn is_host_owned_method(method: &str) -> bool {
             | "provider.list"
             | "run.start"
             | "run.subscribe"
-            | "permission.respond"
-            | "permission.listPending"
             | "artifact.list"
             | "artifact.open"
             | "artifact.reveal"
@@ -158,6 +155,7 @@ pub(crate) fn daemon_owned_method(method: &str) -> bool {
             || method.starts_with("conversation.")
             || method.starts_with("promptQueue.")
             || method.starts_with("interaction.")
+            || method.starts_with("permission.")
             || method.starts_with("task.")
             || method.starts_with("run.")
             || method.starts_with("daemon.")
@@ -200,89 +198,4 @@ mod run_gateway;
 #[cfg(test)]
 mod tests;
 
-// ─── Permission (host dual-write until task-04 integration) ───
-
-async fn handle_permission_respond(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
-    let request_id = match params.get("request_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return error_response("MISSING_PARAM", "request_id is required"),
-    };
-    let approved = params
-        .get("approved")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let scope = params
-        .get("scope")
-        .and_then(Value::as_str)
-        .unwrap_or("once");
-    let run_id = params.get("run_id").and_then(|v| v.as_str());
-
-    // Wake the Run Authority permission waiter (embedded or UDS), bound to run_id when provided.
-    if let Err(e) = daemon_authority::respond_permission_for_run(request_id, approved, run_id).await {
-        // A legacy host-only pending row has no daemon waiter. Keep that
-        // migration path, but never hide errors for a run-bound response.
-        if run_id.is_some() {
-            return error_response("DAEMON_PERMISSION_FAILED", &e);
-        }
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let conn = data_store.conn();
-    let changed = match conn.execute(
-        "UPDATE assistant_permission_requests SET status = ?1, scope = ?2, responded_at = ?3 WHERE id = ?4 AND status = 'pending'",
-        rusqlite::params![if approved { "approved" } else { "rejected" }, scope, now, request_id],
-    ) {
-        Ok(changed) => changed,
-        Err(e) => return error_response("DB_UPDATE_ERROR", &e.to_string()),
-    };
-    // Daemon-only permission requests may not have a DB row yet — still OK if
-    // the waiter was resolved above.
-    success_response(serde_json::json!({
-        "request_id": request_id,
-        "approved": approved,
-        "db_updated": changed > 0,
-    }))
-}
-
-async fn handle_permission_list_pending(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
-    let conversation_id = params.get("conversation_id").and_then(Value::as_str);
-    let conn = data_store.conn();
-    let sql = if conversation_id.is_some() {
-        "SELECT p.id, p.run_id, p.tool_call_id, p.tool_name, p.reason, p.input, p.created_at
-         FROM assistant_permission_requests p JOIN assistant_runs r ON r.id = p.run_id
-         WHERE p.status = 'pending' AND r.conversation_id = ?1 ORDER BY p.created_at ASC"
-    } else {
-        "SELECT id, run_id, tool_call_id, tool_name, reason, input, created_at
-         FROM assistant_permission_requests WHERE status = 'pending' ORDER BY created_at ASC"
-    };
-    let mut stmt = match conn.prepare(sql) {
-        Ok(stmt) => stmt,
-        Err(error) => return error_response("DB_ERROR", &error.to_string()),
-    };
-    let rows = match if let Some(cid) = conversation_id {
-        stmt.query_map(rusqlite::params![cid], pending_permission_row)
-    } else {
-        stmt.query_map([], pending_permission_row)
-    } {
-        Ok(rows) => rows.filter_map(|row| row.ok()).collect::<Vec<_>>(),
-        Err(error) => return error_response("DB_QUERY_ERROR", &error.to_string()),
-    };
-    success_response(serde_json::json!(rows))
-}
-
-fn pending_permission_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
-    let raw_input: String = row.get(5)?;
-    Ok(serde_json::json!({
-        "id": row.get::<_, String>(0)?,
-        "request_id": row.get::<_, String>(0)?,
-        "run_id": row.get::<_, String>(1)?,
-        "tool_call_id": row.get::<_, String>(2)?,
-        "tool_name": row.get::<_, String>(3)?,
-        "reason": row.get::<_, String>(4)?,
-        "input": serde_json::from_str::<Value>(&raw_input).unwrap_or(Value::Null),
-        "created_at": row.get::<_, String>(6)?
-    }))
-}
-
-// ─── Artifacts ───
 

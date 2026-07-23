@@ -181,13 +181,23 @@ async fn main() {
         }
         reason = parent_lifeline(lifeline_enabled) => {
             eprintln!("Daemon shutdown requested: {reason}");
+            // Cancel all execution roots and wait for quiet (task-03/13).
+            let outcomes = natives_agent_daemon::global_run_manager()
+                .runtime
+                .cancel_all_execution_roots()
+                .await;
+            if !outcomes.is_empty() {
+                eprintln!(
+                    "Execution drain finished: {} root outcome(s)",
+                    outcomes.len()
+                );
+            }
             // Best-effort runtime file cleanup. Host force-kills if we hang.
             let _ = std::fs::remove_file(&socket_path);
-            // Grace window for future ExecutionRegistry drain (task-03 wiring).
             let grace_ms = std::env::var("NATIVES_DAEMON_SHUTDOWN_GRACE_MS")
                 .ok()
                 .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(1_500);
+                .unwrap_or(500);
             tokio::time::sleep(std::time::Duration::from_millis(grace_ms)).await;
             std::process::exit(0);
         }
