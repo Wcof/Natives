@@ -42,22 +42,78 @@ pub fn cap_child_permission(parent: &str, requested: &str) -> String {
     label(rank(parent).min(rank(requested)))
 }
 
-/// Sub-agent configuration.
+/// Failure propagation for child batches (task-11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FailurePolicy {
+    /// Parent receives child failure; siblings continue (default).
+    #[default]
+    Isolate,
+    /// One failure cancels siblings; parent fails.
+    FailFast,
+    /// Wait for all; any failure makes aggregate fail.
+    RequireAll,
+}
+
+impl FailurePolicy {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "fail_fast" | "failfast" => Self::FailFast,
+            "require_all" | "requireall" => Self::RequireAll,
+            _ => Self::Isolate,
+        }
+    }
+}
+
+/// Sub-agent configuration — every field is enforced by [`SubAgentManager`].
 #[derive(Debug, Clone)]
 pub struct SubAgentConfig {
+    /// Backward-compatible alias for [`Self::max_concurrent_global`].
     pub max_concurrent: u32,
+    pub max_concurrent_global: u32,
+    pub max_concurrent_per_parent: u32,
+    pub max_tasks_per_parent_total: u32,
     pub max_depth: u32,
     pub max_tokens_per_sub: u64,
+    pub max_tokens_per_child: u64,
+    pub max_tokens_per_tree: u64,
+    pub max_tool_calls_per_child: u32,
+    pub max_tool_calls_per_tree: u32,
+    pub child_timeout_ms: u64,
+    pub failure_policy: FailurePolicy,
 }
 
 impl Default for SubAgentConfig {
     fn default() -> Self {
         SubAgentConfig {
             max_concurrent: 3,
+            max_concurrent_global: 3,
+            max_concurrent_per_parent: 3,
+            max_tasks_per_parent_total: 32,
             max_depth: 5,
             max_tokens_per_sub: 100_000,
+            max_tokens_per_child: 100_000,
+            max_tokens_per_tree: 500_000,
+            max_tool_calls_per_child: 200,
+            max_tool_calls_per_tree: 1_000,
+            child_timeout_ms: 600_000,
+            failure_policy: FailurePolicy::Isolate,
         }
     }
+}
+
+/// Atomic reservation ledger entry (Queued + Running both occupy concurrent slots).
+#[derive(Debug, Clone, Default)]
+struct ReservationLedger {
+    /// Active concurrent reservations (Queued + Running).
+    concurrent_global: u32,
+    concurrent_per_parent: std::collections::HashMap<String, u32>,
+    tasks_per_parent: std::collections::HashMap<String, u32>,
+    tokens_used_child: std::collections::HashMap<String, u64>,
+    tokens_used_tree: std::collections::HashMap<String, u64>,
+    tools_used_child: std::collections::HashMap<String, u32>,
+    tools_used_tree: std::collections::HashMap<String, u32>,
+    /// run_id → reserved depth
+    depth_of: std::collections::HashMap<String, u32>,
 }
 
 /// A sub-agent execution — real child-run identity (not metadata-only).
@@ -91,20 +147,226 @@ pub enum SubAgentStatus {
     Cancelled,
 }
 
-/// Manages sub-agent execution.
+/// Manages sub-agent execution with atomic budget reservations (task-11).
 pub struct SubAgentManager {
     config: SubAgentConfig,
     agents: Arc<Mutex<HashMap<String, SubAgent>>>,
     parent_children: Arc<Mutex<HashMap<String, Vec<String>>>>,
+    /// Single-mutex ledger: Queued+Running concurrent, tree budgets.
+    ledger: Arc<Mutex<ReservationLedger>>,
 }
 
 impl SubAgentManager {
     pub fn new(config: SubAgentConfig) -> Self {
+        let mut cfg = config;
+        // Legacy `max_concurrent` is an alias for the global cap. Honor the
+        // stricter of the two so old tests/callers that only set max_concurrent
+        // still bound reservations.
+        if cfg.max_concurrent == 0 {
+            cfg.max_concurrent = cfg.max_concurrent_global.max(1);
+        }
+        if cfg.max_concurrent_global == 0 {
+            cfg.max_concurrent_global = cfg.max_concurrent.max(1);
+        }
+        cfg.max_concurrent_global = cfg.max_concurrent_global.min(cfg.max_concurrent);
+        cfg.max_concurrent = cfg.max_concurrent_global;
         SubAgentManager {
-            config,
+            config: cfg,
             agents: Arc::new(Mutex::new(HashMap::new())),
             parent_children: Arc::new(Mutex::new(HashMap::new())),
+            ledger: Arc::new(Mutex::new(ReservationLedger::default())),
         }
+    }
+
+    pub fn config(&self) -> &SubAgentConfig {
+        &self.config
+    }
+
+    /// Compute child depth from parent chain (caller must not hardcode 1).
+    pub async fn depth_for_child(&self, parent_run_id: &str) -> u32 {
+        let ledger = self.ledger.lock().await;
+        let parent_depth = ledger.depth_of.get(parent_run_id).copied().unwrap_or(0);
+        parent_depth + 1
+    }
+
+    /// Record root run depth 0 so children compute correctly.
+    pub async fn register_root_depth(&self, run_id: &str) {
+        let mut ledger = self.ledger.lock().await;
+        ledger.depth_of.entry(run_id.to_string()).or_insert(0);
+    }
+
+    /// All-or-nothing concurrent reservation for a batch of N children under one parent.
+    pub async fn reserve_batch(&self, parent_run_id: &str, n: u32) -> Result<(), String> {
+        if n == 0 {
+            return Ok(());
+        }
+        let mut ledger = self.ledger.lock().await;
+        let global_cap = self.config.max_concurrent_global.max(self.config.max_concurrent);
+        if ledger.concurrent_global.saturating_add(n) > global_cap {
+            return Err(format!(
+                "Max concurrent sub-agents ({global_cap}) would be exceeded by batch of {n}"
+            ));
+        }
+        let per_parent = ledger
+            .concurrent_per_parent
+            .get(parent_run_id)
+            .copied()
+            .unwrap_or(0);
+        if per_parent.saturating_add(n) > self.config.max_concurrent_per_parent {
+            return Err(format!(
+                "Max concurrent sub-agents per parent ({}) would be exceeded",
+                self.config.max_concurrent_per_parent
+            ));
+        }
+        let total = ledger
+            .tasks_per_parent
+            .get(parent_run_id)
+            .copied()
+            .unwrap_or(0);
+        if total.saturating_add(n) > self.config.max_tasks_per_parent_total {
+            return Err(format!(
+                "Max tasks per parent ({}) would be exceeded",
+                self.config.max_tasks_per_parent_total
+            ));
+        }
+        // Commit reservation.
+        ledger.concurrent_global = ledger.concurrent_global.saturating_add(n);
+        *ledger
+            .concurrent_per_parent
+            .entry(parent_run_id.to_string())
+            .or_insert(0) += n;
+        *ledger
+            .tasks_per_parent
+            .entry(parent_run_id.to_string())
+            .or_insert(0) += n;
+        Ok(())
+    }
+
+    /// Undo a successful [`reserve_batch`] when the batch will not start children.
+    pub async fn release_batch_reservation(&self, parent_run_id: &str, n: u32) {
+        if n == 0 {
+            return;
+        }
+        let mut ledger = self.ledger.lock().await;
+        ledger.concurrent_global = ledger.concurrent_global.saturating_sub(n);
+        if let Some(v) = ledger.concurrent_per_parent.get_mut(parent_run_id) {
+            *v = v.saturating_sub(n);
+        }
+        if let Some(v) = ledger.tasks_per_parent.get_mut(parent_run_id) {
+            *v = v.saturating_sub(n);
+        }
+    }
+
+    /// Release concurrent reservation when a child reaches a terminal status.
+    async fn release_concurrent_slot(&self, parent_run_id: &str) {
+        let mut ledger = self.ledger.lock().await;
+        ledger.concurrent_global = ledger.concurrent_global.saturating_sub(1);
+        if let Some(v) = ledger.concurrent_per_parent.get_mut(parent_run_id) {
+            *v = v.saturating_sub(1);
+        }
+    }
+
+    /// Settle token usage against child + tree budgets; Err if exceeded.
+    pub async fn settle_tokens(
+        &self,
+        child_run_id: &str,
+        tree_root_run_id: &str,
+        tokens: u64,
+    ) -> Result<(), String> {
+        let mut ledger = self.ledger.lock().await;
+        let child_used = ledger
+            .tokens_used_child
+            .entry(child_run_id.to_string())
+            .or_insert(0);
+        *child_used = child_used.saturating_add(tokens);
+        // Prefer the tighter of max_tokens_per_child and legacy max_tokens_per_sub.
+        let child_cap = self
+            .config
+            .max_tokens_per_child
+            .min(self.config.max_tokens_per_sub);
+        if *child_used > child_cap {
+            return Err(format!(
+                "child token budget exceeded ({}/{})",
+                *child_used, child_cap
+            ));
+        }
+        let tree_used = ledger
+            .tokens_used_tree
+            .entry(tree_root_run_id.to_string())
+            .or_insert(0);
+        *tree_used = tree_used.saturating_add(tokens);
+        if *tree_used > self.config.max_tokens_per_tree {
+            return Err(format!(
+                "tree token budget exceeded ({}/{})",
+                *tree_used, self.config.max_tokens_per_tree
+            ));
+        }
+        Ok(())
+    }
+
+    /// Atomically consume one tool-call unit before ToolCallRequested.
+    pub async fn consume_tool_call(
+        &self,
+        child_run_id: &str,
+        tree_root_run_id: &str,
+    ) -> Result<(), String> {
+        let mut ledger = self.ledger.lock().await;
+        let c = ledger
+            .tools_used_child
+            .entry(child_run_id.to_string())
+            .or_insert(0);
+        *c = c.saturating_add(1);
+        if *c > self.config.max_tool_calls_per_child {
+            return Err(format!(
+                "child tool-call budget exceeded ({}/{})",
+                *c, self.config.max_tool_calls_per_child
+            ));
+        }
+        let t = ledger
+            .tools_used_tree
+            .entry(tree_root_run_id.to_string())
+            .or_insert(0);
+        *t = t.saturating_add(1);
+        if *t > self.config.max_tool_calls_per_tree {
+            return Err(format!(
+                "tree tool-call budget exceeded ({}/{})",
+                *t, self.config.max_tool_calls_per_tree
+            ));
+        }
+        Ok(())
+    }
+
+    /// Detect cycle if `child_run_id` would wait on ancestor (current task is non-blocking;
+    /// still reject constructing parent cycles).
+    pub async fn assert_no_parent_cycle(
+        &self,
+        parent_run_id: &str,
+        child_run_id: &str,
+    ) -> Result<(), String> {
+        if parent_run_id == child_run_id {
+            return Err("SUBAGENT_DEADLOCK: child cannot parent itself".into());
+        }
+        let agents = self.agents.lock().await;
+        // Walk ancestors of parent; if we hit child_run_id, cycle.
+        let mut cursor = Some(parent_run_id.to_string());
+        let mut seen = std::collections::HashSet::new();
+        while let Some(id) = cursor {
+            if !seen.insert(id.clone()) {
+                return Err("SUBAGENT_DEADLOCK: parent cycle detected".into());
+            }
+            if id == child_run_id {
+                return Err("SUBAGENT_DEADLOCK: child would block on ancestor".into());
+            }
+            cursor = agents
+                .values()
+                .find(|a| a.run_id == id)
+                .map(|a| a.parent_run_id.clone());
+        }
+        Ok(())
+    }
+
+    pub async fn active_reservation_count(&self) -> u32 {
+        self.ledger.lock().await.concurrent_global
     }
 
     /// Spawn a new sub-agent with independent provider/key/model identity.
@@ -171,7 +433,14 @@ impl SubAgentManager {
         if id.trim().is_empty() || run_id.trim().is_empty() {
             return Err("Subagent register requires non-empty id and run_id".into());
         }
-        // Check depth limit
+        self.assert_no_parent_cycle(parent_run_id, &run_id).await?;
+
+        // Depth from parent chain when caller passes 0 / underestimates.
+        let parent_depth = {
+            let ledger = self.ledger.lock().await;
+            ledger.depth_of.get(parent_run_id).copied().unwrap_or(0)
+        };
+        let depth = depth.max(parent_depth.saturating_add(1));
         if depth > self.config.max_depth {
             return Err(format!(
                 "Max sub-agent depth ({}) exceeded: {}",
@@ -179,19 +448,14 @@ impl SubAgentManager {
             ));
         }
 
-        // Check concurrency limit
-        let mut agents = self.agents.lock().await;
-        let running_count = agents.values().filter(|a| a.status == SubAgentStatus::Running).count() as u32;
-        if running_count >= self.config.max_concurrent {
-            return Err(format!(
-                "Max concurrent sub-agents ({}) reached",
-                self.config.max_concurrent
-            ));
-        }
+        // Atomic reservation: Queued occupies concurrent slot (task-11).
+        // Single-item reserve via batch(1).
+        self.reserve_batch(parent_run_id, 1).await?;
 
+        let mut agents = self.agents.lock().await;
         let sub = SubAgent {
             id: id.clone(),
-            run_id,
+            run_id: run_id.clone(),
             parent_run_id: parent_run_id.to_string(),
             agent_profile_id,
             provider_id,
@@ -209,6 +473,10 @@ impl SubAgentManager {
         };
 
         agents.insert(id.clone(), sub.clone());
+        {
+            let mut ledger = self.ledger.lock().await;
+            ledger.depth_of.insert(run_id, depth);
+        }
 
         // Track parent-child relationship
         let mut parent_children = self.parent_children.lock().await;
@@ -247,17 +515,31 @@ impl SubAgentManager {
 
     /// Metadata-only: mark descendants Cancelled. Prefer ProductionRuntime::cancel_run_tree
     /// which also request_cancel()s live engines — do not call this alone in production.
+    /// Releases concurrent reservations for each newly-cancelled child.
     pub async fn cascade_cancel_metadata(&self, parent_run_id: &str) -> usize {
         let descendants = self.list_descendants(parent_run_id).await;
-        let mut agents = self.agents.lock().await;
         let mut count = 0usize;
         for d in descendants {
-            if let Some(agent) = agents.get_mut(&d.id) {
-                if !matches!(
-                    agent.status,
-                    SubAgentStatus::Completed | SubAgentStatus::Failed(_) | SubAgentStatus::Cancelled
-                ) {
-                    agent.status = SubAgentStatus::Cancelled;
+            let need = {
+                let agents = self.agents.lock().await;
+                agents
+                    .get(&d.id)
+                    .map(|a| {
+                        !matches!(
+                            a.status,
+                            SubAgentStatus::Completed
+                                | SubAgentStatus::Failed(_)
+                                | SubAgentStatus::Cancelled
+                        )
+                    })
+                    .unwrap_or(false)
+            };
+            if need {
+                if self
+                    .update_status(&d.id, SubAgentStatus::Cancelled)
+                    .await
+                    .is_ok()
+                {
                     count += 1;
                 }
             }
@@ -274,7 +556,23 @@ impl SubAgentManager {
     pub async fn update_status(&self, id: &str, status: SubAgentStatus) -> Result<(), String> {
         let mut agents = self.agents.lock().await;
         if let Some(agent) = agents.get_mut(id) {
+            let prev = agent.status.clone();
+            let parent = agent.parent_run_id.clone();
+            let was_active = matches!(
+                prev,
+                SubAgentStatus::Queued | SubAgentStatus::Running
+            );
+            let now_terminal = matches!(
+                status,
+                SubAgentStatus::Completed
+                    | SubAgentStatus::Failed(_)
+                    | SubAgentStatus::Cancelled
+            );
             agent.status = status;
+            drop(agents);
+            if was_active && now_terminal {
+                self.release_concurrent_slot(&parent).await;
+            }
             Ok(())
         } else {
             Err(format!("Sub-agent '{}' not found", id))
@@ -311,6 +609,20 @@ impl SubAgentManager {
     pub async fn running_count(&self) -> usize {
         let agents = self.agents.lock().await;
         agents.values().filter(|a| a.status == SubAgentStatus::Running).count()
+    }
+
+    /// Queued + Running count (matches reservation ledger when consistent).
+    pub async fn active_count(&self) -> usize {
+        let agents = self.agents.lock().await;
+        agents
+            .values()
+            .filter(|a| {
+                matches!(
+                    a.status,
+                    SubAgentStatus::Queued | SubAgentStatus::Running
+                )
+            })
+            .count()
     }
 }
 
@@ -468,5 +780,92 @@ mod tests {
         assert!(list.contains(&"list_dir".into()));
         assert!(list.contains(&"grep".into()));
         assert!(!list.iter().any(|t| t == "write_file" || t == "task" || t == "run_terminal"));
+    }
+
+    #[tokio::test]
+    async fn queued_occupies_concurrent_reservation() {
+        let mut config = SubAgentConfig::default();
+        config.max_concurrent = 1;
+        config.max_concurrent_global = 1;
+        let manager = SubAgentManager::new(config);
+        let _a = spawn_default(&manager, "p", "A", 1).await.unwrap();
+        // Still Queued — must block second spawn.
+        assert_eq!(manager.active_reservation_count().await, 1);
+        let err = spawn_default(&manager, "p", "B", 1).await.unwrap_err();
+        assert!(err.contains("concurrent") || err.contains("Max"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn batch_preflight_all_or_nothing() {
+        let mut config = SubAgentConfig::default();
+        config.max_concurrent_global = 2;
+        config.max_concurrent = 2;
+        let manager = SubAgentManager::new(config);
+        // Preflight of 3 must fail without leaving reservations.
+        let err = manager.reserve_batch("p", 3).await.unwrap_err();
+        assert!(err.contains("concurrent") || err.contains("Max"), "{err}");
+        assert_eq!(manager.active_reservation_count().await, 0);
+        manager.reserve_batch("p", 2).await.unwrap();
+        assert_eq!(manager.active_reservation_count().await, 2);
+        manager.release_batch_reservation("p", 2).await;
+        assert_eq!(manager.active_reservation_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn depth_increments_from_parent_chain() {
+        let manager = SubAgentManager::new(SubAgentConfig::default());
+        manager.register_root_depth("root").await;
+        let c1 = spawn_default(&manager, "root", "L1", 0).await.unwrap();
+        assert_eq!(c1.depth, 1);
+        let c2 = manager
+            .spawn(
+                &c1.run_id,
+                "L2".into(),
+                0,
+                "openai".into(),
+                format!("key-{}", uuid::Uuid::new_v4()),
+                "gpt-4o".into(),
+                "ask".into(),
+                vec!["read_file".into()],
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(c2.depth, 2);
+    }
+
+    #[tokio::test]
+    async fn tool_and_token_budgets_enforce() {
+        let mut config = SubAgentConfig::default();
+        config.max_tool_calls_per_child = 2;
+        config.max_tokens_per_child = 10;
+        config.max_tokens_per_tree = 15;
+        let manager = SubAgentManager::new(config);
+        manager.consume_tool_call("c1", "root").await.unwrap();
+        manager.consume_tool_call("c1", "root").await.unwrap();
+        let err = manager.consume_tool_call("c1", "root").await.unwrap_err();
+        assert!(err.contains("tool-call"), "{err}");
+        manager.settle_tokens("c1", "root", 10).await.unwrap();
+        let err = manager.settle_tokens("c1", "root", 1).await.unwrap_err();
+        assert!(err.contains("token"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn parent_cycle_rejected() {
+        let manager = SubAgentManager::new(SubAgentConfig::default());
+        let err = manager
+            .assert_no_parent_cycle("same", "same")
+            .await
+            .unwrap_err();
+        assert!(err.contains("DEADLOCK"), "{err}");
+    }
+
+    #[test]
+    fn failure_policy_parse() {
+        assert_eq!(FailurePolicy::parse("isolate"), FailurePolicy::Isolate);
+        assert_eq!(FailurePolicy::parse("fail_fast"), FailurePolicy::FailFast);
+        assert_eq!(FailurePolicy::parse("require_all"), FailurePolicy::RequireAll);
     }
 }

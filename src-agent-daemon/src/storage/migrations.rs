@@ -18,8 +18,9 @@ pub const ALL: &[(i64, &str)] = &[
     (11, MIGRATION_011),
     (12, MIGRATION_012),
     // 013–015 reserved for Agent A (run revision / event seq / project identity).
-    // Agent B task-09: if A has not landed 013 yet, we still take 016 for grants.
+    // Agent B task-09 / task-11: take 016–017 even if A has not landed 013 yet.
     (16, MIGRATION_016),
+    (17, MIGRATION_017),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -541,4 +542,30 @@ CREATE INDEX IF NOT EXISTS idx_tool_grant_v2_conversation
 UPDATE tool_grant SET expires_at = datetime('now')
  WHERE expires_at IS NULL
    AND (scope IS NULL OR scope = '' OR grant_type = 'always');
+";
+
+/// Migration 017 (Agent B / task-11): durable subagent budget ledger snapshot.
+///
+/// Runtime reservations are still in-memory; this table records per-run budget
+/// counters for restart Interrupted recovery and audit. Active children follow
+/// parent Interrupted semantics (task-04/02) — no Future resume.
+const MIGRATION_017: &str = "
+CREATE TABLE IF NOT EXISTS subagent_budget_ledger (
+    run_id TEXT PRIMARY KEY,
+    parent_run_id TEXT,
+    tree_root_run_id TEXT,
+    depth INTEGER NOT NULL DEFAULT 0,
+    concurrent_reserved INTEGER NOT NULL DEFAULT 0,
+    tokens_used INTEGER NOT NULL DEFAULT 0,
+    tool_calls_used INTEGER NOT NULL DEFAULT 0,
+    max_tokens INTEGER,
+    max_tool_calls INTEGER,
+    failure_policy TEXT NOT NULL DEFAULT 'isolate',
+    status TEXT NOT NULL DEFAULT 'active',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_subagent_budget_parent
+    ON subagent_budget_ledger(parent_run_id);
+CREATE INDEX IF NOT EXISTS idx_subagent_budget_tree
+    ON subagent_budget_ledger(tree_root_run_id);
 ";

@@ -814,12 +814,14 @@ impl ProductionRuntime {
         let child_perm =
             cap_child_permission(parent_permission_profile, &permission_profile);
         let child_allowlist = default_subagent_tool_allowlist();
+        // Depth from parent chain — never hardcode 1 (task-11).
+        let depth = self.subagents.depth_for_child(parent_run_id).await;
         let child = self
             .subagents
             .spawn(
                 parent_run_id,
                 prompt.clone(),
-                1,
+                depth,
                 provider_id.clone(),
                 key_id.clone(),
                 model_id.clone(),
@@ -2078,6 +2080,26 @@ impl EngineToolRuntime for PermissionGatedTools {
         if tasks.is_empty() {
             return Vec::new();
         }
+        // All-or-nothing budget preflight before starting any child (task-11).
+        // Preflight reserves then immediately releases; each register() re-reserves.
+        let n = tasks.len() as u32;
+        if let Err(e) = self.subagents.reserve_batch(&self.parent_run_id, n).await {
+            return tasks
+                .iter()
+                .map(|_| ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error": e,
+                        "code": "subagent_budget_exhausted",
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                })
+                .collect();
+        }
+        self.subagents
+            .release_batch_reservation(&self.parent_run_id, n)
+            .await;
+
         // Single-item path still goes through batch assignment so payload is consistent.
         let batch_specs: Vec<(String, Value, String, String)> = tasks
             .into_iter()
@@ -2851,6 +2873,8 @@ impl PermissionGatedTools {
         let child_run_id = created.id.clone();
 
         // Metadata shares real run_id + persistent session id as task_id.
+        // Depth from parent chain — never hardcode 1 (task-11).
+        let depth = self.subagents.depth_for_child(&self.parent_run_id).await;
         let child = match self
             .subagents
             .register(
@@ -2858,7 +2882,7 @@ impl PermissionGatedTools {
                 child_run_id.clone(),
                 &self.parent_run_id,
                 prompt.clone(),
-                1,
+                depth,
                 child_provider.clone(),
                 child_key.clone(),
                 child_model.clone(),
