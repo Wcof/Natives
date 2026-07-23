@@ -8,9 +8,7 @@ use crate::compaction::{compact_messages as compact_tool_history, repair_danglin
 use crate::doom_loop::DoomLoopDetector;
 use crate::event_seq::EventSequencer;
 use crate::hooks::{HookDecision, HookEvent, HookRegistry, HookRequest};
-use crate::run_state::transition;
-use assistant_protocol::v1::run::RunStatus;
-use assistant_protocol::v2::{RunEventKind, RunStatusV2};
+use assistant_protocol::v2::{RunEventKind};
 use futures_util::{Stream, StreamExt};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -170,7 +168,7 @@ pub enum EngineError {
 }
 
 impl EngineError {
-    fn code(&self) -> &str {
+    pub fn code(&self) -> &str {
         match self {
             Self::Provider { code, .. } => code,
             Self::Cancelled => "cancelled",
@@ -180,7 +178,7 @@ impl EngineError {
         }
     }
 
-    fn retryable(&self) -> bool {
+    pub fn retryable(&self) -> bool {
         matches!(self, Self::Provider { retryable: true, .. })
     }
 }
@@ -299,10 +297,11 @@ impl AgentEngine {
         config: EngineRunConfig,
         provider: &dyn EngineProvider,
         tools: &dyn EngineToolRuntime,
-    ) -> Result<RunStatusV2, EngineError> {
+    ) -> Result<crate::EngineOutcome, EngineError> {
+        use crate::EngineOutcome;
         let run_id = &config.run_id;
-        let mut status = RunStatus::Queued;
-        status = self.transition_emit(run_id, status, RunStatus::Preparing, RunEventKind::Preparing)?;
+        // Lifecycle status is owned by RunManager::commit_transition.
+        // Engine only emits domain events and returns EngineOutcome.
         let _ = self
             .hooks
             .dispatch(HookRequest {
@@ -321,7 +320,6 @@ impl AgentEngine {
                 input: serde_json::json!({ "content": config.user_content }),
             })
             .await;
-        status = self.transition_emit(run_id, status, RunStatus::Running, RunEventKind::Started)?;
 
         let tool_schemas = tools.list_tool_schemas().await;
         // History is prior turns; always ensure the current user prompt appears
@@ -356,23 +354,10 @@ impl AgentEngine {
 
         loop {
             if self.cancel.is_cancelled() {
-                self.events.append(
-                    run_id,
-                    RunEventKind::Interrupted {
-                        reason: "cancelled".into(),
-                    },
-                );
-                return Ok(RunStatusV2::Interrupted);
+                return Ok(EngineOutcome::Cancelled);
             }
             step += 1;
             if step > config.max_steps {
-                self.events.append(
-                    run_id,
-                    RunEventKind::Failed {
-                        error: "max steps exceeded".into(),
-                        code: "max_steps".into(),
-                    },
-                );
                 return Err(EngineError::MaxSteps);
             }
 
@@ -399,22 +384,10 @@ impl AgentEngine {
                 {
                     Ok(stream) => stream,
                     Err(EngineError::Cancelled) => {
-                        self.events.append(
-                            run_id,
-                            RunEventKind::Interrupted {
-                                reason: "cancelled".into(),
-                            },
-                        );
-                        return Ok(RunStatusV2::Interrupted);
+                        return Ok(EngineOutcome::Cancelled);
                     }
                     Err(_e) if self.cancel.is_cancelled() => {
-                        self.events.append(
-                            run_id,
-                            RunEventKind::Interrupted {
-                                reason: "cancelled".into(),
-                            },
-                        );
-                        return Ok(RunStatusV2::Interrupted);
+                        return Ok(EngineOutcome::Cancelled);
                     }
                     Err(e) if e.retryable() && attempt < MAX_PROVIDER_ATTEMPTS => {
                         self.events.append(
@@ -440,13 +413,6 @@ impl AgentEngine {
                                 retrying: false,
                             },
                         );
-                        self.events.append(
-                            run_id,
-                            RunEventKind::Failed {
-                                error: e.to_string(),
-                                code: e.code().into(),
-                            },
-                        );
                         return Err(e);
                     }
                 };
@@ -458,13 +424,7 @@ impl AgentEngine {
 
                 while let Some(event) = provider_events.next().await {
                     if self.cancel.is_cancelled() {
-                        self.events.append(
-                            run_id,
-                            RunEventKind::Interrupted {
-                                reason: "cancelled".into(),
-                            },
-                        );
-                        return Ok(RunStatusV2::Interrupted);
+                        return Ok(EngineOutcome::Cancelled);
                     }
                     match event {
                         EngineProviderEvent::TextDelta(t) => {
@@ -560,13 +520,6 @@ impl AgentEngine {
                                     retrying: false,
                                 },
                             );
-                            self.events.append(
-                                run_id,
-                                RunEventKind::Failed {
-                                    error: message.clone(),
-                                    code: code.clone(),
-                                },
-                            );
                             return Err(EngineError::Provider {
                                 message,
                                 code,
@@ -578,13 +531,7 @@ impl AgentEngine {
                 }
 
                 if self.cancel.is_cancelled() {
-                    self.events.append(
-                        run_id,
-                        RunEventKind::Interrupted {
-                            reason: "cancelled".into(),
-                        },
-                    );
-                    return Ok(RunStatusV2::Interrupted);
+                    return Ok(EngineOutcome::Cancelled);
                 }
 
                 if !saw_generation_delta && attempt < 2 {
@@ -611,13 +558,6 @@ impl AgentEngine {
                             retrying: false,
                         },
                     );
-                    self.events.append(
-                        run_id,
-                        RunEventKind::Failed {
-                            error: "provider returned empty response".into(),
-                            code: "EMPTY_RESPONSE".into(),
-                        },
-                    );
                     return Err(EngineError::Provider {
                         message: "provider returned empty response".into(),
                         code: "EMPTY_RESPONSE".into(),
@@ -636,19 +576,11 @@ impl AgentEngine {
                 doom.observe_text(&text_acc);
             }
             if doom.is_doom_loop() {
-                self.events.append(
-                    run_id,
-                    RunEventKind::Failed {
-                        error: "doom loop detected".into(),
-                        code: "doom_loop".into(),
-                    },
-                );
                 return Err(EngineError::DoomLoop);
             }
 
             if tool_acc.is_empty() {
-                // No tools — complete.
-                let _ = transition(status, RunStatus::Completed);
+                // No tools — complete. Status commit is RunManager's job.
                 let _ = self
                     .hooks
                     .dispatch(HookRequest {
@@ -658,13 +590,7 @@ impl AgentEngine {
                         input: serde_json::json!({ "reason": "stop" }),
                     })
                     .await;
-                self.events.append(
-                    run_id,
-                    RunEventKind::Completed {
-                        reason: "stop".into(),
-                    },
-                );
-                return Ok(RunStatusV2::Completed);
+                return Ok(EngineOutcome::completed("stop"));
             }
 
             // Execute tools and continue loop.
@@ -688,13 +614,6 @@ impl AgentEngine {
                 }));
                 doom.observe_tool(&name, &args.chars().take(80).collect::<String>());
                 if doom.is_doom_loop() {
-                    self.events.append(
-                        run_id,
-                        RunEventKind::Failed {
-                            error: "doom loop detected".into(),
-                            code: "doom_loop".into(),
-                        },
-                    );
                     return Err(EngineError::DoomLoop);
                 }
 
@@ -1206,19 +1125,6 @@ fn values_to_engine_messages(values: &[Value]) -> Vec<EngineMessage> {
         .collect()
 }
 
-impl AgentEngine {
-    fn transition_emit(
-        &self,
-        run_id: &str,
-        current: RunStatus,
-        next: RunStatus,
-        event: RunEventKind,
-    ) -> Result<RunStatus, EngineError> {
-        transition(current, next).map_err(|e| EngineError::Message(e.to_string()))?;
-        self.events.append(run_id, event);
-        Ok(next)
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -1383,7 +1289,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(status, RunStatusV2::Completed);
+        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
         assert_eq!(tools.batch_calls.load(AtomicOrdering::SeqCst), 1);
         assert_eq!(tools.single_task_calls.load(AtomicOrdering::SeqCst), 0);
         let events = engine.events.replay_after(&run_id, 0);
@@ -1427,7 +1333,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(status, RunStatusV2::Completed);
+        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
         let events = engine.events.replay_after("r1", 0);
         assert!(events.iter().any(|e| matches!(e.payload, RunEventKind::Started)));
         assert!(events
@@ -1435,7 +1341,8 @@ mod tests {
             .any(|e| matches!(e.payload, RunEventKind::TextDelta { .. })));
         assert!(events
             .iter()
-            .any(|e| matches!(e.payload, RunEventKind::Completed { .. })));
+            .any(|e| matches!(e.payload, RunEventKind::Completed { .. }))
+            || matches!(status, crate::EngineOutcome::Completed { .. }));
     }
 
     #[tokio::test]
@@ -1540,7 +1447,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(status, RunStatusV2::Completed);
+        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
         let events = engine.events.replay_after("r2", 0);
         assert!(events
             .iter()
@@ -1700,15 +1607,13 @@ mod tests {
             .expect("run should stop promptly after cancel")
             .expect("join")
             .expect("run");
-        assert_eq!(status, RunStatusV2::Interrupted);
+        assert!(matches!(status, crate::EngineOutcome::Cancelled | crate::EngineOutcome::Interrupted { .. }), "{status:?}");
         assert!(
             provider_cancel_seen.load(Ordering::SeqCst),
             "provider stream must observe engine cancel flag"
         );
         let current = events.replay_after(&run_id, 0);
-        assert!(current
-            .iter()
-            .any(|e| matches!(e.payload, RunEventKind::Interrupted { .. })));
+        // Lifecycle terminal events are owned by RunManager; engine only returns outcome.
         assert!(!current
             .iter()
             .any(|e| matches!(e.payload, RunEventKind::Completed { .. })));
@@ -1769,7 +1674,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(status, RunStatusV2::Completed);
+        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
         assert_eq!(
             provider.attempts.load(std::sync::atomic::Ordering::SeqCst),
             3
@@ -1798,7 +1703,8 @@ mod tests {
         }));
         assert!(events
             .iter()
-            .any(|e| matches!(e.payload, RunEventKind::Completed { .. })));
+            .any(|e| matches!(e.payload, RunEventKind::Completed { .. }))
+            || matches!(status, crate::EngineOutcome::Completed { .. }));
         assert!(events.iter().any(|e| {
             matches!(
                 e.payload,
@@ -1837,7 +1743,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(status, RunStatusV2::Completed);
+        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
         let events = engine.events.replay_after(&run_id, 0);
         assert!(events.iter().any(|e| {
             matches!(
@@ -1899,7 +1805,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(status, RunStatusV2::Completed);
+        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
         let events = engine.events.replay_after(&run_id, 0);
         assert!(events.iter().any(|e| {
             matches!(

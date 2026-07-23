@@ -294,7 +294,7 @@ pub(crate) async fn handle_run_subscribe(_data_store: &Arc<DataStore>, params: &
                         .map(|e| {
                             serde_json::json!({
                                 "run_id": e.run_id,
-                                "sequence": e.sequence,
+                                "sequence": e.effective_run_sequence(),
                                 "timestamp": e.timestamp.to_rfc3339(),
                                 "type": e.payload.type_name(),
                                 "payload": e.payload,

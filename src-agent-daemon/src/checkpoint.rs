@@ -381,44 +381,139 @@ impl CheckpointManager {
         paths: Option<&[String]>,
         conflict_policy: &str,
     ) -> Result<Vec<String>, String> {
+        // P0 fail-closed validation (task-07):
+        // - checkpoint_id must exist
+        // - checkpoint.run_id must equal request run_id
+        // - project_root must match the live checkpoint project root when known
+        // Any mismatch restores 0 files.
+        if checkpoint_id.trim().is_empty() {
+            return Err("checkpoint_id required".into());
+        }
         if conflict_policy != "fail" {
             return Err("only conflict_policy=fail is supported".into());
         }
+
+        let cp = self.load_checkpoint(checkpoint_id).map_err(|e| {
+            format!("workspace.restore refused: checkpoint not found ({e}); restored=0")
+        })?;
+        if cp.run_id != run_id {
+            return Err(format!(
+                "workspace.restore refused: checkpoint.run_id={} != request run_id={}; restored=0",
+                cp.run_id, run_id
+            ));
+        }
+        // When live checkpoint exists, enforce project root match (canonical).
+        {
+            let map = self.live.lock().map_err(|e| e.to_string())?;
+            if let Some(live) = map.get(run_id) {
+                let expected = live
+                    .project_root
+                    .canonicalize()
+                    .unwrap_or_else(|_| live.project_root.clone());
+                let got = project_root
+                    .canonicalize()
+                    .unwrap_or_else(|_| project_root.to_path_buf());
+                if expected != got {
+                    return Err(format!(
+                        "workspace.restore refused: project_identity mismatch \
+                         (checkpoint root {:?}, request {:?}); restored=0",
+                        expected, got
+                    ));
+                }
+            }
+        }
+
         let preview = self.rewind_preview(run_id, project_root, paths)?;
         if preview.checkpoint_id != checkpoint_id {
-            // allow explicit checkpoint_id from another source
-            let _ = checkpoint_id;
+            return Err(format!(
+                "workspace.restore refused: checkpoint_id mismatch \
+                 (preview={}, request={}); restored=0",
+                preview.checkpoint_id, checkpoint_id
+            ));
         }
         if !preview.conflicts.is_empty() {
             return Err(format!(
-                "rewind refused: {} conflict(s); first={}",
+                "workspace.restore refused: {} conflict(s); first={}; restored=0",
                 preview.conflicts.len(),
                 preview.conflicts[0].path
             ));
         }
-        let cp = self.load_checkpoint(&preview.checkpoint_id)?;
+
+        // Staging: capture current content for undo; apply atomically; rollback on failure.
+        let mut staging: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::new();
         let mut restored = Vec::new();
-        for f in &cp.files {
-            if let Some(filter) = paths {
-                if !filter.iter().any(|p| p == &f.path) {
-                    continue;
-                }
-            }
-            let abs = project_root.join(&f.path);
-            if f.existed_before {
-                if let Some(content) = &f.before_content {
-                    if let Some(parent) = abs.parent() {
-                        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        let apply_result: Result<(), String> = (|| {
+            for f in &cp.files {
+                if let Some(filter) = paths {
+                    if !filter.iter().any(|p| p == &f.path) {
+                        continue;
                     }
-                    std::fs::write(&abs, content).map_err(|e| e.to_string())?;
                 }
-            } else if abs.exists() {
-                // was added by the run — delete
-                std::fs::remove_file(&abs).map_err(|e| e.to_string())?;
+                let abs = project_root.join(&f.path);
+                let prior = if abs.exists() {
+                    Some(std::fs::read(&abs).map_err(|e| e.to_string())?)
+                } else {
+                    None
+                };
+                staging.push((abs.clone(), prior));
+
+                if f.existed_before {
+                    if let Some(content) = &f.before_content {
+                        if let Some(parent) = abs.parent() {
+                            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                        }
+                        // Atomic-ish write: temp + rename
+                        let tmp = abs.with_extension(format!(
+                            "natives-restore-tmp-{}",
+                            Uuid::new_v4()
+                        ));
+                        std::fs::write(&tmp, content).map_err(|e| e.to_string())?;
+                        std::fs::rename(&tmp, &abs).map_err(|e| {
+                            let _ = std::fs::remove_file(&tmp);
+                            e.to_string()
+                        })?;
+                    }
+                } else if abs.exists() {
+                    // was added by the run — delete
+                    std::fs::remove_file(&abs).map_err(|e| e.to_string())?;
+                }
+                restored.push(f.path.clone());
             }
-            restored.push(f.path.clone());
+            Ok(())
+        })();
+
+        if let Err(e) = apply_result {
+            // Undo already-applied files from staging (reverse order).
+            for (abs, prior) in staging.into_iter().rev() {
+                match prior {
+                    Some(bytes) => {
+                        if let Some(parent) = abs.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        let _ = std::fs::write(&abs, bytes);
+                    }
+                    None => {
+                        let _ = std::fs::remove_file(&abs);
+                    }
+                }
+            }
+            return Err(format!(
+                "workspace.restore failed mid-apply and rolled back: {e}; restored=0"
+            ));
         }
         Ok(restored)
+    }
+
+    /// Alias with task-07 naming — workspace restore only (not conversation rewind).
+    pub fn workspace_restore(
+        &self,
+        run_id: &str,
+        checkpoint_id: &str,
+        project_root: &Path,
+        paths: Option<&[String]>,
+        conflict_policy: &str,
+    ) -> Result<Vec<String>, String> {
+        self.rewind(run_id, checkpoint_id, project_root, paths, conflict_policy)
     }
 
     fn checkpoint_for_run(&self, run_id: &str) -> Result<CheckpointRecord, String> {

@@ -2,7 +2,10 @@
 
 use crate::production::{FixtureMode, FixtureProvider, ProductionRuntime};
 use crate::storage::DataStore;
-use agent_core::{AgentEngine, EngineRunConfig, EventSequencer};
+use agent_core::{
+    AgentEngine, CommitError, EngineOutcome, EngineRunConfig, EventSequencer, RunLifecycleAuthority,
+    TransitionMetadata,
+};
 use assistant_protocol::v2::{
     CancelRunRequest, CreateRunRequest, DaemonCapabilities, ReplayRunRequest, RetryRunRequest,
     RunEventKind, RunEventV2, RunStatusV2, RunV2, StartRunRequest, PROTOCOL_V2,
@@ -262,11 +265,11 @@ impl RunManager {
                 started_at, finished_at, error_code, step_count, max_steps,
                 token_budget, total_input_tokens, total_output_tokens, created_at,
                 parent_run_id, agent_profile_id, key_id, permission_profile,
-                project_path, retry_count, idempotency_key
+                project_path, retry_count, idempotency_key, revision
              )
              VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, 0, 0, ?12,
-                ?13, ?14, ?15, ?16, ?17, ?18, ?19
+                ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
              )
              ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status,
@@ -284,7 +287,8 @@ impl RunManager {
                 permission_profile = excluded.permission_profile,
                 project_path = excluded.project_path,
                 retry_count = excluded.retry_count,
-                idempotency_key = excluded.idempotency_key",
+                idempotency_key = excluded.idempotency_key,
+                revision = excluded.revision",
             rusqlite::params![
                 run.id,
                 run.conversation_id,
@@ -304,7 +308,8 @@ impl RunManager {
                 run.permission_profile,
                 run.project_path,
                 run.retry_count as i64,
-                run.idempotency_key
+                run.idempotency_key,
+                run.revision as i64
             ],
         )
         .map_err(|e| format!("PERSISTENCE_FAILED upsert run: {e}"))?;
@@ -325,7 +330,7 @@ impl RunManager {
                         provider_id, key_id, model_id, permission_profile,
                         trigger_message_id, started_at, finished_at, error_code,
                         step_count, max_steps, project_path, retry_count,
-                        created_at, idempotency_key
+                        created_at, idempotency_key, COALESCE(revision, 0)
                  FROM run WHERE idempotency_key = ?1 OR id = ?1 LIMIT 1",
             )
             .map_err(|e| e.to_string())?;
@@ -365,8 +370,11 @@ impl RunManager {
             ),
             last_event_sequence: 0,
             idempotency_key: row.get(18).map_err(|e| e.to_string())?,
-                    effort: None,
+            effort: None,
             runtime_id: None,
+            revision: row.get::<_, i64>(19).unwrap_or(0) as u64,
+            project_id: None,
+            project_identity_version: None,
         }))
     }
 
@@ -387,51 +395,329 @@ impl RunManager {
         } else {
             code
         };
-        let result = {
-            let mut runs = match self.runs.lock() {
-                Ok(g) => g,
-                Err(_) => return,
-            };
-            let Some(run) = runs.get_mut(run_id) else {
-                return;
-            };
-            if run.status.is_terminal() {
-                return;
-            }
-            run.status = RunStatusV2::Failed;
-            run.finished_at = Some(chrono::Utc::now());
-            run.error_code = Some(code.to_string());
-            run.clone()
-        };
-        let _ = self.persist_run_row(&result);
-        self.runtime.events.append(
-            run_id,
-            RunEventKind::Failed {
-                error,
-                code: code.to_string(),
-            },
-        );
-        let _ = self.persist_runs_snapshot();
+        let meta = TransitionMetadata::empty()
+            .with_error_code(code)
+            .with_reason(error)
+            .with_lifecycle_hint("failed");
+        let _ = self.commit_status(run_id, RunStatusV2::Failed, meta);
     }
 
+
+    /// Map a status target to a lifecycle event payload.
+    fn lifecycle_event_for(target: RunStatusV2, metadata: &TransitionMetadata) -> RunEventKind {
+        let reason = metadata
+            .reason
+            .clone()
+            .filter(|s| !s.is_empty())
+            .or_else(|| metadata.lifecycle_hint.clone())
+            .unwrap_or_default();
+        match target {
+            RunStatusV2::Queued => RunEventKind::Queued,
+            RunStatusV2::Preparing => RunEventKind::Preparing,
+            RunStatusV2::Running => RunEventKind::Started,
+            RunStatusV2::WaitingPermission => RunEventKind::Progress {
+                message: if reason.is_empty() {
+                    "waiting_permission".into()
+                } else {
+                    reason
+                },
+                percentage: None,
+            },
+            RunStatusV2::WaitingSubagent => RunEventKind::Progress {
+                message: if reason.is_empty() {
+                    "waiting_subagent".into()
+                } else {
+                    reason
+                },
+                percentage: None,
+            },
+            RunStatusV2::Cancelling => RunEventKind::Progress {
+                message: if reason.is_empty() {
+                    "cancelling".into()
+                } else {
+                    reason
+                },
+                percentage: None,
+            },
+            RunStatusV2::Completed => RunEventKind::Completed {
+                reason: if reason.is_empty() {
+                    "stop".into()
+                } else {
+                    reason
+                },
+            },
+            RunStatusV2::Failed => RunEventKind::Failed {
+                error: if reason.is_empty() {
+                    "failed".into()
+                } else {
+                    reason
+                },
+                code: metadata
+                    .error_code
+                    .clone()
+                    .unwrap_or_else(|| "failed".into()),
+            },
+            RunStatusV2::Cancelled => RunEventKind::Cancelled {
+                reason: if reason.is_empty() {
+                    "cancelled".into()
+                } else {
+                    reason
+                },
+            },
+            RunStatusV2::Interrupted => RunEventKind::Interrupted {
+                reason: if reason.is_empty() {
+                    "interrupted".into()
+                } else {
+                    reason
+                },
+            },
+            RunStatusV2::Created => RunEventKind::Queued,
+        }
+    }
+
+    fn apply_transition_metadata(
+        run: &mut RunV2,
+        target: RunStatusV2,
+        metadata: &TransitionMetadata,
+    ) {
+        if let Some(code) = &metadata.error_code {
+            run.error_code = Some(code.clone());
+        }
+        if let Some(steps) = metadata.step_count {
+            run.step_count = steps;
+        }
+        if matches!(target, RunStatusV2::Preparing | RunStatusV2::Running) && run.started_at.is_none()
+        {
+            run.started_at = Some(chrono::Utc::now());
+        }
+        if target.is_terminal() {
+            run.finished_at = Some(chrono::Utc::now());
+        }
+    }
+
+    /// Persist-first CAS commit of run status + lifecycle event, then memory/broadcast.
+    pub fn commit_transition(
+        &self,
+        run_id: &str,
+        expected_revision: u64,
+        target: RunStatusV2,
+        metadata: TransitionMetadata,
+    ) -> Result<agent_core::CommittedTransition, CommitError> {
+        <Self as RunLifecycleAuthority>::commit_transition(
+            self,
+            run_id,
+            expected_revision,
+            target,
+            metadata,
+        )
+    }
+
+    /// Commit using the current in-memory revision. Terminal races are idempotent.
+    pub fn commit_status(
+        &self,
+        run_id: &str,
+        target: RunStatusV2,
+        metadata: TransitionMetadata,
+    ) -> Result<RunV2, String> {
+        let revision = {
+            let runs = self.runs.lock().map_err(|e| e.to_string())?;
+            let run = runs
+                .get(run_id)
+                .ok_or_else(|| format!("run not found: {run_id}"))?;
+            if run.status == target || run.status.is_terminal() {
+                return Ok(run.clone());
+            }
+            run.revision
+        };
+        match self.commit_transition(run_id, revision, target, metadata) {
+            Ok(_) => self
+                .get_run(run_id)
+                .ok_or_else(|| "run disappeared after commit".into()),
+            Err(CommitError::AlreadyTerminal { .. }) => self
+                .get_run(run_id)
+                .ok_or_else(|| "run not found".into()),
+            Err(CommitError::CasConflict { status, .. }) if status.is_terminal() => self
+                .get_run(run_id)
+                .ok_or_else(|| "run not found".into()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// Commit terminal status from an EngineOutcome (idempotent).
+    pub fn commit_outcome(&self, run_id: &str, outcome: &EngineOutcome) -> Result<RunV2, String> {
+        let status = self
+            .get_run(run_id)
+            .map(|r| r.status)
+            .unwrap_or(RunStatusV2::Running);
+        if status.is_terminal() {
+            return self
+                .get_run(run_id)
+                .ok_or_else(|| "run not found".into());
+        }
+        let (mut target, mut meta) = agent_core::outcome_commit_parts(outcome);
+        // Pre-task-03: cooperative cancel mid-run -> Interrupted; cancel() path uses Cancelled.
+        if matches!(outcome, EngineOutcome::Cancelled) {
+            if status == RunStatusV2::Cancelling {
+                target = RunStatusV2::Cancelled;
+                meta = TransitionMetadata::empty()
+                    .with_reason("cancelled")
+                    .with_lifecycle_hint("cancelled");
+            } else {
+                target = RunStatusV2::Interrupted;
+                meta = TransitionMetadata::empty()
+                    .with_reason("cancelled")
+                    .with_lifecycle_hint("interrupted");
+            }
+        }
+        // Bridge non-adjacent active states so engines that skip explicit Running
+        // commits still land on a legal edge (Preparing/Queued → Running → terminal).
+        self.ensure_running_before_terminal(run_id, target)?;
+        self.commit_status(run_id, target, meta)
+    }
+
+    /// If the run is still Queued/Preparing and the target requires Running as
+    /// predecessor, commit Running first.
+    fn ensure_running_before_terminal(
+        &self,
+        run_id: &str,
+        target: RunStatusV2,
+    ) -> Result<(), String> {
+        let status = self
+            .get_run(run_id)
+            .map(|r| r.status)
+            .unwrap_or(RunStatusV2::Running);
+        if status.is_terminal() || status == RunStatusV2::Running {
+            return Ok(());
+        }
+        // Targets that are legal from Running (and not from Preparing).
+        let needs_running = matches!(
+            target,
+            RunStatusV2::Completed
+                | RunStatusV2::Failed
+                | RunStatusV2::Interrupted
+                | RunStatusV2::WaitingPermission
+                | RunStatusV2::WaitingSubagent
+                | RunStatusV2::Cancelling
+        );
+        if !needs_running {
+            return Ok(());
+        }
+        if status == RunStatusV2::Queued {
+            let _ = self.commit_status(
+                run_id,
+                RunStatusV2::Preparing,
+                TransitionMetadata::empty().with_lifecycle_hint("preparing"),
+            );
+        }
+        let status = self
+            .get_run(run_id)
+            .map(|r| r.status)
+            .unwrap_or(RunStatusV2::Preparing);
+        if status == RunStatusV2::Preparing {
+            let _ = self.commit_status(
+                run_id,
+                RunStatusV2::Running,
+                TransitionMetadata::empty().with_lifecycle_hint("started"),
+            );
+        }
+        Ok(())
+    }
+
+
+    /// Startup recovery (task-04): one transaction, no Engine Future restart.
+    ///
+    /// 1. Active runs → Interrupted (daemon_restarted)
+    /// 2. Related pending interactions → expired
+    /// 3. Related permission_request → expired
+    /// 4. session_actor active/pending fields cleared
     fn interrupt_active_sqlite_runs(&self) -> Result<usize, String> {
         let Some(store) = &self.data_store else {
             return Ok(0);
         };
         let conn = store.conn()?;
-        let changed = conn
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("PERSISTENCE_FAILED begin recovery tx: {e}"))?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let reason = r#"{"reason":"daemon_restarted"}"#;
+
+        // Collect active run ids first (for interaction/permission expiry filters).
+        let active_ids: Vec<String> = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id FROM run WHERE status IN (
+                        'created', 'queued', 'preparing', 'running', 'waiting_permission',
+                        'waiting_subagent', 'cancelling'
+                     )",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+
+        let changed = tx
             .execute(
                 "UPDATE run
                  SET status = 'interrupted',
                      error_code = 'daemon_restarted',
-                     finished_at = ?1
+                     finished_at = ?1,
+                     revision = COALESCE(revision, 0) + 1
                  WHERE status IN (
-                    'queued', 'preparing', 'running', 'waiting_permission',
+                    'created', 'queued', 'preparing', 'running', 'waiting_permission',
                     'waiting_subagent', 'cancelling'
                  )",
-                rusqlite::params![chrono::Utc::now().to_rfc3339()],
+                rusqlite::params![now],
             )
             .map_err(|e| format!("PERSISTENCE_FAILED interrupt active runs: {e}"))?;
+
+        // Expire pending interactions for those runs (history retained, listPending hides).
+        if !active_ids.is_empty() {
+            for rid in &active_ids {
+                let _ = tx.execute(
+                    "UPDATE interaction
+                     SET status = 'expired',
+                         response = ?1,
+                         responded_at = ?2
+                     WHERE status = 'pending' AND run_id = ?3",
+                    rusqlite::params![reason, now, rid],
+                );
+                let _ = tx.execute(
+                    "UPDATE permission_request
+                     SET status = 'expired'
+                     WHERE status = 'pending' AND run_id = ?1",
+                    rusqlite::params![rid],
+                );
+            }
+        } else {
+            // Still expire any pending interactions whose run is already interrupted/missing.
+            let _ = tx.execute(
+                "UPDATE interaction
+                 SET status = 'expired', response = ?1, responded_at = ?2
+                 WHERE status = 'pending'
+                   AND (run_id IS NULL OR run_id IN (
+                        SELECT id FROM run WHERE status = 'interrupted'
+                            AND error_code = 'daemon_restarted'
+                   ))",
+                rusqlite::params![reason, now],
+            );
+        }
+
+        // Clear session actor live pointers (no auto re-exec).
+        let _ = tx.execute(
+            "UPDATE session_actor
+             SET active_run_id = NULL,
+                 running_prompt_id = NULL,
+                 pending_interaction_id = NULL,
+                 cancel_and_send_id = NULL,
+                 cancel_requested = 0,
+                 updated_at = ?1",
+            rusqlite::params![now],
+        );
+
+        tx.commit()
+            .map_err(|e| format!("PERSISTENCE_FAILED commit recovery tx: {e}"))?;
         Ok(changed)
     }
 
@@ -549,14 +835,45 @@ impl RunManager {
             }
         }
 
+
+        // Resolve stable ProjectIdentity when a path is provided (task-10).
+        // Never store raw path as conversation.project_id.
+        let mut bound_project_id: Option<String> = None;
+        let mut bound_identity_version: Option<u32> = None;
+        let mut bound_canonical: Option<String> = None;
+        if let Some(pp) = req.project_path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            if let Some(store) = &self.data_store {
+                if let Ok(conn) = store.conn() {
+                    match crate::project_identity::store::register_or_get(&conn, pp) {
+                        Ok(identity) => {
+                            bound_project_id = Some(identity.project_id.clone());
+                            bound_identity_version = Some(identity.identity_version);
+                            bound_canonical = Some(identity.canonical_path.clone());
+                        }
+                        Err(e) => {
+                            // Missing path: keep diagnostic snapshot path, leave project_id
+                            // unbound (orphaned). Side-effect tools must re-bind first.
+                            eprintln!(
+                                "[run_manager] project identity not bound for '{pp}': {e}"
+                            );
+                            bound_canonical = Some(pp.to_string());
+                        }
+                    }
+                }
+            } else {
+                bound_canonical = Some(pp.to_string());
+            }
+        }
+
         // Host-mediated or daemon-owned: ensure conversation row exists for FK integrity
         // on the SAME store used by persist_run_row (never a different env path).
+        // conversation.project_id stores stable ProjectIdentity UUID (not path).
         self.ensure_conversation_for_run(
             &req.conversation_id,
             &req.provider_id,
             &req.model_id,
             req.permission_profile.as_deref(),
-            req.project_path.as_deref(),
+            bound_project_id.as_deref(),
         )?;
 
         // When the UI supplies an idempotency key, use it as the run id so
@@ -582,13 +899,16 @@ impl RunManager {
             error_code: None,
             step_count: 0,
             max_steps: req.max_steps.unwrap_or(50),
-            project_path: req.project_path.clone(),
+            project_path: bound_canonical.clone().or(req.project_path.clone()),
+            project_id: bound_project_id.clone(),
+            project_identity_version: bound_identity_version,
             retry_count: 0,
             created_at: Some(chrono::Utc::now()),
             last_event_sequence: 0,
             idempotency_key: req.idempotency_key.clone(),
             effort: req.effort.clone(),
             runtime_id: req.runtime_id.clone().or_else(|| Some("native".into())),
+            revision: 0,
         };
         self.persist_run_row(&run)?;
         {
@@ -669,22 +989,28 @@ impl RunManager {
 
     pub async fn cancel(&self, req: CancelRunRequest) -> Result<RunV2, String> {
         self.runtime.cancel_run(&req.run_id).await;
-        let result = {
-            let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
-            let run = runs
-                .get_mut(&req.run_id)
-                .ok_or_else(|| "run not found".to_string())?;
-            if run.status.is_terminal() {
-                run.clone()
-            } else {
-                run.status = RunStatusV2::Cancelled;
-                run.finished_at = Some(chrono::Utc::now());
-                run.clone()
-            }
-        };
-        self.persist_run_row(&result)?;
-        self.persist_runs_snapshot()?;
-        Ok(result)
+        // Pre-task-03: still jump to Cancelled for explicit cancel API.
+        // Prefer Cancelling -> Cancelled when legal; else direct if possible.
+        let current = self
+            .get_run(&req.run_id)
+            .ok_or_else(|| "run not found".to_string())?;
+        if current.status.is_terminal() {
+            return Ok(current);
+        }
+        if current.status != RunStatusV2::Cancelling {
+            let _ = self.commit_status(
+                &req.run_id,
+                RunStatusV2::Cancelling,
+                TransitionMetadata::empty().with_lifecycle_hint("cancelling"),
+            );
+        }
+        self.commit_status(
+            &req.run_id,
+            RunStatusV2::Cancelled,
+            TransitionMetadata::empty()
+                .with_reason("cancelled")
+                .with_lifecycle_hint("cancelled"),
+        )
     }
 
     /// Ensure a run row exists for `start` / `start_detached` (create if `run_id` absent).
@@ -873,21 +1199,11 @@ impl RunManager {
     }
 
     fn mark_preparing(&self, run_id: &str) -> Result<RunV2, String> {
-        let result = {
-            let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
-            let run = runs
-                .get_mut(run_id)
-                .ok_or_else(|| "run not found".to_string())?;
-            if !run.status.is_terminal() {
-                run.status = RunStatusV2::Preparing;
-                if run.started_at.is_none() {
-                    run.started_at = Some(chrono::Utc::now());
-                }
-            }
-            run.clone()
-        };
-        self.persist_run_row(&result)?;
-        Ok(result)
+        self.commit_status(
+            run_id,
+            RunStatusV2::Preparing,
+            TransitionMetadata::empty().with_lifecycle_hint("preparing"),
+        )
     }
 
     /// Non-blocking start for RPC / UI: returns immediately with Preparing status.
@@ -1037,14 +1353,11 @@ impl RunManager {
             .map_err(|e| e.to_string())?
             .insert(run.id.clone(), content.clone());
 
-        {
-            let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
-            if let Some(r) = runs.get_mut(&run.id) {
-                r.status = RunStatusV2::Preparing;
-                r.started_at = Some(chrono::Utc::now());
-                self.persist_run_row(r)?;
-            }
-        }
+        let _ = self.commit_status(
+            &run.id,
+            RunStatusV2::Preparing,
+            TransitionMetadata::empty().with_lifecycle_hint("preparing"),
+        );
 
         let request_project_path = req.project_path.clone();
         let provider_id = req.provider_id.unwrap_or_else(|| run.provider_id.clone());
@@ -1094,16 +1407,14 @@ impl RunManager {
                 Err(e) => e,
             };
             self.runtime.clear_cli_cancel(&run.id).await;
-            {
-                let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
-                if let Some(r) = runs.get_mut(&run.id) {
-                    r.status = RunStatusV2::Failed;
-                    r.finished_at = Some(chrono::Utc::now());
-                    r.error_code = Some("CODEX_UNAVAILABLE".into());
-                    self.persist_run_row(r)?;
-                }
-            }
-            self.persist_runs_snapshot()?;
+            let _ = self.commit_status(
+                &run.id,
+                RunStatusV2::Failed,
+                TransitionMetadata::empty()
+                    .with_error_code("CODEX_UNAVAILABLE")
+                    .with_reason(err.clone())
+                    .with_lifecycle_hint("failed"),
+            );
             return Err(if err.contains("unavailable") {
                 err
             } else {
@@ -1153,18 +1464,14 @@ impl RunManager {
                 "interrupted" | "cancelled" => RunStatusV2::Interrupted,
                 _ => RunStatusV2::Failed,
             };
-            {
-                let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
-                if let Some(r) = runs.get_mut(&run.id) {
-                    r.status = final_status;
-                    r.finished_at = Some(chrono::Utc::now());
-                    if final_status == RunStatusV2::Failed {
-                        r.error_code = Some("CLI_RUNTIME".into());
-                    }
-                    self.persist_run_row(r)?;
-                }
-            }
-            self.persist_runs_snapshot()?;
+            let meta = if final_status == RunStatusV2::Failed {
+                TransitionMetadata::empty()
+                    .with_error_code("CLI_RUNTIME")
+                    .with_lifecycle_hint("failed")
+            } else {
+                TransitionMetadata::empty().with_lifecycle_hint(final_status.as_str())
+            };
+            let _ = self.commit_status(&run.id, final_status, meta);
             return self
                 .get_run(&run.id)
                 .ok_or_else(|| "run missing after cli turn".to_string());
@@ -1258,13 +1565,11 @@ impl RunManager {
                 user_content: content,
                 max_steps,
             };
-            let mut status = engine
-                .run(config, &provider, &tools)
-                .await
-                .unwrap_or(RunStatusV2::Failed);
-            if status == RunStatusV2::Completed {
-                // Best-effort persist assistant turn. Under fixture tests a concurrent
-                // env change can make store() open a different DB — do not fail the run.
+            let outcome = match engine.run(config, &provider, &tools).await {
+                Ok(o) => o,
+                Err(e) => EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
+            };
+            if matches!(outcome, EngineOutcome::Completed { .. }) {
                 let _ = crate::conversation_store::append_assistant_turn_from_events(
                     &run.conversation_id,
                     &run.id,
@@ -1272,7 +1577,9 @@ impl RunManager {
                 );
             }
             self.runtime.engines.lock().await.remove(&run.id);
-            status
+            // Commit terminal from outcome; return status for legacy local var.
+            let committed = self.commit_outcome(&run.id, &outcome)?;
+            committed.status
         } else {
             let project_path = self.resolve_project_path(&run.id, request_project_path.as_deref());
             self.store_project_path(
@@ -1321,20 +1628,21 @@ impl RunManager {
             }
         };
 
-        let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
-        if let Some(r) = runs.get_mut(&run.id) {
-            r.status = final_status;
-            r.finished_at = Some(chrono::Utc::now());
-            if final_status == RunStatusV2::Failed {
-                r.error_code = Some("engine_failed".into());
+        // Fixture path already committed via commit_outcome; production path may still
+        // need a terminal commit from inferred status.
+        if let Some(existing) = self.get_run(&run.id) {
+            if existing.status.is_terminal() {
+                return Ok(existing);
             }
-            let result = r.clone();
-            drop(runs);
-            self.persist_run_row(&result)?;
-            self.persist_runs_snapshot()?;
-            return Ok(result);
         }
-        Err("run disappeared".into())
+        let meta = if final_status == RunStatusV2::Failed {
+            TransitionMetadata::empty()
+                .with_error_code("engine_failed")
+                .with_lifecycle_hint("failed")
+        } else {
+            TransitionMetadata::empty().with_lifecycle_hint(final_status.as_str())
+        };
+        self.commit_status(&run.id, final_status, meta)
     }
 
     /// Start with explicit seams (tests / advanced callers).
@@ -1380,14 +1688,11 @@ impl RunManager {
             .lock()
             .await
             .insert(run.id.clone(), engine.clone());
-        {
-            let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
-            if let Some(r) = runs.get_mut(&run.id) {
-                r.status = RunStatusV2::Preparing;
-                r.started_at = Some(chrono::Utc::now());
-                self.persist_run_row(r)?;
-            }
-        }
+        let _ = self.commit_status(
+            &run.id,
+            RunStatusV2::Preparing,
+            TransitionMetadata::empty().with_lifecycle_hint("preparing"),
+        );
         let config = EngineRunConfig {
             run_id: run.id.clone(),
             conversation_id: run.conversation_id.clone(),
@@ -1398,11 +1703,11 @@ impl RunManager {
             user_content: content,
             max_steps: req.max_steps.unwrap_or(run.max_steps),
         };
-        let final_status = engine
-            .run(config, provider, tools)
-            .await
-            .unwrap_or(RunStatusV2::Failed);
-        let final_status = if final_status == RunStatusV2::Completed
+        let outcome = match engine.run(config, provider, tools).await {
+            Ok(o) => o,
+            Err(e) => EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
+        };
+        let outcome = if matches!(outcome, EngineOutcome::Completed { .. })
             && crate::conversation_store::append_assistant_turn_from_events(
                 &run.conversation_id,
                 &run.id,
@@ -1410,22 +1715,12 @@ impl RunManager {
             )
             .is_err()
         {
-            RunStatusV2::Failed
+            EngineOutcome::failed("persist_assistant", "failed to persist assistant turn", false)
         } else {
-            final_status
+            outcome
         };
         self.runtime.engines.lock().await.remove(&run.id);
-        let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
-        if let Some(r) = runs.get_mut(&run.id) {
-            r.status = final_status;
-            r.finished_at = Some(chrono::Utc::now());
-            let result = r.clone();
-            drop(runs);
-            self.persist_run_row(&result)?;
-            self.persist_runs_snapshot()?;
-            return Ok(result);
-        }
-        Err("run disappeared".into())
+        self.commit_outcome(&run.id, &outcome)
     }
 
     pub fn retry(&self, req: RetryRunRequest) -> Result<RunV2, String> {
@@ -1488,6 +1783,201 @@ impl RunManager {
 pub fn protocol_version() -> &'static str {
     PROTOCOL_V2
 }
+
+
+
+impl RunLifecycleAuthority for RunManager {
+    fn commit_transition(
+        &self,
+        run_id: &str,
+        expected_revision: u64,
+        target: RunStatusV2,
+        metadata: TransitionMetadata,
+    ) -> Result<agent_core::CommittedTransition, CommitError> {
+        // 1. Read current from memory (authority cache); fall back to constructing error.
+        let (from, current_revision) = {
+            let runs = self
+                .runs
+                .lock()
+                .map_err(|e| CommitError::Other(e.to_string()))?;
+            let run = runs.get(run_id).ok_or_else(|| CommitError::NotFound {
+                run_id: run_id.to_string(),
+            })?;
+            (run.status, run.revision)
+        };
+
+        // Terminal idempotency: late outcomes against terminal do not insert events.
+        if from.is_terminal() {
+            return Err(CommitError::AlreadyTerminal {
+                run_id: run_id.to_string(),
+                status: from,
+                revision: current_revision,
+            });
+        }
+
+        if current_revision != expected_revision {
+            return Err(CommitError::CasConflict {
+                run_id: run_id.to_string(),
+                expected: expected_revision,
+                current: current_revision,
+                status: from,
+            });
+        }
+
+        // 2. Validate edge via agent-core sole authority.
+        agent_core::transition(from, target).map_err(CommitError::from)?;
+
+        let new_revision = expected_revision.saturating_add(1);
+        let lifecycle = Self::lifecycle_event_for(target, &metadata);
+
+        // 3. Durable transaction when store present; else memory CAS critical section.
+        let committed_event = if let Some(store) = &self.data_store {
+            let conn = store.conn().map_err(CommitError::Storage)?;
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| CommitError::Storage(e.to_string()))?;
+
+            // CAS update run row
+            let now = chrono::Utc::now().to_rfc3339();
+            let finished_at = if target.is_terminal() {
+                Some(now.clone())
+            } else {
+                None
+            };
+            let started_at = if matches!(target, RunStatusV2::Preparing | RunStatusV2::Running) {
+                Some(now.clone())
+            } else {
+                None
+            };
+            let changed = tx
+                .execute(
+                    "UPDATE run SET
+                        status = ?1,
+                        revision = ?2,
+                        error_code = COALESCE(?3, error_code),
+                        finished_at = COALESCE(?4, finished_at),
+                        started_at = COALESCE(started_at, ?5),
+                        step_count = COALESCE(?6, step_count)
+                     WHERE id = ?7 AND revision = ?8",
+                    rusqlite::params![
+                        target.as_str(),
+                        new_revision as i64,
+                        metadata.error_code,
+                        finished_at,
+                        started_at,
+                        metadata.step_count.map(|s| s as i64),
+                        run_id,
+                        expected_revision as i64,
+                    ],
+                )
+                .map_err(|e| CommitError::Storage(e.to_string()))?;
+            if changed == 0 {
+                // Re-read status for accurate error
+                let (status, rev): (String, i64) = tx
+                    .query_row(
+                        "SELECT status, COALESCE(revision, 0) FROM run WHERE id = ?1",
+                        rusqlite::params![run_id],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .map_err(|e| CommitError::Storage(e.to_string()))?;
+                let status = run_status_from_db(&status);
+                if status.is_terminal() {
+                    return Err(CommitError::AlreadyTerminal {
+                        run_id: run_id.to_string(),
+                        status,
+                        revision: rev as u64,
+                    });
+                }
+                return Err(CommitError::CasConflict {
+                    run_id: run_id.to_string(),
+                    expected: expected_revision,
+                    current: rev as u64,
+                    status,
+                });
+            }
+
+            // Allocate next run_sequence and insert lifecycle event in same tx.
+            let next_seq: i64 = tx
+                .query_row(
+                    "SELECT COALESCE(MAX(sequence), 0) + 1 FROM run_event WHERE run_id = ?1",
+                    rusqlite::params![run_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| CommitError::Storage(e.to_string()))?;
+            let mut event = RunEventV2::new(run_id, next_seq as u64, lifecycle.clone());
+            let payload = serde_json::to_string(&event)
+                .map_err(|e| CommitError::Storage(e.to_string()))?;
+            tx.execute(
+                "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp, event_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    run_id,
+                    next_seq,
+                    event.payload.type_name(),
+                    payload,
+                    event.timestamp.to_rfc3339(),
+                    event.event_id,
+                ],
+            )
+            .map_err(|e| CommitError::Storage(e.to_string()))?;
+            let global = tx.last_insert_rowid() as u64;
+            event.global_sequence = global;
+            tx.commit()
+                .map_err(|e| CommitError::Storage(e.to_string()))?;
+            event
+        } else {
+            // Memory-only: CAS inside the runs mutex (same critical section as status write).
+            RunEventV2::new(
+                run_id,
+                self.runtime.events.last_sequence(run_id).saturating_add(1),
+                lifecycle,
+            )
+        };
+
+        // 4. Update memory cache only after durable success (or memory CAS).
+        {
+            let mut runs = self
+                .runs
+                .lock()
+                .map_err(|e| CommitError::Other(e.to_string()))?;
+            let run = runs.get_mut(run_id).ok_or_else(|| CommitError::NotFound {
+                run_id: run_id.to_string(),
+            })?;
+            // Re-check CAS in memory for the memory-only path.
+            if run.revision != expected_revision {
+                if run.status.is_terminal() {
+                    return Err(CommitError::AlreadyTerminal {
+                        run_id: run_id.to_string(),
+                        status: run.status,
+                        revision: run.revision,
+                    });
+                }
+                return Err(CommitError::CasConflict {
+                    run_id: run_id.to_string(),
+                    expected: expected_revision,
+                    current: run.revision,
+                    status: run.status,
+                });
+            }
+            run.status = target;
+            run.revision = new_revision;
+            Self::apply_transition_metadata(run, target, &metadata);
+        }
+
+        // 5. Broadcast committed lifecycle event (no re-persist).
+        self.runtime.events.inject_committed(committed_event);
+        let _ = self.persist_runs_snapshot();
+
+        Ok(agent_core::CommittedTransition {
+            run_id: run_id.to_string(),
+            from,
+            to: target,
+            revision: new_revision,
+            idempotent: false,
+        })
+    }
+}
+
 
 fn run_status_from_db(status: &str) -> RunStatusV2 {
     match status {
@@ -2550,7 +3040,7 @@ mod tests {
                 .map(|e| {
                     serde_json::json!({
                         "run_id": e.run_id,
-                        "sequence": e.sequence,
+                        "sequence": e.effective_run_sequence(),
                         "type": e.payload.type_name(),
                     })
                 })
@@ -2946,21 +3436,26 @@ mod tests {
         let _ = start_result;
 
         let engine_cancelled = cancel_flag_seen.load(std::sync::atomic::Ordering::SeqCst);
-        let has_interrupted_event = rm
+        let has_cancel_lifecycle = rm
             .runtime
             .events
             .replay_after(&run.id, 0)
             .iter()
-            .any(|e| matches!(e.payload, RunEventKind::Interrupted { .. }));
+            .any(|e| {
+                matches!(
+                    e.payload,
+                    RunEventKind::Cancelled { .. } | RunEventKind::Interrupted { .. }
+                )
+            });
 
         if let Ok(dir) = std::env::var("NATIVES_TEST_SCRATCH") {
             let evidence = serde_json::json!({
                 "run_id": run.id,
-                "status_after_cancel": "interrupted",
+                "status_after_cancel": cancelled.status.as_str(),
                 "cancel_mid_run": true,
                 "engine_was_registered": true,
                 "engine_cancel_flag_observed_by_tool": engine_cancelled,
-                "interrupted_event": has_interrupted_event,
+                "cancel_lifecycle_event": has_cancel_lifecycle,
             });
             let _ = std::fs::write(
                 std::path::Path::new(&dir).join("daemon-cancel-mid.json"),
@@ -2968,8 +3463,8 @@ mod tests {
             );
         }
         assert!(
-            has_interrupted_event,
-            "cancel must append Interrupted event"
+            has_cancel_lifecycle,
+            "cancel must append Cancelled/Interrupted lifecycle event via commit_transition"
         );
         // Tool path should observe cancel flag from request_cancel.
         assert!(
@@ -3103,7 +3598,7 @@ mod tests {
                 .iter()
                 .map(|e| {
                     serde_json::json!({
-                        "sequence": e.sequence,
+                        "sequence": e.effective_run_sequence(),
                         "type": e.payload.type_name(),
                     })
                 })

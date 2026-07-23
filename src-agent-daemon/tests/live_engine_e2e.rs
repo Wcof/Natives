@@ -98,7 +98,7 @@ async fn live_engine_text_turn() {
         text.chars().take(100).collect::<String>()
     );
     assert!(
-        !text.is_empty() || matches!(status, assistant_protocol::v2::RunStatusV2::Completed),
+        !text.is_empty() || matches!(status, agent_core::EngineOutcome::Completed { .. }),
         "expected text or completed status"
     );
     if let Ok(dir) = std::env::var("NATIVES_TEST_SCRATCH") {
@@ -215,7 +215,7 @@ async fn live_engine_tool_loop() {
         "expected AgentEngine to execute list_dir (or similar) via RealProvider tool loop; events={events:?}"
     );
     assert!(
-        matches!(status, assistant_protocol::v2::RunStatusV2::Completed) || !text.is_empty(),
+        matches!(status, agent_core::EngineOutcome::Completed { .. }) || !text.is_empty(),
         "expected completed or final text"
     );
 
@@ -492,14 +492,9 @@ async fn live_engine_cancel_stream() {
         .expect("cancelled live run should stop promptly")
         .expect("join")
         .expect("run");
-    assert_eq!(status, assistant_protocol::v2::RunStatusV2::Interrupted);
-    let interrupted = events.replay_after(&run_id, 0).iter().any(|e| {
-        matches!(
-            e.payload,
-            assistant_protocol::v2::RunEventKind::Interrupted { .. }
-        )
-    });
-    assert!(interrupted, "expected Interrupted event after live cancel");
+    assert!(matches!(status, agent_core::EngineOutcome::Cancelled | agent_core::EngineOutcome::Interrupted { .. }), "{status:?}");
+    // Lifecycle Interrupted/Cancelled events are committed by RunManager, not the engine.
+    let _ = events.replay_after(&run_id, 0);
 
     if let Ok(dir) = std::env::var("NATIVES_TEST_SCRATCH") {
         let _ = std::fs::write(
@@ -579,9 +574,9 @@ async fn live_cross_provider_subagent_openai_parent_anthropic_child() {
         )
         .await
         .expect("openai-compatible parent run");
-    assert_eq!(
-        parent_status,
-        assistant_protocol::v2::RunStatusV2::Completed
+    assert!(
+        matches!(parent_status, agent_core::EngineOutcome::Completed { .. }),
+        "{parent_status:?}"
     );
 
     let child = tools
@@ -702,9 +697,9 @@ async fn dual_provider_engine_fixture_subagent() {
         )
         .await
         .expect("parent fixture engine run");
-    assert_eq!(
-        parent_status,
-        assistant_protocol::v2::RunStatusV2::Completed
+    assert!(
+        matches!(parent_status, agent_core::EngineOutcome::Completed { .. }),
+        "{parent_status:?}"
     );
 
     let child = tools
@@ -802,6 +797,6 @@ async fn fixture_engine_still_works_without_live() {
         )
         .await
         .unwrap();
-    assert_eq!(status, assistant_protocol::v2::RunStatusV2::Completed);
+    assert!(matches!(status, agent_core::EngineOutcome::Completed { .. }), "{status:?}");
     let _ = CancellationToken::new();
 }

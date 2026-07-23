@@ -24,6 +24,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Context passed to tool handlers during execution.
+///
+/// Must be constructed from a verified ProjectIdentity (task-10). Do not
+/// invent `project_root` from `current_dir` for side-effecting tools.
 #[derive(Debug, Clone)]
 pub struct ToolCallContext {
     /// The project root directory (canonical, absolute).
@@ -38,10 +41,16 @@ pub struct ToolCallContext {
     pub tool_call_id: String,
     /// Permission profile for this run.
     pub permission_profile: String,
+    /// Stable project identity UUID (required for privileged tools).
+    pub project_id: Option<String>,
+    /// Identity version at verification time.
+    pub project_identity_version: Option<u32>,
 }
 
 impl ToolCallContext {
     /// Create a new context with required fields.
+    ///
+    /// Prefer [`Self::from_verified_identity`] when a ProjectIdentity is available.
     pub fn new(
         project_root: PathBuf,
         run_id: String,
@@ -57,6 +66,31 @@ impl ToolCallContext {
             conversation_id,
             tool_call_id,
             permission_profile,
+            project_id: None,
+            project_identity_version: None,
+        }
+    }
+
+    /// Construct context from a verified project identity (task-10).
+    pub fn from_verified_identity(
+        project_id: impl Into<String>,
+        identity_version: u32,
+        project_root: PathBuf,
+        run_id: String,
+        conversation_id: String,
+        tool_call_id: String,
+        permission_profile: String,
+    ) -> Self {
+        let working_dir = project_root.clone();
+        Self {
+            project_root,
+            working_dir,
+            run_id,
+            conversation_id,
+            tool_call_id,
+            permission_profile,
+            project_id: Some(project_id.into()),
+            project_identity_version: Some(identity_version),
         }
     }
 
