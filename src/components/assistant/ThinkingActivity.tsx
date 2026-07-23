@@ -2,22 +2,32 @@
 
 /**
  * Live thinking / tool activity strip for the conversation timeline.
- * Presentational only — derivation happens in assistant-timeline helpers.
+ * Owns its own wall-clock tick so "思考过程 · Ns" stays smooth even when
+ * the parent only re-renders on sparse stream events.
  */
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import type {
   TimelineThinkingActivity,
   TimelineToolActivity,
 } from '@/lib/assistant-timeline';
 import { genericThinkingTitle } from '@/lib/assistant-timeline';
+import { formatElapsed } from '@/lib/assistant-message-view';
 
 export interface ThinkingActivityProps {
   locale: string;
   thinking?: TimelineThinkingActivity | null;
   tools?: TimelineToolActivity[];
-  /** Elapsed label for live thinking, e.g. "3.2s". */
-  thinkingDurationLabel?: string | null;
+  /**
+   * Epoch ms when thinking started. Required for a live elapsed label.
+   * Prefer reasoningStartedAt; fall back to run/message start.
+   */
+  thinkingStartedAtMs?: number | null;
+  /**
+   * Epoch ms when thinking finished. While thinking.live is true this is
+   * ignored so the counter keeps moving until the strip unmounts.
+   */
+  thinkingFinishedAtMs?: number | null;
 }
 
 function statusLabel(status: TimelineToolActivity['status'], zh: boolean): string {
@@ -41,10 +51,36 @@ export default function ThinkingActivity({
   locale,
   thinking,
   tools = [],
-  thinkingDurationLabel,
+  thinkingStartedAtMs = null,
+  thinkingFinishedAtMs = null,
 }: ThinkingActivityProps) {
   const zh = locale.startsWith('zh');
+  const live = Boolean(thinking?.live);
+  const started =
+    thinkingStartedAtMs != null && Number.isFinite(thinkingStartedAtMs)
+      ? thinkingStartedAtMs
+      : null;
+
+  // Local clock: 100ms matches formatElapsed's 0.1s display step.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!live || started == null) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 100);
+    return () => window.clearInterval(timer);
+  }, [live, started]);
+
   if (!thinking && tools.length === 0) return null;
+
+  let thinkingDurationLabel: string | null = null;
+  if (thinking && started != null) {
+    const end = live
+      ? now
+      : thinkingFinishedAtMs != null && Number.isFinite(thinkingFinishedAtMs)
+        ? thinkingFinishedAtMs
+        : now;
+    thinkingDurationLabel = formatElapsed(Math.max(0, end - started));
+  }
 
   return (
     <div
@@ -52,7 +88,10 @@ export default function ThinkingActivity({
       data-thinking-activity="1"
     >
       {thinking && (
-        <div className="text-xs text-[var(--text-secondary)]" data-thinking-live={thinking.live ? '1' : '0'}>
+        <div
+          className="text-xs text-[var(--text-secondary)]"
+          data-thinking-live={thinking.live ? '1' : '0'}
+        >
           <div className="mb-1 flex items-center gap-1.5 font-medium">
             {thinking.live && (
               <span
@@ -62,7 +101,9 @@ export default function ThinkingActivity({
             )}
             <span>{genericThinkingTitle(locale)}</span>
             {thinkingDurationLabel ? (
-              <span className="tabular-nums text-[var(--text-disabled)]">· {thinkingDurationLabel}</span>
+              <span className="tabular-nums text-[var(--text-disabled)]">
+                · {thinkingDurationLabel}
+              </span>
             ) : null}
           </div>
           {thinking.text ? (

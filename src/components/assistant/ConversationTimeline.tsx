@@ -45,7 +45,6 @@ const MessageRow = memo(function MessageRow({
   locale,
   zh,
   now,
-  hasActive,
   isLastRetryable,
   onRetry,
   copiedId,
@@ -56,7 +55,6 @@ const MessageRow = memo(function MessageRow({
   locale: string;
   zh: boolean;
   now: number;
-  hasActive: boolean;
   isLastRetryable: boolean;
   onRetry?: () => void;
   copiedId: string | null;
@@ -64,57 +62,71 @@ const MessageRow = memo(function MessageRow({
   runEvents: RunEvent[];
 }) {
   const user = message.role === 'user';
-  const start = message.startedAt ? Date.parse(message.startedAt) : Number.NaN;
+  const start = message.startedAt
+    ? Date.parse(message.startedAt)
+    : message.createdAt
+      ? Date.parse(message.createdAt)
+      : Number.NaN;
+  // Footer total time: always track wall clock while the message is active.
   const end = message.finishedAt ? Date.parse(message.finishedAt) : now || start;
   const duration = Number.isFinite(start) ? formatElapsed(end - start) : null;
   const tokens = (message.inputTokens ?? 0) + (message.outputTokens ?? 0);
-  const reasoningStart = message.reasoningStartedAt
-    ? Date.parse(message.reasoningStartedAt)
-    : Number.NaN;
-  const reasoningEnd = message.reasoningFinishedAt
-    ? Date.parse(message.reasoningFinishedAt)
-    : hasActive
-      ? now
-      : Number.NaN;
   const messageLive = message.status === 'streaming' || message.status === 'running';
 
-  const bodyBlocks = useMemo(() => {
-    const prepared = message.contentBlocks.map((block) => {
-      if (block.type !== 'reasoning') return block;
-      const withLocale = {
-        ...block,
-        locale: locale.startsWith('zh') ? 'zh' : 'en',
-        live: messageLive && Boolean(block.live ?? true),
-      };
-      if (!Number.isFinite(reasoningStart)) return withLocale;
-      return {
-        ...withLocale,
-        durationMs: Math.max(
-          0,
-          (Number.isFinite(reasoningEnd) ? reasoningEnd : now) - reasoningStart,
-        ),
-      };
-    });
-    return filterTimelineBodyBlocks(prepared);
-  }, [message.contentBlocks, locale, messageLive, reasoningStart, reasoningEnd, now]);
+  // Prefer dedicated reasoning clock; fall back to run/message start so the
+  // "思考过程 · Ns" label never stalls at 0.7s waiting for the first delta.
+  const reasoningStart = (() => {
+    if (message.reasoningStartedAt) {
+      const t = Date.parse(message.reasoningStartedAt);
+      if (Number.isFinite(t)) return t;
+    }
+    if (Number.isFinite(start)) return start;
+    return Number.NaN;
+  })();
+  const reasoningFinished = message.reasoningFinishedAt
+    ? Date.parse(message.reasoningFinishedAt)
+    : Number.NaN;
 
   const liveThinking = useMemo(
     () => (messageLive ? extractLiveThinking(message.contentBlocks) : null),
     [message.contentBlocks, messageLive],
   );
 
+  const bodyBlocks = useMemo(() => {
+    const prepared = message.contentBlocks.map((block) => {
+      if (block.type !== 'reasoning') return block;
+      const blockLive = messageLive && Boolean(block.live ?? true);
+      const withLocale = {
+        ...block,
+        locale: locale.startsWith('zh') ? 'zh' : 'en',
+        live: blockLive,
+      };
+      if (!Number.isFinite(reasoningStart)) return withLocale;
+      const endMs = blockLive
+        ? now
+        : Number.isFinite(reasoningFinished)
+          ? reasoningFinished
+          : now;
+      return {
+        ...withLocale,
+        durationMs: Math.max(0, endMs - reasoningStart),
+      };
+    });
+    return filterTimelineBodyBlocks(prepared);
+  }, [
+    message.contentBlocks,
+    locale,
+    messageLive,
+    reasoningStart,
+    reasoningFinished,
+    now,
+  ]);
+
   const toolActivity = useMemo(() => {
     if (!messageLive) return [];
     const all = deriveToolActivityFromEvents(runEvents);
     return selectActiveToolActivity(all);
   }, [runEvents, messageLive]);
-
-  const thinkingDurationLabel =
-    liveThinking && Number.isFinite(reasoningStart)
-      ? formatElapsed(
-          Math.max(0, (Number.isFinite(reasoningEnd) ? reasoningEnd : now) - reasoningStart),
-        )
-      : null;
 
   const hasReasoning = bodyBlocks.some((block) => block.type === 'reasoning');
 
@@ -132,7 +144,14 @@ const MessageRow = memo(function MessageRow({
             locale={locale}
             thinking={liveThinking}
             tools={toolActivity}
-            thinkingDurationLabel={thinkingDurationLabel}
+            thinkingStartedAtMs={Number.isFinite(reasoningStart) ? reasoningStart : null}
+            thinkingFinishedAtMs={
+              liveThinking
+                ? null
+                : Number.isFinite(reasoningFinished)
+                  ? reasoningFinished
+                  : null
+            }
           />
         )}
         {renderBlocks(bodyBlocks)}
@@ -278,7 +297,6 @@ export default function ConversationTimeline({
             locale={locale}
             zh={zh}
             now={now}
-            hasActive={hasActive}
             isLastRetryable={message.id === lastRetryableId}
             onRetry={onRetry}
             copiedId={copiedId}
