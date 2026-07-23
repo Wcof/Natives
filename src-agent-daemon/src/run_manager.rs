@@ -639,6 +639,26 @@ impl RunManager {
             .collect()
     }
 
+    /// Drop in-memory run bookkeeping after conversations were hard-deleted.
+    /// Does not touch durable `usage_stats` aggregates.
+    pub fn forget_conversations(&self, conversation_ids: &[String]) {
+        if conversation_ids.is_empty() {
+            return;
+        }
+        let set: std::collections::HashSet<&str> =
+            conversation_ids.iter().map(|s| s.as_str()).collect();
+        if let Ok(mut runs) = self.runs.lock() {
+            runs.retain(|_, r| !set.contains(r.conversation_id.as_str()));
+        }
+        if let Ok(mut last) = self.last_content.lock() {
+            // last_content is keyed by run_id; drop entries whose run is gone.
+            if let Ok(runs) = self.runs.lock() {
+                last.retain(|run_id, _| runs.contains_key(run_id));
+            }
+        }
+        let _ = self.persist_runs_snapshot();
+    }
+
     pub fn replay(&self, req: ReplayRunRequest) -> Vec<RunEventV2> {
         self.runtime
             .events

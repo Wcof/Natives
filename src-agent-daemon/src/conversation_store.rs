@@ -731,53 +731,162 @@ fn archive(params: Value) -> Result<Value, String> {
 }
 
 async fn delete(params: Value) -> Result<Value, String> {
-    let id = id_param(&params)?;
-    // Cancel active runs on the parent conversation.
-    for run in crate::global_run_manager()
-        .list_runs(Some(id))
-        .into_iter()
-        .filter(|run| run.status.is_active())
-    {
-        let _ = crate::global_run_manager()
-            .cancel(assistant_protocol::v2::CancelRunRequest { run_id: run.id })
-            .await;
-    }
-    // Cancel active child subagent runs (runtime) before SQL CASCADE removes rows.
-    if let Ok(sessions) = crate::subagent_store::list_subagent_sessions(Some(id), true) {
+    let id = id_param(&params)?.to_string();
+    // Collect this conversation + hidden children so we hard-delete the whole tree.
+    let mut conversation_ids: Vec<String> = vec![id.clone()];
+    if let Ok(sessions) = crate::subagent_store::list_subagent_sessions(Some(&id), true) {
         for sess in sessions {
-            if matches!(sess.status.as_str(), "open" | "running" | "idle") {
-                if let Some(parent_run) = sess.parent_run_id.as_deref() {
-                    // Best-effort: cancel any live engine under known task outputs.
-                    let _ = crate::global_run_manager()
-                        .runtime
-                        .kill_task(&sess.id)
-                        .await;
-                    let _ = crate::global_run_manager()
-                        .runtime
-                        .cancel_run(parent_run)
-                        .await;
-                }
-                let _ = crate::subagent_store::close_subagent_session(
-                    &sess.id,
-                    "cancelled",
-                    Some("parent conversation deleted"),
-                );
-            }
-            // Also cancel runs on the child conversation.
-            for run in crate::global_run_manager()
-                .list_runs(Some(&sess.child_conversation_id))
-                .into_iter()
-                .filter(|run| run.status.is_active())
+            if !conversation_ids
+                .iter()
+                .any(|c| c == &sess.child_conversation_id)
             {
-                let _ = crate::global_run_manager()
-                    .cancel(assistant_protocol::v2::CancelRunRequest { run_id: run.id })
-                    .await;
+                conversation_ids.push(sess.child_conversation_id.clone());
             }
         }
     }
-    // SQL CASCADE removes child conversations / subagent_session / route_policy via FK.
-    exec_update("DELETE FROM conversation WHERE id = ?1", params![id])?;
-    Ok(serde_json::json!({ "deleted": true }))
+
+    // Cancel every live run under the tree before rows disappear.
+    for cid in &conversation_ids {
+        for run in crate::global_run_manager()
+            .list_runs(Some(cid))
+            .into_iter()
+            .filter(|run| run.status.is_active())
+        {
+            let _ = crate::global_run_manager()
+                .cancel(assistant_protocol::v2::CancelRunRequest { run_id: run.id })
+                .await;
+        }
+    }
+    if let Ok(sessions) = crate::subagent_store::list_subagent_sessions(Some(&id), true) {
+        for sess in sessions {
+            let _ = crate::global_run_manager()
+                .runtime
+                .kill_task(&sess.id)
+                .await;
+            let _ = crate::subagent_store::close_subagent_session(
+                &sess.id,
+                "cancelled",
+                Some("parent conversation deleted"),
+            );
+        }
+    }
+
+    // Fold remaining token totals into durable usage_stats *before* CASCADE removes
+    // run/message rows. usage_stats is date/model aggregate billing — no conversation content.
+    let mut usage_rows_folded = 0u64;
+    {
+        let store = store()?;
+        let conn = store.conn()?;
+        for cid in &conversation_ids {
+            usage_rows_folded += fold_conversation_tokens_into_usage_stats(&conn, cid)?;
+        }
+        // Hard-delete: conversation content gone; billing stays in usage_stats.
+        // CASCADE clears messages/runs/events/subagent_session/route_policy/children.
+        for cid in conversation_ids.iter().rev() {
+            // Children first is not required with CASCADE from parent, but deleting each
+            // id is idempotent and covers orphan child rows without parent FK path.
+            let _ = conn.execute("DELETE FROM conversation WHERE id = ?1", params![cid]);
+        }
+        // Ensure root is gone even if children-only path ran.
+        let changed = conn
+            .execute("DELETE FROM conversation WHERE id = ?1", params![id])
+            .map_err(|e| e.to_string())?;
+        if changed == 0 {
+            // Already deleted is success (idempotent).
+            let still: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM conversation WHERE id = ?1)",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .unwrap_or(false);
+            if still {
+                return Err("conversation not found".into());
+            }
+        }
+    }
+
+    // Drop in-memory run rows for deleted conversations (best-effort).
+    crate::global_run_manager().forget_conversations(&conversation_ids);
+
+    Ok(serde_json::json!({
+        "deleted": true,
+        "hard_deleted": true,
+        "usage_stats_preserved": true,
+        "usage_rows_folded": usage_rows_folded,
+    }))
+}
+
+/// Snapshot token totals for a conversation into `usage_stats` (billing-only aggregate).
+/// Does not store messages, titles, or prompts.
+fn fold_conversation_tokens_into_usage_stats(
+    conn: &rusqlite::Connection,
+    conversation_id: &str,
+) -> Result<u64, String> {
+    let _ = conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS usage_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            source TEXT NOT NULL,
+            source_path TEXT,
+            model TEXT NOT NULL,
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+            request_count INTEGER NOT NULL DEFAULT 0,
+            cost_usd REAL NOT NULL DEFAULT 0.0,
+            UNIQUE(date, source, model)
+        );",
+    );
+
+    // Prefer run-level totals (already projected from usage_updated events).
+    // date: first 10 chars of RFC3339 / sqlite datetime → YYYY-MM-DD.
+    let mut stmt = conn
+        .prepare(
+            "SELECT COALESCE(NULLIF(TRIM(model_id), ''), 'unknown'),
+                    substr(COALESCE(started_at, created_at, datetime('now')), 1, 10),
+                    COALESCE(SUM(COALESCE(total_input_tokens, 0)), 0),
+                    COALESCE(SUM(COALESCE(total_output_tokens, 0)), 0),
+                    COUNT(*)
+             FROM run
+             WHERE conversation_id = ?1
+             GROUP BY 1, 2",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![conversation_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut folded = 0u64;
+    for row in rows.flatten() {
+        let (model, date, input, output, request_count) = row;
+        if input == 0 && output == 0 {
+            continue;
+        }
+        conn.execute(
+            "INSERT INTO usage_stats
+                (date, source, source_path, model, input_tokens, output_tokens,
+                 cache_creation_tokens, cache_read_tokens, request_count, cost_usd)
+             VALUES (?1, 'natives', 'conversation.delete', ?2, ?3, ?4, 0, 0, ?5, 0.0)
+             ON CONFLICT(date, source, model) DO UPDATE SET
+                input_tokens = input_tokens + excluded.input_tokens,
+                output_tokens = output_tokens + excluded.output_tokens,
+                request_count = request_count + excluded.request_count",
+            params![date, model, input, output, request_count],
+        )
+        .map_err(|e| e.to_string())?;
+        folded += 1;
+    }
+    Ok(folded)
 }
 
 fn exec_update(sql: &str, params: impl rusqlite::Params) -> Result<(), String> {
@@ -1053,5 +1162,87 @@ mod tests {
         let with_children = list(serde_json::json!({ "include_children": true })).unwrap();
         let arr2 = with_children.as_array().unwrap();
         assert!(arr2.iter().any(|c| c["id"] == child));
+    }
+
+    #[tokio::test]
+    async fn delete_hard_removes_conversation_but_keeps_usage_stats() {
+        let _guard = env_lock();
+        let _restore = EnvRestore {
+            db: std::env::var("NATIVES_DB_PATH").ok(),
+            asst: std::env::var("NATIVES_ASSISTANT_DB_PATH").ok(),
+            rt: std::env::var("NATIVES_RUNTIME_DIR").ok(),
+        };
+        let _clear_db = ClearTestDb;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join(format!("natives-del-{}.db", uuid::Uuid::new_v4()));
+        std::env::set_var("NATIVES_DB_PATH", &db);
+        std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+        let art = dir.path().join("artifacts");
+        crate::storage::set_test_db_override(Some(db.clone()), Some(art.clone()));
+        let store = crate::storage::DataStore::new(&db, &art).expect("migrate");
+
+        ensure_conversation_stub("conv-del", "openai", "gpt-4o", None, None).unwrap();
+        {
+            let conn = store.conn().unwrap();
+            conn.execute(
+                "INSERT INTO run (
+                    id, conversation_id, status, provider_id, model_id,
+                    total_input_tokens, total_output_tokens, created_at, started_at
+                 ) VALUES (?1, ?2, 'completed', 'openai', 'gpt-4o', 100, 50, ?3, ?3)",
+                rusqlite::params!["run-del", "conv-del", "2026-07-23T12:00:00Z"],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO message (id, conversation_id, role, status, input_tokens, output_tokens, created_at)
+                 VALUES (?1, ?2, 'user', 'complete', 0, 0, ?3)",
+                rusqlite::params!["msg-del", "conv-del", "2026-07-23T12:00:00Z"],
+            )
+            .unwrap();
+        }
+
+        let out = request(
+            names::CONVERSATION_DELETE,
+            serde_json::json!({ "id": "conv-del" }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out["deleted"], true);
+        assert_eq!(out["hard_deleted"], true);
+        assert_eq!(out["usage_stats_preserved"], true);
+
+        let conn = store.conn().unwrap();
+        let conv_left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM conversation WHERE id = ?1",
+                rusqlite::params!["conv-del"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(conv_left, 0);
+        let msg_left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM message WHERE conversation_id = ?1",
+                rusqlite::params!["conv-del"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(msg_left, 0);
+        let run_left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM run WHERE conversation_id = ?1",
+                rusqlite::params!["conv-del"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(run_left, 0);
+        let usage_in: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(input_tokens),0) FROM usage_stats WHERE source='natives' AND model='gpt-4o'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(usage_in >= 100, "usage_stats should retain folded tokens, got {usage_in}");
     }
 }

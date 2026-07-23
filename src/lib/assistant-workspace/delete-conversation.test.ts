@@ -47,4 +47,13 @@ test('host delete always hard-deletes even when daemon cleanup is pending', () =
   if (earlyCleanup > 0) {
     assert.ok(hardDeleteIdx < earlyCleanup, 'hard delete must not be skipped by cleanup_pending');
   }
+  // Hard delete must preserve billing aggregates.
+  assert.match(fn, /usage_stats_preserved/);
+  assert.match(fn, /hard_deleted/);
+});
+
+test('host delete also clears conversation-scoped tool_calls and artifacts', () => {
+  const fn = host.slice(host.indexOf('async fn handle_conversation_delete'));
+  assert.match(fn, /DELETE FROM assistant_tool_calls WHERE conversation_id/);
+  assert.match(fn, /DELETE FROM assistant_artifacts WHERE conversation_id/);
 });
