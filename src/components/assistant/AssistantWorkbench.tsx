@@ -83,6 +83,8 @@ import { copyToClipboard } from '@/lib/clipboard';
 import ConversationTimeline from './ConversationTimeline';
 import MessageInput from './MessageInput';
 import PermissionRequestCard from './PermissionRequestCard';
+import AskUserPromptCard from './AskUserPromptCard';
+import { COMPOSER_COLUMN_CLASS } from './InteractionPromptShell';
 import GoalStatusBar from './GoalStatusBar';
 import PromptQueuePanel from './PromptQueuePanel';
 import ActivityInspector from './ActivityInspector';
@@ -1732,6 +1734,12 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     activeConversation?.permissionProfileId ?? 'ask',
   );
 
+  // Composer-blocking interactions: hide MessageInput so the user cannot type/stop/send.
+  const composerBlockedByInteraction = Boolean(
+    (permission && permission.kind === 'permission') ||
+      (askUser && askUser.kind === 'ask_user'),
+  );
+
   const showRight =
     rightPanelOpen &&
     (state.view.layoutBreakpoint === 'full' || state.view.layoutBreakpoint === 'drawer-right');
@@ -1830,52 +1838,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             />
           </div>
 
-          {permission && permission.kind === 'permission' && (
-            <div className="mx-auto w-full max-w-[860px] px-5">
-              <PermissionRequestCard
-                request={{
-                  id: permission.id,
-                  toolName: permission.toolName,
-                  reason: permission.reason,
-                  input: permission.input,
-                  status: 'pending',
-                  createdAt: permission.createdAt,
-                }}
-                locale={locale}
-                onApprove={(id, scope) => {
-                  // Must return the Promise so the card can await + recover on failure.
-                  return handlePermission(id, true, scope);
-                }}
-                onReject={(id) => handlePermission(id, false)}
-              />
-            </div>
-          )}
-
-          {askUser && askUser.kind === 'ask_user' && (
-            <div className="mx-4 mb-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-sm">
-              <div className="font-medium">{askUser.question.prompt}</div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {(askUser.question.options ?? []).map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    className="rounded-lg border border-[var(--border)] px-3 py-1.5 hover:bg-[var(--surface-hover)]"
-                    onClick={() =>
-                      void gateway
-                        .request('interaction.respond', {
-                          id: askUser.id,
-                          answer: opt.id,
-                          run_id: askUser.runId,
-                        })
-                        .then(() => dispatch({ type: 'interaction/remove', id: askUser.id }))
-                    }
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Composer interactions (permission / ask_user) replace MessageInput below. */}
 
           {planApproval && planApproval.kind === 'plan_approval' && (
             <div className="mx-4 mb-2 max-h-48 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-sm">
@@ -1990,6 +1953,50 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             }
           />
 
+          {composerBlockedByInteraction ? (
+            <div className={`${COMPOSER_COLUMN_CLASS} pb-5 pt-2`} data-composer-interaction-overlay>
+              {permission && permission.kind === 'permission' ? (
+                <PermissionRequestCard
+                  request={{
+                    id: permission.id,
+                    toolName: permission.toolName,
+                    reason: permission.reason,
+                    input: permission.input,
+                    status: 'pending',
+                    createdAt: permission.createdAt,
+                  }}
+                  locale={locale}
+                  onApprove={(id, scope) => {
+                    // Must return the Promise so the card can await + recover on failure.
+                    return handlePermission(id, true, scope);
+                  }}
+                  onReject={(id) => handlePermission(id, false)}
+                />
+              ) : null}
+              {askUser && askUser.kind === 'ask_user' ? (
+                <AskUserPromptCard
+                  interaction={askUser}
+                  locale={locale}
+                  onAnswer={async (id, answer) => {
+                    await gateway.request('interaction.respond', {
+                      id,
+                      answer,
+                      run_id: askUser.runId,
+                    });
+                    dispatch({ type: 'interaction/remove', id });
+                  }}
+                  onCancel={async (id) => {
+                    await gateway.request('interaction.respond', {
+                      id,
+                      cancelled: true,
+                      run_id: askUser.runId,
+                    });
+                    dispatch({ type: 'interaction/remove', id });
+                  }}
+                />
+              ) : null}
+            </div>
+          ) : (
           <MessageInput
             locale={locale}
             onSend={(draft) => handleSend(draft, false)}
@@ -2139,6 +2146,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             }}
             projectPath={activeProjectPath}
           />
+          )}
         </div>
 
         {showRight && (
