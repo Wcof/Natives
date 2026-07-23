@@ -926,6 +926,7 @@ export function workspaceReducer(
 
     case 'conversations/setActive':
       // Switching conversation must NOT clear other runs/messages
+      if (state.activeConversationId === action.id) return state;
       return { ...state, activeConversationId: action.id };
 
     case 'snapshot/apply':
@@ -1093,8 +1094,21 @@ export function workspaceReducer(
         },
       };
 
-    case 'view/patch':
-      return { ...state, view: { ...state.view, ...action.patch } };
+    case 'view/patch': {
+      // Bail out when every provided field already matches — layout effects
+      // dispatch layoutBreakpoint on mount/resize and must not force a new
+      // state identity when nothing changed (avoids update-depth cascades).
+      const patch = action.patch;
+      let changed = false;
+      for (const key of Object.keys(patch) as Array<keyof typeof patch>) {
+        if (state.view[key] !== patch[key]) {
+          changed = true;
+          break;
+        }
+      }
+      if (!changed) return state;
+      return { ...state, view: { ...state.view, ...patch } };
+    }
 
     case 'view/setBlockExpanded':
       return {

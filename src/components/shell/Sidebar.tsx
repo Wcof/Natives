@@ -329,7 +329,16 @@ export default function Sidebar({
 
   // macOS 使用系统原生 traffic lights（tauri.macos.conf.json Overlay）；
   // Windows/Linux 仍为无边框窗口，需要自绘最小化/最大化/关闭。
-  const usesNativeTrafficLights = detectNativeTrafficLights();
+  //
+  // 必须用「挂载后才切换」的模式：SSR 与客户端首帧都渲染 fallback
+  // window-controls，等 useEffect 再切到 native spacer。若在 render 里直接
+  // 读 detectNativeTrafficLights()，macOS 上会 SSR=false / CSR=true 导致
+  // hydration mismatch。
+  const [usesNativeTrafficLights, setUsesNativeTrafficLights] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- platform chrome only known after mount
+    setUsesNativeTrafficLights(detectNativeTrafficLights());
+  }, []);
 
   const handleWindowAction = useCallback(async (
     action: 'minimize' | 'maximize' | 'close',
@@ -530,6 +539,20 @@ export default function Sidebar({
             </div>
           )}
 
+          {/* 设置模式下：直接在标题栏加入“返回首页”交互按钮 */}
+          {isSettingsMode && (
+            <button
+              type="button"
+              onClick={() => selectNavigation('dashboard', '__dashboard__')}
+              className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all font-medium shrink-0 ml-1"
+              title={t(locale, 'settings.backHome')}
+              aria-label={t(locale, 'settings.backHome')}
+            >
+              <ArrowLeft size={13} />
+              {!isCollapsed && <span>{t(locale, 'settings.backHome')}</span>}
+            </button>
+          )}
+
           {/* 中间弹性拖拽条：不覆盖两侧交互控件 */}
           {!isCollapsed && (
             <div className="titlebar-drag-fill" data-tauri-drag-region />
@@ -561,31 +584,7 @@ export default function Sidebar({
 
       {isSettingsMode ? (
         /* ── Settings Sidebar Layout ── */
-        <div className="flex-1 flex flex-col min-h-0">
-          {/* Back button */}
-          <div className={`pt-2 ${isCollapsed ? 'px-2 pb-2' : 'px-4 pb-3'}`}>
-            <button
-              onClick={() => selectNavigation('dashboard', '__dashboard__')}
-              className={
-                isCollapsed
-                  ? 'flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all'
-                  : 'flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all w-full font-medium'
-              }
-              title={t(locale, 'settings.backHome')}
-              aria-label={t(locale, 'settings.backHome')}
-            >
-              <ArrowLeft size={13} />
-              {!isCollapsed && <span>{t(locale, 'settings.backHome')}</span>}
-            </button>
-          </div>
-
-          {/* Section title */}
-          {!isCollapsed && (
-            <div className="px-5 pb-2 pt-1 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--text-disabled)]">
-              {t(locale, 'settings.title')}
-            </div>
-          )}
-
+        <div className="flex-1 flex flex-col min-h-0 pt-1">
           {/* Settings items — flat nav with five sections */}
           <div className={`flex flex-col gap-0.5 flex-1 overflow-y-auto ${isCollapsed ? 'items-center px-2' : 'px-3'}`}>
             {SETTINGS_NAV_ITEMS.map((item) => {

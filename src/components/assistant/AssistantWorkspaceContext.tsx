@@ -149,17 +149,56 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
         | AssistantNavigationSnapshot
         | ((prev: AssistantNavigationSnapshot) => AssistantNavigationSnapshot),
     ) => {
-      setNavigation(snapshot);
+      setNavigation((prev) => {
+        const next = typeof snapshot === 'function' ? snapshot(prev) : snapshot;
+        // Structural bailout: workbench republishes on every store tick; returning
+        // `prev` when nothing meaningful changed avoids update-depth storms.
+        if (
+          prev === next ||
+          (prev.selectedId === next.selectedId &&
+            prev.activeProjectPath === next.activeProjectPath &&
+            prev.loading === next.loading &&
+            prev.creationState === next.creationState &&
+            prev.isCreatingConversation === next.isCreatingConversation &&
+            prev.pendingCreateProjectPath === next.pendingCreateProjectPath &&
+            prev.tempSession === next.tempSession &&
+            prev.groups === next.groups)
+        ) {
+          return prev;
+        }
+        return next;
+      });
     },
     [],
   );
 
   const publishRuntime = useCallback((snapshot: AssistantRuntimeSnapshot) => {
-    setRuntime(snapshot);
+    setRuntime((prev) => {
+      if (
+        prev.conversationId === snapshot.conversationId &&
+        prev.conversationTitle === snapshot.conversationTitle &&
+        prev.conversationMode === snapshot.conversationMode &&
+        prev.providerId === snapshot.providerId &&
+        prev.modelId === snapshot.modelId &&
+        prev.runId === snapshot.runId &&
+        prev.runStatus === snapshot.runStatus &&
+        prev.runStartedAt === snapshot.runStartedAt &&
+        prev.runFinishedAt === snapshot.runFinishedAt &&
+        prev.events === snapshot.events &&
+        prev.fileChanges === snapshot.fileChanges &&
+        prev.artifacts === snapshot.artifacts &&
+        prev.usage.inputTokens === snapshot.usage.inputTokens &&
+        prev.usage.outputTokens === snapshot.usage.outputTokens &&
+        prev.usage.reasoningTokens === snapshot.usage.reasoningTokens
+      ) {
+        return prev;
+      }
+      return snapshot;
+    });
   }, []);
 
   const registerActions = useCallback((next: AssistantWorkspaceActions | null) => {
-    setWorkbenchActions(next);
+    setWorkbenchActions((prev) => (prev === next ? prev : next));
   }, []);
 
   /**
@@ -382,38 +421,7 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
                 await window.nativesAPI?.project?.remove?.(path);
               }
             }
-            // Re-bucket: host unassigns sessions; clear projectId in the published tree.
-            publishNavigation((prev) => {
-              const conversations = prev.groups.flatMap((g) =>
-                g.conversations.map((c) => ({
-                  id: c.id,
-                  title: c.title,
-                  mode: c.mode,
-                  projectId: c.projectId === path ? null : (c.projectId ?? null),
-                  updatedAt: c.updatedAt,
-                  pinned: c.pinned,
-                })),
-              );
-              const remainingProjects = prev.groups
-                .filter((g) => Boolean(g.path) && g.path !== path)
-                .map((g) => ({
-                  path: g.path as string,
-                  lastOpenedAt: g.lastOpenedAt ?? null,
-                  label: g.label,
-                }));
-              const unassignedLabel =
-                prev.groups.find((g) => !g.path)?.label ??
-                (typeof navigator !== 'undefined' && navigator.language.startsWith('zh')
-                  ? '未关联项目'
-                  : 'Unassigned');
-              return {
-                ...prev,
-                groups: groupAssistantConversations(conversations, remainingProjects, unassignedLabel),
-                activeProjectPath:
-                  prev.activeProjectPath === path ? null : prev.activeProjectPath,
-              };
-            });
-            // Also re-fetch registered projects so empty folders stay accurate.
+            // Soft-delete: sessions keep their project_id, just refresh the project list.
             await refreshNavigationFromHost();
           } catch (e) {
             console.error('Failed to remove project:', e);

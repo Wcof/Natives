@@ -107,10 +107,14 @@ fn test_migration_rollback_on_failure() {
     let store = DataStore::new(&db_path, &art_dir).unwrap();
     drop(store);
 
-    // Verify the database has the schema version table
+    // Verify the database has the daemon schema version table
     let verify_conn = rusqlite::Connection::open(&db_path).unwrap();
     let version: i64 = verify_conn
-        .query_row("SELECT COALESCE(MAX(version), 0) FROM _schema_version", [], |row| row.get(0))
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM _daemon_schema_version",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
     assert!(version > 0, "Migrations should have run");
 

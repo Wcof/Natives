@@ -1,6 +1,6 @@
 'use client';
 
-import { startTransition, useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Package } from 'lucide-react';
 import { followPriority, changedRange, getFollowState, recordTerminalActivity, getExt } from '@/lib/follow-mode';
 import { getScrollbackLines } from '@/lib/path-detector';
@@ -188,17 +188,16 @@ function LiveHtmlPreview({ path }: { path: string }) {
     } catch { /* cross-origin errors are expected if iframe navigated */ }
   }, [getThemeCSS, themeId]);
 
-  // Re-send theme on every themeId change
+  // Re-send theme CSS on themeId change. Do NOT put currentSrc in deps and
+  // do NOT cache-bust via setCurrentSrc(...Date.now()) — that re-triggers this
+  // effect forever (Maximum update depth exceeded).
   useEffect(() => {
     sendThemeToIframe(currentIframeRef.current);
-    // Also re-render with cache-busting URL so the iframe reloads with new theme
-    if (currentSrc) {
-      startTransition(() => { setCurrentSrc(`${currentSrc.split('&v=')[0]}&v=${Date.now()}`); });
-    }
-  }, [themeId, sendThemeToIframe, currentSrc]);
+  }, [themeId, sendThemeToIframe]);
 
+  // Load file into a blob URL when the path changes (not on every currentSrc update).
   useEffect(() => {
-    // Read file content via Tauri IPC and create a blob URL for the iframe
+    let cancelled = false;
     (async () => {
       try {
         const api = window.nativesAPI;
@@ -208,19 +207,21 @@ function LiveHtmlPreview({ path }: { path: string }) {
         }
 
         const result = await api.fs.readFile(path);
-        if (!result) return;
-        const content = typeof result === 'string' ? result : (result as any).content;
+        if (cancelled || !result) return;
+        const content = typeof result === 'string' ? result : (result as { content?: string }).content;
         const mimeType = path.endsWith('.html') || path.endsWith('.htm') ? 'text/html' : 'text/plain';
         const blob = new Blob([content || ''], { type: mimeType });
         const url = URL.createObjectURL(blob);
 
-        if (!currentSrc) {
+        if (!lastUrlRef.current) {
           setCurrentSrc(url);
           lastUrlRef.current = url;
           return;
         }
         if (swappingRef.current) {
           dirtyRef.current = true;
+          // Drop the unused blob if we defer the swap.
+          URL.revokeObjectURL(url);
           return;
         }
         swappingRef.current = true;
@@ -230,7 +231,10 @@ function LiveHtmlPreview({ path }: { path: string }) {
         console.error('[FollowRenderer] Failed to load file:', err);
       }
     })();
-  }, [path, currentSrc]);
+    return () => {
+      cancelled = true;
+    };
+  }, [path]);
 
   const handleNextLoad = useCallback(async () => {
     if (!swappingRef.current) return;

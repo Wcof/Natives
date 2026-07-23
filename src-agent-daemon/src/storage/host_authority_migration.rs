@@ -171,7 +171,14 @@ fn copy_messages(conn: &Connection) -> Result<u64, String> {
                 input_tokens, output_tokens, reasoning_tokens, cost_usd, created_at
              )
              SELECT
-                id, conversation_id, parent_message_id, role, status,
+                id, conversation_id,
+                CASE
+                  WHEN parent_message_id IS NOT NULL
+                       AND parent_message_id IN (SELECT id FROM assistant_messages)
+                  THEN parent_message_id
+                  ELSE NULL
+                END,
+                role, status,
                 input_tokens, output_tokens, reasoning_tokens, cost_usd, created_at
              FROM assistant_messages
              WHERE conversation_id IN (SELECT id FROM conversation)",
@@ -218,7 +225,14 @@ fn copy_runs(conn: &Connection) -> Result<u64, String> {
                 parent_run_id, permission_profile
              )
              SELECT
-                id, conversation_id, status, trigger_message_id, provider_id, model_id,
+                id, conversation_id, status,
+                CASE
+                  WHEN trigger_message_id IS NOT NULL
+                       AND trigger_message_id IN (SELECT id FROM message)
+                  THEN trigger_message_id
+                  ELSE NULL
+                END,
+                provider_id, model_id,
                 started_at, finished_at, error_code, COALESCE(step_count, 0),
                 COALESCE(max_steps, 50), token_budget,
                 COALESCE(total_input_tokens, 0), COALESCE(total_output_tokens, 0),

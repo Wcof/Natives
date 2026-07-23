@@ -148,11 +148,12 @@ function BreadcrumbPath({
   }, [expanded, crumbs]);
 
   // Same for a plain path change while already expanded.
+  // Must declare deps — a bare useEffect re-runs after every render.
   useEffect(() => {
     if (expanded && overflowRef.current) {
       overflowRef.current.scrollLeft = overflowRef.current.scrollWidth;
     }
-  });
+  }, [expanded, crumbs]);
 
   const total = crumbs.length;
   const showCompact = !expanded && total >= COLLAPSE_THRESHOLD;

@@ -187,8 +187,11 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     const update = () => {
       const w = window.innerWidth;
       const layoutBreakpoint = w >= 1200 ? 'full' : w >= 800 ? 'drawer-right' : 'drawer-both';
+      // reducer bails out when layoutBreakpoint is unchanged
       dispatch({ type: 'view/patch', patch: { layoutBreakpoint } });
-      if (layoutBreakpoint !== 'full') setRightPanelOpen(false);
+      if (layoutBreakpoint !== 'full') {
+        setRightPanelOpen((open) => (open ? false : open));
+      }
     };
     update();
     window.addEventListener('resize', update);
@@ -200,7 +203,11 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     let cancelled = false;
     void (async () => {
       if (fileChanges.length === 0 && events.length === 0) {
-        if (!cancelled) setFileContentsByPath({});
+        if (!cancelled) {
+          setFileContentsByPath((prev) =>
+            Object.keys(prev).length === 0 ? prev : {},
+          );
+        }
         return;
       }
       const readFile = async (path: string): Promise<string | null> => {
@@ -518,8 +525,9 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     if (!isTempConversationId(conversation.id)) return;
 
     if (conversation.projectId) {
-      setActiveProjectPath(conversation.projectId);
-      void writeActiveProject(window.nativesAPI, conversation.projectId).catch(() => undefined);
+      const projectId = conversation.projectId;
+      setActiveProjectPath((prev) => (prev === projectId ? prev : projectId));
+      void writeActiveProject(window.nativesAPI, projectId).catch(() => undefined);
     }
 
     // Drop any previous local temp shells (only keep the latest pick).
@@ -543,8 +551,20 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       permissionProfileId:
         existing?.permissionProfileId || conversation.permissionProfileId || 'ask',
     };
-    dispatch({ type: 'conversations/upsert', conversation: shell });
-    dispatch({ type: 'conversations/setActive', id: shell.id });
+    // Skip upsert when the shell is already active and fields match — avoids
+    // conversations map identity churn that re-fires the navigation publisher.
+    const alreadyActive =
+      stateRef.current.activeConversationId === shell.id &&
+      existing &&
+      existing.providerId === shell.providerId &&
+      existing.modelId === shell.modelId &&
+      existing.permissionProfileId === shell.permissionProfileId &&
+      existing.projectId === shell.projectId &&
+      existing.title === shell.title;
+    if (!alreadyActive) {
+      dispatch({ type: 'conversations/upsert', conversation: shell });
+      dispatch({ type: 'conversations/setActive', id: shell.id });
+    }
     const draftFromStore = stateRef.current.composerByConversation[shell.id];
     const draft = draftFromStore?.text || (draftFromStore?.attachments?.length ?? 0) > 0
       ? draftFromStore
@@ -904,22 +924,6 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
           setRegisteredProjects(next);
           if (activeProjectPath === path) {
             setActiveProjectPath(null);
-          }
-          // Host nulls project_id on remove — mirror locally so sessions move to Unassigned.
-          const current = stateRef.current;
-          for (const id of current.conversationOrder) {
-            const c = current.conversations[id];
-            if (c?.projectId === path) {
-              dispatch({
-                type: 'conversations/upsert',
-                conversation: { ...c, projectId: null },
-              });
-            }
-          }
-          const curId = current.activeConversationId;
-          const cur = curId ? current.conversations[curId] : null;
-          if (cur?.projectId === path) {
-            dispatch({ type: 'conversations/setActive', id: null });
           }
         })();
       },

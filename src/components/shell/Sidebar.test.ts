@@ -31,8 +31,9 @@ test('reselecting the active conversation is a no-op (state preserved in store)'
 
 test('assistant sidebar does not default to a permanent loading spinner', () => {
   const context = readFileSync(new URL('../assistant/AssistantWorkspaceContext.tsx', import.meta.url), 'utf8');
-  assert.match(context, /loading:\s*false/);
-  assert.equal(/emptyNavigation[\s\S]*loading:\s*true/.test(context), false);
+  // Initial snapshot must start with loading:false (honest empty, not a permanent spinner).
+  assert.match(context, /const emptyNavigation[\s\S]{0,200}?loading:\s*false/);
+  // Boot may flip loading true while fetching — that is fine; permanent default is not.
   assert.match(workbench, /setLoadingConversations\(false\)/);
   assert.match(workbench, /activeRun\?\.id/);
 });
@@ -88,6 +89,17 @@ test('sidebar uses native traffic lights on macOS and fallback controls elsewher
   // Custom painted traffic lights / zoom long-press menu are gone
   assert.equal(sidebar.includes('mac-traffic-lights'), false);
   assert.equal(sidebar.includes('handleZoomClick'), false);
+  // Hydration-safe: platform detection must not run during render
+  assert.match(
+    sidebar,
+    /useState\(false\)[\s\S]*?setUsesNativeTrafficLights\(detectNativeTrafficLights\(\)\)/,
+  );
+  assert.match(sidebar, /useEffect\(\(\)\s*=>\s*\{[\s\S]*?detectNativeTrafficLights/);
+  // Must not call detectNativeTrafficLights at module/render top-level assignment
+  assert.equal(
+    /const usesNativeTrafficLights\s*=\s*detectNativeTrafficLights\(\)/.test(sidebar),
+    false,
+  );
 });
 
 test('macOS window chrome keeps system traffic lights (decorations + Overlay)', () => {
@@ -207,6 +219,27 @@ test('assistant sidebar deletion goes only through workspace actions (Gateway se
   assert.match(assistantSidebar, /deletingConversation/);
   assert.equal(/\bassistantV2\b/.test(assistantSidebar.replace(/\/\/[^\n]*/g, '')), false);
   assert.equal(assistantSidebar.includes("request('conversation.delete'"), false);
+});
+
+test('conversation menu panel lives under data-assistant-menu (outside-click must not kill item clicks)', () => {
+  // The outside-close handler uses closest('[data-assistant-menu]').
+  // Trigger and portaled panel both mark themselves so item clicks are not outside.
+  assert.match(assistantSidebar, /data-assistant-menu/);
+  assert.match(assistantSidebar, /setDeleteTarget/);
+  // Outside-close should use pointerdown (capture) so it pairs cleanly with the wrapper.
+  assert.match(assistantSidebar, /addEventListener\('pointerdown'/);
+});
+
+test('assistant action menus portal to body above clipping layers', () => {
+  // Must use Portal / body so overflow:hidden sidebar cannot clip the menu.
+  assert.match(assistantSidebar, /from '@\/components\/ui\/Portal'|from \"@\/components\/ui\/Portal\"/);
+  assert.match(assistantSidebar, /<Portal>/);
+  // Fixed positioning + design-token z-index (above right panel / terminal).
+  assert.match(assistantSidebar, /position:\s*['\"]fixed['\"]|className="fixed/);
+  assert.match(assistantSidebar, /--z-context-menu/);
+  // Inline absolute menus for conversation/project actions should be gone.
+  assert.equal(assistantSidebar.includes('absolute right-1 top-full z-50'), false);
+  assert.equal(assistantSidebar.includes('absolute right-0 top-full z-50'), false);
 });
 
 test('slash commands use composer-local positioning; keyboard owned by MessageInput', () => {

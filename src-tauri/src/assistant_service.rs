@@ -319,6 +319,137 @@ fn is_host_active_status(status: &str) -> bool {
     )
 }
 
+/// Ensure host `assistant_conversations` has a row for `conversation_id`.
+///
+/// Phase 0: `conversation.create` is daemon-owned and writes the unprefixed
+/// `conversation` table. Host-owned `run.start` still inserts into
+/// `assistant_messages` / `assistant_runs`, which FK to `assistant_conversations`.
+/// Without this mirror, new daemon-created sessions fail with
+/// `FOREIGN KEY constraint failed` on first send.
+fn ensure_host_assistant_conversation(
+    conn: &rusqlite::Connection,
+    conversation_id: &str,
+    provider_id: &str,
+    model_id: &str,
+) -> std::result::Result<(), String> {
+    let id = conversation_id.trim();
+    if id.is_empty() {
+        return Err("conversation_id is required".into());
+    }
+    let exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM assistant_conversations WHERE id = ?1)",
+            rusqlite::params![id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if exists {
+        return Ok(());
+    }
+
+    // Prefer daemon canonical row when present (same assistant.db file).
+    #[derive(Default)]
+    struct Row {
+        mode: String,
+        project_id: Option<String>,
+        title: String,
+        provider_id: String,
+        model_id: String,
+        permission_profile_id: Option<String>,
+        created_at: String,
+        updated_at: String,
+        archived_at: Option<String>,
+    }
+    let mut seeded = Row::default();
+    let has_canonical = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='conversation'",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap_or(false);
+    if has_canonical {
+        if let Ok(row) = conn.query_row(
+            "SELECT mode, project_id, title, provider_id, model_id, permission_profile_id,
+                    created_at, updated_at, archived_at
+             FROM conversation WHERE id = ?1",
+            rusqlite::params![id],
+            |r| {
+                Ok(Row {
+                    mode: r.get(0)?,
+                    project_id: r.get(1)?,
+                    title: r.get(2)?,
+                    provider_id: r.get(3)?,
+                    model_id: r.get(4)?,
+                    permission_profile_id: r.get(5)?,
+                    created_at: r.get(6)?,
+                    updated_at: r.get(7)?,
+                    archived_at: r.get(8)?,
+                })
+            },
+        ) {
+            seeded = row;
+        }
+    }
+    if seeded.provider_id.is_empty() {
+        let now = chrono::Utc::now().to_rfc3339();
+        seeded = Row {
+            mode: "agent".into(),
+            project_id: None,
+            title: "Host-mirrored conversation".into(),
+            provider_id: if provider_id.trim().is_empty() {
+                "unknown".into()
+            } else {
+                provider_id.trim().into()
+            },
+            model_id: if model_id.trim().is_empty() {
+                "unknown".into()
+            } else {
+                model_id.trim().into()
+            },
+            permission_profile_id: Some("ask".into()),
+            created_at: now.clone(),
+            updated_at: now,
+            archived_at: None,
+        };
+    }
+    let mode = if matches!(seeded.mode.as_str(), "chat" | "agent" | "goal") {
+        seeded.mode.as_str()
+    } else {
+        "agent"
+    };
+    let permission = seeded
+        .permission_profile_id
+        .as_deref()
+        .filter(|p| matches!(*p, "readonly" | "ask" | "full_access"))
+        .unwrap_or("ask");
+    conn.execute(
+        "INSERT INTO assistant_conversations (
+            id, mode, project_id, title, provider_id, model_id,
+            permission_profile_id, created_at, updated_at, archived_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(id) DO NOTHING",
+        rusqlite::params![
+            id,
+            mode,
+            seeded.project_id,
+            if seeded.title.is_empty() {
+                "Host-mirrored conversation"
+            } else {
+                seeded.title.as_str()
+            },
+            seeded.provider_id,
+            seeded.model_id,
+            permission,
+            seeded.created_at,
+            seeded.updated_at,
+            seeded.archived_at,
+        ],
+    )
+    .map_err(|e| format!("ensure_host_assistant_conversation failed: {e}"))?;
+    Ok(())
+}
+
 fn mirror_daemon_events_to_host(run_id: &str, events: &[assistant_protocol::v2::RunEventV2]) {
     let Ok(conn) = crate::db::get_assistant_db_conn() else {
         return;
@@ -1748,6 +1879,13 @@ async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcRes
         let pair_available = provider_model_pair_available(provider_id, model_id, &conn);
         if !pair_available {
             return error_response("INVALID_PARAM", "Provider/model pair is not available");
+        }
+        // Daemon may have created the conversation only in the unprefixed table.
+        // Host still writes assistant_* rows that FK to assistant_conversations.
+        if let Err(e) =
+            ensure_host_assistant_conversation(&conn, conversation_id, provider_id, model_id)
+        {
+            return error_response("DB_INSERT_ERROR", &e);
         }
         let transaction = match conn.unchecked_transaction() {
             Ok(transaction) => transaction,

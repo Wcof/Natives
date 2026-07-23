@@ -131,14 +131,21 @@ impl DataStore {
 
         // Run migrations
         store.run_migrations()?;
-        // Phase 0: merge Host assistant_* tables when present (idempotent).
+
+        // Fail closed: Host and Daemon share assistant.db but Host owns
+        // `_schema_version` with higher version numbers for `assistant_*`
+        // tables. Daemon migrations must use `_daemon_schema_version` so they
+        // are not skipped on Host-first DBs. If the canonical table is still
+        // missing after migrations, refuse to open rather than return a half
+        // store that will fail on every conversation RPC.
         if !store.has_table("conversation") {
-            // Fail closed: a half-migrated DB must not be returned to callers.
             return Err(format!(
                 "conversation table missing after migrations at {}",
                 db_path.display()
             ));
         }
+
+        // Phase 0: merge Host assistant_* tables when present (idempotent).
         if let Err(e) = store.run_host_authority_migration() {
             eprintln!("[agent-daemon] host authority migration failed: {e}");
         }
@@ -184,22 +191,75 @@ impl DataStore {
         EnvTestGuard::acquire()
     }
 
-    /// Run all pending migrations.
+    /// Run all pending daemon migrations.
+    ///
+    /// Host (`src-tauri/src/daemon/data.rs`) and Daemon both open the same
+    /// `assistant.db` file. Host already owns `_schema_version` for its
+    /// `assistant_*` migrations (currently up to v14). Sharing that table
+    /// caused Daemon migrations 1–9 to be skipped on Host-first DBs, leaving
+    /// no canonical `conversation` / `message` / `run` tables.
+    ///
+    /// Daemon therefore tracks progress in `_daemon_schema_version`. On first
+    /// open of a legacy Host DB we bootstrap that table from the presence of
+    /// the canonical tables (not from Host's version numbers).
     fn run_migrations(&self) -> Result<(), String> {
         let _migrate = Self::migration_lock();
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {e}"))?;
 
+        // Keep Host's table for Host migrations; do not read it for Daemon.
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS _schema_version (
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+             CREATE TABLE IF NOT EXISTS _daemon_schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
             );",
         )
-        .map_err(|e| format!("Failed to ensure _schema_version: {e}"))?;
+        .map_err(|e| format!("Failed to ensure schema version tables: {e}"))?;
+
+        // One-shot bootstrap for DBs that already ran Daemon migrations under
+        // the old shared `_schema_version` name (fresh Daemon-only DBs, or
+        // after a partial recovery). If the full canonical core exists, mark
+        // all Daemon versions as applied so we do not re-run CREATE IF NOT
+        // EXISTS for nothing; if not, leave version at 0 so migrations run.
+        let daemon_version: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM _daemon_schema_version",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        if daemon_version == 0 {
+            let has_canonical_core: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) = 4 FROM sqlite_master
+                     WHERE type='table'
+                       AND name IN ('conversation', 'message', 'run', 'run_event')",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap_or(false);
+            if has_canonical_core {
+                // Preserve applied state when Daemon previously wrote into the
+                // shared table, or when an earlier recovery already created
+                // the core tables. Only mark versions that are actually in
+                // migrations::ALL so future additions still run.
+                for (version, _) in migrations::ALL {
+                    conn.execute(
+                        "INSERT OR IGNORE INTO _daemon_schema_version (version) VALUES (?1)",
+                        params![version],
+                    )
+                    .map_err(|e| format!("Failed to bootstrap daemon schema version {version}: {e}"))?;
+                }
+            }
+        }
 
         let current_version: i64 = conn
             .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM _schema_version",
+                "SELECT COALESCE(MAX(version), 0) FROM _daemon_schema_version",
                 [],
                 |row| row.get(0),
             )
@@ -216,7 +276,7 @@ impl DataStore {
                 // Tolerate additive column re-runs.
                 if *version == 7 && msg.contains("duplicate column") {
                     let _ = conn.execute(
-                        "INSERT OR IGNORE INTO _schema_version (version) VALUES (?1)",
+                        "INSERT OR IGNORE INTO _daemon_schema_version (version) VALUES (?1)",
                         params![version],
                     );
                     continue;
@@ -224,7 +284,7 @@ impl DataStore {
                 return Err(format!("Migration {version} failed: {e}"));
             }
             conn.execute(
-                "INSERT OR IGNORE INTO _schema_version (version) VALUES (?1)",
+                "INSERT OR IGNORE INTO _daemon_schema_version (version) VALUES (?1)",
                 params![version],
             )
             .map_err(|e| format!("Failed to record migration {version}: {e}"))?;
@@ -334,12 +394,143 @@ mod tests {
         let conn = store.conn().unwrap();
         let max_version: i64 = conn
             .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM _schema_version",
+                "SELECT COALESCE(MAX(version), 0) FROM _daemon_schema_version",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
         assert!(max_version > 0, "Migrations should have run");
+    }
+
+    /// Host-first DBs already have `_schema_version` at v14 for `assistant_*`
+    /// tables. Daemon must still create the unprefixed canonical tables.
+    #[test]
+    fn test_host_schema_version_does_not_skip_daemon_migrations() {
+        let tmp = std::env::temp_dir();
+        let db_path = tmp.join(format!("test_host_first_{}.db", uuid::Uuid::new_v4()));
+        let art_dir = tmp.join(format!("test_host_first_art_{}", uuid::Uuid::new_v4()));
+
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "PRAGMA journal_mode=WAL;
+                 PRAGMA foreign_keys=ON;
+                 CREATE TABLE _schema_version (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+                 );
+                 INSERT INTO _schema_version (version) VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(11),(12),(13),(14);
+                 CREATE TABLE assistant_conversations (
+                    id TEXT PRIMARY KEY,
+                    mode TEXT NOT NULL DEFAULT 'chat',
+                    project_id TEXT,
+                    title TEXT NOT NULL DEFAULT '',
+                    provider_id TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    permission_profile_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    archived_at TEXT
+                 );
+                 INSERT INTO assistant_conversations
+                   (id, mode, title, provider_id, model_id, created_at, updated_at)
+                 VALUES ('host-c1', 'agent', 'From Host', 'openai', 'gpt-4o',
+                         '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
+            )
+            .unwrap();
+        }
+
+        let store = DataStore::new(&db_path, &art_dir).expect("open host-first DB");
+        {
+            let conn = store.conn().unwrap();
+            let has_conversation: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='conversation'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(has_conversation, 1, "canonical conversation must exist");
+
+            let has_message: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='message'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(has_message, 1, "canonical message must exist");
+
+            let daemon_version: i64 = conn
+                .query_row(
+                    "SELECT COALESCE(MAX(version), 0) FROM _daemon_schema_version",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(
+                daemon_version >= 9,
+                "daemon migrations should record in _daemon_schema_version, got {daemon_version}"
+            );
+
+            // Host row should be merged into canonical conversation.
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM conversation WHERE id='host-c1'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1, "host conversation should be merged");
+
+            // Host version table must remain intact for Host migrations.
+            let host_version: i64 = conn
+                .query_row(
+                    "SELECT COALESCE(MAX(version), 0) FROM _schema_version",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(host_version, 14);
+        }
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&art_dir);
+    }
+
+    /// Optional recovery check against a real Host-first `assistant.db` backup.
+    /// Set `NATIVES_TEST_ASSISTANT_DB` to a writable copy of the file.
+    #[test]
+    fn test_open_real_host_first_backup_if_present() {
+        let Ok(path) = std::env::var("NATIVES_TEST_ASSISTANT_DB") else {
+            return;
+        };
+        let db = std::path::PathBuf::from(path);
+        if !db.exists() {
+            return;
+        }
+        let art = db
+            .parent()
+            .map(|p| p.join("artifacts_test"))
+            .unwrap_or_else(|| std::env::temp_dir().join("artifacts_test"));
+        let _ = std::fs::create_dir_all(&art);
+        let store = DataStore::new(&db, &art).expect("open host-first backup");
+        assert!(store.has_table("conversation"));
+        assert!(store.has_table("message"));
+        assert!(store.has_table("run"));
+        assert!(store.has_table("run_event"));
+        assert!(store.has_table("_daemon_schema_version"));
+        let conn = store.conn().unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM conversation", [], |r| r.get(0))
+            .unwrap();
+        let host_n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM assistant_conversations", [], |r| r.get(0))
+            .unwrap_or(0);
+        assert!(
+            n >= host_n,
+            "expected host conversations merged into canonical table (canonical={n}, host={host_n})"
+        );
     }
 
     #[test]

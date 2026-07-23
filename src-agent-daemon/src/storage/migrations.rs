@@ -17,12 +17,12 @@ pub const ALL: &[(i64, &str)] = &[
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
+///
+/// Note: Daemon schema progress is tracked in `_daemon_schema_version`
+/// (see `DataStore::run_migrations`). Host continues to own `_schema_version`
+/// for `assistant_*` tables on the same file. Do not reintroduce a shared
+/// version table here.
 const MIGRATION_001: &str = "
-CREATE TABLE IF NOT EXISTS _schema_version (
-    version INTEGER PRIMARY KEY,
-    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
 CREATE TABLE IF NOT EXISTS conversation (
     id TEXT PRIMARY KEY,
     mode TEXT NOT NULL DEFAULT 'chat' CHECK(mode IN ('chat', 'agent', 'goal')),
