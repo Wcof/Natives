@@ -16,8 +16,17 @@
 //! 2. wait on `ProductionRuntime` permission waiters
 //! 3. write a control response line to CLI stdin (stream-json input)
 //!
-//! If the CLI version does not emit control requests, Host cards simply stay
-//! idle while CLI-local policy applies — still honest, not fake-green.
+//! ## Fail-closed tool policy (task-05)
+//!
+//! Until we can prove every tool call is host-mediated via control protocol,
+//! Claude CLI runs in **text-only** mode by default:
+//! - only Read/Glob/Grep/LS allowed (readonly surface)
+//! - any tool_use without a matching Host control request fails the turn with
+//!   `CLI_TOOL_BRIDGE_UNAVAILABLE` (no side-effect execution path claimed)
+//! - never rely on user `~/.claude` defaults for write/exec tools
+//!
+//! Set `NATIVES_CLI_CONTROL_PROVEN=1` only when fixtures/integration prove the
+//! control loop end-to-end; otherwise remain fail-closed.
 
 use assistant_protocol::v2::RunEventKind;
 use serde_json::{json, Value};
@@ -64,13 +73,27 @@ pub fn claude_cli_available() -> bool {
 }
 
 /// Map Host permission_profile → Claude CLI `--permission-mode` value.
+///
+/// Fail-closed: never use `acceptEdits` unless control protocol is proven —
+/// that mode would allow CLI-local writes without Host mediation.
 pub fn map_permission_mode(profile: &str) -> Option<&'static str> {
+    if !cli_control_proven() {
+        // Text-only / host-mediated transitional: dontAsk + restricted tools.
+        return Some("dontAsk");
+    }
     match profile {
         "readonly" | "read_only" => Some("dontAsk"),
         "full_access" | "autonomous" | "full" => Some("acceptEdits"),
-        // ask / default: leave CLI default (user can configure ~/.claude)
+        // ask / default: leave CLI default only when control is proven
         _ => None,
     }
+}
+
+/// True only when operator/fixture has proven Host control mediation.
+pub fn cli_control_proven() -> bool {
+    std::env::var("NATIVES_CLI_CONTROL_PROVEN")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 /// Parsed stdout line: normal events and/or a control request needing Host answer.
@@ -490,8 +513,11 @@ pub async fn run_claude_cli_turn(
     if let Some(mode) = map_permission_mode(permission_profile) {
         command.arg("--permission-mode").arg(mode);
     }
-    // readonly: limit to read-ish tools when CLI supports --allowedTools
-    if matches!(permission_profile, "readonly" | "read_only") {
+    // Fail-closed text-only surface until control protocol is proven (task-05).
+    // readonly always uses the same restricted allowlist.
+    if !cli_control_proven()
+        || matches!(permission_profile, "readonly" | "read_only")
+    {
         command
             .arg("--allowedTools")
             .arg("Read,Glob,Grep,LS");
@@ -538,6 +564,10 @@ pub async fn run_claude_cli_turn(
 
     let mut reader = BufReader::new(stdout).lines();
     let mut terminal: Option<String> = None;
+    // Track control mediation; tool_use without control is fail-closed.
+    let mut control_seen = false;
+    let mut pending_control_tools: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     loop {
         if cancel.is_cancelled() {
@@ -556,7 +586,34 @@ pub async fn run_claude_cli_turn(
                 match line {
                     Ok(Some(line)) => {
                         let translated = translate_cli_line(&line);
+                        if translated.control.is_some() {
+                            control_seen = true;
+                            if let Some(ref c) = translated.control {
+                                pending_control_tools.insert(c.tool_name.clone());
+                            }
+                        }
                         for kind in translated.events {
+                            // Fail-closed: tool_use without proven control mediation.
+                            if !cli_control_proven() {
+                                if let RunEventKind::ToolCallRequested { name, .. } = &kind {
+                                    let readonly = matches!(
+                                        name.as_str(),
+                                        "Read" | "Glob" | "Grep" | "LS" | "read_file" | "list_dir" | "grep" | "glob"
+                                    );
+                                    if !readonly && !control_seen {
+                                        let _ = child.kill().await;
+                                        let err = "CLI_TOOL_BRIDGE_UNAVAILABLE: tool execution requires host control mediation; text-only CLI adapter is active";
+                                        runtime.events.append(
+                                            run_id,
+                                            RunEventKind::Failed {
+                                                error: err.into(),
+                                                code: "CLI_TOOL_BRIDGE_UNAVAILABLE".into(),
+                                            },
+                                        );
+                                        return Ok("failed".into());
+                                    }
+                                }
+                            }
                             let is_term = matches!(
                                 kind,
                                 RunEventKind::Completed { .. }
@@ -597,6 +654,7 @@ pub async fn run_claude_cli_turn(
                                 },
                             );
                             let resp = control_response_line(&ctrl.request_id, approved);
+                            let _ = pending_control_tools;
                             if let Err(e) = stdin.write_all(resp.as_bytes()).await {
                                 eprintln!("[cli_runtime_bridge] control response write failed: {e}");
                             } else {
@@ -689,10 +747,34 @@ mod tests {
     }
 
     #[test]
-    fn map_permission_mode_profiles() {
+    fn map_permission_mode_fail_closed_without_proven_control() {
+        // Default: no NATIVES_CLI_CONTROL_PROVEN → always dontAsk (text-only).
+        std::env::remove_var("NATIVES_CLI_CONTROL_PROVEN");
+        assert_eq!(map_permission_mode("readonly"), Some("dontAsk"));
+        assert_eq!(map_permission_mode("full_access"), Some("dontAsk"));
+        assert_eq!(map_permission_mode("ask"), Some("dontAsk"));
+        assert!(!cli_control_proven());
+    }
+
+    #[test]
+    fn map_permission_mode_proven_allows_profile_modes() {
+        std::env::set_var("NATIVES_CLI_CONTROL_PROVEN", "1");
         assert_eq!(map_permission_mode("readonly"), Some("dontAsk"));
         assert_eq!(map_permission_mode("full_access"), Some("acceptEdits"));
         assert_eq!(map_permission_mode("ask"), None);
+        std::env::remove_var("NATIVES_CLI_CONTROL_PROVEN");
+    }
+
+    #[test]
+    fn tool_use_without_control_is_detected() {
+        let line = r#"{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"rm -rf /"}}"#;
+        let t = translate_cli_line(line);
+        assert!(matches!(
+            &t.events[..],
+            [RunEventKind::ToolCallRequested { name, .. }, RunEventKind::ToolCallStarted { .. }]
+                if name == "Bash"
+        ));
+        assert!(t.control.is_none());
     }
 
     #[test]
