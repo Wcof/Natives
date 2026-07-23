@@ -19,9 +19,10 @@ test('approve scopes keep once / this_run / project semantics and display order'
   assert.equal(source.includes('"session"'), false);
 });
 
-test('layout: full-width column, max 860, vertical action stack', () => {
-  assert.match(source, /max-w-\[min\(860px,100%\)\]/);
-  assert.match(source, /w-full max-w-\[min\(860px,100%\)\]/);
+test('layout: full-width card; outer container owns max-w 860 alignment', () => {
+  // Card itself is w-full only — Workbench wraps with MessageInput's max-w-[860px] class.
+  assert.match(source, /className="w-full my-3 rounded-xl/);
+  assert.equal(source.includes('max-w-[min(860px,100%)]'), false);
   assert.match(source, /data-permission-actions/);
   assert.match(source, /flex flex-col gap-2 w-full/);
   // Each action button is full width (not side-by-side chips).

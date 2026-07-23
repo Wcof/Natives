@@ -88,8 +88,11 @@ import PromptQueuePanel from './PromptQueuePanel';
 import ActivityInspector from './ActivityInspector';
 import SubagentAssignmentModal, {
   type AssignmentKeyOption,
+  type SubagentAssignmentConfirmPayload,
 } from './SubagentAssignmentModal';
 import type { ActivitySubagentView } from './ActivityInspector';
+import { extractTodosFromEvents } from '@/lib/assistant-activity-view';
+import type { ProviderKeySummary } from '@/lib/tauri-adapter';
 import ResizableRightPanel from '@/components/ui/ResizableRightPanel';
 import ConnectionBanner from './ConnectionBanner';
 import EngineRecoveryPage from './EngineRecoveryPage';
@@ -258,13 +261,21 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const interactions = selectPendingInteractions(state, rootConversationId);
   const promptQueue = selectPromptQueue(state, activeId);
   const rootRunId = rootRun?.id ?? null;
-  const events = useMemo(
+  // Keep root and selected-child event sources separate so main Todo never
+  // flips when the user inspects a subagent session.
+  const rootEvents = useMemo(
+    () => selectEventsForRunTree(state, rootRunId),
+    [state, rootRunId],
+  );
+  const selectedChildEvents = useMemo(
     () =>
       selectedChildConversationId
         ? selectRunEvents(state, surfaceRun?.id ?? null)
-        : selectEventsForRunTree(state, rootRunId),
-    [state, selectedChildConversationId, surfaceRun?.id, rootRunId],
+        : [],
+    [state, selectedChildConversationId, surfaceRun?.id],
   );
+  // Timeline / file events follow the surface (child when selected).
+  const events = selectedChildConversationId ? selectedChildEvents : rootEvents;
   const artifacts = useMemo(
     () =>
       selectedChildConversationId
@@ -280,6 +291,11 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         : selectFileChangesForRunTree(state, rootRunId),
     [state, selectedChildConversationId, surfaceRun?.id, rootRunId],
   );
+  const mainTodos = useMemo(() => extractTodosFromEvents(rootEvents), [rootEvents]);
+  const selectedChildTodos = useMemo(
+    () => extractTodosFromEvents(selectedChildEvents),
+    [selectedChildEvents],
+  );
   const contextUsage = rootConversationId
     ? state.contextUsageByConversation[rootConversationId] ?? null
     : null;
@@ -291,15 +307,24 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   );
   const activitySubagents = useMemo<ActivitySubagentView[]>(() => {
     if (subagentSessions.length > 0) {
-      return subagentSessions.map((s) => ({
-        id: s.id,
-        name: s.name || s.task || s.id.slice(0, 8),
-        status: s.status,
-        providerId: s.providerId,
-        keyLabel: s.keyId ? s.keyId.slice(0, 8) : undefined,
-        childConversationId: s.childConversationId,
-        task: s.task,
-      }));
+      return subagentSessions.map((s) => {
+        const isSelected = s.childConversationId === selectedChildConversationId;
+        // Never surface raw key ids as labels — use short opaque prefix only.
+        const keyLabel = s.keyId ? `key:${s.keyId.slice(0, 6)}` : undefined;
+        return {
+          id: s.id,
+          name: s.name || s.task || s.id.slice(0, 8),
+          status: s.status,
+          providerId: s.providerId,
+          keyLabel,
+          childConversationId: s.childConversationId,
+          task: s.task,
+          // Prefer live child todo_write when this session is selected.
+          todos:
+            isSelected && selectedChildTodos.length > 0 ? selectedChildTodos : undefined,
+          error: s.error ?? undefined,
+        };
+      });
     }
     return children.map((ch) => ({
       id: ch.id,
@@ -309,7 +334,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       keyLabel: ch.keyLabel,
       task: ch.task,
     }));
-  }, [subagentSessions, children]);
+  }, [subagentSessions, children, selectedChildConversationId, selectedChildTodos]);
   const fileEvents = useMemo(
     () =>
       events
@@ -488,7 +513,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     try {
       const list = await window.nativesAPI?.provider?.list?.();
       if (!Array.isArray(list)) {
-        // Fall back to gateway provider list (has_active_key only).
+        // Fall back to gateway provider list (has_active_key only; no status).
         const opts: AssignmentKeyOption[] = [];
         for (const p of providers) {
           if (!p.keys?.length) continue;
@@ -498,8 +523,13 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               providerName: p.name,
               keyId: k.id,
               keyLabel: k.label || k.maskedKey || k.id,
-              modelId: p.defaultModel || p.models[0]?.id || '',
-              models: p.models,
+              modelId: p.defaultModel || p.models?.[0]?.id || '',
+              models: (p.models ?? []).map((m) => ({
+                id: m.id,
+                displayName: m.displayName,
+              })),
+              isActive: true,
+              status: 'valid',
             });
           }
         }
@@ -514,19 +544,25 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
           name?: string;
           defaultModel?: string | null;
           models?: Array<{ id: string; displayName?: string | null }>;
-          keys?: Array<{
-            id: string;
-            label?: string;
-            maskedKey?: string;
-            isActive?: boolean;
-          }>;
+          keys?: Array<
+            Partial<ProviderKeySummary> & {
+              id: string;
+              label?: string;
+              maskedKey?: string;
+              isActive?: boolean;
+              status?: ProviderKeySummary['status'] | string;
+            }
+          >;
         };
         const models = (provider.models ?? []).map((m) => ({
           id: m.id,
           displayName: m.displayName ?? undefined,
         }));
         for (const k of provider.keys ?? []) {
-          if (k.isActive === false) continue;
+          // Only active + validated keys for random/custom; keep others out of the pool.
+          const active = k.isActive !== false;
+          if (!active) continue;
+          if (k.status != null && k.status !== 'valid') continue;
           opts.push({
             providerId: provider.id,
             providerName: provider.displayName || provider.name || provider.id,
@@ -534,6 +570,8 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             keyLabel: k.label || k.maskedKey || k.id,
             modelId: provider.defaultModel || models[0]?.id || '',
             models,
+            isActive: true,
+            status: (k.status as AssignmentKeyOption['status']) ?? 'valid',
           });
         }
       }
@@ -642,24 +680,19 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     void refreshSubagentSessions(rootConversationId);
   }, [rootConversationId, refreshSubagentSessions, rootRun?.status]);
 
-  // Heartbeat: touch active subagent sessions every 30s while assistant page is visible.
+  // Heartbeat: touch only the root conversation every 30s while assistant page is visible.
+  // Do NOT loop over every subagent — daemon scopes keepalive by parent conversation_id.
   useEffect(() => {
     if (!rootConversationId || isTempConversationId(rootConversationId)) return;
     let cancelled = false;
     const tick = () => {
       if (cancelled) return;
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      const targets = subagentSessions.filter(
-        (s) => s.status === 'open' || s.status === 'running' || s.status === 'idle',
-      );
-      for (const s of targets) {
-        void gateway
-          .request('subagent.touch', {
-            id: s.id,
-            child_conversation_id: s.childConversationId,
-          })
-          .catch(() => undefined);
-      }
+      void gateway
+        .request('subagent.touch', {
+          conversation_id: rootConversationId,
+        })
+        .catch(() => undefined);
     };
     tick();
     const handle = window.setInterval(tick, 30_000);
@@ -667,7 +700,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       cancelled = true;
       window.clearInterval(handle);
     };
-  }, [rootConversationId, subagentSessions, gateway]);
+  }, [rootConversationId, gateway]);
 
   // Prefetch assignment keys when an assignment interaction appears.
   useEffect(() => {
@@ -1161,6 +1194,10 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       setSelectedChildConversationId(childId);
       setLoadingMessages(true);
       try {
+        // Optional selective touch only when user focuses a specific subagent.
+        void gateway
+          .request('subagent.touch', { id: session.id })
+          .catch(() => undefined);
         // Load hidden child conversation history without flipping sidebar root.
         const snapshot = await gateway.getSnapshot(childId);
         dispatch({ type: 'snapshot/apply', snapshot });
@@ -1179,24 +1216,39 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   }, []);
 
   const handleAssignmentConfirm = useCallback(
-    async (payload: {
-      mode: 'default' | 'random' | 'custom';
-      bindings: Array<{ providerId: string; keyId: string; modelId: string }>;
-      sessionId?: string | null;
-    }) => {
+    async (payload: SubagentAssignmentConfirmPayload) => {
+      const wireAssignments = payload.assignments.map((a) => ({
+        call_id: a.callId,
+        provider_id: a.providerId,
+        key_id: a.keyId,
+        model_id: a.modelId,
+      }));
+      const wirePool = payload.pool.map((b) => ({
+        provider_id: b.providerId,
+        key_id: b.keyId,
+        model_id: b.modelId,
+      }));
       const wireBindings = payload.bindings.map((b) => ({
         provider_id: b.providerId,
         key_id: b.keyId,
         model_id: b.modelId,
       }));
+
       if (payload.sessionId) {
-        await gateway.request('subagent.switchRoute', {
+        const result = (await gateway.request('subagent.switchRoute', {
           conversation_id: rootConversationId,
           session_id: payload.sessionId,
           mode: payload.mode,
           bindings: wireBindings,
-        });
+          assignments: wireAssignments,
+          pool: wirePool,
+        })) as { restarted_run_id?: string; restartedRunId?: string } | null;
         setSwitchKeySessionId(null);
+        const restarted =
+          result?.restarted_run_id ?? result?.restartedRunId ?? null;
+        if (restarted) {
+          ensureRunSubscription(restarted);
+        }
         void refreshSubagentSessions(rootConversationId);
         return;
       }
@@ -1209,6 +1261,9 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         response: {
           approved: true,
           mode: payload.mode,
+          assignments: wireAssignments,
+          pool: wirePool,
+          // Legacy flat bindings still accepted by older daemons.
           bindings: wireBindings,
           conversation_id:
             subagentAssignment.conversationId ?? rootConversationId ?? undefined,
@@ -1224,6 +1279,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       dispatch,
       refreshSubagentSessions,
       locale,
+      ensureRunSubscription,
     ],
   );
 
@@ -1775,7 +1831,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
           </div>
 
           {permission && permission.kind === 'permission' && (
-            <div className="px-4 pb-2">
+            <div className="mx-auto w-full max-w-[860px] px-5">
               <PermissionRequestCard
                 request={{
                   id: permission.id,
@@ -2103,7 +2159,9 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
           >
             <ActivityInspector
               run={rootRun ?? activeRun}
-              events={events}
+              events={rootEvents}
+              selectedChildEvents={selectedChildEvents}
+              mainTodos={mainTodos}
               artifacts={artifacts}
               children={children}
               fileChanges={fileChanges}

@@ -302,9 +302,9 @@ export function aggregateArtifactFiles(options: {
 /**
  * Map wire/subagent status to UI key + labels.
  * pending_assignment → 待分配
- * queued / running / waiting* → 执行中
- * completed → 已完成
- * failed / cancelled / … → 关闭
+ * open / queued / running / waiting* → 执行中
+ * completed / idle → 已完成（idle 仅兼容）
+ * failed / cancelled / interrupted / closed → 关闭
  */
 export function mapSubagentUiStatus(status: string | null | undefined): SubagentUiStatus {
   const s = String(status ?? '')
@@ -314,7 +314,14 @@ export function mapSubagentUiStatus(status: string | null | undefined): Subagent
   if (s === 'pending_assignment' || s === 'pending-assignment' || s === 'unassigned') {
     return { key: 'pending_assignment', zh: '待分配', en: 'Pending assignment' };
   }
-  if (s === 'completed' || s === 'complete' || s === 'done' || s === 'success') {
+  // completed and idle (compat) both surface as 已完成
+  if (
+    s === 'completed' ||
+    s === 'complete' ||
+    s === 'done' ||
+    s === 'success' ||
+    s === 'idle'
+  ) {
     return { key: 'completed', zh: '已完成', en: 'Completed' };
   }
   if (
@@ -329,9 +336,10 @@ export function mapSubagentUiStatus(status: string | null | undefined): Subagent
   ) {
     return { key: 'closed', zh: '关闭', en: 'Closed' };
   }
-  // queued / running / waiting_* / in_progress / active / preparing / …
+  // open / queued / running / waiting_* / in_progress / active / preparing / …
   if (
     !s ||
+    s === 'open' ||
     s === 'queued' ||
     s === 'running' ||
     s === 'waiting' ||

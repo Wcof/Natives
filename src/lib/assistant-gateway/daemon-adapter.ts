@@ -431,18 +431,69 @@ export class DaemonAssistantAdapter implements AssistantGateway {
             r.payload && typeof r.payload === 'object'
               ? (r.payload as Record<string, unknown>)
               : r;
+          const defaultRaw =
+            payload.default_binding && typeof payload.default_binding === 'object'
+              ? (payload.default_binding as Record<string, unknown>)
+              : payload.defaultBinding && typeof payload.defaultBinding === 'object'
+                ? (payload.defaultBinding as Record<string, unknown>)
+                : null;
+          const defaultBinding = defaultRaw
+            ? {
+                providerId: String(
+                  defaultRaw.provider_id ?? defaultRaw.providerId ?? '',
+                ),
+                keyId: String(defaultRaw.key_id ?? defaultRaw.keyId ?? ''),
+                modelId: String(defaultRaw.model_id ?? defaultRaw.modelId ?? ''),
+              }
+            : null;
+          const tasks = Array.isArray(payload.tasks)
+            ? payload.tasks
+                .filter(
+                  (item): item is Record<string, unknown> =>
+                    Boolean(item) && typeof item === 'object',
+                )
+                .map((task, index) => ({
+                  callId: String(task.call_id ?? task.callId ?? `task-${index}`),
+                  name: String(
+                    task.name ?? task.prompt ?? task.task ?? `Task ${index + 1}`,
+                  ),
+                  prompt:
+                    task.prompt != null
+                      ? String(task.prompt)
+                      : task.task != null
+                        ? String(task.task)
+                        : null,
+                }))
+            : undefined;
           interactions.push({
             kind: 'subagent_assignment',
             id,
-            runId: String(r.run_id ?? r.runId ?? payload.run_id ?? ''),
+            runId: String(
+              r.run_id ?? r.runId ?? payload.parent_run_id ?? payload.run_id ?? '',
+            ),
             conversationId: String(
-              r.conversation_id ?? r.conversationId ?? payload.conversation_id ?? conversationId,
+              r.conversation_id ??
+                r.conversationId ??
+                payload.parent_conversation_id ??
+                payload.conversation_id ??
+                conversationId,
             ),
             createdAt: String(r.created_at ?? r.createdAt ?? new Date().toISOString()),
             reason: payload.reason != null ? String(payload.reason) : undefined,
-            tasks: Array.isArray(payload.tasks)
-              ? (payload.tasks as Array<{ prompt?: string | null }>)
-              : undefined,
+            batchId:
+              payload.batch_id != null || payload.batchId != null
+                ? String(payload.batch_id ?? payload.batchId)
+                : undefined,
+            parentConversationId:
+              payload.parent_conversation_id != null || payload.parentConversationId != null
+                ? String(payload.parent_conversation_id ?? payload.parentConversationId)
+                : undefined,
+            parentRunId:
+              payload.parent_run_id != null || payload.parentRunId != null
+                ? String(payload.parent_run_id ?? payload.parentRunId)
+                : undefined,
+            defaultBinding,
+            tasks,
           });
         } else if (kind === 'tool_permission' || kind === 'permission') {
           interactions.push({

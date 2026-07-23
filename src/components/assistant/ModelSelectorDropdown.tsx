@@ -23,8 +23,15 @@ export interface ProviderWithModels {
   name: string;
   presetName: string;
   baseUrl: string;
-  keys: Array<{ id: string; label: string; maskedKey: string }>;
+  keys: Array<{
+    id: string;
+    label: string;
+    maskedKey: string;
+    isActive?: boolean;
+    status?: 'untested' | 'valid' | 'invalid' | 'rate_limited' | 'unavailable' | string;
+  }>;
   models?: ModelInfo[];
+  defaultModel?: string | null;
 }
 
 interface ModelSelectorDropdownProps {

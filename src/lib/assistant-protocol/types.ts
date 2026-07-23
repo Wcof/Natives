@@ -359,6 +359,13 @@ export interface SubagentRouteBinding {
   modelId: string;
 }
 
+/** Task row inside a batch assignment interaction. */
+export interface SubagentAssignmentTask {
+  callId: string;
+  name: string;
+  prompt?: string | null;
+}
+
 export interface SubagentAssignmentInteraction {
   kind: 'subagent_assignment';
   id: string;
@@ -366,8 +373,13 @@ export interface SubagentAssignmentInteraction {
   conversationId?: string;
   createdAt: string;
   reason?: string;
-  /** Optional task previews from the interaction payload. */
-  tasks?: Array<{ prompt?: string | null }>;
+  batchId?: string;
+  parentConversationId?: string;
+  parentRunId?: string;
+  /** Default provider/key/model for mode=default. Missing → confirm disabled. */
+  defaultBinding?: SubagentRouteBinding | null;
+  /** Full task list for the batch (one custom row per task). */
+  tasks?: SubagentAssignmentTask[];
 }
 
 export type InteractionRequest =

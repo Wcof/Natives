@@ -17,7 +17,13 @@ export interface AssistantProviderOption {
   name: string;
   presetName: string;
   baseUrl: string;
-  keys: Array<{ id: string; label: string; maskedKey: string }>;
+  keys: Array<{
+    id: string;
+    label: string;
+    maskedKey: string;
+    isActive?: boolean;
+    status?: 'untested' | 'valid' | 'invalid' | 'rate_limited' | 'unavailable' | string;
+  }>;
   models: Array<{ id: string; displayName?: string }>;
   defaultModel?: string | null;
 }

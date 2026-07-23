@@ -185,9 +185,14 @@ test('mapSubagentUiStatus labels', () => {
   assert.equal(mapSubagentUiStatus('pending_assignment').key, 'pending_assignment');
   assert.equal(mapSubagentUiStatus('pending_assignment').zh, '待分配');
   assert.equal(mapSubagentUiStatus('queued').key, 'in_progress');
+  assert.equal(mapSubagentUiStatus('open').key, 'in_progress');
   assert.equal(mapSubagentUiStatus('running').zh, '执行中');
   assert.equal(mapSubagentUiStatus('waiting_permission').key, 'in_progress');
   assert.equal(mapSubagentUiStatus('completed').zh, '已完成');
+  assert.equal(mapSubagentUiStatus('idle').key, 'completed');
+  assert.equal(mapSubagentUiStatus('idle').zh, '已完成');
   assert.equal(mapSubagentUiStatus('failed').key, 'closed');
   assert.equal(mapSubagentUiStatus('cancelled').zh, '关闭');
+  assert.equal(mapSubagentUiStatus('interrupted').key, 'closed');
+  assert.equal(mapSubagentUiStatus('closed').key, 'closed');
 });

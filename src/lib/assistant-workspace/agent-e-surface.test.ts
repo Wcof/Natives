@@ -100,6 +100,9 @@ test('i18n keys for A/B/C/subagent assignment exist in zh and en', () => {
     'switchKeyTitle',
     'mainTask',
     'backToMain',
+    'missingDefaultBinding',
+    'needValidKey',
+    'tasks',
   ];
   for (const k of keys) {
     assert.ok(zh.includes(k), `zh missing ${k}`);
@@ -117,11 +120,18 @@ test('workbench returns Promise from permission handlers and uses multi-run subS
   assert.match(workbench, /selectedRootConversationId/);
   assert.match(workbench, /selectedChildConversationId/);
   assert.match(workbench, /subagent\.touch/);
+  assert.match(workbench, /conversation_id: rootConversationId/);
   assert.match(workbench, /subagent\.switchRoute/);
   assert.match(workbench, /interaction\.respond/);
   assert.match(workbench, /SubagentAssignmentModal/);
+  assert.match(workbench, /restarted_run_id/);
+  assert.match(workbench, /rootEvents/);
+  assert.match(workbench, /selectedChildEvents/);
+  assert.match(workbench, /mainTodos/);
   // Must not soft-abort all runs with a single shared signal.
   assert.equal(workbench.includes('subAbortRef'), false);
+  // Heartbeat must not loop over every subagent.
+  assert.equal(/for \(const s of targets\)/.test(workbench), false);
 });
 
 test('reducer maps subagent_assignment interaction_requested', () => {
@@ -150,6 +160,19 @@ test('reducer maps subagent_assignment interaction_requested', () => {
         kind: 'subagent_assignment',
         conversation_id: 'c1',
         reason: 'assign',
+        batch_id: 'batch-1',
+        parent_conversation_id: 'c1',
+        parent_run_id: 'r1',
+        default_binding: {
+          provider_id: 'openai',
+          key_id: 'k1',
+          model_id: 'gpt-4o',
+        },
+        tasks: [
+          { call_id: 't1', name: 'Research', prompt: 'Look up docs' },
+          { call_id: 't2', name: 'Implement', prompt: 'Write code' },
+          { call_id: 't3', name: 'Review', prompt: 'Check diffs' },
+        ],
       },
     },
   });
@@ -158,5 +181,13 @@ test('reducer maps subagent_assignment interaction_requested', () => {
   assert.equal(interaction.kind, 'subagent_assignment');
   if (interaction.kind === 'subagent_assignment') {
     assert.equal(interaction.conversationId, 'c1');
+    assert.equal(interaction.batchId, 'batch-1');
+    assert.equal(interaction.defaultBinding?.providerId, 'openai');
+    assert.equal(interaction.defaultBinding?.keyId, 'k1');
+    assert.equal(interaction.defaultBinding?.modelId, 'gpt-4o');
+    assert.equal(interaction.tasks?.length, 3);
+    assert.equal(interaction.tasks?.[0]?.callId, 't1');
+    assert.equal(interaction.tasks?.[0]?.name, 'Research');
+    assert.equal(interaction.tasks?.[2]?.name, 'Review');
   }
 });

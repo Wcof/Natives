@@ -166,7 +166,7 @@ export default function PermissionRequestCard({
       data-submitting={submitting ? 'true' : 'false'}
       tabIndex={-1}
       onKeyDown={onCardKeyDown}
-      className="w-full max-w-[min(860px,100%)] my-3 rounded-xl border border-yellow-400/30 bg-yellow-50/50 dark:bg-yellow-950/10 overflow-hidden"
+      className="w-full my-3 rounded-xl border border-yellow-400/30 bg-yellow-50/50 dark:bg-yellow-950/10 overflow-hidden"
     >
       {/* Header */}
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-yellow-400/20 bg-yellow-50/80 dark:bg-yellow-950/20">

@@ -59,11 +59,16 @@ export interface ActivitySubagentView {
   childConversationId?: string;
   task?: string;
   todos?: Array<{ id: string; content: string; status: TodoStatus }>;
+  /** Failure message — never a raw key. */
+  error?: string;
 }
 
 interface ActivityInspectorProps {
   run: Run | null;
+  /** Root / main-run event tree. Main Todo is always derived from this. */
   events: RunEvent[];
+  /** Selected child session events (sub-task Todo source). */
+  selectedChildEvents?: RunEvent[];
   artifacts: Artifact[];
   children: ChildRunSummary[];
   fileChanges: FileChange[];
@@ -217,6 +222,7 @@ function SectionTitle({
 export default function ActivityInspector({
   run,
   events,
+  selectedChildEvents = [],
   artifacts,
   children,
   fileChanges,
@@ -278,8 +284,10 @@ export default function ActivityInspector({
         : (tabs[0]?.id ?? 'run');
 
   // ── Task view model (props preferred, events fallback) ──
+  // Main Todo ALWAYS comes from root events (or explicit mainTodos prop).
+  // Never use selected-child events here.
   const resolvedMainTodos = useMemo<ActivityTodo[]>(() => {
-    // Explicit prop (including empty array) wins; only undefined falls back to events.
+    // Explicit prop (including empty array) wins; only undefined falls back to root events.
     if (mainTodos !== undefined) return mainTodos;
     return extractTodosFromEvents(events);
   }, [mainTodos, events]);
@@ -309,24 +317,31 @@ export default function ActivityInspector({
 
   const selectedSubTodos = useMemo<ActivityTodo[]>(() => {
     if (!selectedSubagent) return [];
+    // Prefer explicit todos on the subagent view.
     if (selectedSubagent.todos && selectedSubagent.todos.length > 0) {
       return selectedSubagent.todos;
     }
+    // Next: latest todo_write from the selected child's own event stream.
+    const fromChildEvents = extractTodosFromEvents(selectedChildEvents);
+    if (fromChildEvents.length > 0) return fromChildEvents;
+    // Fallback: initial delegated task description.
     if (selectedSubagent.task) {
+      const ui = mapSubagentUiStatus(selectedSubagent.status);
       return [
         {
           id: `${selectedSubagent.id}-task`,
           content: selectedSubagent.task,
-          status: mapSubagentUiStatus(selectedSubagent.status).key === 'completed'
-            ? 'completed'
-            : mapSubagentUiStatus(selectedSubagent.status).key === 'in_progress'
-              ? 'in_progress'
-              : 'pending',
+          status:
+            ui.key === 'completed'
+              ? 'completed'
+              : ui.key === 'in_progress'
+                ? 'in_progress'
+                : 'pending',
         },
       ];
     }
     return [];
-  }, [selectedSubagent]);
+  }, [selectedSubagent, selectedChildEvents]);
 
   // Background execution: terminal / async tasks only — never mix with subagents
   const backgroundExecTasks = useMemo(
@@ -635,6 +650,15 @@ export default function ActivityInspector({
                                 .filter(Boolean)
                                 .join(' · ')}
                             </div>
+                            {ui.key === 'closed' && agent.error ? (
+                              <div
+                                className="mt-0.5 truncate text-[10px] text-[var(--danger)]"
+                                title={agent.error}
+                                data-testid={`subagent-error-${agent.id}`}
+                              >
+                                {agent.error}
+                              </div>
+                            ) : null}
                           </div>
                         </button>
                         {onSwitchSubagentKey ? (

@@ -376,18 +376,73 @@ function applyEventToLive(
           p.payload && typeof p.payload === 'object'
             ? (p.payload as Record<string, unknown>)
             : p;
+        const defaultRaw =
+          nested.default_binding && typeof nested.default_binding === 'object'
+            ? (nested.default_binding as Record<string, unknown>)
+            : nested.defaultBinding && typeof nested.defaultBinding === 'object'
+              ? (nested.defaultBinding as Record<string, unknown>)
+              : null;
+        const defaultBinding = defaultRaw
+          ? {
+              providerId: String(
+                defaultRaw.provider_id ?? defaultRaw.providerId ?? '',
+              ),
+              keyId: String(defaultRaw.key_id ?? defaultRaw.keyId ?? ''),
+              modelId: String(defaultRaw.model_id ?? defaultRaw.modelId ?? ''),
+            }
+          : null;
+        const tasks = Array.isArray(nested.tasks)
+          ? nested.tasks
+              .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+              .map((task, index) => ({
+                callId: String(task.call_id ?? task.callId ?? `task-${index}`),
+                name: String(
+                  task.name ?? task.prompt ?? task.task ?? `Task ${index + 1}`,
+                ),
+                prompt:
+                  task.prompt != null
+                    ? String(task.prompt)
+                    : task.task != null
+                      ? String(task.task)
+                      : null,
+              }))
+          : undefined;
         interaction = {
           kind: 'subagent_assignment',
           id,
           runId: event.runId,
           conversationId: String(
-            nested.conversation_id ?? nested.conversationId ?? run.conversationId ?? '',
+            nested.parent_conversation_id ??
+              nested.parentConversationId ??
+              nested.conversation_id ??
+              nested.conversationId ??
+              run.conversationId ??
+              '',
           ),
           createdAt: event.timestamp,
           reason: nested.reason != null ? String(nested.reason) : undefined,
-          tasks: Array.isArray(nested.tasks)
-            ? (nested.tasks as Array<{ prompt?: string | null }>)
-            : undefined,
+          batchId:
+            nested.batch_id != null || nested.batchId != null
+              ? String(nested.batch_id ?? nested.batchId)
+              : undefined,
+          parentConversationId:
+            nested.parent_conversation_id != null || nested.parentConversationId != null
+              ? String(nested.parent_conversation_id ?? nested.parentConversationId)
+              : undefined,
+          parentRunId:
+            nested.parent_run_id != null || nested.parentRunId != null
+              ? String(nested.parent_run_id ?? nested.parentRunId)
+              : undefined,
+          defaultBinding:
+            defaultBinding &&
+            defaultBinding.providerId &&
+            defaultBinding.keyId &&
+            defaultBinding.modelId
+              ? defaultBinding
+              : defaultBinding
+                ? defaultBinding
+                : null,
+          tasks,
         };
       } else {
         interaction = {
