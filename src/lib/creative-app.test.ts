@@ -5,8 +5,11 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   defaultDeleteOptions,
+  deleteNeedsDockerOptions,
   isActionBusy,
   mergeActionsWithBusy,
+  openSurfaceKind,
+  shouldAutoOpenAfterStart,
   shouldReloadCreativeCatalog,
   sortCreativeApps,
   sourceBadge,
@@ -79,5 +82,94 @@ describe('creative-app sort and badge', () => {
     const d = defaultDeleteOptions();
     assert.equal(d.removeVolumes, false);
     assert.equal(d.removeImages, false);
+  });
+});
+
+function summary(
+  partial: Partial<CreativeAppSummary> & Pick<CreativeAppSummary, 'id' | 'source' | 'state'>,
+): CreativeAppSummary {
+  return {
+    runtime: partial.source === 'internal' ? 'workshop_static' : 'local_static',
+    title: partial.id,
+    version: '1',
+    actions: {
+      canOpen: false,
+      canStart: false,
+      canStop: false,
+      canDelete: true,
+      canRetry: false,
+    },
+    ...partial,
+  };
+}
+
+describe('creative-app lifecycle matrix helpers', () => {
+  it('auto-open only for local projects with flag', () => {
+    assert.equal(
+      shouldAutoOpenAfterStart(
+        summary({
+          id: 'l1',
+          source: 'local_project',
+          state: 'running',
+          localProject: {
+            projectRoot: '/tmp/x',
+            projectKind: 'html',
+            launchMode: 'smart',
+            deviceId: 'd',
+            deviceName: 'n',
+            autoOpen: true,
+          },
+        }),
+      ),
+      true,
+    );
+    assert.equal(
+      shouldAutoOpenAfterStart(
+        summary({
+          id: 'l2',
+          source: 'local_project',
+          state: 'running',
+          localProject: {
+            projectRoot: '/tmp/x',
+            projectKind: 'html',
+            launchMode: 'smart',
+            deviceId: 'd',
+            deviceName: 'n',
+            autoOpen: false,
+          },
+        }),
+      ),
+      false,
+    );
+    assert.equal(
+      shouldAutoOpenAfterStart(
+        summary({ id: 'e1', source: 'external_github', state: 'running', runtime: 'docker_run' }),
+      ),
+      false,
+    );
+    assert.equal(
+      shouldAutoOpenAfterStart(summary({ id: 'i1', source: 'internal', state: 'available' })),
+      false,
+    );
+  });
+
+  it('open surface and delete options by source', () => {
+    assert.equal(
+      openSurfaceKind(summary({ id: 'i', source: 'internal', state: 'available' })),
+      'workshop',
+    );
+    assert.equal(
+      openSurfaceKind(
+        summary({ id: 'e', source: 'external_github', state: 'running', runtime: 'docker_run' }),
+      ),
+      'local_url',
+    );
+    assert.equal(
+      openSurfaceKind(summary({ id: 'l', source: 'local_project', state: 'running' })),
+      'local_url',
+    );
+    assert.equal(deleteNeedsDockerOptions('external_github'), true);
+    assert.equal(deleteNeedsDockerOptions('local_project'), false);
+    assert.equal(deleteNeedsDockerOptions('internal'), false);
   });
 });

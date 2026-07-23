@@ -357,6 +357,8 @@ pub struct LocalProjectSummary {
     pub package_manager: Option<PackageManager>,
     pub device_id: String,
     pub device_name: String,
+    /// Whether the host should open the app GUI after a successful start.
+    pub auto_open: bool,
 }
 
 /// Canonical LaunchPlan produced by rule / user / AI; always re-validated locally.

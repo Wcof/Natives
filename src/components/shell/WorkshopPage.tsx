@@ -36,8 +36,10 @@ import { classifyError } from '@/lib/error-classifier';
 import { useCreativeAppCatalog } from '@/hooks/useCreativeAppCatalog';
 import {
   defaultDeleteOptions,
+  deleteNeedsDockerOptions,
   isActionBusy,
   mergeActionsWithBusy,
+  shouldAutoOpenAfterStart,
   sourceBadge,
 } from '@/lib/creative-app';
 import type {
@@ -301,6 +303,9 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
   };
 
   const handleOpen = async (app: CreativeAppSummary) => {
+    // Open surface still differs by source (iframe vs child webview), but
+    // resolution goes through creativeApp.getOpenTarget for non-internal paths
+    // and openInternalModule for workshop modules (Bridge stays internal-only).
     if (app.source === 'internal') {
       await openInternalModule(app.id);
     } else {
@@ -312,16 +317,15 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
     if (busyIds.has(app.id)) return;
     await withBusy(app.id, async () => {
       try {
-        if (app.source === 'internal') {
-          await window.nativesAPI?.module?.enable?.(app.id);
-        } else {
-          const updated = await window.nativesAPI?.creativeApp?.start?.(app.id);
-          const shouldOpen =
-            updated?.state === 'running' &&
-            (updated.localProject?.autoOpen ?? app.localProject?.autoOpen ?? false);
-          if (shouldOpen && updated) {
-            await openExternal(updated);
-          }
+        // Unified lifecycle: all three sources start via creativeApp.start
+        // (adapters map internal → enable_module).
+        const updated = await window.nativesAPI?.creativeApp?.start?.(app.id);
+        if (
+          updated?.state === 'running' &&
+          shouldAutoOpenAfterStart(updated) &&
+          updated.source !== 'internal'
+        ) {
+          await openExternal(updated);
         }
       } catch (err) {
         showToast(classifyError(err).userMessage);
@@ -334,11 +338,7 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
     if (browserApp?.id === app.id) await closeBrowser();
     await withBusy(app.id, async () => {
       try {
-        if (app.source === 'internal') {
-          await window.nativesAPI?.module?.disable?.(app.id);
-        } else {
-          await window.nativesAPI?.creativeApp?.stop?.(app.id);
-        }
+        await window.nativesAPI?.creativeApp?.stop?.(app.id);
       } catch (err) {
         showToast(classifyError(err).userMessage);
       }
@@ -351,14 +351,12 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
     if (browserApp?.id === id) await closeBrowser();
     await withBusy(id, async () => {
       try {
-        if (deleteTarget.source === 'internal') {
-          await window.nativesAPI?.module?.uninstall?.(id);
-        } else {
-          await window.nativesAPI?.creativeApp?.delete?.(id, {
-            removeVolumes: deleteVolumes,
-            removeImages: deleteImages,
-          });
-        }
+        // Unified delete: adapters keep Docker options meaningful only for
+        // external_github; local never touches project files; internal uninstalls module.
+        await window.nativesAPI?.creativeApp?.delete?.(id, {
+          removeVolumes: deleteVolumes,
+          removeImages: deleteImages,
+        });
       } catch (err) {
         showToast(classifyError(err).userMessage);
       } finally {
@@ -1465,7 +1463,7 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
               {deleteTarget.title}
             </div>
 
-            {deleteTarget.source === 'external_github' && (
+            {deleteNeedsDockerOptions(deleteTarget.source) && (
               <div className="flex flex-col gap-2 pt-1">
                 <label className="flex items-center gap-2 text-xs text-[var(--text)] cursor-pointer">
                   <input

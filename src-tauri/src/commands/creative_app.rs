@@ -4,6 +4,7 @@
 //! scopes (or inside `spawn_blocking`) so `Connection` is never held across
 //! `.await` — Connection is !Send.
 
+use crate::creative_app::adapters::{self, LifecycleCtx, ResolvedSource};
 use crate::creative_app::browser::{self, BrowserStateHandle};
 use crate::creative_app::docker;
 use crate::creative_app::install;
@@ -33,6 +34,14 @@ fn conn(pool: &DbPool) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConne
         .map_err(|e| Error::Internal(format!("db: {e}")))
 }
 
+fn lifecycle_ctx(
+    app: tauri::AppHandle,
+    local_runtime: LocalRuntimeHandle,
+    host_http_port: u16,
+) -> LifecycleCtx {
+    LifecycleCtx::new(app, modules_dir(), Some(local_runtime), host_http_port)
+}
+
 #[tauri::command]
 pub fn creative_app_list(state: State<'_, AppState>) -> Result<Vec<CreativeAppSummary>> {
     let c = conn(&state.db)?;
@@ -52,34 +61,11 @@ pub async fn creative_app_start(
     let local_runtime = local_runtime.inner().clone();
     let lock = lock.inner().clone();
     let _guard = lock.lock().await;
-    let handle = app_handle.clone();
+    let ctx = lifecycle_ctx(app_handle, local_runtime, host_port);
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
-        if store::get_app(&c, &id)?.is_some() {
-            rt.block_on(install::start_app(&c, &handle, &id))
-        } else if local::get_app(&c, &id)?.is_some() {
-            rt.block_on(local::start_app(
-                &c,
-                &handle,
-                local_runtime.as_ref(),
-                host_port,
-                &id,
-            ))
-        } else {
-            crate::module_manager::enable_module(&c, &id)?;
-            crate::emit_db_state_changed(
-                &handle,
-                "module",
-                serde_json::json!({ "action": "enable", "moduleId": id }),
-            );
-            crate::emit_db_state_changed(
-                &handle,
-                "creative-app",
-                serde_json::json!({ "action": "start", "id": id }),
-            );
-            service::CreativeAppService::get_summary(&c, &id)
-        }
+        rt.block_on(adapters::start(&c, &ctx, &id))
     })
     .await
     .map_err(|e| Error::Internal(format!("start join: {e}")))?
@@ -94,36 +80,15 @@ pub async fn creative_app_stop(
     local_runtime: State<'_, LocalRuntimeHandle>,
 ) -> Result<CreativeAppSummary> {
     let pool = state.db.clone();
+    let host_port = host_http_port(&state);
     let local_runtime = local_runtime.inner().clone();
     let lock = lock.inner().clone();
     let _guard = lock.lock().await;
-    let handle = app_handle.clone();
+    let ctx = lifecycle_ctx(app_handle, local_runtime, host_port);
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
-        if store::get_app(&c, &id)?.is_some() {
-            rt.block_on(install::stop_app(&c, &handle, &id))
-        } else if local::get_app(&c, &id)?.is_some() {
-            rt.block_on(local::stop_app(
-                &c,
-                &handle,
-                local_runtime.as_ref(),
-                &id,
-            ))
-        } else {
-            crate::module_manager::disable_module(&c, &id)?;
-            crate::emit_db_state_changed(
-                &handle,
-                "module",
-                serde_json::json!({ "action": "disable", "moduleId": id }),
-            );
-            crate::emit_db_state_changed(
-                &handle,
-                "creative-app",
-                serde_json::json!({ "action": "stop", "id": id }),
-            );
-            service::CreativeAppService::get_summary(&c, &id)
-        }
+        rt.block_on(adapters::stop(&c, &ctx, &id))
     })
     .await
     .map_err(|e| Error::Internal(format!("stop join: {e}")))?
@@ -139,41 +104,16 @@ pub async fn creative_app_delete(
     local_runtime: State<'_, LocalRuntimeHandle>,
 ) -> Result<DeleteResult> {
     let pool = state.db.clone();
+    let host_port = host_http_port(&state);
     let local_runtime = local_runtime.inner().clone();
     let lock = lock.inner().clone();
     let _guard = lock.lock().await;
     let opts = options.unwrap_or_default();
-    let handle = app_handle.clone();
+    let ctx = lifecycle_ctx(app_handle, local_runtime, host_port);
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
-        if store::get_app(&c, &id)?.is_some() {
-            rt.block_on(install::delete_app(&c, &handle, &id, opts))
-        } else if local::get_app(&c, &id)?.is_some() {
-            // Never delete the source project directory — only Natives metadata + logs.
-            rt.block_on(local::delete_running_app(
-                &c,
-                &handle,
-                local_runtime.as_ref(),
-                &id,
-            ))
-        } else {
-            crate::module_manager::uninstall_module(&c, &modules_dir(), &id)?;
-            crate::emit_db_state_changed(
-                &handle,
-                "module",
-                serde_json::json!({ "action": "uninstall", "moduleId": id }),
-            );
-            crate::emit_db_state_changed(
-                &handle,
-                "creative-app",
-                serde_json::json!({ "action": "deleted", "id": id }),
-            );
-            Ok(DeleteResult {
-                ok: true,
-                warnings: vec![],
-            })
-        }
+        rt.block_on(adapters::delete(&c, &ctx, &id, opts))
     })
     .await
     .map_err(|e| Error::Internal(format!("delete join: {e}")))?
@@ -192,27 +132,11 @@ pub async fn creative_app_restart(
     let local_runtime = local_runtime.inner().clone();
     let lock = lock.inner().clone();
     let _guard = lock.lock().await;
-    let handle = app_handle.clone();
+    let ctx = lifecycle_ctx(app_handle, local_runtime, host_port);
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
-        if local::get_app(&c, &id)?.is_some() {
-            rt.block_on(local::restart_app(
-                &c,
-                &handle,
-                local_runtime.as_ref(),
-                host_port,
-                &id,
-            ))
-        } else if store::get_app(&c, &id)?.is_some() {
-            // External: stop then start
-            let _ = rt.block_on(install::stop_app(&c, &handle, &id));
-            rt.block_on(install::start_app(&c, &handle, &id))
-        } else {
-            Err(Error::InvalidInput(
-                "restart is only supported for local/external creative apps".into(),
-            ))
-        }
+        rt.block_on(adapters::restart(&c, &ctx, &id))
     })
     .await
     .map_err(|e| Error::Internal(format!("restart join: {e}")))?
@@ -267,10 +191,13 @@ pub async fn creative_app_logs(
     let tail = tail.unwrap_or(200) as usize;
     let local_runtime = local_runtime.inner().clone();
 
-    // Local creative: memory ring + persisted tail
-    {
+    let source = {
         let c = conn(&pool)?;
-        if local::get_app(&c, &id)?.is_some() {
+        adapters::resolve(&c, &id)?
+    };
+
+    match source {
+        ResolvedSource::LocalProject => {
             let mem = local_runtime.recent_logs(&id, tail);
             if !mem.is_empty() {
                 let body = mem
@@ -280,33 +207,36 @@ pub async fn creative_app_logs(
                     .join("\n");
                 return Ok(body);
             }
-            let persisted = local_runtime.persisted_tail(&id, 256 * 1024);
-            return Ok(persisted);
+            Ok(local_runtime.persisted_tail(&id, 256 * 1024))
         }
-    }
-
-    let cfg_json = {
-        let c = conn(&pool)?;
-        let rec = store::get_app(&c, &id)?.ok_or_else(|| Error::NotFound(id.clone()))?;
-        rec.runtime_config_json
-    };
-    let cfg = store::parse_runtime_config(&cfg_json)?;
-    match cfg {
-        RuntimeConfig::DockerCompose {
-            project_name,
-            compose_file,
-            ..
-        } => {
-            docker::compose_logs(
-                &project_name,
-                &std::path::PathBuf::from(compose_file),
-                tail,
-            )
-            .await
+        ResolvedSource::ExternalGithub => {
+            let cfg_json = {
+                let c = conn(&pool)?;
+                let rec = store::get_app(&c, &id)?.ok_or_else(|| Error::NotFound(id.clone()))?;
+                rec.runtime_config_json
+            };
+            let cfg = store::parse_runtime_config(&cfg_json)?;
+            match cfg {
+                RuntimeConfig::DockerCompose {
+                    project_name,
+                    compose_file,
+                    ..
+                } => {
+                    docker::compose_logs(
+                        &project_name,
+                        &std::path::PathBuf::from(compose_file),
+                        tail,
+                    )
+                    .await
+                }
+                RuntimeConfig::DockerRun { container_name, .. } => {
+                    docker::docker_logs(&container_name, tail).await
+                }
+            }
         }
-        RuntimeConfig::DockerRun { container_name, .. } => {
-            docker::docker_logs(&container_name, tail).await
-        }
+        ResolvedSource::Internal => Err(Error::InvalidInput(
+            "workshop modules do not expose process logs via creativeApp.logs".into(),
+        )),
     }
 }
 
