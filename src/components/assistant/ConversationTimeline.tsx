@@ -54,6 +54,7 @@ const MessageRow = memo(function MessageRow({
   message: Message;
   locale: string;
   zh: boolean;
+  /** Wall clock; only meaningful while this message is live. */
   now: number;
   isLastRetryable: boolean;
   onRetry?: () => void;
@@ -62,16 +63,22 @@ const MessageRow = memo(function MessageRow({
   runEvents: RunEvent[];
 }) {
   const user = message.role === 'user';
+  const messageLive = message.status === 'streaming' || message.status === 'running';
   const start = message.startedAt
     ? Date.parse(message.startedAt)
     : message.createdAt
       ? Date.parse(message.createdAt)
       : Number.NaN;
-  // Footer total time: always track wall clock while the message is active.
-  const end = message.finishedAt ? Date.parse(message.finishedAt) : now || start;
+  // Footer total time: wall clock only while the message is active.
+  const end = message.finishedAt
+    ? Date.parse(message.finishedAt)
+    : messageLive
+      ? now || start
+      : Number.isFinite(start)
+        ? start
+        : now;
   const duration = Number.isFinite(start) ? formatElapsed(end - start) : null;
   const tokens = (message.inputTokens ?? 0) + (message.outputTokens ?? 0);
-  const messageLive = message.status === 'streaming' || message.status === 'running';
 
   // Prefer dedicated reasoning clock; fall back to run/message start so the
   // "思考过程 · Ns" label never stalls at 0.7s waiting for the first delta.
@@ -92,6 +99,11 @@ const MessageRow = memo(function MessageRow({
     [message.contentBlocks, messageLive],
   );
 
+  const reasoningFinishedKnown = Number.isFinite(reasoningFinished);
+  // Only finished reasoning without finishedAt needs the parent clock.
+  const bodyDurationClock = !messageLive && !reasoningFinishedKnown ? now : reasoningFinished;
+  // Live reasoning is stripped by filterTimelineBodyBlocks and rendered in
+  // ThinkingActivity (own 100ms clock). Do not rebuild body blocks every 100ms.
   const bodyBlocks = useMemo(() => {
     const prepared = message.contentBlocks.map((block) => {
       if (block.type !== 'reasoning') return block;
@@ -101,12 +113,8 @@ const MessageRow = memo(function MessageRow({
         locale: locale.startsWith('zh') ? 'zh' : 'en',
         live: blockLive,
       };
-      if (!Number.isFinite(reasoningStart)) return withLocale;
-      const endMs = blockLive
-        ? now
-        : Number.isFinite(reasoningFinished)
-          ? reasoningFinished
-          : now;
+      if (blockLive || !Number.isFinite(reasoningStart)) return withLocale;
+      const endMs = Number.isFinite(bodyDurationClock) ? bodyDurationClock : 0;
       return {
         ...withLocale,
         durationMs: Math.max(0, endMs - reasoningStart),
@@ -118,8 +126,7 @@ const MessageRow = memo(function MessageRow({
     locale,
     messageLive,
     reasoningStart,
-    reasoningFinished,
-    now,
+    bodyDurationClock,
   ]);
 
   const toolActivity = useMemo(() => {
@@ -202,6 +209,23 @@ const MessageRow = memo(function MessageRow({
         )}
       </div>
     </article>
+  );
+}, (prev, next) => {
+  // Finished rows ignore parent wall-clock ticks (subagent storms re-render every 100ms).
+  const prevLive = prev.message.status === 'streaming' || prev.message.status === 'running';
+  const nextLive = next.message.status === 'streaming' || next.message.status === 'running';
+  if (prevLive || nextLive) {
+    if (prev.now !== next.now) return false;
+  }
+  return (
+    prev.message === next.message &&
+    prev.locale === next.locale &&
+    prev.zh === next.zh &&
+    prev.isLastRetryable === next.isLastRetryable &&
+    prev.onRetry === next.onRetry &&
+    prev.copiedId === next.copiedId &&
+    prev.onCopy === next.onCopy &&
+    prev.runEvents === next.runEvents
   );
 });
 

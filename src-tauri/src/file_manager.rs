@@ -924,6 +924,7 @@ pub fn open_with(target: &str, with: &str) -> Result<serde_json::Value> {
             };
             #[cfg(target_os = "macos")]
             {
+                // Fixed argv — no shell.
                 std::process::Command::new("open")
                     .args(["-a", "Terminal", dir.to_string_lossy().as_ref()])
                     .spawn()
@@ -931,32 +932,32 @@ pub fn open_with(target: &str, with: &str) -> Result<serde_json::Value> {
             }
             #[cfg(target_os = "windows")]
             {
-                std::process::Command::new("cmd")
-                    .args(["/C", "start", "cmd", "/K", &format!("cd /d {}", dir.display())])
-                    .spawn()
-                    .map_err(|e| Error::Internal(e.to_string()))?;
+                // Prefer Windows Terminal with independent argv; fall back to Explorer.
+                let dir_s = dir.to_string_lossy().to_string();
+                let wt = std::process::Command::new("wt.exe")
+                    .args(["-d", &dir_s])
+                    .spawn();
+                if wt.is_err() {
+                    std::process::Command::new("explorer")
+                        .arg(&dir_s)
+                        .spawn()
+                        .map_err(|e| Error::Internal(e.to_string()))?;
+                }
             }
             #[cfg(all(unix, not(target_os = "macos")))]
             {
-                // Best-effort terminal launch
                 let dir_s = dir.to_string_lossy().to_string();
-                let tried = [
-                    ("x-terminal-emulator", vec![format!("--working-directory={dir_s}")]),
-                    ("gnome-terminal", vec![format!("--working-directory={dir_s}")]),
-                    ("xterm", vec!["-e".into(), format!("cd {dir_s} && bash")]),
-                ];
-                let mut last_err = None;
-                for (bin, args) in tried {
-                    match std::process::Command::new(bin).args(&args).spawn() {
-                        Ok(_) => {
-                            last_err = None;
-                            break;
-                        }
-                        Err(e) => last_err = Some(e),
+                // Prefer x-terminal-emulator with working-directory flag when available.
+                let tried = std::process::Command::new("x-terminal-emulator")
+                    .args(["--working-directory", &dir_s])
+                    .spawn();
+                if tried.is_err() {
+                    let gnome = std::process::Command::new("gnome-terminal")
+                        .args([format!("--working-directory={dir_s}")])
+                        .spawn();
+                    if gnome.is_err() {
+                        open::that(&dir).map_err(|e| Error::Internal(e.to_string()))?;
                     }
-                }
-                if let Some(e) = last_err {
-                    return Err(Error::Internal(e.to_string()));
                 }
             }
             Ok(serde_json::json!({ "ok": true, "with": "terminal" }))

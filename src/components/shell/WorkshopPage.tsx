@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Code2,
   ExternalLink,
+  Folder,
   Github,
   HelpCircle,
   Layers,
@@ -45,7 +46,20 @@ import type {
   CreativeAppInstallCandidate,
   CreativeAppProgressEvent,
   CreativeAppSummary,
+  LaunchPlan,
+  LocalProjectScanResult,
+  PackageManager,
 } from '@/lib/tauri-adapter';
+import {
+  buildCreateRequest,
+  canProceedFromScan,
+  defaultLocalTitleFromPath,
+  deleteLocalConfirmNote,
+  localIssueLabel,
+  pickPackageManager,
+  planSummaryLines,
+  type LocalWizardStep,
+} from '@/lib/local-creative';
 
 interface WorkshopPageProps {
   onInstall: (source: string) => void;
@@ -75,6 +89,8 @@ function stateLabel(locale: Locale, state: CreativeAppSummary['state']): string 
 function runtimeLabel(locale: Locale, runtime: CreativeAppSummary['runtime']): string {
   if (runtime === 'docker_compose') return t(locale, 'workshop.runtimeCompose');
   if (runtime === 'docker_run') return t(locale, 'workshop.runtimeRun');
+  if (runtime === 'local_static') return t(locale, 'workshop.runtimeLocalStatic');
+  if (runtime === 'node_dev_server') return t(locale, 'workshop.runtimeNodeDev');
   return t(locale, 'workshop.runtimeWorkshop');
 }
 
@@ -152,6 +168,51 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
 
   const [logsFor, setLogsFor] = useState<CreativeAppSummary | null>(null);
   const [logsText, setLogsText] = useState('');
+  const [logAutoScroll, setLogAutoScroll] = useState(true);
+  const [logFilter, setLogFilter] = useState('');
+  const logPreRef = useRef<HTMLPreElement | null>(null);
+
+  // Local project wizard (four steps)
+  const [localWizardOpen, setLocalWizardOpen] = useState(false);
+  const [localStep, setLocalStep] = useState<LocalWizardStep>('basic');
+  const [localRoot, setLocalRoot] = useState('');
+  const [localTitle, setLocalTitle] = useState('');
+  const [localDesc, setLocalDesc] = useState('');
+  const [localScanning, setLocalScanning] = useState(false);
+  const [localScan, setLocalScan] = useState<LocalProjectScanResult | null>(null);
+  const [localScanError, setLocalScanError] = useState<string | null>(null);
+  const [localLaunchMode, setLocalLaunchMode] = useState<'smart' | 'custom'>('smart');
+  const [localPlan, setLocalPlan] = useState<LaunchPlan | null>(null);
+  const [localPm, setLocalPm] = useState<PackageManager | undefined>(undefined);
+  const [localScript, setLocalScript] = useState('');
+  const [localAutoOpen, setLocalAutoOpen] = useState(true);
+  const [localStartAfterSave, setLocalStartAfterSave] = useState(false);
+  const [localSaving, setLocalSaving] = useState(false);
+  const [localCwd, setLocalCwd] = useState('.');
+  const [localOpenPath, setLocalOpenPath] = useState('/');
+  const [localPortMode, setLocalPortMode] = useState<'auto' | 'fixed'>('auto');
+  const [localPortValue, setLocalPortValue] = useState('');
+  const [localAiPreview, setLocalAiPreview] = useState<string | null>(null);
+  const [localAiBusy, setLocalAiBusy] = useState(false);
+  const [localAiPendingConfirm, setLocalAiPendingConfirm] = useState(false);
+
+  const [editLocal, setEditLocal] = useState<CreativeAppSummary | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editAutoOpen, setEditAutoOpen] = useState(true);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editPlan, setEditPlan] = useState<LaunchPlan | null>(null);
+  const [editEnvKeys, setEditEnvKeys] = useState<string[]>([]);
+  const [editPortMode, setEditPortMode] = useState<'auto' | 'fixed'>('auto');
+  const [editPortValue, setEditPortValue] = useState('');
+  const [editScript, setEditScript] = useState('');
+  const [editOpenPath, setEditOpenPath] = useState('/');
+  const [editCwd, setEditCwd] = useState('.');
+  const [editLoading, setEditLoading] = useState(false);
+
+  const [depInstallFor, setDepInstallFor] = useState<CreativeAppSummary | null>(null);
+  const [depConfirmChecked, setDepConfirmChecked] = useState(false);
+  const [depInstalling, setDepInstalling] = useState(false);
+  const [depCommand, setDepCommand] = useState<string>('');
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -254,7 +315,13 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
         if (app.source === 'internal') {
           await window.nativesAPI?.module?.enable?.(app.id);
         } else {
-          await window.nativesAPI?.creativeApp?.start?.(app.id);
+          const updated = await window.nativesAPI?.creativeApp?.start?.(app.id);
+          const shouldOpen =
+            updated?.state === 'running' &&
+            (updated.localProject?.autoOpen ?? app.localProject?.autoOpen ?? false);
+          if (shouldOpen && updated) {
+            await openExternal(updated);
+          }
         }
       } catch (err) {
         showToast(classifyError(err).userMessage);
@@ -305,13 +372,304 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
   const openLogs = async (app: CreativeAppSummary) => {
     setLogsFor(app);
     setLogsText('…');
+    setLogAutoScroll(true);
     try {
+      if (app.source === 'local_project' && window.nativesAPI?.creativeApp?.getLocalLogs) {
+        const lines = await window.nativesAPI.creativeApp.getLocalLogs(app.id, 400);
+        if (Array.isArray(lines) && lines.length > 0) {
+          setLogsText(
+            lines
+              .map((l) => `[${l.stream}] ${l.text}`)
+              .join('\n'),
+          );
+          return;
+        }
+      }
       const text = await window.nativesAPI?.creativeApp?.logs?.(app.id, 200);
       setLogsText(text || '');
     } catch (err) {
       setLogsText(classifyError(err).userMessage);
     }
   };
+
+  useEffect(() => {
+    if (!logsFor) return;
+    const api = window.nativesAPI?.creativeApp;
+    if (!api?.onLog) return;
+    return api.onLog((ev) => {
+      if (ev.appId !== logsFor.id) return;
+      setLogsText((prev) => {
+        const line = `[${ev.stream}] ${ev.text}`;
+        if (!prev || prev === '…') return line;
+        return `${prev}\n${line}`;
+      });
+    });
+  }, [logsFor]);
+
+  const resetLocalWizard = () => {
+    setLocalStep('basic');
+    setLocalRoot('');
+    setLocalTitle('');
+    setLocalDesc('');
+    setLocalScanning(false);
+    setLocalScan(null);
+    setLocalScanError(null);
+    setLocalLaunchMode('smart');
+    setLocalPlan(null);
+    setLocalPm(undefined);
+    setLocalScript('');
+    setLocalAutoOpen(true);
+    setLocalStartAfterSave(false);
+    setLocalSaving(false);
+    setLocalCwd('.');
+    setLocalOpenPath('/');
+    setLocalPortMode('auto');
+    setLocalPortValue('');
+    setLocalAiPreview(null);
+    setLocalAiBusy(false);
+    setLocalAiPendingConfirm(false);
+  };
+
+  const pickLocalFolder = async () => {
+    try {
+      const path = await window.nativesAPI?.dialog?.pickDirectory?.();
+      if (!path) return;
+      setLocalRoot(path);
+      if (!localTitle.trim()) setLocalTitle(defaultLocalTitleFromPath(path));
+    } catch (err) {
+      showToast(classifyError(err).userMessage);
+    }
+  };
+
+  const runLocalScan = async (root: string) => {
+    setLocalScanning(true);
+    setLocalScanError(null);
+    try {
+      const scan = await window.nativesAPI?.creativeApp?.inspectLocal?.({ projectRoot: root });
+      if (!scan) throw new Error('inspectLocal unavailable');
+      setLocalScan(scan);
+      const pm = pickPackageManager(scan);
+      setLocalPm(pm);
+      setLocalScript(scan.preferredScript || scan.scripts[0] || '');
+      if (scan.rulePlan) {
+        setLocalPlan(scan.rulePlan);
+      } else {
+        setLocalPlan(null);
+      }
+      if (scan.existingId) {
+        showToast(t(locale, 'workshop.localAlreadyRegistered'));
+      }
+      setLocalStep('scan');
+    } catch (err) {
+      setLocalScanError(classifyError(err).userMessage);
+    } finally {
+      setLocalScanning(false);
+    }
+  };
+
+  const applyCustomPlanFromScan = (): LaunchPlan | null => {
+    if (!localScan) return null;
+    const base = localPlan ?? localScan.rulePlan;
+    if (!base) {
+      // Minimal static fallback when index.html exists via kind
+      if (localScan.projectKind === 'html') {
+        return {
+          schemaVersion: 1,
+          source: 'user',
+          projectKind: 'html',
+          runtime: 'static_http',
+          program: 'internal',
+          cwdRelative: localCwd.trim() || '.',
+          entryFile: 'index.html',
+          args: [],
+          environmentKeys: [],
+          port: {
+            mode: localPortMode,
+            value:
+              localPortMode === 'fixed' && localPortValue
+                ? Number(localPortValue)
+                : undefined,
+          },
+          openPath: localOpenPath.trim() || '/',
+          healthPath: localOpenPath.trim() || '/',
+          startupTimeoutMs: 60000,
+          autoOpen: localAutoOpen,
+          reason: 'user custom static',
+        };
+      }
+      return null;
+    }
+    if (base.runtime === 'static_http') {
+      return {
+        ...base,
+        source: 'user',
+        cwdRelative: localCwd.trim() || base.cwdRelative || '.',
+        openPath: localOpenPath.trim() || base.openPath || '/',
+        healthPath: localOpenPath.trim() || base.healthPath || '/',
+        autoOpen: localAutoOpen,
+        port: {
+          mode: localPortMode,
+          value:
+            localPortMode === 'fixed' && localPortValue
+              ? Number(localPortValue)
+              : undefined,
+        },
+      };
+    }
+    const program = (localPm || base.program) as LaunchPlan['program'];
+    return {
+      ...base,
+      source: 'user',
+      program: program === 'internal' ? 'npm' : program,
+      script: localScript || base.script,
+      cwdRelative: localCwd.trim() || base.cwdRelative || '.',
+      openPath: localOpenPath.trim() || base.openPath || '/',
+      healthPath: localOpenPath.trim() || base.healthPath || '/',
+      autoOpen: localAutoOpen,
+      port: {
+        mode: localPortMode,
+        value:
+          localPortMode === 'fixed' && localPortValue
+            ? Number(localPortValue)
+            : undefined,
+      },
+    };
+  };
+
+  const saveLocalCreative = async (startAfter: boolean) => {
+    if (!localRoot.trim()) return;
+    setLocalSaving(true);
+    try {
+      const mode = localLaunchMode;
+      const plan =
+        mode === 'custom' ? applyCustomPlanFromScan() : localPlan ?? localScan?.rulePlan ?? null;
+      if (!plan) {
+        showToast(t(locale, 'workshop.localNoPlan'));
+        setLocalSaving(false);
+        return;
+      }
+      const req = buildCreateRequest({
+        projectRoot: localRoot.trim(),
+        title: localTitle,
+        description: localDesc,
+        launchMode: mode,
+        launchPlan: plan,
+        autoOpen: localAutoOpen,
+        startAfterSave: startAfter,
+        packageManager: localPm,
+      });
+      const created = await window.nativesAPI?.creativeApp?.createLocal?.(req);
+      if (!created) throw new Error('createLocal failed');
+      if (startAfter) {
+        try {
+          await window.nativesAPI?.creativeApp?.start?.(created.id);
+        } catch (err) {
+          showToast(classifyError(err).userMessage);
+        }
+      }
+      showToast(t(locale, 'workshop.localSaved'));
+      setLocalWizardOpen(false);
+      resetLocalWizard();
+      void reload();
+    } catch (err) {
+      showToast(classifyError(err).userMessage);
+    } finally {
+      setLocalSaving(false);
+    }
+  };
+
+  const handleRestart = async (app: CreativeAppSummary) => {
+    if (busyIds.has(app.id)) return;
+    await withBusy(app.id, async () => {
+      try {
+        await window.nativesAPI?.creativeApp?.restart?.(app.id);
+        void reload();
+      } catch (err) {
+        showToast(classifyError(err).userMessage);
+      }
+    });
+  };
+
+  const handleResolveOrphan = async (app: CreativeAppSummary, restart: boolean) => {
+    if (busyIds.has(app.id)) return;
+    await withBusy(app.id, async () => {
+      try {
+        await window.nativesAPI?.creativeApp?.resolveOrphan?.(app.id, restart);
+        void reload();
+      } catch (err) {
+        showToast(classifyError(err).userMessage);
+      }
+    });
+  };
+
+  const openEditLocal = async (app: CreativeAppSummary) => {
+    setEditLocal(app);
+    setEditTitle(app.title);
+    setEditAutoOpen(Boolean(app.localProject?.autoOpen ?? true));
+    setEditLoading(true);
+    try {
+      const cfg = await window.nativesAPI?.creativeApp?.getLocalConfig?.(app.id);
+      if (cfg?.launchPlan) {
+        setEditPlan(cfg.launchPlan);
+        setEditPortMode(cfg.launchPlan.port.mode);
+        setEditPortValue(cfg.launchPlan.port.value != null ? String(cfg.launchPlan.port.value) : '');
+        setEditScript(cfg.launchPlan.script || '');
+        setEditOpenPath(cfg.launchPlan.openPath || '/');
+        setEditCwd(cfg.launchPlan.cwdRelative || '.');
+        setEditAutoOpen(cfg.launchPlan.autoOpen);
+      }
+      setEditEnvKeys(cfg?.envKeys || []);
+    } catch (err) {
+      showToast(classifyError(err).userMessage);
+    } finally {
+      setEditLoading(false);
+    }
+  };
+
+  const saveEditLocal = async () => {
+    if (!editLocal) return;
+    setEditSaving(true);
+    try {
+      let launchPlan = editPlan;
+      if (launchPlan) {
+        launchPlan = {
+          ...launchPlan,
+          source: 'user',
+          cwdRelative: editCwd.trim() || '.',
+          script: editScript.trim() || launchPlan.script,
+          openPath: editOpenPath.trim() || '/',
+          healthPath: editOpenPath.trim() || '/',
+          autoOpen: editAutoOpen,
+          port: {
+            mode: editPortMode,
+            value:
+              editPortMode === 'fixed' && editPortValue
+                ? Number(editPortValue)
+                : undefined,
+          },
+        };
+      }
+      await window.nativesAPI?.creativeApp?.updateLocal?.({
+        id: editLocal.id,
+        title: editTitle.trim() || editLocal.title,
+        autoOpen: editAutoOpen,
+        launchPlan: launchPlan || undefined,
+        launchMode: launchPlan ? 'custom' : undefined,
+      });
+      setEditLocal(null);
+      void reload();
+    } catch (err) {
+      showToast(classifyError(err).userMessage);
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!logsFor || !logAutoScroll) return;
+    const el = logPreRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [logsText, logsFor, logAutoScroll]);
 
   const beginImport = async (source: string, fileName: string) => {
     try {
@@ -540,12 +898,62 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
           >
             <RefreshCw size={14} />
           </button>
+          {browserApp.source !== 'internal' && (
+            <>
+              <button
+                type="button"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                onClick={() => void handleStop(browserApp)}
+                title={t(locale, 'workshop.actionStop')}
+              >
+                <Pause size={14} />
+              </button>
+              <button
+                type="button"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+                onClick={() => void handleRestart(browserApp)}
+                title={t(locale, 'workshop.actionRestart')}
+              >
+                <RotateCcw size={14} />
+              </button>
+            </>
+          )}
           <div
             className="flex-1 text-xs font-mono text-[var(--text-secondary)] px-3 py-1.5 border border-[var(--border)] rounded-lg bg-[var(--surface-subtle)] truncate"
             title={browserUrl}
           >
             {browserUrl || t(locale, 'workshop.browserAddress')}
           </div>
+          <button
+            type="button"
+            className="flex h-8 items-center gap-1.5 px-2 rounded-lg border border-[var(--border)] text-xs"
+            onClick={async () => {
+              try {
+                await window.nativesAPI?.clipboard?.write?.(browserUrl);
+                showToast(t(locale, 'workshop.copied'));
+              } catch (err) {
+                showToast(classifyError(err).userMessage);
+              }
+            }}
+            title={t(locale, 'workshop.copyUrl')}
+          >
+            {t(locale, 'workshop.copyUrl')}
+          </button>
+          <button
+            type="button"
+            className="flex h-8 items-center gap-1.5 px-2 rounded-lg border border-[var(--border)] text-xs"
+            onClick={async () => {
+              if (!browserUrl) return;
+              try {
+                await window.nativesAPI?.shell?.openPath?.(browserUrl);
+              } catch (err) {
+                showToast(classifyError(err).userMessage);
+              }
+            }}
+            title={t(locale, 'workshop.openSystemBrowser')}
+          >
+            <ExternalLink size={13} />
+          </button>
           <button
             type="button"
             className="flex h-8 items-center gap-1.5 px-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-xs font-medium text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all"
@@ -640,6 +1048,18 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
                   className="flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all w-full text-left"
                   onClick={() => {
                     setAddMenu('closed');
+                    resetLocalWizard();
+                    setLocalWizardOpen(true);
+                  }}
+                >
+                  <Folder size={14} className="text-[var(--text-secondary)]" />
+                  <span>{t(locale, 'workshop.addMenuLocal')}</span>
+                </button>
+                <button
+                  type="button"
+                  className="flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all w-full text-left"
+                  onClick={() => {
+                    setAddMenu('closed');
                     resetWizard();
                     setWizardOpen(true);
                   }}
@@ -694,14 +1114,24 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
                       className={`text-[10px] font-medium px-2 py-0.5 rounded-full flex items-center gap-1 border shrink-0 ${
                         badge === 'github'
                           ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20'
-                          : 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20'
+                          : badge === 'local'
+                            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20'
+                            : 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20'
                       }`}
                     >
-                      {badge === 'github' ? <Github size={10} /> : <Code2 size={10} />}
+                      {badge === 'github' ? (
+                        <Github size={10} />
+                      ) : badge === 'local' ? (
+                        <Folder size={10} />
+                      ) : (
+                        <Code2 size={10} />
+                      )}
                       <span>
                         {badge === 'github'
                           ? t(locale, 'workshop.sourceGithub')
-                          : t(locale, 'workshop.sourceInternal')}
+                          : badge === 'local'
+                            ? t(locale, 'workshop.sourceLocal')
+                            : t(locale, 'workshop.sourceInternal')}
                       </span>
                     </span>
                   </div>
@@ -724,7 +1154,50 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
                   {app.lastError && (
                     <div className="text-[11px] text-rose-500 bg-rose-500/10 border border-rose-500/20 p-2 rounded-lg mb-3 flex items-start gap-1.5">
                       <AlertTriangle size={12} className="shrink-0 mt-0.5" />
-                      <span className="line-clamp-2">{app.lastError}</span>
+                      <span className="line-clamp-2">
+                        {localIssueLabel(app.statusDetail?.code, locale === 'en' ? 'en' : 'zh') ||
+                          app.lastError}
+                      </span>
+                    </div>
+                  )}
+                  {app.source === 'local_project' && app.localProject && (
+                    <div className="text-[11px] text-[var(--text-secondary)] mb-2 space-y-0.5">
+                      <div className="truncate" title={app.localProject.projectRoot}>
+                        {app.localProject.projectRoot}
+                      </div>
+                      <div className="flex gap-2 flex-wrap">
+                        <span>{app.localProject.projectKind}</span>
+                        {app.localProject.packageManager && (
+                          <span>{app.localProject.packageManager}</span>
+                        )}
+                        <span className="truncate">{app.localProject.deviceName}</span>
+                      </div>
+                      <div className="flex gap-1.5 pt-1">
+                        <button
+                          type="button"
+                          className="h-7 px-2 rounded border border-[var(--border)]"
+                          onClick={() =>
+                            void window.nativesAPI?.fs?.openWith?.(
+                              app.localProject!.projectRoot,
+                              'reveal',
+                            )
+                          }
+                        >
+                          {t(locale, 'workshop.openFolder')}
+                        </button>
+                        <button
+                          type="button"
+                          className="h-7 px-2 rounded border border-[var(--border)]"
+                          onClick={() =>
+                            void window.nativesAPI?.fs?.openWith?.(
+                              app.localProject!.projectRoot,
+                              'terminal',
+                            )
+                          }
+                        >
+                          {t(locale, 'workshop.openTerminal')}
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -760,6 +1233,17 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
                       <span>{t(locale, 'workshop.actionStop')}</span>
                     </button>
                   )}
+                  {(app.source === 'local_project' || app.source === 'external_github') &&
+                    (app.state === 'running' || app.state === 'start_failed') && (
+                      <button
+                        type="button"
+                        className="h-8 px-3 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all flex items-center justify-center gap-1.5 shrink-0"
+                        onClick={() => void handleRestart(app)}
+                        title={t(locale, 'workshop.actionRestart')}
+                      >
+                        <RotateCcw size={13} />
+                      </button>
+                    )}
                   {actions.canRetry && (
                     <button
                       type="button"
@@ -770,7 +1254,25 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
                       <span>{t(locale, 'workshop.actionRetry')}</span>
                     </button>
                   )}
-                  {app.source === 'external_github' && (
+                  {app.statusDetail?.code === 'orphaned_process' && (
+                    <>
+                      <button
+                        type="button"
+                        className="h-8 px-2.5 text-[11px] font-medium rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                        onClick={() => void handleResolveOrphan(app, false)}
+                      >
+                        {t(locale, 'workshop.orphanStop')}
+                      </button>
+                      <button
+                        type="button"
+                        className="h-8 px-2.5 text-[11px] font-medium rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                        onClick={() => void handleResolveOrphan(app, true)}
+                      >
+                        {t(locale, 'workshop.orphanRestart')}
+                      </button>
+                    </>
+                  )}
+                  {(app.source === 'external_github' || app.source === 'local_project') && (
                     <button
                       type="button"
                       className="h-8 px-2.5 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-secondary)] hover:text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all flex items-center justify-center gap-1.5 shrink-0"
@@ -780,6 +1282,34 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
                       <ScrollText size={13} />
                     </button>
                   )}
+                  {app.source === 'local_project' && (
+                    <button
+                      type="button"
+                      className="h-8 px-2.5 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-secondary)] hover:text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all flex items-center justify-center gap-1.5 shrink-0"
+                      onClick={() => void openEditLocal(app)}
+                      title={t(locale, 'workshop.actionEdit')}
+                    >
+                      <HelpCircle size={13} />
+                    </button>
+                  )}
+                  {app.source === 'local_project' &&
+                    app.statusDetail?.code === 'dependencies_missing' && (
+                      <button
+                        type="button"
+                        className="h-8 px-2.5 text-[11px] font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)]"
+                        onClick={() => {
+                          setDepInstallFor(app);
+                          setDepConfirmChecked(false);
+                          setDepCommand('');
+                          void window.nativesAPI?.creativeApp
+                            ?.previewLocalDependencyInstall?.(app.id)
+                            .then((p) => setDepCommand(p?.display || ''))
+                            .catch(() => setDepCommand(''));
+                        }}
+                      >
+                        {t(locale, 'workshop.installDeps')}
+                      </button>
+                    )}
                   {actions.canDelete && (
                     <button
                       type="button"
@@ -927,7 +1457,9 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
         >
           <div className="flex flex-col gap-3 py-1">
             <p className="text-xs text-[var(--text-secondary)]">
-              {t(locale, 'workshop.deleteDesc')}
+              {deleteTarget.source === 'local_project'
+                ? deleteLocalConfirmNote(locale === 'en' ? 'en' : 'zh')
+                : t(locale, 'workshop.deleteDesc')}
             </p>
             <div className="p-3 bg-[var(--surface-subtle)] border border-[var(--border)] rounded-lg font-semibold text-sm text-[var(--text)]">
               {deleteTarget.title}
@@ -978,11 +1510,671 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
       )}
 
       {logsFor && (
-        <Modal isOpen onClose={() => setLogsFor(null)} title={t(locale, 'workshop.logsTitle')} width={640}>
-          <div className="py-1">
-            <pre className="max-h-96 overflow-auto text-[11px] font-mono bg-zinc-950 text-zinc-200 p-4 rounded-xl border border-zinc-800 leading-relaxed">
-              {logsText}
+        <Modal isOpen onClose={() => setLogsFor(null)} title={t(locale, 'workshop.logsTitle')} width={720}>
+          <div className="py-1 flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <label className="flex items-center gap-2 text-[11px] text-[var(--text-secondary)]">
+                <input
+                  type="checkbox"
+                  checked={logAutoScroll}
+                  onChange={(e) => setLogAutoScroll(e.target.checked)}
+                />
+                {t(locale, 'workshop.logsAutoScroll')}
+              </label>
+              <input
+                value={logFilter}
+                onChange={(e) => setLogFilter(e.target.value)}
+                placeholder={t(locale, 'workshop.logsFilter')}
+                className="h-7 px-2 text-[11px] rounded border border-[var(--border)] bg-[var(--surface-subtle)] min-w-[160px]"
+              />
+              <div className="flex gap-2 flex-wrap">
+                <button
+                  type="button"
+                  className="h-7 px-2 text-[11px] rounded border border-[var(--border)]"
+                  onClick={async () => {
+                    try {
+                      await window.nativesAPI?.clipboard?.write?.(logsText || '');
+                      showToast(t(locale, 'workshop.copied'));
+                    } catch (err) {
+                      showToast(classifyError(err).userMessage);
+                    }
+                  }}
+                >
+                  {t(locale, 'workshop.logsCopy')}
+                </button>
+                <button
+                  type="button"
+                  className="h-7 px-2 text-[11px] rounded border border-[var(--border)]"
+                  onClick={() => setLogsText('')}
+                >
+                  {t(locale, 'workshop.logsClearView')}
+                </button>
+                <button
+                  type="button"
+                  className="h-7 px-2 text-[11px] rounded border border-[var(--border)]"
+                  onClick={() => void openLogs(logsFor)}
+                >
+                  {t(locale, 'common.refresh')}
+                </button>
+                {logsFor.source === 'local_project' && (
+                  <button
+                    type="button"
+                    className="h-7 px-2 text-[11px] rounded border border-[var(--border)]"
+                    onClick={async () => {
+                      try {
+                        const d = await window.nativesAPI?.creativeApp?.diagnoseLocalWithAi?.(
+                          logsFor.id,
+                        );
+                        if (d) {
+                          showToast(`${d.issueCode}: ${d.summary}`);
+                        }
+                      } catch (err) {
+                        showToast(classifyError(err).userMessage);
+                      }
+                    }}
+                  >
+                    {t(locale, 'workshop.localAiDiagnose')}
+                  </button>
+                )}
+              </div>
+            </div>
+            <pre
+              ref={logPreRef}
+              className="max-h-96 overflow-auto text-[11px] font-mono bg-zinc-950 p-4 rounded-xl border border-zinc-800 leading-relaxed whitespace-pre-wrap"
+            >
+              {(logFilter
+                ? logsText
+                    .split('\n')
+                    .filter((line) => line.toLowerCase().includes(logFilter.toLowerCase()))
+                    .join('\n')
+                : logsText
+              )
+                .split('\n')
+                .map((line, i) => {
+                  const color = line.includes('[stderr]')
+                    ? 'text-rose-300'
+                    : line.includes('[system]')
+                      ? 'text-amber-200'
+                      : 'text-zinc-200';
+                  return (
+                    <div key={i} className={color}>
+                      {line}
+                    </div>
+                  );
+                })}
             </pre>
+          </div>
+        </Modal>
+      )}
+
+      {localWizardOpen && (
+        <Modal
+          isOpen
+          onClose={() => {
+            setLocalWizardOpen(false);
+            resetLocalWizard();
+          }}
+          title={t(locale, 'workshop.localWizardTitle')}
+          width={560}
+        >
+          <div className="flex flex-col gap-4 py-1">
+            <div className="flex gap-2 text-[11px] text-[var(--text-secondary)]">
+              {(['basic', 'scan', 'launch', 'confirm'] as LocalWizardStep[]).map((s, i) => (
+                <span
+                  key={s}
+                  className={
+                    localStep === s
+                      ? 'text-[var(--primary)] font-semibold'
+                      : ''
+                  }
+                >
+                  {i + 1}. {t(locale, `workshop.localStep.${s}` as 'workshop.localStep.basic')}
+                </span>
+              ))}
+            </div>
+
+            {localStep === 'basic' && (
+              <div className="flex flex-col gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">
+                    {t(locale, 'workshop.localFolder')}
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      value={localRoot}
+                      onChange={(e) => setLocalRoot(e.target.value)}
+                      className="flex-1 h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)]"
+                      placeholder="/path/to/project"
+                    />
+                    <button
+                      type="button"
+                      className="h-9 px-3 text-xs rounded-lg border border-[var(--border)]"
+                      onClick={() => void pickLocalFolder()}
+                    >
+                      {t(locale, 'workshop.browseFiles')}
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">
+                    {t(locale, 'workshop.templateName')}
+                  </label>
+                  <input
+                    value={localTitle}
+                    onChange={(e) => setLocalTitle(e.target.value)}
+                    className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">
+                    {t(locale, 'workshop.description')}
+                  </label>
+                  <textarea
+                    value={localDesc}
+                    onChange={(e) => setLocalDesc(e.target.value)}
+                    className="w-full min-h-[64px] px-3 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)]"
+                  />
+                </div>
+                {localScanError && (
+                  <div className="text-xs text-rose-500">{localScanError}</div>
+                )}
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    className="h-9 px-4 text-xs rounded-lg border border-[var(--border)]"
+                    onClick={() => {
+                      setLocalWizardOpen(false);
+                      resetLocalWizard();
+                    }}
+                  >
+                    {t(locale, 'common.cancel')}
+                  </button>
+                  <button
+                    type="button"
+                    className="h-9 px-4 text-xs rounded-lg bg-[var(--primary)] text-white disabled:opacity-50"
+                    disabled={!localRoot.trim() || localScanning}
+                    onClick={() => void runLocalScan(localRoot.trim())}
+                  >
+                    {localScanning ? t(locale, 'workshop.localScanning') : t(locale, 'common.next')}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {localStep === 'scan' && localScan && (
+              <div className="flex flex-col gap-3 text-xs">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>{t(locale, 'workshop.localKind')}: <strong>{localScan.projectKind}</strong></div>
+                  <div>
+                    {t(locale, 'workshop.localPm')}:{' '}
+                    <strong>{localScan.packageManager || '—'}</strong>
+                  </div>
+                  <div>
+                    node_modules:{' '}
+                    <strong>{localScan.hasNodeModules ? 'yes' : 'missing'}</strong>
+                  </div>
+                  <div>
+                    scripts:{' '}
+                    <strong>{localScan.scripts.slice(0, 5).join(', ') || '—'}</strong>
+                  </div>
+                </div>
+                {localScan.risks.length > 0 && (
+                  <ul className="list-disc list-inside text-amber-600 dark:text-amber-400">
+                    {localScan.risks.map((r) => (
+                      <li key={r}>{r}</li>
+                    ))}
+                  </ul>
+                )}
+                {localScan.blockers.length > 0 && (
+                  <ul className="list-disc list-inside text-rose-500">
+                    {localScan.blockers.map((r) => (
+                      <li key={r}>{r}</li>
+                    ))}
+                  </ul>
+                )}
+                <div className="flex justify-between gap-2">
+                  <button
+                    type="button"
+                    className="h-9 px-4 text-xs rounded-lg border border-[var(--border)]"
+                    onClick={() => setLocalStep('basic')}
+                  >
+                    {t(locale, 'common.back')}
+                  </button>
+                  <button
+                    type="button"
+                    className="h-9 px-4 text-xs rounded-lg bg-[var(--primary)] text-white disabled:opacity-50"
+                    disabled={!canProceedFromScan(localScan)}
+                    onClick={() => setLocalStep('launch')}
+                  >
+                    {t(locale, 'common.next')}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {localStep === 'launch' && (
+              <div className="flex flex-col gap-3 text-xs">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    className={`h-9 rounded-lg border ${
+                      localLaunchMode === 'smart'
+                        ? 'border-[var(--primary)] text-[var(--primary)]'
+                        : 'border-[var(--border)]'
+                    }`}
+                    onClick={() => setLocalLaunchMode('smart')}
+                  >
+                    {t(locale, 'workshop.localSmart')}
+                  </button>
+                  <button
+                    type="button"
+                    className={`h-9 rounded-lg border ${
+                      localLaunchMode === 'custom'
+                        ? 'border-[var(--primary)] text-[var(--primary)]'
+                        : 'border-[var(--border)]'
+                    }`}
+                    onClick={() => setLocalLaunchMode('custom')}
+                  >
+                    {t(locale, 'workshop.localCustom')}
+                  </button>
+                </div>
+                {localScan && localScan.packageManagerChoices.length > 1 && (
+                  <div>
+                    <label className="block mb-1">{t(locale, 'workshop.localPm')}</label>
+                    <select
+                      value={localPm || ''}
+                      onChange={(e) => setLocalPm((e.target.value || undefined) as PackageManager | undefined)}
+                      className="w-full h-9 px-2 rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)]"
+                    >
+                      <option value="">{t(locale, 'workshop.localChoosePm')}</option>
+                      {localScan.packageManagerChoices.map((pm) => (
+                        <option key={pm} value={pm}>
+                          {pm}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {localLaunchMode === 'custom' && localScan && localScan.scripts.length > 0 && (
+                  <div>
+                    <label className="block mb-1">script</label>
+                    <select
+                      value={localScript}
+                      onChange={(e) => setLocalScript(e.target.value)}
+                      className="w-full h-9 px-2 rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)]"
+                    >
+                      {localScan.scripts.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {localLaunchMode === 'custom' && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block mb-1">cwd</label>
+                      <input
+                        value={localCwd}
+                        onChange={(e) => setLocalCwd(e.target.value)}
+                        className="w-full h-8 px-2 rounded border border-[var(--border)] bg-[var(--surface-subtle)]"
+                      />
+                    </div>
+                    <div>
+                      <label className="block mb-1">openPath</label>
+                      <input
+                        value={localOpenPath}
+                        onChange={(e) => setLocalOpenPath(e.target.value)}
+                        className="w-full h-8 px-2 rounded border border-[var(--border)] bg-[var(--surface-subtle)]"
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="block mb-1">port</label>
+                      <div className="flex gap-2">
+                        <select
+                          value={localPortMode}
+                          onChange={(e) => setLocalPortMode(e.target.value as 'auto' | 'fixed')}
+                          className="h-8 px-2 rounded border border-[var(--border)] bg-[var(--surface-subtle)]"
+                        >
+                          <option value="auto">auto</option>
+                          <option value="fixed">fixed</option>
+                        </select>
+                        {localPortMode === 'fixed' && (
+                          <input
+                            value={localPortValue}
+                            onChange={(e) => setLocalPortValue(e.target.value)}
+                            className="w-24 h-8 px-2 rounded border border-[var(--border)] bg-[var(--surface-subtle)]"
+                            placeholder="5173"
+                          />
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={localAutoOpen}
+                    onChange={(e) => setLocalAutoOpen(e.target.checked)}
+                  />
+                  {t(locale, 'workshop.localAutoOpen')}
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="h-8 px-3 text-[11px] rounded-lg border border-[var(--border)] disabled:opacity-50"
+                    disabled={localAiBusy || !localRoot.trim()}
+                    onClick={async () => {
+                      setLocalAiBusy(true);
+                      setLocalAiPendingConfirm(false);
+                      try {
+                        const res = await window.nativesAPI?.creativeApp?.previewLocalAi?.(
+                          localRoot.trim(),
+                        );
+                        if (res?.scan) setLocalScan(res.scan);
+                        setLocalAiPreview(
+                          res?.payloadPreview
+                            ? JSON.stringify(res.payloadPreview, null, 2)
+                            : null,
+                        );
+                        setLocalAiPendingConfirm(true);
+                        showToast(t(locale, 'workshop.localAiPreviewReady'));
+                      } catch (err) {
+                        showToast(classifyError(err).userMessage);
+                      } finally {
+                        setLocalAiBusy(false);
+                      }
+                    }}
+                  >
+                    {localAiBusy ? t(locale, 'workshop.localScanning') : t(locale, 'workshop.localAiPreview')}
+                  </button>
+                  <button
+                    type="button"
+                    className="h-8 px-3 text-[11px] rounded-lg border border-[var(--border)] disabled:opacity-50"
+                    disabled={localAiBusy || !localAiPendingConfirm || !localRoot.trim()}
+                    onClick={async () => {
+                      setLocalAiBusy(true);
+                      try {
+                        const res = await window.nativesAPI?.creativeApp?.analyzeLocalWithAi?.(
+                          localRoot.trim(),
+                          true,
+                        );
+                        if (res?.aiPlan) {
+                          setLocalPlan(res.aiPlan);
+                          setLocalLaunchMode('smart');
+                        }
+                        if (res?.scan) setLocalScan(res.scan);
+                        showToast(
+                          res?.aiPlan
+                            ? t(locale, 'workshop.localAiPlanApplied')
+                            : t(locale, 'workshop.localAiNoPlan'),
+                        );
+                        setLocalAiPendingConfirm(false);
+                      } catch (err) {
+                        showToast(classifyError(err).userMessage);
+                      } finally {
+                        setLocalAiBusy(false);
+                      }
+                    }}
+                  >
+                    {t(locale, 'workshop.localAiConfirmSend')}
+                  </button>
+                </div>
+                {localAiPreview && (
+                  <details className="text-[11px]" open={localAiPendingConfirm}>
+                    <summary>{t(locale, 'workshop.localAiPayload')}</summary>
+                    <pre className="mt-1 max-h-40 overflow-auto bg-[var(--surface-subtle)] border border-[var(--border)] rounded-lg p-2 whitespace-pre-wrap">
+                      {localAiPreview}
+                    </pre>
+                  </details>
+                )}
+                <pre className="bg-[var(--surface-subtle)] border border-[var(--border)] rounded-lg p-3 whitespace-pre-wrap">
+                  {planSummaryLines(
+                    localLaunchMode === 'custom'
+                      ? applyCustomPlanFromScan()
+                      : localPlan ?? localScan?.rulePlan,
+                    locale === 'en' ? 'en' : 'zh',
+                  ).join('\n')}
+                </pre>
+                <div className="flex justify-between gap-2">
+                  <button
+                    type="button"
+                    className="h-9 px-4 text-xs rounded-lg border border-[var(--border)]"
+                    onClick={() => setLocalStep('scan')}
+                  >
+                    {t(locale, 'common.back')}
+                  </button>
+                  <button
+                    type="button"
+                    className="h-9 px-4 text-xs rounded-lg bg-[var(--primary)] text-white"
+                    onClick={() => setLocalStep('confirm')}
+                  >
+                    {t(locale, 'common.next')}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {localStep === 'confirm' && (
+              <div className="flex flex-col gap-3 text-xs">
+                <div className="p-3 rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] space-y-1">
+                  <div>
+                    <strong>{localTitle || defaultLocalTitleFromPath(localRoot)}</strong>
+                  </div>
+                  <div className="text-[var(--text-secondary)] truncate">{localRoot}</div>
+                  <pre className="whitespace-pre-wrap pt-2">
+                    {planSummaryLines(
+                      localLaunchMode === 'custom'
+                        ? applyCustomPlanFromScan()
+                        : localPlan ?? localScan?.rulePlan,
+                      locale === 'en' ? 'en' : 'zh',
+                    ).join('\n')}
+                  </pre>
+                </div>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={localStartAfterSave}
+                    onChange={(e) => setLocalStartAfterSave(e.target.checked)}
+                  />
+                  {t(locale, 'workshop.localStartAfterSave')}
+                </label>
+                <div className="flex justify-between gap-2">
+                  <button
+                    type="button"
+                    className="h-9 px-4 text-xs rounded-lg border border-[var(--border)]"
+                    onClick={() => setLocalStep('launch')}
+                  >
+                    {t(locale, 'common.back')}
+                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="h-9 px-4 text-xs rounded-lg border border-[var(--border)] disabled:opacity-50"
+                      disabled={localSaving}
+                      onClick={() => void saveLocalCreative(false)}
+                    >
+                      {t(locale, 'workshop.localSaveOnly')}
+                    </button>
+                    <button
+                      type="button"
+                      className="h-9 px-4 text-xs rounded-lg bg-[var(--primary)] text-white disabled:opacity-50"
+                      disabled={localSaving}
+                      onClick={() => void saveLocalCreative(true)}
+                    >
+                      {t(locale, 'workshop.localSaveStart')}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {editLocal && (
+        <Modal
+          isOpen
+          onClose={() => setEditLocal(null)}
+          title={t(locale, 'workshop.actionEdit')}
+          width={520}
+        >
+          <div className="flex flex-col gap-3 py-1 text-xs">
+            {editLoading && <div>{t(locale, 'common.loading')}</div>}
+            <div>
+              <label className="block text-xs mb-1">{t(locale, 'workshop.templateName')}</label>
+              <input
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                className="w-full h-9 px-3 text-xs rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)]"
+              />
+            </div>
+            <label className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={editAutoOpen}
+                onChange={(e) => setEditAutoOpen(e.target.checked)}
+              />
+              {t(locale, 'workshop.localAutoOpen')}
+            </label>
+            {editPlan && (
+              <>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block mb-1">cwd</label>
+                    <input
+                      value={editCwd}
+                      onChange={(e) => setEditCwd(e.target.value)}
+                      className="w-full h-8 px-2 rounded border border-[var(--border)] bg-[var(--surface-subtle)]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block mb-1">script</label>
+                    <input
+                      value={editScript}
+                      onChange={(e) => setEditScript(e.target.value)}
+                      className="w-full h-8 px-2 rounded border border-[var(--border)] bg-[var(--surface-subtle)]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block mb-1">openPath</label>
+                    <input
+                      value={editOpenPath}
+                      onChange={(e) => setEditOpenPath(e.target.value)}
+                      className="w-full h-8 px-2 rounded border border-[var(--border)] bg-[var(--surface-subtle)]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block mb-1">port</label>
+                    <div className="flex gap-1">
+                      <select
+                        value={editPortMode}
+                        onChange={(e) => setEditPortMode(e.target.value as 'auto' | 'fixed')}
+                        className="h-8 px-1 rounded border border-[var(--border)] bg-[var(--surface-subtle)]"
+                      >
+                        <option value="auto">auto</option>
+                        <option value="fixed">fixed</option>
+                      </select>
+                      {editPortMode === 'fixed' && (
+                        <input
+                          value={editPortValue}
+                          onChange={(e) => setEditPortValue(e.target.value)}
+                          className="w-20 h-8 px-2 rounded border border-[var(--border)] bg-[var(--surface-subtle)]"
+                        />
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-[11px] text-[var(--text-secondary)]">
+                  env keys: {editEnvKeys.length ? editEnvKeys.join(', ') : '—'}
+                </div>
+                <pre className="p-2 rounded border border-[var(--border)] bg-[var(--surface-subtle)] whitespace-pre-wrap">
+                  {planSummaryLines(editPlan, locale === 'en' ? 'en' : 'zh').join('\n')}
+                </pre>
+              </>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="h-9 px-4 text-xs rounded-lg border border-[var(--border)]"
+                onClick={() => setEditLocal(null)}
+              >
+                {t(locale, 'common.cancel')}
+              </button>
+              <button
+                type="button"
+                className="h-9 px-4 text-xs rounded-lg bg-[var(--primary)] text-white disabled:opacity-50"
+                disabled={editSaving || editLoading}
+                onClick={() => void saveEditLocal()}
+              >
+                {t(locale, 'common.save')}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {depInstallFor && (
+        <Modal
+          isOpen
+          onClose={() => setDepInstallFor(null)}
+          title={t(locale, 'workshop.installDeps')}
+          width={480}
+        >
+          <div className="flex flex-col gap-3 py-1 text-xs">
+            <p className="text-[var(--text-secondary)]">{t(locale, 'workshop.installDepsWarn')}</p>
+            {depCommand ? (
+              <pre className="p-2 rounded-lg border border-[var(--border)] bg-[var(--surface-subtle)] font-mono text-[11px] whitespace-pre-wrap">
+                {depCommand}
+              </pre>
+            ) : null}
+            <ul className="list-disc list-inside text-[var(--text-secondary)] space-y-1">
+              <li>{t(locale, 'workshop.installDepsNetwork')}</li>
+              <li>{t(locale, 'workshop.installDepsNodeModules')}</li>
+              <li>{t(locale, 'workshop.installDepsLock')}</li>
+              <li>{t(locale, 'workshop.installDepsUntrusted')}</li>
+            </ul>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={depConfirmChecked}
+                onChange={(e) => setDepConfirmChecked(e.target.checked)}
+              />
+              {t(locale, 'workshop.installDepsConfirm')}
+            </label>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="h-9 px-4 rounded-lg border border-[var(--border)]"
+                onClick={() => setDepInstallFor(null)}
+              >
+                {t(locale, 'common.cancel')}
+              </button>
+              <button
+                type="button"
+                className="h-9 px-4 rounded-lg bg-[var(--primary)] text-white disabled:opacity-50"
+                disabled={!depConfirmChecked || depInstalling}
+                onClick={async () => {
+                  if (!depInstallFor) return;
+                  setDepInstalling(true);
+                  try {
+                    await window.nativesAPI?.creativeApp?.installLocalDependencies?.(
+                      depInstallFor.id,
+                    );
+                    showToast(t(locale, 'workshop.installDepsDone'));
+                    setDepInstallFor(null);
+                    void reload();
+                  } catch (err) {
+                    showToast(classifyError(err).userMessage);
+                  } finally {
+                    setDepInstalling(false);
+                  }
+                }}
+              >
+                {t(locale, 'workshop.installDepsRun')}
+              </button>
+            </div>
           </div>
         </Modal>
       )}

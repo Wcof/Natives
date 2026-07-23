@@ -70,7 +70,7 @@ export function useCreativeAppCatalog(options: { enabled?: boolean } = {}) {
     };
   }, [enabled, reload]);
 
-  // Visibility-gated reconcile every 5s for external Docker state
+  // Visibility-gated reconcile every 5s for Docker + local process exits
   useEffect(() => {
     if (!enabled) return;
     const onVis = () => {
@@ -82,6 +82,7 @@ export function useCreativeAppCatalog(options: { enabled?: boolean } = {}) {
       if (!visibleRef.current) return;
       const api = window.nativesAPI;
       if (!api?.creativeApp?.reconcile) return;
+      // reconcile already polls local exits on the backend.
       void api.creativeApp.reconcile().then(() => reload()).catch(() => {});
     }, 5000);
     return () => {

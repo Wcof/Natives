@@ -101,7 +101,8 @@ import EngineRecoveryPage from './EngineRecoveryPage';
 import CommandPalette, { type AssistantCommand } from './CommandPalette';
 import type { ProviderWithModels } from './ModelSelectorDropdown';
 import {
-  useAssistantWorkspace,
+  useAssistantNavigation,
+  useAssistantWorkspaceApi,
   type AssistantWorkspaceActions,
 } from './AssistantWorkspaceContext';
 import {
@@ -181,7 +182,10 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const state = useAssistantStore();
   const dispatch = useAssistantDispatch();
   const gateway = useAssistantGateway();
-  const { publishNavigation, publishRuntime, registerActions, navigation } = useAssistantWorkspace();
+  // Navigation for selectedId sync; publishers via stable API so stream-driven
+  // runtime publishes do not re-enter Workbench through a second context.
+  const { navigation } = useAssistantNavigation();
+  const { publishNavigation, publishRuntime, registerActions } = useAssistantWorkspaceApi();
 
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -419,7 +423,27 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         events,
         readFile,
       });
-      if (!cancelled) setFileContentsByPath(next);
+      if (cancelled) return;
+      // Bail when path→content map is unchanged. selectEventsForRunTree used to
+      // allocate a fresh [] every render, which re-fired this effect and
+      // setFileContentsByPath(newObject) in a tight loop (Maximum update depth).
+      setFileContentsByPath((prev) => {
+        const prevKeys = Object.keys(prev);
+        const nextKeys = Object.keys(next);
+        if (prevKeys.length === nextKeys.length) {
+          let same = true;
+          for (const key of nextKeys) {
+            const a = prev[key];
+            const b = next[key];
+            if (!a || !b || a.before !== b.before || a.after !== b.after) {
+              same = false;
+              break;
+            }
+          }
+          if (same) return prev;
+        }
+        return next;
+      });
     })();
     return () => {
       cancelled = true;
@@ -651,36 +675,50 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   }, [gateway, dispatch, toast]);
 
   // Multi-run subscription: keep root + active child runs subscribed without cancelling others.
+  // Depend on status signatures (not array/object identity) so empty selectChildRuns
+  // / store map replacement on unrelated ticks cannot thrash soft-resubscribe.
+  const childrenSubKey = children
+    .map((ch) => `${ch.id}:${ch.status}`)
+    .sort()
+    .join('|');
+  const subagentSubKey = subagentSessions
+    .map((s) => {
+      const childRunId = state.activeRunByConversation[s.childConversationId] ?? '';
+      const status = childRunId ? state.runs[childRunId]?.status ?? '' : '';
+      return `${s.childConversationId}:${childRunId}:${status}`;
+    })
+    .sort()
+    .join('|');
   useEffect(() => {
     const wanted = new Set<string>();
     if (rootRun && isActiveRunStatus(rootRun.status)) wanted.add(rootRun.id);
+    // children / sessions read from latest render via closure; deps are signature keys.
     for (const ch of children) {
       if (isActiveRunStatus(String(ch.status))) wanted.add(ch.id);
     }
     for (const s of subagentSessions) {
-      const childRunId = state.activeRunByConversation[s.childConversationId];
+      const childRunId = stateRef.current.activeRunByConversation[s.childConversationId];
       if (childRunId) {
-        const run = state.runs[childRunId];
+        const run = stateRef.current.runs[childRunId];
         if (run && isActiveRunStatus(run.status)) wanted.add(childRunId);
       }
     }
     for (const runId of wanted) {
       ensureRunSubscription(runId);
     }
-  }, [
-    rootRun?.id,
-    rootRun?.status,
-    children,
-    subagentSessions,
-    state.activeRunByConversation,
-    state.runs,
-    ensureRunSubscription,
-  ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- children/subagentSessions captured; identity churn ignored via *SubKey
+  }, [rootRun?.id, rootRun?.status, childrenSubKey, subagentSubKey, ensureRunSubscription]);
 
-  // Load subagent.list when root conversation is visible.
+  // Load subagent.list when root conversation is visible. Avoid re-listing on every
+  // transient status flicker while the parent is already waiting_subagent / running —
+  // use a coarse phase so assignment → first child does not hammer subagent.list.
+  const rootRunPhase =
+    rootRun?.status === 'waiting_subagent' || rootRun?.status === 'running'
+      ? 'active'
+      : rootRun?.status ?? 'idle';
   useEffect(() => {
     void refreshSubagentSessions(rootConversationId);
-  }, [rootConversationId, refreshSubagentSessions, rootRun?.status]);
+  }, [rootConversationId, refreshSubagentSessions, rootRunPhase]);
 
   // Heartbeat: touch only the root conversation every 30s while assistant page is visible.
   // Do NOT loop over every subagent — daemon scopes keepalive by parent conversation_id.
@@ -2119,29 +2157,34 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               }
             }}
             draftText={selectComposerDraft(state, activeId).text}
-            onDraftChange={(text) => {
-              if (activeId) {
-                dispatch({ type: 'composer/set', conversationId: activeId, draft: { text } });
-                // Keep root-level temp draft in sync so remount (settings round-trip)
-                // restores the in-progress text — but never write long-term storage.
-                if (isTempConversationId(activeId)) {
-                  publishNavigation((prev) => {
-                    if (!prev.tempSession || prev.tempSession.conversation.id !== activeId) {
-                      return prev;
-                    }
-                    return {
-                      ...prev,
-                      tempSession: {
-                        ...prev.tempSession,
-                        draft: {
-                          ...prev.tempSession.draft,
-                          text,
-                          updatedAt: new Date().toISOString(),
-                        },
+            draftKey={activeId}
+            onDraftChange={(text, conversationId) => {
+              // Prefer the id captured at keystroke time so a switch mid-debounce
+              // still writes the previous conversation's draft.
+              const id = conversationId ?? activeId;
+              if (!id) return;
+              dispatch({ type: 'composer/set', conversationId: id, draft: { text } });
+              // Temp shell remount restore (settings round-trip). Debounced by
+              // MessageInput; publishNavigation bails without re-rendering the
+              // shell tree when only tempSession.draft.text changes.
+              if (isTempConversationId(id)) {
+                publishNavigation((prev) => {
+                  if (!prev.tempSession || prev.tempSession.conversation.id !== id) {
+                    return prev;
+                  }
+                  if (prev.tempSession.draft.text === text) return prev;
+                  return {
+                    ...prev,
+                    tempSession: {
+                      ...prev.tempSession,
+                      draft: {
+                        ...prev.tempSession.draft,
+                        text,
+                        updatedAt: new Date().toISOString(),
                       },
-                    };
-                  });
-                }
+                    },
+                  };
+                });
               }
             }}
             projectPath={activeProjectPath}

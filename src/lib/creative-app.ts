@@ -14,8 +14,10 @@ export function shouldReloadCreativeCatalog(channel: string): boolean {
   return channel === 'creative-app' || channel === 'module';
 }
 
-export function sourceBadge(source: CreativeAppSource): 'internal' | 'github' {
-  return source === 'external_github' ? 'github' : 'internal';
+export function sourceBadge(source: CreativeAppSource): 'internal' | 'github' | 'local' {
+  if (source === 'external_github') return 'github';
+  if (source === 'local_project') return 'local';
+  return 'internal';
 }
 
 export function isActionBusy(state: CreativeAppState): boolean {

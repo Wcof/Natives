@@ -22,7 +22,10 @@ import Portal from '@/components/ui/Portal';
 import { useToast } from '@/components/ui/Toast';
 import { createTempSession, isTempConversationId } from '@/lib/assistant-temp-conversation';
 import { copyToClipboard } from '@/lib/clipboard';
-import { useAssistantWorkspace } from './AssistantWorkspaceContext';
+import {
+  useAssistantActions,
+  useAssistantNavigation,
+} from './AssistantWorkspaceContext';
 
 interface AssistantSidebarSectionProps {
   locale: Locale;
@@ -52,7 +55,10 @@ function computeMenuPos(trigger: HTMLElement): { top: number; left: number; flip
 }
 
 export default function AssistantSidebarSection({ locale, activeNavigationId, onNavigateAssistant }: AssistantSidebarSectionProps) {
-  const { navigation, actions, publishNavigation } = useAssistantWorkspace();
+  // Split hooks: do NOT subscribe to runtime. Stream ticks (events/usage/status)
+  // must not re-render the project/conversation tree while a run is active.
+  const { navigation, publishNavigation } = useAssistantNavigation();
+  const { actions } = useAssistantActions();
   const { toast } = useToast();
   const zh = locale.startsWith('zh');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());

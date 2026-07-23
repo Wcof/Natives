@@ -277,10 +277,12 @@ pub fn run() {
             });
 
             // Creative App: global mutation lock + child browser state (ADR-0013)
+            // + local project runtime supervisor (process tree / logs)
             app.manage(creative_app::service::new_mutation_lock());
             app.manage(std::sync::Mutex::new(
                 creative_app::browser::BrowserState::new(),
             ));
+            app.manage(creative_app::local::new_runtime_manager());
 
             // Converge leftover installing/starting/stopping/deleting vs Docker labels
             {
@@ -298,6 +300,10 @@ pub fn run() {
                         if let Ok(rt) = rt {
                             let _ = rt.block_on(async {
                                 let _ = creative_app::install::reconcile_all(&conn, Some(&handle)).await;
+                                let _ = creative_app::local::lifecycle::reconcile_local_apps(
+                                    &conn,
+                                    Some(&handle),
+                                );
                             });
                         }
                     });
@@ -349,6 +355,16 @@ pub fn run() {
                 if let Some(state) = window.try_state::<AppState>() {
                     state.ghostty_manager.kill_all();
                     state.terminal_manager.kill_all();
+                }
+                // Stop all local creative process trees on normal exit.
+                if let Some(local_rt) =
+                    window.try_state::<creative_app::local::LocalRuntimeHandle>()
+                {
+                    let handle = window.app_handle().clone();
+                    let rt = local_rt.inner().clone();
+                    let _ = tauri::async_runtime::block_on(async move {
+                        creative_app::local::shutdown_all(rt.as_ref(), Some(&handle)).await;
+                    });
                 }
                 // Graceful agent-daemon sidecar shutdown (wipe bootstrap file).
                 let _ = sidecar_supervisor::global_supervisor().shutdown();
@@ -430,7 +446,7 @@ pub fn run() {
             commands::module::module_disable,
             commands::module::module_update,
             commands::module::write_generated_module,
-            // Creative App (dual-source: workshop + GitHub container)
+            // Creative App (multi-source: workshop + GitHub container + local project)
             commands::creative_app::creative_app_list,
             commands::creative_app::creative_app_start,
             commands::creative_app::creative_app_stop,
@@ -452,6 +468,22 @@ pub fn run() {
             commands::creative_app::creative_app_browser_hide,
             commands::creative_app::creative_app_browser_close,
             commands::creative_app::creative_app_browser_current,
+            commands::creative_app::creative_app_inspect_local,
+            commands::creative_app::creative_app_create_local,
+            commands::creative_app::creative_app_update_local,
+            commands::creative_app::creative_app_rescan_local,
+            commands::creative_app::creative_app_restart,
+            commands::creative_app::creative_app_resolve_orphan,
+            commands::creative_app::creative_app_get_local_logs,
+            commands::creative_app::creative_app_install_local_dependencies,
+            commands::creative_app::creative_app_preview_local_dependency_install,
+            commands::creative_app::creative_app_get_local_ai_settings,
+            commands::creative_app::creative_app_save_local_ai_settings,
+            commands::creative_app::creative_app_preview_local_ai,
+            commands::creative_app::creative_app_analyze_local_with_ai,
+            commands::creative_app::creative_app_diagnose_local_with_ai,
+            commands::creative_app::creative_app_get_local_config,
+            commands::creative_app::creative_app_poll_local_exits,
             // Environment
             commands::env::env_get_variables,
             commands::env::env_get_default_profile,

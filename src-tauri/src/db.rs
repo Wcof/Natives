@@ -594,6 +594,93 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
     )
     .map_err(Error::Database)?;
 
+    // Migration v7→v8: local creative projects (third source).
+    // Independent of external_creative_apps / modules (ADR-0013 extension).
+    if current_version < 8 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS local_creative_apps (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                icon TEXT,
+                canonical_project_root TEXT NOT NULL UNIQUE,
+                device_id TEXT NOT NULL,
+                device_name TEXT NOT NULL,
+                project_kind TEXT NOT NULL,
+                launch_mode TEXT NOT NULL,
+                launch_plan_json TEXT NOT NULL DEFAULT '{}',
+                plan_fingerprint TEXT NOT NULL DEFAULT '',
+                state TEXT NOT NULL,
+                status_detail_json TEXT,
+                open_url TEXT,
+                current_port INTEGER,
+                process_identity_json TEXT,
+                auto_open INTEGER NOT NULL DEFAULT 1,
+                startup_timeout_ms INTEGER NOT NULL DEFAULT 60000,
+                last_started_at TEXT,
+                last_exit_reason TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_local_creative_apps_state
+                ON local_creative_apps(state);
+            CREATE INDEX IF NOT EXISTS idx_local_creative_apps_updated
+                ON local_creative_apps(updated_at);
+
+            CREATE TABLE IF NOT EXISTS local_creative_env (
+                app_id TEXT NOT NULL REFERENCES local_creative_apps(id) ON DELETE CASCADE,
+                key TEXT NOT NULL,
+                value_encrypted TEXT NOT NULL,
+                PRIMARY KEY (app_id, key)
+            );
+
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '8');
+            ",
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // Repair path for v8 tables.
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS local_creative_apps (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            description TEXT,
+            icon TEXT,
+            canonical_project_root TEXT NOT NULL UNIQUE,
+            device_id TEXT NOT NULL,
+            device_name TEXT NOT NULL,
+            project_kind TEXT NOT NULL,
+            launch_mode TEXT NOT NULL,
+            launch_plan_json TEXT NOT NULL DEFAULT '{}',
+            plan_fingerprint TEXT NOT NULL DEFAULT '',
+            state TEXT NOT NULL,
+            status_detail_json TEXT,
+            open_url TEXT,
+            current_port INTEGER,
+            process_identity_json TEXT,
+            auto_open INTEGER NOT NULL DEFAULT 1,
+            startup_timeout_ms INTEGER NOT NULL DEFAULT 60000,
+            last_started_at TEXT,
+            last_exit_reason TEXT,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS local_creative_env (
+            app_id TEXT NOT NULL REFERENCES local_creative_apps(id) ON DELETE CASCADE,
+            key TEXT NOT NULL,
+            value_encrypted TEXT NOT NULL,
+            PRIMARY KEY (app_id, key)
+        );
+        ",
+    )
+    .map_err(Error::Database)?;
+
     Ok(())
 }
 
@@ -606,7 +693,7 @@ mod tests {
         let conn = Connection::open_in_memory().expect("open in-memory database");
         create_tables(&conn).expect("create base tables");
         conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '7')",
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '8')",
             [],
         )
         .expect("set newer schema marker");
@@ -621,6 +708,15 @@ mod tests {
             )
             .expect("query sqlite schema");
         assert_eq!(table_exists, 1);
+
+        let local_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'local_creative_apps'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query local_creative_apps");
+        assert_eq!(local_exists, 1);
     }
 }
 

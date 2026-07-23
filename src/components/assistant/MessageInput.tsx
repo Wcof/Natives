@@ -47,10 +47,21 @@ interface MessageInputProps {
   onSelectModel: (providerId: string, model: string) => void;
   /** Controlled draft text from workspace store (per-conversation). */
   draftText?: string;
-  onDraftChange?: (text: string) => void;
+  /**
+   * Persist draft to the workspace store. Called debounced while typing so
+   * each keystroke does not re-render the whole Workbench. Second arg is the
+   * conversation id captured at edit time (survives switch during debounce).
+   * Empty string / unmount / draftKey change flush immediately.
+   */
+  onDraftChange?: (text: string, conversationId?: string | null) => void;
+  /** Conversation id for this draft — used as debounce key + flush identity. */
+  draftKey?: string | null;
   /** Active project root for `@` file search. */
   projectPath?: string | null;
 }
+
+/** Idle ms before pushing draft text into the workspace store. */
+const DRAFT_PERSIST_DEBOUNCE_MS = 200;
 
 const permissionLabels = {
   readonly: { zh: '只读', en: 'Read only' },
@@ -63,7 +74,7 @@ export default function MessageInput(props: MessageInputProps) {
     locale, onSend, onForceSend, onInterject, onStop, onBlockedSend, isStreaming,
     allowQueueWhileStreaming = false, disabled = false, inputDisabledReason = null,
     permissionProfile, onPermissionChange, providers, selectedProviderId, selectedModel, onSelectModel,
-    draftText, onDraftChange, projectPath = null,
+    draftText, onDraftChange, draftKey = null, projectPath = null,
   } = props;
   const zh = locale.startsWith('zh');
   const [input, setInput] = useState(draftText ?? '');
@@ -78,6 +89,15 @@ export default function MessageInput(props: MessageInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastSlashIndex = useRef(-1);
   const lastAtIndex = useRef(-1);
+  const onDraftChangeRef = useRef(onDraftChange);
+  onDraftChangeRef.current = onDraftChange;
+  const draftKeyRef = useRef(draftKey);
+  draftKeyRef.current = draftKey;
+  /** Pending store write: key = conversation at edit time (survives switch). */
+  const pendingDraftRef = useRef<{ key: string | null; text: string } | null>(null);
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** True while local input is ahead of the last store draftText we adopted. */
+  const localDirtyRef = useRef(false);
   const effectiveDisabled = disabled || inputDisabledReason === 'no_provider' || inputDisabledReason === 'no_model' || inputDisabledReason === 'creating';
 
   // Native currently exposes no slash commands — empty list, honest empty state.
@@ -87,9 +107,60 @@ export default function MessageInput(props: MessageInputProps) {
     [availableCommands, slashQuery],
   );
 
+  const flushDraftToStore = useCallback(() => {
+    if (draftTimerRef.current != null) {
+      clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = null;
+    }
+    const pending = pendingDraftRef.current;
+    if (!pending) return;
+    pendingDraftRef.current = null;
+    onDraftChangeRef.current?.(pending.text, pending.key);
+  }, []);
+
+  const scheduleDraftToStore = useCallback(
+    (value: string, options?: { immediate?: boolean }) => {
+      localDirtyRef.current = true;
+      pendingDraftRef.current = { key: draftKeyRef.current, text: value };
+      if (options?.immediate) {
+        flushDraftToStore();
+        return;
+      }
+      if (draftTimerRef.current != null) clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = setTimeout(() => {
+        draftTimerRef.current = null;
+        flushDraftToStore();
+      }, DRAFT_PERSIST_DEBOUNCE_MS);
+    },
+    [flushDraftToStore],
+  );
+
+  // Always flush on unmount so a remount (settings round-trip) restores text.
+  useEffect(() => () => flushDraftToStore(), [flushDraftToStore]);
+
+  // Conversation switch: flush the previous key's pending text, then adopt store draft.
   useEffect(() => {
-    if (draftText !== undefined && draftText !== input) setInput(draftText);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync from store when conversation draft changes
+    flushDraftToStore();
+    localDirtyRef.current = false;
+    if (draftText !== undefined) setInput(draftText);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when conversation (draftKey) changes
+  }, [draftKey]);
+
+  // Store → input for the *same* conversation only when we are not mid-edit
+  // (e.g. send cleared store to ''). Never clobber newer local keystrokes with
+  // a lagging draftText from a previous debounce flush.
+  useEffect(() => {
+    if (draftText === undefined) return;
+    if (localDirtyRef.current) {
+      // Catch up: store finally matches what we typed → clear dirty.
+      if (draftText === pendingDraftRef.current?.text || draftText === input) {
+        localDirtyRef.current = false;
+        pendingDraftRef.current = null;
+      }
+      return;
+    }
+    if (draftText !== input) setInput(draftText);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- input is local authority while dirty
   }, [draftText]);
 
   useEffect(() => {
@@ -123,7 +194,8 @@ export default function MessageInput(props: MessageInputProps) {
 
   const handleInputChange = (value: string) => {
     setInput(value);
-    onDraftChange?.(value);
+    // Local state updates immediately; store (and Workbench re-render) waits.
+    scheduleDraftToStore(value);
 
     const caret = textareaRef.current?.selectionStart;
     const detection = syncSlashFromValue(value, caret);
@@ -150,7 +222,7 @@ export default function MessageInput(props: MessageInputProps) {
     const afterCursor = input.slice(lastAtIndex.current + 1 + mentionQuery.length);
     const next = `${before}@${file.path} ${afterCursor}`;
     setInput(next);
-    onDraftChange?.(next);
+    scheduleDraftToStore(next);
     setMentionOpen(false);
     textareaRef.current?.focus();
   };
@@ -165,7 +237,8 @@ export default function MessageInput(props: MessageInputProps) {
     const draft = { content: input.trim(), attachments };
     setSubmitting(true);
     setInput('');
-    onDraftChange?.('');
+    // Immediate so store is empty before send path / remount races.
+    scheduleDraftToStore('', { immediate: true });
     setAttachments([]);
     closeSlashMenu();
     try {
@@ -174,7 +247,7 @@ export default function MessageInput(props: MessageInputProps) {
         const ok = await onInterject(draft.content);
         if (!ok) {
           setInput((current) => current || draft.content);
-          onDraftChange?.(draft.content);
+          scheduleDraftToStore(draft.content, { immediate: true });
           setAttachments((current) => (current.length ? current : draft.attachments));
         }
         return;
@@ -183,7 +256,7 @@ export default function MessageInput(props: MessageInputProps) {
       const sent = await sender(draft);
       if (!sent) {
         setInput(current => current || draft.content);
-        onDraftChange?.(draft.content);
+        scheduleDraftToStore(draft.content, { immediate: true });
         setAttachments(current => current.length ? current : draft.attachments);
       }
     } finally {
@@ -234,10 +307,10 @@ export default function MessageInput(props: MessageInputProps) {
     const afterQuery = input.slice(lastSlashIndex.current + 1 + slashQuery.length);
     const next = `${prefix}${command.id} ${afterQuery}`;
     setInput(next);
-    onDraftChange?.(next);
+    scheduleDraftToStore(next);
     closeSlashMenu();
     textareaRef.current?.focus();
-  }, [input, slashQuery, onDraftChange, closeSlashMenu]);
+  }, [input, slashQuery, scheduleDraftToStore, closeSlashMenu]);
 
   const handleTextareaKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.defaultPrevented) return;

@@ -42,7 +42,11 @@ impl CreativeAppService {
             out.push(install::summary_from_external(&rec));
         }
 
-        // Sort: external running first, then title
+        for rec in crate::creative_app::local::list_apps(conn)? {
+            out.push(crate::creative_app::local::summary_from_local(&rec));
+        }
+
+        // Sort: running first, then title
         out.sort_by(|a, b| {
             let rank = |s: &CreativeAppSummary| match s.state {
                 CreativeAppState::Running => 0,
@@ -153,6 +157,21 @@ impl CreativeAppService {
                 app_id: id.to_string(),
             });
         }
+        if let Some(rec) = crate::creative_app::local::get_app(conn, id)? {
+            if rec.state != CreativeAppState::Running {
+                return Err(Error::InvalidInput(
+                    "local creative app is not running".into(),
+                ));
+            }
+            let url = rec
+                .open_url
+                .ok_or_else(|| Error::InvalidInput("missing openUrl".into()))?;
+            validate_local_url(&url)?;
+            return Ok(OpenTarget::LocalUrl {
+                url,
+                app_id: id.to_string(),
+            });
+        }
         // Internal module must be enabled
         let modules = module_manager::list_modules(conn)?;
         let m = modules
@@ -170,6 +189,9 @@ impl CreativeAppService {
     pub fn get_summary(conn: &Connection, id: &str) -> Result<CreativeAppSummary> {
         if let Some(rec) = store::get_app(conn, id)? {
             return Ok(install::summary_from_external(&rec));
+        }
+        if let Some(rec) = crate::creative_app::local::get_app(conn, id)? {
+            return Ok(crate::creative_app::local::summary_from_local(&rec));
         }
         let modules = module_manager::list_modules(conn)?;
         let m = modules

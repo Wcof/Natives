@@ -8,6 +8,8 @@ import { isActiveRunStatus, isTerminalRunStatus } from '@/lib/assistant-protocol
 import type { AssistantWorkspaceState, LiveBubble } from './state';
 
 const EMPTY: never[] = [];
+const EMPTY_DRAFT = { text: '', attachments: [] as const, updatedAt: '' };
+const EMPTY_BLOCKS: Message['contentBlocks'] = [];
 
 export function selectActiveConversation(state: AssistantWorkspaceState) {
   const id = state.activeConversationId;
@@ -18,8 +20,8 @@ export function selectConversationMessages(
   state: AssistantWorkspaceState,
   conversationId: string | null,
 ): Message[] {
-  if (!conversationId) return [];
-  const ids = state.messagesByConversation[conversationId] ?? [];
+  if (!conversationId) return EMPTY;
+  const ids = state.messagesByConversation[conversationId] ?? EMPTY;
   const base = ids.map((id) => state.messages[id]).filter(Boolean) as Message[];
 
   // Append live bubble for active non-terminal run if not already promoted.
@@ -43,8 +45,11 @@ export function selectConversationMessages(
             run.status === 'queued'
               ? 'streaming'
               : run.status,
-          createdAt: run.startedAt ?? new Date().toISOString(),
-          contentBlocks: live?.blocks ?? [],
+          // Prefer run.startedAt so createdAt does not churn every selector call.
+          // Fall back to a fixed epoch rather than Date.now() — churn here forces
+          // timeline message identity changes and effect storms.
+          createdAt: run.startedAt ?? '1970-01-01T00:00:00.000Z',
+          contentBlocks: live?.blocks ?? EMPTY_BLOCKS,
           runId,
         });
       }
@@ -94,22 +99,16 @@ export function selectPromptQueue(
   state: AssistantWorkspaceState,
   conversationId: string | null,
 ): PromptQueueItem[] {
-  if (!conversationId) return [];
-  return state.promptQueues[conversationId] ?? [];
+  if (!conversationId) return EMPTY;
+  return state.promptQueues[conversationId] ?? EMPTY;
 }
 
 export function selectComposerDraft(
   state: AssistantWorkspaceState,
   conversationId: string | null,
 ) {
-  if (!conversationId) return { text: '', attachments: [] as const, updatedAt: '' };
-  return (
-    state.composerByConversation[conversationId] ?? {
-      text: '',
-      attachments: [],
-      updatedAt: '',
-    }
-  );
+  if (!conversationId) return EMPTY_DRAFT;
+  return state.composerByConversation[conversationId] ?? EMPTY_DRAFT;
 }
 
 export function selectIsRunActive(
@@ -143,8 +142,9 @@ export function selectRunEvents(state: AssistantWorkspaceState, runId: string | 
 }
 
 export function selectChildRuns(state: AssistantWorkspaceState, parentRunId: string | null) {
-  if (!parentRunId) return [];
-  const ids = state.childRunsByParent[parentRunId] ?? [];
+  if (!parentRunId) return EMPTY;
+  const ids = state.childRunsByParent[parentRunId] ?? EMPTY;
+  if (ids.length === 0) return EMPTY;
   return ids
     .map((id) => state.childSummaries[id])
     .filter((c): c is NonNullable<typeof c> => Boolean(c));
@@ -180,18 +180,21 @@ export function selectArtifactsForRunTree(
   rootRunId: string | null,
 ): import('@/lib/assistant-protocol').Artifact[] {
   if (!rootRunId) return EMPTY;
-  const ids = [rootRunId, ...(state.childRunsByParent[rootRunId] ?? [])];
+  const childIds = state.childRunsByParent[rootRunId] ?? EMPTY;
+  // No children → reuse the root run's stored array (referential stability for effects).
+  if (childIds.length === 0) return state.artifactsByRun[rootRunId] ?? EMPTY;
+  const ids = [rootRunId, ...childIds];
   const seen = new Set<string>();
   const out: import('@/lib/assistant-protocol').Artifact[] = [];
   for (const id of ids) {
-    for (const a of state.artifactsByRun[id] ?? []) {
+    for (const a of state.artifactsByRun[id] ?? EMPTY) {
       const key = a.id || `${a.runId}:${a.path}`;
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(a);
     }
   }
-  return out;
+  return out.length === 0 ? EMPTY : out;
 }
 
 /** Merge file changes across a main run and its known child runs. */
@@ -200,18 +203,20 @@ export function selectFileChangesForRunTree(
   rootRunId: string | null,
 ): import('@/lib/assistant-protocol').FileChange[] {
   if (!rootRunId) return EMPTY;
-  const ids = [rootRunId, ...(state.childRunsByParent[rootRunId] ?? [])];
+  const childIds = state.childRunsByParent[rootRunId] ?? EMPTY;
+  if (childIds.length === 0) return state.fileChangesByRun[rootRunId] ?? EMPTY;
+  const ids = [rootRunId, ...childIds];
   const seen = new Set<string>();
   const out: import('@/lib/assistant-protocol').FileChange[] = [];
   for (const id of ids) {
-    for (const f of state.fileChangesByRun[id] ?? []) {
+    for (const f of state.fileChangesByRun[id] ?? EMPTY) {
       const key = `${f.runId ?? id}:${f.path}:${f.changeType}`;
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(f);
     }
   }
-  return out;
+  return out.length === 0 ? EMPTY : out;
 }
 
 /** Merge events for root + child runs (ordered by timestamp then sequence). */
@@ -220,11 +225,16 @@ export function selectEventsForRunTree(
   rootRunId: string | null,
 ): import('@/lib/assistant-protocol').RunEvent[] {
   if (!rootRunId) return EMPTY;
-  const ids = [rootRunId, ...(state.childRunsByParent[rootRunId] ?? [])];
+  const childIds = state.childRunsByParent[rootRunId] ?? EMPTY;
+  // Single-run tree: return the stored events array so effect deps stay stable
+  // across unrelated store ticks (composer, view, connection banners, …).
+  if (childIds.length === 0) return state.eventsByRun[rootRunId] ?? EMPTY;
+  const ids = [rootRunId, ...childIds];
   const out: import('@/lib/assistant-protocol').RunEvent[] = [];
   for (const id of ids) {
-    out.push(...(state.eventsByRun[id] ?? []));
+    out.push(...(state.eventsByRun[id] ?? EMPTY));
   }
+  if (out.length === 0) return EMPTY;
   out.sort((a, b) => {
     const ta = a.timestamp || '';
     const tb = b.timestamp || '';

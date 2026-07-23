@@ -49,6 +49,7 @@ describe('creative-app sort and badge', () => {
   it('source badge', () => {
     assert.equal(sourceBadge('internal'), 'internal');
     assert.equal(sourceBadge('external_github'), 'github');
+    assert.equal(sourceBadge('local_project'), 'local');
   });
   it('sort running first', () => {
     const apps: CreativeAppSummary[] = [

@@ -89,10 +89,28 @@ export function AssistantStoreProvider({
     state.view.inspectorTab,
   ]);
 
+  // Debounce draft localStorage writes — typing used to stringify+setItem on
+  // every keystroke (composer/set → this effect). 400ms is enough to batch
+  // bursts; unmount flush (below) keeps remount restore correct.
+  const draftsRef = useRef(state.composerByConversation);
+  draftsRef.current = state.composerByConversation;
   useEffect(() => {
     if (disablePersistence) return;
-    savePersistedDrafts(state.composerByConversation);
+    const timer = window.setTimeout(() => {
+      savePersistedDrafts(draftsRef.current);
+    }, 400);
+    return () => {
+      window.clearTimeout(timer);
+    };
   }, [disablePersistence, state.composerByConversation]);
+
+  // Flush drafts once on provider unmount (settings round-trip / leave assistant).
+  useEffect(() => {
+    if (disablePersistence) return;
+    return () => {
+      savePersistedDrafts(draftsRef.current);
+    };
+  }, [disablePersistence]);
 
   const value = useMemo(
     () => ({

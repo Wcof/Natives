@@ -47,7 +47,7 @@ import {
   type FavoriteItem,
 } from '@/lib/favorites-client';
 import AssistantSidebarSection from '@/components/assistant/AssistantSidebarSection';
-import { useAssistantWorkspace } from '@/components/assistant/AssistantWorkspaceContext';
+import { useAssistantActions } from '@/components/assistant/AssistantWorkspaceContext';
 import {
   isSettingsView,
   getSettingsSection,
@@ -251,7 +251,8 @@ export default function Sidebar({
   const [activeNavigationId, setActiveNavigationId] = useState<string | null>(
     () => getNavigationId(activeModuleId),
   );
-  const { actions: assistantActions } = useAssistantWorkspace();
+  // Actions only — stream runtime ticks must not re-render the whole shell rail.
+  const { actions: assistantActions } = useAssistantActions();
 
   // Builtin tool enabled state (from DB)
   const [enabledTools, setEnabledTools] = useState<Array<{ id: string; driver: string }>>([]);

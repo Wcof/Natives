@@ -34,10 +34,15 @@ export interface WriteGeneratedModuleResult {
   contentHash?: string;
 }
 
-// ── Creative App (dual-source Personal Creations) ──
+// ── Creative App (multi-source Personal Creations) ──
 
-export type CreativeAppSource = 'internal' | 'external_github';
-export type CreativeAppRuntime = 'workshop_static' | 'docker_compose' | 'docker_run';
+export type CreativeAppSource = 'internal' | 'external_github' | 'local_project';
+export type CreativeAppRuntime =
+  | 'workshop_static'
+  | 'docker_compose'
+  | 'docker_run'
+  | 'local_static'
+  | 'node_dev_server';
 export type CreativeAppState =
   | 'available'
   | 'disabled'
@@ -51,6 +56,42 @@ export type CreativeAppState =
   | 'start_failed'
   | 'deleting'
   | 'delete_failed';
+
+export type LocalProjectKind =
+  | 'html'
+  | 'vite'
+  | 'vue'
+  | 'vue_vite'
+  | 'vite_other'
+  | 'unknown';
+
+export type LaunchMode = 'smart' | 'custom';
+export type PackageManager = 'npm' | 'pnpm' | 'yarn';
+
+export type LocalCreativeIssueCode =
+  | 'path_missing'
+  | 'environment_missing'
+  | 'dependencies_missing'
+  | 'port_conflict'
+  | 'config_invalid'
+  | 'ai_error'
+  | 'start_unhealthy'
+  | 'orphaned_process';
+
+export interface CreativeAppStatusDetail {
+  code: LocalCreativeIssueCode;
+  message: string;
+  recoveryActions?: string[];
+}
+
+export interface LocalProjectSummary {
+  projectRoot: string;
+  projectKind: LocalProjectKind;
+  launchMode: LaunchMode;
+  packageManager?: PackageManager;
+  deviceId: string;
+  deviceName: string;
+}
 
 export interface CreativeAppActions {
   canOpen: boolean;
@@ -72,6 +113,8 @@ export interface CreativeAppSummary {
   openUrl?: string;
   repositoryUrl?: string;
   lastError?: string;
+  statusDetail?: CreativeAppStatusDetail;
+  localProject?: LocalProjectSummary;
   actions: CreativeAppActions;
 }
 
@@ -185,12 +228,117 @@ export type CreativeAppProgressStage =
   | 'starting'
   | 'health_check'
   | 'ready'
-  | 'failed';
+  | 'failed'
+  | 'stopped'
+  | 'installing_dependencies';
 
 export interface CreativeAppProgressEvent {
   appId: string;
-  stage: CreativeAppProgressStage;
+  stage: CreativeAppProgressStage | string;
   message: string;
+}
+
+export interface CreativeAppLogEvent {
+  appId: string;
+  seq: number;
+  tsMs: number;
+  stream: 'stdout' | 'stderr' | 'system' | string;
+  text: string;
+}
+
+export interface LaunchPlan {
+  schemaVersion: 1;
+  source: 'rule' | 'user' | 'ai';
+  projectKind: LocalProjectKind;
+  runtime: 'static_http' | 'node_dev_server';
+  program: 'internal' | 'npm' | 'pnpm' | 'yarn' | 'node';
+  cwdRelative: string;
+  script?: string;
+  entryFile?: string;
+  scriptRunner?: 'vite' | 'vue_cli' | 'node';
+  args: string[];
+  environmentKeys: string[];
+  port: { mode: 'auto' | 'fixed'; value?: number };
+  openPath: string;
+  healthPath: string;
+  startupTimeoutMs: number;
+  autoOpen: boolean;
+  confidence?: number;
+  reason: string;
+}
+
+export interface LocalToolVersions {
+  node?: string;
+  npm?: string;
+  pnpm?: string;
+  yarn?: string;
+}
+
+export interface LocalProjectScanResult {
+  projectRoot: string;
+  projectKind: LocalProjectKind;
+  packageManager?: PackageManager;
+  packageManagerChoices: PackageManager[];
+  scripts: string[];
+  preferredScript?: string;
+  hasNodeModules: boolean;
+  dependenciesMissing: boolean;
+  toolVersions: LocalToolVersions;
+  risks: string[];
+  blockers: string[];
+  rulePlan?: LaunchPlan;
+  treeSample: string[];
+  existingId?: string;
+}
+
+export interface CreateLocalCreativeRequest {
+  projectRoot: string;
+  title: string;
+  description?: string;
+  icon?: string;
+  launchMode: LaunchMode;
+  launchPlan?: LaunchPlan;
+  env?: Array<{ key: string; value: string }>;
+  autoOpen?: boolean;
+  startupTimeoutMs?: number;
+  startAfterSave?: boolean;
+}
+
+export interface UpdateLocalCreativeRequest {
+  id: string;
+  title?: string;
+  description?: string;
+  icon?: string;
+  launchMode?: LaunchMode;
+  launchPlan?: LaunchPlan;
+  env?: Array<{ key: string; value: string }>;
+  envUpsert?: Array<{ key: string; value: string }>;
+  envRemoveKeys?: string[];
+  autoOpen?: boolean;
+  startupTimeoutMs?: number;
+  projectRoot?: string;
+}
+
+export interface LocalCreativeAiSettings {
+  enabled: boolean;
+  providerId?: string | null;
+  model?: string | null;
+  mode: string;
+  userConsented: boolean;
+  timeoutMs: number;
+}
+
+export interface LocalCreativeConfig {
+  summary: CreativeAppSummary;
+  launchPlan: LaunchPlan;
+  envKeys: string[];
+  dependencyInstall?: {
+    program: string;
+    args: string[];
+    packageManager: PackageManager;
+    requiresConfirmation: boolean;
+    display: string;
+  };
 }
 
 // --- Types matching the Electron preload contract ---
@@ -389,7 +537,7 @@ export interface NativesAPI {
     ) => Promise<WriteGeneratedModuleResult>;
     rollback: (params: { moduleId: string; oldContent: string }) => Promise<void>;
   };
-  /** Dual-source Personal Creations (internal workshop + external GitHub container). */
+  /** Multi-source Personal Creations (internal + GitHub + local project). */
   creativeApp: {
     list: () => Promise<CreativeAppSummary[]>;
     start: (id: string) => Promise<CreativeAppSummary>;
@@ -413,6 +561,51 @@ export interface NativesAPI {
     browserClose: () => Promise<void>;
     browserCurrent: () => Promise<{ appId?: string | null; url?: string | null }>;
     onProgress: (callback: (event: CreativeAppProgressEvent) => void) => () => void;
+    onLog: (callback: (event: CreativeAppLogEvent) => void) => () => void;
+    inspectLocal: (request: { projectRoot: string }) => Promise<LocalProjectScanResult>;
+    createLocal: (request: CreateLocalCreativeRequest) => Promise<CreativeAppSummary>;
+    updateLocal: (request: UpdateLocalCreativeRequest) => Promise<CreativeAppSummary>;
+    rescanLocal: (id: string) => Promise<LocalProjectScanResult>;
+    restart: (id: string) => Promise<CreativeAppSummary>;
+    resolveOrphan: (id: string, restart: boolean) => Promise<CreativeAppSummary>;
+    getLocalLogs: (
+      id: string,
+      limit?: number,
+    ) => Promise<Array<{ seq: number; tsMs: number; stream: string; text: string }>>;
+    installLocalDependencies: (id: string) => Promise<CreativeAppSummary>;
+    previewLocalDependencyInstall: (
+      id: string,
+    ) => Promise<{
+      program: string;
+      args: string[];
+      packageManager: PackageManager;
+      requiresConfirmation: true;
+      display: string;
+    }>;
+    getLocalAiSettings: () => Promise<LocalCreativeAiSettings>;
+    saveLocalAiSettings: (settings: LocalCreativeAiSettings) => Promise<LocalCreativeAiSettings>;
+    previewLocalAi: (projectRoot: string) => Promise<{
+      scan: LocalProjectScanResult;
+      payloadPreview: unknown;
+      settings: LocalCreativeAiSettings;
+      requiresConfirmation: true;
+    }>;
+    analyzeLocalWithAi: (
+      projectRoot: string,
+      confirmed: boolean,
+    ) => Promise<{
+      scan: LocalProjectScanResult;
+      aiPlan?: LaunchPlan | null;
+      payloadPreview: unknown;
+    }>;
+    diagnoseLocalWithAi: (id: string) => Promise<{
+      schemaVersion: number;
+      issueCode: LocalCreativeIssueCode;
+      summary: string;
+      recoveryActions: string[];
+    }>;
+    getLocalConfig: (id: string) => Promise<LocalCreativeConfig>;
+    pollLocalExits: () => Promise<number>;
   };
   env: {
     getVariables: (profileId: string) => Promise<unknown>;
@@ -874,7 +1067,7 @@ const nativesAPI: NativesAPI = {
       cmd('rollback_module', params),
   },
 
-  // Creative App (dual-source)
+  // Creative App (multi-source)
   creativeApp: {
     list: () => cmd<CreativeAppSummary[]>('creative_app_list'),
     start: (id: string) => cmd<CreativeAppSummary>('creative_app_start', { id }),
@@ -915,6 +1108,67 @@ const nativesAPI: NativesAPI = {
         unlisten.then((fn) => fn());
       };
     },
+    onLog: (callback) => {
+      const unlisten = listen<CreativeAppLogEvent>('creative-app-log', (event) => {
+        callback(event.payload);
+      });
+      return () => {
+        unlisten.then((fn) => fn());
+      };
+    },
+    inspectLocal: (request: { projectRoot: string }) =>
+      cmd<LocalProjectScanResult>('creative_app_inspect_local', { request }),
+    createLocal: (request: CreateLocalCreativeRequest) =>
+      cmd<CreativeAppSummary>('creative_app_create_local', { request }),
+    updateLocal: (request: UpdateLocalCreativeRequest) =>
+      cmd<CreativeAppSummary>('creative_app_update_local', { request }),
+    rescanLocal: (id: string) =>
+      cmd<LocalProjectScanResult>('creative_app_rescan_local', { id }),
+    restart: (id: string) => cmd<CreativeAppSummary>('creative_app_restart', { id }),
+    resolveOrphan: (id: string, restart: boolean) =>
+      cmd<CreativeAppSummary>('creative_app_resolve_orphan', { id, restart }),
+    getLocalLogs: (id: string, limit?: number) =>
+      cmd<Array<{ seq: number; tsMs: number; stream: string; text: string }>>(
+        'creative_app_get_local_logs',
+        { id, limit },
+      ),
+    installLocalDependencies: (id: string) =>
+      cmd<CreativeAppSummary>('creative_app_install_local_dependencies', { id }),
+    previewLocalDependencyInstall: (id: string) =>
+      cmd<{
+        program: string;
+        args: string[];
+        packageManager: PackageManager;
+        requiresConfirmation: true;
+        display: string;
+      }>('creative_app_preview_local_dependency_install', { id }),
+    getLocalAiSettings: () =>
+      cmd<LocalCreativeAiSettings>('creative_app_get_local_ai_settings'),
+    saveLocalAiSettings: (settings: LocalCreativeAiSettings) =>
+      cmd<LocalCreativeAiSettings>('creative_app_save_local_ai_settings', { settings }),
+    previewLocalAi: (projectRoot: string) =>
+      cmd<{
+        scan: LocalProjectScanResult;
+        payloadPreview: unknown;
+        settings: LocalCreativeAiSettings;
+        requiresConfirmation: true;
+      }>('creative_app_preview_local_ai', { projectRoot }),
+    analyzeLocalWithAi: (projectRoot: string, confirmed: boolean) =>
+      cmd<{
+        scan: LocalProjectScanResult;
+        aiPlan?: LaunchPlan | null;
+        payloadPreview: unknown;
+      }>('creative_app_analyze_local_with_ai', { projectRoot, confirmed }),
+    diagnoseLocalWithAi: (id: string) =>
+      cmd<{
+        schemaVersion: number;
+        issueCode: LocalCreativeIssueCode;
+        summary: string;
+        recoveryActions: string[];
+      }>('creative_app_diagnose_local_with_ai', { id }),
+    getLocalConfig: (id: string) =>
+      cmd<LocalCreativeConfig>('creative_app_get_local_config', { id }),
+    pollLocalExits: () => cmd<number>('creative_app_poll_local_exits'),
   },
 
   // Environment

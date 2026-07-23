@@ -14,6 +14,8 @@ fn get_header(request: &Request, name: &str) -> Option<String> {
 
 const ALLOWED_HOSTS: &[&str] = &["localhost", "127.0.0.1", "::1"];
 const CSP_HEADER: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://localhost:* https:; frame-src 'self' https:; frame-ancestors 'none'; form-action 'none'";
+/// CSP for local creative projects (no Workshop Bridge; allows loopback WS for Vite HMR).
+const LOCAL_PROJECT_CSP: &str = "default-src 'self' data: blob: https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* https: wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
 
 pub struct HttpServer {
     port: u16,
@@ -86,12 +88,14 @@ fn handle_request(
         .unwrap_or_else(|_| Header::from_bytes("x-placeholder", "x").unwrap());
 
     let url = request.url().to_string();
+    // Strip query string for routing
+    let path_only = url.split('?').next().unwrap_or(&url).to_string();
     let method = request.method().clone();
 
-    // 3. Route matching
+    // 3. Route matching — only GET/HEAD for static assets; POST for bridge only.
     match &method {
-        Method::Get => {
-            if url == "/natives-sdk.js" {
+        Method::Get | Method::Head => {
+            if path_only == "/natives-sdk.js" {
                 // Serve the bridge SDK
                 let script = include_str!("bridge_sdk.js");
                 let resp = Response::from_string(script)
@@ -100,9 +104,13 @@ fn handle_request(
                         Header::from_bytes("Content-Type", "application/javascript").unwrap(),
                     );
                 request.respond(resp)?;
-            } else if url.starts_with("/modules/") {
+            } else if path_only.starts_with("/modules/") {
                 // Serve module static files
                 serve_module_file(request, modules_dir, csp)?;
+            } else if path_only.starts_with("/local-projects/") {
+                let local_csp = Header::from_bytes("Content-Security-Policy", LOCAL_PROJECT_CSP)
+                    .unwrap_or_else(|_| Header::from_bytes("x-placeholder", "x").unwrap());
+                serve_local_project_file(request, db_path, local_csp, matches!(method, Method::Head))?;
             } else {
                 let resp = Response::from_string("Not Found").with_status_code(404);
                 request.respond(resp)?;
@@ -118,7 +126,7 @@ fn handle_request(
                 return Ok(());
             }
 
-            if url.starts_with("/api/bridge/") {
+            if path_only.starts_with("/api/bridge/") {
                 handle_bridge_request(request, token_manager, csp, db_path)?;
             } else {
                 let resp = Response::from_string("Not Found").with_status_code(404);
@@ -203,7 +211,8 @@ fn serve_module_file(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Parse /modules/{moduleId}/{path}
     let url = request.url().to_string();
-    let path_part = url.strip_prefix("/modules/").unwrap_or(&url);
+    let path_part = url.split('?').next().unwrap_or(&url);
+    let path_part = path_part.strip_prefix("/modules/").unwrap_or(path_part);
     let mut parts = path_part.splitn(2, '/');
     let module_id = parts.next().unwrap_or("");
     let file_path = parts.next().unwrap_or("");
@@ -239,6 +248,194 @@ fn serve_module_file(
         }
     }
     Ok(())
+}
+
+/// Serve local creative project files from DB-resolved roots.
+/// Route: `/local-projects/{creativeId}/{relativePath}`
+/// No Workshop Bridge injection; no Tauri capability.
+fn serve_local_project_file(
+    request: Request,
+    db_path: &Path,
+    csp: Header,
+    head_only: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let url = request.url().to_string();
+    let path_part = url.split('?').next().unwrap_or(&url);
+    let path_part = path_part
+        .strip_prefix("/local-projects/")
+        .unwrap_or(path_part);
+    // percent-decode relative path segments carefully
+    let path_part = percent_decode(path_part);
+    let mut parts = path_part.splitn(2, '/');
+    let creative_id = parts.next().unwrap_or("");
+    let mut rel = parts.next().unwrap_or("").to_string();
+    if creative_id.is_empty() || creative_id.contains("..") || creative_id.contains('\0') {
+        let resp = Response::from_string("Forbidden").with_status_code(403);
+        request.respond(resp)?;
+        return Ok(());
+    }
+    if rel.contains('\0') || rel.contains("..") {
+        let resp = Response::from_string("Forbidden").with_status_code(403);
+        request.respond(resp)?;
+        return Ok(());
+    }
+
+    let project_root = match lookup_local_project_root(db_path, creative_id) {
+        Some(p) => p,
+        None => {
+            let resp = Response::from_string("Not Found").with_status_code(404);
+            request.respond(resp)?;
+            return Ok(());
+        }
+    };
+
+    if rel.is_empty() || rel.ends_with('/') {
+        rel = format!("{rel}index.html");
+    }
+
+    let candidate = match resolve_under_project(&project_root, &rel) {
+        Some(p) => p,
+        None => {
+            let resp = Response::from_string("Forbidden").with_status_code(403);
+            request.respond(resp)?;
+            return Ok(());
+        }
+    };
+
+    let file_path = if candidate.is_dir() {
+        let index = candidate.join("index.html");
+        if index.is_file() {
+            index
+        } else {
+            // SPA fallback only for non-file GETs under project
+            project_root.join("index.html")
+        }
+    } else if candidate.is_file() {
+        candidate
+    } else {
+        // SPA fallback: missing path → index.html if present
+        let index = project_root.join("index.html");
+        if index.is_file() {
+            index
+        } else {
+            let resp = Response::from_string("Not Found").with_status_code(404);
+            request.respond(resp)?;
+            return Ok(());
+        }
+    };
+
+    // Final containment check after canonicalize
+    let file_canon = match std::fs::canonicalize(&file_path) {
+        Ok(p) => p,
+        Err(_) => {
+            let resp = Response::from_string("Not Found").with_status_code(404);
+            request.respond(resp)?;
+            return Ok(());
+        }
+    };
+    let root_canon = match std::fs::canonicalize(&project_root) {
+        Ok(p) => p,
+        Err(_) => {
+            let resp = Response::from_string("Not Found").with_status_code(404);
+            request.respond(resp)?;
+            return Ok(());
+        }
+    };
+    if !file_canon.starts_with(&root_canon) {
+        let resp = Response::from_string("Forbidden").with_status_code(403);
+        request.respond(resp)?;
+        return Ok(());
+    }
+
+    let mime = guess_mime(&file_canon);
+    if head_only {
+        let len = std::fs::metadata(&file_canon).map(|m| m.len()).unwrap_or(0);
+        let resp = Response::empty(200)
+            .with_header(csp)
+            .with_header(Header::from_bytes("Content-Type", mime).unwrap())
+            .with_header(
+                Header::from_bytes("Content-Length", len.to_string().into_bytes()).unwrap_or_else(
+                    |_| Header::from_bytes("x-placeholder", "x").unwrap(),
+                ),
+            );
+        request.respond(resp)?;
+        return Ok(());
+    }
+
+    // HTML: serve raw, no bridge injection
+    if mime == "text/html" {
+        let raw = std::fs::read_to_string(&file_canon)?;
+        let resp = Response::from_string(raw)
+            .with_header(csp)
+            .with_header(Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap());
+        request.respond(resp)?;
+    } else {
+        let content = std::fs::read(&file_canon)?;
+        let resp = Response::from_data(content)
+            .with_header(csp)
+            .with_header(Header::from_bytes("Content-Type", mime).unwrap());
+        request.respond(resp)?;
+    }
+    Ok(())
+}
+
+fn lookup_local_project_root(db_path: &Path, creative_id: &str) -> Option<PathBuf> {
+    let conn = Connection::open(db_path).ok()?;
+    conn.query_row(
+        "SELECT canonical_project_root FROM local_creative_apps WHERE id = ?1",
+        [creative_id],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+    .map(PathBuf::from)
+}
+
+fn resolve_under_project(root: &Path, rel: &str) -> Option<PathBuf> {
+    if rel.is_empty() {
+        return Some(root.to_path_buf());
+    }
+    // Reject absolute and parent segments again after decode
+    let p = Path::new(rel);
+    if p.is_absolute() {
+        return None;
+    }
+    for c in p.components() {
+        match c {
+            std::path::Component::Normal(_) | std::path::Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    Some(root.join(p))
+}
+
+fn percent_decode(input: &str) -> String {
+    // Minimal percent-decoder; invalid sequences kept as-is.
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let h1 = bytes[i + 1];
+            let h2 = bytes[i + 2];
+            if let (Some(a), Some(b)) = (from_hex(h1), from_hex(h2)) {
+                out.push((a << 4) | b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn from_hex(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 const MAX_POST_BODY: u64 = 64 * 1024 * 1024; // 64MB (Natives2: prevent memory exhaustion)

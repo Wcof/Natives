@@ -1133,16 +1133,40 @@ export function workspaceReducer(
     case 'composer/set': {
       const prev = state.composerByConversation[action.conversationId] ?? {
         text: '',
-        attachments: [],
-        updatedAt: new Date().toISOString(),
+        attachments: [] as Array<{
+          path: string;
+          name: string;
+          mimeType?: string;
+          size?: number;
+        }>,
+        updatedAt: '',
       };
+      const nextText = action.draft.text !== undefined ? action.draft.text : prev.text;
+      const nextAttachments =
+        action.draft.attachments !== undefined ? action.draft.attachments : prev.attachments;
+      // Bail out when content is unchanged — MessageInput can re-dispatch the same
+      // draft text after store ticks; always writing updatedAt caused effect storms.
+      const textSame = nextText === prev.text;
+      const attachmentsSame =
+        nextAttachments === prev.attachments ||
+        (nextAttachments.length === prev.attachments.length &&
+          nextAttachments.every(
+            (item, index) =>
+              item.path === prev.attachments[index]?.path &&
+              item.name === prev.attachments[index]?.name &&
+              item.size === prev.attachments[index]?.size &&
+              item.mimeType === prev.attachments[index]?.mimeType,
+          ));
+      if (textSame && attachmentsSame) {
+        return state;
+      }
       return {
         ...state,
         composerByConversation: {
           ...state.composerByConversation,
           [action.conversationId]: {
-            ...prev,
-            ...action.draft,
+            text: nextText,
+            attachments: nextAttachments,
             updatedAt: new Date().toISOString(),
           },
         },

@@ -16,7 +16,11 @@ import type { ProviderSummary, TestKeyResult } from '@/types/provider';
 import {
   type SettingsSection,
 } from './settings-navigation';
-import type { CreativeAppDockerStatus, CreativeAppGithubTokenStatus } from '@/lib/tauri-adapter';
+import type {
+  CreativeAppDockerStatus,
+  CreativeAppGithubTokenStatus,
+  LocalCreativeAiSettings,
+} from '@/lib/tauri-adapter';
 
 // ── Theme skins — only light/dark as supported by the theme engine ──
 const THEMES = [
@@ -137,6 +141,147 @@ function CreativeRuntimeSettings({ locale }: { locale: Locale }) {
               {t(locale, 'settings.githubTokenClear')}
             </button>
           </div>
+        </div>
+      </div>
+
+      <LocalCreativeAiSettingsPanel locale={locale} />
+    </div>
+  );
+}
+
+function LocalCreativeAiSettingsPanel({ locale }: { locale: Locale }) {
+  const { toast } = useToast();
+  const [settings, setSettings] = useState<LocalCreativeAiSettings | null>(null);
+  const [providers, setProviders] = useState<ProviderSummary[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setBusy(true);
+    try {
+      const st =
+        (await window.nativesAPI?.creativeApp?.getLocalAiSettings?.()) ??
+        ({
+          enabled: false,
+          mode: 'only_when_uncertain',
+          userConsented: false,
+          timeoutMs: 45000,
+        } as LocalCreativeAiSettings);
+      setSettings(st);
+      const list = (await window.nativesAPI?.provider?.list?.()) as ProviderSummary[] | undefined;
+      setProviders(Array.isArray(list) ? list : []);
+    } catch (e) {
+      toast(classifyError(e).userMessage, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  if (!settings) return null;
+
+  const save = async (next: LocalCreativeAiSettings) => {
+    try {
+      const saved = await window.nativesAPI?.creativeApp?.saveLocalAiSettings?.(next);
+      setSettings(saved ?? next);
+      toast(t(locale, 'settings.localAiSaved'), 'success');
+    } catch (e) {
+      toast(classifyError(e).userMessage, 'error');
+    }
+  };
+
+  return (
+    <div className="settings-section-card" style={{ marginTop: 16 }}>
+      <div className="settings-section-heading">
+        <div>
+          <h4>{t(locale, 'settings.localAiTitle')}</h4>
+          <p>{t(locale, 'settings.localAiDesc')}</p>
+        </div>
+        <button type="button" className="btn btn-secondary" onClick={() => void refresh()} disabled={busy}>
+          <RefreshCw size={12} /> {t(locale, 'common.refresh')}
+        </button>
+      </div>
+      <div style={{ display: 'grid', gap: 10, fontSize: 13 }}>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            type="checkbox"
+            checked={settings.enabled}
+            onChange={(e) => void save({ ...settings, enabled: e.target.checked })}
+          />
+          {t(locale, 'settings.localAiEnabled')}
+        </label>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            type="checkbox"
+            checked={settings.userConsented}
+            onChange={(e) => void save({ ...settings, userConsented: e.target.checked })}
+          />
+          {t(locale, 'settings.localAiConsent')}
+        </label>
+        <div>
+          <div style={{ marginBottom: 4 }}>{t(locale, 'settings.localAiMode')}</div>
+          <select
+            value={settings.mode}
+            onChange={(e) => void save({ ...settings, mode: e.target.value })}
+            style={{
+              width: '100%',
+              padding: '6px 8px',
+              borderRadius: 6,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-2)',
+              color: 'var(--text)',
+            }}
+          >
+            <option value="only_when_uncertain">{t(locale, 'settings.localAiModeUncertain')}</option>
+            <option value="always">{t(locale, 'settings.localAiModeAlways')}</option>
+          </select>
+        </div>
+        <div>
+          <div style={{ marginBottom: 4 }}>{t(locale, 'settings.localAiProvider')}</div>
+          <select
+            value={settings.providerId || ''}
+            onChange={(e) =>
+              void save({
+                ...settings,
+                providerId: e.target.value || null,
+              })
+            }
+            style={{
+              width: '100%',
+              padding: '6px 8px',
+              borderRadius: 6,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-2)',
+              color: 'var(--text)',
+            }}
+          >
+            <option value="">{t(locale, 'settings.localAiProviderNone')}</option>
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.displayName || p.id}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <div style={{ marginBottom: 4 }}>{t(locale, 'settings.localAiModel')}</div>
+          <input
+            value={settings.model || ''}
+            onChange={(e) => setSettings({ ...settings, model: e.target.value })}
+            onBlur={() => void save(settings)}
+            placeholder="gpt-4.1-mini / claude-…"
+            style={{
+              width: '100%',
+              padding: '6px 8px',
+              borderRadius: 6,
+              border: '1px solid var(--border)',
+              background: 'var(--bg-2)',
+              color: 'var(--text)',
+              fontSize: 12,
+            }}
+          />
         </div>
       </div>
     </div>

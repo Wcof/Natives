@@ -49,6 +49,10 @@ test('provider seeds projects+sessions before workbench: refreshNavigationFromHo
   assert.match(providerSrc, /workbenchActions/);
   // Must not clear shell actions when workbench unmounts.
   assert.match(providerSrc, /actions: shellActions/);
+  // Stream ticks must not re-render the sidebar tree (split contexts).
+  assert.match(providerSrc, /useAssistantNavigation/);
+  assert.match(providerSrc, /AssistantNavigationContext/);
+  assert.match(providerSrc, /AssistantRuntimeContext/);
 });
 
 test('host conversation.* is never dual-routed to UDS daemon', () => {

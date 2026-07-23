@@ -239,9 +239,11 @@ pub async fn install_github(
             health_path: health_path.clone(),
             env_keys: req.env.iter().map(|e| e.key.clone()).collect(),
         },
-        CreativeAppRuntime::WorkshopStatic => {
+        CreativeAppRuntime::WorkshopStatic
+        | CreativeAppRuntime::LocalStatic
+        | CreativeAppRuntime::NodeDevServer => {
             return Err(Error::InvalidInput(
-                "workshop_static is not an external install runtime".into(),
+                "runtime is not an external install runtime".into(),
             ));
         }
     };
@@ -368,7 +370,11 @@ pub async fn install_github(
             )
             .await
         }
-        CreativeAppRuntime::WorkshopStatic => Err(Error::InvalidInput("invalid runtime".into())),
+        CreativeAppRuntime::WorkshopStatic
+        | CreativeAppRuntime::LocalStatic
+        | CreativeAppRuntime::NodeDevServer => {
+            Err(Error::InvalidInput("invalid runtime".into()))
+        }
     };
 
     match install_result {
@@ -915,6 +921,8 @@ pub fn summary_from_external(rec: &ExternalCreativeAppRecord) -> CreativeAppSumm
         open_url: rec.open_url.clone(),
         repository_url: Some(rec.repository_url.clone()),
         last_error: rec.last_error.clone(),
+        status_detail: None,
+        local_project: None,
         actions: CreativeAppActions::for_state(CreativeAppSource::ExternalGithub, rec.state),
     }
 }
@@ -944,6 +952,8 @@ pub fn summary_from_internal(
         open_url: None,
         repository_url: None,
         last_error: None,
+        status_detail: None,
+        local_project: None,
         actions: CreativeAppActions::for_state(CreativeAppSource::Internal, state),
     }
 }

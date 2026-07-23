@@ -22,6 +22,10 @@ pub struct CreativeAppSummary {
     pub repository_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_detail: Option<CreativeAppStatusDetail>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_project: Option<LocalProjectSummary>,
     pub actions: CreativeAppActions,
 }
 
@@ -30,6 +34,7 @@ pub struct CreativeAppSummary {
 pub enum CreativeAppSource {
     Internal,
     ExternalGithub,
+    LocalProject,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -38,6 +43,8 @@ pub enum CreativeAppRuntime {
     WorkshopStatic,
     DockerCompose,
     DockerRun,
+    LocalStatic,
+    NodeDevServer,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -138,7 +145,7 @@ impl CreativeAppActions {
                     can_retry: false,
                 },
             },
-            CreativeAppSource::ExternalGithub => match state {
+            CreativeAppSource::ExternalGithub | CreativeAppSource::LocalProject => match state {
                 CreativeAppState::Running => Self {
                     can_open: true,
                     can_start: false,
@@ -155,16 +162,18 @@ impl CreativeAppActions {
                 },
                 CreativeAppState::InstallFailed | CreativeAppState::StartFailed => Self {
                     can_open: false,
-                    can_start: false,
+                    can_start: true,
+                    // external may still need stop to clean partial containers; local can stop too
                     can_stop: true,
                     can_delete: true,
                     can_retry: true,
                 },
                 CreativeAppState::RuntimeUnavailable => Self {
                     can_open: false,
-                    can_start: false,
+                    can_start: source == CreativeAppSource::LocalProject,
                     can_stop: false,
-                    can_delete: false, // need docker for full delete
+                    // local project delete never needs docker
+                    can_delete: source == CreativeAppSource::LocalProject,
                     can_retry: true,
                 },
                 CreativeAppState::Installing
@@ -194,6 +203,482 @@ impl CreativeAppActions {
             },
         }
     }
+}
+
+// ── Local project domain (third source) ────────────────────────────
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalProjectKind {
+    Html,
+    Vite,
+    Vue,
+    VueVite,
+    ViteOther,
+    Unknown,
+}
+
+impl LocalProjectKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Html => "html",
+            Self::Vite => "vite",
+            Self::Vue => "vue",
+            Self::VueVite => "vue_vite",
+            Self::ViteOther => "vite_other",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "html" => Self::Html,
+            "vite" => Self::Vite,
+            "vue" => Self::Vue,
+            "vue_vite" => Self::VueVite,
+            "vite_other" => Self::ViteOther,
+            "unknown" => Self::Unknown,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchMode {
+    Smart,
+    Custom,
+}
+
+impl LaunchMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Smart => "smart",
+            Self::Custom => "custom",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "smart" => Self::Smart,
+            "custom" => Self::Custom,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageManager {
+    Npm,
+    Pnpm,
+    Yarn,
+}
+
+impl PackageManager {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Npm => "npm",
+            Self::Pnpm => "pnpm",
+            Self::Yarn => "yarn",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "npm" => Self::Npm,
+            "pnpm" => Self::Pnpm,
+            "yarn" => Self::Yarn,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalCreativeIssueCode {
+    PathMissing,
+    EnvironmentMissing,
+    DependenciesMissing,
+    PortConflict,
+    ConfigInvalid,
+    AiError,
+    StartUnhealthy,
+    OrphanedProcess,
+}
+
+impl LocalCreativeIssueCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PathMissing => "path_missing",
+            Self::EnvironmentMissing => "environment_missing",
+            Self::DependenciesMissing => "dependencies_missing",
+            Self::PortConflict => "port_conflict",
+            Self::ConfigInvalid => "config_invalid",
+            Self::AiError => "ai_error",
+            Self::StartUnhealthy => "start_unhealthy",
+            Self::OrphanedProcess => "orphaned_process",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "path_missing" => Self::PathMissing,
+            "environment_missing" => Self::EnvironmentMissing,
+            "dependencies_missing" => Self::DependenciesMissing,
+            "port_conflict" => Self::PortConflict,
+            "config_invalid" => Self::ConfigInvalid,
+            "ai_error" => Self::AiError,
+            "start_unhealthy" => Self::StartUnhealthy,
+            "orphaned_process" => Self::OrphanedProcess,
+            _ => return None,
+        })
+    }
+}
+
+/// Coarse status detail for local creative issues (not every transient stage).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CreativeAppStatusDetail {
+    pub code: LocalCreativeIssueCode,
+    pub message: String,
+    #[serde(default)]
+    pub recovery_actions: Vec<String>,
+}
+
+/// Local-project projection nested under CreativeAppSummary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalProjectSummary {
+    pub project_root: String,
+    pub project_kind: LocalProjectKind,
+    pub launch_mode: LaunchMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_manager: Option<PackageManager>,
+    pub device_id: String,
+    pub device_name: String,
+}
+
+/// Canonical LaunchPlan produced by rule / user / AI; always re-validated locally.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchPlan {
+    pub schema_version: u32,
+    pub source: LaunchPlanSource,
+    pub project_kind: LocalProjectKind,
+    pub runtime: LocalLaunchRuntime,
+    pub program: LaunchProgram,
+    pub cwd_relative: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_file: Option<String>,
+    /// Detected runner from the real package.json script body (or node entry).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script_runner: Option<ScriptRunner>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub environment_keys: Vec<String>,
+    pub port: LaunchPort,
+    pub open_path: String,
+    pub health_path: String,
+    pub startup_timeout_ms: u32,
+    pub auto_open: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchPlanSource {
+    Rule,
+    User,
+    Ai,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalLaunchRuntime {
+    StaticHttp,
+    NodeDevServer,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptRunner {
+    Vite,
+    VueCli,
+    Node,
+}
+
+impl ScriptRunner {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Vite => "vite",
+            Self::VueCli => "vue_cli",
+            Self::Node => "node",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "vite" => Self::Vite,
+            "vue_cli" | "vue-cli" | "vue_cli_service" => Self::VueCli,
+            "node" => Self::Node,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchProgram {
+    Internal,
+    Npm,
+    Pnpm,
+    Yarn,
+    Node,
+}
+
+impl LaunchProgram {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Internal => "internal",
+            Self::Npm => "npm",
+            Self::Pnpm => "pnpm",
+            Self::Yarn => "yarn",
+            Self::Node => "node",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "internal" => Self::Internal,
+            "npm" => Self::Npm,
+            "pnpm" => Self::Pnpm,
+            "yarn" => Self::Yarn,
+            "node" => Self::Node,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchPort {
+    pub mode: LaunchPortMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<u16>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchPortMode {
+    Auto,
+    Fixed,
+}
+
+impl LaunchPlan {
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    pub fn from_json(s: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(s)
+    }
+
+    pub fn creative_runtime(&self) -> CreativeAppRuntime {
+        match self.runtime {
+            LocalLaunchRuntime::StaticHttp => CreativeAppRuntime::LocalStatic,
+            LocalLaunchRuntime::NodeDevServer => CreativeAppRuntime::NodeDevServer,
+        }
+    }
+}
+
+/// Process identity saved for orphan recovery (phase 2 uses full match).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessIdentity {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at_unix: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub executable: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_group_id: Option<i32>,
+}
+
+/// DB row for local creative apps (source directory is reference-only).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalCreativeAppRecord {
+    pub id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub icon: Option<String>,
+    pub canonical_project_root: String,
+    pub device_id: String,
+    pub device_name: String,
+    pub project_kind: LocalProjectKind,
+    pub launch_mode: LaunchMode,
+    pub launch_plan_json: String,
+    pub plan_fingerprint: String,
+    pub state: CreativeAppState,
+    pub status_detail_json: Option<String>,
+    pub open_url: Option<String>,
+    pub current_port: Option<u16>,
+    pub process_identity_json: Option<String>,
+    pub auto_open: bool,
+    pub startup_timeout_ms: u32,
+    pub last_started_at: Option<String>,
+    pub last_exit_reason: Option<String>,
+    pub last_error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Result of scanning a local project directory (not persisted as state).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalProjectScanResult {
+    pub project_root: String,
+    pub project_kind: LocalProjectKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_manager: Option<PackageManager>,
+    /// When multiple lockfiles exist, user must choose.
+    #[serde(default)]
+    pub package_manager_choices: Vec<PackageManager>,
+    #[serde(default)]
+    pub scripts: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preferred_script: Option<String>,
+    pub has_node_modules: bool,
+    pub dependencies_missing: bool,
+    #[serde(default)]
+    pub tool_versions: LocalToolVersions,
+    #[serde(default)]
+    pub risks: Vec<String>,
+    #[serde(default)]
+    pub blockers: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule_plan: Option<LaunchPlan>,
+    /// Relative tree sample (virtual root /project).
+    #[serde(default)]
+    pub tree_sample: Vec<String>,
+    /// Existing local creative id if path already registered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub existing_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalToolVersions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub npm: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pnpm: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yarn: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InspectLocalRequest {
+    pub project_root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateLocalRequest {
+    pub project_root: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    pub launch_mode: LaunchMode,
+    /// Required when launch_mode is custom, or when overriding smart plan.
+    #[serde(default)]
+    pub launch_plan: Option<LaunchPlan>,
+    #[serde(default)]
+    pub env: Vec<EnvPair>,
+    #[serde(default)]
+    pub auto_open: Option<bool>,
+    #[serde(default)]
+    pub startup_timeout_ms: Option<u32>,
+    /// When true, start immediately after save (phase 2 runtime).
+    #[serde(default)]
+    pub start_after_save: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateLocalRequest {
+    pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub launch_mode: Option<LaunchMode>,
+    #[serde(default)]
+    pub launch_plan: Option<LaunchPlan>,
+    /// Legacy full replace of env map (prefer env_upsert / env_remove_keys).
+    #[serde(default)]
+    pub env: Option<Vec<EnvPair>>,
+    #[serde(default)]
+    pub env_upsert: Option<Vec<EnvPair>>,
+    #[serde(default)]
+    pub env_remove_keys: Option<Vec<String>>,
+    #[serde(default)]
+    pub auto_open: Option<bool>,
+    #[serde(default)]
+    pub startup_timeout_ms: Option<u32>,
+    /// Changing directory requires rescan confirmation on the client.
+    #[serde(default)]
+    pub project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalCreativeConfig {
+    pub summary: CreativeAppSummary,
+    pub launch_plan: LaunchPlan,
+    pub env_keys: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dependency_install: Option<DependencyInstallPreview>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DependencyInstallPreview {
+    pub program: String,
+    pub args: Vec<String>,
+    pub package_manager: PackageManager,
+    pub requires_confirmation: bool,
+    pub display: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalScriptCandidate {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runner: Option<ScriptRunner>,
+    pub executable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// DB row for external creative apps.
@@ -504,5 +989,54 @@ mod tests {
         let j = cfg.to_json().unwrap();
         let back = RuntimeConfig::from_json(&j).unwrap();
         assert_eq!(cfg, back);
+    }
+
+    #[test]
+    fn local_project_actions_and_launch_plan_roundtrip() {
+        let a = CreativeAppActions::for_state(
+            CreativeAppSource::LocalProject,
+            CreativeAppState::InstalledStopped,
+        );
+        assert!(a.can_start && a.can_delete && !a.can_open);
+
+        let plan = LaunchPlan {
+            schema_version: 1,
+            source: LaunchPlanSource::Rule,
+            project_kind: LocalProjectKind::Html,
+            runtime: LocalLaunchRuntime::StaticHttp,
+            program: LaunchProgram::Internal,
+            cwd_relative: ".".into(),
+            script: None,
+            entry_file: Some("index.html".into()),
+            script_runner: None,
+            args: vec![],
+            environment_keys: vec![],
+            port: LaunchPort {
+                mode: LaunchPortMode::Auto,
+                value: None,
+            },
+            open_path: "/".into(),
+            health_path: "/".into(),
+            startup_timeout_ms: 60_000,
+            auto_open: true,
+            confidence: Some(0.9),
+            reason: "index.html present".into(),
+        };
+        let j = plan.to_json().unwrap();
+        let back = LaunchPlan::from_json(&j).unwrap();
+        assert_eq!(plan, back);
+        assert_eq!(back.creative_runtime(), CreativeAppRuntime::LocalStatic);
+    }
+
+    #[test]
+    fn local_issue_code_roundtrip() {
+        assert_eq!(
+            LocalCreativeIssueCode::parse("dependencies_missing"),
+            Some(LocalCreativeIssueCode::DependenciesMissing)
+        );
+        assert_eq!(
+            LocalCreativeIssueCode::OrphanedProcess.as_str(),
+            "orphaned_process"
+        );
     }
 }

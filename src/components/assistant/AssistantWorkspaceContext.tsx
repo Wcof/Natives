@@ -68,17 +68,93 @@ export interface AssistantWorkspaceActions {
   respondPermission(requestId: string, approved: boolean): void;
 }
 
+type PublishNavigation = (
+  snapshot:
+    | AssistantNavigationSnapshot
+    | ((prev: AssistantNavigationSnapshot) => AssistantNavigationSnapshot),
+) => void;
+
+/** Combined value for callers that need everything (Workbench). Prefer the
+ *  split hooks (`useAssistantNavigation` / `useAssistantRuntime` /
+ *  `useAssistantActions`) so stream ticks do not re-render the shell sidebar. */
 interface AssistantWorkspaceContextValue {
   navigation: AssistantNavigationSnapshot;
   runtime: AssistantRuntimeSnapshot;
   actions: AssistantWorkspaceActions | null;
-  publishNavigation: (
-    snapshot:
-      | AssistantNavigationSnapshot
-      | ((prev: AssistantNavigationSnapshot) => AssistantNavigationSnapshot),
-  ) => void;
+  publishNavigation: PublishNavigation;
   publishRuntime: (snapshot: AssistantRuntimeSnapshot) => void;
   registerActions: (actions: AssistantWorkspaceActions | null) => void;
+}
+
+interface NavigationContextValue {
+  navigation: AssistantNavigationSnapshot;
+  publishNavigation: PublishNavigation;
+}
+
+interface RuntimeContextValue {
+  runtime: AssistantRuntimeSnapshot;
+}
+
+interface ActionsContextValue {
+  actions: AssistantWorkspaceActions | null;
+}
+
+/** Stable publishers/registrars — identity never changes after mount. */
+interface WorkspaceApiContextValue {
+  publishNavigation: PublishNavigation;
+  publishRuntime: (snapshot: AssistantRuntimeSnapshot) => void;
+  registerActions: (actions: AssistantWorkspaceActions | null) => void;
+}
+
+/** Content equality for project groups so publishNavigation can bail out. */
+function navigationGroupsEqual(
+  left: AssistantProjectGroup[],
+  right: AssistantProjectGroup[],
+): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i += 1) {
+    const a = left[i]!;
+    const b = right[i]!;
+    if (
+      a.id !== b.id ||
+      a.path !== b.path ||
+      a.label !== b.label ||
+      a.lastOpenedAt !== b.lastOpenedAt
+    ) {
+      return false;
+    }
+    if (a.conversations.length !== b.conversations.length) return false;
+    for (let j = 0; j < a.conversations.length; j += 1) {
+      const ca = a.conversations[j]!;
+      const cb = b.conversations[j]!;
+      if (
+        ca.id !== cb.id ||
+        ca.title !== cb.title ||
+        ca.mode !== cb.mode ||
+        ca.projectId !== cb.projectId ||
+        ca.updatedAt !== cb.updatedAt ||
+        Boolean(ca.pinned) !== Boolean(cb.pinned)
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/** Temp draft text-only changes must not re-render the shell sidebar tree. */
+function tempSessionEqual(
+  left: TempConversationSession | null,
+  right: TempConversationSession | null,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  if (left.conversation.id !== right.conversation.id) return false;
+  if (left.conversation.projectId !== right.conversation.projectId) return false;
+  if (left.conversation.title !== right.conversation.title) return false;
+  // Draft text is workbench-local restore data — not rendered by the tree.
+  return true;
 }
 
 const emptyNavigation: AssistantNavigationSnapshot = {
@@ -136,6 +212,14 @@ const emptyRuntime: AssistantRuntimeSnapshot = {
 };
 
 const AssistantWorkspaceContext = createContext<AssistantWorkspaceContextValue | null>(null);
+/** Sidebar / shell tree: only re-renders when navigation content actually changes. */
+const AssistantNavigationContext = createContext<NavigationContextValue | null>(null);
+/** Runtime inspector consumers: stream ticks land here, not on the sidebar. */
+const AssistantRuntimeContext = createContext<RuntimeContextValue | null>(null);
+/** Shell action façade (select/create/delete). Stable unless workbench re-registers. */
+const AssistantActionsContext = createContext<ActionsContextValue | null>(null);
+/** publish/register only — callbacks are useCallback([]) so this value is mount-stable. */
+const AssistantWorkspaceApiContext = createContext<WorkspaceApiContextValue | null>(null);
 
 export function AssistantWorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [navigation, setNavigation] = useState(emptyNavigation);
@@ -151,19 +235,22 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
     ) => {
       setNavigation((prev) => {
         const next = typeof snapshot === 'function' ? snapshot(prev) : snapshot;
-        // Structural bailout: workbench republishes on every store tick; returning
-        // `prev` when nothing meaningful changed avoids update-depth storms.
+        // Structural bailout: workbench republishes on every store tick and
+        // always allocates a fresh groups array. Compare groups by content so
+        // reference churn alone does not re-render the shell sidebar.
+        if (prev === next) return prev;
         if (
-          prev === next ||
-          (prev.selectedId === next.selectedId &&
-            prev.activeProjectPath === next.activeProjectPath &&
-            prev.loading === next.loading &&
-            prev.creationState === next.creationState &&
-            prev.isCreatingConversation === next.isCreatingConversation &&
-            prev.pendingCreateProjectPath === next.pendingCreateProjectPath &&
-            prev.tempSession === next.tempSession &&
-            prev.groups === next.groups)
+          prev.selectedId === next.selectedId &&
+          prev.activeProjectPath === next.activeProjectPath &&
+          prev.loading === next.loading &&
+          prev.creationState === next.creationState &&
+          prev.isCreatingConversation === next.isCreatingConversation &&
+          prev.pendingCreateProjectPath === next.pendingCreateProjectPath &&
+          tempSessionEqual(prev.tempSession, next.tempSession) &&
+          (prev.groups === next.groups || navigationGroupsEqual(prev.groups, next.groups))
         ) {
+          // Drop draft-only tempSession updates without re-rendering the tree.
+          // Remount restore prefers composer store (composer/set) over temp.draft.
           return prev;
         }
         return next;
@@ -184,12 +271,35 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
         prev.runStatus === snapshot.runStatus &&
         prev.runStartedAt === snapshot.runStartedAt &&
         prev.runFinishedAt === snapshot.runFinishedAt &&
-        prev.events === snapshot.events &&
-        prev.fileChanges === snapshot.fileChanges &&
-        prev.artifacts === snapshot.artifacts &&
         prev.usage.inputTokens === snapshot.usage.inputTokens &&
         prev.usage.outputTokens === snapshot.usage.outputTokens &&
-        prev.usage.reasoningTokens === snapshot.usage.reasoningTokens
+        prev.usage.reasoningTokens === snapshot.usage.reasoningTokens &&
+        // Stream ticks allocate fresh arrays every publish; compare length + tail
+        // so shell consumers do not re-render on pure reference churn.
+        prev.events.length === snapshot.events.length &&
+        (prev.events.length === 0 ||
+          (prev.events[prev.events.length - 1]?.sequence ===
+            snapshot.events[snapshot.events.length - 1]?.sequence &&
+            prev.events[prev.events.length - 1]?.runId ===
+              snapshot.events[snapshot.events.length - 1]?.runId &&
+            prev.events[prev.events.length - 1]?.type ===
+              snapshot.events[snapshot.events.length - 1]?.type)) &&
+        prev.fileChanges.length === snapshot.fileChanges.length &&
+        prev.artifacts.length === snapshot.artifacts.length &&
+        (prev.fileChanges.length === 0 ||
+          prev.fileChanges.every(
+            (f, i) =>
+              f.path === snapshot.fileChanges[i]?.path &&
+              f.change === snapshot.fileChanges[i]?.change &&
+              f.changeType === snapshot.fileChanges[i]?.changeType,
+          )) &&
+        (prev.artifacts.length === 0 ||
+          prev.artifacts.every(
+            (a, i) =>
+              a.id === snapshot.artifacts[i]?.id &&
+              a.path === snapshot.artifacts[i]?.path &&
+              a.size === snapshot.artifacts[i]?.size,
+          ))
       ) {
         return prev;
       }
@@ -489,6 +599,30 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
     [workbenchActions, publishNavigation, refreshNavigationFromHost],
   );
 
+  const navigationValue = useMemo<NavigationContextValue>(
+    () => ({ navigation, publishNavigation }),
+    [navigation, publishNavigation],
+  );
+
+  const runtimeValue = useMemo<RuntimeContextValue>(
+    () => ({ runtime }),
+    [runtime],
+  );
+
+  const actionsValue = useMemo<ActionsContextValue>(
+    () => ({ actions: shellActions }),
+    [shellActions],
+  );
+
+  // All three callbacks are useCallback([]) — stable for the provider lifetime.
+  const apiValue = useMemo<WorkspaceApiContextValue>(
+    () => ({ publishNavigation, publishRuntime, registerActions }),
+    [publishNavigation, publishRuntime, registerActions],
+  );
+
+  // Combined bag kept for legacy callers. Nested providers ensure the shell
+  // sidebar (Navigation + Actions only) does not re-render when `runtime`
+  // thrash from stream ticks (events / usage / status).
   const value = useMemo(
     () => ({
       navigation,
@@ -502,7 +636,17 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
   );
 
   return (
-    <AssistantWorkspaceContext.Provider value={value}>{children}</AssistantWorkspaceContext.Provider>
+    <AssistantWorkspaceContext.Provider value={value}>
+      <AssistantWorkspaceApiContext.Provider value={apiValue}>
+        <AssistantNavigationContext.Provider value={navigationValue}>
+          <AssistantRuntimeContext.Provider value={runtimeValue}>
+            <AssistantActionsContext.Provider value={actionsValue}>
+              {children}
+            </AssistantActionsContext.Provider>
+          </AssistantRuntimeContext.Provider>
+        </AssistantNavigationContext.Provider>
+      </AssistantWorkspaceApiContext.Provider>
+    </AssistantWorkspaceContext.Provider>
   );
 }
 
@@ -510,6 +654,46 @@ export function useAssistantWorkspace(): AssistantWorkspaceContextValue {
   const value = useContext(AssistantWorkspaceContext);
   if (!value) {
     throw new Error('useAssistantWorkspace must be used inside AssistantWorkspaceProvider');
+  }
+  return value;
+}
+
+/** Project / conversation tree. Safe for the shell sidebar during streaming. */
+export function useAssistantNavigation(): NavigationContextValue {
+  const value = useContext(AssistantNavigationContext);
+  if (!value) {
+    throw new Error('useAssistantNavigation must be used inside AssistantWorkspaceProvider');
+  }
+  return value;
+}
+
+/** Run/events/artifacts snapshot for inspectors — high-churn during streams. */
+export function useAssistantRuntime(): RuntimeContextValue {
+  const value = useContext(AssistantRuntimeContext);
+  if (!value) {
+    throw new Error('useAssistantRuntime must be used inside AssistantWorkspaceProvider');
+  }
+  return value;
+}
+
+/** Select / create / delete / pin — shell buttons and the conversation tree. */
+export function useAssistantActions(): ActionsContextValue {
+  const value = useContext(AssistantActionsContext);
+  if (!value) {
+    throw new Error('useAssistantActions must be used inside AssistantWorkspaceProvider');
+  }
+  return value;
+}
+
+/**
+ * Stable publish/register API. Workbench should use this for publishers so
+ * stream-driven runtime state updates do not bounce Workbench through a
+ * second context subscription (store already drives its re-renders).
+ */
+export function useAssistantWorkspaceApi(): WorkspaceApiContextValue {
+  const value = useContext(AssistantWorkspaceApiContext);
+  if (!value) {
+    throw new Error('useAssistantWorkspaceApi must be used inside AssistantWorkspaceProvider');
   }
   return value;
 }

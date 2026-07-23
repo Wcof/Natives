@@ -186,6 +186,8 @@ pub fn runtime_to_db(r: CreativeAppRuntime) -> &'static str {
         CreativeAppRuntime::WorkshopStatic => "workshop_static",
         CreativeAppRuntime::DockerCompose => "docker_compose",
         CreativeAppRuntime::DockerRun => "docker_run",
+        CreativeAppRuntime::LocalStatic => "local_static",
+        CreativeAppRuntime::NodeDevServer => "node_dev_server",
     }
 }
 
@@ -194,6 +196,8 @@ pub fn runtime_from_db(s: &str) -> Option<CreativeAppRuntime> {
         "workshop_static" => Some(CreativeAppRuntime::WorkshopStatic),
         "docker_compose" => Some(CreativeAppRuntime::DockerCompose),
         "docker_run" => Some(CreativeAppRuntime::DockerRun),
+        "local_static" => Some(CreativeAppRuntime::LocalStatic),
+        "node_dev_server" => Some(CreativeAppRuntime::NodeDevServer),
         _ => None,
     }
 }
@@ -387,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn modules_survive_v7() {
+    fn modules_survive_v8() {
         let conn = mem();
         conn.execute(
             "INSERT INTO modules (id, name, version, entry, type, enabled, state) VALUES ('m1','M','1','index.html','web',1,'installed')",
@@ -407,6 +411,14 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(ver, "7");
+        assert_eq!(ver, "8");
+        let local: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='local_creative_apps'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(local, 1);
     }
 }
