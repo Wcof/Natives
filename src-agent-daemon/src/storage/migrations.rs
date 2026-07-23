@@ -16,6 +16,7 @@ pub const ALL: &[(i64, &str)] = &[
     (9, MIGRATION_009),
     (10, MIGRATION_010),
     (11, MIGRATION_011),
+    (12, MIGRATION_012),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -466,4 +467,34 @@ ALTER TABLE subagent_route_policy
 
 PRAGMA legacy_alter_table=OFF;
 PRAGMA foreign_keys=ON;
+";
+
+/// Migration 012: SessionCoordinator durable state.
+///
+/// - `session_actor` stores per-conversation coordination fields that must
+///   survive daemon restart (pending interjection, cancel-and-send target,
+///   pending interaction, drain policy, version).
+/// - `prompt_queue.status` makes queue item lifecycle durable so recovery
+///   never re-executes a sent/running item as a silent duplicate.
+const MIGRATION_012: &str = "
+CREATE TABLE IF NOT EXISTS session_actor (
+    conversation_id TEXT PRIMARY KEY
+        REFERENCES conversation(id) ON DELETE CASCADE,
+    active_run_id TEXT,
+    running_prompt_id TEXT,
+    pending_interjection TEXT,
+    pending_interaction_id TEXT,
+    cancel_and_send_id TEXT,
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    drain_on_finish INTEGER NOT NULL DEFAULT 1,
+    version INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+ALTER TABLE prompt_queue ADD COLUMN status TEXT NOT NULL DEFAULT 'queued';
+
+CREATE INDEX IF NOT EXISTS idx_prompt_queue_status
+    ON prompt_queue(conversation_id, status, position);
+CREATE INDEX IF NOT EXISTS idx_session_actor_updated
+    ON session_actor(updated_at);
 ";

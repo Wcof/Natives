@@ -155,30 +155,34 @@ impl CheckpointManager {
 
     /// After a successful write, record after content/hash.
     pub fn capture_after(&self, run_id: &str, rel_path: &str) -> Result<(), String> {
-        let mut map = self.live.lock().map_err(|e| e.to_string())?;
-        let live = map
-            .get_mut(run_id)
-            .ok_or_else(|| format!("no checkpoint for run {run_id}"))?;
-        let abs = live.project_root.join(rel_path);
-        let entry = live
-            .files
-            .entry(rel_path.to_string())
-            .or_insert_with(|| FileSnapshot {
-                path: rel_path.to_string(),
-                before_hash: None,
-                after_hash: None,
-                before_content: None,
-                after_content: None,
-                existed_before: false,
-            });
-        if abs.exists() {
-            let bytes = std::fs::read(&abs).map_err(|e| e.to_string())?;
-            entry.after_hash = Some(hex_sha256(&bytes));
-            entry.after_content = String::from_utf8(bytes).ok();
-        } else {
-            entry.after_hash = None;
-            entry.after_content = None;
+        {
+            let mut map = self.live.lock().map_err(|e| e.to_string())?;
+            let live = map
+                .get_mut(run_id)
+                .ok_or_else(|| format!("no checkpoint for run {run_id}"))?;
+            let abs = live.project_root.join(rel_path);
+            let entry = live
+                .files
+                .entry(rel_path.to_string())
+                .or_insert_with(|| FileSnapshot {
+                    path: rel_path.to_string(),
+                    before_hash: None,
+                    after_hash: None,
+                    before_content: None,
+                    after_content: None,
+                    existed_before: false,
+                });
+            if abs.exists() {
+                let bytes = std::fs::read(&abs).map_err(|e| e.to_string())?;
+                entry.after_hash = Some(hex_sha256(&bytes));
+                entry.after_content = String::from_utf8(bytes).ok();
+            } else {
+                entry.after_hash = None;
+                entry.after_content = None;
+            }
         }
+        // Best-effort durable flush so mid-run crash still has after images.
+        let _ = self.flush_live_to_store(run_id);
         Ok(())
     }
 
@@ -199,13 +203,23 @@ impl CheckpointManager {
         };
         if let Some(store) = &self.store {
             let conn = store.conn()?;
+            // Persist full file snapshots so rewind works after process restart.
             let snap = serde_json::to_string(&serde_json::json!({ "files": files }))
                 .unwrap_or_else(|_| "{}".into());
-            conn.execute(
-                "UPDATE checkpoint SET snapshot_json = ?1, label = 'run_complete' WHERE id = ?2",
-                params![snap, live.id],
-            )
-            .map_err(|e| e.to_string())?;
+            let updated = conn
+                .execute(
+                    "UPDATE checkpoint SET snapshot_json = ?1, label = 'run_complete' WHERE id = ?2",
+                    params![snap, live.id],
+                )
+                .map_err(|e| e.to_string())?;
+            if updated == 0 {
+                conn.execute(
+                    "INSERT INTO checkpoint (id, run_id, conversation_id, sequence, label, snapshot_json)
+                     VALUES (?1, ?2, ?3, 0, 'run_complete', ?4)",
+                    params![live.id, live.run_id, live.conversation_id, snap],
+                )
+                .map_err(|e| e.to_string())?;
+            }
             // Retention: keep last 50 per conversation
             conn.execute(
                 "DELETE FROM checkpoint WHERE conversation_id = ?1 AND id NOT IN (
@@ -217,6 +231,28 @@ impl CheckpointManager {
             .map_err(|e| e.to_string())?;
         }
         Ok(record)
+    }
+
+    /// Flush live before/after images to SQLite without removing the live map.
+    pub fn flush_live_to_store(&self, run_id: &str) -> Result<(), String> {
+        let map = self.live.lock().map_err(|e| e.to_string())?;
+        let live = map
+            .get(run_id)
+            .ok_or_else(|| format!("no checkpoint for run {run_id}"))?;
+        let store = self
+            .store
+            .as_ref()
+            .ok_or_else(|| "checkpoint store unavailable".to_string())?;
+        let conn = store.conn()?;
+        let files: Vec<FileSnapshot> = live.files.values().cloned().collect();
+        let snap = serde_json::to_string(&serde_json::json!({ "files": files }))
+            .unwrap_or_else(|_| "{}".into());
+        conn.execute(
+            "UPDATE checkpoint SET snapshot_json = ?1 WHERE id = ?2",
+            params![snap, live.id],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     pub fn load_checkpoint(&self, checkpoint_id: &str) -> Result<CheckpointRecord, String> {

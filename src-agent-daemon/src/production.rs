@@ -412,10 +412,12 @@ impl ProductionRuntime {
         })?;
         // Full production hook set + project hooks for this workspace.
         let hooks = build_production_hooks_for_project(Some(&project_root));
+        let budget = agent_core::ContextBudget::default();
         let engine = Arc::new(
             AgentEngine::new(self.events.clone())
                 .with_hooks(hooks)
-                .with_session_harness(crate::prompt_queue_store::global_harness()),
+                .with_session_harness(crate::prompt_queue_store::global_harness())
+                .with_context_budget(budget.history_compact_chars, budget.tool_output_max_chars),
         );
         self.engines
             .lock()
@@ -436,6 +438,13 @@ impl ProductionRuntime {
                 },
             );
         }
+        // Mark coordinator running so terminal drain / cancel-and-send are scoped.
+        crate::prompt_queue_store::global_harness().mark_running(
+            &conversation_id,
+            &run_id,
+            &user_content,
+        );
+        crate::prompt_queue_store::persist_actor_snapshot(&conversation_id);
 
         let provider = RealProvider {
             provider_id: provider_id.clone(),
@@ -516,6 +525,12 @@ impl ProductionRuntime {
         );
         // Completed may already be emitted by engine; duplicate is ok for terminal detection.
         self.engines.lock().await.remove(&run_id);
+
+        // SessionCoordinator: drain next prompt / cancel-and-send after real terminal.
+        // Never re-executes the just-finished run — only starts a *new* queued item.
+        let success = status == "completed";
+        let _ = crate::prompt_queue_store::on_run_terminal(&conversation_id, &run_id, success)
+            .await;
         let _ = status;
         Ok(())
     }
@@ -2194,6 +2209,11 @@ impl PermissionGatedTools {
                 "input": input,
             }),
         );
+        crate::prompt_queue_store::global_harness().set_pending_interaction(
+            &self.conversation_id,
+            Some(permission_id.clone()),
+        );
+        crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
         self.events.append(
             &self.parent_run_id,
             RunEventKind::PermissionRequested {
@@ -2222,6 +2242,9 @@ impl PermissionGatedTools {
                 .await;
             }
         }
+        crate::prompt_queue_store::global_harness()
+            .set_pending_interaction(&self.conversation_id, None);
+        crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
         self.events.append(
             &self.parent_run_id,
             RunEventKind::PermissionResponded {

@@ -77,6 +77,42 @@ pub fn assemble_context(
     }
 }
 
+/// Soft context budget: estimate + thresholds used by engine / RPC.
+#[derive(Debug, Clone, Copy)]
+pub struct ContextBudget {
+    /// Approximate token budget for full history (chars/4 heuristic).
+    pub token_budget: u64,
+    /// Character soft limit before tool-output compaction kicks in.
+    pub history_compact_chars: usize,
+    /// Max characters retained per tool output after compaction.
+    pub tool_output_max_chars: usize,
+}
+
+impl Default for ContextBudget {
+    fn default() -> Self {
+        Self {
+            token_budget: 128_000,
+            history_compact_chars: 48_000,
+            tool_output_max_chars: 4_000,
+        }
+    }
+}
+
+impl ContextBudget {
+    pub fn from_token_budget(token_budget: u64) -> Self {
+        let chars = (token_budget.saturating_mul(4)) as usize;
+        Self {
+            token_budget: token_budget.max(1_024),
+            history_compact_chars: chars.clamp(8_000, 200_000),
+            tool_output_max_chars: (chars / 24).clamp(512, 8_000),
+        }
+    }
+
+    pub fn estimate_tokens(text_chars: usize) -> u64 {
+        (text_chars as u64 / 4).max(1)
+    }
+}
+
 /// Compact history when over budget: keep system + last N user/assistant pairs.
 pub fn compact_messages(
     messages: &[(String, String)],
@@ -89,11 +125,11 @@ pub fn compact_messages(
     if estimate <= token_budget {
         return (messages.to_vec(), None);
     }
-    // Keep last 4 messages
+    // Keep last 4 messages when over budget (deterministic minimum retention).
     let keep = messages.len().saturating_sub(4);
     let dropped = &messages[..keep];
     let summary = format!(
-        "Previous conversation summary ({} messages omitted for context budget).",
+        "Previous conversation summary ({} messages omitted for context budget; budget={token_budget} tokens).",
         dropped.len()
     );
     let mut kept = vec![("system".into(), summary.clone())];

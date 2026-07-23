@@ -279,7 +279,7 @@ impl DataStore {
             if let Err(e) = conn.execute_batch(sql) {
                 let msg = e.to_string();
                 // Tolerate additive column re-runs / partial rebuilds.
-                if (*version == 7 || *version == 11) && msg.contains("duplicate column") {
+                if (*version == 7 || *version == 11 || *version == 12) && msg.contains("duplicate column") {
                     let _ = conn.execute(
                         "INSERT OR IGNORE INTO _daemon_schema_version (version) VALUES (?1)",
                         params![version],

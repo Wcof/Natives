@@ -262,14 +262,15 @@ fn daemon_owned_method(method: &str) -> bool {
         })
         .unwrap_or(true); // production default UDS
 
-    // In UDS production: conversation/promptQueue/interaction are daemon-owned.
-    // In embedded/test mode: keep host handlers so in-process DataStore tests work.
-    if uds
-        && (method.starts_with("conversation.")
-            || method.starts_with("promptQueue.")
-            || method.starts_with("interaction.")
-            || method.starts_with("task."))
+    // Execution data write authority is always the Agent Daemon (assistant.db),
+    // whether embedded (in-process RunManager) or UDS sidecar. Host natives.db
+    // retains credentials / OS actions only — never dual-write queue/runs.
+    if method.starts_with("conversation.")
+        || method.starts_with("promptQueue.")
+        || method.starts_with("interaction.")
+        || method.starts_with("task.")
     {
+        let _ = uds; // mode still affects provider/run routing below
         return true;
     }
 
@@ -3142,19 +3143,22 @@ mod tests {
         assert!(!daemon_owned_method("run.subscribe"));
         assert!(daemon_owned_method("provider.test"));
         assert!(daemon_owned_method("mcp.list"));
-        // Phase 0 cutover under UDS: conversation + promptQueue are daemon authority.
+        // Conversation / promptQueue / interaction / task are always daemon-owned
+        // (single write authority on assistant.db) in both UDS and embedded.
         std::env::set_var("NATIVES_DAEMON_MODE", "uds");
         assert!(daemon_owned_method("conversation.list"));
         assert!(daemon_owned_method("conversation.delete"));
         assert!(daemon_owned_method("conversation.create"));
         assert!(daemon_owned_method("promptQueue.list"));
         assert!(daemon_owned_method("promptQueue.interject"));
+        assert!(daemon_owned_method("interaction.listPending"));
         // Host retains OS artifact actions and run.start preflight.
         assert!(!daemon_owned_method("artifact.open"));
         assert!(!daemon_owned_method("run.start"));
-        // Embedded keeps host conversation handlers for in-process tests.
+        // Embedded uses the same daemon-owned write path (in-process authority).
         std::env::set_var("NATIVES_DAEMON_MODE", "embedded");
-        assert!(!daemon_owned_method("conversation.list"));
+        assert!(daemon_owned_method("conversation.list"));
+        assert!(daemon_owned_method("promptQueue.list"));
         std::env::remove_var("NATIVES_DAEMON_MODE");
     }
 

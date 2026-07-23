@@ -78,6 +78,8 @@ impl RunManager {
         };
         let _ = mgr.interrupt_active_sqlite_runs();
         let _ = mgr.restore_runs_snapshot();
+        // Hydrate SessionCoordinator from durable queue/actor rows (no auto re-exec).
+        let _ = crate::prompt_queue_store::recover_session_actors_on_startup();
         mgr
     }
 

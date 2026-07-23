@@ -202,8 +202,12 @@ pub struct AgentEngine {
     pub events: EventSequencer,
     cancel: CancellationToken,
     hooks: HookRegistry,
-    /// Optional session harness for interjection / safe-point drain (Phase 2).
-    session_harness: Option<Arc<crate::session_harness::SessionHarness>>,
+    /// Optional session coordinator for interjection / safe-point drain.
+    session_harness: Option<Arc<crate::session_coordinator::SessionCoordinator>>,
+    /// Optional soft char budget override for history compaction.
+    history_compact_chars: Option<usize>,
+    /// Optional max chars kept per tool output after compaction.
+    tool_output_max_chars: Option<usize>,
 }
 
 impl AgentEngine {
@@ -213,6 +217,8 @@ impl AgentEngine {
             cancel: CancellationToken::new(),
             hooks: HookRegistry::new(),
             session_harness: None,
+            history_compact_chars: None,
+            tool_output_max_chars: None,
         }
     }
 
@@ -223,9 +229,24 @@ impl AgentEngine {
 
     pub fn with_session_harness(
         mut self,
-        harness: Arc<crate::session_harness::SessionHarness>,
+        harness: Arc<crate::session_coordinator::SessionCoordinator>,
     ) -> Self {
         self.session_harness = Some(harness);
+        self
+    }
+
+    /// Alias of [`Self::with_session_harness`] using the coordinator name.
+    pub fn with_session_coordinator(
+        self,
+        coordinator: Arc<crate::session_coordinator::SessionCoordinator>,
+    ) -> Self {
+        self.with_session_harness(coordinator)
+    }
+
+    /// Override in-engine history compaction thresholds (Context Budget).
+    pub fn with_context_budget(mut self, history_chars: usize, tool_output_chars: usize) -> Self {
+        self.history_compact_chars = Some(history_chars.max(1_000));
+        self.tool_output_max_chars = Some(tool_output_chars.max(256));
         self
     }
 
@@ -248,18 +269,18 @@ impl AgentEngine {
         self.cancel.is_cancelled()
     }
 
-    /// Apply harness action at a safe point: inject interjection into messages.
+    /// Apply coordinator action at a safe point: inject interjection into messages.
     fn apply_safe_point(
         &self,
         conversation_id: &str,
-        point: crate::session_harness::SafePoint,
+        point: crate::session_coordinator::SafePoint,
         messages: &mut Vec<EngineMessage>,
     ) {
         let Some(harness) = &self.session_harness else {
             return;
         };
         match harness.on_safe_point(conversation_id, point) {
-            crate::session_harness::HarnessAction::InjectInterjection { content } => {
+            crate::session_coordinator::CoordinatorAction::InjectInterjection { content } => {
                 messages.push(EngineMessage {
                     role: "user".into(),
                     content: format!("[interjection]\n{content}"),
@@ -652,7 +673,7 @@ impl AgentEngine {
             // Safe point: before any tool in this batch.
             self.apply_safe_point(
                 &config.conversation_id,
-                crate::session_harness::SafePoint::BeforeTool,
+                crate::session_coordinator::SafePoint::BeforeTool,
                 &mut messages,
             );
             let mut prepared: Vec<PreparedToolCall> = Vec::new();
@@ -740,7 +761,7 @@ impl AgentEngine {
                     },
                 );
 
-                let parallel_safe = crate::session_harness::is_parallel_safe_tool(&name);
+                let parallel_safe = crate::session_coordinator::is_parallel_safe_tool(&name);
                 prepared.push(PreparedToolCall {
                     id,
                     name,
@@ -757,7 +778,7 @@ impl AgentEngine {
             // Safe point: after tool batch completes.
             self.apply_safe_point(
                 &config.conversation_id,
-                crate::session_harness::SafePoint::AfterTool,
+                crate::session_coordinator::SafePoint::AfterTool,
                 &mut messages,
             );
 
@@ -801,7 +822,7 @@ impl AgentEngine {
             messages = self.maybe_compact_history(run_id, messages).await;
             self.apply_safe_point(
                 &config.conversation_id,
-                crate::session_harness::SafePoint::ProviderBatchBoundary,
+                crate::session_coordinator::SafePoint::ProviderBatchBoundary,
                 &mut messages,
             );
         }
@@ -816,7 +837,7 @@ impl AgentEngine {
         tools: &dyn EngineToolRuntime,
         prepared: Vec<PreparedToolCall>,
     ) -> Vec<ExecutedToolCall> {
-        use crate::session_harness::PARALLEL_SAFE_MAX_CONCURRENCY;
+        use crate::session_coordinator::PARALLEL_SAFE_MAX_CONCURRENCY;
         use futures_util::stream::{self, StreamExt};
 
         let mut out: Vec<ExecutedToolCall> = Vec::with_capacity(prepared.len());
@@ -1019,8 +1040,12 @@ impl AgentEngine {
         run_id: &str,
         messages: Vec<EngineMessage>,
     ) -> Vec<EngineMessage> {
+        let history_limit = self
+            .history_compact_chars
+            .unwrap_or(HISTORY_COMPACT_CHARS);
+        let tool_limit = self.tool_output_max_chars.unwrap_or(TOOL_OUTPUT_MAX_CHARS);
         let before_chars: usize = messages.iter().map(|m| m.content.len()).sum();
-        if before_chars < HISTORY_COMPACT_CHARS {
+        if before_chars < history_limit {
             // Still repair dangling pairs cheaply.
             let values = engine_messages_to_values(&messages);
             let (fixed, repaired) = repair_dangling_tool_calls(&values);
@@ -1041,7 +1066,7 @@ impl AgentEngine {
             .await;
 
         let values = engine_messages_to_values(&messages);
-        let result = compact_tool_history(&values, TOOL_OUTPUT_MAX_CHARS);
+        let result = compact_tool_history(&values, tool_limit);
         let after_chars: usize = result
             .messages
             .iter()
@@ -1340,11 +1365,13 @@ mod tests {
                 ],
             ]),
         };
+        let run_id = format!("r-batch-{}", uuid::Uuid::new_v4());
+        let conversation_id = format!("c-batch-{}", uuid::Uuid::new_v4());
         let status = engine
             .run(
                 EngineRunConfig {
-                    run_id: "r-batch".into(),
-                    conversation_id: "c-batch".into(),
+                    run_id: run_id.clone(),
+                    conversation_id,
                     model: "m".into(),
                     system_prompt: None,
                     messages: Vec::new(),
@@ -1359,7 +1386,7 @@ mod tests {
         assert_eq!(status, RunStatusV2::Completed);
         assert_eq!(tools.batch_calls.load(AtomicOrdering::SeqCst), 1);
         assert_eq!(tools.single_task_calls.load(AtomicOrdering::SeqCst), 0);
-        let events = engine.events.replay_after("r-batch", 0);
+        let events = engine.events.replay_after(&run_id, 0);
         let completed: Vec<_> = events
             .iter()
             .filter_map(|e| match &e.payload {

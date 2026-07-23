@@ -18,6 +18,8 @@ pub mod profile;
 pub mod context;
 pub mod mcp;
 pub mod compaction;
+pub mod session_coordinator;
+/// Historical module path; re-exports [`session_coordinator`].
 pub mod session_harness;
 
 pub use run_state::*;
@@ -29,11 +31,16 @@ pub use engine::*;
 pub use hooks::*;
 pub use hook_handlers::*;
 pub use profile::*;
-pub use context::*;
+pub use context::{
+    assemble_context, compact_messages, discover_agents_md, AssembledContext, ContextBudget,
+};
 pub use mcp::*;
 // Prefer explicit imports for compaction to avoid clashing with context helpers.
-pub use compaction::{compact_messages as compact_history_messages, repair_dangling_tool_calls, CompactResult};
-pub use session_harness::{
-    is_parallel_safe_tool, HarnessAction, PromptSource, QueueItem, SafePoint, SessionHarness,
+pub use compaction::{
+    compact_messages as compact_history_messages, repair_dangling_tool_calls, CompactResult,
+};
+pub use session_coordinator::{
+    is_parallel_safe_tool, CoordinatorAction, HarnessAction, PromptSource, QueueItem,
+    QueueItemStatus, SafePoint, SessionActorSnapshot, SessionCoordinator, SessionHarness,
     PARALLEL_SAFE_MAX_CONCURRENCY,
 };
