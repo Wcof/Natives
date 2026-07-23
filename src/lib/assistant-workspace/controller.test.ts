@@ -379,6 +379,46 @@ test('respondPermission deny records approved=false bound to run_id', async () =
   assert.equal(denied!.payload?.permission_id, 'perm-1');
 });
 
+test('respondPermission forwards this_run scope without remapping to run', async () => {
+  const seen: Array<{ method: string; params?: unknown }> = [];
+  const adapter: AssistantGateway = {
+    async connect() {},
+    async disconnect() {},
+    async request(method: AssistantMethod, params?: unknown) {
+      seen.push({ method, params });
+      return { ok: true } as never;
+    },
+    async *subscribe() {},
+    async getSnapshot() {
+      return {
+        conversation: {
+          id: 'c',
+          mode: 'agent',
+          title: 't',
+          providerId: 'p',
+          modelId: 'm',
+          createdAt: 't',
+          updatedAt: 't',
+        },
+        messages: [],
+        runs: [],
+      };
+    },
+  };
+  let state = createInitialWorkspaceState();
+  const dispatch = (a: import('./state').WorkspaceAction) => {
+    state = workspaceReducer(state, a);
+  };
+  await respondPermission(adapter, dispatch, 'perm-scope', true, 'this_run', 'run-9');
+  const call = seen.find((s) => s.method === 'permission.respond');
+  assert.ok(call, 'permission.respond must be called');
+  const params = call!.params as Record<string, unknown>;
+  assert.equal(params.scope, 'this_run');
+  assert.equal(params.request_id, 'perm-scope');
+  assert.equal(params.run_id, 'run-9');
+  assert.equal(params.approved, true);
+});
+
 test('retryRun after cancel returns new or same run id via run.retry', async () => {
   const adapter = new FixtureAssistantAdapter(goldenTextStream);
   await adapter.connect();
