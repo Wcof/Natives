@@ -15,13 +15,14 @@ pub use platform_sandbox::{
     allow_autonomous_shell, wrap_command_macos, PlatformCapabilities, SandboxProfile,
 };
 pub use process_supervisor::{
-    FakeProcessSupervisor, LocalProcessSupervisor, ProcessSnapshot, ProcessSpec, ProcessState,
-    ProcessSupervisor, DEFAULT_FOREGROUND_BUDGET_MS,
+    global_process_supervisor, FakeProcessSupervisor, LocalProcessSupervisor, ProcessSnapshot,
+    ProcessSpec, ProcessState, ProcessSupervisor, DEFAULT_FOREGROUND_BUDGET_MS,
 };
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 /// Context passed to tool handlers during execution.
 #[derive(Debug, Clone)]
@@ -38,6 +39,8 @@ pub struct ToolCallContext {
     pub tool_call_id: String,
     /// Permission profile for this run.
     pub permission_profile: String,
+    /// Shared run cancellation token (task-03). Tools/MCP must select on this.
+    pub cancel: CancellationToken,
 }
 
 impl ToolCallContext {
@@ -49,6 +52,25 @@ impl ToolCallContext {
         tool_call_id: String,
         permission_profile: String,
     ) -> Self {
+        Self::with_cancel(
+            project_root,
+            run_id,
+            conversation_id,
+            tool_call_id,
+            permission_profile,
+            CancellationToken::new(),
+        )
+    }
+
+    /// Context bound to a registry-owned cancel token.
+    pub fn with_cancel(
+        project_root: PathBuf,
+        run_id: String,
+        conversation_id: String,
+        tool_call_id: String,
+        permission_profile: String,
+        cancel: CancellationToken,
+    ) -> Self {
         let working_dir = project_root.clone();
         Self {
             project_root,
@@ -57,6 +79,7 @@ impl ToolCallContext {
             conversation_id,
             tool_call_id,
             permission_profile,
+            cancel,
         }
     }
 

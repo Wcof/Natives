@@ -416,13 +416,40 @@ async fn wait_host_permission(
         let mut map = runtime.permission_waiters.lock().await;
         map.insert(permission_id.to_string(), (run_id.to_string(), "cli".into(), tx));
     }
-    match tokio::time::timeout(timeout, rx).await {
-        Ok(Ok((approved, _scope))) => approved,
-        _ => {
-            // Timeout / cancel → deny
+    let cancel = runtime
+        .execution
+        .token(run_id)
+        .await
+        .or_else(|| {
+            // Fall back to mirrored cli flag.
+            None
+        });
+    let cancel = if let Some(c) = cancel {
+        c
+    } else {
+        runtime
+            .cli_cancel_flags
+            .try_lock()
+            .ok()
+            .and_then(|g| g.get(run_id).cloned())
+            .unwrap_or_else(CancellationToken::new)
+    };
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {
             let mut map = runtime.permission_waiters.lock().await;
             map.remove(permission_id);
             false
+        }
+        res = tokio::time::timeout(timeout, rx) => {
+            match res {
+                Ok(Ok((approved, _scope))) => approved,
+                _ => {
+                    let mut map = runtime.permission_waiters.lock().await;
+                    map.remove(permission_id);
+                    false
+                }
+            }
         }
     }
 }

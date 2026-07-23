@@ -221,6 +221,12 @@ impl AgentEngine {
         }
     }
 
+    /// Use a registry-owned cancel token (task-03). Prefer over the engine-local root.
+    pub fn with_cancel_token(mut self, cancel: CancellationToken) -> Self {
+        self.cancel = cancel;
+        self
+    }
+
     pub fn with_hooks(mut self, hooks: HookRegistry) -> Self {
         self.hooks = hooks;
         self
