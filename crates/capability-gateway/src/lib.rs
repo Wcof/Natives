@@ -15,18 +15,19 @@ pub use platform_sandbox::{
     allow_autonomous_shell, wrap_command_macos, PlatformCapabilities, SandboxProfile,
 };
 pub use process_supervisor::{
-    FakeProcessSupervisor, LocalProcessSupervisor, ProcessSnapshot, ProcessSpec, ProcessState,
-    ProcessSupervisor, DEFAULT_FOREGROUND_BUDGET_MS,
+    global_process_supervisor, FakeProcessSupervisor, LocalProcessSupervisor, ProcessSnapshot,
+    ProcessSpec, ProcessState, ProcessSupervisor, DEFAULT_FOREGROUND_BUDGET_MS,
 };
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 /// Context passed to tool handlers during execution.
 ///
 /// Must be constructed from a verified ProjectIdentity (task-10). Do not
-/// invent `project_root` from `current_dir` for side-effecting tools.
+/// Context for a tool call execution.
 #[derive(Debug, Clone)]
 pub struct ToolCallContext {
     /// The project root directory (canonical, absolute).
@@ -45,6 +46,8 @@ pub struct ToolCallContext {
     pub project_id: Option<String>,
     /// Identity version at verification time.
     pub project_identity_version: Option<u32>,
+    /// Shared run cancellation token (task-03). Tools/MCP must select on this.
+    pub cancel: CancellationToken,
 }
 
 impl ToolCallContext {
@@ -58,6 +61,25 @@ impl ToolCallContext {
         tool_call_id: String,
         permission_profile: String,
     ) -> Self {
+        Self::with_cancel(
+            project_root,
+            run_id,
+            conversation_id,
+            tool_call_id,
+            permission_profile,
+            CancellationToken::new(),
+        )
+    }
+
+    /// Context bound to a registry-owned cancel token.
+    pub fn with_cancel(
+        project_root: PathBuf,
+        run_id: String,
+        conversation_id: String,
+        tool_call_id: String,
+        permission_profile: String,
+        cancel: CancellationToken,
+    ) -> Self {
         let working_dir = project_root.clone();
         Self {
             project_root,
@@ -68,6 +90,7 @@ impl ToolCallContext {
             permission_profile,
             project_id: None,
             project_identity_version: None,
+            cancel,
         }
     }
 
@@ -81,6 +104,29 @@ impl ToolCallContext {
         tool_call_id: String,
         permission_profile: String,
     ) -> Self {
+        Self::from_verified_identity_with_cancel(
+            project_id,
+            identity_version,
+            project_root,
+            run_id,
+            conversation_id,
+            tool_call_id,
+            permission_profile,
+            CancellationToken::new(),
+        )
+    }
+
+    /// Verified identity + registry-owned cancel token.
+    pub fn from_verified_identity_with_cancel(
+        project_id: impl Into<String>,
+        identity_version: u32,
+        project_root: PathBuf,
+        run_id: String,
+        conversation_id: String,
+        tool_call_id: String,
+        permission_profile: String,
+        cancel: CancellationToken,
+    ) -> Self {
         let working_dir = project_root.clone();
         Self {
             project_root,
@@ -91,6 +137,7 @@ impl ToolCallContext {
             permission_profile,
             project_id: Some(project_id.into()),
             project_identity_version: Some(identity_version),
+            cancel,
         }
     }
 

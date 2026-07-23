@@ -116,7 +116,7 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "mcp.list",
     "mcp.start",
     "mcp.stop",
-    "mcp.call",
+    // mcp.call intentionally NOT implemented (task-06): direct RPC transport bypass disabled.
     "mcp.liveness",
     "mcp.reconnect",
     "mcp.auth.set",

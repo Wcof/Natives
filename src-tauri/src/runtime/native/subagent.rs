@@ -36,8 +36,17 @@ impl SubagentCoordinator {
         Arc::new(Self {
             manager: Arc::new(SubAgentManager::new(SubAgentConfig {
                 max_concurrent: 3,
+                max_concurrent_global: 3,
+                max_concurrent_per_parent: 3,
+                max_tasks_per_parent_total: 32,
                 max_depth: 1,
                 max_tokens_per_sub: 100_000,
+                max_tokens_per_child: 100_000,
+                max_tokens_per_tree: 500_000,
+                max_tool_calls_per_child: 200,
+                max_tool_calls_per_tree: 1_000,
+                child_timeout_ms: 600_000,
+                failure_policy: agent_core::subagents::FailurePolicy::Isolate,
             })),
             registry,
             hooks,

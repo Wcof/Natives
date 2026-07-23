@@ -7,7 +7,10 @@ mod ssrf;
 pub use apply_patch_parser::{parse_patch_input, PatchOp};
 pub use ssrf::validate_fetch_url;
 
-use crate::{Tool, SideEffect, PermissionClass, PathScope, ToolHandler, ToolOutput, ToolError, ToolCallContext};
+use crate::{
+    Tool, SideEffect, PermissionClass, PathScope, ToolHandler, ToolOutput, ToolError, ToolCallContext,
+    ProcessSupervisor,
+};
 use std::sync::Arc;
 
 /// Read a file from the filesystem (offset/limit, binary-safe metadata).
@@ -428,7 +431,7 @@ impl ToolHandler for EditFileTool {
     }
 }
 
-/// Run a terminal command.
+/// Run a terminal command via [`LocalProcessSupervisor`] (no orphan `mem::forget`).
 ///
 /// Preferred schema (Phase 1):
 /// `{ "command": "string", "cwd": "relative?", "timeout_ms": 300000, "background": false, "description": "..." }`
@@ -440,8 +443,15 @@ impl ToolHandler for RunTerminalTool {
     async fn execute(
         &self,
         input: serde_json::Value,
-        _context: &ToolCallContext,
+        context: &ToolCallContext,
     ) -> Result<ToolOutput, ToolError> {
+        if context.cancel.is_cancelled() {
+            return Err(ToolError {
+                code: "cancelled".into(),
+                message: "run cancelled before terminal spawn".into(),
+                retryable: false,
+            });
+        }
         let command = input
             .get("command")
             .and_then(|v| v.as_str())
@@ -462,9 +472,10 @@ impl ToolHandler for RunTerminalTool {
         let description = input
             .get("description")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let cwd = input.get("cwd").and_then(|v| v.as_str());
-        if let Some(cwd) = cwd {
+            .unwrap_or("")
+            .to_string();
+        let cwd_input = input.get("cwd").and_then(|v| v.as_str());
+        if let Some(cwd) = cwd_input {
             crate::policy::check_path_traversal(cwd)?;
         } else {
             return Err(ToolError {
@@ -500,130 +511,89 @@ impl ToolHandler for RunTerminalTool {
             (program, args, display)
         };
 
-        let mut cmd = tokio::process::Command::new(&program);
-        cmd.args(&args)
-            .current_dir(cwd.unwrap())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
+        let cwd = crate::process_supervisor::resolve_cwd(&context.project_root, cwd_input).map_err(
+            |e| ToolError {
+                code: "cwd_invalid".into(),
+                message: e,
+                retryable: false,
+            },
+        )?;
 
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
-            cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
-        }
-
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let supervisor = crate::global_process_supervisor();
         let started = std::time::Instant::now();
-        // Foreground budget 15s then report background=true (process may still run briefly).
-        let foreground_budget = std::time::Duration::from_secs(15);
-        let hard_timeout = std::time::Duration::from_millis(timeout_ms);
+        let spec = crate::ProcessSpec {
+            run_id: context.run_id.clone(),
+            task_id: task_id.clone(),
+            display_command: display.clone(),
+            program,
+            args,
+            cwd,
+            timeout_ms,
+            background,
+        };
 
-        let mut child = cmd.spawn().map_err(|e| ToolError {
-            code: "spawn_error".into(),
-            message: e.to_string(),
-            retryable: true,
-        })?;
-
-        if background {
-            // Detach wait: best-effort try_wait once, return running snapshot.
-            let status = child.try_wait().ok().flatten();
-            if let Some(status) = status {
-                let (stdout, stderr) = drain_child_pipes(&mut child).await;
-                return Ok(terminal_result(
-                    display,
-                    description,
-                    status.code(),
-                    &stdout,
-                    &stderr,
-                    false,
-                    true,
-                    started.elapsed().as_millis() as u64,
-                ));
+        // Race spawn against run cancel; if cancelled mid-foreground, force kill.
+        let spawn_fut = supervisor.spawn(spec);
+        let snap = tokio::select! {
+            biased;
+            _ = context.cancel.cancelled() => {
+                return Err(ToolError {
+                    code: "cancelled".into(),
+                    message: "run cancelled during terminal spawn".into(),
+                    retryable: false,
+                });
             }
-            // Leave process running (kill_on_drop will reap if tool handle drops in tests).
-            std::mem::forget(child);
-            return Ok(terminal_result(
-                display,
-                description,
-                None,
-                "",
-                "",
-                true,
-                true,
-                started.elapsed().as_millis() as u64,
-            ));
-        }
-
-        let wait_fut = child.wait();
-        let result = tokio::time::timeout(foreground_budget.min(hard_timeout), wait_fut).await;
-        match result {
-            Ok(Ok(status)) => {
-                let (stdout, stderr) = drain_child_pipes(&mut child).await;
-                Ok(terminal_result(
-                    display,
-                    description,
-                    status.code(),
-                    &stdout,
-                    &stderr,
-                    false,
-                    false,
-                    started.elapsed().as_millis() as u64,
-                ))
-            }
-            Ok(Err(e)) => Err(ToolError {
+            res = spawn_fut => res.map_err(|e| ToolError {
                 code: "spawn_error".into(),
-                message: e.to_string(),
+                message: e,
                 retryable: true,
+            })?,
+        };
+
+        use crate::ProcessState;
+        match snap.state {
+            ProcessState::Completed | ProcessState::Failed => Ok(terminal_result(
+                display,
+                &description,
+                snap.exit_code,
+                &snap.stdout_tail,
+                &snap.stderr_tail,
+                snap.truncated,
+                snap.background,
+                started.elapsed().as_millis() as u64,
+            )),
+            ProcessState::Cancelled => Err(ToolError {
+                code: "cancelled".into(),
+                message: "terminal process cancelled".into(),
+                retryable: false,
             }),
-            Err(_) if hard_timeout > foreground_budget => {
-                // Auto-background instead of kill.
-                let task_id = uuid::Uuid::new_v4().to_string();
-                std::mem::forget(child);
+            ProcessState::Background | ProcessState::Running => {
+                // Supervised background — no mem::forget; cancel tree can kill via task_id.
                 Ok(ToolOutput {
                     result: serde_json::json!({
                         "display_command": display,
                         "description": description,
-                        "exit_code": null,
-                        "output": "",
+                        "exit_code": snap.exit_code,
+                        "output": format!("{}{}", snap.stdout_tail, snap.stderr_tail),
+                        "stdout": snap.stdout_tail,
+                        "stderr": snap.stderr_tail,
                         "background": true,
-                        "auto_backgrounded": true,
+                        "auto_backgrounded": !background,
                         "task_id": task_id,
-                        "truncated": false,
-                        "message": "foreground budget exceeded; process continued in background",
+                        "truncated": snap.truncated,
+                        "message": if background {
+                            "process running under process supervisor"
+                        } else {
+                            "foreground budget exceeded; process continued under supervisor"
+                        },
                     }),
-                    truncated: false,
+                    truncated: snap.truncated,
                     duration_ms: started.elapsed().as_millis() as u64,
-                })
-            }
-            Err(_) => {
-                let _ = child.start_kill();
-                let _ = child.wait().await;
-                Err(ToolError {
-                    code: "timeout".into(),
-                    message: format!("command timed out after {timeout_ms}ms"),
-                    retryable: true,
                 })
             }
         }
     }
-}
-
-async fn drain_child_pipes(child: &mut tokio::process::Child) -> (String, String) {
-    use tokio::io::AsyncReadExt;
-    let mut stdout = String::new();
-    let mut stderr = String::new();
-    if let Some(mut out) = child.stdout.take() {
-        let mut buf = Vec::new();
-        let _ = out.read_to_end(&mut buf).await;
-        stdout = String::from_utf8_lossy(&buf).into_owned();
-    }
-    if let Some(mut err) = child.stderr.take() {
-        let mut buf = Vec::new();
-        let _ = err.read_to_end(&mut buf).await;
-        stderr = String::from_utf8_lossy(&buf).into_owned();
-    }
-    (stdout, stderr)
 }
 
 fn terminal_result(

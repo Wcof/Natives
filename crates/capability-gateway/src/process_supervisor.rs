@@ -90,6 +90,14 @@ pub struct LocalProcessSupervisor {
     foreground_budget_ms: u64,
 }
 
+/// Process-wide supervisor so background tasks survive tool-handler return
+/// and can be force-killed by the run cancellation tree (task-03).
+pub fn global_process_supervisor() -> &'static LocalProcessSupervisor {
+    use std::sync::OnceLock;
+    static GLOBAL: OnceLock<LocalProcessSupervisor> = OnceLock::new();
+    GLOBAL.get_or_init(LocalProcessSupervisor::new)
+}
+
 impl LocalProcessSupervisor {
     pub fn new() -> Self {
         Self {

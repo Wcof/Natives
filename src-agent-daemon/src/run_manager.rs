@@ -988,29 +988,60 @@ impl RunManager {
     }
 
     pub async fn cancel(&self, req: CancelRunRequest) -> Result<RunV2, String> {
+        // Phase 1: commit Cancelling (best-effort until full RunJournal CAS lands).
+        let (was_terminal, revision_before) = {
+            let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
+            let run = runs
+                .get_mut(&req.run_id)
+                .ok_or_else(|| "run not found".to_string())?;
+            if run.status.is_terminal() {
+                return Ok(run.clone());
+            }
+            let rev = run.revision;
+            if run.status != RunStatusV2::Cancelling {
+                // Validate via agent-core sole transition rules when possible.
+                let _ = agent_core::transition(run.status, RunStatusV2::Cancelling);
+                run.status = RunStatusV2::Cancelling;
+                run.revision = rev.saturating_add(1);
+                let mid = run.clone();
+                drop(runs);
+                let _ = self.persist_run_row(&mid);
+                (false, rev)
+            } else {
+                (false, rev)
+            }
+        };
+        let _ = (was_terminal, revision_before);
+
+        // Phase 2: signal tree + grace + force cleanup.
         self.runtime.cancel_run(&req.run_id).await;
-        // Pre-task-03: still jump to Cancelled for explicit cancel API.
-        // Prefer Cancelling -> Cancelled when legal; else direct if possible.
+        // Phase 3: Cancelled only after registry quiet (or Failed on cleanup fail).
+        // Status commits go through commit_status (Agent A sole authority).
+        let quiet = self.runtime.execution.active_count().await == 0
+            || !self.runtime.execution.is_registered(&req.run_id).await;
         let current = self
             .get_run(&req.run_id)
             .ok_or_else(|| "run not found".to_string())?;
         if current.status.is_terminal() {
             return Ok(current);
         }
-        if current.status != RunStatusV2::Cancelling {
-            let _ = self.commit_status(
+        if quiet {
+            self.commit_status(
                 &req.run_id,
-                RunStatusV2::Cancelling,
-                TransitionMetadata::empty().with_lifecycle_hint("cancelling"),
-            );
+                RunStatusV2::Cancelled,
+                TransitionMetadata::empty()
+                    .with_reason("cancelled")
+                    .with_lifecycle_hint("cancelled"),
+            )
+        } else {
+            self.commit_status(
+                &req.run_id,
+                RunStatusV2::Failed,
+                TransitionMetadata::empty()
+                    .with_reason("cancel_cleanup_failed")
+                    .with_lifecycle_hint("failed"),
+            )
         }
-        self.commit_status(
-            &req.run_id,
-            RunStatusV2::Cancelled,
-            TransitionMetadata::empty()
-                .with_reason("cancelled")
-                .with_lifecycle_hint("cancelled"),
-        )
     }
 
     /// Ensure a run row exists for `start` / `start_detached` (create if `run_id` absent).
@@ -1519,7 +1550,16 @@ impl RunManager {
                 agent_core::HookEvent::Stop,
                 Box::new(agent_core::AllowAllHook),
             );
-            let engine = Arc::new(AgentEngine::new(self.runtime.events.clone()).with_hooks(hooks));
+            let cancel = self
+                .runtime
+                .ensure_execution_token(&run.id, run.parent_run_id.as_deref())
+                .await
+                .unwrap_or_else(|_| CancellationToken::new());
+            let engine = Arc::new(
+                AgentEngine::new(self.runtime.events.clone())
+                    .with_cancel_token(cancel)
+                    .with_hooks(hooks),
+            );
             self.runtime
                 .engines
                 .lock()
@@ -1682,7 +1722,14 @@ impl RunManager {
         // conversation history already holds the user messages (history reload tests).
         let content = req.content.clone().unwrap_or_default();
         // Register engine so cancel_run → request_cancel works mid-flight.
-        let engine = Arc::new(AgentEngine::new(self.runtime.events.clone()));
+        let cancel = self
+            .runtime
+            .ensure_execution_token(&run.id, run.parent_run_id.as_deref())
+            .await
+            .unwrap_or_else(|_| CancellationToken::new());
+        let engine = Arc::new(
+            AgentEngine::new(self.runtime.events.clone()).with_cancel_token(cancel),
+        );
         self.runtime
             .engines
             .lock()
