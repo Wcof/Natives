@@ -50,16 +50,27 @@ impl crate::runtime::execution_registry::ProcessCancelHook for GlobalProcessCanc
     }
 }
 
-/// Shared production runtime owned by the Daemon.
+/// Production runtime facade owned by the Daemon.
+///
+/// Deep state owners (task-01):
+/// - `execution` → [`crate::runtime::ExecutionRegistry`]
+/// - `tool_policy` → [`crate::runtime::ToolPolicyState`]
+/// - `permission_waiters` / `assignment_*` → InteractionHub maps (still pub for bridge)
+/// - `subagents` / `task_outputs` → TaskSupervisor maps
+/// - `engines` / `cli_cancel_flags` → migrating into ExecutionRegistry
+///
+/// Callers should use methods (`cancel_run`, `respond_permission`, `set_run_tool_allowlist`)
+/// rather than reaching into maps when possible.
 pub struct ProductionRuntime {
     pub events: EventSequencer,
     pub permissions: Arc<PermissionManager>,
     pub subagents: Arc<SubAgentManager>,
-    pub hooks: Arc<Mutex<HookRegistry>>,
+    // hooks: removed dead shared state — each start builds HookRegistry per project (task-01).
     /// permission_id → (run_id, resolver). run_id binding prevents cross-run responds.
+    /// Owned by InteractionHub conceptually; field kept for bridge compatibility until full private facade.
     pub permission_waiters: Arc<Mutex<HashMap<String, (String, String, oneshot::Sender<(bool, String)>)>>>,
     /// task_id → child run status/output
-    pub task_outputs: Arc<Mutex<HashMap<String, TaskRecord>>>,
+    pub task_outputs: Arc<Mutex<HashMap<String, crate::runtime::TaskRecord>>>,
     pub engines: Arc<Mutex<HashMap<String, Arc<AgentEngine>>>>,
     /// CLI runtime cancel flags (run_id → flag). Prefer [`Self::execution`] token tree (task-03).
     /// Kept as a compatibility mirror while CLI bridge migrates fully to ExecutionRegistry.
@@ -93,12 +104,7 @@ pub struct ToolGrant {
 }
 
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct TaskRecord {
-    pub run_id: String,
-    pub status: String,
-    pub output: Option<String>,
-}
+pub use crate::runtime::TaskRecord;
 
 /// Build the production HookRegistry: Rust lifecycle hooks always present;
 /// optional trusted CommandHook (argv) and HttpHook (SSRF-gated) from env;
@@ -279,9 +285,7 @@ impl ProductionRuntime {
             events,
             permissions: Arc::new(PermissionManager::new(PermissionProfile::ConfirmEach)),
             subagents: Arc::new(SubAgentManager::new(SubAgentConfig::default())),
-            hooks: Arc::new(Mutex::new(build_production_hooks())),
             permission_waiters: Arc::new(Mutex::new(HashMap::new())),
-            // type: HashMap<permission_id, (run_id, oneshot)>
             task_outputs: Arc::new(Mutex::new(HashMap::new())),
             engines: Arc::new(Mutex::new(HashMap::new())),
             cli_cancel_flags: Arc::new(Mutex::new(HashMap::new())),

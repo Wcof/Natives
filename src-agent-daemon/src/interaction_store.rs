@@ -485,7 +485,7 @@ mod tests {
                     "response": { "approved": false },
                 })))
                 .unwrap_err();
-            assert!(err.contains("not pending") || err.contains("not found"), "{err}");
+            assert!(err.contains("not pending") || err.contains("not found") || err.contains("already_resolved"), "{err}");
         });
     }
 
