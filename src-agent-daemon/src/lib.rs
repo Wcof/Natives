@@ -18,6 +18,7 @@ pub mod memory_store;
 pub mod natives_db_broker;
 pub mod production;
 pub mod production_hooks;
+pub mod production_credentials;
 pub mod project_identity;
 pub mod prompt_queue_store;
 pub mod rpc;
