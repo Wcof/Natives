@@ -1490,6 +1490,13 @@ impl RunManager {
             self.runtime
                 .register_cli_cancel(&run.id, cancel.clone())
                 .await;
+            // Commit Running before the turn: Preparing→{Completed,Cancelled} are not
+            // legal edges, but Running→terminal are. CLI is actively running here.
+            let _ = self.commit_status(
+                &run.id,
+                RunStatusV2::Running,
+                TransitionMetadata::empty().with_lifecycle_hint("running"),
+            );
             let project = request_project_path
                 .as_deref()
                 .or(run.project_path.as_deref())
