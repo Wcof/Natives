@@ -17,6 +17,7 @@ pub mod mcp_runtime;
 pub mod memory_store;
 pub mod natives_db_broker;
 pub mod production;
+pub mod production_hooks;
 pub mod project_identity;
 pub mod prompt_queue_store;
 pub mod rpc;
