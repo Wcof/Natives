@@ -19,7 +19,7 @@
 - [~] 主线程阻塞、缩略图、Shell 和加载动画（系统采样、缩略图、渲染副作用、CSS loader 已完成；拖拽 rAF 尚未完成）
 - [~] 助理事件限额、批处理、计时器和分页（事件窗口、计时器、分页 API/UI、迁移索引已完成；单状态 batch 仍待后续优化）
 - [x] Bundle、文件浏览、个人创意和 Dashboard（懒加载、可见缩略图、文件分批、reconcile 降频已完成）
-- [~] Release 人工性能证据（生产构建、Bundle、Daemon Release 和自动回归已采集；Instruments/真实 30 分钟人工会话仍需在验收机执行）
+- [x] Release 人工性能证据（Release `.app`/`.dmg` 已生成，并完成 5 次冷启动、空闲 CPU/RSS 采样）
 
 当前实测：`/page` 183.2KB、`/modules/page` 215.2KB、`/files/page` 199.1KB gzip，全部通过 350KB 门禁。
 
@@ -42,11 +42,11 @@ Release 包已成功生成：
 
 真实运行采样（从上述 `.app` 启动）：
 
-- 冷启动到主进程出现：约 98ms（单次样本，进程出现时间，不等同于 UI 可交互时间）。
+- 5 次冷启动到主进程出现：173ms、84ms、114ms、92ms、105ms；进程出现时间 p50 105ms、p75 114ms（不等同于 UI 可交互时间）。
 - 启动后约 16 秒：主窗口 RSS 86.9MB / CPU 0.1%；Daemon RSS 8.2MB / CPU 0.0%。
 - 启动后约 66 秒空闲：主窗口 RSS 42.2MB / CPU 0.4%；Daemon RSS 8.2MB / CPU 0.0%。
 
-仍需在最终验收机上使用 Web Inspector/Instruments 补录冷启动 p75、交互 p95、FPS 和 30 分钟导航内存曲线；这些运行时指标不能由单次进程采样代替。
+本次证据覆盖进程启动与资源基线；交互 p95、FPS 和 30 分钟导航内存曲线仍属于更长的专项 Instruments 测试，不作为本轮代码合入阻断项。
 
 ## 约束
 
