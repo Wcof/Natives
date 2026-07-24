@@ -42,11 +42,12 @@ test('hasMethod matches advertised methods only', () => {
   assert.equal(hasMethod(c, 'run.rewind'), false);
 });
 
-test('canRewind requires run.rewind or run.rewindPreview', () => {
+test('canRewind requires both non-deprecated workspace restore methods', () => {
   assert.equal(canRewind(null), false);
   assert.equal(canRewind(caps(['run.start'])), false);
-  assert.equal(canRewind(caps(['run.rewind'])), true);
-  assert.equal(canRewind(caps(['run.rewindPreview'])), true);
+  assert.equal(canRewind(caps(['run.rewind', 'run.rewindPreview'])), false);
+  assert.equal(canRewind(caps(['workspace.restore'])), false);
+  assert.equal(canRewind(caps(['workspace.restore', 'workspace.restorePreview'])), true);
 });
 
 test('canShowContextUsage requires conversation.getContextUsage', () => {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, Paperclip, Plus, Send, ShieldCheck, Square, X } from 'lucide-react';
+import { Bot, Check, ChevronDown, Paperclip, Plus, Send, ShieldCheck, Square, X } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import {
   canSendAssistantDraft,
@@ -21,6 +21,12 @@ import {
 import ModelSelectorDropdown, { type ProviderWithModels } from './ModelSelectorDropdown';
 import SlashCommandPopover from './SlashCommandPopover';
 import FileMentionPopover, { type ProjectFileHit } from './FileMentionPopover';
+
+export interface ComposerSubagent {
+  id: string;
+  name: string;
+  status?: string;
+}
 
 interface MessageInputProps {
   locale: Locale;
@@ -58,6 +64,11 @@ interface MessageInputProps {
   draftKey?: string | null;
   /** Active project root for `@` file search. */
   projectPath?: string | null;
+  /** Child agents of the root conversation; clicking one opens its hidden session. */
+  subagents?: ComposerSubagent[];
+  activeSubagent?: ComposerSubagent | null;
+  onSelectSubagent?: (id: string) => void;
+  changeSummary?: { fileCount: number; additions: number; deletions: number } | null;
 }
 
 /** Idle ms before pushing draft text into the workspace store. */
@@ -69,12 +80,27 @@ const permissionLabels = {
   full_access: { zh: '完全访问', en: 'Full access' },
 } as const;
 
+const AGENT_ACCENTS = [
+  { solid: '#2563eb', soft: 'rgba(37,99,235,.12)', border: 'rgba(37,99,235,.38)' },
+  { solid: '#7c3aed', soft: 'rgba(124,58,237,.12)', border: 'rgba(124,58,237,.38)' },
+  { solid: '#0891b2', soft: 'rgba(8,145,178,.12)', border: 'rgba(8,145,178,.38)' },
+  { solid: '#c2410c', soft: 'rgba(194,65,12,.12)', border: 'rgba(194,65,12,.38)' },
+  { solid: '#be185d', soft: 'rgba(190,24,93,.12)', border: 'rgba(190,24,93,.38)' },
+];
+
+function agentAccent(id: string) {
+  let hash = 0;
+  for (let index = 0; index < id.length; index++) hash = (hash * 31 + id.charCodeAt(index)) | 0;
+  return AGENT_ACCENTS[Math.abs(hash) % AGENT_ACCENTS.length]!;
+}
+
 export default function MessageInput(props: MessageInputProps) {
   const {
     locale, onSend, onForceSend, onInterject, onStop, onBlockedSend, isStreaming,
     allowQueueWhileStreaming = false, disabled = false, inputDisabledReason = null,
     permissionProfile, onPermissionChange, providers, selectedProviderId, selectedModel, onSelectModel,
     draftText, onDraftChange, draftKey = null, projectPath = null,
+    subagents = [], activeSubagent = null, onSelectSubagent, changeSummary = null,
   } = props;
   const zh = locale.startsWith('zh');
   const [input, setInput] = useState(draftText ?? '');
@@ -99,6 +125,7 @@ export default function MessageInput(props: MessageInputProps) {
   /** True while local input is ahead of the last store draftText we adopted. */
   const localDirtyRef = useRef(false);
   const effectiveDisabled = disabled || inputDisabledReason === 'no_provider' || inputDisabledReason === 'no_model' || inputDisabledReason === 'creating';
+  const activeAccent = activeSubagent ? agentAccent(activeSubagent.id) : null;
 
   // Native currently exposes no slash commands — empty list, honest empty state.
   const availableCommands = useMemo(() => listSlashCommands(), []);
@@ -378,7 +405,41 @@ export default function MessageInput(props: MessageInputProps) {
 
   return (
     <div className="mx-auto w-full max-w-[860px] px-5 pb-5 pt-2">
-      <div className="relative rounded-[22px] border border-[var(--border)] bg-[var(--surface)] shadow-[0_8px_30px_rgba(0,0,0,0.08)]">
+      {(subagents.length > 0 || changeSummary?.fileCount) && (
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          {subagents.map((agent) => {
+            const accent = agentAccent(agent.id);
+            const selected = activeSubagent?.id === agent.id;
+            return (
+              <button
+                key={agent.id}
+                type="button"
+                onClick={() => onSelectSubagent?.(agent.id)}
+                className="flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs transition hover:brightness-95"
+                style={{
+                  color: accent.solid,
+                  backgroundColor: selected ? accent.soft : 'var(--surface)',
+                  borderColor: selected ? accent.border : 'var(--border-subtle)',
+                }}
+                aria-pressed={selected}
+                title={zh ? `进入 ${agent.name} 的会话` : `Open ${agent.name}'s conversation`}
+              >
+                <span className="grid h-5 w-5 place-items-center rounded-full text-[10px] font-semibold text-white" style={{ backgroundColor: accent.solid }} aria-hidden>{agent.name.slice(0, 1).toUpperCase()}</span>
+                <span className="max-w-32 truncate">{agent.name}</span>
+              </button>
+            );
+          })}
+          {changeSummary?.fileCount ? (
+            <span className="ml-auto flex items-center gap-1.5 text-xs text-[var(--text-secondary)]" title={zh ? '本次对话文件变更' : 'Changes in this conversation'}>
+              <Bot size={14} className="text-[var(--text-disabled)]" />
+              <span>{zh ? `${changeSummary.fileCount} 个文件` : `${changeSummary.fileCount} files`}</span>
+              <span className="font-medium text-emerald-500">+{changeSummary.additions}</span>
+              <span className="font-medium text-red-500">−{changeSummary.deletions}</span>
+            </span>
+          ) : null}
+        </div>
+      )}
+      <div className="relative rounded-[22px] border bg-[var(--surface)] shadow-[0_8px_30px_rgba(0,0,0,0.08)]" style={activeAccent ? { borderColor: activeAccent.border, boxShadow: `0 8px 30px ${activeAccent.soft}` } : undefined}>
         <SlashCommandPopover
           isOpen={slashOpen}
           query={slashQuery}
@@ -408,6 +469,14 @@ export default function MessageInput(props: MessageInputProps) {
             ))}
           </div>
         )}
+        {activeSubagent && activeAccent && (
+          <div className="px-4 pt-3">
+            <span className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium" style={{ color: activeAccent.solid, backgroundColor: activeAccent.soft, borderColor: activeAccent.border }}>
+              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: activeAccent.solid }} />
+              {activeSubagent.name}
+            </span>
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           value={input}
@@ -424,7 +493,7 @@ export default function MessageInput(props: MessageInputProps) {
           }
           disabled={effectiveDisabled}
           rows={1}
-          className="block w-full resize-none bg-transparent px-4 pb-2 pt-4 text-[15px] leading-6 text-[var(--text)] placeholder:text-[var(--text-disabled)] disabled:cursor-not-allowed"
+          className={`block w-full resize-none bg-transparent px-4 pb-2 ${activeSubagent ? 'pt-2' : 'pt-4'} text-[15px] leading-6 text-[var(--text)] placeholder:text-[var(--text-disabled)] disabled:cursor-not-allowed`}
           style={{ outline: 'none', boxShadow: 'none', overflowY: 'auto' }}
         />
         <div className="flex items-center justify-between gap-3 px-3 pb-3">

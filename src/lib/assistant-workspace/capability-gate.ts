@@ -39,7 +39,7 @@ export function hasMethod(
 }
 
 export function canRewind(caps: DaemonCapabilities | null | undefined): boolean {
-  return hasMethod(caps, 'run.rewind') || hasMethod(caps, 'run.rewindPreview');
+  return hasMethod(caps, 'workspace.restore') && hasMethod(caps, 'workspace.restorePreview');
 }
 
 export function canShowContextUsage(caps: DaemonCapabilities | null | undefined): boolean {

@@ -10,6 +10,7 @@ import {
   extractLiveThinking,
   filterTimelineBodyBlocks,
   selectActiveToolActivity,
+  summarizeConversationChanges,
 } from './assistant-timeline';
 
 test('filterTimelineBodyBlocks drops tools and live reasoning, keeps text/plan', () => {
@@ -95,4 +96,27 @@ test('selectActiveToolActivity keeps only pending/running', () => {
     active.map((t) => t.toolCallId),
     ['a', 'c'],
   );
+});
+
+test('tool detail keeps input, output, and the changed hunk until the answer completes', () => {
+  const tools = deriveToolActivityFromEvents([
+    { runId: 'r1', sequence: 1, timestamp: 't1', type: 'tool_call_requested', payload: { id: 'edit', name: 'write_file', input: { path: 'src/a.ts', content: 'new' } } },
+    { runId: 'r1', sequence: 2, timestamp: 't2', type: 'tool_call_started', payload: { id: 'edit', name: 'write_file' } },
+    { runId: 'r1', sequence: 3, timestamp: 't3', type: 'file_changed', payload: { path: 'src/a.ts', before: 'old', after: 'new' } },
+    { runId: 'r1', sequence: 4, timestamp: 't4', type: 'tool_call_completed', payload: { id: 'edit', name: 'write_file', output: { ok: true } } },
+  ]);
+  assert.equal(tools.length, 1);
+  assert.deepEqual(tools[0]!.input, { path: 'src/a.ts', content: 'new' });
+  assert.deepEqual(tools[0]!.output, { ok: true });
+  assert.deepEqual(tools[0]!.fileChanges, [{ path: 'src/a.ts', before: 'old', after: 'new' }]);
+});
+
+test('summarizeConversationChanges reports the net file count and line totals', () => {
+  const summary = summarizeConversationChanges(
+    [{ runId: 'r1', sequence: 1, timestamp: 't1', type: 'file_changed', payload: { path: 'src/a.ts', before: 'old\nkeep', after: 'new\nkeep\nadded' } }],
+    [{ path: 'src/a.ts', changeType: 'modified', runId: 'r1' }, { path: 'README.md', changeType: 'created', runId: 'r1' }],
+  );
+  assert.equal(summary.files.length, 2);
+  assert.equal(summary.additions, 2);
+  assert.equal(summary.deletions, 1);
 });

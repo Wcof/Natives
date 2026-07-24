@@ -22,6 +22,8 @@ interface DiffViewerProps {
   /** Compact timeline mode vs full inspector. */
   mode?: 'inline' | 'full';
   locale?: string;
+  /** Open hunk snippets immediately without opting into Monaco. */
+  defaultExpanded?: boolean;
 }
 
 /**
@@ -36,9 +38,10 @@ export default function DiffViewer({
   onOpenFile,
   mode = 'inline',
   locale = 'en',
+  defaultExpanded = false,
 }: DiffViewerProps) {
   const zh = locale.startsWith('zh');
-  const [expanded, setExpanded] = useState(mode === 'full');
+  const [expanded, setExpanded] = useState(mode === 'full' || defaultExpanded);
   const [useMonaco, setUseMonaco] = useState(mode === 'full');
   const result = useMemo(
     () => computeLineDiff(oldContent, newContent),

@@ -46,6 +46,8 @@ const DEFAULT_CAPABILITIES: DaemonCapabilities = {
     'run.getEvents',
     'run.list',
     'run.listChildren',
+    'workspace.restorePreview',
+    'workspace.restore',
     'permission.respond',
     'permission.listPending',
     'interaction.listPending',
@@ -376,8 +378,16 @@ export class FixtureAssistantAdapter implements AssistantGateway {
           }));
         return clone(children) as T;
       }
-      case 'run.rewind': {
+      case 'run.rewind':
+      case 'workspace.restore': {
         return { ok: true, rewound: true } as T;
+      }
+      case 'workspace.restorePreview': {
+        return {
+          checkpoint_id: `fixture-checkpoint-${String(p.run_id ?? 'run')}`,
+          files: [],
+          conflicts: [],
+        } as T;
       }
 
       case 'permission.respond':

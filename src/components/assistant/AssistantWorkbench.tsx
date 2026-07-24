@@ -95,6 +95,7 @@ import SubagentAssignmentModal, {
 } from './SubagentAssignmentModal';
 import type { ActivitySubagentView } from './ActivityInspector';
 import { extractTodosFromEvents } from '@/lib/assistant-activity-view';
+import { summarizeConversationChanges } from '@/lib/assistant-timeline';
 import type { ProviderKeySummary } from '@/lib/tauri-adapter';
 import ResizableRightPanel from '@/components/ui/ResizableRightPanel';
 import ConnectionBanner from './ConnectionBanner';
@@ -371,6 +372,21 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       task: ch.task,
     }));
   }, [subagentSessions, children, selectedChildConversationId, selectedChildTodos]);
+  const composerSubagents = useMemo(
+    () => activitySubagents
+      .filter((agent): agent is ActivitySubagentView & { childConversationId: string } => Boolean(agent.childConversationId))
+      .map((agent) => ({ id: agent.id, name: agent.name, status: agent.status })),
+    [activitySubagents],
+  );
+  const activeComposerSubagent = selectedChildConversationId
+    ? composerSubagents.find((agent) =>
+        activitySubagents.find((item) => item.id === agent.id)?.childConversationId === selectedChildConversationId,
+      ) ?? null
+    : null;
+  const conversationChangeSummary = useMemo(
+    () => summarizeConversationChanges(events, fileChanges),
+    [events, fileChanges],
+  );
   const fileEvents = useMemo(
     () =>
       events
@@ -1826,6 +1842,53 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const recoveryMode = needsEngineRecovery(state.connection, state.capabilities);
   const allowRewind = canRewind(state.capabilities);
 
+  const handleRollbackChanges = useCallback(
+    async (changes: Array<{ path: string; runId?: string }>): Promise<boolean> => {
+      const byRun = new Map<string, string[]>();
+      for (const change of changes) {
+        const runId = change.runId ?? (rootRun ?? activeRun)?.id;
+        if (!runId || !change.path) continue;
+        const paths = byRun.get(runId) ?? [];
+        if (!paths.includes(change.path)) paths.push(change.path);
+        byRun.set(runId, paths);
+      }
+      if (byRun.size === 0) {
+        toast(zh ? '没有可撤销的文件变更' : 'No reversible file changes found', 'error');
+        return false;
+      }
+      try {
+        const previews = await Promise.all(
+          [...byRun.entries()].map(async ([runId, paths]) => {
+            const preview = await gateway.request<Record<string, unknown>>('workspace.restorePreview', {
+              run_id: runId,
+              paths,
+            });
+            const checkpointId = String(preview?.checkpoint_id ?? preview?.checkpointId ?? '');
+            const conflicts = Array.isArray(preview?.conflicts) ? preview.conflicts : [];
+            if (!checkpointId || conflicts.length > 0) {
+              throw new Error(zh ? '文件在执行后已被其他修改，无法安全撤销' : 'Files changed after this run; undo was refused safely');
+            }
+            return { runId, paths, checkpointId };
+          }),
+        );
+        for (const preview of previews) {
+          await gateway.request('workspace.restore', {
+            run_id: preview.runId,
+            checkpoint_id: preview.checkpointId,
+            paths: preview.paths,
+            conflict_policy: 'fail',
+          });
+        }
+        toast(zh ? '已撤销本次对话的文件修改' : 'Conversation file changes undone', 'success');
+        return true;
+      } catch (err) {
+        toast(classifyError(err).userMessage, 'error');
+        return false;
+      }
+    },
+    [rootRun, activeRun, gateway, toast, zh],
+  );
+
   const handleCopyDiagnostics = useCallback(() => {
     const text = buildDiagnosticsText({
       connection: state.connection,
@@ -1911,6 +1974,9 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             <ConversationTimeline
               messages={timelineMessages}
               eventsByRun={state.eventsByRun}
+              changeEvents={events}
+              fileChanges={fileChanges}
+              onRollbackChanges={allowRewind ? handleRollbackChanges : undefined}
               loading={loadingMessages}
               locale={locale}
               onRetry={() => void handleRetry()}
@@ -2229,6 +2295,14 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               }
             }}
             projectPath={activeProjectPath}
+            subagents={composerSubagents}
+            activeSubagent={activeComposerSubagent}
+            onSelectSubagent={(id) => void handleSelectSubagent(id)}
+            changeSummary={{
+              fileCount: conversationChangeSummary.files.length,
+              additions: conversationChangeSummary.additions,
+              deletions: conversationChangeSummary.deletions,
+            }}
           />
           )}
         </div>
@@ -2295,12 +2369,9 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               onRollbackFile={
                 allowRewind
                   ? (path) => {
-                      // Rollback must go through engine permission/events — intent only.
-                      void gateway
-                        .request('run.rewind', { path, run_id: (rootRun ?? activeRun)?.id })
-                        .catch((err) => {
-                          toast(classifyError(err).userMessage, 'error');
-                        });
+                      if (!window.confirm(zh ? `确定撤销 ${path} 的本次修改？` : `Undo this run's changes to ${path}?`)) return;
+                      const change = [...fileChanges].reverse().find((item) => item.path === path);
+                      void handleRollbackChanges([{ path, runId: change?.runId }]);
                     }
                   : undefined
               }

@@ -1,17 +1,18 @@
 'use client';
 
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, Check, Copy, RefreshCw } from 'lucide-react';
+import { ArrowDown, Check, Copy, FileDiff, RefreshCw, Undo2 } from 'lucide-react';
 import { formatElapsed, messagePlainText } from '@/lib/assistant-message-view';
 import type { RunEvent } from '@/lib/assistant-protocol';
 import {
   deriveToolActivityFromEvents,
   extractLiveThinking,
   filterTimelineBodyBlocks,
-  selectActiveToolActivity,
+  summarizeConversationChanges,
 } from '@/lib/assistant-timeline';
 import { renderBlocks, type ContentBlock } from './blocks';
 import ThinkingActivity from './ThinkingActivity';
+import type { FileChange } from '@/lib/assistant-protocol';
 
 export interface Message {
   id: string;
@@ -36,13 +37,87 @@ interface ConversationTimelineProps {
   onRetry?: () => void;
   /** Full event streams keyed by run id (for live tool nesting). */
   eventsByRun?: Record<string, RunEvent[]>;
+  /** Visible surface events/files: root includes child agents; child is self-only. */
+  changeEvents?: RunEvent[];
+  fileChanges?: FileChange[];
+  onRollbackChanges?: (changes: Array<{ path: string; runId?: string }>) => Promise<boolean>;
 }
 
 const NEAR_BOTTOM_PX = 80;
 /** Shared empty run events so MessageRow memo is not busted by `?? []` each render. */
 const EMPTY_RUN_EVENTS: RunEvent[] = [];
 /** Idle tool strip — avoid allocating `[]` on every finished MessageRow render. */
-const EMPTY_TOOL_ACTIVITY: ReturnType<typeof selectActiveToolActivity> = [];
+const EMPTY_TOOL_ACTIVITY: ReturnType<typeof deriveToolActivityFromEvents> = [];
+
+function ChangeSummaryCard({
+  locale,
+  events,
+  fileChanges,
+  onRollbackChanges,
+}: {
+  locale: string;
+  events: RunEvent[];
+  fileChanges: FileChange[];
+  onRollbackChanges?: (changes: Array<{ path: string; runId?: string }>) => Promise<boolean>;
+}) {
+  const zh = locale.startsWith('zh');
+  const summary = useMemo(
+    () => summarizeConversationChanges(events, fileChanges),
+    [events, fileChanges],
+  );
+  const [showAll, setShowAll] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [rollingBack, setRollingBack] = useState(false);
+  const [rolledBack, setRolledBack] = useState(false);
+  if (summary.files.length === 0) return null;
+  const shown = showAll ? summary.files : summary.files.slice(0, 3);
+  const extra = summary.files.length - shown.length;
+  const restore = async () => {
+    if (!onRollbackChanges || rollingBack) return;
+    setRollingBack(true);
+    try {
+      const ok = await onRollbackChanges(summary.files.map(({ path, runId }) => ({ path, runId })));
+      if (ok) setRolledBack(true);
+    } finally {
+      setRollingBack(false);
+      setConfirming(false);
+    }
+  };
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)]" data-change-summary>
+      <div className="flex items-center gap-3 px-4 py-3">
+        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[var(--surface-hover)] text-[var(--text-secondary)]"><FileDiff size={20} /></div>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-[var(--text)]">{zh ? `已编辑 ${summary.files.length} 个文件` : `Edited ${summary.files.length} files`}</div>
+          <div className="mt-0.5 text-sm font-medium tabular-nums"><span className="text-emerald-500">+{summary.additions}</span><span className="ml-2 text-red-500">−{summary.deletions}</span></div>
+        </div>
+        {onRollbackChanges && !rolledBack && (
+          confirming ? (
+            <div className="flex shrink-0 items-center gap-1">
+              <button type="button" onClick={() => setConfirming(false)} disabled={rollingBack} className="rounded-lg px-2 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">{zh ? '取消' : 'Cancel'}</button>
+              <button type="button" onClick={() => void restore()} disabled={rollingBack} className="rounded-lg border border-[var(--danger)]/40 px-2 py-1.5 text-xs font-medium text-[var(--danger)] hover:bg-red-500/10 disabled:opacity-50">{rollingBack ? (zh ? '撤销中…' : 'Undoing…') : (zh ? '确认撤销' : 'Confirm undo')}</button>
+            </div>
+          ) : (
+            <button type="button" onClick={() => setConfirming(true)} className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1.5 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"><Undo2 size={15} />{zh ? '撤销' : 'Undo'}</button>
+          )
+        )}
+        {rolledBack && <span className="shrink-0 text-xs text-[var(--text-disabled)]">{zh ? '已撤销' : 'Undone'}</span>}
+      </div>
+      <div className="border-t border-[var(--border-subtle)] px-4 py-1">
+        {shown.map((file) => (
+          <div key={file.path} className="flex items-center gap-3 py-2 text-sm">
+            <span className="min-w-0 flex-1 truncate text-[var(--text-secondary)]">{file.path}</span>
+            <span className="shrink-0 tabular-nums text-emerald-500">+{file.additions}</span>
+            <span className="shrink-0 tabular-nums text-red-500">−{file.deletions}</span>
+          </div>
+        ))}
+        {extra > 0 && <button type="button" onClick={() => setShowAll(true)} className="py-2 text-left text-sm text-[var(--text-secondary)] hover:text-[var(--text)]">{zh ? `再显示 ${extra} 个文件` : `Show ${extra} more files`}</button>}
+        {showAll && summary.files.length > 3 && <button type="button" onClick={() => setShowAll(false)} className="py-2 text-left text-sm text-[var(--text-secondary)] hover:text-[var(--text)]">{zh ? '收起' : 'Show less'}</button>}
+      </div>
+    </section>
+  );
+}
 
 const MessageRow = memo(function MessageRow({
   message,
@@ -135,8 +210,7 @@ const MessageRow = memo(function MessageRow({
 
   const toolActivity = useMemo(() => {
     if (!messageLive) return EMPTY_TOOL_ACTIVITY;
-    const all = deriveToolActivityFromEvents(runEvents);
-    return selectActiveToolActivity(all);
+    return deriveToolActivityFromEvents(runEvents);
   }, [runEvents, messageLive]);
 
   const hasReasoning = bodyBlocks.some((block) => block.type === 'reasoning');
@@ -239,6 +313,9 @@ export default function ConversationTimeline({
   locale,
   onRetry,
   eventsByRun = {},
+  changeEvents = EMPTY_RUN_EVENTS,
+  fileChanges = [],
+  onRollbackChanges,
 }: ConversationTimelineProps) {
   const zh = locale.startsWith('zh');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -276,6 +353,12 @@ export default function ConversationTimeline({
             (message.status === 'failed' || message.status === 'interrupted'),
         )?.id,
     [messages],
+  );
+  const latest = messages[messages.length - 1];
+  const showChangeSummary = Boolean(
+    latest?.role === 'assistant' &&
+      !hasActive &&
+      (latest.status === 'complete' || latest.status === 'completed' || latest.status === 'done'),
   );
 
   const onCopy = (id: string, text: string) => {
@@ -334,6 +417,14 @@ export default function ConversationTimeline({
             }
           />
         ))}
+        {showChangeSummary && (
+          <ChangeSummaryCard
+            locale={locale}
+            events={changeEvents}
+            fileChanges={fileChanges}
+            onRollbackChanges={onRollbackChanges}
+          />
+        )}
       </div>
       {!following && (
         <button
