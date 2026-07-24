@@ -20,29 +20,16 @@ interface FileRowProps {
   dimmed?: boolean;
   onMoveDrop?: (sourcePaths: string[], destDir: string) => void;
   dragPaths?: string[];
+  flash?: boolean;
 }
 
-export default function FileRow({ entry, onSelect, onContextMenu, showDir, selected, onDoubleClick, isFavorite, onFavoriteToggle, dimmed, onMoveDrop, dragPaths }: FileRowProps) {
-  const [flash, setFlash] = useState(false);
+export default function FileRow({ entry, onSelect, onContextMenu, showDir, selected, onDoubleClick, isFavorite, onFavoriteToggle, dimmed, onMoveDrop, dragPaths, flash = false }: FileRowProps) {
   const [dropTarget, setDropTarget] = useState(false);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    const handler = (e: Event) => {
-      if ((e as CustomEvent).detail === entry.path) {
-        setFlash(true);
-        if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-        flashTimerRef.current = setTimeout(() => setFlash(false), 1200);
-      }
-    };
-    window.addEventListener('file-flash', handler);
-    return () => {
-      window.removeEventListener('file-flash', handler);
-      if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
-      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-    };
-  }, [entry.path]);
+  useEffect(() => () => {
+    if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+  }, []);
 
   const tint = getIconColor(entry);
   const ext = getBadgeExt(entry.name);

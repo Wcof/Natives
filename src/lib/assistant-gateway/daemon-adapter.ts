@@ -304,7 +304,7 @@ export class DaemonAssistantAdapter implements AssistantGateway {
     const fn = this.resolveRequest();
     const [convRaw, messagesRaw, runsRaw] = await Promise.all([
       fn('conversation.get', { id: conversationId }).catch(() => null),
-      fn('conversation.getMessages', { conversation_id: conversationId }),
+      fn('conversation.getMessagesPage', { conversation_id: conversationId, limit: 100 }).catch(() => fn('conversation.getMessages', { conversation_id: conversationId })),
       fn('run.list', { conversation_id: conversationId, limit: 20 }),
     ]);
 
@@ -312,7 +312,13 @@ export class DaemonAssistantAdapter implements AssistantGateway {
       ? mapWireConversation(convRaw as Record<string, unknown>)
       : mapWireConversation({ id: conversationId, title: 'Conversation' });
 
-    const messages = (Array.isArray(messagesRaw) ? messagesRaw : []).map((m) =>
+    const messageRows = Array.isArray(messagesRaw)
+      ? messagesRaw
+      : Array.isArray((messagesRaw as { messages?: unknown[] } | null)?.messages)
+        ? (messagesRaw as { messages: unknown[] }).messages
+        : [];
+    const pageRaw = messagesRaw as { nextCursor?: { createdAt?: string; id?: string } | null };
+    const messages = messageRows.map((m) =>
       mapWireMessage((m ?? {}) as Record<string, unknown>),
     );
     const runRows = Array.isArray(runsRaw)
@@ -519,6 +525,14 @@ export class DaemonAssistantAdapter implements AssistantGateway {
       runs,
       activeRunId: active?.id ?? null,
       eventsByRun,
+      messagePageInfo: Array.isArray(messagesRaw)
+        ? { hasMore: false, nextCursor: null }
+        : {
+            hasMore: Boolean(pageRaw.nextCursor),
+            nextCursor: pageRaw.nextCursor?.createdAt && pageRaw.nextCursor.id
+              ? { createdAt: pageRaw.nextCursor.createdAt, id: pageRaw.nextCursor.id }
+              : null,
+          },
       artifacts,
       interactions,
       capabilities: await this.getCapabilities(),

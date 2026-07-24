@@ -116,6 +116,19 @@ test('sequence gap enters recovering and replay fills without duplicates', () =>
   assert.deepEqual(seqs, [1, 2, 3, 4]);
 });
 
+test('retains a bounded event window for long streams', () => {
+  let state = withRun(createInitialWorkspaceState());
+  for (let sequence = 1; sequence <= 10_000; sequence += 1) {
+    state = workspaceReducer(state, {
+      type: 'event/apply',
+      event: ev('r1', sequence, 'text_delta', { text: 'x' }),
+    });
+  }
+  assert.equal(state.eventsByRun.r1!.length, 2_000);
+  assert.equal(state.eventsByRun.r1![0]!.sequence, 8_001);
+  assert.equal(state.lastSequenceByRun.r1, 10_000);
+});
+
 test('tool call updates in place (no duplicate tool blocks)', () => {
   let state = withRun(createInitialWorkspaceState());
   state = workspaceReducer(state, {

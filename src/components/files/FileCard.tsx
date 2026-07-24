@@ -19,6 +19,7 @@ interface FileCardProps {
   dimmed?: boolean;
   onMoveDrop?: (sourcePaths: string[], destDir: string) => void;
   dragPaths?: string[];
+  flash?: boolean;
 }
 
 const BADGE_LABELS: Record<string, string> = {
@@ -34,47 +35,31 @@ const BADGE_COLORS: Record<string, { bg: string; text: string; border: string }>
   git: { bg: 'transparent', text: 'var(--text-secondary)', border: 'var(--border)' },
 };
 
-export default function FileCard({ entry, onSelect, onContextMenu, selected, onDoubleClick, isFavorite, onFavoriteToggle, dimmed, onMoveDrop, dragPaths }: FileCardProps) {
-  const [flash, setFlash] = useState(false);
+export default function FileCard({ entry, onSelect, onContextMenu, selected, onDoubleClick, isFavorite, onFavoriteToggle, dimmed, onMoveDrop, dragPaths, flash = false }: FileCardProps) {
+  const [dropTarget, setDropTarget] = useState(false);
   const [heat, setHeat] = useState(0);
   const [showRipple, setShowRipple] = useState(false);
-  const [dropTarget, setDropTarget] = useState(false);
+  const isChanged = heat > 0;
   const cardRef = useRef<HTMLDivElement>(null);
-  const heatDecayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const rippleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const heatDecayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rippleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail === entry.path) {
-        // Increment heat (0 → 1 max)
-        setHeat(prev => Math.min(1, prev + 0.15));
-        setFlash(true);
-        setShowRipple(true);
+    if (!flash) return;
+    setHeat((prev) => Math.min(1, prev + 0.15));
+    setShowRipple(true);
+    if (rippleTimerRef.current) clearTimeout(rippleTimerRef.current);
+    rippleTimerRef.current = setTimeout(() => setShowRipple(false), 800);
+    if (heatDecayRef.current) clearTimeout(heatDecayRef.current);
+    heatDecayRef.current = setTimeout(() => setHeat(0), 8000);
+  }, [flash]);
 
-        // Clear flash after animation
-        if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-        flashTimerRef.current = setTimeout(() => setFlash(false), 1200);
-        // Clear ripple after animation
-        if (rippleTimerRef.current) clearTimeout(rippleTimerRef.current);
-        rippleTimerRef.current = setTimeout(() => setShowRipple(false), 800);
-
-        // Decay heat over time
-        if (heatDecayRef.current) clearTimeout(heatDecayRef.current);
-        heatDecayRef.current = setTimeout(() => setHeat(0), 8000);
-      }
-    };
-    window.addEventListener('file-flash', handler);
-    return () => {
-      window.removeEventListener('file-flash', handler);
-      if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
-      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-      if (rippleTimerRef.current) clearTimeout(rippleTimerRef.current);
-      if (heatDecayRef.current) clearTimeout(heatDecayRef.current);
-    };
-  }, [entry.path]);
+  useEffect(() => () => {
+    if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+    if (rippleTimerRef.current) clearTimeout(rippleTimerRef.current);
+    if (heatDecayRef.current) clearTimeout(heatDecayRef.current);
+  }, []);
 
   const ext = !entry.isDir ? getBadgeExt(entry.name) : '';
   const extBadge = !entry.isDir ? EXT_BADGES[ext] : null;
@@ -112,12 +97,11 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
 
   const badge = entry.projectBadge;
   const badgeStyle = badge ? BADGE_COLORS[badge] : null;
-  const isChanged = heat > 0;
 
   return (
     <div
       ref={cardRef}
-      className={'file-card' + (flash ? ' anim-liveZap' : '') + (isChanged ? ' changed' : '')}
+      className={'file-card' + (flash ? ' anim-liveZap' : '')}
       data-file-entry={entry.path}
       data-heat={heat.toFixed(2)}
       onClick={(ev) => {
@@ -236,7 +220,7 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
           </div>
         )}
 
-        {/* Video play badge — centered frosted circle */}
+      {/* Video play badge — centered frosted circle */}
         {entry.kind === 'video' && !entry.isDir && (
           <span style={{
             position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
@@ -249,14 +233,6 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
         )}
 
         {/* Edit ripple — expanding ring from icon center */}
-        {showRipple && (
-          <span style={{
-            position: 'absolute', inset: 0, borderRadius: '50%',
-            border: '2px solid var(--primary)',
-            animation: 'editRipple 0.8s ease-out forwards',
-            pointerEvents: 'none',
-          }} />
-        )}
       </div>
 
       {/* File name — up to 2 lines */}
@@ -294,6 +270,8 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
         <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)' }}>→ {entry.symlink}</div>
       )}
 
+      {showRipple && <span style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: '2px solid var(--primary)', animation: 'editRipple 0.8s ease-out forwards', pointerEvents: 'none' }} />}
+
       {/* Changed count badge — shows when heat > 0 */}
       {isChanged && (
         <div style={{
@@ -321,24 +299,30 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
 // ── Image Thumbnail with loading + error states ──
 
 function ImageThumb({ entry, size }: { entry: FileEntry; size: number }) {
-  const { dataUrl, loading, error } = useThumbnail(entry.path, size);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (!hostRef.current || typeof IntersectionObserver === 'undefined') {
+      setVisible(true);
+      return;
+    }
+    const observer = new IntersectionObserver(([item]) => setVisible(Boolean(item?.isIntersecting)), { rootMargin: '240px' });
+    observer.observe(hostRef.current);
+    return () => observer.disconnect();
+  }, []);
+  const { dataUrl, loading, error } = useThumbnail(entry.path, size, visible);
 
-  if (loading) {
+  if (!visible || loading) {
     // 加载中显示文件图标，避免空白闪烁
     const Icon = getFileIcon(entry);
     const tint = getIconColor(entry);
     // eslint-disable-next-line react-hooks/static-components
-    return <Icon size={size} color={tint} />;
+    return <div ref={hostRef}><Icon size={size} color={tint} /></div>;
   }
   if (error || !dataUrl) {
-    return <FbImage size={size} />;
+    return <div ref={hostRef}><FbImage size={size} /></div>;
   }
-  return (
-    <img
-      src={dataUrl}
-      alt={entry.name}
-      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-      loading="lazy"
-    />
-  );
+  return <div ref={hostRef}>
+    <img src={dataUrl} alt={entry.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" />
+  </div>;
 }

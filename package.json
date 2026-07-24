@@ -9,6 +9,8 @@
     "daemon:bundle": "bash scripts/daemon/prepare-sidecar.sh",
     "dev": "npm run daemon:build && tauri dev",
     "build": "next build",
+    "perf:bundle": "node scripts/perf/check-bundle.mjs",
+    "perf:check": "npm run typecheck && npm run lint && npm run build && npm run perf:bundle",
     "start": "next start",
     "lint": "eslint src/",
     "test": "tsx --test src/**/*.test.ts",

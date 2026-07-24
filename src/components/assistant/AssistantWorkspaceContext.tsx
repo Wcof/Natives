@@ -339,9 +339,10 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
       }),
       (async () => {
         try {
-          const raw = await api.assistantV2?.request?.('conversation.list', {
-            include_archived: false,
-          });
+          const request = api.assistantV2?.request;
+          if (!request) return [];
+          const raw = await request('conversation.listPage', { limit: 100 })
+            .catch(() => request('conversation.list', { include_archived: false }));
           const list = Array.isArray(raw)
             ? raw
             : Array.isArray((raw as { conversations?: unknown[] } | null)?.conversations)

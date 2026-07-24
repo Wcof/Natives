@@ -1,6 +1,6 @@
 'use client';
 
-import { forwardRef } from 'react';
+import { forwardRef, useEffect, useRef, useState } from 'react';
 import { type FileEntry } from '@/types/file';
 import { t, useLocale } from '@/i18n';
 import FileCard from './FileCard';
@@ -19,6 +19,7 @@ interface FileGridProps {
   cutPaths?: Set<string>;
   onMoveDrop?: (sourcePaths: string[], destDir: string) => void;
   dragPaths?: string[];
+  flashPaths?: Set<string>;
 }
 
 const GRID_COLS: Record<string, string> = {
@@ -28,10 +29,22 @@ const GRID_COLS: Record<string, string> = {
 };
 
 const FileGrid = forwardRef<HTMLDivElement, FileGridProps>(function FileGrid(
-  { entries, onSelect, onContextMenu, selectedIndex = -1, selectedPaths, gridSize = 'md', onEditRequest, favorites, onFavoriteToggle, cutPaths, onMoveDrop, dragPaths },
+  { entries, onSelect, onContextMenu, selectedIndex = -1, selectedPaths, gridSize = 'md', onEditRequest, favorites, onFavoriteToggle, cutPaths, onMoveDrop, dragPaths, flashPaths },
   ref,
 ) {
   const locale = useLocale();
+  const [count, setCount] = useState(200);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { setCount(200); }, [entries]);
+  useEffect(() => {
+    const node = sentinelRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(([item]) => {
+      if (item?.isIntersecting) setCount((value) => Math.min(value + 200, entries.length));
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [entries.length]);
 
   if (entries.length === 0) {
     return (
@@ -54,7 +67,7 @@ const FileGrid = forwardRef<HTMLDivElement, FileGridProps>(function FileGrid(
         padding: SPACING.md,
       }}
     >
-      {entries.map((entry, index) => (
+      {entries.slice(0, count).map((entry, index) => (
         <FileCard
           key={entry.path}
           entry={entry}
@@ -67,8 +80,10 @@ const FileGrid = forwardRef<HTMLDivElement, FileGridProps>(function FileGrid(
           dimmed={cutPaths?.has(entry.path)}
           onMoveDrop={onMoveDrop}
           dragPaths={dragPaths}
+          flash={flashPaths?.has(entry.path)}
         />
       ))}
+      {count < entries.length && <div ref={sentinelRef} style={{ minHeight: 1, gridColumn: '1 / -1' }} />}
     </div>
   );
 });

@@ -72,7 +72,7 @@ import {
 import { hydrateFileDiffContents } from '@/lib/assistant-workspace/file-diff-contents';
 import { createDefaultGateway, FixtureAssistantAdapter } from '@/lib/assistant-gateway';
 import { goldenTextStream } from '@/lib/assistant-fixtures/golden';
-import { isActiveRunStatus, mapWireConversation } from '@/lib/assistant-protocol';
+import { isActiveRunStatus, mapWireConversation, mapWireMessage } from '@/lib/assistant-protocol';
 import type {
   Conversation,
   RunEvent,
@@ -271,6 +271,32 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       state.liveByRun,
     ],
   );
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
+  const messagePageInfo = activeId ? state.messagePageInfoByConversation[activeId] : undefined;
+  const loadOlderMessages = useCallback(async () => {
+    if (!activeId || !messagePageInfo?.hasMore || loadingOlderMessages) return;
+    setLoadingOlderMessages(true);
+    try {
+      const raw = await gateway.request<unknown>('conversation.getMessagesPage', {
+        conversation_id: activeId,
+        limit: 100,
+        cursor: messagePageInfo.nextCursor,
+      });
+      const rows = Array.isArray(raw) ? raw : (raw as { messages?: unknown[] } | null)?.messages ?? [];
+      const next = (raw as { nextCursor?: { createdAt?: string; id?: string } | null } | null)?.nextCursor;
+      dispatch({
+        type: 'messages/prependPage',
+        conversationId: activeId,
+        messages: rows.map((row) => mapWireMessage((row ?? {}) as Record<string, unknown>)),
+        pageInfo: {
+          hasMore: Boolean(next),
+          nextCursor: next?.createdAt && next.id ? { createdAt: next.createdAt, id: next.id } : null,
+        },
+      });
+    } finally {
+      setLoadingOlderMessages(false);
+    }
+  }, [activeId, dispatch, gateway, loadingOlderMessages, messagePageInfo]);
   const rootRun = selectActiveRun(state, rootConversationId);
   const surfaceRun = selectActiveRun(state, activeId);
   // Timeline / input / pause track surface; activity inspector prefers root tree.
@@ -1980,6 +2006,9 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               loading={loadingMessages}
               locale={locale}
               onRetry={() => void handleRetry()}
+              hasMoreOlder={Boolean(messagePageInfo?.hasMore)}
+              loadingOlder={loadingOlderMessages}
+              onLoadOlder={() => void loadOlderMessages()}
             />
           </div>
 

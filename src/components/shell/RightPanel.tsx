@@ -52,6 +52,7 @@ export default function RightPanel({
 }: RightPanelProps) {
   const [locale, setLocale] = useState<Locale>('en');
   const [isDragging, setIsDragging] = useState(false);
+  const [draftWidth, setDraftWidth] = useState(width);
   const isOpen = mode !== 'closed';
   const widthRef = useRef(width);
   widthRef.current = width;
@@ -86,13 +87,17 @@ export default function RightPanel({
     setIsDragging(true);
     const startX = e.clientX;
     const startW = widthRef.current;
+    let latest = startW;
+    setDraftWidth(startW);
 
     const handleMove = (ev: MouseEvent) => {
       // Drag handle is on the left edge: moving left grows the panel.
       const delta = startX - ev.clientX;
-      onResize(clampRightPanelWidth(startW + delta));
+      latest = clampRightPanelWidth(startW + delta);
+      setDraftWidth(latest);
     };
     const handleUp = () => {
+      onResize(latest);
       setIsDragging(false);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
@@ -120,7 +125,8 @@ export default function RightPanel({
     }
   };
 
-  const density = width < 300 ? 'compact' : width >= 480 ? 'wide' : 'normal';
+  const displayWidth = isDragging ? draftWidth : width;
+  const density = displayWidth < 300 ? 'compact' : displayWidth >= 480 ? 'wide' : 'normal';
 
   return (
     <aside
@@ -130,7 +136,7 @@ export default function RightPanel({
       data-density={density}
       data-resizing={isDragging ? 'true' : 'false'}
       style={{
-        width: isOpen ? width : 0,
+        width: isOpen ? displayWidth : 0,
         position: 'relative',
         // Snap during drag; keep CSS transition only when idle.
         transition: isDragging ? 'none' : undefined,
@@ -144,7 +150,7 @@ export default function RightPanel({
           onDoubleClick={handleDragDoubleClick}
           role="separator"
           aria-orientation="vertical"
-          aria-valuenow={width}
+          aria-valuenow={displayWidth}
           aria-valuemin={RIGHT_PANEL_MIN_WIDTH}
           aria-valuemax={RIGHT_PANEL_MAX_WIDTH}
           aria-label={t(locale, 'rightPanel.resize')}

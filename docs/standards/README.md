@@ -29,6 +29,7 @@ docs/standards/
 │   ├── 01-layering.md                   四类边界、分层依赖、IPC/协议
 │   ├── 02-security.md                   五大防线 + 安全红线
 │   └── 03-data.md                       SQLite / 命名空间 / 迁移 / 凭证
+│   └── 04-performance.md                性能预算、主线程与增长边界
 ├── frontend/                          ← 前端架构规范
 │   ├── 01-structure.md                  目录 / 命名 / 组件分层
 │   ├── 02-state-and-data.md             状态 / IPC / 无假数据
@@ -49,7 +50,7 @@ docs/standards/
 | 引擎整改契约 | [`NATIVE_ENGINE_FULL_REMEDIATION.md`](../architecture/NATIVE_ENGINE_FULL_REMEDIATION.md) | technical/01 · product/02 |
 | 外部容器应用 | [ADR-0013](../adr/0013-creative-app-dual-source.md) + design 文 | product/01 · technical/02 |
 
-共 13 篇规范 + 关联架构指南。**新增功能或重构必须先检索相关规范篇。**
+共 14 篇规范 + 关联架构指南。**新增功能或重构必须先检索相关规范篇。**
 
 ---
 
@@ -108,6 +109,7 @@ docs/standards/
 | 模块管理 / 创意工坊 | `module-workshop-kernel-runtime.md` | technical/02·03 · frontend/02 | KI-1…KI-5 |
 | 助理 / Native 引擎 | `NATIVE_ENGINE_FULL_REMEDIATION.md` · capability map | technical/01 · product/02 | 广告 ⊆ 可调；Host/Daemon 权威分立 |
 | 个人创意双来源 | ADR-0013 · creative-app design | product/01 · technical/02 | 管理面统一、运行时分轨 |
+| 全应用性能 | `application-performance-remediation.md` | technical/04 | 预算可测、增长有界、可见性门控 |
 
 ---
 
@@ -133,3 +135,4 @@ docs/standards/
 - [ ] 若违反 MUST，已写 ADR。  
 - [ ] 涉及工坊时校验 KI-1…KI-5。  
 - [ ] 涉及引擎时能力广告 ⊆ 可调实现。
+- [ ] 性能改动提供同设备前后证据，并通过 `npm run perf:check`（`technical/04`）。

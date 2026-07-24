@@ -41,6 +41,9 @@ interface ConversationTimelineProps {
   changeEvents?: RunEvent[];
   fileChanges?: FileChange[];
   onRollbackChanges?: (changes: Array<{ path: string; runId?: string }>) => Promise<boolean>;
+  hasMoreOlder?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => void | Promise<void>;
 }
 
 const NEAR_BOTTOM_PX = 80;
@@ -237,6 +240,7 @@ const MessageRow = memo(function MessageRow({
                   ? reasoningFinished
                   : null
             }
+            nowMs={now}
           />
         )}
         {renderBlocks(bodyBlocks)}
@@ -316,6 +320,9 @@ export default function ConversationTimeline({
   changeEvents = EMPTY_RUN_EVENTS,
   fileChanges = [],
   onRollbackChanges,
+  hasMoreOlder = false,
+  loadingOlder = false,
+  onLoadOlder,
 }: ConversationTimelineProps) {
   const zh = locale.startsWith('zh');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -328,11 +335,20 @@ export default function ConversationTimeline({
     (message) => message.status === 'streaming' || message.status === 'running',
   );
 
+  const loadOlder = async () => {
+    const el = scrollRef.current;
+    const before = el ? { height: el.scrollHeight, top: el.scrollTop } : null;
+    await onLoadOlder?.();
+    if (!el || !before) return;
+    requestAnimationFrame(() => {
+      el.scrollTop = before.top + (el.scrollHeight - before.height);
+    });
+  };
+
   useEffect(() => {
     if (!hasActive) return;
     setNow(Date.now());
-    // 100ms ≈ one update per 0.1s display step; rAF would re-render every frame.
-    const timer = window.setInterval(() => setNow(Date.now()), 100);
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [hasActive]);
 
@@ -401,13 +417,18 @@ export default function ConversationTimeline({
       className="relative h-full overflow-y-auto"
     >
       <div className="mx-auto flex w-full max-w-[860px] flex-col gap-7 px-5 py-7">
+        {hasMoreOlder && onLoadOlder && (
+          <button type="button" onClick={() => void loadOlder()} disabled={loadingOlder} className="self-center rounded border px-3 py-1 text-xs text-[var(--text-secondary)]">
+            {loadingOlder ? (zh ? '加载中…' : 'Loading…') : (zh ? '加载更早消息' : 'Load older messages')}
+          </button>
+        )}
         {messages.map((message) => (
           <MessageRow
             key={message.id}
             message={message}
             locale={locale}
             zh={zh}
-            now={now}
+            now={message.status === 'streaming' || message.status === 'running' ? now : 0}
             isLastRetryable={message.id === lastRetryableId}
             onRetry={onRetry}
             copiedId={copiedId}

@@ -1,12 +1,12 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useLocale, t } from '@/i18n';
 import type { UsageDashboardResponse, UsageCacheReadResult, UsageCacheMetadata, UsageMetrics, UsageViewRequest, DashboardState } from '@/types/usage';
 import { filterUsageRecords, aggregateUsageMetrics, uniqueSessionCount, buildSourceDimensions } from '@/lib/usage-dashboard';
 import { UsageToolbar } from './UsageToolbar';
 import { UsageMetricGrid } from './UsageMetricGrid';
-import { UsageCharts } from './UsageCharts';
+const UsageCharts = lazy(() => import('./UsageCharts').then((module) => ({ default: module.UsageCharts })));
 import { UsageSourcesPanel } from './UsageSourcesPanel';
 import { RefreshCw, AlertCircle, X } from 'lucide-react';
 import { classifyError } from '@/lib/error-classifier';
@@ -338,14 +338,14 @@ export function UsageDashboard() {
         lastSyncTime={lastSyncTime}
       />)}
 
-      {filtered && (<UsageCharts
+      {filtered && (<Suspense fallback={<div className={styles.chartPanel}>Loading charts…</div>}><UsageCharts
         daily={filtered?.daily ?? []}
         activity={filtered?.activity ?? []}
         sessions={filtered?.sessions ?? []}
         sources={data?.sources ?? []}
         metrics={metrics}
         lastRefresh={lastSyncTime}
-      />)}
+      /></Suspense>)}
 
       {data && (
         <div className={styles.sourcesSection}>

@@ -560,12 +560,6 @@ function applyOneEvent(
   const runId = event.runId;
   if (!runId || !Number.isFinite(event.sequence)) return state;
 
-  const seen = state.seenSequencesByRun[runId] ?? {};
-  if (seen[event.sequence]) {
-    // Idempotent: ignore duplicates
-    return state;
-  }
-
   const last = state.lastSequenceByRun[runId] ?? 0;
 
   // Out of order (older than last without being the next): ignore if not gap fill
@@ -582,14 +576,13 @@ function applyOneEvent(
     };
   }
 
-  const nextSeen = { ...seen, [event.sequence]: true as const };
+  const retained = [...(state.eventsByRun[runId] ?? []), event].slice(-2000);
   let next: AssistantWorkspaceState = {
     ...state,
-    seenSequencesByRun: { ...state.seenSequencesByRun, [runId]: nextSeen },
     lastSequenceByRun: { ...state.lastSequenceByRun, [runId]: event.sequence },
     eventsByRun: {
       ...state.eventsByRun,
-      [runId]: [...(state.eventsByRun[runId] ?? []), event],
+      [runId]: retained,
     },
   };
 
@@ -871,6 +864,9 @@ function applySnapshot(
     ...next,
     messages,
     messagesByConversation: { ...next.messagesByConversation, [c.id]: order },
+    messagePageInfoByConversation: snapshot.messagePageInfo
+      ? { ...next.messagePageInfoByConversation, [c.id]: { hasMore: snapshot.messagePageInfo.hasMore, nextCursor: snapshot.messagePageInfo.nextCursor } }
+      : next.messagePageInfoByConversation,
   };
 
   const runs = { ...next.runs };
@@ -1013,6 +1009,25 @@ export function workspaceReducer(
 
     case 'snapshot/apply':
       return applySnapshot(state, action.snapshot);
+
+    case 'messages/prependPage': {
+      const existing = state.messagesByConversation[action.conversationId] ?? [];
+      const incoming = action.messages.filter((message) => !state.messages[message.id]);
+      const messages = { ...state.messages };
+      for (const message of incoming) messages[message.id] = message;
+      return {
+        ...state,
+        messages,
+        messagesByConversation: {
+          ...state.messagesByConversation,
+          [action.conversationId]: [...incoming.map((message) => message.id), ...existing],
+        },
+        messagePageInfoByConversation: {
+          ...state.messagePageInfoByConversation,
+          [action.conversationId]: action.pageInfo,
+        },
+      };
+    }
 
     case 'run/upsert': {
       const run = action.run;
@@ -1303,9 +1318,6 @@ function applyOneEventForReplay(
   event: RunEvent,
 ): AssistantWorkspaceState {
   const runId = event.runId;
-  const seen = state.seenSequencesByRun[runId] ?? {};
-  if (seen[event.sequence]) return state;
-
   // Pretend last is event.sequence - 1 so gap check passes
   const patched: AssistantWorkspaceState = {
     ...state,

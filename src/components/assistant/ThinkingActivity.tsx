@@ -6,7 +6,7 @@
  * the parent only re-renders on sparse stream events.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { ChevronDown, Eye, FilePenLine, Terminal, Wrench } from 'lucide-react';
 import type {
   TimelineThinkingActivity,
@@ -30,6 +30,7 @@ export interface ThinkingActivityProps {
    * ignored so the counter keeps moving until the strip unmounts.
    */
   thinkingFinishedAtMs?: number | null;
+  nowMs?: number;
 }
 
 function statusLabel(status: TimelineToolActivity['status'], zh: boolean): string {
@@ -91,6 +92,7 @@ export default function ThinkingActivity({
   tools = [],
   thinkingStartedAtMs = null,
   thinkingFinishedAtMs = null,
+  nowMs = 0,
 }: ThinkingActivityProps) {
   const zh = locale.startsWith('zh');
   const live = Boolean(thinking?.live);
@@ -99,25 +101,16 @@ export default function ThinkingActivity({
       ? thinkingStartedAtMs
       : null;
 
-  // Local clock: 100ms matches formatElapsed's 0.1s display step.
-  const [now, setNow] = useState(() => Date.now());
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
-  useEffect(() => {
-    if (!live || started == null) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 100);
-    return () => window.clearInterval(timer);
-  }, [live, started]);
-
   if (!thinking && tools.length === 0) return null;
 
   let thinkingDurationLabel: string | null = null;
   if (thinking && started != null) {
     const end = live
-      ? now
+      ? nowMs
       : thinkingFinishedAtMs != null && Number.isFinite(thinkingFinishedAtMs)
         ? thinkingFinishedAtMs
-        : now;
+        : nowMs;
     thinkingDurationLabel = formatElapsed(Math.max(0, end - started));
   }
 

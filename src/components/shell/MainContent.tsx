@@ -1,10 +1,9 @@
 'use client';
 
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { type Locale } from '@/i18n';
 import type { FileEntry } from '@/types/file';
 import ErrorBoundary from '@/components/ui/ErrorBoundary';
-import SettingsPage from './SettingsPage';
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 import { getBuiltinTool } from '@/lib/builtin-tools';
 import { isSettingsView, getSettingsSection } from './settings-navigation';
@@ -16,6 +15,7 @@ const LazyFilePreview = lazy(() => import('@/components/files/FilePreview'));
 const LazyAiWorkbench = lazy(() => import('@/components/ai/AiWorkbench'));
 const LazyToolsPage = lazy(() => import('@/components/tools/ToolsPage'));
 const LazyAssistantWorkbench = lazy(() => import('@/components/assistant/AssistantWorkbench'));
+const LazySettingsPage = lazy(() => import('./SettingsPage'));
 
 const BUILTIN_LAZY_MAP: Record<string, React.LazyExoticComponent<any>> = {};
 
@@ -24,6 +24,22 @@ const LazyFallback = () => (
     <MathCurveLoader size={48} />
   </div>
 );
+
+function BuiltinToolLauncher({ toolId, children }: { toolId: string; children: React.ReactNode }) {
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = await window.nativesAPI?.builtinTool?.list?.();
+        if (cancelled) return;
+        const entry = list?.find((t: { id: string }) => t.id === toolId);
+        if (entry?.driver && entry.driver !== 'native') await window.nativesAPI?.builtinTool?.launch?.(entry.driver);
+      } catch { /* best effort */ }
+    })();
+    return () => { cancelled = true; };
+  }, [toolId]);
+  return <>{children}</>;
+}
 
 export interface MainContentProps {
   activeView: string;
@@ -76,16 +92,7 @@ export default function MainContent({
     }
 
     if (toolDef) {
-      (async () => {
-        try {
-          const list = await window.nativesAPI?.builtinTool?.list?.();
-          const entry = list?.find((t: { id: string }) => t.id === toolId);
-          if (entry?.driver && entry.driver !== 'native') {
-            await window.nativesAPI?.builtinTool?.launch?.(entry.driver);
-          }
-        } catch { /* ignore */ }
-      })();
-      return children;
+      return <BuiltinToolLauncher toolId={toolId}>{children}</BuiltinToolLauncher>;
     }
 
     return children;
@@ -93,7 +100,7 @@ export default function MainContent({
 
   // Settings routing — handle all settings: prefixed views
   if (isSettingsView(activeView)) {
-    return <SettingsPage activeSection={getSettingsSection(activeView)} locale={locale} />;
+    return <Suspense fallback={<LazyFallback />}><LazySettingsPage activeSection={getSettingsSection(activeView)} locale={locale} /></Suspense>;
   }
 
   switch (activeView) {

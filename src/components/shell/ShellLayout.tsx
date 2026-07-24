@@ -1,7 +1,6 @@
 'use client';
 
 import { startTransition, useState, useEffect, useCallback, memo, lazy, Suspense } from 'react';
-import { motion, useReducedMotion } from 'framer-motion';
 import { type Locale } from '@/i18n';
 import Sidebar, { SIDEBAR_COLLAPSED_WIDTH, clampSidebarWidth } from './Sidebar';
 import RightPanel, { clampRightPanelWidth } from './RightPanel';
@@ -9,7 +8,6 @@ import type { RightPanelMode } from './RightPanel';
 import NotificationPanel from './NotificationPanel';
 import Header from './Header';
 import TerminalPanel from './Terminal';
-import CommandPalette from './CommandPalette';
 import ErrorBoundary from '@/components/ui/ErrorBoundary';
 import ControlHubWidget from './ControlHubWidget';
 import MainContent from './MainContent';
@@ -17,13 +15,8 @@ import { applyTheme } from '@/lib/theme-engine';
 
 const MemoizedSidebar = memo(Sidebar);
 const MemoizedHeader = memo(Header);
-import ScreenshotCard from '@/components/screenshot/ScreenshotCard';
-import AnnotationEditor from '@/components/screenshot/AnnotationEditor';
-import ReleaseWizardDialog from '@/components/release/ReleaseWizardDialog';
-import UpdateNotification from '@/components/update/UpdateNotification';
 // V1.0: LiquidGlass 已退役（纯色 Surface 体系）
 import { getHttpPort } from '@/lib/natives-http-port';
-import ModuleDetails from './ModuleDetails';
 import { useShellState } from './useShellState';
 import '@/types'; // ensure Window.nativesAPI type
 import { Edit2, Eye } from 'lucide-react';
@@ -34,11 +27,31 @@ import type { PreviewSubMode } from '@/components/files/FilePreview';
 
 // Right panel lazy imports (not in MainContent)
 const LazyFilePreview = lazy(() => import('@/components/files/FilePreview'));
+const LazyCommandPalette = lazy(() => import('./CommandPalette'));
+const LazyScreenshotCard = lazy(() => import('@/components/screenshot/ScreenshotCard'));
+const LazyAnnotationEditor = lazy(() => import('@/components/screenshot/AnnotationEditor'));
+const LazyReleaseWizardDialog = lazy(() => import('@/components/release/ReleaseWizardDialog'));
+const LazyUpdateNotification = lazy(() => import('@/components/update/UpdateNotification'));
+const LazyModuleDetails = lazy(() => import('./ModuleDetails'));
 const LazyFallback = () => (
   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 16 }}>
     <MathCurveLoader size={48} />
   </div>
 );
+
+function IdleUpdateNotification({ locale }: { locale: Locale }) {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const schedule = (window as Window & { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
+    if (schedule) {
+      const id = schedule(() => setReady(true));
+      return () => (window as Window & { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback?.(id);
+    }
+    const id = window.setTimeout(() => setReady(true), 1000);
+    return () => window.clearTimeout(id);
+  }, []);
+  return ready ? <Suspense fallback={null}><LazyUpdateNotification locale={locale} /></Suspense> : null;
+}
 import { useLayoutEvents } from './hooks/useLayoutEvents';
 import { useModuleEvents } from './hooks/useModuleEvents';
 import { useFileEvents } from './hooks/useFileEvents';
@@ -57,7 +70,6 @@ interface ShellState {
 }
 
 export default function ShellLayout({ children }: { children: React.ReactNode }) {
-  const prefersReducedMotion = useReducedMotion();
   const {
     state, setState, stateRef,
     activeView, setActiveView,
@@ -80,6 +92,16 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     toggleRightPanel,
     setRightPanelMode,
   } = useShellState();
+
+  const handleSidebarResize = useCallback((width: number) => {
+    setState((prev) => ({ ...prev, sidebarWidth: clampSidebarWidth(width) }));
+  }, [setState]);
+  const handleRightPanelResize = useCallback((width: number) => {
+    setState((prev) => ({ ...prev, rightPanelWidth: clampRightPanelWidth(width) }));
+  }, [setState]);
+  const handleTerminalResize = useCallback((height: number) => {
+    setState((prev) => ({ ...prev, terminalHeight: height }));
+  }, [setState]);
 
   // ── Event hooks ──
   useLayoutEvents({
@@ -347,10 +369,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           isCollapsed={effectiveSidebarCollapsed}
           onToggle={toggleSidebar}
           width={state.sidebarWidth}
-          onResize={(w) => setState((prev) => ({
-            ...prev,
-            sidebarWidth: clampSidebarWidth(w),
-          }))}
+          onResize={handleSidebarResize}
           activeModuleId={activeView}
           onModuleSelect={handleModuleSelect}
           onNotificationClick={() => toggleRightPanel('notifications')}
@@ -361,12 +380,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       {/* Right: Workspace */}
       <div className="flex-1 flex flex-col min-w-0 h-full box-border relative z-10">
         {/* Main Content — conditional bottom margin to preserve gap when terminal is visible */}
-        <motion.div
+        <div
           className={`flex-1 surface-section min-w-0 overflow-hidden relative flex flex-col${state.terminalCollapsed || isSettingsMode ? '' : ' mb-3'}`}
           style={{ paddingTop: 0 }}
-          initial={prefersReducedMotion ? undefined : { opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={prefersReducedMotion ? undefined : { type: 'spring', stiffness: 100, damping: 20, mass: 0.8 }}
         >
           {/* ↓ relative z-20 确保 header 的下拉菜单不被 content panel 遮住 */}
           {activeView !== 'dashboard' && !isSettingsMode && (
@@ -400,7 +416,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           </div>
           {/* Portal target for content-area overlays — covers only the content panel */}
           <div id="content-overlay-root" style={{ position: 'absolute', inset: 0, zIndex: 50, pointerEvents: 'none' }} />
-        </motion.div>
+        </div>
 
         {/* Terminal — bottom of workspace column, hidden via CSS to preserve state */}
         <div className={isSettingsMode ? 'hidden' : 'contents'}>
@@ -408,7 +424,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
             isCollapsed={state.terminalCollapsed}
             onToggle={toggleTerminal}
             height={state.terminalHeight}
-            onResize={(h) => setState((prev) => ({ ...prev, terminalHeight: h }))}
+            onResize={handleTerminalResize}
             isMaximized={state.terminalMaximized}
             onMaximizeToggle={toggleMaximized}
             onSessionCreated={(id) => { terminalSessionIdRef.current = id; }}
@@ -426,10 +442,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           previewSubMode={state.previewSubMode}
           onPreviewSubModeChange={setPreviewSubMode}
           width={state.rightPanelWidth}
-          onResize={(w) => setState((prev) => ({
-            ...prev,
-            rightPanelWidth: clampRightPanelWidth(w),
-          }))}
+          onResize={handleRightPanelResize}
           title={state.rightPanelMode === 'file-preview' && selectedFile ? selectedFile.name : undefined}
           extraHeaderContent={
             state.rightPanelMode === 'file-preview' && selectedFile && state.previewSubMode === 'preview'
@@ -470,12 +483,12 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
             </Suspense>
           )}
           {state.rightPanelMode === 'module-details' && activeView.startsWith('module:') && (
-            <ModuleDetails moduleId={activeView.slice(7)} locale={locale} />
+            <Suspense fallback={<LazyFallback />}><LazyModuleDetails moduleId={activeView.slice(7)} locale={locale} /></Suspense>
           )}
         </RightPanel>
         </div>
       )}
-      <CommandPalette
+      <Suspense fallback={null}><LazyCommandPalette
         isOpen={state.cmdkOpen}
         onClose={() => setState((prev) => ({ ...prev, cmdkOpen: false }))}
     // eslint-disable-next-line react-hooks/refs
@@ -483,10 +496,10 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         onToggleTerminal={toggleTerminal}
     // eslint-disable-next-line react-hooks/refs
         terminalSessionId={terminalSessionIdRef.current}
-      />
+      /></Suspense>
 
       {/* Phase 3: Screenshot Card */}
-      <ScreenshotCard
+      <Suspense fallback={null}><LazyScreenshotCard
         locale={locale}
         onSendToTerminal={(filePath) => {
           const terminal = document.querySelector<HTMLTextAreaElement>('[data-terminal-input]');
@@ -533,11 +546,11 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           }
         }}
         onDismiss={() => {}}
-      />
+      /></Suspense>
 
       {/* Phase 3: Annotation Editor */}
       {annotationImageUrl && annotatingFile && (
-        <AnnotationEditor
+        <Suspense fallback={null}><LazyAnnotationEditor
           locale={locale}
           imageUrl={annotationImageUrl}
           onSave={async (dataUrl) => {
@@ -556,18 +569,18 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
             setAnnotatingFile(null);
             setAnnotationImageUrl(null);
           }}
-        />
+        /></Suspense>
       )}
 
       {/* Phase 3: Release Wizard */}
-      <ReleaseWizardDialog
+      <Suspense fallback={null}><LazyReleaseWizardDialog
         locale={locale}
         isOpen={releaseWizardOpen}
         onClose={() => setReleaseWizardOpen(false)}
-      />
+      /></Suspense>
 
       {/* Phase 3: Update Notification */}
-      <UpdateNotification locale={locale} />
+      <IdleUpdateNotification locale={locale} />
     </div>
     </div>
     </>

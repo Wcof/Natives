@@ -391,7 +391,7 @@ export default function ActivityInspector({
     } finally {
       setTasksLoading(false);
     }
-  }, [useTaskList, gateway, run?.id, conversationId, onRefreshTasks]);
+  }, [useTaskList, gateway, run, conversationId, onRefreshTasks]);
 
   useEffect(() => {
     if (effectiveTab !== 'tasks' || !useTaskList) return;
@@ -421,7 +421,7 @@ export default function ActivityInspector({
       onTabChange('changes');
       onOpenFile?.(item.path);
     },
-    [onOpenFile, onTabChange],
+    [onOpenFile, onTabChange, setSelectedChangePath],
   );
 
   const handleSelectSubagent = useCallback(

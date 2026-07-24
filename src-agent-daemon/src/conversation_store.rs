@@ -10,9 +10,11 @@ pub async fn request(method: &str, params: Value) -> Result<Value, String> {
     match method {
         names::CONVERSATION_CREATE => create(params),
         names::CONVERSATION_LIST => list(params),
+        "conversation.listPage" => list_page(params),
         names::CONVERSATION_GET => get(params),
         names::CONVERSATION_FORK => fork(params),
         names::CONVERSATION_GET_MESSAGES => get_messages(params),
+        "conversation.getMessagesPage" => get_messages_page(params),
         names::CONVERSATION_APPEND_MESSAGE => append_message(params),
         names::CONVERSATION_RENAME => rename(params),
         names::CONVERSATION_UPDATE_MODEL => update_model(params),
@@ -111,6 +113,32 @@ fn list(params: Value) -> Result<Value, String> {
         .query_map([], row_to_conversation)
         .map_err(|e| e.to_string())?;
     Ok(Value::Array(rows.filter_map(Result::ok).collect()))
+}
+
+fn list_page(params: Value) -> Result<Value, String> {
+    let limit = params.get("limit").and_then(Value::as_i64).unwrap_or(100).clamp(20, 200);
+    let cursor = params.get("cursor");
+    let cursor_updated = cursor.and_then(|v| v.get("updatedAt").or_else(|| v.get("updated_at"))).and_then(Value::as_str);
+    let cursor_id = cursor.and_then(|v| v.get("id")).and_then(Value::as_str);
+    let store = store()?;
+    let conn = store.conn()?;
+    let mut stmt = conn.prepare(
+        "SELECT id, mode, project_id, title, provider_id, model_id, permission_profile_id,
+                created_at, updated_at, archived_at, parent_conversation_id
+         FROM conversation
+         WHERE parent_conversation_id IS NULL
+           AND (?1 IS NULL OR updated_at < ?1 OR (updated_at = ?1 AND id < ?2))
+         ORDER BY updated_at DESC, id DESC LIMIT ?3")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map(params![cursor_updated, cursor_id, limit + 1], row_to_conversation)
+        .map_err(|e| e.to_string())?;
+    let mut conversations: Vec<Value> = rows.filter_map(Result::ok).collect();
+    let has_more = conversations.len() > limit as usize;
+    conversations.truncate(limit as usize);
+    let next_cursor = has_more.then(|| conversations.last()).flatten().and_then(|row| Some(serde_json::json!({
+        "updatedAt": row.get("updated_at")?, "id": row.get("id")?
+    })));
+    Ok(serde_json::json!({ "conversations": conversations, "nextCursor": next_cursor }))
 }
 
 fn get(params: Value) -> Result<Value, String> {
@@ -264,16 +292,20 @@ fn fork(params: Value) -> Result<Value, String> {
 
 fn get_messages(params: Value) -> Result<Value, String> {
     let conversation_id = required_str(&params, "conversation_id")?;
+    let page_limit = params.get("limit").and_then(Value::as_i64).map(|n| n.clamp(20, 200));
+    let cursor = params.get("cursor");
+    let cursor_created = cursor.and_then(|v| v.get("createdAt").or_else(|| v.get("created_at"))).and_then(Value::as_str);
+    let cursor_id = cursor.and_then(|v| v.get("id")).and_then(Value::as_str);
     let store = store()?;
     let conn = store.conn()?;
-    let mut stmt = conn
-        .prepare(
+    let mut messages: Vec<Value> = if let Some(limit) = page_limit {
+        let mut stmt = conn.prepare(
             "SELECT id, role, conversation_id, parent_message_id, status, input_tokens, output_tokens, created_at
-             FROM message WHERE conversation_id = ?1 ORDER BY created_at ASC",
-        )
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map(params![conversation_id], |row| {
+             FROM message WHERE conversation_id = ?1
+               AND (?2 IS NULL OR created_at < ?2 OR (created_at = ?2 AND id < ?3))
+             ORDER BY created_at DESC, id DESC LIMIT ?4",
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(params![conversation_id, cursor_created, cursor_id, limit + 1], |row| {
             Ok(serde_json::json!({
                 "id": row.get::<_, String>(0)?,
                 "role": row.get::<_, String>(1)?,
@@ -284,9 +316,25 @@ fn get_messages(params: Value) -> Result<Value, String> {
                 "output_tokens": row.get::<_, Option<i64>>(6)?,
                 "created_at": row.get::<_, String>(7)?,
             }))
-        })
-        .map_err(|e| e.to_string())?;
-    let mut messages: Vec<Value> = rows.filter_map(Result::ok).collect();
+        }).map_err(|e| e.to_string())?;
+        let mut rows: Vec<Value> = rows.filter_map(Result::ok).collect();
+        rows.reverse();
+        rows
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT id, role, conversation_id, parent_message_id, status, input_tokens, output_tokens, created_at
+             FROM message WHERE conversation_id = ?1 ORDER BY created_at ASC, id ASC",
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(params![conversation_id], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?, "role": row.get::<_, String>(1)?,
+                "conversation_id": row.get::<_, String>(2)?, "parent_message_id": row.get::<_, Option<String>>(3)?,
+                "status": row.get::<_, String>(4)?, "input_tokens": row.get::<_, Option<i64>>(5)?,
+                "output_tokens": row.get::<_, Option<i64>>(6)?, "created_at": row.get::<_, String>(7)?,
+            }))
+        }).map_err(|e| e.to_string())?;
+        rows.filter_map(Result::ok).collect()
+    };
 
     let mut blocks = conn
         .prepare(
@@ -359,6 +407,23 @@ fn get_messages(params: Value) -> Result<Value, String> {
         message["content_blocks"] = serde_json::json!(content_blocks);
     }
     Ok(Value::Array(messages))
+}
+
+fn get_messages_page(params: Value) -> Result<Value, String> {
+    let conversation_id = required_str(&params, "conversation_id")?;
+    let limit = params.get("limit").and_then(Value::as_i64).unwrap_or(100).clamp(20, 200);
+    let cursor = params.get("cursor");
+    let cursor_created = cursor.and_then(|v| v.get("createdAt").or_else(|| v.get("created_at"))).and_then(Value::as_str);
+    let cursor_id = cursor.and_then(|v| v.get("id")).and_then(Value::as_str);
+    let all = get_messages(serde_json::json!({ "conversation_id": conversation_id, "limit": limit, "cursor": { "createdAt": cursor_created, "id": cursor_id } }))?;
+    let mut messages: Vec<Value> = all.as_array().cloned().unwrap_or_default();
+    let has_more = messages.len() > limit as usize;
+    messages.truncate(limit as usize);
+    let next_cursor = has_more.then(|| messages.first()).flatten().and_then(|row| Some(serde_json::json!({
+        "createdAt": row.get("created_at")?, "id": row.get("id")?
+    })));
+    messages.reverse();
+    Ok(serde_json::json!({ "messages": messages, "nextCursor": next_cursor }))
 }
 
 pub fn engine_history(conversation_id: &str) -> Result<Vec<EngineMessage>, String> {
