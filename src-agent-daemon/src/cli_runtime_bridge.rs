@@ -432,39 +432,25 @@ async fn wait_host_permission(
     timeout: Duration,
 ) -> bool {
     let (tx, rx) = oneshot::channel();
-    {
-        let _waiters = runtime.permission_waiters_ref();
-        let mut map = _waiters.lock().await;
-        map.insert(
-            permission_id.to_string(),
-            (run_id.to_string(), "cli".into(), tx),
-        );
-    }
-    let cancel = runtime.execution.token(run_id).await.or_else(|| {
-        // Fall back to mirrored cli flag.
-        None
-    });
-    let cancel = if let Some(c) = cancel {
-        c
-    } else {
-        runtime
-            .get_cli_cancel(run_id)
-            .await
-            .unwrap_or_else(CancellationToken::new)
-    };
+    runtime
+        .insert_permission_waiter(permission_id, run_id, "cli", tx)
+        .await;
+    let cancel = runtime
+        .execution
+        .token(run_id)
+        .await
+        .unwrap_or_else(CancellationToken::new);
     tokio::select! {
         biased;
         _ = cancel.cancelled() => {
-            let _waiters = runtime.permission_waiters_ref(); let mut map = _waiters.lock().await;
-            map.remove(permission_id);
+            let _ = runtime.remove_permission_waiter(permission_id).await;
             false
         }
         res = tokio::time::timeout(timeout, rx) => {
             match res {
                 Ok(Ok((approved, _scope))) => approved,
                 _ => {
-                    let _waiters = runtime.permission_waiters_ref(); let mut map = _waiters.lock().await;
-                    map.remove(permission_id);
+                    let _ = runtime.remove_permission_waiter(permission_id).await;
                     false
                 }
             }

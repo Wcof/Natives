@@ -56,7 +56,7 @@ impl crate::runtime::execution_registry::ProcessCancelHook for GlobalProcessCanc
 /// - `tool_policy` → [`crate::runtime::ToolPolicyState`]
 /// - `permission_waiters` / `assignment_*` → InteractionHub maps (still pub for bridge)
 /// - `subagents` / `task_outputs` → TaskSupervisor maps
-/// - `engines` / `cli_cancel_flags` → migrating into ExecutionRegistry
+/// - `engines` → migrating into ExecutionRegistry
 ///
 /// Callers should use methods (`cancel_run`, `respond_permission`, `set_run_tool_allowlist`)
 /// rather than reaching into maps when possible.
@@ -73,9 +73,6 @@ pub struct ProductionRuntime {
     /// task_id → child run status/output
     pub task_outputs: Arc<Mutex<HashMap<String, crate::runtime::TaskRecord>>>,
     pub engines: Arc<Mutex<HashMap<String, Arc<AgentEngine>>>>,
-    /// CLI runtime cancel flags (run_id → flag). Prefer [`Self::execution`] token tree (task-03).
-    /// Kept as a compatibility mirror while CLI bridge migrates fully to ExecutionRegistry.
-    cli_cancel_flags: Arc<Mutex<HashMap<String, CancellationToken>>>,
     /// Sole cancel-token + join/resource registry (task-03). Agent C relocates in task-01.
     pub execution: Arc<crate::runtime::ExecutionRegistry>,
     /// Structured tool grant policy (task-09). Agent C relocates in task-01.
@@ -121,7 +118,6 @@ impl ProductionRuntime {
             permission_waiters: Arc::new(Mutex::new(HashMap::new())),
             task_outputs: Arc::new(Mutex::new(HashMap::new())),
             engines: Arc::new(Mutex::new(HashMap::new())),
-            cli_cancel_flags: Arc::new(Mutex::new(HashMap::new())),
             execution: Arc::new(crate::runtime::ExecutionRegistry::new()),
             tool_policy: Arc::new(crate::runtime::ToolPolicyState::new()),
             assignment_waiters: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -226,23 +222,6 @@ impl ProductionRuntime {
         self.task_outputs.lock().await.remove(id)
     }
 
-    // ─── CLI cancel flag facade (task-01) ───
-
-    /// Take a CLI cancel flag (consumes).
-    pub async fn take_cli_cancel(&self, run_id: &str) -> Option<CancellationToken> {
-        self.cli_cancel_flags.lock().await.remove(run_id)
-    }
-
-    /// Clone CLI cancel flag reference (does not consume).
-    pub async fn get_cli_cancel(&self, run_id: &str) -> Option<CancellationToken> {
-        self.cli_cancel_flags.lock().await.get(run_id).cloned()
-    }
-
-    /// Remove CLI cancel flag.
-    pub async fn remove_cli_cancel(&self, run_id: &str) -> bool {
-        self.cli_cancel_flags.lock().await.remove(run_id).is_some()
-    }
-
     // ─── Assignment facade (task-01 / task-11) ───
 
     /// Clone assignment waiters map for PermissionGatedTools.
@@ -255,21 +234,6 @@ impl ProductionRuntime {
     /// Clone assignment inflight map for subagent store.
     pub fn assignment_inflight_ref(&self) -> Arc<std::sync::Mutex<HashMap<String, String>>> {
         self.interactions.assignment_inflight_arc()
-    }
-
-    /// Register a cancel flag for a CLI-backed run (REQ-T01).
-    pub async fn register_cli_cancel(&self, run_id: &str, flag: CancellationToken) {
-        self.cli_cancel_flags
-            .lock()
-            .await
-            .insert(run_id.to_string(), flag.clone());
-        // Single cancel entry: register token on ExecutionRegistry tree as well.
-        let _ = self.execution.register_with_token(run_id, None, flag).await;
-    }
-
-    /// Drop CLI cancel flag after the turn ends.
-    pub async fn clear_cli_cancel(&self, run_id: &str) {
-        self.cli_cancel_flags.lock().await.remove(run_id);
     }
 
     pub async fn set_permission_profile(&self, profile: &str) {
@@ -579,16 +543,8 @@ impl ProductionRuntime {
             run_ids.push(run_id.to_string());
         }
 
-        // Signal cooperative cancel on registry tokens + legacy cli flags + engines.
+        // Signal cooperative cancel on registry tokens + engines.
         let _ = self.execution.signal_tree(run_id).await;
-        {
-            let flags = self.cli_cancel_flags.lock().await;
-            for rid in &run_ids {
-                if let Some(flag) = flags.get(rid) {
-                    flag.cancel();
-                }
-            }
-        }
         {
             let engines = self.engines.lock().await;
             for rid in &run_ids {
@@ -622,15 +578,11 @@ impl ProductionRuntime {
             );
         }
 
-        // Drop engine handles + CLI cancel mirrors for this tree after force phase.
+        // Drop engine handles for this tree after force phase.
         {
             let mut engines = self.engines.lock().await;
             for rid in &outcome.run_ids {
                 engines.remove(rid);
-            }
-            let mut flags = self.cli_cancel_flags.lock().await;
-            for rid in &outcome.run_ids {
-                flags.remove(rid);
             }
         }
 
@@ -676,11 +628,6 @@ impl ProductionRuntime {
         } else {
             self.execution.register_root(run_id).await?
         };
-        // Mirror into cli_cancel_flags so older CLI paths flip the same token.
-        self.cli_cancel_flags
-            .lock()
-            .await
-            .insert(run_id.to_string(), reg.token.clone());
         Ok(reg.token)
     }
 

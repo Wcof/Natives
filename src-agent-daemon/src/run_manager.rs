@@ -1443,10 +1443,10 @@ impl RunManager {
 
         // REQ-T02: Codex remains fail-closed (app-server not implemented).
         if runtime_id == "codex_cli" {
-            let cancel = CancellationToken::new();
-            self.runtime
-                .register_cli_cancel(&run.id, cancel.clone())
-                .await;
+            let cancel = self
+                .runtime
+                .ensure_execution_token(&run.id, run.parent_run_id.as_deref())
+                .await?;
             let err = match crate::codex_runtime_bridge::run_codex_cli_turn(
                 &self.runtime,
                 &run.id,
@@ -1465,7 +1465,7 @@ impl RunManager {
                 Ok(s) => s,
                 Err(e) => e,
             };
-            self.runtime.clear_cli_cancel(&run.id).await;
+            self.runtime.execution.mark_finished(&run.id).await;
             let _ = self.commit_status(
                 &run.id,
                 RunStatusV2::Failed,
@@ -1486,10 +1486,10 @@ impl RunManager {
             && std::env::var("NATIVES_DAEMON_FIXTURE").ok().as_deref() != Some("1")
             && !cfg!(test)
         {
-            let cancel = CancellationToken::new();
-            self.runtime
-                .register_cli_cancel(&run.id, cancel.clone())
-                .await;
+            let cancel = self
+                .runtime
+                .ensure_execution_token(&run.id, run.parent_run_id.as_deref())
+                .await?;
             // Commit Running before the turn: Preparing→{Completed,Cancelled} are not
             // legal edges, but Running→terminal are. CLI is actively running here.
             let _ = self.commit_status(
@@ -1514,6 +1514,7 @@ impl RunManager {
             {
                 Ok(s) => s,
                 Err(e) => {
+                    self.runtime.execution.mark_finished(&run.id).await;
                     // Do not append terminal events here; commit_status is sole lifecycle writer.
                     let meta = TransitionMetadata::empty()
                         .with_error_code("CLI_RUNTIME")
@@ -1525,7 +1526,7 @@ impl RunManager {
                         .ok_or_else(|| "run missing after cli turn".to_string());
                 }
             };
-            self.runtime.clear_cli_cancel(&run.id).await;
+            self.runtime.execution.mark_finished(&run.id).await;
             let final_status = match terminal.as_str() {
                 "completed" => RunStatusV2::Completed,
                 "cancelled" => RunStatusV2::Cancelled,
@@ -3215,7 +3216,9 @@ mod tests {
                 max_steps: Some(5),
                 parent_run_id: None,
                 project_path: None,
-                idempotency_key: Some("tree-parent".into()),
+                // EventSequencer may persist across test processes; keep this run's
+                // replay cursor isolated while preserving the one-terminal assertion.
+                idempotency_key: Some(format!("tree-parent-{}", Uuid::new_v4())),
                 effort: None,
                 runtime_id: None,
             })
