@@ -1,10 +1,12 @@
 use crate::{Error, Result};
 use sha2::{Digest, Sha256};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const MAX_CACHE_SIZE: u64 = 400 * 1024 * 1024; // 400 MB
 const THUMB_WIDTH_MIN: u32 = 48;
 const THUMB_WIDTH_MAX: u32 = 1600;
+static EVICTION_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Generate a thumbnail for a file. Returns (jpeg_data, was_cached).
 pub fn generate_thumbnail(file_path: &str, width: u32) -> Result<Option<(Vec<u8>, bool)>> {
@@ -62,8 +64,11 @@ pub fn generate_thumbnail(file_path: &str, width: u32) -> Result<Option<(Vec<u8>
     let _ = std::fs::create_dir_all(&cache_dir);
     let _ = std::fs::write(&cache_path, &jpeg_data);
 
-    // LRU eviction
-    evict_cache_if_needed(&cache_dir);
+    // ponytail: scan the cache once per 64 writes; per-write eviction made a large
+    // directory pay an O(n) filesystem walk for every visible image.
+    if EVICTION_COUNTER.fetch_add(1, Ordering::Relaxed) % 64 == 0 {
+        evict_cache_if_needed(&cache_dir);
+    }
 
     Ok(Some((jpeg_data, false)))
 }
@@ -228,4 +233,3 @@ fn evict_cache_if_needed(cache_dir: &Path) {
 fn rand_suffix() -> u32 {
     rand::random::<u32>()
 }
-

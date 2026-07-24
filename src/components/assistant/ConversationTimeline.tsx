@@ -163,6 +163,7 @@ const MessageRow = memo(function MessageRow({
                   ? reasoningFinished
                   : null
             }
+            nowMs={now}
           />
         )}
         {renderBlocks(bodyBlocks)}
@@ -254,8 +255,7 @@ export default function ConversationTimeline({
   useEffect(() => {
     if (!hasActive) return;
     setNow(Date.now());
-    // 100ms ≈ one update per 0.1s display step; rAF would re-render every frame.
-    const timer = window.setInterval(() => setNow(Date.now()), 100);
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [hasActive]);
 
@@ -324,7 +324,7 @@ export default function ConversationTimeline({
             message={message}
             locale={locale}
             zh={zh}
-            now={now}
+            now={message.status === 'streaming' || message.status === 'running' ? now : 0}
             isLastRetryable={message.id === lastRetryableId}
             onRetry={onRetry}
             copiedId={copiedId}

@@ -88,7 +88,7 @@ export default function GoalStatusBar({
   const [, setTick] = useState(0);
   useEffect(() => {
     if (!active || !run?.startedAt) return;
-    const id = window.setInterval(() => setTick((n) => n + 1), 250);
+    const id = window.setInterval(() => setTick((n) => n + 1), 1000);
     return () => window.clearInterval(id);
   }, [active, run?.startedAt, run?.id]);
 

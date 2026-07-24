@@ -2143,3 +2143,17 @@ input[type="search"]::placeholder {
 [data-theme="dark"] .btn-primary-v1:hover {
   color: var(--primary-dark) !important;
 }
+@keyframes natives-loader-spin {
+  to { transform: rotate(360deg); }
+}
+
+.math-curve-loader {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  animation: natives-loader-spin 1.6s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .math-curve-loader { animation: none; }
+}

@@ -23,6 +23,7 @@ pub const ALL: &[(i64, &str)] = &[
     (16, MIGRATION_016),
     (17, MIGRATION_017),
     (18, MIGRATION_018),
+    (19, MIGRATION_019),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -638,4 +639,14 @@ CREATE INDEX IF NOT EXISTS idx_subagent_budget_parent
     ON subagent_budget_ledger(parent_run_id);
 CREATE INDEX IF NOT EXISTS idx_subagent_budget_tree
     ON subagent_budget_ledger(tree_root_run_id);
+";
+
+/// Migration 019: stable pagination indexes for GUI snapshots.
+const MIGRATION_019: &str = "
+CREATE INDEX IF NOT EXISTS idx_conversation_updated_id
+    ON conversation(updated_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_message_conversation_created_id
+    ON message(conversation_id, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_message_block_message_sort
+    ON message_block(message_id, sort_order ASC, id ASC);
 ";

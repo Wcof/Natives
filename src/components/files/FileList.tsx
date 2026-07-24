@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { t, type Locale } from '@/i18n';
 import { type FileEntry } from '@/types/file';
 import { SPACING, FONT_SIZE } from '@/lib/design-tokens';
@@ -26,6 +26,18 @@ interface FileListProps {
 
 export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, onContextMenu, showDir, selectedIndex = -1, selectedPaths, onEditRequest, favorites, onFavoriteToggle, cutPaths, onMoveDrop, dragPaths }: FileListProps) {
   const [locale, setLocale] = useState<Locale>('zh');
+  const [count, setCount] = useState(200);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { setCount(200); }, [entries]);
+  useEffect(() => {
+    const node = sentinelRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(([item]) => {
+      if (item?.isIntersecting) setCount((value) => Math.min(value + 200, entries.length));
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [entries.length]);
 
   useEffect(() => {
     async function loadLocale() {
@@ -88,7 +100,7 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
           {t(locale, 'fileBrowser.empty')}
         </div>
       ) : (
-        entries.map((entry, index) => (
+        entries.slice(0, count).map((entry, index) => (
           <FileRow
             key={entry.path}
             entry={entry}
@@ -105,6 +117,7 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
           />
         ))
       )}
+      {count < entries.length && <div ref={sentinelRef} style={{ minHeight: 1 }} />}
     </div>
   );
 }

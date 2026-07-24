@@ -7,7 +7,8 @@ import type { CreativeAppSummary } from '@/lib/tauri-adapter';
 /**
  * Unified Personal Creations catalog.
  * Reloads on db-state-changed channel === 'creative-app' | 'module'.
- * When the page is visible, reconciles external Docker state every 5s.
+ * Reconciles on page entry/visibility recovery; running external apps get a
+ * sparse 30s visible calibration instead of a fixed 5s Docker poll.
  */
 export function useCreativeAppCatalog(options: { enabled?: boolean } = {}) {
   const { enabled = true } = options;
@@ -70,21 +71,25 @@ export function useCreativeAppCatalog(options: { enabled?: boolean } = {}) {
     };
   }, [enabled, reload]);
 
-  // Visibility-gated reconcile every 5s for Docker + local process exits
   useEffect(() => {
     if (!enabled) return;
-    const onVis = () => {
-      visibleRef.current = document.visibilityState === 'visible';
-    };
-    document.addEventListener('visibilitychange', onVis);
-    onVis();
-    const timer = setInterval(() => {
-      if (!visibleRef.current) return;
+    const reconcile = () => {
       const api = window.nativesAPI;
       if (!api?.creativeApp?.reconcile) return;
-      // reconcile already polls local exits on the backend.
       void api.creativeApp.reconcile().then(() => reload()).catch(() => {});
-    }, 5000);
+    };
+    const onVis = () => {
+      const visible = document.visibilityState === 'visible';
+      if (visible && !visibleRef.current) reconcile();
+      visibleRef.current = visible;
+    };
+    document.addEventListener('visibilitychange', onVis);
+    visibleRef.current = document.visibilityState === 'visible';
+    if (visibleRef.current) reconcile();
+    const timer = setInterval(() => {
+      if (!visibleRef.current) return;
+      reconcile();
+    }, 30000);
     return () => {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', onVis);

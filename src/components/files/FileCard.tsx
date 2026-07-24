@@ -321,24 +321,30 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
 // ── Image Thumbnail with loading + error states ──
 
 function ImageThumb({ entry, size }: { entry: FileEntry; size: number }) {
-  const { dataUrl, loading, error } = useThumbnail(entry.path, size);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (!hostRef.current || typeof IntersectionObserver === 'undefined') {
+      setVisible(true);
+      return;
+    }
+    const observer = new IntersectionObserver(([item]) => setVisible(Boolean(item?.isIntersecting)), { rootMargin: '240px' });
+    observer.observe(hostRef.current);
+    return () => observer.disconnect();
+  }, []);
+  const { dataUrl, loading, error } = useThumbnail(entry.path, size, visible);
 
-  if (loading) {
+  if (!visible || loading) {
     // 加载中显示文件图标，避免空白闪烁
     const Icon = getFileIcon(entry);
     const tint = getIconColor(entry);
     // eslint-disable-next-line react-hooks/static-components
-    return <Icon size={size} color={tint} />;
+    return <div ref={hostRef}><Icon size={size} color={tint} /></div>;
   }
   if (error || !dataUrl) {
-    return <FbImage size={size} />;
+    return <div ref={hostRef}><FbImage size={size} /></div>;
   }
-  return (
-    <img
-      src={dataUrl}
-      alt={entry.name}
-      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-      loading="lazy"
-    />
-  );
+  return <div ref={hostRef}>
+    <img src={dataUrl} alt={entry.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" />
+  </div>;
 }

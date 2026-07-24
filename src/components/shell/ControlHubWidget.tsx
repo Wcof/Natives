@@ -54,11 +54,18 @@ export default function ControlHubWidget() {
       }
     };
 
-    poll();
-    const timer = setInterval(poll, 2000);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void poll();
+    };
+    onVisibility();
+    document.addEventListener('visibilitychange', onVisibility);
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') void poll();
+    }, 5000);
     return () => {
       cancelled = true;
       clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);
 

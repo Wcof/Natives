@@ -13,6 +13,31 @@
 
 import { useState, useEffect } from 'react';
 
+const MAX_CACHE = 128;
+const cache = new Map<string, string>();
+const pending = new Map<string, Promise<string>>();
+
+async function loadThumbnail(filePath: string, width: number): Promise<string> {
+  const key = `${filePath}:${width}`;
+  const cached = cache.get(key);
+  if (cached) return cached;
+  const active = pending.get(key);
+  if (active) return active;
+  const request = (async () => {
+    const api = (window as any).nativesAPI;
+    if (!api?.thumbnail?.generate) throw new Error('thumbnail.generate API not available');
+    const result = await api.thumbnail.generate(filePath, width);
+    const base64 = typeof result === 'string' ? result : result?.buffer;
+    if (!base64) throw new Error('thumbnail returned empty');
+    const dataUrl = `data:image/jpeg;base64,${base64}`;
+    cache.set(key, dataUrl);
+    if (cache.size > MAX_CACHE) cache.delete(cache.keys().next().value as string);
+    return dataUrl;
+  })();
+  pending.set(key, request);
+  try { return await request; } finally { pending.delete(key); }
+}
+
 interface UseThumbnailResult {
   /** 生成的 data:image/jpeg;base64,... URL，成功时非空 */
   dataUrl: string | null;
@@ -22,12 +47,13 @@ interface UseThumbnailResult {
   error: string | null;
 }
 
-export function useThumbnail(filePath: string, width: number): UseThumbnailResult {
+export function useThumbnail(filePath: string, width: number, enabled = true): UseThumbnailResult {
   const [dataUrl, setDataUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!enabled) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -35,19 +61,9 @@ export function useThumbnail(filePath: string, width: number): UseThumbnailResul
 
     (async () => {
       try {
-        const api = (window as any).nativesAPI;
-        if (!api?.thumbnail?.generate) {
-          throw new Error('thumbnail.generate API not available');
-        }
-        const result = await api.thumbnail.generate(filePath, width);
+        const result = await loadThumbnail(filePath, width);
         if (!cancelled) {
-          // API 返回字符串（base64 JPEG）或 { buffer: string }
-          const base64 = typeof result === 'string' ? result : (result as any)?.buffer;
-          if (base64) {
-            setDataUrl(`data:image/jpeg;base64,${base64}`);
-          } else {
-            throw new Error('thumbnail returned empty');
-          }
+          setDataUrl(result);
         }
       } catch (err) {
         if (!cancelled) {
@@ -61,7 +77,7 @@ export function useThumbnail(filePath: string, width: number): UseThumbnailResul
     })();
 
     return () => { cancelled = true; };
-  }, [filePath, width]);
+  }, [enabled, filePath, width]);
 
   return { dataUrl, loading, error };
 }

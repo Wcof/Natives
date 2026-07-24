@@ -238,10 +238,10 @@ test('conversation menu panel lives under data-assistant-menu (outside-click mus
 
 test('assistant action menus portal to body above clipping layers', () => {
   // Must use Portal / body so overflow:hidden sidebar cannot clip the menu.
-  assert.match(assistantSidebar, /from '@\/components\/ui\/Portal'|from \"@\/components\/ui\/Portal\"/);
+  assert.match(assistantSidebar, /from '@\/components\/ui\/Portal'|from "@\/components\/ui\/Portal"/);
   assert.match(assistantSidebar, /<Portal>/);
   // Fixed positioning + design-token z-index (above right panel / terminal).
-  assert.match(assistantSidebar, /position:\s*['\"]fixed['\"]|className="fixed/);
+  assert.match(assistantSidebar, /position:\s*['"]fixed['"]|className="fixed/);
   assert.match(assistantSidebar, /--z-context-menu/);
   // Inline absolute menus for conversation/project actions should be gone.
   assert.equal(assistantSidebar.includes('absolute right-1 top-full z-50'), false);

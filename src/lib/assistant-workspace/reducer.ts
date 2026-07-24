@@ -582,14 +582,16 @@ function applyOneEvent(
     };
   }
 
-  const nextSeen = { ...seen, [event.sequence]: true as const };
+  const nextSeenEntries = Object.entries({ ...seen, [event.sequence]: true as const }).slice(-2000);
+  const nextSeen = Object.fromEntries(nextSeenEntries) as Record<number, true>;
+  const retained = [...(state.eventsByRun[runId] ?? []), event].slice(-2000);
   let next: AssistantWorkspaceState = {
     ...state,
     seenSequencesByRun: { ...state.seenSequencesByRun, [runId]: nextSeen },
     lastSequenceByRun: { ...state.lastSequenceByRun, [runId]: event.sequence },
     eventsByRun: {
       ...state.eventsByRun,
-      [runId]: [...(state.eventsByRun[runId] ?? []), event],
+      [runId]: retained,
     },
   };
 

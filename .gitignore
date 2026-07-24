@@ -69,3 +69,12 @@ plugins/
 
 # 外部引用目录
 References/
+
+# Tracked engineering instruction entrypoints
+!.claude/
+.claude/*
+!.claude/rules/
+.claude/rules/*
+!.claude/rules/performance.md
+!AGENTS.md
+!CLAUDE.md

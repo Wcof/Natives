@@ -1,6 +1,6 @@
 'use client';
 
-import { forwardRef } from 'react';
+import { forwardRef, useEffect, useRef, useState } from 'react';
 import { type FileEntry } from '@/types/file';
 import { t, useLocale } from '@/i18n';
 import FileCard from './FileCard';
@@ -32,6 +32,18 @@ const FileGrid = forwardRef<HTMLDivElement, FileGridProps>(function FileGrid(
   ref,
 ) {
   const locale = useLocale();
+  const [count, setCount] = useState(200);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { setCount(200); }, [entries]);
+  useEffect(() => {
+    const node = sentinelRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(([item]) => {
+      if (item?.isIntersecting) setCount((value) => Math.min(value + 200, entries.length));
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [entries.length]);
 
   if (entries.length === 0) {
     return (
@@ -54,7 +66,7 @@ const FileGrid = forwardRef<HTMLDivElement, FileGridProps>(function FileGrid(
         padding: SPACING.md,
       }}
     >
-      {entries.map((entry, index) => (
+      {entries.slice(0, count).map((entry, index) => (
         <FileCard
           key={entry.path}
           entry={entry}
@@ -69,6 +81,7 @@ const FileGrid = forwardRef<HTMLDivElement, FileGridProps>(function FileGrid(
           dragPaths={dragPaths}
         />
       ))}
+      {count < entries.length && <div ref={sentinelRef} style={{ minHeight: 1, gridColumn: '1 / -1' }} />}
     </div>
   );
 });
