@@ -147,7 +147,7 @@ export default function FileContextMenu({
         mkItem({ label: t(locale, 'fileBrowser.diskUsage'), action: () => onDiskUsage?.(p) }),
         mkItem({ label: t(locale, 'fileBrowser.revealInFinder'), action: () => onRevealInFinder?.(entry) }),
         'sep',
-        mkItem({ label: t(locale, 'fileBrowser.copyPath'), action: () => onCopyPath?.(entry) ?? navigator.clipboard.writeText(p) }),
+        mkItem({ label: t(locale, 'fileBrowser.copyPath'), action: () => { if (onCopyPath) onCopyPath(entry); else navigator.clipboard.writeText(p); } }),
         mkItem({ label: t(locale, 'fileBrowser.duplicate'), action: () => onDuplicate?.(entry), shortcut: '⌘D' }),
         mkItem({ label: t(locale, 'fileBrowser.copy'), action: () => onCopy?.(entry), shortcut: '⌘C' }),
         mkItem({ label: t(locale, 'fileBrowser.cut'), action: () => onCut?.(entry), shortcut: '⌘X' }),
@@ -176,7 +176,7 @@ export default function FileContextMenu({
     items.push(
       mkItem({ label: t(locale, 'fileBrowser.revealInFinder'), action: () => onRevealInFinder?.(entry) }),
       'sep',
-      mkItem({ label: t(locale, 'fileBrowser.copyPath'), action: () => onCopyPath?.(entry) ?? navigator.clipboard.writeText(p) }),
+      mkItem({ label: t(locale, 'fileBrowser.copyPath'), action: () => { if (onCopyPath) onCopyPath(entry); else navigator.clipboard.writeText(p); } }),
       mkItem({ label: t(locale, 'fileBrowser.duplicate'), action: () => onDuplicate?.(entry), shortcut: '⌘D' }),
       mkItem({ label: t(locale, 'fileBrowser.copy'), action: () => onCopy?.(entry), shortcut: '⌘C' }),
       mkItem({ label: t(locale, 'fileBrowser.cut'), action: () => onCut?.(entry), shortcut: '⌘X' }),

@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Star,
   Clock,
+  History,
   Search,
   FolderSearch,
   CornerDownLeft,
@@ -31,6 +32,7 @@ export interface FileNavShellProps {
   canGoUp: boolean;
   isFavorite: boolean;
   recentMode: boolean;
+  recentOpenedMode: boolean;
   searchQuery: string;
   sortBy: FileSortBy;
   sortDir: FileSortDir;
@@ -41,6 +43,7 @@ export interface FileNavShellProps {
   onRefresh: () => void;
   onToggleFavorite: () => void;
   onToggleRecent: () => void;
+  onToggleRecentOpened: () => void;
   onSearchChange: (query: string) => void;
   onOpenGlobalSearch: () => void;
   onPathSubmit: (path: string) => void | Promise<void>;
@@ -55,6 +58,7 @@ export default function FileNavShell({
   canGoUp,
   isFavorite,
   recentMode,
+  recentOpenedMode,
   searchQuery,
   sortBy,
   sortDir,
@@ -65,6 +69,7 @@ export default function FileNavShell({
   onRefresh,
   onToggleFavorite,
   onToggleRecent,
+  onToggleRecentOpened,
   onSearchChange,
   onOpenGlobalSearch,
   onPathSubmit,
@@ -315,7 +320,11 @@ export default function FileNavShell({
             }}
             title={`${currentPath}\n${t(locale, 'fileBrowser.editPathHint')}`}
           >
-            {recentMode ? t(locale, 'fileBrowser.recentMode') : currentPath}
+            {recentOpenedMode
+              ? t(locale, 'fileBrowser.recentOpened')
+              : recentMode
+                ? t(locale, 'fileBrowser.recentMode')
+                : currentPath}
           </button>
         )}
       </div>
@@ -479,6 +488,18 @@ export default function FileNavShell({
           title={recentMode ? t(locale, 'fileBrowser.recentModeTitle') : t(locale, 'fileBrowser.recentMode')}
         >
           <Clock size={13} />
+        </button>
+        <button
+          type="button"
+          style={{
+            ...btnStyle(true),
+            color: recentOpenedMode ? 'var(--primary)' : 'var(--text)',
+            borderColor: recentOpenedMode ? 'var(--primary)' : 'var(--border)',
+          }}
+          onClick={onToggleRecentOpened}
+          title={recentOpenedMode ? t(locale, 'fileBrowser.recentOpenedTitle') : t(locale, 'fileBrowser.recentOpened')}
+        >
+          <History size={13} />
         </button>
         <button
           type="button"

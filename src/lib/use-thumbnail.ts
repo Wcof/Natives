@@ -11,7 +11,7 @@
  *   return <img src={dataUrl} alt={alt} />;
  */
 
-import { useState, useEffect, startTransition } from 'react';
+import { useState, useEffect } from 'react';
 
 interface UseThumbnailResult {
   /** 生成的 data:image/jpeg;base64,... URL，成功时非空 */
@@ -29,9 +29,9 @@ export function useThumbnail(filePath: string, width: number): UseThumbnailResul
 
   useEffect(() => {
     let cancelled = false;
-    startTransition(() => { setLoading(true); });
-    startTransition(() => { setError(null); });
-    startTransition(() => { setDataUrl(null); });
+    setLoading(true);
+    setError(null);
+    setDataUrl(null);
 
     (async () => {
       try {
@@ -44,7 +44,7 @@ export function useThumbnail(filePath: string, width: number): UseThumbnailResul
           // API 返回字符串（base64 JPEG）或 { buffer: string }
           const base64 = typeof result === 'string' ? result : (result as any)?.buffer;
           if (base64) {
-            startTransition(() => { setDataUrl(`data:image/jpeg;base64,${base64}`); });
+            setDataUrl(`data:image/jpeg;base64,${base64}`);
           } else {
             throw new Error('thumbnail returned empty');
           }
@@ -55,7 +55,7 @@ export function useThumbnail(filePath: string, width: number): UseThumbnailResul
         }
       } finally {
         if (!cancelled) {
-          startTransition(() => { setLoading(false); });
+          setLoading(false);
         }
       }
     })();

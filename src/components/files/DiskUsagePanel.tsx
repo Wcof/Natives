@@ -3,7 +3,7 @@
 import { startTransition, useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { t, type Locale } from '@/i18n';
-import { X } from 'lucide-react';
+import { X, ExternalLink } from 'lucide-react';
 import { FbFolder, FbText } from '@/lib/file-icons';
 import { webFsClient } from '@/lib/web-fs-client';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
@@ -94,7 +94,6 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
   }, [currentPath]);
 
   const formatPath = (p: string) => {
-    const home = typeof window !== 'undefined' ? (window as any).__homeDir || '~' : '~';
     return p.startsWith('/Users/') ? '~' + p.slice(6) : p;
   };
 
@@ -208,7 +207,10 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
               return (
                 <div
                   key={item.path}
-                  onClick={() => { if (item.isDir) { setCurrentPath(item.path); onNavigate(item.path); } }}
+                  // Single click = drill into the next level *inside* the panel.
+                  // Double click / dedicated button = open in the file browser.
+                  onClick={() => { if (item.isDir) handleDirClick(item.path); }}
+                  onDoubleClick={() => { if (item.isDir) onNavigate(item.path); }}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 10,
                     padding: '8px 12px', borderRadius: BORDER_RADIUS.md,
@@ -245,6 +247,23 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
                   }}>
                     {item.sizeFormatted || fmtBytes(item.size)}
                   </div>
+                  {item.isDir && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onNavigate(item.path); }}
+                      title={t(locale, 'fileBrowser.diskUsageOpenInBrowser')}
+                      style={{
+                        position: 'relative', zIndex: 1, flexShrink: 0,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        width: 22, height: 22, borderRadius: BORDER_RADIUS.md, border: 'none',
+                        background: 'transparent', color: 'var(--text-secondary)',
+                        cursor: 'pointer',
+                      }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = 'var(--primary)'; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = 'var(--text-secondary)'; }}
+                    >
+                      <ExternalLink size={13} />
+                    </button>
+                  )}
                 </div>
               );
             })}

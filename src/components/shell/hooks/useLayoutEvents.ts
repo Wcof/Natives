@@ -124,6 +124,13 @@ export function useLayoutEvents({
     return () => window.removeEventListener('toggle-terminal', handler);
   }, [toggleTerminal]);
 
+  // Ensure-open terminal event (idempotent: expands if collapsed, never closes an open panel)
+  useEffect(() => {
+    const handler = () => setState((prev: any) => (prev.terminalCollapsed ? { ...prev, terminalCollapsed: false } : prev));
+    window.addEventListener('open-terminal', handler);
+    return () => window.removeEventListener('open-terminal', handler);
+  }, [setState]);
+
   // Open/toggle command palette from UI chrome (e.g. collapsed sidebar search)
   useEffect(() => {
     const openHandler = () => setState((prev: any) => ({ ...prev, cmdkOpen: true }));

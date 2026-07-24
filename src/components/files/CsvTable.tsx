@@ -91,7 +91,7 @@ export default function CsvTable({ content, delimiter = ',', maxRows = 500 }: Cs
       </table>
       {content.split('\n').length > maxRows + 1 && (
         <div style={{
-          padding: `px px`,
+          padding: `${SPACING.sm}px ${SPACING.md}px`,
           color: 'var(--text-disabled)',
           fontSize: FONT_SIZE.sm,
           textAlign: 'center',

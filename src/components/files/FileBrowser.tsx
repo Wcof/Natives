@@ -2,7 +2,7 @@
 
 import { startTransition, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
-import { type FileEntry, type FileKind } from '@/types/file';
+import { type FileEntry, detectFileKind } from '@/types/file';
 import { t, type Locale } from '@/i18n';
 import FileGrid from './FileGrid';
 import FileList from './FileList';
@@ -14,7 +14,7 @@ import { nextSortDir, nextSortForField, type FileSortBy } from './file-sort';
 import Skeleton from '@/components/ui/Skeleton';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Modal from '@/components/ui/Modal';
-import { pushRecentFile } from '@/lib/recent-files-client';
+import { pushRecentFile, useRecentFiles, removeRecentFile } from '@/lib/recent-files-client';
 import {
   type FavoriteItem,
   loadFavorites,
@@ -62,6 +62,12 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const [diskUsageTarget, setDiskUsageTarget] = useState<string | null>(null);
   const [locale, setLocale] = useState<Locale>('zh');
   const [recentMode, setRecentMode] = useState(false);
+  /** 「最近打开」视图（读取 LRU），与 recentMode（最近修改，后端扫描）互斥 */
+  const [recentOpenedMode, setRecentOpenedMode] = useState(false);
+  const { paths: recentOpenedPaths } = useRecentFiles();
+  /** 供 loadEntries 读取的最新 LRU 快照，避免把 paths 放进依赖数组导致预览时重载 */
+  const recentOpenedPathsRef = useRef<string[]>(recentOpenedPaths);
+  recentOpenedPathsRef.current = recentOpenedPaths;
   const [selectedIndex, setSelectedIndex] = useState(-1);
   /** Multi-selection by path (shift/cmd click). Primary cursor remains selectedIndex. */
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
@@ -83,6 +89,10 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const fileAreaRef = useRef<HTMLDivElement>(null);
   const gridContainerRef = useRef<HTMLDivElement>(null);
   const lastClickedIndexRef = useRef<number>(-1);
+  /** 代次守卫：快速导航时丢弃过期的 loadEntries 响应，防止旧内容覆盖新目录 */
+  const loadIdRef = useRef(0);
+  /** toast 计时器句柄：连续 toast 覆盖前先清理，卸载时清理防 setState */
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const navigateTo = useCallback((path: string) => {
     const normalized = path === '' ? '/' : path.replace(/\/+$/, '') || '/';
@@ -90,6 +100,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     if (historyRef.current[historyIndexRef.current] === normalized) {
       setCurrentPath(normalized);
       setRecentMode(false);
+      setRecentOpenedMode(false);
       setSelectedPaths(new Set());
       lastClickedIndexRef.current = -1;
       return;
@@ -101,6 +112,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     setHistoryTick((n) => n + 1);
     setCurrentPath(normalized);
     setRecentMode(false);
+    setRecentOpenedMode(false);
     setSelectedPaths(new Set());
     lastClickedIndexRef.current = -1;
   }, []);
@@ -111,6 +123,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       setHistoryTick((n) => n + 1);
       setCurrentPath(historyRef.current[historyIndexRef.current]!);
       setRecentMode(false);
+      setRecentOpenedMode(false);
       setSelectedPaths(new Set());
       lastClickedIndexRef.current = -1;
     }
@@ -122,6 +135,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       setHistoryTick((n) => n + 1);
       setCurrentPath(historyRef.current[historyIndexRef.current]!);
       setRecentMode(false);
+      setRecentOpenedMode(false);
       setSelectedPaths(new Set());
       lastClickedIndexRef.current = -1;
     }
@@ -140,8 +154,19 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   void historyTick;
 
   const showToast = useCallback((msg: string) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToast(msg);
-    setTimeout(() => setToast(null), 2200);
+    toastTimerRef.current = setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, 2200);
+  }, []);
+
+  // 卸载时清理 toast 计时器，避免卸载后 setState
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
   }, []);
 
   /** Resolve pasted/typed path via fs.stat; open parent if target is a file. */
@@ -252,14 +277,62 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     void toggleFavorite(entry.path);
   }, [toggleFavorite]);
 
+  // 「最近修改」「最近打开」互斥切换
+  const handleToggleRecent = useCallback(() => {
+    setRecentMode((prev) => {
+      const next = !prev;
+      if (next) setRecentOpenedMode(false);
+      return next;
+    });
+  }, []);
+
+  const handleToggleRecentOpened = useCallback(() => {
+    setRecentOpenedMode((prev) => {
+      const next = !prev;
+      if (next) setRecentMode(false);
+      return next;
+    });
+  }, []);
+
   const loadEntries = useCallback(async () => {
+    // 代次守卫：只有最新一次调用允许写回状态
+    const rid = ++loadIdRef.current;
     setLoading(true);
     try {
       const fsApi = getFsApi();
 
-      if (recentMode) {
+      if (recentOpenedMode) {
+        // 最近打开模式：读取 LRU（客户端记录），逐项 stat 过滤死链接
+        const paths = recentOpenedPathsRef.current;
+        const settled = await Promise.all(
+          paths.map(async (p) => {
+            try {
+              const st = await fsApi.stat(p);
+              if (!st?.found || st.isDir) return null; // 死链接或已变成目录 → 跳过
+              const dir = p.substring(0, p.lastIndexOf('/')) || '/';
+              const name = st.name || p.split('/').pop() || '';
+              return {
+                name,
+                path: st.path || p,
+                isDir: false,
+                kind: detectFileKind(name),
+                hidden: name.startsWith('.'),
+                size: st.size || 0,
+                mtime: st.mtime || 0,
+                btime: 0,
+                dirHint: dir === currentPath ? undefined : dir,
+              } as FileEntry;
+            } catch {
+              return null;
+            }
+          }),
+        );
+        if (rid !== loadIdRef.current) return;
+        setEntries(settled.filter((e): e is FileEntry => e !== null));
+      } else if (recentMode) {
         // 最近修改模式：调用后端递归扫描，返回按 mtime 降序的文件
         const recentData = await fsApi.recentFiles(currentPath);
+        if (rid !== loadIdRef.current) return;
         if (recentData && Array.isArray(recentData)) {
           // 转换 WalkFile 格式 → FileEntry，填入 dirHint
           const recentEntries: FileEntry[] = recentData.map((f: any) => {
@@ -269,7 +342,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
               name,
               path: f.path,
               isDir: false,
-              kind: 'text' as FileKind,
+              kind: detectFileKind(name),
               hidden: name.startsWith('.'),
               size: f.size || 0,
               mtime: f.mtime || 0,
@@ -289,24 +362,34 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             entries?: FileEntry[];
             project?: string | null;
           };
+          if (rid !== loadIdRef.current) return;
           setEntries(Array.isArray(detailed?.entries) ? detailed.entries : []);
         } else {
           const data = await fsApi.listDir(currentPath, options);
+          if (rid !== loadIdRef.current) return;
           setEntries((data as FileEntry[]) || []);
         }
       }
     } catch (err) {
+      if (rid !== loadIdRef.current) return;
       showToast(t(locale, 'fileBrowser.loadFailed'));
       setEntries([]);
     } finally {
-      setLoading(false);
+      if (rid === loadIdRef.current) setLoading(false);
     }
-  }, [currentPath, sortBy, sortDir, showHidden, recentMode, locale, showToast]);
+  }, [currentPath, sortBy, sortDir, showHidden, recentMode, recentOpenedMode, locale, showToast]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadEntries();
   }, [loadEntries]);
+
+  // 「最近打开」模式下，LRU 变化时刷新列表（loadEntries 用 ref 读取 paths，需显式触发）
+  useEffect(() => {
+    if (!recentOpenedMode) return;
+    void loadEntries();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recentOpenedPaths, recentOpenedMode]);
 
   // Drag-and-drop: files from Finder + images from WeChat/browser
   const { isDragging, dragHandlers } = useFileDrop({
@@ -393,7 +476,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       if (detail.type === 'forward') goForward();
       if (detail.type === 'up') goUp();
       if (detail.type === 'refresh') void loadEntries();
-      if (detail.type === 'toggleRecent') setRecentMode((prev) => !prev);
+      if (detail.type === 'toggleRecent') handleToggleRecent();
       if (detail.type === 'toggleFavorite') void toggleFavorite();
       if (detail.type === 'globalSearch') setGlobalSearchOpen(true);
       if (detail.type === 'goToPath' && typeof detail.value === 'string') {
@@ -402,7 +485,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     };
     window.addEventListener('header-file-action', handler);
     return () => window.removeEventListener('header-file-action', handler);
-  }, [goBack, goForward, goUp, loadEntries, toggleFavorite, resolveAndNavigate]);
+  }, [goBack, goForward, goUp, loadEntries, toggleFavorite, resolveAndNavigate, handleToggleRecent]);
 
   // Listen for external navigation events (sidebar quick access / favorites)
   useEffect(() => {
@@ -540,7 +623,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     }
     setRenameTarget(null);
     setRenameValue('');
-  }, [renameTarget, renameValue, loadEntries, showToast]);
+  }, [renameTarget, renameValue, loadEntries, showToast, locale]);
 
   const handleTrash = useCallback((entry: FileEntry) => {
     // fanbox: files trash immediately; directories ask once
@@ -553,6 +636,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         const result = await getFsApi().trashEntry(entry.path);
         if (result?.ok) {
           showToast(t(locale, 'fileBrowser.trashed'));
+          void removeRecentFile(entry.path);
           window.dispatchEvent(new CustomEvent('file-trashed', { detail: { path: entry.path } }));
           setSelectedPaths(prev => {
             const n = new Set(prev); n.delete(entry.path); return n;
@@ -721,6 +805,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         for (const p of paths) await fsApi.trashEntry(p);
         showToast(t(locale, 'fileBrowser.batchTrashed').replace('{count}', String(paths.length)));
       }
+      paths.forEach((p) => { void removeRecentFile(p); });
       setSelectedPaths(new Set());
       await loadEntries();
     } catch {
@@ -772,14 +857,25 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
 
   const handleOpenInTerminal = useCallback(async (dir: string) => {
     const api = (window as any).nativesAPI;
-    if (api?.terminal?.openInDir) {
-      // Electron: create new PTY session and cd into dir
-      const result = await api.terminal.openInDir(dir);
-      if (result?.sessionId) {
-        window.dispatchEvent(new CustomEvent('toggle-terminal'));
+    if (api?.terminal?.create && api?.terminal?.write) {
+      try {
+        // 打开终端面板 → 新建 PTY 会话 → cd 进目标目录
+        // 用幂等的 open-terminal（仅在折叠时展开），避免终端已打开时被 toggle 关闭
+        window.dispatchEvent(new CustomEvent('open-terminal'));
+        const result = await api.terminal.create() as { sessionId?: string; error?: string };
+        const sessionId = result?.sessionId;
+        if (!sessionId) {
+          showToast(t(locale, 'fileBrowser.terminalOpenFailed'));
+          return;
+        }
+        // 单引号包裹并转义内部单引号（' → '\''），防止路径中的空格/特殊字符
+        const escaped = dir.replace(/'/g, "'\\''");
+        await api.terminal.write(sessionId, `cd '${escaped}'\n`);
+      } catch {
+        showToast(t(locale, 'fileBrowser.terminalOpenFailed'));
       }
     } else {
-      // Web fallback: copy cd command
+      // 浏览器 dev 模式降级：复制 cd 命令
       navigator.clipboard.writeText(`cd "${dir}"`);
       showToast(t(locale, 'fileBrowser.copyAsCd'));
     }
@@ -804,6 +900,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       const result = await getFsApi().trashEntry(trashedPath);
       if (result?.ok) {
         showToast(t(locale, 'fileBrowser.trashed'));
+        void removeRecentFile(trashedPath);
         window.dispatchEvent(new CustomEvent('file-trashed', { detail: { path: trashedPath } }));
         await loadEntries();
       } else {
@@ -842,7 +939,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     }
     setNewItemTarget(null);
     setNewItemName('');
-  }, [newItemTarget, newItemName, loadEntries, showToast]);
+  }, [newItemTarget, newItemName, loadEntries, showToast, locale]);
 
   const segments = currentPath.split('/').filter(Boolean);
 
@@ -1067,10 +1164,10 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       viewMode, sortBy, sortDir, showHidden, gridSize,
       segments: segments.length > 0 ? segments : ['/'],
       isFavorite, breadcrumbPath: currentPath, projectBadge: detectedProject,
-      canGoBack, canGoForward, canGoUp, recentMode, searchQuery, loading,
+      canGoBack, canGoForward, canGoUp, recentMode, recentOpenedMode, searchQuery, loading,
     };
     window.dispatchEvent(new CustomEvent('header-file-state', { detail }));
-  }, [viewMode, sortBy, sortDir, showHidden, gridSize, segments, isFavorite, currentPath, detectedProject, canGoBack, canGoForward, canGoUp, recentMode, searchQuery, loading, historyTick]);
+  }, [viewMode, sortBy, sortDir, showHidden, gridSize, segments, isFavorite, currentPath, detectedProject, canGoBack, canGoForward, canGoUp, recentMode, recentOpenedMode, searchQuery, loading, historyTick]);
 
   return (
     <div style={{
@@ -1088,6 +1185,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         canGoUp={canGoUp}
         isFavorite={isFavorite}
         recentMode={recentMode}
+        recentOpenedMode={recentOpenedMode}
         searchQuery={searchQuery}
         sortBy={sortBy}
         sortDir={sortDir}
@@ -1097,7 +1195,8 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         onUp={goUp}
         onRefresh={() => { void loadEntries(); }}
         onToggleFavorite={() => { void toggleFavorite(); }}
-        onToggleRecent={() => setRecentMode((prev) => !prev)}
+        onToggleRecent={handleToggleRecent}
+        onToggleRecentOpened={handleToggleRecentOpened}
         onSearchChange={setSearchQuery}
         onOpenGlobalSearch={() => setGlobalSearchOpen(true)}
         onPathSubmit={(path) => { void resolveAndNavigate(path); }}
@@ -1185,7 +1284,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             onSort={handleSort}
             onSelect={(entry, ev) => handleSelect(entry, ev)}
             onContextMenu={handleContextMenu}
-            showDir={recentMode}
+            showDir={recentMode || recentOpenedMode}
             selectedIndex={selectedIndex}
             selectedPaths={selectedPaths}
             onEditRequest={handleOpenEntry}
@@ -1199,7 +1298,17 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       </div>
 
 
-      {!loading && filteredEntries.length === 0 && (
+      {!loading && filteredEntries.length === 0 && recentOpenedMode && (
+        <div style={{
+          display: 'flex', justifyContent: 'center',
+          padding: SPACING.md, borderTop: '1px solid var(--border)',
+          fontSize: FONT_SIZE.sm, color: 'var(--text-secondary)',
+        }}>
+          {t(locale, 'fileBrowser.recentOpenedEmpty')}
+        </div>
+      )}
+
+      {!loading && filteredEntries.length === 0 && !recentOpenedMode && (
         <div style={{
           display: 'flex', gap: SPACING.sm, justifyContent: 'center',
           padding: SPACING.md, borderTop: '1px solid var(--border)',

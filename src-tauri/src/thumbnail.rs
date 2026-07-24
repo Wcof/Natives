@@ -31,9 +31,16 @@ pub fn generate_thumbnail(file_path: &str, width: u32) -> Result<Option<(Vec<u8>
         return Ok(None);
     }
 
-    // Check cache
+    // Check cache. Key includes mtime so edits to the source invalidate stale
+    // thumbnails instead of serving the previous render forever.
+    let mtime = std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
     let cache_dir = get_cache_dir();
-    let cache_key = make_cache_key(file_path, width);
+    let cache_key = make_cache_key(file_path, width, mtime);
     let cache_path = cache_dir.join(format!("{cache_key}.jpg"));
 
     if cache_path.exists() {
@@ -68,8 +75,8 @@ fn get_cache_dir() -> std::path::PathBuf {
         .join("thumbs")
 }
 
-fn make_cache_key(file_path: &str, width: u32) -> String {
-    let input = format!("{file_path}:{width}");
+fn make_cache_key(file_path: &str, width: u32, mtime: u128) -> String {
+    let input = format!("{file_path}:{width}:{mtime}");
     let hash = Sha256::digest(input.as_bytes());
     hex::encode(hash)
 }
@@ -135,11 +142,25 @@ fn generate_ql_thumb(path: &Path, width: u32) -> Result<Vec<u8>> {
         return Err(Error::Internal("qlmanage thumbnail generation failed".into()));
     }
 
-    // qlmanage outputs a PNG file
-    let png_path = tmp_dir.join(format!(
-        "{}.png",
-        path.file_stem().and_then(|s| s.to_str()).unwrap_or("thumb")
-    ));
+    // qlmanage names its output "<full file name>.png" (e.g. video.mp4.png), not
+    // "<stem>.png". Rather than reconstruct that name, take the first .png that
+    // landed in our private temp dir — it's the only file qlmanage wrote there.
+    let png_path = std::fs::read_dir(&tmp_dir)
+        .ok()
+        .and_then(|dir| {
+            dir.flatten()
+                .map(|e| e.path())
+                .find(|p| p.extension().and_then(|e| e.to_str()) == Some("png"))
+        });
+    let png_path = match png_path {
+        Some(p) => p,
+        None => {
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+            return Err(Error::Internal(
+                "qlmanage produced no thumbnail".into(),
+            ));
+        }
+    };
 
     // Convert PNG to JPEG using sips
     let jpeg_path = tmp_dir.join("thumb.jpg");
@@ -208,74 +229,3 @@ fn rand_suffix() -> u32 {
     rand::random::<u32>()
 }
 
-// ── HEIC/HEIF full-size transcode (Natives2: transparent markdown preview) ──
-
-/// Full-size HEIC → JPEG transcode using macOS sips.
-/// Returns (jpeg_data, was_cached). Used by HTTP server for transparent HEIC preview.
-#[allow(dead_code)]
-pub fn transcode_heic(file_path: &str) -> Result<Option<(Vec<u8>, bool)>> {
-    let path = Path::new(file_path);
-    if !path.exists() || !path.is_file() {
-        return Ok(None);
-    }
-
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-
-    // Only handle HEIC/HEIF
-    if !matches!(ext.as_str(), "heic" | "heif") {
-        return Ok(None);
-    }
-
-    // Check cache (keyed on file path + mtime)
-    let cache_dir = get_cache_dir().join("heic");
-    let mtime = std::fs::metadata(path)
-        .ok()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let cache_key = make_cache_key(&format!("{file_path}:heic:{mtime}"), 0);
-    let cache_path = cache_dir.join(format!("{cache_key}.jpg"));
-
-    if cache_path.exists() {
-        if let Ok(data) = std::fs::read(&cache_path) {
-            return Ok(Some((data, true)));
-        }
-    }
-
-    // Full-size transcode using sips (no resize, just format conversion)
-    let tmp_dir = std::env::temp_dir();
-    let tmp_file = tmp_dir.join(format!("heic_{}.jpg", rand_suffix()));
-
-    let output = std::process::Command::new("sips")
-        .args([
-            "-s",
-            "format",
-            "jpeg",
-            &path.to_string_lossy(),
-            "--out",
-            &tmp_file.to_string_lossy(),
-        ])
-        .output()
-        .map_err(|e| Error::Internal(format!("sips HEIC transcode failed: {e}")))?;
-
-    if !output.status.success() {
-        return Err(Error::Internal("sips HEIC transcode failed".into()));
-    }
-
-    let data = std::fs::read(&tmp_file).map_err(Error::Io)?;
-    let _ = std::fs::remove_file(&tmp_file);
-
-    // Cache the result
-    let _ = std::fs::create_dir_all(&cache_dir);
-    let _ = std::fs::write(&cache_path, &data);
-
-    // LRU eviction for HEIC cache
-    evict_cache_if_needed(&cache_dir);
-
-    Ok(Some((data, false)))
-}
