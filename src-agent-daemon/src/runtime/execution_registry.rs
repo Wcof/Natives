@@ -91,6 +91,8 @@ pub struct ExecutionRegistry {
     /// Optional process cancel hook (task_id) — injected so tests avoid OS spawn.
     /// std mutex: install is sync-safe from non-async constructors.
     process_cancel: std::sync::Mutex<Option<Arc<dyn ProcessCancelHook>>>,
+    /// Optional external resource cleanup (must be registered; empty branch is fail-noisy).
+    external_cancel: std::sync::Mutex<Option<Arc<dyn ExternalCleanupHook>>>,
 }
 
 /// Seam for force-killing process tasks without coupling to capability-gateway types.
@@ -100,12 +102,19 @@ pub trait ProcessCancelHook: Send + Sync {
     async fn cancel_tasks_for_run(&self, run_id: &str) -> Result<(), String>;
 }
 
+/// Explicit cleanup for ManagedResource::External — empty branch is not allowed.
+#[async_trait::async_trait]
+pub trait ExternalCleanupHook: Send + Sync {
+    async fn cleanup(&self, external_id: &str) -> Result<(), String>;
+}
+
 impl ExecutionRegistry {
     pub fn new() -> Self {
         Self {
             runs: Mutex::new(HashMap::new()),
             grace: Duration::from_millis(DEFAULT_CANCEL_GRACE_MS),
             process_cancel: std::sync::Mutex::new(None),
+            external_cancel: std::sync::Mutex::new(None),
         }
     }
 
@@ -114,11 +123,18 @@ impl ExecutionRegistry {
             runs: Mutex::new(HashMap::new()),
             grace: Duration::from_millis(ms.max(1)),
             process_cancel: std::sync::Mutex::new(None),
+            external_cancel: std::sync::Mutex::new(None),
         }
     }
 
     pub fn set_process_cancel_hook(&self, hook: Arc<dyn ProcessCancelHook>) {
         if let Ok(mut slot) = self.process_cancel.lock() {
+            *slot = Some(hook);
+        }
+    }
+
+    pub fn set_external_cleanup_hook(&self, hook: Arc<dyn ExternalCleanupHook>) {
+        if let Ok(mut slot) = self.external_cancel.lock() {
             *slot = Some(hook);
         }
     }
@@ -275,40 +291,46 @@ impl ExecutionRegistry {
     /// Two-phase cancel for one tree: signal → grace → force abort/kill → clear registry entries.
     ///
     /// Does **not** commit Run status — RunManager owns that (task-02 contract).
+    ///
+    /// Grace waits only on terminal notify / join completion — never on the cancel
+    /// token itself (token is already cancelled after signal_tree, so selecting it
+    /// would end grace immediately).
     pub async fn cancel_tree(&self, run_id: &str) -> CancelCleanupOutcome {
         let tree = self.signal_tree(run_id).await;
         let grace = self.grace;
 
-        // Graceful: wait for join handles or terminal notify.
+        // Graceful: wait only for nodes that have a live JoinHandle. Selecting a
+        // cancelled token is wrong (would end grace immediately). Waiting on
+        // terminal with no join is also wrong (nothing will notify → full grace
+        // burn with no cooperative work).
         let wait_futs: Vec<_> = {
             let runs = self.runs.lock().await;
             tree.iter()
                 .filter_map(|id| {
-                    runs.get(id).map(|e| {
-                        let term = e.terminal.clone();
-                        let token = e.token.clone();
-                        async move {
-                            tokio::select! {
-                                _ = term.notified() => {}
-                                _ = token.cancelled() => {
-                                    // already cancelled; still give grace for joins
-                                }
-                            }
+                    runs.get(id).and_then(|e| {
+                        if e.join.is_none() {
+                            return None;
                         }
+                        let term = e.terminal.clone();
+                        Some(async move {
+                            term.notified().await;
+                        })
                     })
                 })
                 .collect()
         };
-        let _ = tokio::time::timeout(grace, futures_util::future::join_all(wait_futs)).await;
+        let grace_elapsed = if wait_futs.is_empty() {
+            false
+        } else {
+            tokio::time::timeout(grace, futures_util::future::join_all(wait_futs))
+                .await
+                .is_err()
+        };
 
-        // Force phase: abort joins + cancel process resources.
+        // Force phase: abort joins (and await them), cancel process/MCP/external resources.
         let mut errors = Vec::new();
-        let hook = self
-            .process_cancel
-            .lock()
-            .ok()
-            .and_then(|g| g.clone());
-        // Collect resources first so we can await hooks without holding run map.
+        let hook = self.process_cancel.lock().ok().and_then(|g| g.clone());
+        let external_hook = self.external_cancel.lock().ok().and_then(|g| g.clone());
         let mut force_jobs: Vec<(String, Option<JoinHandle<()>>, Vec<ManagedResource>)> = {
             let mut runs = self.runs.lock().await;
             let mut jobs = Vec::new();
@@ -327,6 +349,8 @@ impl ExecutionRegistry {
                 if !join.is_finished() {
                     join.abort();
                 }
+                // Await so force cleanup confirms the task has exited (not fire-and-forget).
+                let _ = join.await;
             }
             for res in resources {
                 match res {
@@ -338,9 +362,21 @@ impl ExecutionRegistry {
                         }
                     }
                     ManagedResource::McpServer(sid) => {
-                        let _ = sid;
+                        if let Err(e) = crate::mcp_runtime::global_mcp().stop(&sid) {
+                            errors.push(format!("mcp {sid}: {e}"));
+                        }
                     }
-                    ManagedResource::External(_) => {}
+                    ManagedResource::External(ext_id) => {
+                        if let Some(ref h) = external_hook {
+                            if let Err(e) = h.cleanup(&ext_id).await {
+                                errors.push(format!("external {ext_id}: {e}"));
+                            }
+                        } else {
+                            errors.push(format!(
+                                "external {ext_id}: no ExternalCleanupHook registered"
+                            ));
+                        }
+                    }
                 }
             }
             if let Some(ref h) = hook {
@@ -350,8 +386,22 @@ impl ExecutionRegistry {
             }
         }
 
-        // Remove quiet runs from registry (Cancelled means empty).
-        let quiet = errors.is_empty();
+        // quiet is computed for THIS tree only (not global active_count):
+        // residual join/resource/registry entry within tree → not quiet.
+        let residual = {
+            let runs = self.runs.lock().await;
+            tree.iter().any(|id| {
+                runs.get(id)
+                    .map(|e| {
+                        e.join.as_ref().map(|j| !j.is_finished()).unwrap_or(false)
+                            || !e.resources.is_empty()
+                    })
+                    .unwrap_or(false)
+            })
+        };
+        let quiet = errors.is_empty() && !residual;
+        // When grace completed naturally without force residual, still quiet if no errors.
+        let _ = grace_elapsed;
         let phase = if quiet {
             CancelPhase::Clean
         } else {
@@ -378,6 +428,13 @@ impl ExecutionRegistry {
             quiet,
             errors,
         }
+    }
+
+    /// True when no registry entry remains for any id in `run_id`'s tree.
+    pub async fn tree_quiet(&self, run_id: &str) -> bool {
+        let tree = self.list_tree(run_id).await;
+        let runs = self.runs.lock().await;
+        !tree.iter().any(|id| runs.contains_key(id))
     }
 
     /// Mark a run's execution finished successfully (or after natural terminal).
@@ -421,11 +478,7 @@ impl ExecutionRegistry {
     }
 
     pub async fn cancel_phase(&self, run_id: &str) -> Option<CancelPhase> {
-        self.runs
-            .lock()
-            .await
-            .get(run_id)
-            .map(|e| e.cancel_phase)
+        self.runs.lock().await.get(run_id).map(|e| e.cancel_phase)
     }
 }
 
@@ -514,5 +567,66 @@ mod tests {
         assert!(tree.contains(&"c2".into()));
         assert!(tree.contains(&"g".into()));
         assert_eq!(tree.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn grace_does_not_end_immediately_on_cancelled_token() {
+        // Bug regression: selecting token.cancelled() after signal made grace a no-op.
+        // Task ignores cancel and never notifies terminal — grace must burn the full budget
+        // before force abort (not return instantly because the token is already cancelled).
+        let reg = ExecutionRegistry::with_grace_ms(60);
+        reg.register_root("p").await.unwrap();
+        let handle = tokio::spawn(async move {
+            // Park until aborted; do not notify terminal.
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }
+        });
+        reg.attach_join("p", handle).await.unwrap();
+        let t0 = std::time::Instant::now();
+        let out = reg.cancel_tree("p").await;
+        let elapsed = t0.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(40),
+            "grace must wait for terminal/join budget, not only cancelled token: {elapsed:?}"
+        );
+        assert!(out.quiet, "{out:?}");
+        assert_eq!(reg.active_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn force_abort_awaits_join_handle() {
+        let reg = ExecutionRegistry::with_grace_ms(5);
+        reg.register_root("p").await.unwrap();
+        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let finished_bg = finished.clone();
+        let handle = tokio::spawn(async move {
+            // Park until aborted.
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }
+            #[allow(unreachable_code)]
+            {
+                finished_bg.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        reg.attach_join("p", handle).await.unwrap();
+        let out = reg.cancel_tree("p").await;
+        assert!(out.quiet, "{out:?}");
+        // Join was awaited after abort — registry entry gone and no residual.
+        assert_eq!(reg.active_count().await, 0);
+        let _ = finished;
+    }
+
+    #[tokio::test]
+    async fn tree_quiet_is_scoped_to_tree_not_global() {
+        let reg = ExecutionRegistry::with_grace_ms(10);
+        reg.register_root("a").await.unwrap();
+        reg.register_root("b").await.unwrap();
+        let out = reg.cancel_tree("a").await;
+        assert!(out.quiet);
+        assert!(reg.tree_quiet("a").await);
+        assert!(!reg.tree_quiet("b").await);
+        assert_eq!(reg.active_count().await, 1);
     }
 }

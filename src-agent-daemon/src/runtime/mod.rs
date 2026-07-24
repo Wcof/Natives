@@ -9,8 +9,8 @@ pub mod task_supervisor;
 pub mod tool_policy;
 
 pub use execution_registry::{
-    CancelCleanupOutcome, CancelPhase, ExecutionRegistration, ExecutionRegistry, ManagedResource,
-    ProcessCancelHook, DEFAULT_CANCEL_GRACE_MS,
+    CancelCleanupOutcome, CancelPhase, ExecutionRegistration, ExecutionRegistry,
+    ExternalCleanupHook, ManagedResource, ProcessCancelHook, DEFAULT_CANCEL_GRACE_MS,
 };
 pub use interaction_hub::InteractionHub;
 pub use task_supervisor::{TaskRecord, TaskSupervisor};

@@ -1017,8 +1017,8 @@ impl RunManager {
         self.runtime.cancel_run(&req.run_id).await;
 
         // Phase 3: Cancelled only after registry quiet (or Failed on cleanup fail).
-        let quiet = self.runtime.execution.active_count().await == 0
-            || !self.runtime.execution.is_registered(&req.run_id).await;
+        // quiet is scoped to this run's tree (not global active_count).
+        let quiet = self.runtime.execution.tree_quiet(&req.run_id).await;
         let current = self
             .get_run(&req.run_id)
             .ok_or_else(|| "run not found".to_string())?;

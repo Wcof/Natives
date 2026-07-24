@@ -66,8 +66,9 @@ pub struct ProductionRuntime {
     pub permissions: Arc<PermissionManager>,
     pub subagents: Arc<SubAgentManager>,
     // hooks: removed dead shared state — each start builds HookRegistry per project (task-01).
-    /// permission_id → (run_id, resolver). run_id binding prevents cross-run responds.
-    /// Owned by InteractionHub conceptually; field kept for bridge compatibility until full private facade.
+    /// Sole interaction waiter owner (permission + assignment).
+    pub interactions: Arc<crate::runtime::InteractionHub>,
+    /// Bridge Arc into InteractionHub maps (same storage) for PermissionGatedTools.
     pub permission_waiters:
         Arc<Mutex<HashMap<String, (String, String, oneshot::Sender<(bool, String)>)>>>,
     /// task_id → child run status/output
@@ -286,6 +287,7 @@ impl ProductionRuntime {
             events,
             permissions: Arc::new(PermissionManager::new(PermissionProfile::ConfirmEach)),
             subagents: Arc::new(SubAgentManager::new(SubAgentConfig::default())),
+            interactions: Arc::new(crate::runtime::InteractionHub::new()),
             permission_waiters: Arc::new(Mutex::new(HashMap::new())),
             task_outputs: Arc::new(Mutex::new(HashMap::new())),
             engines: Arc::new(Mutex::new(HashMap::new())),
@@ -297,6 +299,11 @@ impl ProductionRuntime {
             assignment_inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
             run_tool_allowlists: Arc::new(Mutex::new(HashMap::new())),
         };
+        // Bind bridge maps to InteractionHub storage (single owner).
+        let mut rt = rt;
+        rt.permission_waiters = rt.interactions.permission_waiters_arc();
+        rt.assignment_waiters = rt.interactions.assignment_waiters_arc();
+        rt.assignment_inflight = rt.interactions.assignment_inflight_arc();
         // Wire process supervisor force-kill into cancel tree (task-03).
         rt.execution
             .set_process_cancel_hook(Arc::new(GlobalProcessCancelHook));
@@ -346,7 +353,7 @@ impl ProductionRuntime {
     pub fn permission_waiters_ref(
         &self,
     ) -> Arc<Mutex<HashMap<String, (String, String, oneshot::Sender<(bool, String)>)>>> {
-        self.permission_waiters.clone()
+        self.interactions.permission_waiters_arc()
     }
 
     /// Insert a permission waiter.
@@ -357,10 +364,9 @@ impl ProductionRuntime {
         tool_name: &str,
         tx: oneshot::Sender<(bool, String)>,
     ) {
-        self.permission_waiters.lock().await.insert(
-            id.to_string(),
-            (run_id.to_string(), tool_name.to_string(), tx),
-        );
+        self.interactions
+            .register_permission(id, run_id, tool_name, tx)
+            .await;
     }
 
     /// Remove a permission waiter (on respond or cancel).
@@ -368,7 +374,7 @@ impl ProductionRuntime {
         &self,
         id: &str,
     ) -> Option<(String, String, oneshot::Sender<(bool, String)>)> {
-        self.permission_waiters.lock().await.remove(id)
+        self.interactions.resolve_permission(id).await
     }
 
     // ─── Task output facade (task-01) ───
@@ -414,12 +420,12 @@ impl ProductionRuntime {
     pub fn assignment_waiters_ref(
         &self,
     ) -> Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<Value>>>> {
-        self.assignment_waiters.clone()
+        self.interactions.assignment_waiters_arc()
     }
 
     /// Clone assignment inflight map for subagent store.
     pub fn assignment_inflight_ref(&self) -> Arc<std::sync::Mutex<HashMap<String, String>>> {
-        self.assignment_inflight.clone()
+        self.interactions.assignment_inflight_arc()
     }
 
     /// Register a cancel flag for a CLI-backed run (REQ-T01).
@@ -427,7 +433,9 @@ impl ProductionRuntime {
         self.cli_cancel_flags
             .lock()
             .await
-            .insert(run_id.to_string(), flag);
+            .insert(run_id.to_string(), flag.clone());
+        // Single cancel entry: register token on ExecutionRegistry tree as well.
+        let _ = self.execution.register_with_token(run_id, None, flag).await;
     }
 
     /// Drop CLI cancel flag after the turn ends.
@@ -785,8 +793,8 @@ impl ProductionRuntime {
             );
         }
 
-        // Drop engine handles for quiet trees so terminal means no live execution.
-        if outcome.quiet {
+        // Drop engine handles + CLI cancel mirrors for this tree after force phase.
+        {
             let mut engines = self.engines.lock().await;
             for rid in &outcome.run_ids {
                 engines.remove(rid);
@@ -812,26 +820,13 @@ impl ProductionRuntime {
     }
 
     async fn cancel_waiters_for_runs(&self, run_ids: &[String]) {
-        let set: std::collections::HashSet<&str> = run_ids.iter().map(|s| s.as_str()).collect();
-        {
-            let mut map = self.permission_waiters.lock().await;
-            let stale: Vec<String> = map
-                .iter()
-                .filter(|(_, (rid, _, _))| set.contains(rid.as_str()))
-                .map(|(pid, _)| pid.clone())
-                .collect();
-            for pid in stale {
-                if let Some((_rid, _tool, tx)) = map.remove(&pid) {
-                    let _ = tx.send((false, "cancelled".into()));
-                    let _ = crate::interaction_store::mark_resolved(
-                        &pid,
-                        serde_json::json!({ "approved": false, "scope": "once", "reason": "cancelled" }),
-                    );
-                }
-            }
+        let stale = self.interactions.cancel_runs(run_ids).await;
+        for pid in stale {
+            let _ = crate::interaction_store::mark_resolved(
+                &pid,
+                serde_json::json!({ "approved": false, "scope": "once", "reason": "cancelled" }),
+            );
         }
-        // Assignment waiters are conversation-scoped; best-effort drop none here.
-        let _ = set;
     }
 
     /// Ensure a run is registered in the cancel tree; returns its token.
