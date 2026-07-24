@@ -1,10 +1,10 @@
 //! DeepSeek provider adapter — OpenAI-compatible Chat Completions.
 
-use async_trait::async_trait;
 use crate::capabilities::*;
 use crate::http_stream::stream_chat_completions;
 use crate::stream::ProviderEvent;
-use assistant_protocol::v1::provider::{ProviderType, ModelCapabilities};
+use assistant_protocol::v1::provider::{ModelCapabilities, ProviderType};
+use async_trait::async_trait;
 use reqwest::Client;
 
 pub struct DeepSeekAdapter {
@@ -75,6 +75,7 @@ impl ProviderAdapter for DeepSeekAdapter {
                 Credential {
                     api_key: self.api_key.clone().unwrap_or_default(),
                     base_url: Some(self.base_url.clone()),
+                    proxy_url: None,
                     key_id: None,
                     provider_type: Some("deepseek".into()),
                 },
@@ -98,8 +99,10 @@ impl ProviderAdapter for DeepSeekAdapter {
     async fn chat_stream(
         &self,
         _request: ProviderRequest,
-    ) -> Result<Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>, ProviderError>
-    {
+    ) -> Result<
+        Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>,
+        ProviderError,
+    > {
         Err(ProviderError {
             code: "use_stream".into(),
             message: "Use stream(request, credential) for DeepSeek; offline mock removed".into(),
@@ -127,10 +130,12 @@ impl ProviderAdapter for DeepSeekAdapter {
                 retry_after_ms: None,
             })?
         };
-        let base = credential
-            .base_url
-            .unwrap_or_else(|| self.base_url.clone());
-        stream_chat_completions(&self.client, &base, &key, request).await
+        let base = credential.base_url.unwrap_or_else(|| self.base_url.clone());
+        let client = match credential.proxy_url.as_deref() {
+            Some(url) if !url.trim().is_empty() => crate::http_client::client(Some(url))?,
+            _ => self.client.clone(),
+        };
+        stream_chat_completions(&client, &base, &key, request).await
     }
     async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
         Ok(vec![

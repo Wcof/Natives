@@ -1,11 +1,9 @@
 //! Gemini GenerateContent adapter — real HTTP streaming (SSE / JSON array).
 
-use async_trait::async_trait;
 use crate::capabilities::*;
-use crate::stream::{
-    parse_gemini_chunk, split_sse_lines, sse_data_payload, ProviderEvent,
-};
-use assistant_protocol::v1::provider::{ProviderType, ModelCapabilities};
+use crate::stream::{parse_gemini_chunk, split_sse_lines, sse_data_payload, ProviderEvent};
+use assistant_protocol::v1::provider::{ModelCapabilities, ProviderType};
+use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::Client;
 use std::time::Duration;
@@ -168,6 +166,7 @@ impl ProviderAdapter for GeminiAdapter {
                 Credential {
                     api_key: self.api_key.clone().unwrap_or_default(),
                     base_url: Some(self.base_url.clone()),
+                    proxy_url: None,
                     key_id: None,
                     provider_type: Some("gemini".into()),
                 },
@@ -191,8 +190,10 @@ impl ProviderAdapter for GeminiAdapter {
     async fn chat_stream(
         &self,
         _request: ProviderRequest,
-    ) -> Result<Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>, ProviderError>
-    {
+    ) -> Result<
+        Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>,
+        ProviderError,
+    > {
         // No mock "Hello from Gemini" tool-call path — require credentials via stream().
         Err(ProviderError {
             code: "use_stream".into(),
@@ -222,9 +223,8 @@ impl ProviderAdapter for GeminiAdapter {
                 retry_after_ms: None,
             })?
         };
-        let base = credential
-            .base_url
-            .unwrap_or_else(|| self.base_url.clone());
+        let proxy_url = credential.proxy_url.clone();
+        let base = credential.base_url.unwrap_or_else(|| self.base_url.clone());
         let model = if request.model.is_empty() {
             "gemini-2.0-flash".to_string()
         } else {
@@ -238,8 +238,11 @@ impl ProviderAdapter for GeminiAdapter {
         );
         let body = build_generate_body(&request);
 
-        let response = self
-            .client
+        let client = match proxy_url.as_deref() {
+            Some(url) if !url.trim().is_empty() => crate::http_client::client(Some(url))?,
+            _ => self.client.clone(),
+        };
+        let response = client
             .post(&url)
             .header("Content-Type", "application/json")
             .timeout(Duration::from_secs(300))
@@ -258,7 +261,11 @@ impl ProviderAdapter for GeminiAdapter {
             let status = response.status().as_u16();
             let headers = response.headers().clone();
             let text = response.text().await.unwrap_or_default();
-            return Err(crate::http_stream::map_http_status(status, &text, Some(&headers)));
+            return Err(crate::http_stream::map_http_status(
+                status,
+                &text,
+                Some(&headers),
+            ));
         }
 
         let byte_stream = response.bytes_stream();
@@ -395,7 +402,10 @@ mod tool_message_tests {
         let contents = body["contents"].as_array().unwrap();
         assert_eq!(contents.len(), 3);
         assert_eq!(contents[1]["role"], "model");
-        assert_eq!(contents[1]["parts"][0]["functionCall"]["name"], "get_weather");
+        assert_eq!(
+            contents[1]["parts"][0]["functionCall"]["name"],
+            "get_weather"
+        );
         assert_eq!(contents[2]["role"], "user");
         assert_eq!(
             contents[2]["parts"][0]["functionResponse"]["name"],

@@ -10,6 +10,8 @@ import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { unwrapAssistantRpc, type AssistantRpcEnvelope } from './assistant-rpc';
 import { classifyError } from './error-classifier';
+import type { ProviderRoutingApi } from '@/types/provider-routing';
+import type { ProviderRouteBinding, ProviderRoutingSettings } from '@/types/provider-routing';
 
 // ── Ghostty render state payload (feature gate ghostty-vt) ──
 
@@ -422,6 +424,32 @@ function normalizeProvider(provider: StoredProvider): ProviderSummary {
   };
 }
 
+type HostRoutingSettings = { enabled: boolean; localEnabled: boolean; localPort: number; rectifier: { enabled?: boolean }; globalProxy: { enabled?: boolean; url?: string } };
+type HostLocalRoutingTokenIssued = { token: string };
+type HostRouteBinding = { id: string; position: number; providerId: string; credentialKind: 'api_key' | 'sub2api_pool'; credentialId: string | null; modelId: string; enabled: boolean; createdAt: string; updatedAt: string };
+
+function normalizeRoutingSettings(settings: HostRoutingSettings): ProviderRoutingSettings {
+  return {
+    enabled: settings.enabled,
+    loopbackEnabled: settings.localEnabled,
+    loopbackPort: settings.localPort,
+    rectifierEnabled: settings.rectifier.enabled === true,
+    outboundProxyEnabled: settings.globalProxy.enabled === true,
+    outboundProxyUrl: typeof settings.globalProxy.url === 'string' ? settings.globalProxy.url : null,
+  };
+}
+
+function normalizeRouteBinding(binding: HostRouteBinding): ProviderRouteBinding {
+  return {
+    id: binding.id,
+    providerId: binding.providerId,
+    modelId: binding.modelId,
+    credential: binding.credentialKind === 'api_key' && binding.credentialId ? { kind: 'api_key', keyId: binding.credentialId } : { kind: 'sub2api_pool' },
+    priority: binding.position,
+    enabled: binding.enabled,
+  };
+}
+
 /**
  * Map a stored provider-test payload into UI-facing fields.
  * Non-throwing failures still need classification so AddProvider / ProviderDetail
@@ -778,6 +806,8 @@ export interface NativesAPI {
     setPrimaryKey: (input: { providerId: string; keyId: string }) => Promise<void>;
     deleteKey: (input: { providerId: string; keyId: string }) => Promise<void>;
   };
+  /** Optional until the Host routing commands are registered. */
+  providerRouting?: ProviderRoutingApi;
   windowControls: {
     minimize: () => Promise<void>;
     maximize: () => Promise<void>;
@@ -1513,6 +1543,42 @@ const nativesAPI: NativesAPI = {
       cmd('provider_set_primary_key', { input }),
     deleteKey: (input: { providerId: string; keyId: string }) =>
       cmd('delete_provider_key', { input }),
+  },
+
+  providerRouting: {
+    getSettings: () => cmd<HostRoutingSettings>('provider_routing_get_settings').then(normalizeRoutingSettings),
+    saveSettings: (settings) => cmd<HostRoutingSettings>('provider_routing_update_settings', {
+      input: {
+        enabled: settings.enabled,
+        localEnabled: settings.loopbackEnabled,
+        localPort: settings.loopbackPort,
+        rectifier: { enabled: settings.rectifierEnabled },
+        globalProxy: { enabled: settings.outboundProxyEnabled, url: settings.outboundProxyUrl },
+      },
+    }).then(normalizeRoutingSettings),
+    rotateLoopbackToken: () => cmd<HostLocalRoutingTokenIssued>('provider_routing_rotate_local_token').then((result) => result.token),
+    listBindings: () => cmd<HostRouteBinding[]>('provider_routing_list_bindings').then((bindings) => bindings.map(normalizeRouteBinding)),
+    saveBindings: (bindings) => cmd<HostRouteBinding[]>('provider_routing_update_bindings', {
+      bindings: bindings.map((binding, position) => ({
+        id: binding.id,
+        position,
+        providerId: binding.providerId,
+        credentialKind: binding.credential.kind,
+        credentialId: binding.credential.kind === 'api_key' ? binding.credential.keyId : null,
+        modelId: binding.modelId,
+        enabled: binding.enabled,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })),
+    }).then((bindings) => bindings.map(normalizeRouteBinding)),
+    listSub2ApiAccounts: (providerId) => cmd<Array<{ id: string; providerId: string; name: string; platform: string; accountType: string; concurrency: number; priority: number; expiresAt: string | null; status: 'active' | 'paused' | 'expired' | 'invalid' }>>('provider_accounts_list', { providerId }).then((accounts) => accounts.map((account) => ({ ...account, email: null }))),
+    previewSub2ApiImport: ({ providerId, content }) => cmd<{ accounts: Array<{ index: number; name: string; platform: string; accountType: string; action: 'create' | 'update' | 'skip' | 'reject'; error: string | null }> }>('provider_accounts_preview_import', { providerId, source: content }).then((preview) => ({
+      items: preview.accounts.map((account) => ({ ...account, email: null, reason: account.error })),
+      rejected: preview.accounts.filter((account) => account.action === 'reject').length,
+    })),
+    commitSub2ApiImport: ({ providerId, content }) => cmd<{ created: number; updated: number; skipped: number; failed: unknown[] }>('provider_accounts_commit_import', { request: { providerId, source: content } }).then((result) => ({ ...result, failed: result.failed.length })),
+    deleteSub2ApiAccounts: ({ providerId, accountIds }) => cmd<{ deleted: string[]; notFound: string[]; failed: string[] }>('provider_accounts_batch_delete', { request: { providerId, accountIds } }),
+    createSub2ApiPool: ({ name }) => cmd<string>('provider_accounts_create_pool', { input: { name } }),
   },
 
   // Assistant

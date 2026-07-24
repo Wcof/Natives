@@ -397,10 +397,11 @@ impl ProductionRuntime {
             eprintln!("[production] persist_actor_snapshot on run start: {e}");
         }
 
-        let provider = RealProvider {
-            provider_id: provider_id.clone(),
-            key_id: key_id.clone(),
-        };
+        let provider = crate::routing::RoutedProvider::new(crate::routing::load_plan(
+            provider_id.clone(),
+            key_id.clone(),
+            model_id.clone(),
+        ));
         // Child subagent runs may have pre-registered a readonly (or custom) surface.
         let mut tool_allowlist = self
             .take_run_tool_allowlist(&run_id)
@@ -636,9 +637,8 @@ impl ProductionRuntime {
     ) -> Result<String, String> {
         let child_perm = cap_child_permission(parent_permission_profile, &permission_profile);
         let child_allowlist = default_subagent_tool_allowlist();
-        let subagent_hooks = build_production_hooks_for_project(
-            project_root.as_deref().map(std::path::Path::new),
-        );
+        let subagent_hooks =
+            build_production_hooks_for_project(project_root.as_deref().map(std::path::Path::new));
         let start_responses = subagent_hooks
             .dispatch(HookRequest {
                 event: HookEvent::SubagentStart,
@@ -729,9 +729,7 @@ impl ProductionRuntime {
         );
 
         tokio::spawn(async move {
-            let child_project_root = project_root_bg
-                .as_deref()
-                .map(std::path::PathBuf::from);
+            let child_project_root = project_root_bg.as_deref().map(std::path::PathBuf::from);
             let provider = RealProvider {
                 provider_id: provider_id.clone(),
                 key_id: Some(key_id.clone()),
@@ -761,8 +759,7 @@ impl ProductionRuntime {
                 tool_allowlist: Some(child_allowlist_bg),
             };
             // Same production hook set as parent (M4) — not a reduced AllowAll-only registry.
-            let hooks =
-                build_production_hooks_for_project(child_project_root.as_deref());
+            let hooks = build_production_hooks_for_project(child_project_root.as_deref());
             // Child cancel token is parent.child_token when registry has parent.
             let child_cancel = if let Some(parent_tok) = engines
                 .lock()
@@ -794,11 +791,8 @@ impl ProductionRuntime {
                     child_system.push_str(&skills);
                 }
             }
-            let child_context = assemble_context(
-                None,
-                child_project_root.as_deref(),
-                Some(&child_system),
-            );
+            let child_context =
+                assemble_context(None, child_project_root.as_deref(), Some(&child_system));
             let config = EngineRunConfig {
                 run_id: child_run_id.clone(),
                 conversation_id: child_conversation_bg,
@@ -1160,7 +1154,7 @@ impl EngineProvider for RealProvider {
             })
             .collect();
 
-        let request = ProviderRequest {
+        let mut request = ProviderRequest {
             model: model.to_string(),
             messages: provider_messages,
             system_prompt: system_prompt.map(str::to_string),
@@ -1174,6 +1168,10 @@ impl EngineProvider for RealProvider {
             stream: true,
             structured_output: None,
         };
+        crate::request_rectifier::rectify_provider_request(
+            &mut request,
+            crate::routing::rectifier_enabled(),
+        );
 
         let stream = match adapter.stream(request, credential).await {
             Ok(stream) => stream,
@@ -1268,7 +1266,7 @@ impl EngineProvider for RealProvider {
     }
 }
 
-fn provider_error_message(
+pub(crate) fn provider_error_message(
     error: &ProviderError,
     provider_id: &str,
     protocol: &str,
@@ -1288,7 +1286,7 @@ fn provider_error_message(
 }
 
 /// Map engine history into provider history parts (preserves tool_calls / tool_call_id).
-fn engine_message_to_history(m: EngineMessage) -> HistoryMessage {
+pub(crate) fn engine_message_to_history(m: EngineMessage) -> HistoryMessage {
     HistoryMessage {
         role: m.role,
         content: m.content,

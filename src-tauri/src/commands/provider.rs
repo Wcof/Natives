@@ -772,9 +772,7 @@ fn models_url(provider_type: &str, base_url: &str) -> Result<String> {
 }
 
 fn non_empty_text(value: &serde_json::Value) -> bool {
-    value
-        .as_str()
-        .is_some_and(|text| !text.trim().is_empty())
+    value.as_str().is_some_and(|text| !text.trim().is_empty())
 }
 
 /// Whether a provider test response proves the endpoint/model is usable.
@@ -801,7 +799,9 @@ fn provider_response_has_content(provider_type: &str, value: &serde_json::Value)
         }
         "openai_responses" => {
             non_empty_text(&value["output_text"])
-                || value["output"].as_array().is_some_and(|items| !items.is_empty())
+                || value["output"]
+                    .as_array()
+                    .is_some_and(|items| !items.is_empty())
                 || (value.get("id").is_some() && value.get("model").is_some())
         }
         _ => {
@@ -884,17 +884,13 @@ fn provider_test_error(
     )
 }
 
-
 fn provider_test_is_rate_limited(result: &ProviderTestResult) -> bool {
-    result
-        .error
-        .as_deref()
-        .is_some_and(|err| {
-            let lower = err.to_ascii_lowercase();
-            lower.contains("http_status=429")
-                || lower.contains("rate limited")
-                || lower.contains("too many requests")
-        })
+    result.error.as_deref().is_some_and(|err| {
+        let lower = err.to_ascii_lowercase();
+        lower.contains("http_status=429")
+            || lower.contains("rate limited")
+            || lower.contains("too many requests")
+    })
 }
 
 #[derive(Clone)]
@@ -966,7 +962,6 @@ async fn execute_provider_test_with_retry(
     execute_provider_test(provider_type, base_url, api_key, model, route).await
 }
 
-
 #[tauri::command]
 pub async fn provider_discover_models(
     input: ProviderDiscoveryInput,
@@ -975,9 +970,7 @@ pub async fn provider_discover_models(
         return Err(Error::InvalidInput("API key cannot be empty".to_string()));
     }
     let api_protocol = required_api_protocol(input.api_protocol.as_deref())?;
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
+    let client = crate::credential_broker::outbound_http_client(std::time::Duration::from_secs(15))
         .map_err(|e| Error::Internal(format!("Failed to build HTTP client: {e}")))?;
     let mut request = client.get(models_url(&api_protocol, &input.base_url)?);
     if is_anthropic_protocol(&api_protocol) {
@@ -1117,18 +1110,16 @@ async fn execute_provider_test(
     model: Option<&str>,
     route: Option<&ProviderRateLimitRoute>,
 ) -> ProviderTestResult {
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            return ProviderTestResult {
-                success: false,
-                error: Some(format!("Failed to build HTTP client: {e}")),
+    let client =
+        match crate::credential_broker::outbound_http_client(std::time::Duration::from_secs(15)) {
+            Ok(c) => c,
+            Err(e) => {
+                return ProviderTestResult {
+                    success: false,
+                    error: Some(format!("Failed to build HTTP client: {e}")),
+                }
             }
-        }
-    };
+        };
 
     let protocol = normalize_api_protocol(provider_type);
     let test_url = match provider_test_url(&protocol, base_url) {
@@ -1175,7 +1166,10 @@ async fn execute_provider_test(
             request = request.header("Authorization", format!("Bearer {}", api_key));
         }
         if let Err(error) = acquire_provider_test_slot(route).await {
-            return ProviderTestResult { success: false, error: Some(error.to_string()) };
+            return ProviderTestResult {
+                success: false,
+                error: Some(error.to_string()),
+            };
         }
         let response = request.json(&body).send().await;
 
@@ -1330,7 +1324,10 @@ async fn execute_provider_test(
         request = request.header("Authorization", format!("Bearer {}", api_key));
     }
     if let Err(error) = acquire_provider_test_slot(route).await {
-        return ProviderTestResult { success: false, error: Some(error.to_string()) };
+        return ProviderTestResult {
+            success: false,
+            error: Some(error.to_string()),
+        };
     }
     let response = request.send().await;
 
@@ -1463,14 +1460,18 @@ pub async fn provider_test(
 
     let model = input.model.or(default_model);
     let protocol = normalize_api_protocol(&api_protocol);
-    let route = ProviderRateLimitRoute { provider_id: provider_id.clone(), key_id: key_id.clone() };
+    let route = ProviderRateLimitRoute {
+        provider_id: provider_id.clone(),
+        key_id: key_id.clone(),
+    };
     let result = execute_provider_test_with_retry(
         &protocol,
         &base_url,
         &api_key,
         model.as_deref(),
         Some(&route),
-    ).await;
+    )
+    .await;
     let now = chrono_now();
     let status = if result.success {
         "valid"
@@ -2155,7 +2156,6 @@ mod tests {
     /// Verify that the ProviderKey DTO struct used for frontend communication
     /// has masked_key instead of an api_key field.
 
-
     /// Regression: chat-completions 429 must surface a structured rate-limit error.
     /// Spins a local HTTP server that returns 429, then asserts the exact error
     /// shape currently shown in the UI (protocol/model/http_status/retryable/message).
@@ -2192,12 +2192,27 @@ mod tests {
 
         assert!(!result.success, "429 must not be treated as success");
         let err = result.error.expect("error message required");
-        assert!(err.contains("Provider test failed:"), "missing prefix: {err}");
-        assert!(err.contains("protocol=openai_chat_completions"), "missing protocol: {err}");
-        assert!(err.contains("model=deepseek-v4-flash"), "missing model: {err}");
+        assert!(
+            err.contains("Provider test failed:"),
+            "missing prefix: {err}"
+        );
+        assert!(
+            err.contains("protocol=openai_chat_completions"),
+            "missing protocol: {err}"
+        );
+        assert!(
+            err.contains("model=deepseek-v4-flash"),
+            "missing model: {err}"
+        );
         assert!(err.contains("http_status=429"), "missing status: {err}");
-        assert!(err.contains("retryable=true"), "429 should be retryable: {err}");
-        assert!(err.contains("Rate limited"), "missing rate-limit message: {err}");
+        assert!(
+            err.contains("retryable=true"),
+            "429 should be retryable: {err}"
+        );
+        assert!(
+            err.contains("Rate limited"),
+            "missing rate-limit message: {err}"
+        );
     }
 
     #[test]

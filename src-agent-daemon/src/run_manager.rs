@@ -3773,6 +3773,7 @@ mod tests {
                     Ok(provider_adapters::capabilities::Credential {
                         api_key: "broker-secret-not-for-logs".into(),
                         base_url: Some("https://example.test/v1".into()),
+                        proxy_url: None,
                         key_id: Some(key_id.unwrap_or("broker-key-1").to_string()),
                         provider_type: Some("openai_compatible".into()),
                     })

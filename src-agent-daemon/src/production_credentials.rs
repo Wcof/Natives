@@ -56,6 +56,7 @@ pub fn resolve_credential_for_run(
                 return Ok(Credential {
                     api_key: cred.api_key,
                     base_url: cred.base_url,
+                    proxy_url: cred.proxy_url,
                     key_id: cred.key_id.or_else(|| key_id.map(|s| s.to_string())),
                     provider_type: cred.provider_type,
                 });
@@ -98,6 +99,7 @@ pub fn resolve_credential_for_run(
                 base_url: std::env::var("NATIVES_TEST_ANTHROPIC_BASE")
                     .ok()
                     .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok()),
+                proxy_url: None,
                 key_id: key_id.map(str::to_string),
                 provider_type: Some("anthropic".into()),
             }),
@@ -119,6 +121,7 @@ pub fn resolve_credential_for_run(
         return Ok(Credential {
             api_key: "ollama".into(),
             base_url: std::env::var("NATIVES_TEST_OLLAMA_BASE").ok(),
+            proxy_url: None,
             key_id: key_id.map(str::to_string),
             provider_type: Some("ollama".into()),
         });
@@ -164,6 +167,7 @@ pub fn resolve_credential_for_run(
             Ok(Credential {
                 api_key,
                 base_url: raw_base.map(normalize_openai_compatible_base),
+                proxy_url: None,
                 key_id: key_id.map(str::to_string),
                 provider_type: Some(
                     if lower.contains("deepseek") {

@@ -2653,6 +2653,7 @@ mod tests {
             Credential {
                 api_key: "test-key".into(),
                 base_url: None,
+                proxy_url: None,
                 key_id: Some("k".into()),
                 provider_type: Some("openai_compatible".into()),
             },
@@ -2675,6 +2676,7 @@ mod tests {
             Credential {
                 api_key: "test-key".into(),
                 base_url: None,
+                proxy_url: None,
                 key_id: Some("k".into()),
                 provider_type: Some("openai_compatible".into()),
             },

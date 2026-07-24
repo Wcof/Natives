@@ -5,10 +5,11 @@
 //! its capabilities via `ProviderCapabilities`.
 
 pub mod capabilities;
-pub mod stream;
+pub mod http_client;
 pub mod http_stream;
 pub mod providers;
+pub mod stream;
 
 pub use capabilities::*;
-pub use stream::ProviderEvent;
 pub use providers::register_all;
+pub use stream::ProviderEvent;

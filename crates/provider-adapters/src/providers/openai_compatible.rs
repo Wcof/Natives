@@ -1,10 +1,10 @@
 //! OpenAI-compatible provider adapter — real HTTP streaming.
 
-use async_trait::async_trait;
 use crate::capabilities::*;
 use crate::http_stream::{chat_completions, stream_chat_completions};
 use crate::stream::ProviderEvent;
-use assistant_protocol::v1::provider::{ProviderType, ModelCapabilities};
+use assistant_protocol::v1::provider::{ModelCapabilities, ProviderType};
+use async_trait::async_trait;
 use reqwest::Client;
 
 pub struct OpenAiCompatibleAdapter {
@@ -86,8 +86,10 @@ impl ProviderAdapter for OpenAiCompatibleAdapter {
     async fn chat_stream(
         &self,
         _request: ProviderRequest,
-    ) -> Result<Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>, ProviderError>
-    {
+    ) -> Result<
+        Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>,
+        ProviderError,
+    > {
         Err(ProviderError {
             code: "use_stream".into(),
             message: "Use stream(request, credential) for OpenAI-compatible; offline mock removed"
@@ -116,10 +118,9 @@ impl ProviderAdapter for OpenAiCompatibleAdapter {
                 retry_after_ms: None,
             })?
         };
-        let base = credential
-            .base_url
-            .unwrap_or_else(|| self.base_url.clone());
-        stream_chat_completions(&self.client, &base, &key, request).await
+        let base = credential.base_url.unwrap_or_else(|| self.base_url.clone());
+        let client = crate::http_client::client(credential.proxy_url.as_deref())?;
+        stream_chat_completions(&client, &base, &key, request).await
     }
     async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
         Ok(vec![ModelInfo {
