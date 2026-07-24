@@ -2526,6 +2526,15 @@ impl PermissionGatedTools {
                         duration_ms,
                     },
                 );
+                // MCP is not auto-rollbackable — record for restore coverage honesty.
+                let _ = crate::side_effect_ledger::record_tool_effect(
+                    &self.parent_run_id,
+                    "mcp_call",
+                    "mcp",
+                    &serde_json::json!({ "server": server_id, "tool": tool_name }),
+                    false,
+                    None,
+                );
                 ToolExecutionResult {
                     output: serde_json::json!({
                         "server": server_id,
