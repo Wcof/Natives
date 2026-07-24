@@ -33,6 +33,8 @@ pub const ALL_METHODS: &[&str] = &[
     "run.finish",
     "run.rewind",
     "run.rewindPreview",
+    "workspace.restore",
+    "workspace.restorePreview",
     "permission.respond",
     "permission.listPending",
     "interaction.listPending",
@@ -114,7 +116,7 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "mcp.list",
     "mcp.start",
     "mcp.stop",
-    "mcp.call",
+    // mcp.call intentionally NOT implemented (task-06): direct RPC transport bypass disabled.
     "mcp.liveness",
     "mcp.reconnect",
     "mcp.auth.set",
@@ -143,6 +145,8 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "promptQueue.interject",
     "run.rewindPreview",
     "run.rewind",
+    "workspace.restorePreview",
+    "workspace.restore",
     "conversation.getContextUsage",
     "task.list",
     "task.cancel",
@@ -205,6 +209,8 @@ pub mod names {
     pub const RUN_GET_EVENTS: &str = "run.getEvents";
     pub const RUN_REWIND: &str = "run.rewind";
     pub const RUN_REWIND_PREVIEW: &str = "run.rewindPreview";
+    pub const WORKSPACE_RESTORE: &str = "workspace.restore";
+    pub const WORKSPACE_RESTORE_PREVIEW: &str = "workspace.restorePreview";
     pub const PERMISSION_RESPOND: &str = "permission.respond";
     pub const TOOL_LIST: &str = "tool.list";
     pub const PROMPT_QUEUE_LIST: &str = "promptQueue.list";

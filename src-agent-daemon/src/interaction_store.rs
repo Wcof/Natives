@@ -232,10 +232,17 @@ pub async fn respond(params: Value) -> Result<Value, String> {
             .map_err(|e| e.to_string())?;
 
         let Some((run_id, conversation_id, kind, status)) = existing else {
-            return Err(format!("interaction not found: {id}"));
+            // Stable orphan code shared with permission.respond (task-04).
+            return Err(format!("permission_orphaned: interaction not found: {id}"));
         };
+        if status == "resolved" {
+            return Err(format!("already_resolved: interaction {id}"));
+        }
         if status != "pending" {
-            return Err(format!("interaction not pending: {id} (status={status})"));
+            // expired / cancelled after restart — not grantable.
+            return Err(format!(
+                "permission_orphaned: interaction not pending: {id} (status={status})"
+            ));
         }
 
         let changed = conn
@@ -478,7 +485,7 @@ mod tests {
                     "response": { "approved": false },
                 })))
                 .unwrap_err();
-            assert!(err.contains("not pending") || err.contains("not found"), "{err}");
+            assert!(err.contains("not pending") || err.contains("not found") || err.contains("already_resolved"), "{err}");
         });
     }
 

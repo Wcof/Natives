@@ -483,7 +483,7 @@ fn persist_context_snapshots_from_events(
             .query_row(
                 "SELECT COUNT(*) FROM context_snapshot
                  WHERE run_id = ?1 AND sequence = ?2 AND snapshot_type = 'compaction'",
-                params![run_id, event.sequence as i64],
+                params![run_id, event.effective_run_sequence() as i64],
                 |row| row.get(0),
             )
             .map_err(|e| e.to_string())?;
@@ -498,13 +498,13 @@ fn persist_context_snapshots_from_events(
             params![
                 uuid::Uuid::new_v4().to_string(),
                 run_id,
-                event.sequence as i64,
+                event.effective_run_sequence() as i64,
                 *after_tokens as i64,
                 summary,
                 serde_json::json!({
                     "before_tokens": before_tokens,
                     "after_tokens": after_tokens,
-                    "event_sequence": event.sequence
+                    "event_sequence": event.effective_run_sequence()
                 })
                 .to_string()
             ],
@@ -1010,16 +1010,22 @@ mod tests {
             "run-1",
             &[
                 RunEventV2 {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            global_sequence: 0,
+            run_sequence: 0,
                     run_id: "run-1".into(),
-                    sequence: 1,
+sequence: 1,
                     timestamp: chrono::Utc::now(),
                     payload: RunEventKind::TextDelta {
                         text: "done".into(),
                     },
                 },
                 RunEventV2 {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            global_sequence: 0,
+            run_sequence: 0,
                     run_id: "run-1".into(),
-                    sequence: 2,
+sequence: 2,
                     timestamp: chrono::Utc::now(),
                     payload: RunEventKind::ToolCallCompleted {
                         id: "tool-1".into(),
@@ -1081,8 +1087,11 @@ mod tests {
             "compact-run",
             &[
                 RunEventV2 {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            global_sequence: 0,
+            run_sequence: 0,
                     run_id: "compact-run".into(),
-                    sequence: 7,
+sequence: 7,
                     timestamp: chrono::Utc::now(),
                     payload: RunEventKind::ContextCompressed {
                         before_tokens: 100,
@@ -1091,8 +1100,11 @@ mod tests {
                     },
                 },
                 RunEventV2 {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            global_sequence: 0,
+            run_sequence: 0,
                     run_id: "compact-run".into(),
-                    sequence: 8,
+sequence: 8,
                     timestamp: chrono::Utc::now(),
                     payload: RunEventKind::TextDelta {
                         text: "current answer".into(),

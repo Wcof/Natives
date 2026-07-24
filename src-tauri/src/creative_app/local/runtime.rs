@@ -35,6 +35,7 @@ pub struct CreativeAppOperationProgress {
     pub message: String,
 }
 
+#[allow(dead_code)]
 struct LiveLocalProcess {
     child: Option<Child>,
     identity: ProcessIdentity,

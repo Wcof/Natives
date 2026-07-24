@@ -29,6 +29,7 @@ fn parse_plan(rec: &LocalCreativeAppRecord) -> Result<LaunchPlan> {
         .map_err(|e| Error::InvalidInput(format!("launch_plan: {e}")))
 }
 
+#[allow(dead_code)]
 fn parse_status(json: &Option<String>) -> Option<CreativeAppStatusDetail> {
     json.as_deref().and_then(|s| serde_json::from_str(s).ok())
 }

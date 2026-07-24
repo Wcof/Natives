@@ -976,7 +976,7 @@ mod tests {
     fn migration_011_status_completed_and_parent_heartbeat() {
         with_temp_db(|| {
             let s = store().unwrap();
-            let conn = s.conn().unwrap();
+            let _conn = s.conn().unwrap();
             // completed is accepted by CHECK
             let binding = RouteBinding {
                 provider_id: "openai".into(),

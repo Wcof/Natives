@@ -17,6 +17,12 @@ pub const ALL: &[(i64, &str)] = &[
     (10, MIGRATION_010),
     (11, MIGRATION_011),
     (12, MIGRATION_012),
+    (13, MIGRATION_013),
+    (14, MIGRATION_014),
+    (15, MIGRATION_015),
+    (16, MIGRATION_016),
+    (17, MIGRATION_017),
+    (18, MIGRATION_018),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -497,4 +503,139 @@ CREATE INDEX IF NOT EXISTS idx_prompt_queue_status
     ON prompt_queue(conversation_id, status, position);
 CREATE INDEX IF NOT EXISTS idx_session_actor_updated
     ON session_actor(updated_at);
+";
+
+/// Migration 013: Run revision for CAS commits (task-02).
+///
+/// Every status transition increments `revision`. `RunManager::commit_transition`
+/// updates with `WHERE id=? AND revision=?` so late outcomes cannot overwrite
+/// Cancelling/Cancelled/other terminals.
+const MIGRATION_013: &str = "
+ALTER TABLE run ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+";
+
+/// Migration 014: Event identity + dual sequences (task-08).
+///
+/// - `event_id` stable UUID/ULID idempotency key
+/// - `run_event.id` remains `global_sequence` (AUTOINCREMENT)
+/// - existing `sequence` column is the per-run sequence (`run_sequence` on wire)
+const MIGRATION_014: &str = "
+ALTER TABLE run_event ADD COLUMN event_id TEXT;
+UPDATE run_event
+   SET event_id = 'legacy:' || run_id || ':' || sequence
+ WHERE event_id IS NULL OR event_id = '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_run_event_event_id ON run_event(event_id);
+";
+
+/// Migration 015: Stable ProjectIdentity (task-10).
+///
+/// Paths are attributes. Runs/conversations gain `project_id` UUID column;
+/// `project_path` remains a diagnostic snapshot.
+const MIGRATION_015: &str = "
+CREATE TABLE IF NOT EXISTS project_identity (
+    project_id TEXT PRIMARY KEY,
+    canonical_path TEXT NOT NULL,
+    filesystem_fingerprint TEXT NOT NULL,
+    identity_version INTEGER NOT NULL DEFAULT 1,
+    verified_at INTEGER NOT NULL DEFAULT 0,
+    orphaned INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_identity_path
+    ON project_identity(canonical_path)
+    WHERE orphaned = 0;
+
+ALTER TABLE run ADD COLUMN project_id TEXT;
+ALTER TABLE conversation ADD COLUMN project_identity_id TEXT;
+";
+
+/// Migration 018: Side-effect ledger for workspace restore / rewind semantics (task-07).
+///
+/// Minimal durable records of tool side-effects. Not a universal transaction
+/// framework — only tracks what restore/preview can honestly claim.
+const MIGRATION_018: &str = "
+CREATE TABLE IF NOT EXISTS side_effect_record (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    tool_call_id TEXT,
+    category TEXT NOT NULL CHECK(category IN (
+        'workspace_file', 'database', 'process', 'network', 'git', 'mcp', 'external'
+    )),
+    target_summary TEXT NOT NULL DEFAULT '',
+    reversible INTEGER NOT NULL DEFAULT 0,
+    compensation_id TEXT,
+    checkpoint_id TEXT,
+    artifact_id TEXT,
+    coverage_note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_side_effect_run ON side_effect_record(run_id, created_at);
+";
+
+/// Migration 016 (Agent B / task-09): structured tool grants.
+///
+/// Legacy coarse `tool_grant` rows keep policy_version=0 and are ignored for
+/// reuse. New grants bind project identity, permission class, path/argument
+/// constraints, session/run scope, expiry, and policy version.
+const MIGRATION_016: &str = "
+-- Mark existing coarse grants as legacy so they cannot auto-authorize.
+UPDATE tool_grant SET scope = COALESCE(scope, '') WHERE 1=1;
+
+CREATE TABLE IF NOT EXISTS tool_grant_v2 (
+    id TEXT PRIMARY KEY,
+    project_id TEXT,
+    project_identity_version TEXT,
+    project_fingerprint TEXT,
+    tool_name TEXT NOT NULL,
+    permission_class TEXT NOT NULL DEFAULT 'unknown',
+    path_scope_json TEXT NOT NULL DEFAULT 'null',
+    argument_constraint_json TEXT NOT NULL DEFAULT 'null',
+    conversation_id TEXT,
+    run_id TEXT,
+    session_id TEXT,
+    scope TEXT NOT NULL DEFAULT 'once' CHECK(scope IN ('once', 'this_run', 'session', 'project')),
+    expires_at TEXT,
+    policy_version INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    revoked_at TEXT,
+    -- Audit-only; never stores secrets (constraint summary / redacted pattern).
+    constraint_summary TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tool_grant_v2_lookup
+    ON tool_grant_v2(tool_name, project_id, policy_version);
+CREATE INDEX IF NOT EXISTS idx_tool_grant_v2_conversation
+    ON tool_grant_v2(conversation_id, tool_name);
+
+-- Expire legacy coarse grants (policy_version 0 semantics via grant_type always + empty scope).
+UPDATE tool_grant SET expires_at = datetime('now')
+ WHERE expires_at IS NULL
+   AND (scope IS NULL OR scope = '' OR grant_type = 'always');
+";
+
+/// Migration 017 (Agent B / task-11): durable subagent budget ledger snapshot.
+///
+/// Runtime reservations are still in-memory; this table records per-run budget
+/// counters for restart Interrupted recovery and audit. Active children follow
+/// parent Interrupted semantics (task-04/02) — no Future resume.
+const MIGRATION_017: &str = "
+CREATE TABLE IF NOT EXISTS subagent_budget_ledger (
+    run_id TEXT PRIMARY KEY,
+    parent_run_id TEXT,
+    tree_root_run_id TEXT,
+    depth INTEGER NOT NULL DEFAULT 0,
+    concurrent_reserved INTEGER NOT NULL DEFAULT 0,
+    tokens_used INTEGER NOT NULL DEFAULT 0,
+    tool_calls_used INTEGER NOT NULL DEFAULT 0,
+    max_tokens INTEGER,
+    max_tool_calls INTEGER,
+    failure_policy TEXT NOT NULL DEFAULT 'isolate',
+    status TEXT NOT NULL DEFAULT 'active',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_subagent_budget_parent
+    ON subagent_budget_ledger(parent_run_id);
+CREATE INDEX IF NOT EXISTS idx_subagent_budget_tree
+    ON subagent_budget_ledger(tree_root_run_id);
 ";

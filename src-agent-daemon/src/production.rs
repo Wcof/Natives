@@ -5,235 +5,95 @@
 
 use agent_core::assemble_context;
 use agent_core::{
-    cap_child_permission, default_subagent_tool_allowlist, AgentEngine, AllowAllHook, CommandHook,
-    EngineError, EngineMessage, EngineProvider, EngineProviderEvent, EngineProviderEventStream,
-    EngineRunConfig, EngineToolRuntime, EventSequencer, HookEvent, HookRegistry, HttpHook,
-    PermissionManager, PermissionProfile, SubAgentConfig, SubAgentManager, SubAgentStatus,
-    ToolExecutionResult, ToolSchema,
+    cap_child_permission, default_subagent_tool_allowlist, AgentEngine, EngineError, EngineMessage,
+    EngineProvider, EngineProviderEvent, EngineProviderEventStream, EngineRunConfig,
+    EventSequencer, PermissionManager, PermissionProfile, SubAgentConfig, SubAgentManager,
+    SubAgentStatus, ToolSchema,
 };
 use assistant_protocol::v2::RunEventKind;
-use capability_gateway::{CapabilityGateway, SideEffect};
+use capability_gateway::CapabilityGateway;
 use futures_util::StreamExt;
 use provider_adapters::capabilities::{
-    history_message_to_provider, Credential, HistoryMessage, HistoryToolCall, ProviderAdapter,
-    ProviderError, ProviderRequest, ProviderTool,
+    history_message_to_provider, HistoryMessage, HistoryToolCall, ProviderAdapter, ProviderError,
+    ProviderRequest, ProviderTool,
 };
 use provider_adapters::stream::ProviderEvent;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::{oneshot, Mutex};
 use tokio_util::sync::CancellationToken;
 
-/// Shared production runtime owned by the Daemon.
+/// Force-kill terminal processes owned by the global ProcessSupervisor (task-03).
+struct GlobalProcessCancelHook;
+
+#[async_trait::async_trait]
+impl crate::runtime::execution_registry::ProcessCancelHook for GlobalProcessCancelHook {
+    async fn cancel_task(&self, task_id: &str) -> Result<(), String> {
+        use capability_gateway::ProcessSupervisor;
+        capability_gateway::global_process_supervisor()
+            .cancel(task_id)
+            .await
+            .map(|_| ())
+    }
+
+    async fn cancel_tasks_for_run(&self, run_id: &str) -> Result<(), String> {
+        use capability_gateway::ProcessSupervisor;
+        let sup = capability_gateway::global_process_supervisor();
+        let snaps = sup.list_for_run(run_id).await;
+        for s in snaps {
+            let _ = sup.cancel(&s.task_id).await;
+        }
+        Ok(())
+    }
+}
+
+/// Production runtime facade owned by the Daemon.
+///
+/// Deep state owners (task-01):
+/// - `execution` → [`crate::runtime::ExecutionRegistry`]
+/// - `tool_policy` → [`crate::runtime::ToolPolicyState`]
+/// - permission and assignment waits → InteractionHub
+/// - `subagents` / `task_outputs` → TaskSupervisor maps
+/// - `engines` → migrating into ExecutionRegistry
+///
+/// Callers should use methods (`cancel_run`, `respond_permission`, `set_run_tool_allowlist`)
+/// rather than reaching into maps when possible.
 pub struct ProductionRuntime {
     pub events: EventSequencer,
     pub permissions: Arc<PermissionManager>,
     pub subagents: Arc<SubAgentManager>,
-    pub hooks: Arc<Mutex<HookRegistry>>,
-    /// permission_id → (run_id, resolver). run_id binding prevents cross-run responds.
-    pub permission_waiters: Arc<Mutex<HashMap<String, (String, String, oneshot::Sender<(bool, String)>)>>>,
+    // hooks: removed dead shared state — each start builds HookRegistry per project (task-01).
+    /// Sole interaction waiter owner (permission + assignment).
+    pub interactions: Arc<crate::runtime::InteractionHub>,
     /// task_id → child run status/output
-    pub task_outputs: Arc<Mutex<HashMap<String, TaskRecord>>>,
+    pub task_outputs: Arc<Mutex<HashMap<String, crate::runtime::TaskRecord>>>,
     pub engines: Arc<Mutex<HashMap<String, Arc<AgentEngine>>>>,
-    /// CLI runtime cancel flags (run_id → flag). Set by CLI bridge; flipped by cancel_run.
-    pub cli_cancel_flags: Arc<Mutex<HashMap<String, CancellationToken>>>,
-    /// In-memory tool grants (conversation_id, tool_name, pattern) -> scope.
-    /// Backed by tool_grant table when a DataStore is available.
-    pub tool_grants: Arc<Mutex<Vec<ToolGrant>>>,
+    /// Sole cancel-token + join/resource registry (task-03). Agent C relocates in task-01.
+    pub execution: Arc<crate::runtime::ExecutionRegistry>,
+    /// Structured tool grant policy (task-09). Agent C relocates in task-01.
+    pub tool_policy: Arc<crate::runtime::ToolPolicyState>,
     /// interaction_id → oneshot for subagent_assignment batch waits.
     /// std mutex so interaction.respond can wake without re-entering tokio runtime.
-    pub assignment_waiters: Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<Value>>>>,
+    pub(crate) assignment_waiters: Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<Value>>>>,
     /// Ensure only one assignment interaction is pending per parent conversation.
-    pub assignment_inflight: Arc<std::sync::Mutex<HashMap<String, String>>>,
+    pub(crate) assignment_inflight: Arc<std::sync::Mutex<HashMap<String, String>>>,
     /// Per-run tool allowlist registered before RunManager starts a child run.
     /// `Some(list)` = hard allowlist; entry removed once the run starts.
     pub run_tool_allowlists: Arc<Mutex<HashMap<String, Vec<String>>>>,
 }
 
-/// Remembered tool approval (once is not stored; this_run/project are).
-#[derive(Debug, Clone)]
-pub struct ToolGrant {
-    pub conversation_id: String,
-    pub run_id: Option<String>,
-    pub tool_name: String,
-    /// Empty = any input; for run_terminal, command pattern when scoped.
-    pub pattern: String,
-    /// "this_run" | "project"
-    pub scope: String,
-}
+#[cfg(test)]
+pub use crate::production_credentials::clear_credential_broker_for_tests;
+pub use crate::production_credentials::{
+    install_credential_broker, resolve_credential, resolve_credential_for_run, CredentialBrokerFn,
+};
+pub use crate::production_hooks::{build_production_hooks, build_production_hooks_for_project};
+pub use crate::production_tools::PermissionGatedTools;
+pub use crate::runtime::TaskRecord;
 
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct TaskRecord {
-    pub run_id: String,
-    pub status: String,
-    pub output: Option<String>,
-}
-
-/// Build the production HookRegistry: Rust lifecycle hooks always present;
-/// optional trusted CommandHook (argv) and HttpHook (SSRF-gated) from env;
-/// optional project `.claude/hooks.json` command hooks (M3).
-pub fn build_production_hooks() -> HookRegistry {
-    build_production_hooks_for_project(std::env::current_dir().ok().as_deref())
-}
-
-/// Same as [`build_production_hooks`] with an explicit project path for hook discovery.
-pub fn build_production_hooks_for_project(project: Option<&std::path::Path>) -> HookRegistry {
-    let mut hooks = HookRegistry::new();
-    // Full target event surface (fail-open allow-all defaults; project hooks may deny).
-    for event in [
-        HookEvent::SessionStart,
-        HookEvent::SessionEnd,
-        HookEvent::UserPromptSubmit,
-        HookEvent::PreToolUse,
-        HookEvent::PostToolUse,
-        HookEvent::PostToolUseFailure,
-        HookEvent::PermissionRequest,
-        HookEvent::PermissionDenied,
-        HookEvent::Notification,
-        HookEvent::SubagentStart,
-        HookEvent::SubagentStop,
-        HookEvent::PreCompact,
-        HookEvent::PostCompact,
-        HookEvent::Stop,
-        HookEvent::StopFailure,
-        HookEvent::Error,
-    ] {
-        // Built-in allow defaults; project/user hooks may still Deny (aggregate fail-closed).
-        hooks.register(event, Box::new(AllowAllHook));
-    }
-    // After defaults, enable fail-closed so removing all handlers cannot open tools.
-    hooks.enable_security_fail_closed();
-
-    if let Some(root) = project {
-        load_project_hooks(root, &mut hooks);
-    }
-
-    // Trusted command hook: NATIVES_HOOK_CMD=/path/to/binary (argv only, never shell).
-    if let Ok(program) = std::env::var("NATIVES_HOOK_CMD") {
-        if !program.trim().is_empty() {
-            hooks.register(
-                HookEvent::PreToolUse,
-                Box::new(CommandHook {
-                    program,
-                    args: std::env::var("NATIVES_HOOK_CMD_ARGS")
-                        .ok()
-                        .map(|s| s.split_whitespace().map(str::to_string).collect())
-                        .unwrap_or_default(),
-                    timeout: Duration::from_secs(10),
-                    trusted: true,
-                }),
-            );
-        }
-    }
-    // HTTP hook with host allowlist: NATIVES_HOOK_HTTP=https://hooks.example/pre
-    if let Ok(url) = std::env::var("NATIVES_HOOK_HTTP") {
-        if !url.trim().is_empty() {
-            let allow = std::env::var("NATIVES_HOOK_HTTP_ALLOW")
-                .ok()
-                .map(|s| s.split(',').map(|h| h.trim().to_string()).collect())
-                .unwrap_or_default();
-            hooks.register(
-                HookEvent::PostToolUse,
-                Box::new(HttpHook {
-                    url,
-                    timeout: Duration::from_secs(5),
-                    allow_hosts: allow,
-                }),
-            );
-        }
-    }
-    hooks
-}
-
-/// Load project hooks from `.claude|grok|natives/hooks.json` (compatible shapes).
-/// Supported: `{ "PreToolUse": [ { "type": "command", "command": "/path", "args": [] } ] }`
-fn load_project_hooks(project: &std::path::Path, hooks: &mut HookRegistry) {
-    let candidates = [
-        project.join(".claude").join("hooks.json"),
-        project.join(".grok").join("hooks.json"),
-        project.join(".natives").join("hooks.json"),
-    ];
-    for path in candidates {
-        load_hooks_file(&path, hooks);
-    }
-    // User-level hooks (optional): ~/.natives/hooks.json
-    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-        load_hooks_file(
-            &std::path::PathBuf::from(home)
-                .join(".natives")
-                .join("hooks.json"),
-            hooks,
-        );
-    }
-}
-
-fn load_hooks_file(path: &std::path::Path, hooks: &mut HookRegistry) {
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return;
-    };
-    let Ok(value) = serde_json::from_str::<Value>(&raw) else {
-        return;
-    };
-    let Some(obj) = value.as_object() else {
-        return;
-    };
-    for (event_name, handlers) in obj {
-        let event = match event_name.as_str() {
-            "PreToolUse" | "pre_tool_use" => HookEvent::PreToolUse,
-            "PostToolUse" | "post_tool_use" => HookEvent::PostToolUse,
-            "PostToolUseFailure" => HookEvent::PostToolUseFailure,
-            "Stop" | "stop" => HookEvent::Stop,
-            "StopFailure" => HookEvent::StopFailure,
-            "SessionStart" => HookEvent::SessionStart,
-            "SessionEnd" => HookEvent::SessionEnd,
-            "UserPromptSubmit" => HookEvent::UserPromptSubmit,
-            "PermissionRequest" | "PermissionDenied" => HookEvent::PermissionDenied,
-            "SubagentStart" => HookEvent::SubagentStart,
-            "SubagentStop" => HookEvent::SubagentStop,
-            "CompactStart" | "PreCompact" => HookEvent::PreCompact,
-            "CompactEnd" | "PostCompact" => HookEvent::PostCompact,
-            "Notification" => HookEvent::Notification,
-            "Error" => HookEvent::StopFailure,
-            _ => continue,
-        };
-        let Some(arr) = handlers.as_array() else {
-            continue;
-        };
-        for h in arr {
-            let h_type = h.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            if h_type != "command" {
-                continue;
-            }
-            let Some(program) = h.get("command").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            if program.trim().is_empty() {
-                continue;
-            }
-            let args = h
-                .get("args")
-                .and_then(|v| v.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|x| x.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default();
-            hooks.register(
-                event,
-                Box::new(CommandHook {
-                    program: program.to_string(),
-                    args,
-                    timeout: Duration::from_secs(10),
-                    trusted: true,
-                }),
-            );
-        }
-    }
-}
+// Hook assembly moved to `production_hooks.rs` (task-01 structure).
 
 impl ProductionRuntime {
     pub fn new() -> Self {
@@ -251,17 +111,22 @@ impl ProductionRuntime {
             events,
             permissions: Arc::new(PermissionManager::new(PermissionProfile::ConfirmEach)),
             subagents: Arc::new(SubAgentManager::new(SubAgentConfig::default())),
-            hooks: Arc::new(Mutex::new(build_production_hooks())),
-            permission_waiters: Arc::new(Mutex::new(HashMap::new())),
-            // type: HashMap<permission_id, (run_id, oneshot)>
+            interactions: Arc::new(crate::runtime::InteractionHub::new()),
             task_outputs: Arc::new(Mutex::new(HashMap::new())),
             engines: Arc::new(Mutex::new(HashMap::new())),
-            cli_cancel_flags: Arc::new(Mutex::new(HashMap::new())),
-            tool_grants: Arc::new(Mutex::new(Vec::new())),
+            execution: Arc::new(crate::runtime::ExecutionRegistry::new()),
+            tool_policy: Arc::new(crate::runtime::ToolPolicyState::new()),
             assignment_waiters: Arc::new(std::sync::Mutex::new(HashMap::new())),
             assignment_inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
             run_tool_allowlists: Arc::new(Mutex::new(HashMap::new())),
         };
+        // Assignment bridges remain until the subagent interaction protocol is moved.
+        let mut rt = rt;
+        rt.assignment_waiters = rt.interactions.assignment_waiters_arc();
+        rt.assignment_inflight = rt.interactions.assignment_inflight_arc();
+        // Wire process supervisor force-kill into cancel tree (task-03).
+        rt.execution
+            .set_process_cancel_hook(Arc::new(GlobalProcessCancelHook));
         // Background reaper: idle subagent sessions.
         spawn_subagent_reaper();
         rt
@@ -280,17 +145,83 @@ impl ProductionRuntime {
         self.run_tool_allowlists.lock().await.remove(run_id)
     }
 
-    /// Register a cancel flag for a CLI-backed run (REQ-T01).
-    pub async fn register_cli_cancel(&self, run_id: &str, flag: CancellationToken) {
-        self.cli_cancel_flags
-            .lock()
-            .await
-            .insert(run_id.to_string(), flag);
+    // ─── Engine registry facade (task-01) ───
+
+    /// Register an engine handle for a run.
+    pub async fn register_engine(&self, run_id: &str, engine: Arc<AgentEngine>) {
+        self.engines.lock().await.insert(run_id.to_string(), engine);
     }
 
-    /// Drop CLI cancel flag after the turn ends.
-    pub async fn clear_cli_cancel(&self, run_id: &str) {
-        self.cli_cancel_flags.lock().await.remove(run_id);
+    /// Remove engine handle. Returns true if it existed.
+    pub async fn remove_engine(&self, run_id: &str) -> bool {
+        self.engines.lock().await.remove(run_id).is_some()
+    }
+
+    /// Check if a run has a live engine.
+    pub async fn has_engine(&self, run_id: &str) -> bool {
+        self.engines.lock().await.contains_key(run_id)
+    }
+
+    /// Clone engine handles for PermissionGatedTools construction.
+    pub async fn engine_handles(&self) -> Arc<Mutex<HashMap<String, Arc<AgentEngine>>>> {
+        self.engines.clone()
+    }
+
+    // ─── Permission waiter facade (task-01 / task-04) ───
+
+    /// Insert a permission waiter.
+    pub async fn insert_permission_waiter(
+        &self,
+        id: &str,
+        run_id: &str,
+        tool_name: &str,
+        tx: oneshot::Sender<(bool, String)>,
+    ) {
+        self.interactions
+            .register_permission(id, run_id, tool_name, tx)
+            .await;
+    }
+
+    /// Remove a permission waiter (on respond or cancel).
+    pub async fn remove_permission_waiter(
+        &self,
+        id: &str,
+    ) -> Option<(String, String, oneshot::Sender<(bool, String)>)> {
+        self.interactions.resolve_permission(id).await
+    }
+
+    // ─── Task output facade (task-01) ───
+
+    /// Clone task output map reference for PermissionGatedTools.
+    pub fn task_outputs_ref(&self) -> Arc<Mutex<HashMap<String, TaskRecord>>> {
+        self.task_outputs.clone()
+    }
+
+    /// Insert a task output record.
+    pub async fn insert_task_output(&self, id: &str, record: TaskRecord) {
+        self.task_outputs
+            .lock()
+            .await
+            .insert(id.to_string(), record);
+    }
+
+    /// Remove a task output record.
+    pub async fn remove_task_output(&self, id: &str) -> Option<TaskRecord> {
+        self.task_outputs.lock().await.remove(id)
+    }
+
+    // ─── Assignment facade (task-01 / task-11) ───
+
+    /// Clone assignment waiters map for PermissionGatedTools.
+    pub fn assignment_waiters_ref(
+        &self,
+    ) -> Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<Value>>>> {
+        self.interactions.assignment_waiters_arc()
+    }
+
+    /// Clone assignment inflight map for subagent store.
+    pub fn assignment_inflight_ref(&self) -> Arc<std::sync::Mutex<HashMap<String, String>>> {
+        self.interactions.assignment_inflight_arc()
     }
 
     pub async fn set_permission_profile(&self, profile: &str) {
@@ -313,22 +244,10 @@ impl ProductionRuntime {
             return Err("request_id required".into());
         }
         let scope = normalize_permission_scope(scope.unwrap_or("once"));
-        let mut map = self.permission_waiters.lock().await;
-        let Some((bound_run, _tool_name, tx)) = map.remove(request_id) else {
-            return Err(format!("permission request not found: {request_id}"));
-        };
-        if let Some(rid) = run_id {
-            if !rid.is_empty() && rid != bound_run {
-                // Re-insert so legitimate owner can still respond.
-                map.insert(
-                    request_id.to_string(),
-                    (bound_run.clone(), _tool_name, tx),
-                );
-                return Err(format!(
-                    "permission run_id mismatch: expected {bound_run}, got {rid}"
-                ));
-            }
-        }
+        let (_bound_run, _tool_name, tx) = self
+            .interactions
+            .resolve_permission_for_run(request_id, run_id)
+            .await?;
         let _ = tx.send((approved, scope.clone()));
         // Best-effort: resolve any matching interaction row for restart recovery.
         let _ = crate::interaction_store::mark_resolved(
@@ -338,7 +257,10 @@ impl ProductionRuntime {
         Ok(())
     }
 
-    /// Record a durable/in-memory grant after approval.
+    /// Record a durable structured grant after approval (task-09).
+    ///
+    /// `pattern` is treated as a hint for terminal command when input is not passed;
+    /// prefer [`Self::remember_tool_grant_invocation`] when full input is available.
     pub async fn remember_tool_grant(
         &self,
         conversation_id: &str,
@@ -347,26 +269,33 @@ impl ProductionRuntime {
         pattern: &str,
         scope: &str,
     ) {
-        let scope = normalize_permission_scope(scope);
-        if scope == "once" || !matches!(scope.as_str(), "this_run" | "project") {
-            return;
-        }
-        let grant = ToolGrant {
-            conversation_id: conversation_id.to_string(),
-            run_id: if scope == "this_run" {
-                Some(run_id.to_string())
-            } else {
-                None
-            },
-            tool_name: tool_name.to_string(),
-            pattern: pattern.to_string(),
-            scope: scope.clone(),
+        let input = if tool_name == "run_terminal" && !pattern.is_empty() {
+            serde_json::json!({ "command": pattern, "cwd": "." })
+        } else if matches!(tool_name, "write_file" | "read_file" | "apply_patch")
+            && !pattern.is_empty()
+        {
+            serde_json::json!({ "path": pattern })
+        } else {
+            serde_json::json!({})
         };
-        self.tool_grants.lock().await.push(grant.clone());
-        // Best-effort SQLite persistence (tool_grant table).
-        if let Err(e) = persist_tool_grant_db(&grant) {
-            eprintln!("[agent-daemon] tool_grant persist failed: {e}");
-        }
+        let inv =
+            crate::runtime::invocation_from_gate(tool_name, &input, conversation_id, run_id, None);
+        let _ = self
+            .tool_policy
+            .remember(&inv, scope, Some("permission_respond"))
+            .await;
+    }
+
+    /// Remember grant from a full tool invocation (structured constraints).
+    pub async fn remember_tool_grant_invocation(
+        &self,
+        inv: &crate::runtime::ToolInvocation,
+        scope: &str,
+    ) {
+        let _ = self
+            .tool_policy
+            .remember(inv, scope, Some("permission_respond"))
+            .await;
     }
 
     pub async fn has_tool_grant(
@@ -376,25 +305,33 @@ impl ProductionRuntime {
         tool_name: &str,
         pattern: &str,
     ) -> bool {
-        let grants = self.tool_grants.lock().await;
-        for g in grants.iter() {
-            if g.conversation_id != conversation_id || g.tool_name != tool_name {
-                continue;
-            }
-            if !g.pattern.is_empty() && g.pattern != pattern {
-                continue;
-            }
-            match g.scope.as_str() {
-                "project" => return true,
-                "this_run" if g.run_id.as_deref() == Some(run_id) => return true,
-                _ => {}
-            }
-        }
-        drop(grants);
-        // DB fallback for process restart within same conversation.
-        load_tool_grant_match(conversation_id, run_id, tool_name, pattern)
+        let input = if tool_name == "run_terminal" && !pattern.is_empty() {
+            serde_json::json!({ "command": pattern, "cwd": "." })
+        } else if matches!(tool_name, "write_file" | "read_file" | "apply_patch")
+            && !pattern.is_empty()
+        {
+            serde_json::json!({ "path": pattern })
+        } else {
+            // Empty input for non-pattern tools: only exact empty-constraint grants match.
+            serde_json::json!({})
+        };
+        let inv =
+            crate::runtime::invocation_from_gate(tool_name, &input, conversation_id, run_id, None);
+        matches!(
+            self.tool_policy.check(&inv).await,
+            crate::runtime::GrantDecision::Allowed { .. }
+        )
     }
 
+    pub async fn check_tool_grant_invocation(
+        &self,
+        inv: &crate::runtime::ToolInvocation,
+    ) -> crate::runtime::GrantDecision {
+        self.tool_policy.check(inv).await
+    }
+
+    /// Execute a production engine turn. Returns `EngineOutcome` only — never commits
+    /// Run lifecycle status or terminal lifecycle events. RunManager is the sole committer.
     pub async fn start_run(
         &self,
         run_id: String,
@@ -406,7 +343,7 @@ impl ProductionRuntime {
         user_content: String,
         max_steps: u32,
         project_path: Option<std::path::PathBuf>,
-    ) -> Result<(), String> {
+    ) -> Result<agent_core::EngineOutcome, String> {
         let project_root = project_path.ok_or_else(|| {
             "project_path is required for daemon runs; process cwd fallback is disabled".to_string()
         })?;
@@ -423,8 +360,10 @@ impl ProductionRuntime {
         let profile_for_assemble = agent_core::discover_agents_md(&project_root)
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|raw| agent_core::parse_agent_profile_markdown(&raw, None).ok());
+        let cancel = self.ensure_execution_token(&run_id, None).await?;
         let engine = Arc::new(
             AgentEngine::new(self.events.clone())
+                .with_cancel_token(cancel.clone())
                 .with_hooks(hooks)
                 .with_session_harness(crate::prompt_queue_store::global_harness())
                 .with_context_budget(budget.history_compact_chars, budget.tool_output_max_chars),
@@ -473,7 +412,7 @@ impl ProductionRuntime {
             },
             permissions: self.permissions.clone(),
             events: self.events.clone(),
-            waiters: self.permission_waiters.clone(),
+            interactions: self.interactions.clone(),
             subagents: self.subagents.clone(),
             task_outputs: self.task_outputs.clone(),
             engines: self.engines.clone(),
@@ -488,20 +427,15 @@ impl ProductionRuntime {
             tool_allowlist,
         };
 
-        let assembled = assemble_context(
-            profile_for_assemble.as_ref(),
-            Some(&project_root),
-            None,
-        );
+        let assembled = assemble_context(profile_for_assemble.as_ref(), Some(&project_root), None);
         // Compact history against resolved token budget (chars/4 fallback estimate).
-        let raw_history = crate::conversation_store::engine_history(&conversation_id)
-            .unwrap_or_default();
+        let raw_history =
+            crate::conversation_store::engine_history(&conversation_id).unwrap_or_default();
         let history_pairs: Vec<(String, String)> = raw_history
             .iter()
             .map(|m| (m.role.clone(), m.content.clone()))
             .collect();
-        let (compacted, _) =
-            agent_core::compact_messages(&history_pairs, budget.token_budget);
+        let (compacted, _) = agent_core::compact_messages(&history_pairs, budget.token_budget);
         // Map compacted (role, content) back to EngineMessage, preserving tool fields
         // for messages still present (match by role+content).
         let messages: Vec<EngineMessage> = compacted
@@ -537,69 +471,56 @@ impl ProductionRuntime {
             max_steps,
         };
 
-        let status = engine
-            .run(config, &provider, &tools)
-            .await
-            .map(|s| s.as_str().to_string())
-            .unwrap_or_else(|_| "failed".into());
+        let outcome = match engine.run(config, &provider, &tools).await {
+            Ok(o) => o,
+            Err(e) => agent_core::EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
+        };
         // Finalize checkpoint — failure closes related side effects (no silent half-state).
         if let Err(e) = crate::checkpoint::global_checkpoint_manager().finalize_run(&run_id) {
             eprintln!("[production] checkpoint finalize_run failed: {e}");
-            // Fail closed for completed path: still record assistant turn only if finalize ok.
-            if status == "completed" {
-                // Keep event log terminal, but do not claim durable file snapshots exist.
-            }
         }
-        if status == "completed" {
+        let success = matches!(outcome, agent_core::EngineOutcome::Completed { .. });
+        if success {
             crate::conversation_store::append_assistant_turn_from_events(
                 &conversation_id,
                 &run_id,
                 &self.events.replay_after(&run_id, 0),
             )?;
         }
-        self.events.append(
-            &run_id,
-            if status == "completed" {
-                RunEventKind::Completed {
-                    reason: "stop".into(),
-                }
-            } else if status == "interrupted" {
-                RunEventKind::Interrupted {
-                    reason: "cancelled".into(),
-                }
-            } else {
-                RunEventKind::Failed {
-                    error: "engine ended".into(),
-                    code: status.clone(),
-                }
-            },
-        );
-        // Completed may already be emitted by engine; duplicate is ok for terminal detection.
+        // Do NOT commit_outcome or append terminal lifecycle events here.
+        // RunManager is the sole lifecycle committer after this returns.
         self.engines.lock().await.remove(&run_id);
 
         // SessionCoordinator: drain next prompt / cancel-and-send after real terminal.
         // Never re-executes the just-finished run — only starts a *new* queued item.
-        let success = status == "completed";
-        let _ = crate::prompt_queue_store::on_run_terminal(&conversation_id, &run_id, success)
-            .await;
-        let _ = status;
-        Ok(())
+        let _ =
+            crate::prompt_queue_store::on_run_terminal(&conversation_id, &run_id, success).await;
+        Ok(outcome)
     }
 
     /// Sole production cancel API: cancel `run_id` and every nested descendant
-    /// child run. For each id: request_cancel live engine → mark subagent
-    /// metadata Cancelled → update task_outputs → append Interrupted.
+    /// child run via the ExecutionRegistry token tree (task-03).
+    ///
+    /// Order: signal tokens → wake waiters → grace → force process/join cleanup.
+    /// Lifecycle status (`Cancelling`/`Cancelled`) is committed by RunManager,
+    /// not here. Domain cleanup only.
+    ///
     /// All cancel entry points (RPC, UI, kill_task, parent cancel) must call this.
     pub async fn cancel_run_tree(&self, run_id: &str) {
+        // Prefer registry tree; fall back to subagent metadata for legacy paths.
+        let mut run_ids = self.execution.list_tree(run_id).await;
         let descendants = self.subagents.list_descendants(run_id).await;
-        // Root first, then every child/grandchild run_id (engines are keyed by run_id).
-        let mut run_ids: Vec<String> = vec![run_id.to_string()];
         for d in &descendants {
             if !run_ids.contains(&d.run_id) {
                 run_ids.push(d.run_id.clone());
             }
         }
+        if run_ids.is_empty() {
+            run_ids.push(run_id.to_string());
+        }
 
+        // Signal cooperative cancel on registry tokens + engines.
+        let _ = self.execution.signal_tree(run_id).await;
         {
             let engines = self.engines.lock().await;
             for rid in &run_ids {
@@ -608,6 +529,9 @@ impl ProductionRuntime {
                 }
             }
         }
+
+        // Wake permission / assignment waiters bound to this tree.
+        self.cancel_waiters_for_runs(&run_ids).await;
 
         // Metadata + task_outputs for every descendant task.
         for d in &descendants {
@@ -619,26 +543,68 @@ impl ProductionRuntime {
                 rec.status = "cancelled".into();
             }
         }
-        // Also mark any non-descendant metadata children (defensive).
         let _ = self.subagents.cascade_cancel_metadata(run_id).await;
 
-        for rid in &run_ids {
-            self.events.append(
-                rid,
-                RunEventKind::Cancelled {
-                    reason: "cancelled".into(),
-                },
+        // Grace + force via registry (process kill, join abort).
+        let outcome = self.execution.cancel_tree(run_id).await;
+        if !outcome.quiet {
+            eprintln!(
+                "[production] cancel_tree cleanup incomplete for {run_id}: {:?}",
+                outcome.errors
             );
         }
+
+        // Drop engine handles for this tree after force phase.
+        {
+            let mut engines = self.engines.lock().await;
+            for rid in &outcome.run_ids {
+                engines.remove(rid);
+            }
+        }
+
+        // No terminal lifecycle events here — RunManager::cancel commits Cancelled/Failed
+        // after cleanup quiet. Domain cleanup only.
     }
 
     /// Alias for tree cancel — never cancel a single node without descendants.
     pub async fn cancel_run(&self, run_id: &str) {
-        // Flip CLI cancel flags first so claude child processes can be killed promptly.
-        if let Some(flag) = self.cli_cancel_flags.lock().await.get(run_id) {
-            flag.cancel();
-        }
         self.cancel_run_tree(run_id).await;
+    }
+
+    /// Daemon shutdown entry (task-13 wiring): cancel every root and wait quiet.
+    pub async fn cancel_all_execution_roots(&self) -> Vec<crate::runtime::CancelCleanupOutcome> {
+        self.execution.cancel_all_execution_roots().await
+    }
+
+    async fn cancel_waiters_for_runs(&self, run_ids: &[String]) {
+        let stale = self.interactions.cancel_runs(run_ids).await;
+        for pid in stale {
+            let _ = crate::interaction_store::mark_resolved(
+                &pid,
+                serde_json::json!({ "approved": false, "scope": "once", "reason": "cancelled" }),
+            );
+        }
+    }
+
+    /// Ensure a run is registered in the cancel tree; returns its token.
+    pub async fn ensure_execution_token(
+        &self,
+        run_id: &str,
+        parent_run_id: Option<&str>,
+    ) -> Result<CancellationToken, String> {
+        let reg = if let Some(parent) = parent_run_id {
+            if self.execution.is_registered(parent).await {
+                self.execution.register_child(run_id, parent).await?
+            } else {
+                // Parent missing (legacy): still create child root but record parent link.
+                self.execution
+                    .register_with_token(run_id, Some(parent.to_string()), CancellationToken::new())
+                    .await?
+            }
+        } else {
+            self.execution.register_root(run_id).await?
+        };
+        Ok(reg.token)
     }
 
     pub async fn spawn_child_task(
@@ -652,15 +618,16 @@ impl ProductionRuntime {
         parent_permission_profile: &str,
         project_root: Option<String>,
     ) -> Result<String, String> {
-        let child_perm =
-            cap_child_permission(parent_permission_profile, &permission_profile);
+        let child_perm = cap_child_permission(parent_permission_profile, &permission_profile);
         let child_allowlist = default_subagent_tool_allowlist();
+        // Depth from parent chain — never hardcode 1 (task-11).
+        let depth = self.subagents.depth_for_child(parent_run_id).await;
         let child = self
             .subagents
             .spawn(
                 parent_run_id,
                 prompt.clone(),
-                1,
+                depth,
                 provider_id.clone(),
                 key_id.clone(),
                 model_id.clone(),
@@ -712,7 +679,7 @@ impl ProductionRuntime {
         let subagents = self.subagents.clone();
         let task_outputs = self.task_outputs.clone();
         let permissions = self.permissions.clone();
-        let waiters = self.permission_waiters.clone();
+        let interactions = self.interactions.clone();
         let engines = self.engines.clone();
         let task_id_bg = task_id.clone();
         let child_allowlist_bg = child_allowlist;
@@ -744,7 +711,7 @@ impl ProductionRuntime {
                 },
                 permissions,
                 events: events.clone(),
-                waiters,
+                interactions,
                 subagents: subagents.clone(),
                 task_outputs: task_outputs.clone(),
                 engines: engines.clone(),
@@ -759,8 +726,21 @@ impl ProductionRuntime {
             };
             // Same production hook set as parent (M4) — not a reduced AllowAll-only registry.
             let hooks = build_production_hooks();
+            // Child cancel token is parent.child_token when registry has parent.
+            let child_cancel = if let Some(parent_tok) = engines
+                .lock()
+                .await
+                .get(&parent_owned)
+                .map(|e| e.cancel_token())
+            {
+                parent_tok.child_token()
+            } else {
+                CancellationToken::new()
+            };
+            // Best-effort register under shared runtime if available via engines map only.
             let engine = Arc::new(
                 AgentEngine::new(events.clone())
+                    .with_cancel_token(child_cancel)
                     .with_hooks(hooks)
                     .with_session_harness(crate::prompt_queue_store::global_harness()),
             );
@@ -782,7 +762,7 @@ impl ProductionRuntime {
             let result = engine.run(config, &provider, &tools).await;
             engines.lock().await.remove(&child_run_id);
             let (status, output) = match &result {
-                Ok(s) => {
+                Ok(o) => {
                     let text = events
                         .replay_after(&child_run_id, 0)
                         .into_iter()
@@ -791,9 +771,23 @@ impl ProductionRuntime {
                             _ => None,
                         })
                         .collect::<String>();
-                    (s.as_str().to_string(), Some(text))
+                    let status = match o {
+                        agent_core::EngineOutcome::Completed { .. } => "completed".to_string(),
+                        agent_core::EngineOutcome::Failed { .. } => "failed".to_string(),
+                        agent_core::EngineOutcome::Cancelled => "cancelled".to_string(),
+                        agent_core::EngineOutcome::Interrupted { .. } => "interrupted".to_string(),
+                    };
+                    let _ =
+                        crate::run_manager::global_run_manager().commit_outcome(&child_run_id, o);
+                    (status, Some(text))
                 }
-                Err(e) => ("failed".into(), Some(e.to_string())),
+                Err(e) => {
+                    let outcome =
+                        agent_core::EngineOutcome::failed(e.code(), e.to_string(), e.retryable());
+                    let _ = crate::run_manager::global_run_manager()
+                        .commit_outcome(&child_run_id, &outcome);
+                    ("failed".into(), Some(e.to_string()))
+                }
             };
             if status == "completed" {
                 let _ = subagents
@@ -876,10 +870,7 @@ impl ProductionRuntime {
     /// Returns the task record on success; `"timeout"` or `"unknown task_id: …"` on error.
     pub async fn wait_task(&self, task_id: &str, timeout_ms: u64) -> Result<TaskRecord, String> {
         fn is_terminal(status: &str) -> bool {
-            matches!(
-                status,
-                "completed" | "failed" | "cancelled" | "interrupted"
-            )
+            matches!(status, "completed" | "failed" | "cancelled" | "interrupted")
         }
 
         let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms.max(1));
@@ -933,7 +924,9 @@ mod task_surface_tests {
 
         let listed = rt.list_tasks().await;
         assert_eq!(listed.len(), 2);
-        assert!(listed.iter().any(|(id, r)| id == "task-1" && r.status == "running"));
+        assert!(listed
+            .iter()
+            .any(|(id, r)| id == "task-1" && r.status == "running"));
         assert!(listed
             .iter()
             .any(|(id, r)| id == "task-2" && r.output.as_deref() == Some("done")));
@@ -995,7 +988,6 @@ mod task_surface_tests {
     }
 }
 
-
 #[cfg(test)]
 mod tool_grant_tests {
     use super::*;
@@ -1032,8 +1024,14 @@ mod tool_grant_tests {
         let rt = Arc::new(ProductionRuntime::new());
         rt.remember_tool_grant("c1", "r1", "run_terminal", "cargo test", "project")
             .await;
-        assert!(rt.has_tool_grant("c1", "r1", "run_terminal", "cargo test").await);
-        assert!(!rt.has_tool_grant("c1", "r1", "run_terminal", "rm -rf /").await);
+        assert!(
+            rt.has_tool_grant("c1", "r1", "run_terminal", "cargo test")
+                .await
+        );
+        assert!(
+            !rt.has_tool_grant("c1", "r1", "run_terminal", "rm -rf /")
+                .await
+        );
     }
 }
 
@@ -1236,221 +1234,7 @@ fn resolve_adapter(provider_id: &str) -> Box<dyn ProviderAdapter> {
     }
 }
 
-/// Injected by Tauri host: decrypt from natives.db via Credential Broker.
-/// Signature: (provider_id, key_id, run_id) → Credential (memory only).
-pub type CredentialBrokerFn =
-    Arc<dyn Fn(&str, Option<&str>, &str) -> Result<Credential, String> + Send + Sync>;
-
-static CREDENTIAL_BROKER: std::sync::Mutex<Option<CredentialBrokerFn>> =
-    std::sync::Mutex::new(None);
-
-/// Install the authenticated Credential Broker (from Tauri host).
-pub fn install_credential_broker(broker: CredentialBrokerFn) {
-    if let Ok(mut slot) = CREDENTIAL_BROKER.lock() {
-        *slot = Some(broker);
-    }
-}
-
-/// Clear broker (tests only).
-#[cfg(test)]
-pub fn clear_credential_broker_for_tests() {
-    if let Ok(mut slot) = CREDENTIAL_BROKER.lock() {
-        *slot = None;
-    }
-}
-
-/// Resolve credentials: 1) installed Tauri broker (natives.db) 2) test env 3) fail.
-/// Never invent mock completion text. Never log api_key.
-pub fn resolve_credential(provider_id: &str, key_id: Option<&str>) -> Result<Credential, String> {
-    // Legacy callers without a run must fail closed for lease binding in production
-    // broker path; env-based test keys still work via resolve_credential_for_run
-    // with an explicit synthetic id only from tests.
-    resolve_credential_for_run(provider_id, key_id, "legacy-unbound")
-}
-
-pub fn resolve_credential_for_run(
-    provider_id: &str,
-    key_id: Option<&str>,
-    run_id: &str,
-) -> Result<Credential, String> {
-    if run_id.trim().is_empty() {
-        return Err("run_id required for credential lease binding".into());
-    }
-    // 1. Authenticated broker path (production): Tauri decrypts natives.db.
-    //    Child agents must pass their own run_id — never inherit parent lease.
-    let broker = CREDENTIAL_BROKER.lock().ok().and_then(|g| g.clone());
-    if let Some(broker) = broker {
-        match broker(provider_id, key_id, run_id) {
-            Ok(cred) if !cred.api_key.trim().is_empty() => {
-                // Attach key_id for audit; lease binding is enforced by run_id arg.
-                return Ok(Credential {
-                    api_key: cred.api_key,
-                    base_url: cred.base_url,
-                    key_id: cred.key_id.or_else(|| key_id.map(|s| s.to_string())),
-                    provider_type: cred.provider_type,
-                });
-            }
-            Ok(_) => {
-                return Err(format!(
-                    "Broker returned empty key for provider '{provider_id}'"
-                ))
-            }
-            Err(e) => {
-                // Fall through to env only when broker reports not-found and tests set env.
-                let lower = e.to_ascii_lowercase();
-                if !lower.contains("not found") && !lower.contains("no active key") {
-                    return Err(redact_cred_err(&e));
-                }
-            }
-        }
-    }
-
-    // 2. Explicit test/dev env keys (NATIVES_TEST_*) — never invent offline success text.
-    // Anthropic also accepts common local env names used by CLI tooling (never logged).
-    let lower = provider_id.to_ascii_lowercase();
-    if lower.contains("anthropic") || lower.contains("claude") {
-        let api_key = std::env::var("NATIVES_TEST_ANTHROPIC_KEY")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .or_else(|| {
-                std::env::var("ANTHROPIC_API_KEY")
-                    .ok()
-                    .filter(|s| !s.trim().is_empty())
-            })
-            .or_else(|| {
-                std::env::var("ANTHROPIC_AUTH_TOKEN")
-                    .ok()
-                    .filter(|s| !s.trim().is_empty())
-            });
-        return match api_key {
-            Some(api_key) => Ok(Credential {
-                api_key,
-                base_url: std::env::var("NATIVES_TEST_ANTHROPIC_BASE")
-                    .ok()
-                    .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok()),
-                key_id: key_id.map(str::to_string),
-                provider_type: Some("anthropic".into()),
-            }),
-            None => Err(format!(
-                "No credential for provider '{provider_id}' (broker + NATIVES_TEST_ANTHROPIC_KEY/ANTHROPIC_API_KEY unavailable)"
-            )),
-        };
-    }
-    let (env_key, env_base) = if lower.contains("gemini") {
-        ("NATIVES_TEST_GEMINI_KEY", None)
-    } else if lower.contains("deepseek") {
-        (
-            "NATIVES_TEST_DEEPSEEK_KEY",
-            Some("NATIVES_TEST_DEEPSEEK_BASE"),
-        )
-    } else if lower.contains("compatible") || lower.contains("sensenova") {
-        ("NATIVES_TEST_OPENAI_KEY", Some("NATIVES_TEST_OPENAI_BASE"))
-    } else if lower.contains("ollama") {
-        return Ok(Credential {
-            api_key: "ollama".into(),
-            base_url: std::env::var("NATIVES_TEST_OLLAMA_BASE").ok(),
-            key_id: key_id.map(str::to_string),
-            provider_type: Some("ollama".into()),
-        });
-    } else {
-        ("NATIVES_TEST_OPENAI_KEY", Some("NATIVES_TEST_OPENAI_BASE"))
-    };
-    // OpenAI-compatible / SenseNova often expose keys via ANTHROPIC_* in local tooling.
-    let api_key = std::env::var(env_key)
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| {
-            if lower.contains("compatible")
-                || lower.contains("sensenova")
-                || lower.contains("openai")
-            {
-                std::env::var("ANTHROPIC_AUTH_TOKEN")
-                    .ok()
-                    .filter(|s| !s.trim().is_empty())
-                    .or_else(|| {
-                        std::env::var("ANTHROPIC_API_KEY")
-                            .ok()
-                            .filter(|s| !s.trim().is_empty())
-                    })
-            } else {
-                None
-            }
-        });
-    match api_key {
-        Some(api_key) => {
-            let raw_base = env_base
-                .and_then(|k| std::env::var(k).ok())
-                .or_else(|| std::env::var("NATIVES_TEST_OPENAI_BASE").ok())
-                .or_else(|| {
-                    if lower.contains("compatible")
-                        || lower.contains("sensenova")
-                        || lower.contains("openai")
-                    {
-                        std::env::var("ANTHROPIC_BASE_URL").ok()
-                    } else {
-                        None
-                    }
-                });
-            Ok(Credential {
-                api_key,
-                base_url: raw_base.map(normalize_openai_compatible_base),
-                key_id: key_id.map(str::to_string),
-                provider_type: Some(
-                    if lower.contains("deepseek") {
-                        "deepseek"
-                    } else if lower.contains("gemini") {
-                        "gemini"
-                    } else {
-                        "openai_compatible"
-                    }
-                    .into(),
-                ),
-            })
-        }
-        None => Err(format!(
-            "No credential for provider '{provider_id}' (broker + {env_key} both unavailable)"
-        )),
-    }
-}
-
-/// SenseNova and many gateways require `…/v1` for chat completions; accept host-only env.
-pub(crate) fn normalize_openai_compatible_base(base: String) -> String {
-    let t = base.trim().trim_end_matches('/').to_string();
-    if t.is_empty() {
-        return t;
-    }
-    // Already versioned or clearly a full API root.
-    if t.ends_with("/v1") || t.contains("/v1/") || t.ends_with("/openai") {
-        return t;
-    }
-    // token.sensenova.cn style host-only base → append /v1
-    format!("{t}/v1")
-}
-
-#[cfg(test)]
-mod base_url_normalize_tests {
-    use super::normalize_openai_compatible_base;
-
-    #[test]
-    fn appends_v1_for_host_only() {
-        assert_eq!(
-            normalize_openai_compatible_base("https://token.sensenova.cn".into()),
-            "https://token.sensenova.cn/v1"
-        );
-        assert_eq!(
-            normalize_openai_compatible_base("https://token.sensenova.cn/".into()),
-            "https://token.sensenova.cn/v1"
-        );
-    }
-
-    #[test]
-    fn keeps_existing_v1() {
-        assert_eq!(
-            normalize_openai_compatible_base("https://token.sensenova.cn/v1".into()),
-            "https://token.sensenova.cn/v1"
-        );
-    }
-}
+// Credential resolution moved to `production_credentials.rs` (task-01 structure).
 
 #[cfg(test)]
 mod permission_bind_tests {
@@ -1481,20 +1265,19 @@ mod permission_bind_tests {
     async fn rejects_mismatched_run_id() {
         let rt = ProductionRuntime::new();
         let (tx, _rx) = oneshot::channel();
-        rt.permission_waiters
-            .lock()
-            .await
-            .insert("p1".into(), ("run-a".into(), "tool".into(), tx));
+        rt.insert_permission_waiter("p1", "run-a", "tool", tx).await;
         let err = rt
             .respond_permission("p1", true, Some("run-b"), Some("once"))
             .await
             .unwrap_err();
         assert!(err.contains("mismatch"), "{err}");
         // Still present for correct owner
-        assert!(rt.permission_waiters.lock().await.contains_key("p1"));
-        let ok = rt.respond_permission("p1", false, Some("run-a"), Some("once")).await;
+        assert!(rt.interactions.has_permission("p1").await);
+        let ok = rt
+            .respond_permission("p1", false, Some("run-a"), Some("once"))
+            .await;
         assert!(ok.is_ok());
-        assert!(!rt.permission_waiters.lock().await.contains_key("p1"));
+        assert!(!rt.interactions.has_permission("p1").await);
     }
 }
 
@@ -1527,32 +1310,12 @@ mod provider_error_message_tests {
     }
 }
 
-fn redact_cred_err(msg: &str) -> String {
-    // Lightweight redaction without pulling regex into the daemon binary.
-    let mut out = String::with_capacity(msg.len());
-    let bytes = msg.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i..].starts_with(b"sk-") || bytes[i..].starts_with(b"SK-") {
-            out.push_str("[REDACTED_KEY]");
-            i += 3;
-            while i < bytes.len()
-                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'-')
-            {
-                i += 1;
-            }
-        } else {
-            out.push(bytes[i] as char);
-            i += 1;
-        }
-    }
-    out
-}
-
-
 /// Register gateway tools for a run. Parent (`allowlist=None`) gets full builtins.
 /// Child (`Some`) only registers the intersection so unauthorized tools are not present.
-fn register_tools_for_surface(gateway: &mut CapabilityGateway, allowlist: Option<&[String]>) {
+pub(crate) fn register_tools_for_surface(
+    gateway: &mut CapabilityGateway,
+    allowlist: Option<&[String]>,
+) {
     match allowlist {
         None => gateway.register_builtins(),
         Some(list) => {
@@ -1569,1675 +1332,14 @@ fn register_tools_for_surface(gateway: &mut CapabilityGateway, allowlist: Option
     }
 }
 
-/// Tools with permission gate + real task orchestration.
-pub struct PermissionGatedTools {
-    pub gateway: Arc<CapabilityGateway>,
-    pub permissions: Arc<PermissionManager>,
-    pub events: EventSequencer,
-    pub waiters: Arc<Mutex<HashMap<String, (String, String, oneshot::Sender<(bool, String)>)>>>,
-    pub subagents: Arc<SubAgentManager>,
-    pub task_outputs: Arc<Mutex<HashMap<String, TaskRecord>>>,
-    /// Shared with ProductionRuntime so kill_task / cascade can cancel live engines.
-    pub engines: Arc<Mutex<HashMap<String, Arc<AgentEngine>>>>,
-    pub runtime: Option<Arc<ProductionRuntime>>,
-    pub provider_id: String,
-    /// Real parent run key_id when known (never `"auto"`).
-    pub key_id: Option<String>,
-    pub parent_run_id: String,
-    pub conversation_id: String,
-    pub model_id: String,
-    pub permission_profile: String,
-    /// `None` = parent/unrestricted surface (permission profile still applies).
-    /// `Some` = hard allowlist; tools outside the list are hidden and denied.
-    pub tool_allowlist: Option<Vec<String>>,
-}
-
-impl PermissionGatedTools {
-    fn tool_allowed(&self, name: &str) -> bool {
-        match &self.tool_allowlist {
-            None => true,
-            Some(list) => {
-                if list.iter().any(|t| t == name) {
-                    return true;
-                }
-                // MCP surface: allow only when explicitly listed as `mcp_call` or exact name.
-                if name.starts_with("mcp__") {
-                    return list.iter().any(|t| t == "mcp_call" || t == name);
-                }
-                false
-            }
-        }
-    }
-
-    fn deny_not_allowlisted(name: &str) -> ToolExecutionResult {
-        ToolExecutionResult {
-            output: serde_json::json!({
-                "error": format!("tool `{name}` not in subagent tool_allowlist"),
-                "denied": true,
-                "code": "tool_not_allowlisted",
-            }),
-            is_error: true,
-            duration_ms: 0,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl EngineToolRuntime for PermissionGatedTools {
-    async fn list_tool_schemas(&self) -> Vec<ToolSchema> {
-        self.gateway
-            .list_tools()
-            .into_iter()
-            .filter(|t| self.tool_allowed(t.name))
-            .map(|t| ToolSchema {
-                name: t.name.to_string(),
-                description: t.description.to_string(),
-                input_schema: t.schema.clone(),
-            })
-            .collect()
-    }
-
-    async fn execute_tool(
-        &self,
-        name: &str,
-        input: Value,
-        cancel: &CancellationToken,
-    ) -> ToolExecutionResult {
-        if cancel.is_cancelled() {
-            return ToolExecutionResult {
-                output: serde_json::json!({"error": "cancelled"}),
-                is_error: true,
-                duration_ms: 0,
-            };
-        }
-
-        // Hard allowlist gate before permission / orchestration (Phase 0).
-        if !self.tool_allowed(name) {
-            return Self::deny_not_allowlisted(name);
-        }
-
-        let tool = self.gateway.get_tool(name);
-        let is_mcp = name == "mcp_call" || name.starts_with("mcp__");
-        if tool.is_none()
-            && !matches!(name, "task" | "task_output" | "kill_task" | "mcp_call")
-            && !name.starts_with("mcp__")
-        {
-            return ToolExecutionResult {
-                output: serde_json::json!({"error": format!("unknown tool: {name}")}),
-                is_error: true,
-                duration_ms: 0,
-            };
-        }
-
-        // Permission gate: PermissionClass + SideEffect (G5).
-        // Orchestration tools always go through this gate (never early-return around it).
-        let profile_str = match self.permission_profile.as_str() {
-            "full_access" | "autonomous" | "full" => "autonomous",
-            "readonly" => "readonly",
-            _ => "ask",
-        };
-        let (perm_class, side_effect) = if let Some(tool) = tool {
-            (tool.permission_class, tool.side_effect)
-        } else if is_mcp {
-            (
-                capability_gateway::PermissionClass::ExternalWrite,
-                SideEffect::Network,
-            )
-        } else {
-            // Fail-closed defaults if somehow unregistered.
-            match name {
-                "task_output" => (
-                    capability_gateway::PermissionClass::AlwaysAllowed,
-                    SideEffect::ReadOnly,
-                ),
-                "task" | "kill_task" => (
-                    capability_gateway::PermissionClass::ProjectWrite,
-                    SideEffect::Process,
-                ),
-                _ => (
-                    capability_gateway::PermissionClass::Elevation,
-                    SideEffect::Destructive,
-                ),
-            }
-        };
-        let class_result = capability_gateway::policy::check_permission(perm_class, profile_str);
-        let needs_ask = match class_result {
-            capability_gateway::policy::PolicyResult::Allowed => false,
-            capability_gateway::policy::PolicyResult::NeedsApproval(_)
-            | capability_gateway::policy::PolicyResult::Denied(_) => true,
-        };
-
-        if profile_str == "readonly" && !matches!(side_effect, SideEffect::ReadOnly) {
-            return ToolExecutionResult {
-                output: serde_json::json!({"error": "readonly profile denies side effects", "denied": true}),
-                is_error: true,
-                duration_ms: 0,
-            };
-        }
-
-        if needs_ask {
-            if let Some(denied) = self.await_tool_permission(name, &input).await {
-                return denied;
-            }
-        }
-
-        // Orchestration tools after permission.
-        if name == "task" {
-            return self.execute_task(input).await;
-        }
-        if name == "task_output" {
-            let id = input.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
-            let rec = self.task_outputs.lock().await.get(id).cloned();
-            return ToolExecutionResult {
-                output: serde_json::to_value(rec)
-                    .unwrap_or(serde_json::json!({"status":"unknown"})),
-                is_error: false,
-                duration_ms: 0,
-            };
-        }
-        if name == "kill_task" {
-            let id = input.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
-            let ok = self.kill_task_tree(id).await;
-            return ToolExecutionResult {
-                output: serde_json::json!({"cancelled": ok, "task_id": id}),
-                is_error: !ok,
-                duration_ms: 0,
-            };
-        }
-        // MCP tools: always after permission gate (ExternalWrite / Network).
-        if name == "mcp_call" || name.starts_with("mcp__") {
-            return self.execute_mcp_call(name, input).await;
-        }
-
-        let Some(_tool) = tool else {
-            return ToolExecutionResult {
-                output: serde_json::json!({"error": format!("unknown tool: {name}")}),
-                is_error: true,
-                duration_ms: 0,
-            };
-        };
-
-        // Inject project cwd for terminal when missing (sandbox).
-        let mut input = input;
-        if name == "run_terminal" {
-            if input.get("cwd").and_then(|v| v.as_str()).is_none() {
-                if let Some(root) = &self.gateway.project_root {
-                    if let Some(obj) = input.as_object_mut() {
-                        obj.insert("cwd".into(), Value::String(root.clone()));
-                    }
-                }
-            }
-        }
-
-        // Phase 3: lazy before-image for write tools (write_file / apply_patch).
-        let write_paths = extract_write_paths(name, &input);
-        for rel in &write_paths {
-            let _ = crate::checkpoint::global_checkpoint_manager()
-                .capture_before(&self.parent_run_id, rel);
-        }
-
-        let started = Instant::now();
-        // Stable id for tool_output_delta correlation (engine also emits its own
-        // tool_call_* ids; UI merges by tool_call_id when present on deltas).
-        let stream_tool_call_id = uuid::Uuid::new_v4().to_string();
-
-        // Create tool call context
-        let project_root = self
-            .gateway
-            .project_root
-            .as_ref()
-            .map(|s| std::path::PathBuf::from(s))
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
-        let tool_context = capability_gateway::ToolCallContext::new(
-            project_root,
-            self.parent_run_id.clone(),
-            self.conversation_id.clone(),
-            stream_tool_call_id.clone(),
-            self.permission_profile.clone(),
-        );
-
-        match self.gateway.execute(name, input, &tool_context).await {
-            Ok(out) => {
-                if name == "run_terminal" {
-                    emit_terminal_output_deltas(
-                        &self.events,
-                        &self.parent_run_id,
-                        &stream_tool_call_id,
-                        &out.result,
-                    );
-                    // Background shell tasks: surface on Activity task list.
-                    if out
-                        .result
-                        .get("background")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false)
-                    {
-                        let task_id = out
-                            .result
-                            .get("task_id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(&stream_tool_call_id)
-                            .to_string();
-                        let label = out
-                            .result
-                            .get("display_command")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("terminal")
-                            .to_string();
-                        self.events.append(
-                            &self.parent_run_id,
-                            RunEventKind::TaskStarted {
-                                task_id: task_id.clone(),
-                                run_id: self.parent_run_id.clone(),
-                                label,
-                            },
-                        );
-                        if let Some(rt) = &self.runtime {
-                            rt.task_outputs.lock().await.insert(
-                                task_id,
-                                TaskRecord {
-                                    run_id: self.parent_run_id.clone(),
-                                    status: "running".into(),
-                                    output: out
-                                        .result
-                                        .get("output")
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string()),
-                                },
-                            );
-                        }
-                    }
-                }
-                for rel in &write_paths {
-                    let _ = crate::checkpoint::global_checkpoint_manager()
-                        .capture_after(&self.parent_run_id, rel);
-                    // Best-effort FileChanged with before/after from checkpoint live map.
-                    if let Ok(preview) = crate::checkpoint::global_checkpoint_manager()
-                        .checkpoint_for_run_public(&self.parent_run_id)
-                    {
-                        if let Some(snap) = preview.files.iter().find(|f| &f.path == rel) {
-                            self.events.append(
-                                &self.parent_run_id,
-                                RunEventKind::FileChanged {
-                                    path: rel.clone(),
-                                    change_type: if !snap.existed_before {
-                                        "created".into()
-                                    } else {
-                                        "modified".into()
-                                    },
-                                    before: snap.before_content.clone(),
-                                    after: snap.after_content.clone(),
-                                    before_hash: snap.before_hash.clone(),
-                                    after_hash: snap.after_hash.clone(),
-                                    diff_artifact_id: None,
-                                },
-                            );
-                        }
-                    }
-                }
-                ToolExecutionResult {
-                    output: out.result,
-                    is_error: false,
-                    duration_ms: out.duration_ms.max(started.elapsed().as_millis() as u64),
-                }
-            }
-            Err(err) => ToolExecutionResult {
-                output: serde_json::json!({"error": err.message, "code": err.code}),
-                is_error: true,
-                duration_ms: started.elapsed().as_millis() as u64,
-            },
-        }
-    }
-
-    async fn execute_task_batch(
-        &self,
-        tasks: Vec<(String, Value)>,
-        cancel: &CancellationToken,
-    ) -> Vec<ToolExecutionResult> {
-        if tasks.is_empty() {
-            return Vec::new();
-        }
-        // Single-item path still goes through batch assignment so payload is consistent.
-        let batch_specs: Vec<(String, Value, String, String)> = tasks
-            .into_iter()
-            .map(|(call_id, input)| {
-                let prompt = input
-                    .get("prompt")
-                    .or_else(|| input.get("task"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let name = input
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                (call_id, input, name, prompt)
-            })
-            .collect();
-
-        // Resolve one assignment for the whole batch (full tasks[] + default_binding).
-        let assignment_map = match self
-            .resolve_batch_assignment(
-                &batch_specs
-                    .iter()
-                    .map(|(call_id, _input, name, prompt)| {
-                        (
-                            call_id.clone(),
-                            name.clone(),
-                            prompt.clone(),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            )
-            .await
-        {
-            Ok(m) => m,
-            Err(e) => {
-                return batch_specs
-                    .iter()
-                    .map(|_| ToolExecutionResult {
-                        output: serde_json::json!({
-                            "error": e,
-                            "code": "subagent_assignment_failed",
-                        }),
-                        is_error: true,
-                        duration_ms: 0,
-                    })
-                    .collect();
-            }
-        };
-
-        let mut out = Vec::with_capacity(batch_specs.len());
-        for (call_id, input, _name, _prompt) in batch_specs {
-            if cancel.is_cancelled() {
-                out.push(ToolExecutionResult {
-                    output: serde_json::json!({"error": "cancelled"}),
-                    is_error: true,
-                    duration_ms: 0,
-                });
-                continue;
-            }
-            let binding = assignment_map
-                .get(&call_id)
-                .cloned()
-                .or_else(|| assignment_map.values().next().cloned());
-            let mut input = input;
-            if let Some(b) = binding {
-                // Inject resolved binding for execute_task (model credentials still ignored).
-                if let Some(obj) = input.as_object_mut() {
-                    obj.insert(
-                        "_resolved_binding".into(),
-                        serde_json::json!({
-                            "provider_id": b.provider_id,
-                            "key_id": b.key_id,
-                            "model_id": b.model_id,
-                        }),
-                    );
-                    obj.insert("task_call_id".into(), Value::String(call_id.clone()));
-                }
-            }
-            out.push(self.execute_task(input).await);
-        }
-        out
-    }
-}
-
 /// Collect relative paths that a write-side tool is about to touch.
 
-/// Emit batched terminal stdout/stderr as ToolOutputDelta (≤8KB chunks, ≤1MB total).
-fn emit_terminal_output_deltas(
-    events: &EventSequencer,
-    run_id: &str,
-    tool_call_id: &str,
-    result: &Value,
-) {
-    const CHUNK: usize = 8 * 1024;
-    const MAX_PERSIST: usize = 1024 * 1024;
-    let stdout = result
-        .get("stdout")
-        .and_then(|v| v.as_str())
-        .or_else(|| result.get("output").and_then(|v| v.as_str()))
-        .unwrap_or("");
-    let stderr = result.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
-    let mut persisted = 0usize;
-    for (stream, text) in [("stdout", stdout), ("stderr", stderr)] {
-        if text.is_empty() {
-            continue;
-        }
-        let bytes = text.as_bytes();
-        let mut offset = 0usize;
-        while offset < bytes.len() {
-            if persisted >= MAX_PERSIST {
-                events.append(
-                    run_id,
-                    RunEventKind::ToolOutputDelta {
-                        tool_call_id: tool_call_id.to_string(),
-                        stream: stream.into(),
-                        text: String::new(),
-                        truncated: true,
-                    },
-                );
-                return;
-            }
-            let end = (offset + CHUNK).min(bytes.len());
-            let take = (end - offset).min(MAX_PERSIST - persisted);
-            let end = offset + take;
-            let chunk = String::from_utf8_lossy(&bytes[offset..end]).into_owned();
-            persisted += chunk.len();
-            events.append(
-                run_id,
-                RunEventKind::ToolOutputDelta {
-                    tool_call_id: tool_call_id.to_string(),
-                    stream: stream.into(),
-                    text: chunk,
-                    truncated: persisted >= MAX_PERSIST || end < bytes.len() && take < CHUNK,
-                },
-            );
-            offset = end;
-            if take == 0 {
-                break;
-            }
-        }
-    }
-}
-
-fn extract_write_paths(name: &str, input: &Value) -> Vec<String> {
-    let mut paths = Vec::new();
-    match name {
-        "write_file" | "edit_file" => {
-            if let Some(p) = input.get("path").and_then(|v| v.as_str()) {
-                if !p.is_empty() && !p.contains("..") {
-                    // Prefer project-relative: strip absolute if possible is caller's job.
-                    paths.push(p.to_string());
-                }
-            }
-        }
-        "apply_patch" => {
-            if let Some(arr) = input.get("files").and_then(|v| v.as_array()) {
-                for f in arr {
-                    if let Some(p) = f.get("path").and_then(|v| v.as_str()) {
-                        if !p.is_empty() && !p.contains("..") {
-                            paths.push(p.to_string());
-                        }
-                    }
-                }
-            }
-            if let Some(p) = input.get("path").and_then(|v| v.as_str()) {
-                if !p.is_empty() && !p.contains("..") {
-                    paths.push(p.to_string());
-                }
-            }
-        }
-        _ => {}
-    }
-    paths
-}
-
-
-fn normalize_permission_scope(scope: &str) -> String {
+pub(crate) fn normalize_permission_scope(scope: &str) -> String {
     match scope.trim().to_ascii_lowercase().as_str() {
         "run" | "this_run" | "session" => "this_run".into(),
         "project" | "always" | "forever" => "project".into(),
         _ => "once".into(),
     }
-}
-
-fn tool_pattern(name: &str, input: &Value) -> String {
-    if name == "run_terminal" {
-        input
-            .get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string()
-    } else {
-        String::new()
-    }
-}
-
-fn persist_tool_grant_db(grant: &ToolGrant) -> Result<(), String> {
-    // Prefer assistant.db path used by daemon stores.
-    let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| std::env::var("NATIVES_DB_PATH").ok().filter(|s| !s.trim().is_empty()));
-    let Some(db_path) = db_path else {
-        return Ok(());
-    };
-    let path = std::path::PathBuf::from(db_path);
-    if !path.exists() {
-        return Ok(());
-    }
-    let art = path
-        .parent()
-        .map(|p| p.join("artifacts"))
-        .unwrap_or_else(std::env::temp_dir);
-    let store = crate::storage::DataStore::new(&path, &art)?;
-    let conn = store.conn()?;
-    let id = uuid::Uuid::new_v4().to_string();
-    let grant_type = match grant.scope.as_str() {
-        "this_run" => "session",
-        "project" => "always",
-        _ => "once",
-    };
-    conn.execute(
-        "INSERT OR REPLACE INTO tool_grant
-         (id, conversation_id, run_id, tool_name, scope, grant_type, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
-        rusqlite::params![
-            id,
-            grant.conversation_id,
-            grant.run_id,
-            grant.tool_name,
-            grant.pattern,
-            grant_type,
-        ],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-fn load_tool_grant_match(
-    conversation_id: &str,
-    run_id: &str,
-    tool_name: &str,
-    pattern: &str,
-) -> bool {
-    let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| std::env::var("NATIVES_DB_PATH").ok().filter(|s| !s.trim().is_empty()));
-    let Some(db_path) = db_path else {
-        return false;
-    };
-    let path = std::path::PathBuf::from(db_path);
-    if !path.exists() {
-        return false;
-    }
-    let art = path
-        .parent()
-        .map(|p| p.join("artifacts"))
-        .unwrap_or_else(std::env::temp_dir);
-    let Ok(store) = crate::storage::DataStore::new(&path, &art) else {
-        return false;
-    };
-    let Ok(conn) = store.conn() else {
-        return false;
-    };
-    let mut stmt = match conn.prepare(
-        "SELECT run_id, scope, grant_type FROM tool_grant
-         WHERE conversation_id = ?1 AND tool_name = ?2
-           AND (scope IS NULL OR scope = '' OR scope = ?3)",
-    ) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    let rows = stmt.query_map(
-        rusqlite::params![conversation_id, tool_name, pattern],
-        |row| {
-            Ok((
-                row.get::<_, Option<String>>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        },
-    );
-    let Ok(rows) = rows else {
-        return false;
-    };
-    for row in rows.flatten() {
-        let (rid, _scope_pat, grant_type) = row;
-        match grant_type.as_str() {
-            "always" => return true,
-            "session" if rid.as_deref() == Some(run_id) => return true,
-            _ => {}
-        }
-    }
-    false
-}
-
-impl PermissionGatedTools {
-    async fn await_tool_permission(
-        &self,
-        name: &str,
-        input: &Value,
-    ) -> Option<ToolExecutionResult> {
-        let pattern = tool_pattern(name, input);
-        // Skip ask when this_run / project grant already covers this tool (+ pattern).
-        if let Some(rt) = &self.runtime {
-            if rt
-                .has_tool_grant(
-                    &self.conversation_id,
-                    &self.parent_run_id,
-                    name,
-                    &pattern,
-                )
-                .await
-            {
-                return None;
-            }
-        }
-
-        let tool_call_id = uuid::Uuid::new_v4().to_string();
-        let permission_id = self
-            .permissions
-            .request_permission_for_profile(
-                match self.permission_profile.as_str() {
-                    "readonly" | "read_only" => PermissionProfile::ReadOnly,
-                    "full_access" | "autonomous" | "full" => PermissionProfile::Autonomous,
-                    _ => PermissionProfile::ConfirmEach,
-                },
-                &self.parent_run_id,
-                &tool_call_id,
-                name,
-                format!("Approve {name}?"),
-                input.clone(),
-            )
-            .await
-            .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string());
-
-        if permission_id == "auto-approved" {
-            return None;
-        }
-        // Install the waiter before publishing the event. Otherwise a fast UI
-        // (or test responder) can observe PermissionRequested, respond, and
-        // lose the race before the channel exists, leaving the engine blocked.
-        let (tx, rx) = oneshot::channel::<(bool, String)>();
-        self.waiters.lock().await.insert(
-            permission_id.clone(),
-            (self.parent_run_id.clone(), name.to_string(), tx),
-        );
-        // Best-effort: persist interaction row for restart recovery.
-        let _ = crate::interaction_store::insert_pending(
-            &permission_id,
-            Some(&self.parent_run_id),
-            Some(&self.conversation_id),
-            "tool_permission",
-            serde_json::json!({
-                "tool_call_id": tool_call_id,
-                "tool_name": name,
-                "reason": format!("Approve tool `{name}`"),
-                "input": input,
-            }),
-        );
-        crate::prompt_queue_store::global_harness().set_pending_interaction(
-            &self.conversation_id,
-            Some(permission_id.clone()),
-        );
-        let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
-        self.events.append(
-            &self.parent_run_id,
-            RunEventKind::PermissionRequested {
-                tool_call_id: tool_call_id.clone(),
-                tool_name: name.to_string(),
-                reason: format!("Approve tool `{name}`"),
-                permission_id: permission_id.clone(),
-                input: input.clone(),
-            },
-        );
-        let (approved, scope) = tokio::time::timeout(Duration::from_secs(120), rx)
-            .await
-            .ok()
-            .and_then(|r| r.ok())
-            .unwrap_or((false, "once".into()));
-        let scope = normalize_permission_scope(&scope);
-        if approved {
-            if let Some(rt) = &self.runtime {
-                rt.remember_tool_grant(
-                    &self.conversation_id,
-                    &self.parent_run_id,
-                    name,
-                    &pattern,
-                    &scope,
-                )
-                .await;
-            }
-        }
-        crate::prompt_queue_store::global_harness()
-            .set_pending_interaction(&self.conversation_id, None);
-        let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
-        self.events.append(
-            &self.parent_run_id,
-            RunEventKind::PermissionResponded {
-                permission_id,
-                approved,
-                scope: scope.clone(),
-            },
-        );
-        // Phase 2: AfterPermissionResolved is a documented safe point. Message
-        // mutation lives in AgentEngine (apply_safe_point); the tool layer cannot
-        // push into provider history here. Call the harness so the seam is live,
-        // then re-queue any interjection so Engine's AfterTool/ProviderBatch can
-        // inject it into messages (on_safe_point consumes pending).
-        match crate::prompt_queue_store::on_safe_point(
-            &self.conversation_id,
-            agent_core::SafePoint::AfterPermissionResolved,
-        ) {
-            agent_core::HarnessAction::InjectInterjection { content } => {
-                crate::prompt_queue_store::global_harness()
-                    .interject(&self.conversation_id, content);
-            }
-            _ => {}
-        }
-        if approved {
-            None
-        } else {
-            Some(ToolExecutionResult {
-                output: serde_json::json!({"error": "permission denied", "denied": true}),
-                is_error: true,
-                duration_ms: 0,
-            })
-        }
-    }
-
-    /// Same tree-cancel rules as ProductionRuntime::cancel_run_tree, using
-    /// the shared engines/subagents/events maps held by this tool runtime.
-    async fn cancel_run_tree_local(&self, run_id: &str) {
-        if let Some(rt) = &self.runtime {
-            rt.cancel_run_tree(run_id).await;
-            return;
-        }
-        let descendants = self.subagents.list_descendants(run_id).await;
-        let mut run_ids: Vec<String> = vec![run_id.to_string()];
-        for d in &descendants {
-            if !run_ids.contains(&d.run_id) {
-                run_ids.push(d.run_id.clone());
-            }
-        }
-        {
-            let engines = self.engines.lock().await;
-            for rid in &run_ids {
-                if let Some(engine) = engines.get(rid) {
-                    engine.request_cancel();
-                }
-            }
-        }
-        for d in &descendants {
-            let _ = self
-                .subagents
-                .update_status(&d.id, SubAgentStatus::Cancelled)
-                .await;
-            if let Some(rec) = self.task_outputs.lock().await.get_mut(&d.id) {
-                rec.status = "cancelled".into();
-            }
-        }
-        let _ = self.subagents.cascade_cancel_metadata(run_id).await;
-        for rid in &run_ids {
-            self.events.append(
-                rid,
-                RunEventKind::Interrupted {
-                    reason: "cancelled".into(),
-                },
-            );
-        }
-    }
-
-    async fn kill_task_tree(&self, task_id: &str) -> bool {
-        let child_run_id = self
-            .task_outputs
-            .lock()
-            .await
-            .get(task_id)
-            .map(|r| r.run_id.clone());
-        let Some(rid) = child_run_id else {
-            return false;
-        };
-        self.cancel_run_tree_local(&rid).await;
-        let _ = self
-            .subagents
-            .update_status(task_id, SubAgentStatus::Cancelled)
-            .await;
-        if let Some(rec) = self.task_outputs.lock().await.get_mut(task_id) {
-            rec.status = "cancelled".into();
-        }
-        true
-    }
-
-    /// Route `mcp_call` / namespaced `mcp__server__tool` through daemon MCP runtime.
-    async fn execute_mcp_call(&self, name: &str, input: Value) -> ToolExecutionResult {
-        let started = Instant::now();
-        let (server_id, tool_name, arguments) = if name == "mcp_call" {
-            let server = input
-                .get("server")
-                .or_else(|| input.get("server_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let tool = input
-                .get("tool")
-                .or_else(|| input.get("name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let args = input
-                .get("arguments")
-                .or_else(|| input.get("input"))
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({}));
-            (server, tool, args)
-        } else {
-            // mcp__{server}__{tool}
-            let rest = name.strip_prefix("mcp__").unwrap_or(name);
-            let mut parts = rest.splitn(2, "__");
-            let server = parts.next().unwrap_or("").to_string();
-            let tool = parts.next().unwrap_or("").to_string();
-            (server, tool, input)
-        };
-        if server_id.is_empty() || tool_name.is_empty() {
-            return ToolExecutionResult {
-                output: serde_json::json!({
-                    "error": "mcp_call requires server and tool",
-                    "code": "invalid_input",
-                }),
-                is_error: true,
-                duration_ms: started.elapsed().as_millis() as u64,
-            };
-        }
-        let call_id = format!("mcp-{server_id}-{tool_name}");
-        let display_name = format!("mcp_call:{server_id}/{tool_name}");
-        // Structured audit event (permission already passed).
-        self.events.append(
-            &self.parent_run_id,
-            RunEventKind::ToolCallStarted {
-                id: call_id.clone(),
-                name: display_name.clone(),
-            },
-        );
-        match crate::mcp_runtime::global_mcp().call_tool(&server_id, &tool_name, arguments) {
-            Ok(result) => {
-                let duration_ms = started.elapsed().as_millis() as u64;
-                self.events.append(
-                    &self.parent_run_id,
-                    RunEventKind::ToolCallCompleted {
-                        id: call_id,
-                        name: display_name,
-                        output: result.clone(),
-                        is_error: false,
-                        duration_ms,
-                    },
-                );
-                ToolExecutionResult {
-                    output: serde_json::json!({
-                        "server": server_id,
-                        "tool": tool_name,
-                        "ok": true,
-                        "result": result,
-                    }),
-                    is_error: false,
-                    duration_ms,
-                }
-            }
-            Err(e) => {
-                let duration_ms = started.elapsed().as_millis() as u64;
-                self.events.append(
-                    &self.parent_run_id,
-                    RunEventKind::ToolCallCompleted {
-                        id: call_id,
-                        name: display_name,
-                        output: serde_json::json!({"error": e}),
-                        is_error: true,
-                        duration_ms,
-                    },
-                );
-                ToolExecutionResult {
-                    output: serde_json::json!({
-                        "server": server_id,
-                        "tool": tool_name,
-                        "ok": false,
-                        "error": e,
-                        "code": "mcp_call_failed",
-                    }),
-                    is_error: true,
-                    duration_ms,
-                }
-            }
-        }
-    }
-
-    async fn execute_task(&self, input: Value) -> ToolExecutionResult {
-        let prompt = input
-            .get("prompt")
-            .or_else(|| input.get("task"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        if prompt.trim().is_empty() {
-            return ToolExecutionResult {
-                output: serde_json::json!({"error": "prompt required for task"}),
-                is_error: true,
-                duration_ms: 0,
-            };
-        }
-        // Credential fields from the model are intentionally ignored (route policy assigns).
-        let _ignored_provider = input.get("provider_id");
-        let _ignored_key = input.get("key_id");
-        let _ignored_model = input.get("model_id");
-
-        let name = input
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        // Child permission never exceeds parent; default request is ask (not full_access).
-        let requested_perm = input
-            .get("permission_profile")
-            .and_then(|v| v.as_str())
-            .unwrap_or("ask");
-        let child_perm = cap_child_permission(&self.permission_profile, requested_perm);
-        // Explicit tool_allowlist on task input, else default readonly surface.
-        let child_allowlist: Vec<String> = if let Some(arr) = input.get("tool_allowlist") {
-            arr.as_array()
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .collect()
-                })
-                .unwrap_or_else(default_subagent_tool_allowlist)
-        } else {
-            default_subagent_tool_allowlist()
-        };
-
-        // Prefer binding injected by execute_task_batch; else resolve (single-task path).
-        let binding = if let Some(b) = input
-            .get("_resolved_binding")
-            .cloned()
-            .and_then(|v| serde_json::from_value::<crate::subagent_store::RouteBinding>(v).ok())
-        {
-            b
-        } else {
-            match self.resolve_task_binding(&input).await {
-                Ok(b) => b,
-                Err(e) => {
-                    return ToolExecutionResult {
-                        output: serde_json::json!({
-                            "error": e,
-                            "code": "subagent_assignment_failed",
-                        }),
-                        is_error: true,
-                        duration_ms: 0,
-                    };
-                }
-            }
-        };
-        let child_provider = binding.provider_id.clone();
-        let child_key = binding.key_id.clone();
-        let child_model = binding.model_id.clone();
-
-        // Persist hidden child conversation + subagent_session (real IDs).
-        let _ = crate::conversation_store::ensure_conversation_stub(
-            &self.conversation_id,
-            &self.provider_id,
-            &self.model_id,
-            Some(&self.permission_profile),
-            None,
-        );
-        let task_call_id = input
-            .get("task_call_id")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty());
-        let (session_id, child_conversation_id) =
-            match crate::subagent_store::create_hidden_child_session(
-                &self.conversation_id,
-                Some(&self.parent_run_id),
-                task_call_id,
-                &name,
-                &prompt,
-                &binding,
-                Some(&child_perm),
-                self.gateway.project_root.as_deref(),
-            ) {
-                Ok(v) => v,
-                Err(e) => {
-                    if use_fixture_flag(&input) {
-                        let sid = uuid::Uuid::new_v4().to_string();
-                        let cid = uuid::Uuid::new_v4().to_string();
-                        (sid, cid)
-                    } else {
-                        return ToolExecutionResult {
-                            output: serde_json::json!({
-                                "error": format!("create child session failed: {e}"),
-                            }),
-                            is_error: true,
-                            duration_ms: 0,
-                        };
-                    }
-                }
-            };
-
-        // Standard RunManager path: create_run + start_detached (no embedded Engine).
-        let project_path = self.gateway.project_root.clone();
-        let created = match crate::global_run_manager().create_run(
-            assistant_protocol::v2::CreateRunRequest {
-                conversation_id: child_conversation_id.clone(),
-                provider_id: child_provider.clone(),
-                model_id: child_model.clone(),
-                key_id: Some(child_key.clone()),
-                agent_profile_id: None,
-                permission_profile: Some(child_perm.clone()),
-                content: Some(prompt.clone()),
-                attachments: None,
-                max_steps: Some(15),
-                parent_run_id: Some(self.parent_run_id.clone()),
-                project_path: project_path.clone(),
-                idempotency_key: None,
-                effort: None,
-                runtime_id: Some("native".into()),
-            },
-        ) {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = crate::subagent_store::close_subagent_session(
-                    &session_id,
-                    "failed",
-                    Some(&e),
-                );
-                return ToolExecutionResult {
-                    output: serde_json::json!({"error": format!("create child run failed: {e}")}),
-                    is_error: true,
-                    duration_ms: 0,
-                };
-            }
-        };
-        let child_run_id = created.id.clone();
-
-        // Metadata shares real run_id + persistent session id as task_id.
-        let child = match self
-            .subagents
-            .register(
-                session_id.clone(),
-                child_run_id.clone(),
-                &self.parent_run_id,
-                prompt.clone(),
-                1,
-                child_provider.clone(),
-                child_key.clone(),
-                child_model.clone(),
-                child_perm.clone(),
-                child_allowlist.clone(),
-                None,
-                Some("none".into()),
-                project_path.clone(),
-            )
-            .await
-        {
-            Ok(c) => c,
-            Err(e) => {
-                let _ = crate::subagent_store::close_subagent_session(
-                    &session_id,
-                    "failed",
-                    Some(&e),
-                );
-                return ToolExecutionResult {
-                    output: serde_json::json!({"error": e}),
-                    is_error: true,
-                    duration_ms: 0,
-                };
-            }
-        };
-        let _ = self
-            .subagents
-            .update_status(&child.id, SubAgentStatus::Running)
-            .await;
-        let _ = crate::subagent_store::update_subagent_session_status(&session_id, "running", None);
-
-        // Apply child tool surface before RunManager starts the engine.
-        crate::global_run_manager()
-            .runtime
-            .set_run_tool_allowlist(&child_run_id, child_allowlist.clone())
-            .await;
-
-        self.events.append(
-            &self.parent_run_id,
-            RunEventKind::SubagentCreated {
-                sub_run_id: child_run_id.clone(),
-                agent_profile_id: None,
-                task: prompt.clone(),
-            },
-        );
-
-        let task_id = session_id.clone();
-        self.task_outputs.lock().await.insert(
-            task_id.clone(),
-            TaskRecord {
-                run_id: child_run_id.clone(),
-                status: "running".into(),
-                output: None,
-            },
-        );
-
-        let start_result = crate::run_manager::RunManager::start_detached_global(
-            assistant_protocol::v2::StartRunRequest {
-                run_id: Some(child_run_id.clone()),
-                conversation_id: Some(child_conversation_id.clone()),
-                provider_id: Some(child_provider.clone()),
-                model_id: Some(child_model.clone()),
-                key_id: Some(child_key.clone()),
-                content: Some(prompt.clone()),
-                attachments: None,
-                trigger_message_id: None,
-                permission_profile: Some(child_perm.clone()),
-                max_steps: Some(15),
-                project_path: project_path.clone(),
-                idempotency_key: None,
-                effort: None,
-                runtime_id: Some("native".into()),
-            },
-        );
-        if let Err(e) = start_result {
-            let _ = crate::subagent_store::close_subagent_session(
-                &session_id,
-                "failed",
-                Some(&e),
-            );
-            if let Some(rec) = self.task_outputs.lock().await.get_mut(&task_id) {
-                rec.status = "failed".into();
-                rec.output = Some(e.clone());
-            }
-            return ToolExecutionResult {
-                output: serde_json::json!({"error": format!("start child run failed: {e}")}),
-                is_error: true,
-                duration_ms: 0,
-            };
-        }
-
-        // Background watcher: when RunManager marks the run terminal, update session/task.
-        let session_id_bg = session_id.clone();
-        let task_id_bg = task_id.clone();
-        let child_run_id_bg = child_run_id.clone();
-        let parent_run_id = self.parent_run_id.clone();
-        let events = self.events.clone();
-        let subagents = self.subagents.clone();
-        let task_outputs = self.task_outputs.clone();
-        let mem_task_id_bg = child.id.clone();
-        tokio::spawn(async move {
-            for _ in 0..3_600 {
-                tokio::time::sleep(Duration::from_millis(250)).await;
-                let Some(run) = crate::global_run_manager().get_run(&child_run_id_bg) else {
-                    continue;
-                };
-                let status = run.status.as_str().to_string();
-                if !run.status.is_terminal() {
-                    continue;
-                }
-                let text = events
-                    .replay_after(&child_run_id_bg, 0)
-                    .into_iter()
-                    .filter_map(|e| match e.payload {
-                        RunEventKind::TextDelta { text } => Some(text),
-                        _ => None,
-                    })
-                    .collect::<String>();
-                if status == "completed" {
-                    let _ = subagents
-                        .update_status(&mem_task_id_bg, SubAgentStatus::Completed)
-                        .await;
-                    let _ = crate::subagent_store::update_subagent_session_status(
-                        &session_id_bg,
-                        "completed",
-                        None,
-                    );
-                    events.append(
-                        &parent_run_id,
-                        RunEventKind::SubagentCompleted {
-                            sub_run_id: child_run_id_bg.clone(),
-                            result: text.clone(),
-                        },
-                    );
-                } else {
-                    let err_msg = run
-                        .error_code
-                        .clone()
-                        .unwrap_or_else(|| status.clone());
-                    let _ = subagents
-                        .update_status(
-                            &mem_task_id_bg,
-                            SubAgentStatus::Failed(err_msg.clone()),
-                        )
-                        .await;
-                    let _ = crate::subagent_store::close_subagent_session(
-                        &session_id_bg,
-                        if status == "cancelled" || status == "interrupted" {
-                            "cancelled"
-                        } else {
-                            "failed"
-                        },
-                        Some(&err_msg),
-                    );
-                    events.append(
-                        &parent_run_id,
-                        RunEventKind::SubagentFailed {
-                            sub_run_id: child_run_id_bg.clone(),
-                            error: err_msg,
-                        },
-                    );
-                }
-                let rec = TaskRecord {
-                    run_id: child_run_id_bg.clone(),
-                    status,
-                    output: if text.is_empty() { None } else { Some(text) },
-                };
-                task_outputs.lock().await.insert(task_id_bg, rec);
-                break;
-            }
-        });
-
-        ToolExecutionResult {
-            output: serde_json::json!({
-                "task_id": task_id,
-                "run_id": child_run_id,
-                "conversation_id": child_conversation_id,
-                "session_id": session_id,
-                "status": "running",
-                "provider_id": child_provider,
-                "key_id": child_key,
-                "model_id": child_model,
-                "permission_profile": child_perm,
-            }),
-            is_error: false,
-            duration_ms: 0,
-        }
-    }
-
-    fn default_binding(&self) -> crate::subagent_store::RouteBinding {
-        crate::subagent_store::RouteBinding {
-            provider_id: self.provider_id.clone(),
-            key_id: self
-                .key_id
-                .clone()
-                .filter(|k| !k.trim().is_empty() && !k.eq_ignore_ascii_case("auto"))
-                .unwrap_or_default(),
-            model_id: self.model_id.clone(),
-        }
-    }
-
-    /// One assignment interaction for the entire task batch (full tasks[] + default_binding).
-    /// Returns call_id → binding map (default mode maps every call_id to default_binding).
-    async fn resolve_batch_assignment(
-        &self,
-        tasks: &[(String, String, String)],
-    ) -> Result<std::collections::HashMap<String, crate::subagent_store::RouteBinding>, String>
-    {
-        use std::collections::HashMap;
-
-        let use_fixture = std::env::var("NATIVES_DAEMON_FIXTURE")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-
-        let default_binding = self.default_binding();
-
-        // Existing policy: assign from pool without UI.
-        if let Some(policy) =
-            crate::subagent_store::get_route_policy(&self.conversation_id).ok().flatten()
-        {
-            let mut map = HashMap::new();
-            let mut attempted = Vec::new();
-            for (call_id, _, _) in tasks {
-                let b = crate::subagent_store::pick_binding(&policy, &attempted)?;
-                attempted.push(b.clone());
-                // Prefer not repeating until pool exhausted (pick_binding already cycles).
-                map.insert(call_id.clone(), b);
-            }
-            return Ok(map);
-        }
-
-        if use_fixture {
-            // Offline unit tests: still ignore model-supplied credentials unless
-            // NATIVES_DAEMON_FIXTURE_HONOR_TASK_CREDS=1 (legacy identity tests).
-            let honor = std::env::var("NATIVES_DAEMON_FIXTURE_HONOR_TASK_CREDS")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false);
-            let mut map = HashMap::new();
-            for (call_id, _, _) in tasks {
-                let b = if honor {
-                    // Caller may pass creds via ambient: use default_binding only;
-                    // honor path is for resolve_task_binding single-task tests that
-                    // still set fixture env — fall through to default.
-                    default_binding.clone()
-                } else {
-                    crate::subagent_store::RouteBinding {
-                        provider_id: if default_binding.provider_id.is_empty() {
-                            "fixture".into()
-                        } else {
-                            default_binding.provider_id.clone()
-                        },
-                        key_id: if default_binding.key_id.is_empty() {
-                            "fixture-key".into()
-                        } else {
-                            default_binding.key_id.clone()
-                        },
-                        model_id: if default_binding.model_id.is_empty() {
-                            "fixture-model".into()
-                        } else {
-                            default_binding.model_id.clone()
-                        },
-                    }
-                };
-                map.insert(call_id.clone(), b);
-            }
-            return Ok(map);
-        }
-
-        let Some(rt) = self.runtime.clone() else {
-            return Err(
-                "no route policy and no runtime for subagent_assignment interaction".into(),
-            );
-        };
-
-        // Only one assignment interaction per parent conversation at a time.
-        let interaction_id = {
-            let mut inflight = rt
-                .assignment_inflight
-                .lock()
-                .map_err(|e| format!("assignment_inflight lock: {e}"))?;
-            if let Some(existing) = inflight.get(&self.conversation_id) {
-                // Another batch already waiting — still wait on same interaction.
-                existing.clone()
-            } else {
-                let id = uuid::Uuid::new_v4().to_string();
-                inflight.insert(self.conversation_id.clone(), id.clone());
-                id
-            }
-        };
-
-        let (tx, rx) = oneshot::channel::<Value>();
-        let mut installed = false;
-        {
-            let mut waiters = rt
-                .assignment_waiters
-                .lock()
-                .map_err(|e| format!("assignment_waiters lock: {e}"))?;
-            if !waiters.contains_key(&interaction_id) {
-                waiters.insert(interaction_id.clone(), tx);
-                installed = true;
-                let batch_id = uuid::Uuid::new_v4().to_string();
-                let tasks_payload: Vec<Value> = tasks
-                    .iter()
-                    .map(|(call_id, name, prompt)| {
-                        serde_json::json!({
-                            "call_id": call_id,
-                            "name": name,
-                            "prompt": prompt,
-                        })
-                    })
-                    .collect();
-                let payload = serde_json::json!({
-                    "kind": "subagent_assignment",
-                    "batch_id": batch_id,
-                    "parent_conversation_id": self.conversation_id,
-                    "parent_run_id": self.parent_run_id,
-                    "conversation_id": self.conversation_id,
-                    "run_id": self.parent_run_id,
-                    "default_binding": {
-                        "provider_id": default_binding.provider_id,
-                        "key_id": default_binding.key_id,
-                        "model_id": default_binding.model_id,
-                    },
-                    "tasks": tasks_payload,
-                    "reason": "Assign provider/key/model for subagent tasks in this conversation",
-                });
-                let _ = crate::interaction_store::insert_pending(
-                    &interaction_id,
-                    Some(&self.parent_run_id),
-                    Some(&self.conversation_id),
-                    "subagent_assignment",
-                    payload.clone(),
-                );
-                self.events.append(
-                    &self.parent_run_id,
-                    RunEventKind::InteractionRequested {
-                        interaction_id: interaction_id.clone(),
-                        kind: "subagent_assignment".into(),
-                        payload,
-                    },
-                );
-            } else {
-                drop(tx);
-            }
-        }
-
-        let response = if installed {
-            match tokio::time::timeout(Duration::from_secs(120), rx).await {
-                Ok(Ok(v)) => v,
-                Ok(Err(_)) => {
-                    if let Ok(mut i) = rt.assignment_inflight.lock() {
-                        i.remove(&self.conversation_id);
-                    }
-                    return Err("subagent assignment cancelled".into());
-                }
-                Err(_) => {
-                    if let Ok(mut w) = rt.assignment_waiters.lock() {
-                        w.remove(&interaction_id);
-                    }
-                    if let Ok(mut i) = rt.assignment_inflight.lock() {
-                        i.remove(&self.conversation_id);
-                    }
-                    return Err("subagent assignment timed out".into());
-                }
-            }
-        } else {
-            // Wait for policy written by the owner of the oneshot.
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
-            loop {
-                if let Some(policy) =
-                    crate::subagent_store::get_route_policy(&self.conversation_id).ok().flatten()
-                {
-                    let mut map = HashMap::new();
-                    let mut attempted = Vec::new();
-                    for (call_id, _, _) in tasks {
-                        let b = crate::subagent_store::pick_binding(&policy, &attempted)?;
-                        attempted.push(b.clone());
-                        map.insert(call_id.clone(), b);
-                    }
-                    return Ok(map);
-                }
-                let still = rt
-                    .assignment_inflight
-                    .lock()
-                    .map(|g| g.contains_key(&self.conversation_id))
-                    .unwrap_or(false);
-                if !still {
-                    return Err("subagent assignment cancelled".into());
-                }
-                if tokio::time::Instant::now() >= deadline {
-                    return Err("subagent assignment timed out".into());
-                }
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-        };
-
-        // Cancel / deny → fail the batch (no silent default key).
-        if response
-            .get("cancelled")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-            || response.get("approved").and_then(|v| v.as_bool()) == Some(false)
-        {
-            if let Ok(mut i) = rt.assignment_inflight.lock() {
-                i.remove(&self.conversation_id);
-            }
-            return Err("subagent assignment cancelled".into());
-        }
-
-        let mode = response
-            .get("mode")
-            .and_then(Value::as_str)
-            .unwrap_or("default");
-
-        // Prefer per-call assignments; fall back to pool/bindings.
-        let assignments: Vec<Value> = response
-            .get("assignments")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-
-        let mut map = HashMap::new();
-        if mode == "default" {
-            if default_binding.key_id.trim().is_empty() {
-                if let Ok(mut i) = rt.assignment_inflight.lock() {
-                    i.remove(&self.conversation_id);
-                }
-                return Err(
-                    "default_binding.key_id missing on parent run; cannot confirm default mode"
-                        .into(),
-                );
-            }
-            validate_route_binding(&default_binding)?;
-            for (call_id, _, _) in tasks {
-                map.insert(call_id.clone(), default_binding.clone());
-            }
-        } else if !assignments.is_empty() {
-            for a in assignments {
-                let call_id = a
-                    .get("call_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let b = crate::subagent_store::RouteBinding {
-                    provider_id: a
-                        .get("provider_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                    key_id: a
-                        .get("key_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                    model_id: a
-                        .get("model_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                };
-                validate_route_binding(&b)?;
-                if !call_id.is_empty() {
-                    map.insert(call_id, b);
-                }
-            }
-            // Fill any missing call_ids from pool if present.
-            if map.len() < tasks.len() {
-                let pool: Vec<crate::subagent_store::RouteBinding> = response
-                    .get("pool")
-                    .or_else(|| response.get("bindings"))
-                    .cloned()
-                    .and_then(|v| serde_json::from_value(v).ok())
-                    .unwrap_or_default();
-                let mut pi = 0usize;
-                for (call_id, _, _) in tasks {
-                    if map.contains_key(call_id) {
-                        continue;
-                    }
-                    if pool.is_empty() {
-                        break;
-                    }
-                    let b = pool[pi % pool.len()].clone();
-                    validate_route_binding(&b)?;
-                    map.insert(call_id.clone(), b);
-                    pi += 1;
-                }
-            }
-        } else {
-            let bindings: Vec<crate::subagent_store::RouteBinding> = response
-                .get("pool")
-                .or_else(|| response.get("bindings"))
-                .cloned()
-                .and_then(|v| serde_json::from_value(v).ok())
-                .unwrap_or_default();
-            if bindings.is_empty() {
-                if let Ok(mut i) = rt.assignment_inflight.lock() {
-                    i.remove(&self.conversation_id);
-                }
-                return Err("subagent assignment response missing bindings".into());
-            }
-            for b in &bindings {
-                validate_route_binding(b)?;
-            }
-            let mut pi = 0usize;
-            for (call_id, _, _) in tasks {
-                map.insert(call_id.clone(), bindings[pi % bindings.len()].clone());
-                pi += 1;
-            }
-        }
-
-        if map.is_empty() {
-            if let Ok(mut i) = rt.assignment_inflight.lock() {
-                i.remove(&self.conversation_id);
-            }
-            return Err("subagent assignment produced empty binding map".into());
-        }
-
-        // Persist pool for subsequent subagents (random/custom pool or default singleton).
-        let pool_for_policy: Vec<crate::subagent_store::RouteBinding> = response
-            .get("pool")
-            .or_else(|| response.get("bindings"))
-            .cloned()
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_else(|| {
-                map.values()
-                    .cloned()
-                    .fold(Vec::new(), |mut acc, b| {
-                        if !acc.iter().any(|x| x == &b) {
-                            acc.push(b);
-                        }
-                        acc
-                    })
-            });
-        if !pool_for_policy.is_empty() {
-            let _ = crate::subagent_store::upsert_route_policy(
-                &self.conversation_id,
-                mode,
-                &pool_for_policy,
-            );
-        }
-
-        if let Ok(mut i) = rt.assignment_inflight.lock() {
-            i.remove(&self.conversation_id);
-        }
-        Ok(map)
-    }
-
-    /// Single-task path: resolve one binding (uses batch assignment with one task).
-    async fn resolve_task_binding(
-        &self,
-        _input: &Value,
-    ) -> Result<crate::subagent_store::RouteBinding, String> {
-        let call_id = _input
-            .get("task_call_id")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let name = _input
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let prompt = _input
-            .get("prompt")
-            .or_else(|| _input.get("task"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let map = self
-            .resolve_batch_assignment(&[(call_id.clone(), name, prompt)])
-            .await?;
-        map.get(&call_id)
-            .cloned()
-            .or_else(|| map.into_values().next())
-            .ok_or_else(|| "subagent assignment produced no binding".into())
-    }
-}
-
-fn use_fixture_flag(input: &Value) -> bool {
-    input
-        .get("fixture")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-        || std::env::var("NATIVES_DAEMON_FIXTURE")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
 }
 
 /// Wake a pending `subagent_assignment` waiter (from interaction.respond).
@@ -3268,7 +1370,11 @@ pub fn validate_route_binding(binding: &crate::subagent_store::RouteBinding) -> 
         return Err("route binding model_id is required".into());
     }
     // Reject values that look like secrets rather than IDs.
-    for (label, v) in [("provider_id", provider), ("key_id", key), ("model_id", model)] {
+    for (label, v) in [
+        ("provider_id", provider),
+        ("key_id", key),
+        ("model_id", model),
+    ] {
         if v.len() > 256 {
             return Err(format!("route binding {label} is too long"));
         }
@@ -3409,10 +1515,15 @@ pub async fn restart_subagent_with_binding(
 }
 
 /// Background reaper: close idle subagent sessions.
+/// Safe to call without a Tokio runtime (unit tests / sync constructors): no-ops until a
+/// runtime exists; production daemon always constructs under tokio::main.
 fn spawn_subagent_reaper() {
     static STARTED: std::sync::Once = std::sync::Once::new();
     STARTED.call_once(|| {
-        tokio::spawn(async {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        handle.spawn(async {
             let mut interval = tokio::time::interval(Duration::from_secs(30));
             loop {
                 interval.tick().await;
@@ -3429,7 +1540,11 @@ async fn reaper_tick() -> Result<(), String> {
     let now = chrono::Utc::now();
     for sess in sessions {
         // Never close while a live task_output still says running.
-        if let Some(rec) = crate::global_run_manager().runtime.task_output(&sess.id).await {
+        if let Some(rec) = crate::global_run_manager()
+            .runtime
+            .task_output(&sess.id)
+            .await
+        {
             if rec.status == "running" {
                 continue;
             }
@@ -3449,7 +1564,11 @@ async fn reaper_tick() -> Result<(), String> {
             crate::subagent_store::parent_heartbeat_recent(&sess.parent_conversation_id, 90);
         let limit_secs = if parent_active { 300i64 } else { 120i64 };
         if idle.num_seconds() >= limit_secs {
-            if let Some(rec) = crate::global_run_manager().runtime.task_output(&sess.id).await {
+            if let Some(rec) = crate::global_run_manager()
+                .runtime
+                .task_output(&sess.id)
+                .await
+            {
                 if rec.status == "running" {
                     continue;
                 }
@@ -3500,6 +1619,7 @@ fn lookup_model_context_window(provider_id: &str, model_id: &str) -> Option<u64>
     .map(|w| w as u64)
 }
 
+#[allow(dead_code)]
 fn parent_conversation_recently_active(conversation_id: &str, within_secs: i64) -> bool {
     let Ok(store) = (|| -> Result<crate::storage::DataStore, String> {
         #[cfg(test)]
@@ -3622,7 +1742,7 @@ mod tool_allowlist_tests {
             },
             permissions: rt.permissions.clone(),
             events: rt.events.clone(),
-            waiters: rt.permission_waiters.clone(),
+            interactions: rt.interactions.clone(),
             subagents: Arc::new(SubAgentManager::new(SubAgentConfig::default())),
             task_outputs: rt.task_outputs.clone(),
             engines: rt.engines.clone(),
@@ -3651,7 +1771,9 @@ mod tool_allowlist_tests {
             .map(|t| t.name)
             .collect();
         assert!(names.contains(&"read_file".into()));
-        assert!(!names.iter().any(|n| n == "write_file" || n == "task" || n == "run_terminal"));
+        assert!(!names
+            .iter()
+            .any(|n| n == "write_file" || n == "task" || n == "run_terminal"));
 
         let denied = tools
             .execute_tool(
@@ -3748,7 +1870,12 @@ mod tool_allowlist_tests {
             ok.output.get("permission_profile").and_then(|v| v.as_str()),
             Some("full_access")
         );
-        let task_id = ok.output.get("task_id").and_then(|v| v.as_str()).unwrap().to_string();
+        let task_id = ok
+            .output
+            .get("task_id")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .to_string();
         let child = tools.subagents.get(&task_id).await.expect("child record");
         assert_eq!(
             child.tool_allowlist,
@@ -3780,7 +1907,7 @@ mod tool_allowlist_tests {
 
         // Parent ask: cannot upgrade to full_access (cap before spawn).
         // Use full_access permission_profile field on tools so task gate doesn't block,
-        // but cap_child_permission still sees parent profile "ask" via a custom field? 
+        // but cap_child_permission still sees parent profile "ask" via a custom field?
         // We call the helper directly for the pure cap assertion, and use spawn path
         // with parent tools.permission_profile = ask under autonomous class by temporarily
         // using full_access for the parent tools gate while asserting cap_child_permission.
@@ -3803,7 +1930,11 @@ mod tool_allowlist_tests {
             )
             .await;
         assert!(!empty.is_error, "{:?}", empty.output);
-        let empty_id = empty.output.get("task_id").and_then(|v| v.as_str()).unwrap();
+        let empty_id = empty
+            .output
+            .get("task_id")
+            .and_then(|v| v.as_str())
+            .unwrap();
         let empty_child = tools.subagents.get(empty_id).await.unwrap();
         assert!(empty_child.tool_allowlist.is_empty());
 
@@ -3833,7 +1964,9 @@ mod tool_allowlist_tests {
     async fn execute_task_ignores_model_key_id_auto_when_policy_exists() {
         let _env_guard = crate::storage::DataStore::env_test_lock();
         let dir = tempfile::tempdir().unwrap();
-        let db = dir.path().join(format!("task-auto-{}.db", uuid::Uuid::new_v4()));
+        let db = dir
+            .path()
+            .join(format!("task-auto-{}.db", uuid::Uuid::new_v4()));
         let art = dir.path().join("artifacts");
         crate::storage::set_test_db_override(Some(db.clone()), Some(art.clone()));
         let _warm = crate::storage::DataStore::new(&db, &art).expect("migrate");

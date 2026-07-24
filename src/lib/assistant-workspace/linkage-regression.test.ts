@@ -56,15 +56,19 @@ test('provider seeds projects+sessions before workbench: refreshNavigationFromHo
 });
 
 test('host conversation.* is never dual-routed to UDS daemon', () => {
-  assert.match(hostServiceSrc, /if method\.starts_with\("conversation\."\)/);
-  assert.match(hostServiceSrc, /return false;/);
-  // Old dual-store routing must not return.
+  // Host-owned table is short; conversation.* defaults to Daemon authority forward.
+  assert.match(hostServiceSrc, /method\.starts_with\("conversation\."\)/);
+  assert.match(hostServiceSrc, /is_host_owned_method/);
+  assert.match(hostServiceSrc, /daemon_authority::request/);
+  // Must not keep the old dual-store UDS-only branch.
   assert.equal(
     /method\.starts_with\("conversation\."\) && daemon_authority::authority_mode_label\(\) == "uds"/.test(
       hostServiceSrc,
     ),
     false,
   );
+  // conversation.create is not host-owned.
+  assert.equal(hostServiceSrc.includes('| "conversation.create"'), false);
 });
 
 test('remove project confirm button is hard-coded zh/en, not raw i18n key', () => {

@@ -8,10 +8,7 @@
 //! Do not advertise Codex as executable based on binary detection alone.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-
-use assistant_protocol::v2::RunEventKind;
 
 use crate::production::ProductionRuntime;
 
@@ -39,10 +36,10 @@ fn which(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Fail-closed Codex turn. Emits a single Failed event and returns Err.
+/// Fail-closed Codex turn. Returns Err only — RunManager commits Failed status/lifecycle.
 pub async fn run_codex_cli_turn(
-    runtime: &ProductionRuntime,
-    run_id: &str,
+    _runtime: &ProductionRuntime,
+    _run_id: &str,
     _prompt: &str,
     _model: &str,
     _project_path: Option<&Path>,
@@ -51,15 +48,7 @@ pub async fn run_codex_cli_turn(
 ) -> Result<String, String> {
     let _ = cancel.is_cancelled();
     let msg = "runtime codex_cli is unavailable (app-server not implemented)".to_string();
-    runtime.events.append(run_id, RunEventKind::Preparing);
-    runtime.events.append(run_id, RunEventKind::Started);
-    runtime.events.append(
-        run_id,
-        RunEventKind::Failed {
-            error: msg.clone(),
-            code: "CODEX_UNAVAILABLE".into(),
-        },
-    );
+    // Do not append Preparing/Started/Failed lifecycle events — RunManager is sole committer.
     Err(msg)
 }
 
@@ -76,13 +65,16 @@ mod tests {
     async fn run_codex_turn_fails_closed() {
         let rt = ProductionRuntime::new();
         let cancel = CancellationToken::new();
+        let before = rt.events.replay_after("run-x", 0).len();
         let err = run_codex_cli_turn(&rt, "run-x", "hi", "m", None, "ask", cancel)
             .await
             .unwrap_err();
         assert!(err.contains("unavailable"));
-        let evs = rt.events.replay_after("run-x", 0);
-        assert!(evs
-            .iter()
-            .any(|e| matches!(e.payload, RunEventKind::Failed { .. })));
+        // Bridge must not write any events; RunManager commits Failed.
+        let after = rt.events.replay_after("run-x", 0).len();
+        assert_eq!(
+            before, after,
+            "codex bridge must not append any events to the sequencer"
+        );
     }
 }

@@ -223,9 +223,7 @@ async fn handle_connection(
             &mut writer,
             &protocol_version.to_string(),
             &daemon_version,
-            format!(
-                "Protocol mismatch: client v{client_version}, daemon v{protocol_version}"
-            ),
+            format!("Protocol mismatch: client v{client_version}, daemon v{protocol_version}"),
         )
         .await?;
         return Ok(());
@@ -631,10 +629,7 @@ async fn handle_rpc(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             let run_id = request.params.get("run_id").and_then(|v| v.as_str());
-            let scope = request
-                .params
-                .get("scope")
-                .and_then(|v| v.as_str());
+            let scope = request.params.get("scope").and_then(|v| v.as_str());
             if request_id.is_empty() {
                 send_error(
                     writer,
@@ -701,9 +696,9 @@ async fn handle_rpc(
                                 max_steps: Some(new_run.max_steps),
                                 project_path: new_run.project_path.clone(),
                                 idempotency_key: None,
-                                        effort: None,
-            runtime_id: None,
-        };
+                                effort: None,
+                                runtime_id: None,
+                            };
                             match crate::run_manager::RunManager::start_detached_global(start_req) {
                                 Ok(run) => {
                                     send_success(
@@ -830,11 +825,11 @@ async fn handle_rpc(
                         break;
                     }
                     match tokio::time::timeout(left, rx.recv()).await {
-                        Ok(Ok(ev)) if ev.sequence > after => {
+                        Ok(Ok(ev)) if ev.effective_run_sequence() > after => {
                             events.push(ev);
                             // Drain a small batch without extra waits.
                             while let Ok(more) = rx.try_recv() {
-                                if more.sequence > after {
+                                if more.effective_run_sequence() > after {
                                     events.push(more);
                                 }
                             }
@@ -892,7 +887,8 @@ async fn handle_rpc(
         | names::PROMPT_QUEUE_REORDER
         | names::PROMPT_QUEUE_SEND_NOW
         | names::PROMPT_QUEUE_INTERJECT => {
-            match crate::prompt_queue_store::request(&request.method, request.params.clone()).await {
+            match crate::prompt_queue_store::request(&request.method, request.params.clone()).await
+            {
                 Ok(value) => {
                     send_success(
                         writer,
@@ -914,11 +910,7 @@ async fn handle_rpc(
                     } else {
                         ErrorCategory::Validation
                     };
-                    send_error(
-                        writer,
-                        &DaemonError::new(code, category, false, e),
-                    )
-                    .await
+                    send_error(writer, &DaemonError::new(code, category, false, e)).await
                 }
             }
         }
@@ -945,11 +937,7 @@ async fn handle_rpc(
                     } else {
                         ErrorCategory::Validation
                     };
-                    send_error(
-                        writer,
-                        &DaemonError::new(code, category, false, e),
-                    )
-                    .await
+                    send_error(writer, &DaemonError::new(code, category, false, e)).await
                 }
             }
         }
@@ -976,11 +964,7 @@ async fn handle_rpc(
                     } else {
                         ErrorCategory::Validation
                     };
-                    send_error(
-                        writer,
-                        &DaemonError::new(code, category, false, e),
-                    )
-                    .await
+                    send_error(writer, &DaemonError::new(code, category, false, e)).await
                 }
             }
         }
@@ -1217,13 +1201,20 @@ async fn handle_rpc(
                 .or_else(|| request.params.get("server_id"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            // Optional inline register for trusted stdio/http
-            if let Some(cfg) = request.params.get("server") {
-                if let Ok(server) =
-                    serde_json::from_value::<agent_core::McpServerConfig>(cfg.clone())
-                {
-                    let _ = crate::mcp_runtime::global_mcp().register_server(server);
-                }
+            // task-06: refuse inline trusted server registration over RPC.
+            // Only start already-registered servers from trusted config sources.
+            if request.params.get("server").is_some() {
+                send_error(
+                    writer,
+                    &DaemonError::new(
+                        error_codes::INVALID_INPUT,
+                        ErrorCategory::Validation,
+                        false,
+                        "inline MCP server registration disabled; register via trusted config only",
+                    ),
+                )
+                .await;
+                return;
             }
             // Transport-aware start (stdio session or HTTP/SSE probe).
             match crate::mcp_runtime::global_mcp().start(id) {
@@ -1284,66 +1275,24 @@ async fn handle_rpc(
             }
         }
         names::MCP_CALL => {
-            let server_id = request
-                .params
-                .get("server_id")
-                .or_else(|| request.params.get("id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let tool_name = request
-                .params
-                .get("tool")
-                .or_else(|| request.params.get("name"))
-                .or_else(|| request.params.get("tool_name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let arguments = request
-                .params
-                .get("arguments")
-                .or_else(|| request.params.get("input"))
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({}));
-            if server_id.is_empty() || tool_name.is_empty() {
-                send_error(
-                    writer,
-                    &DaemonError::new(
-                        error_codes::INVALID_INPUT,
-                        ErrorCategory::Validation,
-                        false,
-                        "mcp.call requires server_id and tool",
-                    ),
-                )
-                .await;
-            } else {
-                match crate::mcp_runtime::global_mcp().call_tool(server_id, tool_name, arguments) {
-                    Ok(v) => {
-                        send_success(
-                            writer,
-                            &request.request_id,
-                            &request.client_id,
-                            &request.session_token,
-                            serde_json::json!({
-                                "server_id": server_id,
-                                "tool": tool_name,
-                                "result": v,
-                            }),
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        send_error(
-                            writer,
-                            &DaemonError::new(
-                                error_codes::INVALID_INPUT,
-                                ErrorCategory::Validation,
-                                false,
-                                e,
-                            ),
-                        )
-                        .await;
-                    }
-                }
-            }
+            // task-06 phase 1: close direct RPC MCP transport bypass.
+            // Never call global_mcp().call_tool from RPC. Agent path uses
+            // PermissionGatedTools -> shared invocation only.
+            let _ = (
+                request.params.get("server_id"),
+                request.params.get("tool"),
+                request.params.get("arguments"),
+            );
+            send_error(
+                writer,
+                &DaemonError::new(
+                    error_codes::INVALID_INPUT,
+                    ErrorCategory::Validation,
+                    false,
+                    "direct_mcp_call_disabled",
+                ),
+            )
+            .await;
         }
         names::MCP_LIVENESS => {
             let id = request
@@ -1681,11 +1630,7 @@ async fn handle_rpc(
                     .get("timeout_ms")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(60_000);
-                match run_manager()
-                    .runtime
-                    .wait_task(&task_id, timeout_ms)
-                    .await
-                {
+                match run_manager().runtime.wait_task(&task_id, timeout_ms).await {
                     Ok(rec) => {
                         send_success(
                             writer,
@@ -2113,7 +2058,7 @@ async fn handle_rpc(
         // Unimplemented catalogue methods: fail closed (not empty success).
         // Method disposition: known→unsupported, unknown→unsupported (invalid only for bad shape).
         // promptQueue.* is handled above via prompt_queue_store (daemon DB + harness).
-        "run.rewindPreview" | "run.rewind" => {
+        "run.rewindPreview" | "run.rewind" | "workspace.restorePreview" | "workspace.restore" => {
             match handle_rewind_rpc(&request.method, &request.params) {
                 Ok(value) => {
                     send_success(
@@ -2139,32 +2084,30 @@ async fn handle_rpc(
                 }
             }
         }
-        "conversation.getContextUsage" => {
-            match handle_context_usage_rpc(&request.params) {
-                Ok(value) => {
-                    send_success(
-                        writer,
-                        &request.request_id,
-                        &request.client_id,
-                        &request.session_token,
-                        value,
-                    )
-                    .await
-                }
-                Err(e) => {
-                    send_error(
-                        writer,
-                        &DaemonError::new(
-                            error_codes::INVALID_INPUT,
-                            ErrorCategory::Validation,
-                            false,
-                            e,
-                        ),
-                    )
-                    .await
-                }
+        "conversation.getContextUsage" => match handle_context_usage_rpc(&request.params) {
+            Ok(value) => {
+                send_success(
+                    writer,
+                    &request.request_id,
+                    &request.client_id,
+                    &request.session_token,
+                    value,
+                )
+                .await
             }
-        }
+            Err(e) => {
+                send_error(
+                    writer,
+                    &DaemonError::new(
+                        error_codes::INVALID_INPUT,
+                        ErrorCategory::Validation,
+                        false,
+                        e,
+                    ),
+                )
+                .await
+            }
+        },
         _ => {
             let status = assistant_protocol::v2::method_status(&request.method);
             let code = match status {
@@ -2186,25 +2129,49 @@ async fn handle_rpc(
     }
 }
 
-fn handle_rewind_rpc(method: &str, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+fn handle_rewind_rpc(
+    method: &str,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
     use crate::checkpoint::global_checkpoint_manager;
     let run_id = params
         .get("run_id")
         .and_then(|v| v.as_str())
         .ok_or("run_id is required")?;
-    let project_path = params
-        .get("project_path")
-        .or_else(|| params.get("project_root"))
-        .and_then(|v| v.as_str())
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            crate::run_manager::global_run_manager()
-                .list_runs(None)
-                .into_iter()
-                .find(|r| r.id == run_id)
-                .and_then(|r| r.project_path.map(std::path::PathBuf::from))
-        })
-        .ok_or_else(|| "project_path required for rewind".to_string())?;
+    // Project path is taken from the bound run identity — callers cannot inject
+    // an arbitrary path to restore files into another project (task-07/10).
+    let run = crate::run_manager::global_run_manager()
+        .get_run(run_id)
+        .ok_or_else(|| format!("run not found: {run_id}"))?;
+    // Legacy unbound ProjectIdentity: refuse restore entirely (no caller path injection).
+    if run.project_id.is_none() {
+        return Err(
+            "workspace.restore refused: run has no verified ProjectIdentity; restored=0".into(),
+        );
+    }
+    let bound_path = run.project_path.map(std::path::PathBuf::from);
+    let project_path = if let Some(bound) = bound_path {
+        if let Some(caller) = params
+            .get("project_path")
+            .or_else(|| params.get("project_root"))
+            .and_then(|v| v.as_str())
+        {
+            let caller_p = std::path::PathBuf::from(caller);
+            let b = bound.canonicalize().unwrap_or_else(|_| bound.clone());
+            let c = caller_p.canonicalize().unwrap_or(caller_p);
+            if b != c {
+                return Err(format!(
+                    "workspace.restore refused: caller project_path does not match run identity; restored=0"
+                ));
+            }
+        }
+        bound
+    } else {
+        return Err(
+            "workspace.restore refused: run has project_id but no bound project_path; restored=0"
+                .into(),
+        );
+    };
     let paths: Option<Vec<String>> = params.get("paths").and_then(|v| {
         v.as_array().map(|a| {
             a.iter()
@@ -2214,15 +2181,33 @@ fn handle_rewind_rpc(method: &str, params: &serde_json::Value) -> Result<serde_j
     });
     let mgr = global_checkpoint_manager();
     match method {
-        "run.rewindPreview" => {
-            let preview = mgr.rewind_preview(
-                run_id,
-                &project_path,
-                paths.as_deref(),
-            )?;
-            Ok(serde_json::to_value(preview).unwrap_or_default())
+        "run.rewindPreview" | "run.rewind" => {
+            // Deprecated: ambiguous "whole run rewind". Prefer workspace.restore*.
+            let replacement = if method.contains("Preview") {
+                "workspace.restorePreview"
+            } else {
+                "workspace.restore"
+            };
+            Ok(serde_json::json!({
+                "deprecated": true,
+                "method": method,
+                "scope": "workspace_file_only",
+                "message": "run.rewind/run.rewindPreview are deprecated. Use workspace.restorePreview / workspace.restore for checkpoint-covered files only. Conversation rewind and execution replay are separate APIs. External side-effects are not rolled back.",
+                "replacement": replacement,
+            }))
         }
-        "run.rewind" => {
+        "workspace.restorePreview" => {
+            let preview = mgr.rewind_preview(run_id, &project_path, paths.as_deref())?;
+            let mut value = serde_json::to_value(preview).unwrap_or_default();
+            if let Some(obj) = value.as_object_mut() {
+                let coverage = crate::side_effect_ledger::coverage_for_run(run_id)
+                    .unwrap_or_else(|| "unknown".into());
+                obj.insert("coverage".into(), serde_json::json!(coverage));
+                obj.insert("scope".into(), serde_json::json!("workspace_file_only"));
+            }
+            Ok(value)
+        }
+        "workspace.restore" => {
             let checkpoint_id = params
                 .get("checkpoint_id")
                 .and_then(|v| v.as_str())
@@ -2231,14 +2216,14 @@ fn handle_rewind_rpc(method: &str, params: &serde_json::Value) -> Result<serde_j
                 .get("conflict_policy")
                 .and_then(|v| v.as_str())
                 .unwrap_or("fail");
-            let restored = mgr.rewind(
+            let restored = mgr.workspace_restore(
                 run_id,
                 checkpoint_id,
                 &project_path,
                 paths.as_deref(),
                 policy,
             )?;
-            // Emit event best-effort
+            // Restore audit event — does not alter old Run terminal status.
             crate::run_manager::global_run_manager().events().append(
                 run_id,
                 assistant_protocol::v2::RunEventKind::CheckpointRewound {
@@ -2249,11 +2234,12 @@ fn handle_rewind_rpc(method: &str, params: &serde_json::Value) -> Result<serde_j
             );
             Ok(serde_json::json!({
                 "ok": true,
+                "scope": "workspace_file_only",
                 "checkpoint_id": checkpoint_id,
                 "restored_paths": restored,
             }))
         }
-        other => Err(format!("unsupported rewind method: {other}")),
+        other => Err(format!("unsupported restore method: {other}")),
     }
 }
 

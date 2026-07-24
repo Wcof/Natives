@@ -562,6 +562,8 @@ export type AssistantMethod =
   | 'run.getActivity'
   | 'run.rewind'
   | 'run.rewindPreview'
+  | 'workspace.restore'
+  | 'workspace.restorePreview'
   | 'task.wait'
   | 'permission.respond'
   | 'permission.listPending'

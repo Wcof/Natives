@@ -52,7 +52,6 @@ pub struct SupervisorConfig {
     pub runtime_dir: PathBuf,
     pub socket_path: PathBuf,
     pub pid_path: PathBuf,
-    pub lock_path: PathBuf,
     pub bootstrap_path: PathBuf,
     pub daemon_bin: PathBuf,
     pub natives_db_path: PathBuf,
@@ -61,6 +60,8 @@ pub struct SupervisorConfig {
     /// When true, missing UDS is Faulted (never Embedded).
     pub require_uds: bool,
     pub health_timeout: Duration,
+    /// How long Host waits after closing lifeline before force-killing the Daemon.
+    pub shutdown_grace: Duration,
     pub max_restarts: u32,
 }
 
@@ -104,7 +105,6 @@ impl SupervisorConfig {
 
         Self {
             pid_path: runtime_dir.join("agent-daemon.pid"),
-            lock_path: runtime_dir.join("agent-daemon.lock"),
             bootstrap_path: runtime_dir.join("bootstrap.token"),
             runtime_dir,
             socket_path,
@@ -113,6 +113,12 @@ impl SupervisorConfig {
             assistant_db_path,
             require_uds,
             health_timeout: Duration::from_secs(15),
+            shutdown_grace: Duration::from_millis(
+                std::env::var("NATIVES_DAEMON_SHUTDOWN_GRACE_MS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(2_000),
+            ),
             max_restarts: 5,
         }
     }
@@ -163,7 +169,11 @@ pub struct SidecarSupervisor {
 struct InnerState {
     status: SupervisorStatus,
     child: Option<Child>,
+    /// Host end of the inherited stdin lifeline. Dropping closes the pipe (EOF to Daemon).
+    lifeline_stdin: Option<std::process::ChildStdin>,
     bootstrap_token: Option<String>,
+    /// Ensures concurrent window/app exit hooks only run shutdown once.
+    shutdown_started: bool,
 }
 
 impl SidecarSupervisor {
@@ -181,7 +191,9 @@ impl SidecarSupervisor {
                     production_ready: false,
                 },
                 child: None,
+                lifeline_stdin: None,
                 bootstrap_token: None,
+                shutdown_started: false,
             }),
             config,
         }
@@ -232,8 +244,9 @@ impl SidecarSupervisor {
         }
 
         match self.spawn_child() {
-            Ok((child, bootstrap)) => {
+            Ok((mut child, bootstrap)) => {
                 let pid = child.id();
+                let lifeline_stdin = child.stdin.take();
                 // Write pid (best-effort)
                 let _ = std::fs::write(&self.config.pid_path, pid.to_string());
                 // Bootstrap must not be written to ordinary logs.
@@ -248,43 +261,52 @@ impl SidecarSupervisor {
                 }
 
                 let readiness = self.wait_for_readiness(&bootstrap, self.config.health_timeout);
-                let mut inner = self.state.lock().map_err(|e| e.to_string())?;
-                inner.child = Some(child);
-                inner.bootstrap_token = Some(bootstrap.clone());
-                if readiness.is_ok() {
-                    // Export for UDS client resolution in this process.
-                    std::env::set_var("NATIVES_DAEMON_SOCKET", &self.config.socket_path);
-                    std::env::set_var("NATIVES_DAEMON_BOOTSTRAP", &bootstrap);
-                    if self.config.require_uds {
-                        std::env::set_var("NATIVES_DAEMON_MODE", "uds");
-                    }
-                    std::env::set_var("NATIVES_DB_PATH", &self.config.natives_db_path);
-                    std::env::set_var(
-                        "NATIVES_ASSISTANT_DB_PATH",
-                        &self.config.assistant_db_path,
-                    );
-                    // Drop cached UDS client so next call re-handshakes after restart.
-                    // (async reset is best-effort from callers; env bootstrap is source of truth.)
-                    inner.status.state = SupervisorState::Healthy;
-                    inner.status.pid = Some(pid);
-                    inner.status.production_ready = self.config.require_uds;
-                    inner.status.last_error = None;
-                    // Note: daemon process restores Run snapshots itself on boot
-                    // (RunManager::new → restore_runs_snapshot). Active runs become
-                    // Interrupted for safe UI retry — no silent re-exec.
-                } else {
-                    let reason = readiness.unwrap_err();
+                if let Err(reason) = readiness {
+                    // Readiness failure must not leave a Faulted orphan child.
+                    let _ = force_kill_child_tree(&mut child);
+                    let _ = child.wait();
+                    let mut inner = self.state.lock().map_err(|e| e.to_string())?;
+                    inner.child = None;
+                    inner.lifeline_stdin = None;
+                    inner.bootstrap_token = None;
                     inner.status.state = SupervisorState::Faulted {
                         reason: reason.clone(),
                     };
                     inner.status.production_ready = false;
                     inner.status.last_error = Some(reason.clone());
+                    inner.status.pid = None;
+                    let _ = std::fs::remove_file(&self.config.socket_path);
+                    let _ = std::fs::remove_file(&self.config.pid_path);
+                    let _ = std::fs::remove_file(&self.config.bootstrap_path);
                     if self.config.require_uds {
                         return Err(format!(
                             "UDS required but daemon not healthy: {reason} (no embedded fallback)"
                         ));
                     }
+                    return Ok(inner.status.clone());
                 }
+
+                let mut inner = self.state.lock().map_err(|e| e.to_string())?;
+                inner.child = Some(child);
+                inner.lifeline_stdin = lifeline_stdin;
+                inner.bootstrap_token = Some(bootstrap.clone());
+                // Export for UDS client resolution in this process.
+                std::env::set_var("NATIVES_DAEMON_SOCKET", &self.config.socket_path);
+                std::env::set_var("NATIVES_DAEMON_BOOTSTRAP", &bootstrap);
+                if self.config.require_uds {
+                    std::env::set_var("NATIVES_DAEMON_MODE", "uds");
+                }
+                std::env::set_var("NATIVES_DB_PATH", &self.config.natives_db_path);
+                std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &self.config.assistant_db_path);
+                // Drop cached UDS client so next call re-handshakes after restart.
+                // (async reset is best-effort from callers; env bootstrap is source of truth.)
+                inner.status.state = SupervisorState::Healthy;
+                inner.status.pid = Some(pid);
+                inner.status.production_ready = self.config.require_uds;
+                inner.status.last_error = None;
+                // Note: daemon process restores Run snapshots itself on boot
+                // (RunManager::new → restore_runs_snapshot). Active runs become
+                // Interrupted for safe UI retry — no silent re-exec.
                 Ok(inner.status.clone())
             }
             Err(e) => {
@@ -313,20 +335,48 @@ impl SidecarSupervisor {
             ));
         }
         let bootstrap = generate_bootstrap_token();
+        let instance_id = generate_bootstrap_token();
         let mut cmd = Command::new(&self.config.daemon_bin);
         cmd.env("NATIVES_DAEMON_SOCKET", &self.config.socket_path)
             .env("NATIVES_DAEMON_BOOTSTRAP", &bootstrap)
             .env("NATIVES_DB_PATH", &self.config.natives_db_path)
-            .env(
-                "NATIVES_ASSISTANT_DB_PATH",
-                &self.config.assistant_db_path,
-            )
+            .env("NATIVES_ASSISTANT_DB_PATH", &self.config.assistant_db_path)
             .env("NATIVES_RUNTIME_DIR", &self.config.runtime_dir)
+            // Host→Daemon lifeline: Host holds write end; Host exit closes pipe → Daemon EOF.
+            .env("NATIVES_PARENT_LIFELINE", "stdio")
+            .env("NATIVES_DAEMON_INSTANCE_ID", &instance_id)
+            .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // Safety: runs in child before exec; establishes its own process group.
+            unsafe {
+                cmd.pre_exec(|| {
+                    if libc::setpgid(0, 0) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
         let child = cmd
             .spawn()
             .map_err(|e| format!("spawn {}: {e}", self.config.daemon_bin.display()))?;
+        let ownership = serde_json::json!({
+            "daemon_pid": child.id(),
+            "host_pid": std::process::id(),
+            "instance_id": instance_id,
+            "daemon_bin": self.config.daemon_bin.display().to_string(),
+            "started_at": chrono::Utc::now().to_rfc3339(),
+            "runtime_dir": self.config.runtime_dir.display().to_string(),
+            "socket": self.config.socket_path.display().to_string(),
+        });
+        let _ = std::fs::write(
+            self.config.runtime_dir.join("agent-daemon.ownership.json"),
+            ownership.to_string(),
+        );
         Ok((child, bootstrap))
     }
 
@@ -461,23 +511,106 @@ impl SidecarSupervisor {
         self.ensure_started()
     }
 
-    /// Graceful stop — kill child and clear socket.
+    /// Graceful stop with grace→force upgrade. Idempotent under concurrent hooks.
     pub fn shutdown(&self) -> Result<(), String> {
-        let mut inner = self.state.lock().map_err(|e| e.to_string())?;
-        inner.status.state = SupervisorState::ShuttingDown;
-        if let Some(mut child) = inner.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+        self.shutdown_with_grace(self.config.shutdown_grace)
+    }
+
+    /// Same as [`Self::shutdown`] with an explicit grace window (tests / ops).
+    pub fn shutdown_with_grace(&self, grace: Duration) -> Result<(), String> {
+        let mut child = {
+            let mut inner = self.state.lock().map_err(|e| e.to_string())?;
+            if inner.shutdown_started && inner.child.is_none() {
+                if matches!(inner.status.state, SupervisorState::Stopped) {
+                    return Ok(());
+                }
+                if matches!(inner.status.state, SupervisorState::ShuttingDown) {
+                    inner.status.state = SupervisorState::Stopped;
+                    return Ok(());
+                }
+            }
+            inner.shutdown_started = true;
+            inner.status.state = SupervisorState::ShuttingDown;
+            // Closing the write end signals EOF to Daemon (primary graceful path).
+            drop(inner.lifeline_stdin.take());
+            inner.child.take()
+        };
+
+        let mut kill_err: Option<String> = None;
+        if let Some(ref mut child) = child {
+            let deadline = Instant::now() + grace;
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) if Instant::now() >= deadline => {
+                        if let Err(e) = force_kill_child_tree(child) {
+                            kill_err = Some(e);
+                        }
+                        match child.wait() {
+                            Ok(_) => break,
+                            Err(e) => {
+                                kill_err = Some(format!(
+                                    "{}; wait: {e}",
+                                    kill_err.clone().unwrap_or_default()
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                    Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+                    Err(e) => {
+                        kill_err = Some(format!("try_wait: {e}"));
+                        let _ = force_kill_child_tree(child);
+                        let _ = child.wait();
+                        break;
+                    }
+                }
+            }
         }
+
         let _ = std::fs::remove_file(&self.config.socket_path);
         let _ = std::fs::remove_file(&self.config.pid_path);
-        // Wipe bootstrap file on shutdown.
         let _ = std::fs::remove_file(&self.config.bootstrap_path);
+        let _ = std::fs::remove_file(self.config.runtime_dir.join("agent-daemon.ownership.json"));
+
+        let mut inner = self.state.lock().map_err(|e| e.to_string())?;
+        inner.child = None;
+        inner.lifeline_stdin = None;
         inner.bootstrap_token = None;
+        if let Some(err) = kill_err {
+            inner.status.state = SupervisorState::Faulted {
+                reason: format!("shutdown cleanup failed: {err}"),
+            };
+            inner.status.last_error = Some(err.clone());
+            inner.status.production_ready = false;
+            inner.status.pid = None;
+            return Err(format!("shutdown cleanup failed: {err}"));
+        }
         inner.status.state = SupervisorState::Stopped;
         inner.status.pid = None;
         inner.status.production_ready = false;
         Ok(())
+    }
+
+    /// Never kill an arbitrary PID from a stale file. Always fail-closed without deeper proof.
+    pub fn should_reap_stale_ownership(
+        record: &serde_json::Value,
+        expected_bin: &Path,
+        expected_instance: Option<&str>,
+    ) -> bool {
+        let Some(bin) = record.get("daemon_bin").and_then(|v| v.as_str()) else {
+            return false;
+        };
+        if Path::new(bin) != expected_bin {
+            return false;
+        }
+        if let Some(want) = expected_instance {
+            let got = record.get("instance_id").and_then(|v| v.as_str());
+            if got != Some(want) {
+                return false;
+            }
+        }
+        false
     }
 
     pub fn bootstrap_token(&self) -> Option<String> {
@@ -489,6 +622,41 @@ impl SidecarSupervisor {
 
     pub fn config(&self) -> &SupervisorConfig {
         &self.config
+    }
+}
+
+fn force_kill_child_tree(child: &mut Child) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as i32;
+        // Negative pid: signal the process group started via setpgid in spawn.
+        let rc = unsafe { libc::kill(-pid, libc::SIGKILL) };
+        if rc != 0 {
+            child.kill().map_err(|e| format!("kill child {pid}: {e}"))?;
+        }
+        let _ = child.try_wait();
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        let pid = child.id();
+        // Kill full process tree, then wait/reap.
+        let status = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .status()
+            .map_err(|e| format!("taskkill spawn failed: {e}"))?;
+        if !status.success() {
+            // Fallback to direct kill if taskkill fails.
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+        Ok(())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        child.kill().map_err(|e| format!("kill child: {e}"))?;
+        let _ = child.wait();
+        Ok(())
     }
 }
 
@@ -632,13 +800,13 @@ mod tests {
             runtime_dir: dir.clone(),
             socket_path: dir.join("t.sock"),
             pid_path: dir.join("t.pid"),
-            lock_path: dir.join("t.lock"),
             bootstrap_path: dir.join("boot"),
             daemon_bin: PathBuf::from("/nonexistent/natives-agent-daemon-xyz"),
             natives_db_path: dir.join("natives.db"),
             assistant_db_path: dir.join("assistant.db"),
             require_uds: true,
             health_timeout: Duration::from_millis(100),
+            shutdown_grace: Duration::from_millis(50),
             max_restarts: 1,
         };
         let sup = SidecarSupervisor::new(cfg);
@@ -664,13 +832,13 @@ mod tests {
             runtime_dir: dir.clone(),
             socket_path: dir.join("t.sock"),
             pid_path: dir.join("t.pid"),
-            lock_path: dir.join("t.lock"),
             bootstrap_path: dir.join("boot"),
             daemon_bin: PathBuf::from("/unused"),
             natives_db_path: dir.join("natives.db"),
             assistant_db_path: dir.join("assistant.db"),
             require_uds: true,
             health_timeout: Duration::from_millis(1),
+            shutdown_grace: Duration::from_millis(50),
             max_restarts: 1,
         };
         let err = SidecarSupervisor::new(cfg)
@@ -678,6 +846,159 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("daemon readiness failed"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn spawn_lifeline_fixture(ignore_eof: bool) -> (Child, PathBuf) {
+        let script =
+            std::env::temp_dir().join(format!("natives-lifeline-fixture-{}.sh", uuid_like()));
+        let body = concat!(
+            "#!/bin/sh\n",
+            "if [ \"${NATIVES_FIXTURE_IGNORE_EOF:-0}\" = \"1\" ]; then\n",
+            "  while true; do sleep 0.05; done\n",
+            "fi\n",
+            "while IFS= read -r _line || [ -n \"$_line\" ]; do\n",
+            "  :\n",
+            "done\n",
+            "exit 0\n",
+        );
+        std::fs::write(&script, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut cmd = Command::new(&script);
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .env("NATIVES_PARENT_LIFELINE", "stdio");
+        if ignore_eof {
+            cmd.env("NATIVES_FIXTURE_IGNORE_EOF", "1");
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            unsafe {
+                cmd.pre_exec(|| {
+                    if libc::setpgid(0, 0) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
+        let child = cmd.spawn().expect("spawn fixture");
+        (child, script)
+    }
+
+    fn wait_timeout(
+        child: &mut Child,
+        dur: Duration,
+    ) -> std::io::Result<Option<std::process::ExitStatus>> {
+        let start = Instant::now();
+        loop {
+            if let Some(st) = child.try_wait()? {
+                return Ok(Some(st));
+            }
+            if start.elapsed() >= dur {
+                return Ok(None);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn lifeline_eof_exits_fixture_without_kill() {
+        let (mut child, script) = spawn_lifeline_fixture(false);
+        drop(child.stdin.take());
+        let status = wait_timeout(&mut child, Duration::from_secs(2))
+            .expect("wait")
+            .expect("fixture should exit on EOF");
+        assert!(status.code().is_some());
+        let _ = std::fs::remove_file(script);
+    }
+
+    #[test]
+    fn force_kill_when_fixture_ignores_graceful() {
+        let (mut child, script) = spawn_lifeline_fixture(true);
+        drop(child.stdin.take());
+        assert!(child.try_wait().unwrap().is_none());
+        force_kill_child_tree(&mut child).unwrap();
+        let _ = child.wait().unwrap();
+        let _ = std::fs::remove_file(script);
+    }
+
+    #[test]
+    fn shutdown_is_idempotent() {
+        let dir = tempfile_path();
+        let _ = std::fs::create_dir_all(&dir);
+        let (mut child, script) = spawn_lifeline_fixture(false);
+        let lifeline = child.stdin.take();
+        let cfg = SupervisorConfig {
+            runtime_dir: dir.clone(),
+            socket_path: dir.join("t.sock"),
+            pid_path: dir.join("t.pid"),
+            bootstrap_path: dir.join("boot"),
+            daemon_bin: script.clone(),
+            natives_db_path: dir.join("natives.db"),
+            assistant_db_path: dir.join("assistant.db"),
+            require_uds: false,
+            health_timeout: Duration::from_millis(100),
+            shutdown_grace: Duration::from_millis(200),
+            max_restarts: 1,
+        };
+        let sup = SidecarSupervisor::new(cfg);
+        {
+            let mut inner = sup.state.lock().unwrap();
+            let pid = child.id();
+            inner.child = Some(child);
+            inner.lifeline_stdin = lifeline;
+            inner.status.state = SupervisorState::Healthy;
+            inner.status.pid = Some(pid);
+        }
+        sup.shutdown().unwrap();
+        assert_eq!(sup.status().state, SupervisorState::Stopped);
+        sup.shutdown().unwrap();
+        assert_eq!(sup.status().state, SupervisorState::Stopped);
+        let _ = std::fs::remove_file(script);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn continuous_lifecycle_no_orphan_pids() {
+        for _ in 0..20 {
+            let (mut child, script) = spawn_lifeline_fixture(false);
+            let pid = child.id();
+            drop(child.stdin.take());
+            let _ = wait_timeout(&mut child, Duration::from_secs(2))
+                .unwrap()
+                .expect("exit");
+            #[cfg(unix)]
+            {
+                let alive = unsafe { libc::kill(pid as i32, 0) == 0 };
+                assert!(!alive, "orphan pid {pid} still alive");
+            }
+            let _ = std::fs::remove_file(script);
+        }
+    }
+
+    #[test]
+    fn stale_ownership_never_auto_kills_unknown_pid() {
+        let record = serde_json::json!({
+            "daemon_pid": 1,
+            "daemon_bin": "/usr/bin/true",
+            "instance_id": "other",
+        });
+        assert!(!SidecarSupervisor::should_reap_stale_ownership(
+            &record,
+            Path::new("/usr/bin/true"),
+            Some("mine")
+        ));
+        assert!(!SidecarSupervisor::should_reap_stale_ownership(
+            &record,
+            Path::new("/usr/bin/true"),
+            Some("other")
+        ));
     }
 
     fn tempfile_path() -> PathBuf {

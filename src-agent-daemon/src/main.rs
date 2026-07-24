@@ -154,9 +154,9 @@ async fn main() {
         }
     );
 
+    let socket_path = config.socket_path.clone();
     let server = RpcServer::new(
-        config
-            .socket_path
+        socket_path
             .to_str()
             .unwrap_or("/tmp/natives-agent.sock"),
         &config.bootstrap_token,
@@ -165,8 +165,77 @@ async fn main() {
     );
 
     println!("Starting RPC server...");
-    if let Err(e) = server.run().await {
-        eprintln!("Fatal error: {}", e);
-        std::process::exit(1);
+    let lifeline_enabled = std::env::var("NATIVES_PARENT_LIFELINE")
+        .map(|v| v.eq_ignore_ascii_case("stdio"))
+        .unwrap_or(false);
+    if lifeline_enabled {
+        println!("Parent lifeline: stdio (EOF triggers shutdown)");
+    }
+
+    tokio::select! {
+        result = server.run() => {
+            if let Err(e) = result {
+                eprintln!("Fatal error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        reason = parent_lifeline(lifeline_enabled) => {
+            eprintln!("Daemon shutdown requested: {reason}");
+            // Cancel all execution roots and wait for quiet (task-03/13).
+            let outcomes = natives_agent_daemon::global_run_manager()
+                .runtime
+                .cancel_all_execution_roots()
+                .await;
+            if !outcomes.is_empty() {
+                eprintln!(
+                    "Execution drain finished: {} root outcome(s)",
+                    outcomes.len()
+                );
+            }
+            // Best-effort runtime file cleanup. Host force-kills if we hang.
+            let _ = std::fs::remove_file(&socket_path);
+            let grace_ms = std::env::var("NATIVES_DAEMON_SHUTDOWN_GRACE_MS")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(500);
+            tokio::time::sleep(std::time::Duration::from_millis(grace_ms)).await;
+            std::process::exit(0);
+        }
+    }
+}
+
+/// Wait for Host→Daemon inherited stdin EOF when `NATIVES_PARENT_LIFELINE=stdio`.
+/// Standalone daemons leave the env unset and never observe terminal stdin.
+async fn parent_lifeline(enabled: bool) -> &'static str {
+    if !enabled {
+        std::future::pending::<()>().await;
+        return "unreachable";
+    }
+    use tokio::io::AsyncReadExt;
+    let mut stdin = tokio::io::stdin();
+    let mut buf = [0_u8; 64];
+    loop {
+        match stdin.read(&mut buf).await {
+            Ok(0) => return "parent_lifeline_eof",
+            Ok(_) => {
+                // Host keeps the write end open; ignore any incidental bytes.
+            }
+            Err(_) => return "parent_lifeline_read_error",
+        }
+    }
+}
+
+#[cfg(test)]
+mod parent_lifeline_tests {
+    use super::parent_lifeline;
+
+    #[tokio::test]
+    async fn disabled_lifeline_is_pending_not_eof() {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            parent_lifeline(false),
+        )
+        .await;
+        assert!(result.is_err(), "disabled lifeline must not resolve");
     }
 }

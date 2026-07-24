@@ -1,8 +1,9 @@
 //! Claude CLI runtime bridge for session main path (REQ-T01).
 //!
 //! Spawns `claude -p --output-format stream-json`, maps stdout lines to
-//! Protocol v2 [`RunEventKind`], and appends them to the shared EventSequencer.
-//! Codex is intentionally not bridged here (red line: unavailable).
+//! Protocol v2 domain events, and returns a terminal status string for
+//! RunManager (sole lifecycle committer). Never writes Completed/Failed/
+//! Cancelled/Interrupted lifecycle events. Codex is not bridged here.
 //!
 //! ## Host-mediated permissions (deep path)
 //!
@@ -16,19 +17,27 @@
 //! 2. wait on `ProductionRuntime` permission waiters
 //! 3. write a control response line to CLI stdin (stream-json input)
 //!
-//! If the CLI version does not emit control requests, Host cards simply stay
-//! idle while CLI-local policy applies — still honest, not fake-green.
+//! ## Fail-closed tool policy (task-05)
+//!
+//! Until we can prove every tool call is host-mediated via control protocol,
+//! Claude CLI runs in **text-only** mode by default:
+//! - only Read/Glob/Grep/LS allowed (readonly surface)
+//! - any tool_use without a matching Host control request fails the turn with
+//!   `CLI_TOOL_BRIDGE_UNAVAILABLE` (no side-effect execution path claimed)
+//! - never rely on user `~/.claude` defaults for write/exec tools
+//!
+//! Set `NATIVES_CLI_CONTROL_PROVEN=1` only when fixtures/integration prove the
+//! control loop end-to-end; otherwise remain fail-closed.
 
 use assistant_protocol::v2::RunEventKind;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::production::ProductionRuntime;
@@ -39,7 +48,10 @@ pub fn find_claude_binary() -> Option<PathBuf> {
         return Some(PathBuf::from("claude"));
     }
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    let fallback = PathBuf::from(home).join(".claude").join("local").join("claude");
+    let fallback = PathBuf::from(home)
+        .join(".claude")
+        .join("local")
+        .join("claude");
     if fallback.exists() {
         Some(fallback)
     } else {
@@ -64,13 +76,27 @@ pub fn claude_cli_available() -> bool {
 }
 
 /// Map Host permission_profile → Claude CLI `--permission-mode` value.
+///
+/// Fail-closed: never use `acceptEdits` unless control protocol is proven —
+/// that mode would allow CLI-local writes without Host mediation.
 pub fn map_permission_mode(profile: &str) -> Option<&'static str> {
+    if !cli_control_proven() {
+        // Text-only / host-mediated transitional: dontAsk + restricted tools.
+        return Some("dontAsk");
+    }
     match profile {
         "readonly" | "read_only" => Some("dontAsk"),
         "full_access" | "autonomous" | "full" => Some("acceptEdits"),
-        // ask / default: leave CLI default (user can configure ~/.claude)
+        // ask / default: leave CLI default only when control is proven
         _ => None,
     }
+}
+
+/// True only when operator/fixture has proven Host control mediation.
+pub fn cli_control_proven() -> bool {
+    std::env::var("NATIVES_CLI_CONTROL_PROVEN")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 /// Parsed stdout line: normal events and/or a control request needing Host answer.
@@ -168,10 +194,7 @@ pub fn translate_cli_line(line: &str) -> TranslatedLine {
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("tool")
                                 .to_string();
-                            let input = block
-                                .get("input")
-                                .cloned()
-                                .unwrap_or_else(|| json!({}));
+                            let input = block.get("input").cloned().unwrap_or_else(|| json!({}));
                             out.push(RunEventKind::ToolCallRequested {
                                 id: id.clone(),
                                 name: name.clone(),
@@ -247,10 +270,7 @@ pub fn translate_cli_line(line: &str) -> TranslatedLine {
                             .get("is_error")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
-                        let output = block
-                            .get("content")
-                            .cloned()
-                            .unwrap_or_else(|| json!(null));
+                        let output = block.get("content").cloned().unwrap_or_else(|| json!(null));
                         out.push(RunEventKind::ToolCallCompleted {
                             id,
                             name: "tool".into(),
@@ -412,17 +432,28 @@ async fn wait_host_permission(
     timeout: Duration,
 ) -> bool {
     let (tx, rx) = oneshot::channel();
-    {
-        let mut map = runtime.permission_waiters.lock().await;
-        map.insert(permission_id.to_string(), (run_id.to_string(), "cli".into(), tx));
-    }
-    match tokio::time::timeout(timeout, rx).await {
-        Ok(Ok((approved, _scope))) => approved,
-        _ => {
-            // Timeout / cancel → deny
-            let mut map = runtime.permission_waiters.lock().await;
-            map.remove(permission_id);
+    runtime
+        .insert_permission_waiter(permission_id, run_id, "cli", tx)
+        .await;
+    let cancel = runtime
+        .execution
+        .token(run_id)
+        .await
+        .unwrap_or_else(CancellationToken::new);
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => {
+            let _ = runtime.remove_permission_waiter(permission_id).await;
             false
+        }
+        res = tokio::time::timeout(timeout, rx) => {
+            match res {
+                Ok(Ok((approved, _scope))) => approved,
+                _ => {
+                    let _ = runtime.remove_permission_waiter(permission_id).await;
+                    false
+                }
+            }
         }
     }
 }
@@ -438,12 +469,10 @@ pub async fn run_claude_cli_turn(
     permission_profile: &str,
     cancel: CancellationToken,
 ) -> Result<String, String> {
-    let bin = find_claude_binary().ok_or_else(|| {
-        "runtime claude_cli unavailable (claude binary not found)".to_string()
-    })?;
+    let bin = find_claude_binary()
+        .ok_or_else(|| "runtime claude_cli unavailable (claude binary not found)".to_string())?;
 
-    runtime.events.append(run_id, RunEventKind::Preparing);
-    runtime.events.append(run_id, RunEventKind::Started);
+    // Lifecycle Preparing/Started is committed by RunManager, not here.
 
     let mut command = Command::new(&bin);
     command
@@ -463,11 +492,10 @@ pub async fn run_claude_cli_turn(
     if let Some(mode) = map_permission_mode(permission_profile) {
         command.arg("--permission-mode").arg(mode);
     }
-    // readonly: limit to read-ish tools when CLI supports --allowedTools
-    if matches!(permission_profile, "readonly" | "read_only") {
-        command
-            .arg("--allowedTools")
-            .arg("Read,Glob,Grep,LS");
+    // Fail-closed text-only surface until control protocol is proven (task-05).
+    // readonly always uses the same restricted allowlist.
+    if !cli_control_proven() || matches!(permission_profile, "readonly" | "read_only") {
+        command.arg("--allowedTools").arg("Read,Glob,Grep,LS");
     }
 
     if let Some(cwd) = project_path {
@@ -511,16 +539,15 @@ pub async fn run_claude_cli_turn(
 
     let mut reader = BufReader::new(stdout).lines();
     let mut terminal: Option<String> = None;
+    // Track control mediation; tool_use without control is fail-closed.
+    let mut control_seen = false;
+    let mut pending_control_tools: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     loop {
         if cancel.is_cancelled() {
             let _ = child.kill().await;
-            runtime.events.append(
-                run_id,
-                RunEventKind::Interrupted {
-                    reason: "cancelled".into(),
-                },
-            );
+            // Status only — RunManager commits Interrupted/Cancelled.
             return Ok("interrupted".into());
         }
 
@@ -529,14 +556,28 @@ pub async fn run_claude_cli_turn(
                 match line {
                     Ok(Some(line)) => {
                         let translated = translate_cli_line(&line);
+                        if translated.control.is_some() {
+                            control_seen = true;
+                            if let Some(ref c) = translated.control {
+                                pending_control_tools.insert(c.tool_name.clone());
+                            }
+                        }
                         for kind in translated.events {
-                            let is_term = matches!(
-                                kind,
-                                RunEventKind::Completed { .. }
-                                    | RunEventKind::Failed { .. }
-                                    | RunEventKind::Interrupted { .. }
-                                    | RunEventKind::Cancelled { .. }
-                            );
+                            // Fail-closed: tool_use without proven control mediation.
+                            if !cli_control_proven() {
+                                if let RunEventKind::ToolCallRequested { name, .. } = &kind {
+                                    let readonly = matches!(
+                                        name.as_str(),
+                                        "Read" | "Glob" | "Grep" | "LS" | "read_file" | "list_dir" | "grep" | "glob"
+                                    );
+                                    if !readonly && !control_seen {
+                                        let _ = child.kill().await;
+                                        return Err(
+                                            "CLI_TOOL_BRIDGE_UNAVAILABLE: tool execution requires host control mediation; text-only CLI adapter is active".into()
+                                        );
+                                    }
+                                }
+                            }
                             let status_hint = match &kind {
                                 RunEventKind::Completed { .. } => Some("completed"),
                                 RunEventKind::Failed { .. } => Some("failed"),
@@ -544,13 +585,13 @@ pub async fn run_claude_cli_turn(
                                 RunEventKind::Cancelled { .. } => Some("cancelled"),
                                 _ => None,
                             };
-                            runtime.events.append(run_id, kind);
                             if let Some(s) = status_hint {
+                                // Never append terminal lifecycle events from CLI bridge.
                                 terminal = Some(s.into());
-                            }
-                            if is_term {
                                 break;
                             }
+                            // Domain events only (text/tool/permission).
+                            runtime.events.append(run_id, kind);
                         }
                         if let Some(ctrl) = translated.control {
                             // Host-mediated permission: wait UI respond, write CLI control response.
@@ -570,6 +611,7 @@ pub async fn run_claude_cli_turn(
                                 },
                             );
                             let resp = control_response_line(&ctrl.request_id, approved);
+                            let _ = pending_control_tools;
                             if let Err(e) = stdin.write_all(resp.as_bytes()).await {
                                 eprintln!("[cli_runtime_bridge] control response write failed: {e}");
                             } else {
@@ -582,14 +624,7 @@ pub async fn run_claude_cli_turn(
                     }
                     Ok(None) => break,
                     Err(e) => {
-                        runtime.events.append(
-                            run_id,
-                            RunEventKind::Failed {
-                                error: format!("cli stdout read error: {e}"),
-                                code: "CLI_IO".into(),
-                            },
-                        );
-                        return Ok("failed".into());
+                        return Err(format!("cli stdout read error: {e}"));
                     }
                 }
             }
@@ -604,22 +639,10 @@ pub async fn run_claude_cli_turn(
         .map_err(|e| format!("claude wait failed: {e}"))?;
 
     if terminal.is_none() {
+        // Status only — RunManager commits the single terminal lifecycle event.
         if status.success() {
-            runtime.events.append(
-                run_id,
-                RunEventKind::Completed {
-                    reason: "done".into(),
-                },
-            );
             terminal = Some("completed".into());
         } else {
-            runtime.events.append(
-                run_id,
-                RunEventKind::Failed {
-                    error: format!("claude exit {status}"),
-                    code: "CLI_EXIT".into(),
-                },
-            );
             terminal = Some("failed".into());
         }
     }
@@ -662,10 +685,60 @@ mod tests {
     }
 
     #[test]
-    fn map_permission_mode_profiles() {
+    fn map_permission_mode_fail_closed_without_proven_control() {
+        // Default: no NATIVES_CLI_CONTROL_PROVEN → always dontAsk (text-only).
+        // Isolation: another parallel test may set NATIVES_CLI_CONTROL_PROVEN=1.
+        let _guard = EnvVarGuard::remove("NATIVES_CLI_CONTROL_PROVEN");
+        assert_eq!(map_permission_mode("readonly"), Some("dontAsk"));
+        assert_eq!(map_permission_mode("full_access"), Some("dontAsk"));
+        assert_eq!(map_permission_mode("ask"), Some("dontAsk"));
+        assert!(!cli_control_proven());
+    }
+
+    #[test]
+    fn map_permission_mode_proven_allows_profile_modes() {
+        let _guard = EnvVarGuard::set("NATIVES_CLI_CONTROL_PROVEN", "1");
         assert_eq!(map_permission_mode("readonly"), Some("dontAsk"));
         assert_eq!(map_permission_mode("full_access"), Some("acceptEdits"));
         assert_eq!(map_permission_mode("ask"), None);
+    }
+
+    /// Process-global env isolation for parallel cargo tests.
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, previous }
+        }
+    }
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    #[test]
+    fn tool_use_without_control_is_detected() {
+        let line = r#"{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"rm -rf /"}}"#;
+        let t = translate_cli_line(line);
+        assert!(matches!(
+            &t.events[..],
+            [RunEventKind::ToolCallRequested { name, .. }, RunEventKind::ToolCallStarted { .. }]
+                if name == "Bash"
+        ));
+        assert!(t.control.is_none());
     }
 
     #[test]

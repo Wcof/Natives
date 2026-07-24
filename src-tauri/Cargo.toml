@@ -68,3 +68,6 @@ provider-adapters = { path = "../crates/provider-adapters" }
 capability-gateway = { path = "../crates/capability-gateway" }
 assistant-protocol = { path = "../crates/assistant-protocol" }
 natives-agent-daemon = { path = "../src-agent-daemon" }
+
+[dev-dependencies]
+tempfile = "3"
