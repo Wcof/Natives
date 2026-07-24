@@ -64,6 +64,7 @@ impl ProviderAdapter for DeepSeekAdapter {
                 message: "DeepSeek API key required (offline mock removed)".into(),
                 category: ProviderErrorCategory::Auth,
                 retryable: false,
+                retry_after_ms: None,
             });
         }
         let mut text = String::new();
@@ -104,6 +105,7 @@ impl ProviderAdapter for DeepSeekAdapter {
             message: "Use stream(request, credential) for DeepSeek; offline mock removed".into(),
             category: ProviderErrorCategory::Auth,
             retryable: false,
+            retry_after_ms: None,
         })
     }
     async fn stream(
@@ -122,6 +124,7 @@ impl ProviderAdapter for DeepSeekAdapter {
                 message: "DeepSeek API key required".into(),
                 category: ProviderErrorCategory::Auth,
                 retryable: false,
+                retry_after_ms: None,
             })?
         };
         let base = credential

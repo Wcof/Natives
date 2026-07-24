@@ -897,19 +897,73 @@ fn provider_test_is_rate_limited(result: &ProviderTestResult) -> bool {
         })
 }
 
+#[derive(Clone)]
+struct ProviderRateLimitRoute {
+    provider_id: String,
+    key_id: String,
+}
+
+async fn daemon_rate_limit_call(
+    method: &str,
+    route: &ProviderRateLimitRoute,
+    retry_after_ms: Option<u64>,
+) -> std::result::Result<(), String> {
+    let socket = std::env::var("NATIVES_DAEMON_SOCKET")
+        .map_err(|_| "Native daemon is unavailable; provider test was not sent".to_string())?;
+    let bootstrap = std::env::var("NATIVES_DAEMON_BOOTSTRAP")
+        .map_err(|_| "Native daemon is unavailable; provider test was not sent".to_string())?;
+    let mut client = natives_agent_daemon::DaemonClient::connect(
+        socket,
+        &bootstrap,
+        natives_agent_daemon::client_protocol_version(),
+    )
+    .await
+    .map_err(|error| format!("Native daemon rate limiter is unavailable: {error}"))?;
+    client
+        .call(
+            method,
+            serde_json::json!({
+                "provider_id": route.provider_id,
+                "key_id": route.key_id,
+                "retry_after_ms": retry_after_ms,
+            }),
+        )
+        .await
+        .map_err(|error| format!("Native daemon rate limiter rejected provider test: {error}"))?;
+    Ok(())
+}
+
+async fn acquire_provider_test_slot(route: Option<&ProviderRateLimitRoute>) -> Result<()> {
+    if let Some(route) = route {
+        daemon_rate_limit_call("engine.rateLimit.acquire", route, None)
+            .await
+            .map_err(Error::Internal)?;
+    }
+    Ok(())
+}
+
+async fn record_provider_test_rate_limit(
+    route: Option<&ProviderRateLimitRoute>,
+    headers: &reqwest::header::HeaderMap,
+) {
+    if let Some(route) = route {
+        let retry_after_ms = provider_adapters::http_stream::retry_after_ms(headers);
+        let _ = daemon_rate_limit_call("engine.rateLimit.cooldown", route, retry_after_ms).await;
+    }
+}
+
 async fn execute_provider_test_with_retry(
     provider_type: &str,
     base_url: &str,
     api_key: &str,
     model: Option<&str>,
+    route: Option<&ProviderRateLimitRoute>,
 ) -> ProviderTestResult {
-    let first = execute_provider_test(provider_type, base_url, api_key, model).await;
+    let first = execute_provider_test(provider_type, base_url, api_key, model, route).await;
     if first.success || !provider_test_is_rate_limited(&first) {
         return first;
     }
-    // One short backoff: many gateways burst-limit the discover+test sequence.
-    tokio::time::sleep(std::time::Duration::from_millis(750)).await;
-    execute_provider_test(provider_type, base_url, api_key, model).await
+    execute_provider_test(provider_type, base_url, api_key, model, route).await
 }
 
 
@@ -1061,6 +1115,7 @@ async fn execute_provider_test(
     base_url: &str,
     api_key: &str,
     model: Option<&str>,
+    route: Option<&ProviderRateLimitRoute>,
 ) -> ProviderTestResult {
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
@@ -1119,11 +1174,17 @@ async fn execute_provider_test(
         } else {
             request = request.header("Authorization", format!("Bearer {}", api_key));
         }
+        if let Err(error) = acquire_provider_test_slot(route).await {
+            return ProviderTestResult { success: false, error: Some(error.to_string()) };
+        }
         let response = request.json(&body).send().await;
 
         return match response {
             Ok(resp) => {
                 let status = resp.status();
+                if status == 429 {
+                    record_provider_test_rate_limit(route, resp.headers()).await;
+                }
                 let request_id = resp
                     .headers()
                     .get("x-request-id")
@@ -1268,11 +1329,17 @@ async fn execute_provider_test(
     } else {
         request = request.header("Authorization", format!("Bearer {}", api_key));
     }
+    if let Err(error) = acquire_provider_test_slot(route).await {
+        return ProviderTestResult { success: false, error: Some(error.to_string()) };
+    }
     let response = request.send().await;
 
     match response {
         Ok(resp) => {
             let status = resp.status();
+            if status == 429 {
+                record_provider_test_rate_limit(route, resp.headers()).await;
+            }
             let request_id = resp
                 .headers()
                 .get("x-request-id")
@@ -1396,7 +1463,14 @@ pub async fn provider_test(
 
     let model = input.model.or(default_model);
     let protocol = normalize_api_protocol(&api_protocol);
-    let result = execute_provider_test_with_retry(&protocol, &base_url, &api_key, model.as_deref()).await;
+    let route = ProviderRateLimitRoute { provider_id: provider_id.clone(), key_id: key_id.clone() };
+    let result = execute_provider_test_with_retry(
+        &protocol,
+        &base_url,
+        &api_key,
+        model.as_deref(),
+        Some(&route),
+    ).await;
     let now = chrono_now();
     let status = if result.success {
         "valid"
@@ -1419,13 +1493,29 @@ pub async fn provider_test(
 #[tauri::command]
 pub async fn test_provider_raw(input: RawProviderTestInput) -> Result<ProviderTestResult> {
     let protocol = required_api_protocol(input.api_protocol.as_deref())?;
+    let route = raw_provider_rate_limit_route(&protocol, &input.base_url, &input.api_key);
     Ok(execute_provider_test_with_retry(
         &protocol,
         &input.base_url,
         &input.api_key,
         input.model.as_deref(),
+        Some(&route),
     )
     .await)
+}
+
+fn raw_provider_rate_limit_route(
+    protocol: &str,
+    base_url: &str,
+    api_key: &str,
+) -> ProviderRateLimitRoute {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    api_key.hash(&mut hasher);
+    ProviderRateLimitRoute {
+        provider_id: format!("raw:{protocol}:{}", base_url.trim_end_matches('/')),
+        key_id: format!("raw:{:016x}", hasher.finish()),
+    }
 }
 
 // ── Helpers ──
@@ -2095,6 +2185,7 @@ mod tests {
             &base,
             "sk-test",
             Some("deepseek-v4-flash"),
+            None,
         ));
 
         handle.join().expect("server thread");

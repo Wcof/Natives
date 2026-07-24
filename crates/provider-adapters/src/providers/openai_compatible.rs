@@ -66,6 +66,7 @@ impl ProviderAdapter for OpenAiCompatibleAdapter {
             message: "API key required".into(),
             category: ProviderErrorCategory::Auth,
             retryable: false,
+            retry_after_ms: None,
         })?;
         let (content, tools, usage) =
             chat_completions(&self.client, &self.base_url, &key, request).await?;
@@ -93,6 +94,7 @@ impl ProviderAdapter for OpenAiCompatibleAdapter {
                 .into(),
             category: ProviderErrorCategory::Auth,
             retryable: false,
+            retry_after_ms: None,
         })
     }
     async fn stream(
@@ -111,6 +113,7 @@ impl ProviderAdapter for OpenAiCompatibleAdapter {
                 message: "API key required".into(),
                 category: ProviderErrorCategory::Auth,
                 retryable: false,
+                retry_after_ms: None,
             })?
         };
         let base = credential

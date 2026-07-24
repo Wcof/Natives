@@ -1068,8 +1068,22 @@ impl EngineProvider for RealProvider {
             .clone()
             .unwrap_or_else(|| self.provider_id.clone());
         let key_id = credential.key_id.clone();
+        let route_key_id = key_id.as_deref().unwrap_or("default").to_string();
         let base_url = credential.base_url.clone();
         let adapter = resolve_adapter(&protocol);
+
+        if let Some(governor) = crate::global_governor() {
+            governor
+                .acquire(&self.provider_id, &route_key_id, cancel.clone())
+                .await
+                .map_err(|e| {
+                    if e == "cancelled" {
+                        EngineError::Cancelled
+                    } else {
+                        EngineError::Message(e)
+                    }
+                })?;
+        }
 
         let provider_messages: Vec<_> = messages
             .into_iter()
@@ -1100,25 +1114,43 @@ impl EngineProvider for RealProvider {
             structured_output: None,
         };
 
-        let stream = adapter.stream(request, credential).await.map_err(|e| {
-            let message = provider_error_message(
-                &e,
-                &self.provider_id,
-                &protocol,
-                model,
-                key_id.as_deref(),
-                base_url.as_deref(),
-            );
-            EngineError::Provider {
-                message,
-                code: e.code,
-                retryable: e.retryable,
+        let stream = match adapter.stream(request, credential).await {
+            Ok(stream) => stream,
+            Err(e) => {
+                if matches!(
+                    e.category,
+                    provider_adapters::capabilities::ProviderErrorCategory::RateLimit
+                ) {
+                    if let Some(governor) = crate::global_governor() {
+                        governor
+                            .record_rate_limit(&self.provider_id, &route_key_id, e.retry_after_ms)
+                            .await;
+                    }
+                }
+                return Err(EngineError::Provider {
+                    message: provider_error_message(
+                        &e,
+                        &self.provider_id,
+                        &protocol,
+                        model,
+                        key_id.as_deref(),
+                        base_url.as_deref(),
+                    ),
+                    code: e.code,
+                    retryable: e.retryable,
+                    category: format!("{:?}", e.category),
+                    retry_after_ms: e.retry_after_ms,
+                });
             }
-        })?;
+        };
         let provider_id = self.provider_id.clone();
+        let route_key_id = route_key_id.clone();
+        let governor = crate::global_governor();
         let model = model.to_string();
         let mapped = futures_util::stream::unfold((stream, cancel), move |(mut stream, cancel)| {
             let provider_id = provider_id.clone();
+            let route_key_id = route_key_id.clone();
+            let governor = governor.clone();
             let protocol = protocol.clone();
             let model = model.clone();
             let key_id = key_id.clone();
@@ -1129,8 +1161,15 @@ impl EngineProvider for RealProvider {
                 }
                 tokio::select! {
                     ev = stream.next() => {
-                        ev.map(|ev| {
-                            let event = match ev {
+                        let ev = ev?;
+                        if let ProviderEvent::Error(error) = &ev {
+                            if matches!(error.category, provider_adapters::capabilities::ProviderErrorCategory::RateLimit) {
+                                if let Some(governor) = &governor {
+                                    governor.record_rate_limit(&provider_id, &route_key_id, error.retry_after_ms).await;
+                                }
+                            }
+                        }
+                        let event = match ev {
                                 ProviderEvent::TextDelta(t) => EngineProviderEvent::TextDelta(t),
                                 ProviderEvent::ReasoningDelta(t) => EngineProviderEvent::ReasoningDelta(t),
                                 ProviderEvent::ToolCallDelta {
@@ -1151,20 +1190,14 @@ impl EngineProvider for RealProvider {
                                 },
                                 ProviderEvent::Completed => EngineProviderEvent::Completed,
                                 ProviderEvent::Error(e) => EngineProviderEvent::Error {
-                                    message: provider_error_message(
-                                        &e,
-                                        &provider_id,
-                                        &protocol,
-                                        &model,
-                                        key_id.as_deref(),
-                                        base_url.as_deref(),
-                                    ),
-                                    code: e.code,
-                                    retryable: e.retryable,
+                                        message: provider_error_message(&e, &provider_id, &protocol, &model, key_id.as_deref(), base_url.as_deref()),
+                                        code: e.code,
+                                        retryable: e.retryable,
+                                        category: format!("{:?}", e.category),
+                                        retry_after_ms: e.retry_after_ms,
                                 },
                             };
-                            (event, (stream, cancel))
-                        })
+                        Some((event, (stream, cancel)))
                     }
                     _ = cancel.cancelled() => None,
                 }
@@ -1279,6 +1312,13 @@ mod permission_bind_tests {
         assert!(ok.is_ok());
         assert!(!rt.interactions.has_permission("p1").await);
     }
+
+    #[test]
+    fn permission_scope_preserves_session_boundary() {
+        assert_eq!(normalize_permission_scope("session"), "session");
+        assert_eq!(normalize_permission_scope("this_run"), "this_run");
+        assert_eq!(normalize_permission_scope("project"), "project");
+    }
 }
 
 #[cfg(test)]
@@ -1294,6 +1334,7 @@ mod provider_error_message_tests {
                 message: "bad key sk-secret123".into(),
                 category: ProviderErrorCategory::Auth,
                 retryable: false,
+                retry_after_ms: None,
             },
             "p1",
             "openai_chat_completions",
@@ -1336,7 +1377,8 @@ pub(crate) fn register_tools_for_surface(
 
 pub(crate) fn normalize_permission_scope(scope: &str) -> String {
     match scope.trim().to_ascii_lowercase().as_str() {
-        "run" | "this_run" | "session" => "this_run".into(),
+        "run" | "this_run" => "this_run".into(),
+        "session" => "session".into(),
         "project" | "always" | "forever" => "project".into(),
         _ => "once".into(),
     }

@@ -124,6 +124,25 @@ async fn main() {
     println!("Natives Agent Daemon v{}", config.version);
     // Credential broker from natives.db when NATIVES_DB_PATH is set (sidecar mode).
     let broker_ok = natives_agent_daemon::try_install_natives_db_broker();
+
+    // Initialize governor from persisted settings if available.
+    let mut rl_settings = natives_agent_daemon::governor::EngineRateLimitSettings::default();
+    if let Ok(Some(val)) = natives_agent_daemon::natives_db_broker::read_setting(
+        natives_agent_daemon::governor::SETTINGS_KEY,
+    ) {
+        if let Ok(settings) =
+            serde_json::from_str::<natives_agent_daemon::governor::EngineRateLimitSettings>(&val)
+        {
+            if settings.validate().is_ok() {
+                rl_settings = settings;
+            }
+        }
+    }
+    let governor = std::sync::Arc::new(
+        natives_agent_daemon::governor::ProviderRequestGovernor::new(rl_settings),
+    );
+    let _ = natives_agent_daemon::GLOBAL_GOVERNOR.set(governor);
+
     // Interval/one-shot scheduler runner (persisted jobs under NATIVES_RUNTIME_DIR).
     let _ = natives_agent_daemon::ensure_scheduler_runner();
     // Run snapshot path is restored on RunManager::new(); ensure process-wide manager is warm.
@@ -156,9 +175,7 @@ async fn main() {
 
     let socket_path = config.socket_path.clone();
     let server = RpcServer::new(
-        socket_path
-            .to_str()
-            .unwrap_or("/tmp/natives-agent.sock"),
+        socket_path.to_str().unwrap_or("/tmp/natives-agent.sock"),
         &config.bootstrap_token,
         &config.protocol_version,
         &config.version,
@@ -231,11 +248,9 @@ mod parent_lifeline_tests {
 
     #[tokio::test]
     async fn disabled_lifeline_is_pending_not_eof() {
-        let result = tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            parent_lifeline(false),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(50), parent_lifeline(false))
+                .await;
         assert!(result.is_err(), "disabled lifeline must not resolve");
     }
 }

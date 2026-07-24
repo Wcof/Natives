@@ -26,6 +26,18 @@ export interface MemoryAdminSnapshot {
   results: unknown[];
 }
 
+export interface EngineRateLimitSettings {
+  enabled: boolean;
+  requests_per_minute: number;
+}
+
+export interface EngineRateLimitSnapshot {
+  settings: EngineRateLimitSettings;
+  effective_interval_ms: number;
+  queued_requests: number;
+  cooling_routes: number;
+}
+
 export async function listMcp(gateway: AssistantGateway): Promise<McpAdminSnapshot> {
   const raw = (await gateway.request('mcp.list', {})) as Record<string, unknown>;
   return {
@@ -66,18 +78,31 @@ export async function searchMemory(
   return { results: (obj.results as unknown[]) ?? (obj.items as unknown[]) ?? [] };
 }
 
+export async function getRateLimit(gateway: AssistantGateway): Promise<EngineRateLimitSnapshot> {
+  return (await gateway.request('engine.rateLimit.get', {})) as EngineRateLimitSnapshot;
+}
+
+export async function updateRateLimit(
+  gateway: AssistantGateway,
+  settings: EngineRateLimitSettings,
+): Promise<EngineRateLimitSnapshot> {
+  return (await gateway.request('engine.rateLimit.update', settings)) as EngineRateLimitSnapshot;
+}
+
 /** Aggregate dashboard for settings / management surfaces. */
 export async function loadCapabilityAdminDashboard(gateway: AssistantGateway): Promise<{
   mcp: McpAdminSnapshot;
   scheduler: SchedulerAdminSnapshot;
   extensions: ExtensionAdminSnapshot;
   skills: SkillAdminSnapshot;
+  rateLimit: EngineRateLimitSnapshot | null;
 }> {
-  const [mcp, scheduler, extensions, skills] = await Promise.all([
+  const [mcp, scheduler, extensions, skills, rateLimit] = await Promise.all([
     listMcp(gateway),
     listScheduler(gateway),
     listExtensions(gateway),
     listSkills(gateway),
+    getRateLimit(gateway).catch(() => null),
   ]);
-  return { mcp, scheduler, extensions, skills };
+  return { mcp, scheduler, extensions, skills, rateLimit };
 }

@@ -380,6 +380,7 @@ async fn test_provider_model(
             message: format!("Provider test returned no content: model={model}"),
             category: provider_adapters::capabilities::ProviderErrorCategory::Unknown,
             retryable: true,
+            retry_after_ms: None,
         })
     }
 }
@@ -441,6 +442,158 @@ async fn handle_rpc(
                 &request.client_id,
                 &request.session_token,
                 serde_json::json!({"pong": true, "timestamp": chrono::Utc::now().to_rfc3339()}),
+            )
+            .await;
+        }
+        names::ENGINE_RATE_LIMIT_GET => {
+            let snapshot = if let Some(gov) = crate::global_governor() {
+                gov.snapshot().await
+            } else {
+                crate::governor::EngineRateLimitSnapshot {
+                    settings: crate::governor::EngineRateLimitSettings::default(),
+                    effective_interval_ms: 0,
+                    queued_requests: 0,
+                    cooling_routes: 0,
+                }
+            };
+            send_success(
+                writer,
+                &request.request_id,
+                &request.client_id,
+                &request.session_token,
+                serde_json::to_value(&snapshot).unwrap_or_default(),
+            )
+            .await;
+        }
+        names::ENGINE_RATE_LIMIT_UPDATE => {
+            let req: crate::governor::EngineRateLimitSettings =
+                match serde_json::from_value(request.params.clone()) {
+                    Ok(req) => req,
+                    Err(e) => {
+                        send_rpc_failure(
+                            writer,
+                            request,
+                            "invalid_params",
+                            format!("Invalid parameters: {e}"),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+            if let Err(message) = req.validate() {
+                send_rpc_failure(writer, request, "invalid_params", message).await;
+                return;
+            }
+            let encoded = match serde_json::to_string(&req) {
+                Ok(encoded) => encoded,
+                Err(e) => {
+                    send_rpc_failure(writer, request, "serialization_failed", e.to_string()).await;
+                    return;
+                }
+            };
+            if let Err(message) =
+                crate::natives_db_broker::write_setting(crate::governor::SETTINGS_KEY, &encoded)
+            {
+                send_rpc_failure(writer, request, "persistence_failed", message).await;
+                return;
+            }
+            if let Some(gov) = crate::global_governor() {
+                gov.update_settings(req.clone()).await;
+            }
+            let snapshot = if let Some(gov) = crate::global_governor() {
+                gov.snapshot().await
+            } else {
+                crate::governor::EngineRateLimitSnapshot {
+                    settings: req,
+                    effective_interval_ms: 0,
+                    queued_requests: 0,
+                    cooling_routes: 0,
+                }
+            };
+            send_success(
+                writer,
+                &request.request_id,
+                &request.client_id,
+                &request.session_token,
+                serde_json::to_value(snapshot).unwrap_or_default(),
+            )
+            .await;
+        }
+        names::ENGINE_RATE_LIMIT_ACQUIRE => {
+            let provider_id = request
+                .params
+                .get("provider_id")
+                .and_then(serde_json::Value::as_str);
+            let key_id = request
+                .params
+                .get("key_id")
+                .and_then(serde_json::Value::as_str);
+            let (Some(provider_id), Some(key_id)) = (provider_id, key_id) else {
+                send_rpc_failure(
+                    writer,
+                    request,
+                    "invalid_params",
+                    "provider_id and key_id are required".into(),
+                )
+                .await;
+                return;
+            };
+            if let Some(governor) = crate::global_governor() {
+                if let Err(message) = governor
+                    .acquire(
+                        provider_id,
+                        key_id,
+                        tokio_util::sync::CancellationToken::new(),
+                    )
+                    .await
+                {
+                    send_rpc_failure(writer, request, "rate_limit_cancelled", message).await;
+                    return;
+                }
+            }
+            send_success(
+                writer,
+                &request.request_id,
+                &request.client_id,
+                &request.session_token,
+                serde_json::json!({"acquired": true}),
+            )
+            .await;
+        }
+        names::ENGINE_RATE_LIMIT_COOLDOWN => {
+            let provider_id = request
+                .params
+                .get("provider_id")
+                .and_then(serde_json::Value::as_str);
+            let key_id = request
+                .params
+                .get("key_id")
+                .and_then(serde_json::Value::as_str);
+            let retry_after_ms = request
+                .params
+                .get("retry_after_ms")
+                .and_then(serde_json::Value::as_u64);
+            let (Some(provider_id), Some(key_id)) = (provider_id, key_id) else {
+                send_rpc_failure(
+                    writer,
+                    request,
+                    "invalid_params",
+                    "provider_id and key_id are required".into(),
+                )
+                .await;
+                return;
+            };
+            if let Some(governor) = crate::global_governor() {
+                governor
+                    .record_rate_limit(provider_id, key_id, retry_after_ms)
+                    .await;
+            }
+            send_success(
+                writer,
+                &request.request_id,
+                &request.client_id,
+                &request.session_token,
+                serde_json::json!({"recorded": true}),
             )
             .await;
         }
@@ -2310,6 +2463,24 @@ async fn send_success(
 /// Send an error response.
 async fn send_error(writer: &mut tokio::net::unix::OwnedWriteHalf, error: &DaemonError) {
     let json = serde_json::to_string(error).unwrap_or_default();
+    let _ = writer.write_all(json.as_bytes()).await;
+    let _ = writer.write_all(b"\n").await;
+}
+
+async fn send_rpc_failure(
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    request: &RpcRequest,
+    code: &str,
+    message: String,
+) {
+    let response = RpcResponse {
+        protocol_version: assistant_protocol::v2::PROTOCOL_V2.to_string(),
+        request_id: request.request_id.clone(),
+        success: false,
+        data: None,
+        error: Some(serde_json::json!({"code": code, "message": message})),
+    };
+    let json = serde_json::to_string(&response).unwrap_or_default();
     let _ = writer.write_all(json.as_bytes()).await;
     let _ = writer.write_all(b"\n").await;
 }

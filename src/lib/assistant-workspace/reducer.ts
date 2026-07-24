@@ -186,7 +186,16 @@ function applyEventToLive(
       const attempt = Number(p.attempt ?? 0);
       const snapshot = attempt > 0 ? live.attemptSnapshots?.[attempt] : undefined;
       if (snapshot) {
-        live.blocks = snapshot.map((b) => ({ ...b }));
+        // Text/tool deltas from a failed provider attempt are speculative, but
+        // reasoning is useful context and must not vanish when the engine
+        // retries or reports the attempt failure.
+        const reasoning = live.blocks
+          .filter((b) => b.type === 'reasoning')
+          .map((b) => ({ ...b, live: false }));
+        live.blocks = [
+          ...snapshot.filter((b) => b.type !== 'reasoning').map((b) => ({ ...b })),
+          ...reasoning,
+        ];
         live.attemptSnapshots = { ...(live.attemptSnapshots ?? {}) };
         delete live.attemptSnapshots[attempt];
       }

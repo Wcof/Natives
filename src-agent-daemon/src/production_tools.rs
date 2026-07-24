@@ -544,7 +544,7 @@ impl PermissionGatedTools {
                 input,
                 &self.conversation_id,
                 &self.parent_run_id,
-                None,
+                Some(&self.conversation_id),
                 &identity,
             );
         }

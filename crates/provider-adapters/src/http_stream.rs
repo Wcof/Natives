@@ -1,12 +1,11 @@
 //! Shared HTTP streaming helper for OpenAI-compatible chat completions.
 
 use crate::capabilities::{
-    ProviderError, ProviderErrorCategory, ProviderRequest, ProviderTool, ProviderMessage,
-    ProviderContentBlock,
+    ProviderContentBlock, ProviderError, ProviderErrorCategory, ProviderMessage, ProviderRequest,
+    ProviderTool,
 };
-use crate::stream::{
-    split_sse_lines, sse_data_payload, OpenAiSseParser, ProviderEvent,
-};
+use crate::stream::{split_sse_lines, sse_data_payload, OpenAiSseParser, ProviderEvent};
+use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use reqwest::Client;
 use std::time::Duration;
@@ -123,7 +122,46 @@ fn tool_to_json(tool: &ProviderTool) -> serde_json::Value {
     })
 }
 
-pub fn map_http_status(status: u16, body: &str) -> ProviderError {
+pub fn retry_after_ms(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    if let Some(value) = headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+    {
+        if let Ok(seconds) = value.trim().parse::<u64>() {
+            return Some(seconds.saturating_mul(1_000));
+        }
+        if let Ok(at) = DateTime::parse_from_rfc2822(value) {
+            return at
+                .with_timezone(&Utc)
+                .signed_duration_since(Utc::now())
+                .num_milliseconds()
+                .try_into()
+                .ok();
+        }
+    }
+    headers
+        .get("x-ratelimit-reset")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<i128>().ok())
+        .and_then(|epoch| {
+            let now_ms = i128::from(Utc::now().timestamp_millis());
+            let reset_ms = if epoch > 10_000_000_000 {
+                epoch
+            } else {
+                epoch.saturating_mul(1_000)
+            };
+            reset_ms
+                .saturating_sub(now_ms)
+                .try_into()
+                .ok()
+        })
+}
+
+pub fn map_http_status(
+    status: u16,
+    body: &str,
+    headers: Option<&reqwest::header::HeaderMap>,
+) -> ProviderError {
     let category = match status {
         401 | 403 => ProviderErrorCategory::Auth,
         429 => ProviderErrorCategory::RateLimit,
@@ -142,11 +180,17 @@ pub fn map_http_status(status: u16, body: &str) -> ProviderError {
             | ProviderErrorCategory::Timeout
             | ProviderErrorCategory::Network
     );
+
+    let retry_after_ms = (status == 429)
+        .then(|| headers.and_then(retry_after_ms))
+        .flatten();
+
     ProviderError {
         code: format!("http_{status}"),
         message: redact_http_body(body),
         category,
         retryable,
+        retry_after_ms,
     }
 }
 
@@ -166,10 +210,7 @@ pub async fn stream_chat_completions(
 {
     let mut request = request;
     request.stream = true;
-    let url = format!(
-        "{}/chat/completions",
-        base_url.trim_end_matches('/')
-    );
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let body = build_chat_completions_body(&request);
 
     let response = client
@@ -185,12 +226,14 @@ pub async fn stream_chat_completions(
             message: e.to_string(),
             category: ProviderErrorCategory::Network,
             retryable: true,
+            retry_after_ms: None,
         })?;
 
     let status = response.status().as_u16();
     if !response.status().is_success() {
+        let headers = response.headers().clone();
         let text = response.text().await.unwrap_or_default();
-        return Err(map_http_status(status, &text));
+        return Err(map_http_status(status, &text, Some(&headers)));
     }
 
     let byte_stream = response.bytes_stream();
@@ -220,6 +263,7 @@ pub async fn stream_chat_completions(
                         message: err.to_string(),
                         category: ProviderErrorCategory::Network,
                         retryable: true,
+                        retry_after_ms: None,
                     });
                     return;
                 }
@@ -266,12 +310,14 @@ pub async fn stream_responses(
             message: e.to_string(),
             category: ProviderErrorCategory::Network,
             retryable: true,
+            retry_after_ms: None,
         })?;
 
     let status = response.status().as_u16();
     if !response.status().is_success() {
+        let headers = response.headers().clone();
         let text = response.text().await.unwrap_or_default();
-        return Err(map_http_status(status, &text));
+        return Err(map_http_status(status, &text, Some(&headers)));
     }
 
     let byte_stream = response.bytes_stream();
@@ -300,6 +346,7 @@ pub async fn stream_responses(
                         message: err.to_string(),
                         category: ProviderErrorCategory::Network,
                         retryable: true,
+                        retry_after_ms: None,
                     });
                     return;
                 }
@@ -398,14 +445,17 @@ pub async fn chat_completions(
     base_url: &str,
     api_key: &str,
     request: ProviderRequest,
-) -> Result<(String, Option<Vec<(String, String, String)>>, crate::capabilities::ProviderUsage), ProviderError>
-{
+) -> Result<
+    (
+        String,
+        Option<Vec<(String, String, String)>>,
+        crate::capabilities::ProviderUsage,
+    ),
+    ProviderError,
+> {
     let mut request = request;
     request.stream = false;
-    let url = format!(
-        "{}/chat/completions",
-        base_url.trim_end_matches('/')
-    );
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let body = build_chat_completions_body(&request);
 
     let response = client
@@ -421,17 +471,20 @@ pub async fn chat_completions(
             message: e.to_string(),
             category: ProviderErrorCategory::Network,
             retryable: true,
+            retry_after_ms: None,
         })?;
 
     let status = response.status().as_u16();
+    let headers = response.headers().clone();
     let text = response.text().await.map_err(|e| ProviderError {
         code: "network".into(),
         message: e.to_string(),
         category: ProviderErrorCategory::Network,
         retryable: true,
+        retry_after_ms: None,
     })?;
     if !(200..300).contains(&status) {
-        return Err(map_http_status(status, &text));
+        return Err(map_http_status(status, &text, Some(&headers)));
     }
 
     let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| ProviderError {
@@ -439,6 +492,7 @@ pub async fn chat_completions(
         message: e.to_string(),
         category: ProviderErrorCategory::ServerError,
         retryable: false,
+        retry_after_ms: None,
     })?;
 
     let content = value["choices"][0]["message"]["content"]
@@ -450,7 +504,10 @@ pub async fn chat_completions(
         for tc in arr {
             let id = tc["id"].as_str().unwrap_or("").to_string();
             let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
-            let args = tc["function"]["arguments"].as_str().unwrap_or("{}").to_string();
+            let args = tc["function"]["arguments"]
+                .as_str()
+                .unwrap_or("{}")
+                .to_string();
             tool_calls.push((id, name, args));
         }
     }
@@ -567,5 +624,38 @@ mod tool_message_tests {
         assert_eq!(json["role"], "tool");
         assert_eq!(json["tool_call_id"], "t1");
         assert_eq!(json["content"], "ok");
+    }
+
+    #[test]
+    fn retry_after_parses_seconds_http_date_and_reset_epoch() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::RETRY_AFTER, "3".parse().unwrap());
+        assert_eq!(retry_after_ms(&headers), Some(3_000));
+
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            (Utc::now() + chrono::Duration::seconds(3))
+                .to_rfc2822()
+                .parse()
+                .unwrap(),
+        );
+        assert!(matches!(retry_after_ms(&headers), Some(ms) if (1_000..=3_000).contains(&ms)));
+
+        headers.remove(reqwest::header::RETRY_AFTER);
+        headers.insert(
+            "x-ratelimit-reset",
+            (Utc::now().timestamp() + 3).to_string().parse().unwrap(),
+        );
+        assert!(matches!(retry_after_ms(&headers), Some(ms) if (2_000..=3_000).contains(&ms)));
+    }
+
+    #[test]
+    fn rate_limit_error_includes_retry_after_when_available() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::RETRY_AFTER, "2".parse().unwrap());
+        let error = map_http_status(429, "too many requests", Some(&headers));
+        assert_eq!(error.category, ProviderErrorCategory::RateLimit);
+        assert_eq!(error.retry_after_ms, Some(2_000));
+        assert!(serde_json::to_string(&error).is_ok());
     }
 }

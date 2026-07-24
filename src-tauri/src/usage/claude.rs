@@ -631,6 +631,12 @@ pub fn claude_source_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn claude_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     #[test]
     fn claude_reads_model_from_message() {
@@ -842,6 +848,7 @@ mod tests {
 
     #[test]
     fn claude_counts_serde_success_on_real_session_file() {
+        let _env_lock = claude_env_lock();
         let src = dirs::home_dir()
             .unwrap()
             .join(".claude/projects/-Users-ldh-Downloads-project-AiNative-Natives/a7631756-153f-4fec-8c33-54f4a5568cc7.jsonl");
@@ -862,7 +869,8 @@ mod tests {
         let now = crate::usage::now_ms();
         let local = tz.timestamp_millis_opt(now).single().unwrap();
         let midnight = local.date_naive().and_hms_opt(0, 0, 0).unwrap();
-        let start = tz.from_local_datetime(&midnight).unwrap().timestamp_millis();
+        let start = tz.from_local_datetime(&midnight).unwrap().timestamp_millis()
+            - 14 * 24 * 60 * 60 * 1_000;
         for line in reader.lines() {
             let Ok(line) = line else { continue };
             lines += 1;
@@ -930,6 +938,7 @@ mod tests {
 
     #[test]
     fn claude_scans_real_home_file_via_config_dir_override() {
+        let _env_lock = claude_env_lock();
         // Copy the largest real today session into a temp CLAUDE_CONFIG_DIR and
         // ensure the Rust scanner sees multi-million tokens (not ~1.1M).
         let src = dirs::home_dir()
@@ -966,7 +975,8 @@ mod tests {
         let now = crate::usage::now_ms();
         let local = tz.timestamp_millis_opt(now).single().unwrap();
         let midnight = local.date_naive().and_hms_opt(0, 0, 0).unwrap();
-        let start = tz.from_local_datetime(&midnight).unwrap().timestamp_millis();
+        let start = tz.from_local_datetime(&midnight).unwrap().timestamp_millis()
+            - 14 * 24 * 60 * 60 * 1_000;
         let result = scan_claude_logs(start, now, &tz);
         std::env::remove_var("CLAUDE_CONFIG_DIR");
         let total: i64 = result.daily.iter().map(|r| r.total_tokens.unwrap_or(0)).sum();
@@ -988,6 +998,7 @@ mod tests {
 
     #[test]
     fn claude_scans_fixture_with_real_stream_shape() {
+        let _env_lock = claude_env_lock();
         // Real Claude Code lines often include nested usage fields
         // (server_tool_use, cache_creation, etc). Ensure we still parse them.
         let root = std::env::temp_dir().join(format!(

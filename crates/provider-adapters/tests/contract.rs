@@ -2,10 +2,10 @@
 //!
 //! Every registered adapter must satisfy the same contract suite.
 
-use provider_adapters::capabilities::*;
-use provider_adapters::capabilities::contract_tests::run_contract_tests;
-use assistant_protocol::v1::provider::{ProviderType, ModelCapabilities};
+use assistant_protocol::v1::provider::{ModelCapabilities, ProviderType};
 use async_trait::async_trait;
+use provider_adapters::capabilities::contract_tests::run_contract_tests;
+use provider_adapters::capabilities::*;
 
 /// Mock adapter for contract testing.
 struct MockAdapter;
@@ -47,7 +47,10 @@ impl ProviderAdapter for MockAdapter {
     async fn chat_stream(
         &self,
         _request: ProviderRequest,
-    ) -> Result<Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>, ProviderError> {
+    ) -> Result<
+        Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>,
+        ProviderError,
+    > {
         let stream = tokio_stream::iter(vec![
             ProviderStreamEvent::TextDelta("Mock ".to_string()),
             ProviderStreamEvent::TextDelta("response".to_string()),
@@ -57,24 +60,22 @@ impl ProviderAdapter for MockAdapter {
     }
 
     async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
-        Ok(vec![
-            ModelInfo {
-                id: "gpt-4".to_string(),
-                display_name: Some("GPT-4".to_string()),
-                context_window: 8192,
-                max_output: 4096,
-                capabilities: ModelCapabilities {
-                    streaming: true,
-                    image_input: true,
-                    file_input: true,
-                    reasoning: false,
-                    tool_calling: true,
-                    structured_output: true,
-                    function_calling: true,
-                    system_prompt: true,
-                },
+        Ok(vec![ModelInfo {
+            id: "gpt-4".to_string(),
+            display_name: Some("GPT-4".to_string()),
+            context_window: 8192,
+            max_output: 4096,
+            capabilities: ModelCapabilities {
+                streaming: true,
+                image_input: true,
+                file_input: true,
+                reasoning: false,
+                tool_calling: true,
+                structured_output: true,
+                function_calling: true,
+                system_prompt: true,
             },
-        ])
+        }])
     }
 
     async fn test_connection(&self) -> Result<ProviderTestResult, ProviderError> {
@@ -148,6 +149,7 @@ fn test_provider_error_serialization() {
         message: "Too many requests".to_string(),
         category: ProviderErrorCategory::RateLimit,
         retryable: true,
+        retry_after_ms: None,
     };
     let json = serde_json::to_string(&error).unwrap();
     assert!(json.contains("rate_limit_exceeded"));

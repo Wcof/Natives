@@ -27,6 +27,7 @@ pub enum ProviderEvent {
 struct ChatChunk {
     choices: Option<Vec<ChatChoice>>,
     usage: Option<UsageWire>,
+    error: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -105,11 +106,41 @@ impl OpenAiSseParser {
                     message: format!("Invalid SSE JSON: {err}"),
                     category: ProviderErrorCategory::ServerError,
                     retryable: false,
+                    retry_after_ms: None,
                 })];
             }
         };
 
         let mut events = Vec::new();
+
+        if let Some(error) = chunk.error {
+            let message = error
+                .get("message")
+                .and_then(|value| value.as_str())
+                .unwrap_or("provider stream error")
+                .chars()
+                .take(400)
+                .collect::<String>();
+            let rate_limited = error
+                .get("type")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+                .contains("rate")
+                || message.to_ascii_lowercase().contains("rate limit");
+            events.push(ProviderEvent::Error(ProviderError {
+                code: "chat_stream_error".into(),
+                message,
+                category: if rate_limited {
+                    ProviderErrorCategory::RateLimit
+                } else {
+                    ProviderErrorCategory::ServerError
+                },
+                retryable: true,
+                retry_after_ms: None,
+            }));
+            return events;
+        }
 
         if let Some(usage) = chunk.usage {
             events.push(ProviderEvent::Usage(ProviderUsage {

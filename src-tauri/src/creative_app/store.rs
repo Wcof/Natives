@@ -306,6 +306,12 @@ pub fn mask_token(token: &str) -> String {
 mod tests {
     use super::*;
     use crate::db::{apply_migrations, create_tables};
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_key_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     fn mem() -> Connection {
         // Clear process-global env key cache so in-memory DBs don't reuse another test's key.
@@ -320,6 +326,7 @@ mod tests {
 
     #[test]
     fn crud_and_cascade_env() {
+        let _lock = env_key_lock();
         let conn = mem();
         let now = chrono::Utc::now().to_rfc3339();
         let rec = ExternalCreativeAppRecord {
@@ -365,6 +372,7 @@ mod tests {
 
     #[test]
     fn token_mask_and_roundtrip() {
+        let _lock = env_key_lock();
         let conn = mem();
         // Serialize against other env tests that share process-global key cache.
         set_github_token(&conn, "ghp_abcdefghijklmnop").unwrap();

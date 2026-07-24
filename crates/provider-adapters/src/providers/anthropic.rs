@@ -167,6 +167,7 @@ impl ProviderAdapter for AnthropicAdapter {
                 message: "Anthropic API key required (offline mock removed)".into(),
                 category: ProviderErrorCategory::Auth,
                 retryable: false,
+                retry_after_ms: None,
             });
         }
         let mut text = String::new();
@@ -206,6 +207,7 @@ impl ProviderAdapter for AnthropicAdapter {
             message: "Use stream(request, credential) for Anthropic; offline mock removed".into(),
             category: ProviderErrorCategory::Auth,
             retryable: false,
+            retry_after_ms: None,
         })
     }
     async fn stream(
@@ -224,6 +226,7 @@ impl ProviderAdapter for AnthropicAdapter {
                 message: "Anthropic API key required".into(),
                 category: ProviderErrorCategory::Auth,
                 retryable: false,
+                retry_after_ms: None,
             })?
         };
         let base = credential
@@ -247,12 +250,14 @@ impl ProviderAdapter for AnthropicAdapter {
                 message: e.to_string(),
                 category: ProviderErrorCategory::Network,
                 retryable: true,
+                retry_after_ms: None,
             })?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
+            let headers = response.headers().clone();
             let text = response.text().await.unwrap_or_default();
-            return Err(crate::http_stream::map_http_status(status, &text));
+            return Err(crate::http_stream::map_http_status(status, &text, Some(&headers)));
         }
 
         let byte_stream = response.bytes_stream();
@@ -282,6 +287,7 @@ impl ProviderAdapter for AnthropicAdapter {
                             message: err.to_string(),
                             category: ProviderErrorCategory::Network,
                             retryable: true,
+                            retry_after_ms: None,
                         });
                         return;
                     }

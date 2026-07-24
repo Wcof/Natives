@@ -90,6 +90,7 @@ impl ProviderAdapter for OllamaAdapter {
             message: "Use stream(request, credential) for Ollama; offline mock removed".into(),
             category: ProviderErrorCategory::Auth,
             retryable: false,
+            retry_after_ms: None,
         })
     }
     async fn stream(

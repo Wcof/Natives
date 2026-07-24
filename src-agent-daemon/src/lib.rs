@@ -12,6 +12,7 @@ pub mod codex_runtime_bridge;
 pub mod conversation_store;
 pub mod event_log;
 pub mod extension_store;
+pub mod governor;
 pub mod interaction_store;
 pub mod mcp_runtime;
 pub mod memory_store;
@@ -32,6 +33,16 @@ pub mod skill_store;
 pub mod storage;
 pub mod subagent_store;
 pub mod task_store;
+
+use governor::ProviderRequestGovernor;
+use std::sync::Arc;
+use std::sync::OnceLock;
+
+pub static GLOBAL_GOVERNOR: OnceLock<Arc<ProviderRequestGovernor>> = OnceLock::new();
+
+pub fn global_governor() -> Option<Arc<ProviderRequestGovernor>> {
+    GLOBAL_GOVERNOR.get().cloned()
+}
 
 pub use authority::{
     build_execution_authority, AuthorityError, EmbeddedAuthority, ExecutionAuthority, UdsAuthority,

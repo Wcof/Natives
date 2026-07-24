@@ -1476,6 +1476,7 @@ export const en = {
       hideDetails: 'Hide request details',
       allowOnce: 'Allow once',
       allowThisRun: 'Always allow this run',
+      allowSession: 'Always allow this session',
       allowProject: 'Always allow for this project',
       reject: 'Reject',
       processing: 'Processing…',
@@ -1629,5 +1630,21 @@ export const en = {
     color: 'Color',
     thickness: 'Thickness',
     undo: 'Undo ⌘Z',
+  },
+
+  // ── Rate Limit ──
+  rateLimit: {
+    title: 'Model Request Rate',
+    enabled: 'Enable rate limit',
+    disabled: 'Rate limit disabled',
+    rpm: 'Requests per minute',
+    rpmRange: 'Range: 1–600',
+    intervalHint: 'Min interval per API Key: ~{seconds}s',
+    queued: 'Queued requests',
+    cooling: 'Cooling routes',
+    save: 'Save',
+    saveSuccess: 'Rate limit settings saved',
+    saveFailed: 'Failed to save rate limit settings',
+    invalidRpm: 'RPM must be an integer between 1 and 600',
   },
 };

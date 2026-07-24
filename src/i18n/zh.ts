@@ -1464,6 +1464,7 @@ export const zh = {
       hideDetails: '收起详细参数',
       allowOnce: '仅允许本次',
       allowThisRun: '本次运行始终允许',
+      allowSession: '当前会话始终允许',
       allowProject: '当前项目始终允许',
       reject: '拒绝',
       processing: '处理中…',
@@ -1617,5 +1618,21 @@ export const zh = {
     color: '颜色',
     thickness: '粗细',
     undo: '撤销 ⌘Z',
+  },
+
+  // ── Rate Limit ──
+  rateLimit: {
+    title: '模型请求速率',
+    enabled: '启用速率限制',
+    disabled: '速率限制已关闭',
+    rpm: '每分钟请求数',
+    rpmRange: '范围：1–600',
+    intervalHint: '同一 API Key 最短间隔约 {seconds} 秒',
+    queued: '排队请求',
+    cooling: '冷却中的 Key',
+    save: '保存配置',
+    saveSuccess: '速率限制配置已保存',
+    saveFailed: '保存速率限制配置失败',
+    invalidRpm: 'RPM 必须为 1–600 之间的整数',
   },
 };

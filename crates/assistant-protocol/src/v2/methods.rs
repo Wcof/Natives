@@ -81,6 +81,10 @@ pub const ALL_METHODS: &[&str] = &[
     "scheduler.delete",
     "scheduler.history",
     "scheduler.tick",
+    "engine.rateLimit.get",
+    "engine.rateLimit.update",
+    "engine.rateLimit.acquire",
+    "engine.rateLimit.cooldown",
 ];
 
 /// Methods actually handled by the Agent Daemon RPC (must match `rpc.rs`).
@@ -156,6 +160,10 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "subagent.list",
     "subagent.touch",
     "subagent.switchRoute",
+    "engine.rateLimit.get",
+    "engine.rateLimit.update",
+    "engine.rateLimit.acquire",
+    "engine.rateLimit.cooldown",
 ];
 
 /// Methods the Tauri host still owns after Phase 0 cutover.
@@ -254,6 +262,10 @@ pub mod names {
     pub const SCHEDULER_DELETE: &str = "scheduler.delete";
     pub const SCHEDULER_HISTORY: &str = "scheduler.history";
     pub const SCHEDULER_TICK: &str = "scheduler.tick";
+    pub const ENGINE_RATE_LIMIT_GET: &str = "engine.rateLimit.get";
+    pub const ENGINE_RATE_LIMIT_UPDATE: &str = "engine.rateLimit.update";
+    pub const ENGINE_RATE_LIMIT_ACQUIRE: &str = "engine.rateLimit.acquire";
+    pub const ENGINE_RATE_LIMIT_COOLDOWN: &str = "engine.rateLimit.cooldown";
 }
 
 /// Returns true if `method` is a known v2 RPC method.
@@ -315,6 +327,10 @@ mod tests {
             "mcp.list",
             "artifact.list",
             "scheduler.list",
+            "engine.rateLimit.get",
+            "engine.rateLimit.update",
+            "engine.rateLimit.acquire",
+            "engine.rateLimit.cooldown",
         ] {
             assert!(is_known_method(required), "missing method: {required}");
         }

@@ -32,8 +32,7 @@ impl NativesDbBroker {
         if !path.exists() {
             return Err(format!("natives.db not found at {}", path.display()));
         }
-        let conn = Connection::open(&path)
-            .map_err(|e| format!("open natives.db failed: {e}"))?;
+        let conn = Connection::open(&path).map_err(|e| format!("open natives.db failed: {e}"))?;
         // Best-effort read-only pragma (may fail if already WAL-opened elsewhere).
         let _ = conn.execute_batch("PRAGMA query_only=ON; PRAGMA busy_timeout=3000;");
         Ok(Self {
@@ -146,8 +145,7 @@ fn envelope_decrypt(
         return Err("DEK package too short".into());
     }
     let (kek_nonce, dek_ct) = dek_package.split_at(12);
-    let kek_cipher =
-        Aes256Gcm::new_from_slice(&kek).map_err(|e| format!("KEK cipher: {e}"))?;
+    let kek_cipher = Aes256Gcm::new_from_slice(&kek).map_err(|e| format!("KEK cipher: {e}"))?;
     let dek = kek_cipher
         .decrypt(Nonce::from_slice(kek_nonce), dek_ct)
         .map_err(|e| format!("DEK decrypt failed: {e}"))?;
@@ -225,6 +223,44 @@ pub fn try_install_natives_db_broker() -> bool {
     }
 }
 
+pub fn read_setting(key: &str) -> Result<Option<String>, String> {
+    let path = default_natives_db_path();
+    if !path.exists() {
+        return Ok(None);
+    }
+    let conn = Connection::open(&path).map_err(|e| format!("open natives.db failed: {e}"))?;
+    conn.query_row(
+        "SELECT value FROM settings WHERE key = ?1 LIMIT 1",
+        rusqlite::params![key],
+        |row| row.get::<_, String>(0),
+    )
+    .map(Some)
+    .or_else(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => Ok(None),
+        _ => Err(e.to_string()),
+    })
+}
+
+pub fn write_setting(key: &str, value: &str) -> Result<(), String> {
+    let path = default_natives_db_path();
+    let conn = Connection::open(&path).map_err(|e| format!("open natives.db failed: {e}"))?;
+
+    // Ensure settings table exists (fallback for older schema versions)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        rusqlite::params![key, value],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,15 +329,10 @@ mod tests {
     fn resolves_and_decrypts_primary_key() {
         let (_dir, path) = setup_db_with_key("sk-test-secret-key-value");
         let broker = NativesDbBroker::open(&path).unwrap();
-        let cred = broker
-            .resolve("provider-uuid", None, "run-1")
-            .unwrap();
+        let cred = broker.resolve("provider-uuid", None, "run-1").unwrap();
         assert_eq!(cred.api_key, "sk-test-secret-key-value");
         assert_eq!(cred.key_id.as_deref(), Some("k1"));
-        assert_eq!(
-            cred.base_url.as_deref(),
-            Some("https://example.test")
-        );
+        assert_eq!(cred.base_url.as_deref(), Some("https://example.test"));
         assert_eq!(cred.provider_type.as_deref(), Some("anthropic_messages"));
     }
 }

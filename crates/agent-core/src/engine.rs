@@ -145,6 +145,8 @@ pub enum EngineProviderEvent {
         message: String,
         code: String,
         retryable: bool,
+        category: String,
+        retry_after_ms: Option<u64>,
     },
 }
 
@@ -157,6 +159,8 @@ pub enum EngineError {
         message: String,
         code: String,
         retryable: bool,
+        category: String,
+        retry_after_ms: Option<u64>,
     },
     #[error("cancelled")]
     Cancelled,
@@ -179,6 +183,10 @@ impl EngineError {
 
     pub fn retryable(&self) -> bool {
         matches!(self, Self::Provider { retryable: true, .. })
+    }
+
+    pub fn is_rate_limited(&self) -> bool {
+        matches!(self, Self::Provider { category, .. } if category == "RateLimit")
     }
 }
 
@@ -404,7 +412,9 @@ impl AgentEngine {
                                 retrying: true,
                             },
                         );
-                        sleep_provider_backoff(attempt).await;
+                        if !e.is_rate_limited() {
+                            sleep_provider_backoff(attempt).await;
+                        }
                         attempt += 1;
                         continue 'attempts;
                     }
@@ -492,21 +502,25 @@ impl AgentEngine {
                             message,
                             code,
                             retryable,
+                            category,
+                            retry_after_ms,
                         } => {
                             if !saw_generation_delta && retryable && attempt < MAX_PROVIDER_ATTEMPTS {
                                 self.events.append(
                                     run_id,
                                     RunEventKind::GenerationAttemptFailed {
                                         attempt,
-                                        code,
+                                        code: code.clone(),
                                         retryable,
                                         retrying: true,
                                     },
-                            );
-                            sleep_provider_backoff(attempt).await;
-                            attempt += 1;
-                            continue 'attempts;
-                        }
+                                );
+                                if category != "RateLimit" {
+                                    sleep_provider_backoff(attempt).await;
+                                }
+                                attempt += 1;
+                                continue 'attempts;
+                            }
                             if saw_generation_delta {
                                 self.events.append(
                                     run_id,
@@ -529,6 +543,8 @@ impl AgentEngine {
                                 message,
                                 code,
                                 retryable,
+                                category,
+                                retry_after_ms,
                             });
                         }
                         EngineProviderEvent::Completed => {}
@@ -567,6 +583,8 @@ impl AgentEngine {
                         message: "provider returned empty response".into(),
                         code: "EMPTY_RESPONSE".into(),
                         retryable: false,
+                        category: "unknown".into(),
+                        retry_after_ms: None,
                     });
                 }
 
@@ -1650,6 +1668,8 @@ mod tests {
                         message: "temporary provider failure".into(),
                         code: "http_503".into(),
                         retryable: true,
+                        category: "ServerError".into(),
+                        retry_after_ms: None,
                     });
                 }
                 Ok(Box::pin(futures_util::stream::iter(vec![
@@ -1787,6 +1807,8 @@ mod tests {
                     message: "upstream unavailable".into(),
                     code: "http_503".into(),
                     retryable: true,
+                    category: "ServerError".into(),
+                    retry_after_ms: None,
                 }],
                 vec![
                     EngineProviderEvent::TextDelta("ok".into()),
@@ -1837,6 +1859,8 @@ mod tests {
                     message: "stream dropped".into(),
                     code: "http_503".into(),
                     retryable: true,
+                    category: "ServerError".into(),
+                    retry_after_ms: None,
                 },
             ]]),
         };

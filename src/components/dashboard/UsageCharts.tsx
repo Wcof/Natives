@@ -14,6 +14,7 @@ import {
 import { EmptyState } from '@/components/ui/EmptyState';
 import { BarChart3, Clock, Folder, PieChart } from 'lucide-react';
 import { fmtCount, fmtDurationCompact } from '@/lib/format';
+import styles from './UsageDashboard.module.css';
 
 interface Props {
   daily: UsageDailyRecord[];
@@ -241,11 +242,11 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.md }}>
       {/* ── Charts Row ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: SPACING.md }}>
+      <div className={styles.chartsGrid}>
         {/* Token Trend */}
-        <div style={{ padding: SPACING.md, borderRadius: BORDER_RADIUS.md, background: 'var(--bg-2)', border: '0.0625rem solid var(--border)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACING.sm }}>
-            <div style={{ fontSize: FONT_SIZE.xs, fontWeight: 600, color: 'var(--text-dim)' }}>
+        <div className={styles.chartCard}>
+          <div className={styles.chartHeader}>
+            <div className={styles.chartTitle}>
               {t(locale, 'usage.tokenTrend')}
             </div>
 
@@ -278,71 +279,70 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
           </div>
 
           {trend.length > 0 ? (
-            <ResponsiveContainer width="100%" height={180}>
-              {trendMetric === 'token' ? (
-                <BarChart data={trend}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={(v: string) => v.slice(5)} />
-                  <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={compact} />
-                  <Tooltip
-                    content={renderSeriesTooltip}
-                    cursor={{ fill: 'color-mix(in srgb, var(--text) 6%, transparent)' }}
-                    wrapperStyle={{ outline: 'none', zIndex: 20 }}
-                    contentStyle={tipBaseStyle}
-                  />
-                  <Bar dataKey="inputTokens" stackId="a" fill="var(--chart-volume-2)" name={t(locale, 'usage.inputTokens')} />
-                  <Bar dataKey="cacheReadTokens" stackId="a" fill="var(--chart-volume-5)" name={t(locale, 'usage.cacheRead')} />
-                  <Bar dataKey="outputTokens" stackId="a" fill="var(--chart-volume-8)" name={t(locale, 'usage.outputTokens')} />
-                </BarChart>
-              ) : trendMetric === 'cost' ? (
-                <BarChart data={trend}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={(v: string) => v.slice(5)} />
-                  <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={(v: number) => `$${v.toFixed(2)}`} />
-                  <Tooltip
-                    content={renderSeriesTooltip}
-                    cursor={{ fill: 'color-mix(in srgb, var(--text) 6%, transparent)' }}
-                    wrapperStyle={{ outline: 'none', zIndex: 20 }}
-                    contentStyle={tipBaseStyle}
-                  />
-                  <Bar dataKey="costUsd" fill="var(--chart-volume-7)" radius={[2, 2, 0, 0]} name={t(locale, 'usage.costLabel')} />
-                </BarChart>
-              ) : (
-                <BarChart data={trend.map((t_) => ({ ...t_, activeMinutes: (t_.activeSeconds ?? 0) / 60 }))}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={(v: string) => v.slice(5)} />
-                  <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} />
-                  <Tooltip
-                    content={renderSeriesTooltip}
-                    cursor={{ fill: 'color-mix(in srgb, var(--text) 6%, transparent)' }}
-                    wrapperStyle={{ outline: 'none', zIndex: 20 }}
-                    contentStyle={tipBaseStyle}
-                  />
-                  <Bar dataKey="activeMinutes" fill="var(--chart-volume-7)" radius={[2, 2, 0, 0]} name={t(locale, 'usage.estimatedActiveDuration')} />
-                </BarChart>
-              )}
-            </ResponsiveContainer>
+            <div className={styles.chartBody}>
+              <ResponsiveContainer width="100%" height="100%">
+                {trendMetric === 'token' ? (
+                  <BarChart data={trend}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <XAxis dataKey="date" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={(v: string) => v.slice(5)} />
+                    <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={compact} />
+                    <Tooltip
+                      content={renderSeriesTooltip}
+                      cursor={{ fill: 'color-mix(in srgb, var(--text) 6%, transparent)' }}
+                      wrapperStyle={{ outline: 'none', zIndex: 20 }}
+                      contentStyle={tipBaseStyle}
+                    />
+                    <Bar dataKey="inputTokens" stackId="a" fill="var(--chart-volume-2)" name={t(locale, 'usage.inputTokens')} />
+                    <Bar dataKey="cacheReadTokens" stackId="a" fill="var(--chart-volume-5)" name={t(locale, 'usage.cacheRead')} />
+                    <Bar dataKey="outputTokens" stackId="a" fill="var(--chart-volume-8)" name={t(locale, 'usage.outputTokens')} />
+                  </BarChart>
+                ) : trendMetric === 'cost' ? (
+                  <BarChart data={trend}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <XAxis dataKey="date" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={(v: string) => v.slice(5)} />
+                    <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={(v: number) => `$${v.toFixed(2)}`} />
+                    <Tooltip
+                      content={renderSeriesTooltip}
+                      cursor={{ fill: 'color-mix(in srgb, var(--text) 6%, transparent)' }}
+                      wrapperStyle={{ outline: 'none', zIndex: 20 }}
+                      contentStyle={tipBaseStyle}
+                    />
+                    <Bar dataKey="costUsd" fill="var(--chart-volume-7)" radius={[2, 2, 0, 0]} name={t(locale, 'usage.costLabel')} />
+                  </BarChart>
+                ) : (
+                  <BarChart data={trend.map((t_) => ({ ...t_, activeMinutes: (t_.activeSeconds ?? 0) / 60 }))}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <XAxis dataKey="date" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={(v: string) => v.slice(5)} />
+                    <YAxis tick={{ fontSize: 9, fill: 'var(--text-dim)' }} />
+                    <Tooltip
+                      content={renderSeriesTooltip}
+                      cursor={{ fill: 'color-mix(in srgb, var(--text) 6%, transparent)' }}
+                      wrapperStyle={{ outline: 'none', zIndex: 20 }}
+                      contentStyle={tipBaseStyle}
+                    />
+                    <Bar dataKey="activeMinutes" fill="var(--chart-volume-7)" radius={[2, 2, 0, 0]} name={t(locale, 'usage.estimatedActiveDuration')} />
+                  </BarChart>
+                )}
+              </ResponsiveContainer>
+            </div>
           ) : (
-            <EmptyState icon={<BarChart3 size={20} />} title={t(locale, 'usage.noTrendData')} description="" />
+            <div className={styles.chartBody}>
+              <EmptyState icon={<BarChart3 size={20} />} title={t(locale, 'usage.noTrendData')} description="" />
+            </div>
           )}
         </div>
 
         {/* Hourly Heatmap (GitHub-style 7x24 Grid) */}
         <div
           ref={heatWrapRef}
+          className={styles.chartCard}
           style={{
-            padding: SPACING.md,
-            borderRadius: BORDER_RADIUS.md,
-            background: 'var(--bg-2)',
-            border: '0.0625rem solid var(--border)',
-            display: 'flex',
-            flexDirection: 'column',
             position: 'relative',
             overflow: 'visible',
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACING.sm }}>
-            <div style={{ fontSize: FONT_SIZE.xs, fontWeight: 600, color: 'var(--text-dim)' }}>
+          <div className={styles.chartHeader}>
+            <div className={styles.chartTitle}>
               {t(locale, 'usage.hourlyHeatmap')}
             </div>
 
@@ -375,8 +375,8 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
           </div>
 
           {heatmap.length > 0 && hasHourlySources ? (
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-              <div style={{ display: 'flex', gap: 8 }}>
+            <div className={styles.chartBody} style={{ alignItems: 'stretch' }}>
+              <div style={{ flex: 1, display: 'flex', gap: 8 }}>
                 {/* Day labels */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 3, justifyContent: 'space-between', paddingBottom: 14 }}>
                   {DAY_LABELS.map((day) => (
@@ -510,7 +510,7 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
               ) : null}
             </div>
           ) : (
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div className={styles.chartBody}>
               <EmptyState icon={<Clock size={20} />} title={t(locale, 'usage.noHourlyActivity')} description="" />
             </div>
           )}
@@ -518,91 +518,109 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
       </div>
 
       {/* ── Distribution Row ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: SPACING.md }}>
+      <div className={styles.distGrid}>
         {/* Source Distribution */}
-        <div style={{ padding: SPACING.md, borderRadius: BORDER_RADIUS.md, background: 'var(--bg-2)', border: '0.0625rem solid var(--border)' }}>
-          <div style={{ fontSize: FONT_SIZE.xs, fontWeight: 600, color: 'var(--text-dim)', marginBottom: SPACING.sm }}>{t(locale, 'usage.sourceDistribution')}</div>
+        <div className={styles.chartCard}>
+          <div className={styles.chartHeader}>
+            <div className={styles.chartTitle}>{t(locale, 'usage.sourceDistribution')}</div>
+          </div>
           {sourceDist.length > 0 ? (
-            <ResponsiveContainer width="100%" height={180}>
-              <BarChart data={sourceDist} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={compact} />
-                <YAxis type="category" dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} width={60} />
-                <Tooltip
-                  content={(p) => renderDistTooltip(p, 'source')}
-                  cursor={{ fill: 'color-mix(in srgb, var(--text) 6%, transparent)' }}
-                  wrapperStyle={{ outline: 'none', zIndex: 20 }}
-                  contentStyle={tipBaseStyle}
-                />
-                <Bar dataKey="totalTokens" radius={[0, 2, 2, 0]} name={t(locale, 'usage.totalTokens')}>
-                  {sourceDist.map((entry, index) => {
-                    const maxVal = Math.max(...sourceDist.map((d) => d.totalTokens ?? 0));
-                    const level = getChartVolumeLevel(entry.totalTokens ?? 0, maxVal);
-                    return <Cell key={`cell-${index}`} fill={`var(--chart-volume-${level})`} />;
-                  })}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            <div className={styles.chartBody}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={sourceDist} layout="vertical">
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={compact} />
+                  <YAxis type="category" dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} width={60} />
+                  <Tooltip
+                    content={(p) => renderDistTooltip(p, 'source')}
+                    cursor={{ fill: 'color-mix(in srgb, var(--text) 6%, transparent)' }}
+                    wrapperStyle={{ outline: 'none', zIndex: 20 }}
+                    contentStyle={tipBaseStyle}
+                  />
+                  <Bar dataKey="totalTokens" radius={[0, 2, 2, 0]} name={t(locale, 'usage.totalTokens')}>
+                    {sourceDist.map((entry, index) => {
+                      const maxVal = Math.max(...sourceDist.map((d) => d.totalTokens ?? 0));
+                      const level = getChartVolumeLevel(entry.totalTokens ?? 0, maxVal);
+                      return <Cell key={`cell-${index}`} fill={`var(--chart-volume-${level})`} />;
+                    })}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           ) : (
-            <EmptyState icon={<PieChart size={20} />} title={t(locale, 'usage.noSourceData')} description="" />
+            <div className={styles.chartBody}>
+              <EmptyState icon={<PieChart size={20} />} title={t(locale, 'usage.noSourceData')} description="" />
+            </div>
           )}
         </div>
 
         {/* Model Distribution */}
-        <div style={{ padding: SPACING.md, borderRadius: BORDER_RADIUS.md, background: 'var(--bg-2)', border: '0.0625rem solid var(--border)' }}>
-          <div style={{ fontSize: FONT_SIZE.xs, fontWeight: 600, color: 'var(--text-dim)', marginBottom: SPACING.sm }}>{t(locale, 'usage.modelDistribution')}</div>
+        <div className={styles.chartCard}>
+          <div className={styles.chartHeader}>
+            <div className={styles.chartTitle}>{t(locale, 'usage.modelDistribution')}</div>
+          </div>
           {modelDist.length > 0 ? (
-            <ResponsiveContainer width="100%" height={180}>
-              <BarChart data={modelDist} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={compact} />
-                <YAxis type="category" dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} width={80} />
-                <Tooltip
-                  content={(p) => renderDistTooltip(p, 'model')}
-                  cursor={{ fill: 'color-mix(in srgb, var(--text) 6%, transparent)' }}
-                  wrapperStyle={{ outline: 'none', zIndex: 20 }}
-                  contentStyle={tipBaseStyle}
-                />
-                <Bar dataKey="totalTokens" radius={[0, 2, 2, 0]} name={t(locale, 'usage.totalTokens')}>
-                  {modelDist.map((entry, index) => {
-                    const maxVal = Math.max(...modelDist.map((d) => d.totalTokens ?? 0));
-                    const level = getChartVolumeLevel(entry.totalTokens ?? 0, maxVal);
-                    return <Cell key={`cell-${index}`} fill={`var(--chart-volume-${level})`} />;
-                  })}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            <div className={styles.chartBody}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={modelDist} layout="vertical">
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={compact} />
+                  <YAxis type="category" dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} width={80} />
+                  <Tooltip
+                    content={(p) => renderDistTooltip(p, 'model')}
+                    cursor={{ fill: 'color-mix(in srgb, var(--text) 6%, transparent)' }}
+                    wrapperStyle={{ outline: 'none', zIndex: 20 }}
+                    contentStyle={tipBaseStyle}
+                  />
+                  <Bar dataKey="totalTokens" radius={[0, 2, 2, 0]} name={t(locale, 'usage.totalTokens')}>
+                    {modelDist.map((entry, index) => {
+                      const maxVal = Math.max(...modelDist.map((d) => d.totalTokens ?? 0));
+                      const level = getChartVolumeLevel(entry.totalTokens ?? 0, maxVal);
+                      return <Cell key={`cell-${index}`} fill={`var(--chart-volume-${level})`} />;
+                    })}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           ) : (
-            <EmptyState icon={<BarChart3 size={20} />} title={t(locale, 'usage.noModelData')} description="" />
+            <div className={styles.chartBody}>
+              <EmptyState icon={<BarChart3 size={20} />} title={t(locale, 'usage.noModelData')} description="" />
+            </div>
           )}
         </div>
 
         {/* Project Distribution */}
-        <div style={{ padding: SPACING.md, borderRadius: BORDER_RADIUS.md, background: 'var(--bg-2)', border: '0.0625rem solid var(--border)' }}>
-          <div style={{ fontSize: FONT_SIZE.xs, fontWeight: 600, color: 'var(--text-dim)', marginBottom: SPACING.sm }}>{t(locale, 'usage.projectDistribution')}</div>
+        <div className={styles.chartCard}>
+          <div className={styles.chartHeader}>
+            <div className={styles.chartTitle}>{t(locale, 'usage.projectDistribution')}</div>
+          </div>
           {projectDist.length > 0 ? (
-            <ResponsiveContainer width="100%" height={180}>
-              <BarChart data={projectDist} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={compact} />
-                <YAxis type="category" dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} width={80} />
-                <Tooltip
-                  content={(p) => renderDistTooltip(p, 'project')}
-                  cursor={{ fill: 'color-mix(in srgb, var(--text) 6%, transparent)' }}
-                  wrapperStyle={{ outline: 'none', zIndex: 20 }}
-                  contentStyle={tipBaseStyle}
-                />
-                <Bar dataKey="totalTokens" radius={[0, 2, 2, 0]} name={t(locale, 'usage.totalTokens')}>
-                  {projectDist.map((entry, index) => {
-                    const maxVal = Math.max(...projectDist.map((d) => d.totalTokens ?? 0));
-                    const level = getChartVolumeLevel(entry.totalTokens ?? 0, maxVal);
-                    return <Cell key={`cell-${index}`} fill={`var(--chart-volume-${level})`} />;
-                  })}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            <div className={styles.chartBody}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={projectDist} layout="vertical">
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} tickFormatter={compact} />
+                  <YAxis type="category" dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-dim)' }} width={80} />
+                  <Tooltip
+                    content={(p) => renderDistTooltip(p, 'project')}
+                    cursor={{ fill: 'color-mix(in srgb, var(--text) 6%, transparent)' }}
+                    wrapperStyle={{ outline: 'none', zIndex: 20 }}
+                    contentStyle={tipBaseStyle}
+                  />
+                  <Bar dataKey="totalTokens" radius={[0, 2, 2, 0]} name={t(locale, 'usage.totalTokens')}>
+                    {projectDist.map((entry, index) => {
+                      const maxVal = Math.max(...projectDist.map((d) => d.totalTokens ?? 0));
+                      const level = getChartVolumeLevel(entry.totalTokens ?? 0, maxVal);
+                      return <Cell key={`cell-${index}`} fill={`var(--chart-volume-${level})`} />;
+                    })}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           ) : (
-            <EmptyState icon={<Folder size={20} />} title={t(locale, 'usage.noProjectData')} description="" />
+            <div className={styles.chartBody}>
+              <EmptyState icon={<Folder size={20} />} title={t(locale, 'usage.noProjectData')} description="" />
+            </div>
           )}
         </div>
       </div>

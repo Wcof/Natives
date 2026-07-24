@@ -299,8 +299,8 @@ export interface RunEvent {
 
 // ─── Interaction / Permission ────────────────────────────
 
-/** Daemon normalizes `run`/`session` → `this_run`; prefer sending `this_run` from UI. */
-export type PermissionScope = 'once' | 'this_run' | 'run' | 'project' | 'global';
+/** Native grant scope; `session` is the current conversation across its runs. */
+export type PermissionScope = 'once' | 'this_run' | 'session' | 'run' | 'project' | 'global';
 
 export interface PermissionInteraction {
   kind: 'permission';
@@ -609,4 +609,8 @@ export type AssistantMethod =
   | 'scheduler.history'
   | 'scheduler.tick'
   | 'extension.list'
-  | 'extension.enable';
+  | 'extension.enable'
+  | 'engine.rateLimit.get'
+  | 'engine.rateLimit.update'
+  | 'engine.rateLimit.acquire'
+  | 'engine.rateLimit.cooldown';

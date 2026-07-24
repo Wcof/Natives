@@ -540,20 +540,6 @@ export default function Sidebar({
             </div>
           )}
 
-          {/* 设置模式下：直接在标题栏加入“返回首页”交互按钮 */}
-          {isSettingsMode && (
-            <button
-              type="button"
-              onClick={() => selectNavigation('dashboard', '__dashboard__')}
-              className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)] transition-all font-medium shrink-0 ml-1"
-              title={t(locale, 'settings.backHome')}
-              aria-label={t(locale, 'settings.backHome')}
-            >
-              <ArrowLeft size={13} />
-              {!isCollapsed && <span>{t(locale, 'settings.backHome')}</span>}
-            </button>
-          )}
-
           {/* 中间弹性拖拽条：不覆盖两侧交互控件 */}
           {!isCollapsed && (
             <div className="titlebar-drag-fill" data-tauri-drag-region />
@@ -588,6 +574,24 @@ export default function Sidebar({
         <div className="flex-1 flex flex-col min-h-0 pt-1">
           {/* Settings items — flat nav with five sections */}
           <div className={`flex flex-col gap-0.5 flex-1 overflow-y-auto ${isCollapsed ? 'items-center px-2' : 'px-3'}`}>
+            {/* 返回主页：置于《通用》正上方，严格左对齐 */}
+            <button
+              type="button"
+              onClick={() => selectNavigation('dashboard', '__dashboard__')}
+              title={t(locale, 'settings.backHome')}
+              aria-label={t(locale, 'settings.backHome')}
+              className={
+                isCollapsed
+                  ? 'flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-secondary)] hover:text-[var(--primary)] hover:bg-[var(--border-subtle)] transition-all mb-0.5 shrink-0'
+                  : 'flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[var(--text-secondary)] hover:text-[var(--primary)] hover:bg-[var(--border-subtle)] transition-all font-medium mb-0.5 shrink-0'
+              }
+            >
+              <ArrowLeft size={15} className="shrink-0" />
+              {!isCollapsed && <span className="truncate text-sm">{t(locale, 'settings.backHome')}</span>}
+            </button>
+
+            <div className="w-full my-1 border-t border-[var(--border-subtle)] opacity-50" />
+
             {SETTINGS_NAV_ITEMS.map((item) => {
               const Icon = item.icon;
               const isActive = activeSettingsSection === item.id;

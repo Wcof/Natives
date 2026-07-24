@@ -41,18 +41,18 @@ export interface InteractionPromptShellProps {
 
 const TONE_CLASS: Record<NonNullable<InteractionPromptShellProps['tone']>, string> = {
   warning:
-    'border-yellow-400/30 bg-yellow-50/50 dark:bg-yellow-950/10',
-  neutral: 'border-[var(--border)] bg-[var(--surface)]',
-  accent: 'border-[var(--primary)]/30 bg-[var(--primary)]/5',
+    'border-[var(--warning)]/30 bg-[var(--surface)] shadow-[var(--shadow-modal)]',
+  neutral: 'border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-modal)]',
+  accent: 'border-[var(--primary)]/30 bg-[var(--surface)] shadow-[var(--shadow-modal)]',
 };
 
 const TONE_HEADER: Record<NonNullable<InteractionPromptShellProps['tone']>, string> = {
   warning:
-    'border-yellow-400/20 bg-yellow-50/80 dark:bg-yellow-950/20 text-yellow-700 dark:text-yellow-300',
+    'border-b border-[var(--border-subtle)] bg-[var(--warning-soft)] text-[var(--text)]',
   neutral:
-    'border-[var(--border-subtle)] bg-[var(--surface-hover)]/60 text-[var(--text-secondary)]',
+    'border-b border-[var(--border-subtle)] bg-[var(--surface-hover)]/60 text-[var(--text-secondary)]',
   accent:
-    'border-[var(--primary)]/20 bg-[var(--primary)]/10 text-[var(--text)]',
+    'border-b border-[var(--border-subtle)] bg-[var(--primary-soft)] text-[var(--text)]',
 };
 
 /**
@@ -95,13 +95,13 @@ export function InteractionPromptShell({
       data-submitting={submitting ? 'true' : 'false'}
       tabIndex={-1}
       onKeyDown={onKeyDown}
-      className={`w-full overflow-hidden rounded-xl border shadow-[0_8px_30px_rgba(0,0,0,0.08)] ${TONE_CLASS[tone]}`}
+      className={`w-full overflow-hidden rounded-[var(--radius-lg,14px)] border ${TONE_CLASS[tone]}`}
     >
       <div
-        className={`flex items-center gap-2 border-b px-4 py-2.5 text-xs font-semibold ${TONE_HEADER[tone]}`}
+        className={`flex items-center gap-2 px-4 py-2.5 text-xs font-medium ${TONE_HEADER[tone]}`}
       >
         {icon ? <span className="shrink-0" aria-hidden>{icon}</span> : null}
-        <span className="min-w-0 flex-1 truncate">{title}</span>
+        <span className="min-w-0 flex-1 truncate font-semibold">{title}</span>
         {headerExtra}
         {submitting && processingLabel ? (
           <span
@@ -119,7 +119,7 @@ export function InteractionPromptShell({
       {error ? (
         <div
           role="alert"
-          className="mx-4 mb-3 rounded-lg border border-red-400/30 bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300"
+          className="mx-4 mb-3 rounded-lg border border-[var(--danger)]/30 bg-[var(--danger-soft)] px-3 py-2 text-xs text-[var(--danger)]"
           data-interaction-error
         >
           {error}

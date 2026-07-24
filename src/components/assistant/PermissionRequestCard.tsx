@@ -8,12 +8,13 @@ import {
 } from './InteractionPromptShell';
 
 /** Scope strings accepted by daemon normalize_permission_scope — do not rename. */
-export type PermissionScope = 'once' | 'this_run' | 'project';
+export type PermissionScope = 'once' | 'this_run' | 'session' | 'project';
 
 /** Approve scopes in display order (recommended → broader). */
 export const PERMISSION_APPROVE_SCOPES: readonly PermissionScope[] = [
   'once',
   'this_run',
+  'session',
   'project',
 ] as const;
 
@@ -44,6 +45,7 @@ export type PermissionCopy = {
   hideDetails: string;
   allowOnce: string;
   allowThisRun: string;
+  allowSession: string;
   allowProject: string;
   reject: string;
   processing: string;
@@ -59,6 +61,7 @@ export function permissionCopy(locale: string): PermissionCopy {
     hideDetails: t(locale, 'assistant.permission.hideDetails'),
     allowOnce: t(locale, 'assistant.permission.allowOnce'),
     allowThisRun: t(locale, 'assistant.permission.allowThisRun'),
+    allowSession: t(locale, 'assistant.permission.allowSession'),
     allowProject: t(locale, 'assistant.permission.allowProject'),
     reject: t(locale, 'assistant.permission.reject'),
     processing: t(locale, 'assistant.permission.processing'),
@@ -73,6 +76,8 @@ export function labelForScope(scope: PermissionScope, copy: PermissionCopy): str
       return copy.allowOnce;
     case 'this_run':
       return copy.allowThisRun;
+    case 'session':
+      return copy.allowSession;
     case 'project':
       return copy.allowProject;
     default: {
@@ -146,7 +151,7 @@ export default function PermissionRequestCard({
   return (
     <InteractionPromptShell
       title={copy.title}
-      icon={<Shield size={14} className="text-yellow-600 dark:text-yellow-400" />}
+      icon={<Shield size={14} className="text-[var(--warning)]" />}
       tone="warning"
       submitting={submitting}
       processingLabel={copy.processing}
@@ -155,15 +160,17 @@ export default function PermissionRequestCard({
       data-testid="permission-request-card"
     >
       <div className="space-y-3" data-permission-card data-submitting={submitting ? 'true' : 'false'}>
-        <div className="space-y-1">
-          <div
-            className="break-all text-sm font-mono font-medium text-[var(--text-primary)]"
-            data-permission-tool
-          >
-            {request.toolName}
+        <div className="space-y-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-hover)]/40 p-3">
+          <div className="flex items-center gap-2">
+            <code
+              className="break-all rounded-md bg-[var(--surface)] px-2 py-0.5 text-xs font-mono font-semibold text-[var(--text)] border border-[var(--border-subtle)]"
+              data-permission-tool
+            >
+              {request.toolName}
+            </code>
           </div>
           {request.reason ? (
-            <p className="break-words text-xs text-[var(--text-secondary)]" data-permission-reason>
+            <p className="break-words text-xs text-[var(--text-body)] leading-relaxed" data-permission-reason>
               {request.reason}
             </p>
           ) : null}
@@ -177,23 +184,23 @@ export default function PermissionRequestCard({
               aria-controls={detailsId}
               disabled={submitting}
               onClick={() => setDetailsOpen((open) => !open)}
-              className={`inline-flex items-center gap-1 rounded text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50 ${focusRing}`}
+              className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-colors disabled:opacity-50 ${focusRing}`}
               data-permission-details-toggle
             >
               {detailsOpen ? (
-                <ChevronDown size={12} aria-hidden />
+                <ChevronDown size={13} aria-hidden />
               ) : (
-                <ChevronRight size={12} aria-hidden />
+                <ChevronRight size={13} aria-hidden />
               )}
               {detailsOpen ? copy.hideDetails : copy.showDetails}
             </button>
             {detailsOpen ? (
               <div
                 id={detailsId}
-                className="mt-2 max-w-full overflow-x-auto rounded-lg bg-[var(--surface)] p-2 text-xs font-mono text-[var(--text-secondary)]"
+                className="mt-2 max-w-full overflow-x-auto rounded-lg border border-[var(--border-subtle)] bg-[var(--input-bg)] p-3 text-xs font-mono text-[var(--text-body)]"
                 data-permission-details
               >
-                <pre className="m-0 whitespace-pre-wrap break-all">
+                <pre className="m-0 whitespace-pre-wrap break-all text-[11px] leading-relaxed">
                   {JSON.stringify(request.input, null, 2)}
                 </pre>
               </div>
@@ -214,7 +221,7 @@ export default function PermissionRequestCard({
               data-permission-scope={scope}
               disabled={submitting}
               onClick={() => handleApprove(scope)}
-              className={`w-full rounded-lg px-3 py-2 text-left text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${focusRing} bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-950/30 dark:text-green-400 dark:hover:bg-green-950/50`}
+              className={`w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-left text-xs font-medium text-[var(--text)] transition-all disabled:cursor-not-allowed disabled:opacity-60 hover:bg-[var(--surface-hover)] hover:border-[var(--primary)]/40 ${focusRing}`}
             >
               {labelForScope(scope, copy)}
             </button>
@@ -225,7 +232,7 @@ export default function PermissionRequestCard({
             data-permission-reject
             disabled={submitting}
             onClick={handleReject}
-            className={`w-full rounded-lg border border-red-300/50 bg-transparent px-3 py-2 text-left text-xs font-medium text-red-600 transition-colors disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-800/50 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 ${focusRing}`}
+            className={`w-full rounded-lg border border-[var(--border-subtle)] bg-transparent px-3 py-2 text-left text-xs font-medium text-[var(--danger)] transition-all disabled:cursor-not-allowed disabled:opacity-60 hover:bg-[var(--danger-soft)] hover:border-[var(--danger)]/30 ${focusRing}`}
           >
             {copy.reject}
           </button>

@@ -10,13 +10,13 @@ import {
 
 const source = readFileSync(new URL('./PermissionRequestCard.tsx', import.meta.url), 'utf8');
 
-test('approve scopes keep once / this_run / project semantics and display order', () => {
-  assert.deepEqual([...PERMISSION_APPROVE_SCOPES], ['once', 'this_run', 'project']);
+test('approve scopes keep once / this_run / session / project semantics and display order', () => {
+  assert.deepEqual([...PERMISSION_APPROVE_SCOPES], ['once', 'this_run', 'session', 'project']);
   // Source must pass scope strings through unchanged — no remapping.
   assert.match(source, /onApprove\(request\.id, scope\)/);
   assert.match(source, /data-permission-scope=\{scope\}/);
   assert.equal(source.includes("'always'"), false);
-  assert.equal(source.includes('"session"'), false);
+  assert.match(source, /'session'/);
 });
 
 test('layout: built on InteractionPromptShell; full-width vertical actions', () => {
@@ -32,7 +32,7 @@ test('layout: built on InteractionPromptShell; full-width vertical actions', () 
   assert.equal(source.includes('授权范围'), false);
 });
 
-test('button order: once → this_run → project → reject (reject last)', () => {
+test('button order: once → this_run → session → project → reject (reject last)', () => {
   const actionsIdx = source.indexOf('data-permission-actions');
   assert.ok(actionsIdx > 0);
   const actionsBlock = source.slice(actionsIdx);
@@ -90,6 +90,7 @@ test('permissionCopy exposes all UI strings for locale', () => {
     assert.ok(copy.title);
     assert.ok(copy.allowOnce);
     assert.ok(copy.allowThisRun);
+    assert.ok(copy.allowSession);
     assert.ok(copy.allowProject);
     assert.ok(copy.reject);
     assert.ok(copy.processing);
@@ -97,7 +98,7 @@ test('permissionCopy exposes all UI strings for locale', () => {
     assert.ok(copy.escapeHint);
   }
   // Labels map scopes correctly.
-  const scopes: PermissionScope[] = ['once', 'this_run', 'project'];
+  const scopes: PermissionScope[] = ['once', 'this_run', 'session', 'project'];
   for (const scope of scopes) {
     assert.ok(labelForScope(scope, zh).length > 0);
     assert.ok(labelForScope(scope, en).length > 0);

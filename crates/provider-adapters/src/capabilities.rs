@@ -1,6 +1,6 @@
+use assistant_protocol::v1::provider::{ModelCapabilities, ProviderType};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use assistant_protocol::v1::provider::{ProviderType, ModelCapabilities};
 
 /// Provider capabilities declaration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,8 +40,12 @@ pub struct ProviderMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ProviderContentBlock {
-    Text { text: String },
-    Image { image_url: ImageSource },
+    Text {
+        text: String,
+    },
+    Image {
+        image_url: ImageSource,
+    },
     ToolCall {
         id: String,
         name: String,
@@ -87,9 +91,7 @@ pub fn history_message_to_provider(msg: HistoryMessage) -> ProviderMessage {
         if !calls.is_empty() {
             let mut content = Vec::new();
             if !msg.content.is_empty() {
-                content.push(ProviderContentBlock::Text {
-                    text: msg.content,
-                });
+                content.push(ProviderContentBlock::Text { text: msg.content });
             }
             for call in calls {
                 let input = parse_tool_arguments(&call.arguments);
@@ -131,8 +133,13 @@ pub fn history_message_to_provider(msg: HistoryMessage) -> ProviderMessage {
 }
 
 /// Map a batch of history messages.
-pub fn history_messages_to_provider(messages: impl IntoIterator<Item = HistoryMessage>) -> Vec<ProviderMessage> {
-    messages.into_iter().map(history_message_to_provider).collect()
+pub fn history_messages_to_provider(
+    messages: impl IntoIterator<Item = HistoryMessage>,
+) -> Vec<ProviderMessage> {
+    messages
+        .into_iter()
+        .map(history_message_to_provider)
+        .collect()
 }
 
 fn parse_tool_arguments(arguments: &str) -> serde_json::Value {
@@ -140,7 +147,8 @@ fn parse_tool_arguments(arguments: &str) -> serde_json::Value {
     if trimmed.is_empty() {
         return serde_json::json!({});
     }
-    serde_json::from_str(trimmed).unwrap_or_else(|_| serde_json::Value::String(arguments.to_string()))
+    serde_json::from_str(trimmed)
+        .unwrap_or_else(|_| serde_json::Value::String(arguments.to_string()))
 }
 
 #[cfg(test)]
@@ -252,9 +260,19 @@ pub struct ProviderRequest {
 pub enum ProviderStreamEvent {
     TextDelta(String),
     ReasoningDelta(String),
-    ToolCallBegin { id: String, name: String },
-    ToolCallDelta { id: String, delta: String },
-    ToolCallComplete { id: String, name: String, input: serde_json::Value },
+    ToolCallBegin {
+        id: String,
+        name: String,
+    },
+    ToolCallDelta {
+        id: String,
+        delta: String,
+    },
+    ToolCallComplete {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
     Done(ProviderUsage),
     Error(ProviderError),
 }
@@ -271,7 +289,11 @@ pub struct ProviderResponse {
 pub enum ProviderResponseBlock {
     Text(String),
     Reasoning(String),
-    ToolCall { id: String, name: String, input: serde_json::Value },
+    ToolCall {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
 }
 
 /// Token usage information.
@@ -290,6 +312,8 @@ pub struct ProviderError {
     pub message: String,
     pub category: ProviderErrorCategory,
     pub retryable: bool,
+    #[serde(default)]
+    pub retry_after_ms: Option<u64>,
 }
 
 /// Error category.
@@ -333,7 +357,10 @@ pub trait ProviderAdapter: Send + Sync {
     async fn chat_stream(
         &self,
         request: ProviderRequest,
-    ) -> Result<Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>, ProviderError>;
+    ) -> Result<
+        Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>,
+        ProviderError,
+    >;
 
     /// Authenticated streaming path used by the Agent Engine.
     ///
@@ -434,7 +461,10 @@ pub mod contract_tests {
     pub fn run_contract_tests(adapter: &dyn ProviderAdapter) {
         let caps = adapter.capabilities();
         assert!(!caps.features.is_empty(), "Features should not be empty");
-        assert!(caps.max_context_window > 0, "Max context window should be > 0");
+        assert!(
+            caps.max_context_window > 0,
+            "Max context window should be > 0"
+        );
 
         // Provider type should be set
         let pt = adapter.provider_type();

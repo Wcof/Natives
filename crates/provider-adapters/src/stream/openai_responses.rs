@@ -21,6 +21,7 @@ pub fn parse_responses_event(data: &str) -> Vec<ProviderEvent> {
                 message: format!("Invalid Responses JSON: {err}"),
                 category: ProviderErrorCategory::ServerError,
                 retryable: false,
+                retry_after_ms: None,
             })];
         }
     };
@@ -85,17 +86,25 @@ pub fn parse_responses_event(data: &str) -> Vec<ProviderEvent> {
             events.push(ProviderEvent::Completed);
         }
         "error" => {
+            let message = value
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("responses error")
+                .chars()
+                .take(400)
+                .collect::<String>();
+            let rate_limited = message.to_ascii_lowercase().contains("rate")
+                || value.get("code").and_then(|v| v.as_str()).unwrap_or_default() == "429";
             events.push(ProviderEvent::Error(ProviderError {
                 code: "responses_error".into(),
-                message: value
-                    .get("message")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("responses error")
-                    .chars()
-                    .take(400)
-                    .collect(),
-                category: ProviderErrorCategory::ServerError,
+                message,
+                category: if rate_limited {
+                    ProviderErrorCategory::RateLimit
+                } else {
+                    ProviderErrorCategory::ServerError
+                },
                 retryable: true,
+                retry_after_ms: None,
             }));
         }
         _ => {}

@@ -335,6 +335,41 @@ test('generation attempt discard rolls back partial live text', () => {
   assert.equal(state.liveByRun.r1!.blocks[0]!.text, 'good');
 });
 
+test('generation attempt discard preserves reasoning context', () => {
+  let state = withRun(createInitialWorkspaceState());
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 1, 'generation_attempt_started', { attempt: 1 }),
+  });
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 2, 'reasoning_delta', { text: 'diagnose first path' }),
+  });
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 3, 'text_delta', { text: 'partial' }),
+  });
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 4, 'generation_attempt_discarded', { attempt: 1, reason: 'http_503' }),
+  });
+  const reasoning = state.liveByRun.r1!.blocks.find((b) => b.type === 'reasoning');
+  assert.equal(reasoning?.reasoning, 'diagnose first path');
+  assert.equal(reasoning?.live, false);
+
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 5, 'generation_attempt_started', { attempt: 2 }),
+  });
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 6, 'reasoning_delta', { text: ' retry path' }),
+  });
+  const retriedReasoning = state.liveByRun.r1!.blocks.find((b) => b.type === 'reasoning');
+  assert.equal(retriedReasoning?.reasoning, 'diagnose first path retry path');
+  assert.equal(retriedReasoning?.live, true);
+});
+
 test('draft isolation per conversation', () => {
   let state = createInitialWorkspaceState();
   state = workspaceReducer(state, {

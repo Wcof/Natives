@@ -322,7 +322,41 @@ fn get_messages(params: Value) -> Result<Value, String> {
             .get("id")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        message["content_blocks"] = serde_json::json!(by_message.remove(id).unwrap_or_default());
+        let mut content_blocks = by_message.remove(id).unwrap_or_default();
+        let run_id = content_blocks.iter().find_map(|block| {
+            (block.get("type").and_then(Value::as_str) == Some("run_reference"))
+                .then(|| block.get("content")?.get("run_id")?.as_str())
+                .flatten()
+        });
+        if let Some(run_id) = run_id {
+            message["run_id"] = serde_json::json!(run_id);
+            if !content_blocks
+                .iter()
+                .any(|block| block.get("type").and_then(Value::as_str) == Some("reasoning"))
+            {
+                let event_payloads = conn
+                    .prepare(
+                        "SELECT payload FROM run_event WHERE run_id = ?1 ORDER BY sequence ASC",
+                    )
+                    .and_then(|mut stmt| {
+                        stmt.query_map(params![run_id], |row| row.get::<_, String>(0))
+                            .map(|rows| rows.filter_map(Result::ok).collect::<Vec<_>>())
+                    })
+                    .unwrap_or_default();
+                let events = event_payloads
+                    .iter()
+                    .filter_map(|payload| serde_json::from_str::<RunEventV2>(payload).ok())
+                    .collect::<Vec<_>>();
+                if let Some(reasoning) = reasoning_block_from_events(&events) {
+                    content_blocks.insert(0, serde_json::json!({
+                        "type": "reasoning",
+                        "index": 0,
+                        "content": reasoning,
+                    }));
+                }
+            }
+        }
+        message["content_blocks"] = serde_json::json!(content_blocks);
     }
     Ok(Value::Array(messages))
 }
@@ -419,6 +453,47 @@ fn block_text(block: &Value) -> Option<String> {
     }
 }
 
+fn reasoning_block_from_events(events: &[RunEventV2]) -> Option<Value> {
+    let mut reasoning = String::new();
+    let mut started_at = None;
+    let mut finished_at = None;
+    for event in events {
+        if let RunEventKind::ReasoningDelta { text } = &event.payload {
+            started_at.get_or_insert(event.timestamp);
+            reasoning.push_str(text);
+        }
+        if started_at.is_some()
+            && finished_at.is_none()
+            && matches!(
+                &event.payload,
+                RunEventKind::TextDelta { .. }
+                    | RunEventKind::ToolCallRequested { .. }
+                    | RunEventKind::ToolCallStarted { .. }
+                    | RunEventKind::ToolCallDelta { .. }
+                    | RunEventKind::ToolCallCompleted { .. }
+                    | RunEventKind::Completed { .. }
+                    | RunEventKind::Failed { .. }
+                    | RunEventKind::Cancelled { .. }
+                    | RunEventKind::Interrupted { .. }
+            )
+        {
+            finished_at = Some(event.timestamp);
+        }
+    }
+    let reasoning = reasoning.trim();
+    if reasoning.is_empty() {
+        return None;
+    }
+    let duration_ms = started_at
+        .zip(finished_at.or_else(|| events.last().map(|e| e.timestamp)))
+        .map(|(start, end)| (end - start).num_milliseconds().max(0) as u64)
+        .unwrap_or(0);
+    Some(serde_json::json!({
+        "reasoning": reasoning,
+        "duration_ms": duration_ms,
+    }))
+}
+
 pub fn append_assistant_turn_from_events(
     conversation_id: &str,
     run_id: &str,
@@ -449,6 +524,16 @@ pub fn append_assistant_turn_from_events(
     }
     if !text.trim().is_empty() {
         blocks.insert(0, serde_json::json!({ "type": "text", "text": text }));
+    }
+    if let Some(reasoning) = reasoning_block_from_events(events) {
+        blocks.insert(
+            0,
+            serde_json::json!({
+                "type": "reasoning",
+                "reasoning": reasoning["reasoning"],
+                "duration_ms": reasoning["duration_ms"],
+            }),
+        );
     }
     if blocks.len() == 1 {
         return Ok(None);
@@ -1005,6 +1090,8 @@ mod tests {
         assert_eq!(messages[0]["content_blocks"][0]["content"]["text"], "hello");
         let history = engine_history(id).unwrap();
         assert_eq!(history[0].content, "hello");
+        let reasoning_started = chrono::Utc::now();
+        let reasoning_finished = reasoning_started + chrono::Duration::milliseconds(1500);
         append_assistant_turn_from_events(
             id,
             "run-1",
@@ -1015,7 +1102,18 @@ mod tests {
             run_sequence: 0,
                     run_id: "run-1".into(),
 sequence: 1,
-                    timestamp: chrono::Utc::now(),
+                    timestamp: reasoning_started,
+                    payload: RunEventKind::ReasoningDelta {
+                        text: "inspect persisted path".into(),
+                    },
+                },
+                RunEventV2 {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            global_sequence: 0,
+            run_sequence: 0,
+                    run_id: "run-1".into(),
+sequence: 2,
+                    timestamp: reasoning_finished,
                     payload: RunEventKind::TextDelta {
                         text: "done".into(),
                     },
@@ -1025,7 +1123,7 @@ sequence: 1,
             global_sequence: 0,
             run_sequence: 0,
                     run_id: "run-1".into(),
-sequence: 2,
+sequence: 3,
                     timestamp: chrono::Utc::now(),
                     payload: RunEventKind::ToolCallCompleted {
                         id: "tool-1".into(),
@@ -1042,6 +1140,27 @@ sequence: 2,
         assert_eq!(history[1].role, "assistant");
         assert!(history[1].content.contains("done"));
         assert!(history[1].content.contains("tool result: read_file"));
+        let messages = request(
+            names::CONVERSATION_GET_MESSAGES,
+            serde_json::json!({ "conversation_id": id }),
+        )
+        .await
+        .unwrap();
+        let assistant = messages
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|message| message["role"] == "assistant")
+            .unwrap();
+        assert_eq!(assistant["run_id"], "run-1");
+        let reasoning = assistant["content_blocks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|block| block["type"] == "reasoning")
+            .unwrap();
+        assert_eq!(reasoning["content"]["reasoning"], "inspect persisted path");
+        assert_eq!(reasoning["content"]["duration_ms"], 1500);
 
     }
 

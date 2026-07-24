@@ -101,6 +101,16 @@ src/
 - **为什么**：大文件难读、难测、AI 编辑易出错。
 - **检查方法**：review 时关注行数与职责密度。
 
+#### R-E7 · Flex/Grid 卡片与 Dashboard 弹性布局规范
+- **等级**：MUST
+- **分类**：布局、组件
+- **规则**：所有网格（Grid）和弹性（Flex）容器内的卡片组件（如 Dashboard 图表块、统计块、分布块、表单块），**必须**实现完全自适应填充：
+  1. **卡片容器纵向自适应**：在 CSS Grid 或 Flex 父容器中的卡片元素，**必须**声明 `display: flex; flex-direction: column; height: 100%;`（或 `flex: 1`），保证卡片在 Grid 项高度被拉伸时能与同行其它卡片等高铺满。
+  2. **卡片内部内容 100% 填充**：卡片内部的图表包装块（如 Recharts `ResponsiveContainer` 容器）、表单、表格或 `<EmptyState>` 占位组件，**必须**放置在 `flex: 1; width: 100%; display: flex; flex-direction: column;` 的 body 块中，并将 `ResponsiveContainer` 设为 `width="100%" height="100%"`（且必要时设 `min-height`），确保图表/表单/空状态在卡片内垂直居中且铺满全部可用空间。
+  3. **可预测的响应式网格列数**：对于多卡片并排（如 2 列图表、3 列分布），**必须**使用可预测的响应式 Grid 布局（如 `grid-template-columns: repeat(3, 1fr)` 配合 `@media (max-width: 900px) { grid-template-columns: 1fr; }`），**禁止**单纯使用未限制的 `repeat(auto-fit, minmax(220px, 1fr))` 导致换行后末尾卡片仅占部分宽度而右侧留空。
+- **为什么**：当网格高度或屏幕宽度发生变化时，如果卡片或内部图表/表单没有声明 Flex/Grid 铺满，会导致内容下方出现死空白区、空状态塌陷或折行卡片右侧留空，破坏 Dashboard 的视觉饱满感与精致度。
+- **检查方法**：缩放浏览器视口及在不同数据量（含 EmptyState）下检查 Dashboard 块，确认卡片同行等高且内部图表/空状态 100% 铺满卡片。
+
 ---
 
 ## 五、本篇合规自检清单
@@ -110,3 +120,4 @@ src/
 - [ ] 我清楚我的组件属于 Shell / Feature / UI 原子哪一类，import 方向正确（R-E3）。
 - [ ] 我没有硬编码颜色/尺寸，都引用了设计令牌（R-E4）。
 - [ ] 文件命名遵循 PascalCase / use 前缀 / `.test` 后缀（R-E5）。
+- [ ] 网格与 Flex 卡片及其内部图表/表单完全自适应铺满（R-E7）。

@@ -623,10 +623,13 @@ fn revoke_grant_db(grant_id: &str) -> Result<(), String> {
 /// Infer a stable permission_class string for grant binding.
 pub fn permission_class_for_tool(tool_name: &str) -> String {
     match tool_name {
-        "read_file" | "list_dir" | "grep" | "glob" => "project_read".into(),
+        "read_file" | "list_dir" | "search_files" | "grep" | "glob" => "project_read".into(),
         "write_file" | "apply_patch" | "edit_file" => "project_write".into(),
         "run_terminal" | "bash" => "destructive_command".into(),
-        "web_fetch" | "fetch" => "external_write".into(),
+        "web_fetch" | "fetch" | "mcp_call" => "external_write".into(),
+        "task" | "kill_task" => "project_write".into(),
+        "task_output" | "memory_search" | "memory_get" | "skill" | "todo_write"
+        | "notification" => "always_allowed".into(),
         name if name.starts_with("mcp__") => "external_write".into(),
         _ => "unknown".into(),
     }
@@ -646,7 +649,9 @@ pub fn invocation_from_gate(
         permission_class: permission_class_for_tool(tool_name),
         conversation_id: conversation_id.to_string(),
         run_id: run_id.to_string(),
-        session_id: None,
+        // A conversation is the Native session boundary. Keep it available so
+        // session-scoped grants can match across runs in the same conversation.
+        session_id: Some(conversation_id.to_string()),
         // Soft path-as-id removed: project_id must come from verified ProjectIdentity.
         project_id: None,
         project_identity_version: None,
@@ -743,6 +748,19 @@ mod tests {
         ));
         inv.run_id = "r2".into();
         assert_eq!(pol.check(&inv).await, GrantDecision::NeedsApproval);
+    }
+
+    #[tokio::test]
+    async fn session_scope_matches_runs_in_same_conversation_only() {
+        let pol = ToolPolicyState::new();
+        let inv = inv_terminal("cargo test", ".", "/p");
+        pol.remember(&inv, "session", None).await.unwrap();
+        let mut next_run = inv.clone();
+        next_run.run_id = "r2".into();
+        assert!(matches!(pol.check(&next_run).await, GrantDecision::Allowed { .. }));
+        next_run.conversation_id = "c2".into();
+        next_run.session_id = Some("s2".into());
+        assert_eq!(pol.check(&next_run).await, GrantDecision::NeedsApproval);
     }
 
     #[tokio::test]
@@ -844,6 +862,14 @@ mod tests {
         assert!(tool_requires_verified_project("run_terminal"));
         assert!(tool_requires_verified_project("mcp_call"));
         assert!(!tool_requires_verified_project("read_file"));
+    }
+
+    #[test]
+    fn permission_classes_match_gateway_tool_categories() {
+        assert_eq!(permission_class_for_tool("mcp_call"), "external_write");
+        assert_eq!(permission_class_for_tool("task"), "project_write");
+        assert_eq!(permission_class_for_tool("task_output"), "always_allowed");
+        assert_eq!(permission_class_for_tool("search_files"), "project_read");
     }
 
     #[test]

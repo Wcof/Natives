@@ -43,6 +43,7 @@ impl OpenAiAdapter {
                 message: "OpenAI API key is required".into(),
                 category: ProviderErrorCategory::Auth,
                 retryable: false,
+                retry_after_ms: None,
             })?
         };
         let base = credential
@@ -95,6 +96,7 @@ impl ProviderAdapter for OpenAiAdapter {
             message: "OpenAI API key is required".into(),
             category: ProviderErrorCategory::Auth,
             retryable: false,
+            retry_after_ms: None,
         })?;
         let (content, tools, usage) =
             chat_completions(&self.client, &self.base_url, &key, request).await?;
@@ -126,6 +128,7 @@ impl ProviderAdapter for OpenAiAdapter {
                 message: "OpenAI API key required (offline mock removed)".into(),
                 category: ProviderErrorCategory::Auth,
                 retryable: false,
+                retry_after_ms: None,
             });
         }
         let key = self.api_key.clone().unwrap();

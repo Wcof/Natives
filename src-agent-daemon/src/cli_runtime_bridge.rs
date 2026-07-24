@@ -653,6 +653,12 @@ pub async fn run_claude_cli_turn(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     #[test]
     fn translate_content_block_delta() {
@@ -687,7 +693,7 @@ mod tests {
     #[test]
     fn map_permission_mode_fail_closed_without_proven_control() {
         // Default: no NATIVES_CLI_CONTROL_PROVEN → always dontAsk (text-only).
-        // Isolation: another parallel test may set NATIVES_CLI_CONTROL_PROVEN=1.
+        let _lock = env_lock();
         let _guard = EnvVarGuard::remove("NATIVES_CLI_CONTROL_PROVEN");
         assert_eq!(map_permission_mode("readonly"), Some("dontAsk"));
         assert_eq!(map_permission_mode("full_access"), Some("dontAsk"));
@@ -697,6 +703,7 @@ mod tests {
 
     #[test]
     fn map_permission_mode_proven_allows_profile_modes() {
+        let _lock = env_lock();
         let _guard = EnvVarGuard::set("NATIVES_CLI_CONTROL_PROVEN", "1");
         assert_eq!(map_permission_mode("readonly"), Some("dontAsk"));
         assert_eq!(map_permission_mode("full_access"), Some("acceptEdits"));

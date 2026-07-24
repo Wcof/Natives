@@ -18,6 +18,7 @@ pub fn parse_gemini_chunk(data: &str) -> Vec<ProviderEvent> {
                 message: format!("Invalid Gemini JSON: {err}"),
                 category: ProviderErrorCategory::ServerError,
                 retryable: false,
+                retry_after_ms: None,
             })];
         }
     };
@@ -28,17 +29,25 @@ fn parse_gemini_value(value: &Value) -> Vec<ProviderEvent> {
     let mut events = Vec::new();
 
     if let Some(err) = value.get("error") {
+        let message = err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("gemini error")
+            .chars()
+            .take(400)
+            .collect::<String>();
+        let rate_limited = err.get("code").and_then(|v| v.as_u64()) == Some(429)
+            || message.to_ascii_lowercase().contains("rate");
         events.push(ProviderEvent::Error(ProviderError {
             code: "gemini_error".into(),
-            message: err
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("gemini error")
-                .chars()
-                .take(400)
-                .collect(),
-            category: ProviderErrorCategory::ServerError,
+            message,
+            category: if rate_limited {
+                ProviderErrorCategory::RateLimit
+            } else {
+                ProviderErrorCategory::ServerError
+            },
             retryable: true,
+            retry_after_ms: None,
         }));
         return events;
     }

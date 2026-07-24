@@ -71,6 +71,7 @@ impl AnthropicSseParser {
                     message: format!("Invalid Anthropic SSE: {err}"),
                     category: ProviderErrorCategory::ServerError,
                     retryable: false,
+                    retry_after_ms: None,
                 })];
             }
         };
@@ -180,11 +181,19 @@ impl AnthropicSseParser {
                 out.push(ProviderEvent::Completed);
             }
             "error" => {
+                let message = data.chars().take(300).collect::<String>();
+                let rate_limited = message.to_ascii_lowercase().contains("rate")
+                    || message.contains("429");
                 out.push(ProviderEvent::Error(ProviderError {
                     code: "anthropic_error".into(),
-                    message: data.chars().take(300).collect(),
-                    category: ProviderErrorCategory::ServerError,
+                    message,
+                    category: if rate_limited {
+                        ProviderErrorCategory::RateLimit
+                    } else {
+                        ProviderErrorCategory::ServerError
+                    },
                     retryable: true,
+                    retry_after_ms: None,
                 }));
             }
             _ => {}
