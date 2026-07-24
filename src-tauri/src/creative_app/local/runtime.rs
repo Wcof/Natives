@@ -191,6 +191,8 @@ impl LocalRuntimeManager {
         }
 
         let log = self.logs.get_or_open(app_id);
+        // Inject this app's env values so live + persisted logs redact them by value.
+        log.set_secrets(env.iter().map(|(_, v)| v.clone()).collect());
         log.append(
             LogStream::System,
             &format!("starting: {program} {}", args.join(" ")),

@@ -55,6 +55,8 @@ pub struct LocalLogStore {
     ring: Mutex<RingState>,
     /// Approximate size of current.log (best-effort).
     current_size: Mutex<u64>,
+    /// Concrete env values for this app; redacted from every appended line.
+    secrets: Mutex<Vec<String>>,
 }
 
 impl LocalLogStore {
@@ -73,6 +75,7 @@ impl LocalLogStore {
                 lines: VecDeque::new(),
             }),
             current_size: Mutex::new(size),
+            secrets: Mutex::new(Vec::new()),
         })
     }
 
@@ -80,9 +83,23 @@ impl LocalLogStore {
         &self.app_id
     }
 
+    /// Inject this app's concrete env values so live + persisted log lines
+    /// redact them by value (not just by pattern). Call before start/install.
+    pub fn set_secrets(&self, values: Vec<String>) {
+        let filtered: Vec<String> = values
+            .into_iter()
+            .filter(|v| v.trim().len() >= 4)
+            .collect();
+        let mut guard = self.secrets.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = filtered;
+    }
+
     pub fn append(&self, stream: LogStream, text: &str) -> LogLine {
         let ts_ms = chrono::Utc::now().timestamp_millis();
-        let sanitized = sanitize_log_text(text);
+        let sanitized = {
+            let secrets = self.secrets.lock().unwrap_or_else(|e| e.into_inner());
+            sanitize_log_text_with_secrets(text, &secrets)
+        };
         let line = {
             let mut ring = self.ring.lock().unwrap_or_else(|e| e.into_inner());
             ring.seq = ring.seq.saturating_add(1);
@@ -229,6 +246,9 @@ pub fn sanitize_log_text_with_secrets(text: &str, secret_values: &[String]) -> S
     out
 }
 
+/// One-shot redacted append against explicit secrets, independent of the
+/// store's injected secret set. Prefer `store.set_secrets()` + `append()` for
+/// the live process path; this remains for callers that hold values ad hoc.
 pub fn append_with_secrets(
     store: &LocalLogStore,
     stream: LogStream,
@@ -236,8 +256,6 @@ pub fn append_with_secrets(
     secret_values: &[String],
 ) -> LogLine {
     let sanitized = sanitize_log_text_with_secrets(text, secret_values);
-    // Reuse append path but avoid double sanitize of already cleaned text by
-    // writing through a thin path: append still sanitizes; pass cleaned text.
     store.append(stream, &sanitized)
 }
 
@@ -331,6 +349,7 @@ impl LogRegistry {
                         lines: VecDeque::new(),
                     }),
                     current_size: Mutex::new(0),
+                    secrets: Mutex::new(Vec::new()),
                 }
             }),
         );
@@ -384,6 +403,37 @@ mod tests {
     }
 
     #[test]
+    fn injected_secrets_redact_appended_lines() {
+        let dir = std::env::temp_dir().join(format!(
+            "natives-log-secret-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let store = LocalLogStore {
+            app_id: "s".into(),
+            dir: dir.clone(),
+            ring: Mutex::new(RingState {
+                seq: 0,
+                bytes: 0,
+                lines: VecDeque::new(),
+            }),
+            current_size: Mutex::new(0),
+            secrets: Mutex::new(Vec::new()),
+        };
+        store.set_secrets(vec!["super-secret-token".into(), "ab".into()]);
+        let line = store.append(LogStream::Stdout, "using super-secret-token now");
+        assert!(!line.text.contains("super-secret-token"));
+        assert!(line.text.contains("***"));
+        // Too-short values are ignored (not redacted to avoid noise).
+        let line2 = store.append(LogStream::Stdout, "value ab here");
+        assert!(line2.text.contains("ab"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn ring_caps_memory() {
         let dir = std::env::temp_dir().join(format!(
             "natives-log-test-{}",
@@ -402,6 +452,7 @@ mod tests {
                 lines: VecDeque::new(),
             }),
             current_size: Mutex::new(0),
+            secrets: Mutex::new(Vec::new()),
         };
         for i in 0..200 {
             store.append(LogStream::Stdout, &format!("line {i} {}", "x".repeat(8000)));

@@ -374,8 +374,8 @@ pub async fn creative_app_create_local(
     let _guard = lock.lock().await;
     let handle = app_handle.clone();
     tokio::task::spawn_blocking(move || {
-        let c = conn(&pool)?;
-        let summary = create_local_app(&c, request)?;
+        let mut c = conn(&pool)?;
+        let summary = create_local_app(&mut c, request)?;
         crate::emit_db_state_changed(
             &handle,
             "creative-app",

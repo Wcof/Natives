@@ -105,6 +105,8 @@ pub async fn install_dependencies(
     let (program, args) = resolve_install_command(root, pm)?;
 
     let log = logs.get_or_open(id);
+    // Redact this app's env values from install logs (by value, not just pattern).
+    log.set_secrets(store::secret_values(conn, id));
     log.append(
         LogStream::System,
         &format!("install deps: {program} {}", args.join(" ")),
@@ -151,6 +153,22 @@ pub async fn install_dependencies(
                     | "ALLUSERSPROFILE"
             ) || k.starts_with("LC_")
         }));
+
+    // New process group so a package manager that spawns children (node-gyp,
+    // postinstall scripts) is cleaned up as a tree on kill_on_drop / app exit.
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setpgid(0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x00000200); // CREATE_NEW_PROCESS_GROUP
+    }
 
     let mut child = cmd
         .spawn()
