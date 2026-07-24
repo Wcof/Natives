@@ -532,7 +532,7 @@ impl ToolHandler for SkillTool {
             result: serde_json::json!({
                 "skill": input.get("name"),
                 "loaded": false,
-                "note": "Skill loader resolves from .claude/skills and .grok/skills"
+                "note": "Agent Daemon resolves skills from .agents/.claude/.grok/.natives"
             }),
             truncated: false,
             duration_ms: 0,

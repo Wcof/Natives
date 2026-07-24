@@ -311,11 +311,48 @@ impl AgentEngine {
         provider: &dyn EngineProvider,
         tools: &dyn EngineToolRuntime,
     ) -> Result<crate::EngineOutcome, EngineError> {
+        let run_id = config.run_id.clone();
+        let result = self.run_inner(config, provider, tools).await;
+        if let Err(error) = &result {
+            let _ = self
+                .hooks
+                .dispatch(HookRequest {
+                    event: HookEvent::Error,
+                    run_id: run_id.clone(),
+                    tool_name: None,
+                    input: serde_json::json!({
+                        "code": error.code(),
+                        "message": error.to_string(),
+                    }),
+                })
+                .await;
+        }
+        let _ = self
+            .hooks
+            .dispatch(HookRequest {
+                event: HookEvent::SessionEnd,
+                run_id,
+                tool_name: None,
+                input: serde_json::json!({
+                    "success": result.is_ok(),
+                }),
+            })
+            .await;
+        result
+    }
+
+    async fn run_inner(
+        &self,
+        mut config: EngineRunConfig,
+        provider: &dyn EngineProvider,
+        tools: &dyn EngineToolRuntime,
+    ) -> Result<crate::EngineOutcome, EngineError> {
         use crate::EngineOutcome;
-        let run_id = &config.run_id;
+        let run_id_owned = config.run_id.clone();
+        let run_id = &run_id_owned;
         // Lifecycle status is owned by RunManager::commit_transition.
         // Engine only emits domain events and returns EngineOutcome.
-        let _ = self
+        let session_start = self
             .hooks
             .dispatch(HookRequest {
                 event: HookEvent::SessionStart,
@@ -324,7 +361,8 @@ impl AgentEngine {
                 input: serde_json::json!({ "conversation_id": config.conversation_id }),
             })
             .await;
-        let _ = self
+        apply_prompt_hook_responses(&mut config, session_start)?;
+        let prompt_submit = self
             .hooks
             .dispatch(HookRequest {
                 event: HookEvent::UserPromptSubmit,
@@ -333,6 +371,7 @@ impl AgentEngine {
                 input: serde_json::json!({ "content": config.user_content }),
             })
             .await;
+        apply_prompt_hook_responses(&mut config, prompt_submit)?;
 
         let tool_schemas = tools.list_tool_schemas().await;
         // History is prior turns; always ensure the current user prompt appears
@@ -604,7 +643,7 @@ impl AgentEngine {
 
             if tool_acc.is_empty() {
                 // No tools — complete. Status commit is RunManager's job.
-                let _ = self
+                let stop = self
                     .hooks
                     .dispatch(HookRequest {
                         event: HookEvent::Stop,
@@ -613,6 +652,20 @@ impl AgentEngine {
                         input: serde_json::json!({ "reason": "stop" }),
                     })
                     .await;
+                if let Err(reason) = HookRegistry::aggregate_allow(&stop) {
+                    let _ = self
+                        .hooks
+                        .dispatch(HookRequest {
+                            event: HookEvent::StopFailure,
+                            run_id: run_id.to_string(),
+                            tool_name: None,
+                            input: serde_json::json!({ "reason": reason }),
+                        })
+                        .await;
+                    return Err(EngineError::Message(format!(
+                        "stop hook denied: {reason}"
+                    )));
+                }
                 return Ok(EngineOutcome::completed("stop"));
             }
 
@@ -997,7 +1050,7 @@ impl AgentEngine {
             return values_to_engine_messages(&fixed);
         }
 
-        let _ = self
+        let pre_compact = self
             .hooks
             .dispatch(HookRequest {
                 event: HookEvent::PreCompact,
@@ -1006,6 +1059,9 @@ impl AgentEngine {
                 input: json!({ "before_chars": before_chars }),
             })
             .await;
+        if HookRegistry::aggregate_allow(&pre_compact).is_err() {
+            return messages;
+        }
 
         let values = engine_messages_to_values(&messages);
         let result = compact_tool_history(&values, tool_limit);
@@ -1046,6 +1102,35 @@ impl AgentEngine {
         values_to_engine_messages(&result.messages)
     }
 
+}
+
+fn apply_prompt_hook_responses(
+    config: &mut EngineRunConfig,
+    responses: Vec<crate::hooks::HookResponse>,
+) -> Result<(), EngineError> {
+    for response in responses {
+        match response.decision {
+            HookDecision::Deny { reason } => {
+                return Err(EngineError::Message(format!("hook denied: {reason}")));
+            }
+            HookDecision::Modify { payload } => {
+                if let Some(content) = payload.get("content").and_then(Value::as_str) {
+                    config.user_content = content.to_string();
+                }
+            }
+            HookDecision::Inject { messages } => {
+                config.messages.extend(messages.into_iter().map(|content| EngineMessage {
+                    role: "system".into(),
+                    content,
+                    tool_call_id: None,
+                    tool_name: None,
+                    tool_calls: None,
+                }));
+            }
+            HookDecision::Allow | HookDecision::Rewake => {}
+        }
+    }
+    Ok(())
 }
 
 async fn sleep_provider_backoff(attempt: u32) {
@@ -1153,7 +1238,7 @@ fn values_to_engine_messages(values: &[Value]) -> Vec<EngineMessage> {
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use super::*;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     struct FakeProvider {
         rounds: Mutex<Vec<Vec<EngineProviderEvent>>>,
@@ -1205,6 +1290,52 @@ mod tests {
                 duration_ms: 1,
             }
         }
+    }
+
+    #[tokio::test]
+    async fn session_end_hook_fires_after_success() {
+        struct RecordingHook(Arc<Mutex<Vec<HookEvent>>>);
+
+        #[async_trait::async_trait]
+        impl crate::hooks::HookHandler for RecordingHook {
+            async fn handle(
+                &self,
+                request: HookRequest,
+            ) -> crate::hooks::HookResponse {
+                self.0.lock().unwrap().push(request.event);
+                crate::hooks::HookResponse {
+                    decision: HookDecision::Allow,
+                }
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut hooks = HookRegistry::new();
+        hooks.register(
+            HookEvent::SessionEnd,
+            Box::new(RecordingHook(seen.clone())),
+        );
+        let engine = AgentEngine::new(EventSequencer::new()).with_hooks(hooks);
+        let provider = FakeProvider {
+            rounds: Mutex::new(Vec::new()),
+        };
+        engine
+            .run(
+                EngineRunConfig {
+                    run_id: "run-hook-end".into(),
+                    conversation_id: "conversation-hook-end".into(),
+                    model: "model".into(),
+                    system_prompt: None,
+                    messages: Vec::new(),
+                    user_content: "hello".into(),
+                    max_steps: 2,
+                },
+                &provider,
+                &FakeTools,
+            )
+            .await
+            .unwrap();
+        assert_eq!(*seen.lock().unwrap(), vec![HookEvent::SessionEnd]);
     }
 
     #[tokio::test]

@@ -1,11 +1,14 @@
 //! Command and HTTP hook handlers with safety rails.
 
-use crate::hooks::{HookDecision, HookHandler, HookRequest, HookResponse};
+use crate::hooks::{
+    tool_pattern_matches, HookDecision, HookHandler, HookRequest, HookResponse,
+};
 use serde_json::Value;
 use std::net::IpAddr;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 const MAX_IO_BYTES: usize = 256 * 1024;
@@ -16,10 +19,16 @@ pub struct CommandHook {
     pub args: Vec<String>,
     pub timeout: Duration,
     pub trusted: bool,
+    pub cwd: Option<PathBuf>,
+    pub tool_pattern: Option<String>,
 }
 
 #[async_trait::async_trait]
 impl HookHandler for CommandHook {
+    fn matches_tool(&self, tool_name: Option<&str>) -> bool {
+        tool_pattern_matches(self.tool_pattern.as_deref(), tool_name)
+    }
+
     async fn handle(&self, request: HookRequest) -> HookResponse {
         if !self.trusted {
             return HookResponse {
@@ -28,7 +37,18 @@ impl HookHandler for CommandHook {
                 },
             };
         }
-        let payload = serde_json::to_vec(&request).unwrap_or_default();
+        let event_name = format!("{:?}", request.event);
+        let payload = serde_json::to_vec(&serde_json::json!({
+            "event": request.event,
+            "hook_event_name": event_name.clone(),
+            "run_id": request.run_id.clone(),
+            "session_id": request.run_id.clone(),
+            "tool_name": request.tool_name.clone(),
+            "input": request.input.clone(),
+            "tool_input": request.input.clone(),
+            "cwd": self.cwd.as_ref(),
+        }))
+        .unwrap_or_default();
         if payload.len() > MAX_IO_BYTES {
             return HookResponse {
                 decision: HookDecision::Deny {
@@ -37,8 +57,18 @@ impl HookHandler for CommandHook {
             };
         }
 
-        let mut child = match Command::new(&self.program)
+        let mut command = Command::new(&self.program);
+        command
             .args(&self.args)
+            .env("NATIVES_HOOK_EVENT", &event_name)
+            .env("NATIVES_RUN_ID", &request.run_id);
+        if let Some(cwd) = &self.cwd {
+            command
+                .current_dir(cwd)
+                .env("CLAUDE_PROJECT_DIR", cwd)
+                .env("NATIVES_PROJECT_DIR", cwd);
+        }
+        let mut child = match command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -59,46 +89,45 @@ impl HookHandler for CommandHook {
             let _ = stdin.write_all(&payload).await;
         }
 
-        let result = tokio::time::timeout(self.timeout, async {
-            let mut stdout = Vec::new();
-            if let Some(mut out) = child.stdout.take() {
-                let mut buf = vec![0u8; 8192];
-                loop {
-                    let n = out.read(&mut buf).await.unwrap_or(0);
-                    if n == 0 {
-                        break;
-                    }
-                    stdout.extend_from_slice(&buf[..n]);
-                    if stdout.len() > MAX_IO_BYTES {
-                        break;
-                    }
-                }
-            }
-            let status = child.wait().await;
-            (status, stdout)
-        })
-        .await;
+        let result = tokio::time::timeout(self.timeout, child.wait_with_output()).await;
 
         match result {
-            Ok((Ok(status), stdout)) if status.success() => parse_hook_stdout(&stdout),
-            Ok((Ok(status), _)) => HookResponse {
-                decision: HookDecision::Deny {
-                    reason: format!("hook exited with {status}"),
-                },
-            },
-            Ok((Err(e), _)) => HookResponse {
+            Ok(Ok(output))
+                if output.stdout.len().saturating_add(output.stderr.len()) > MAX_IO_BYTES =>
+            {
+                HookResponse {
+                    decision: HookDecision::Deny {
+                        reason: "hook output too large".into(),
+                    },
+                }
+            }
+            Ok(Ok(output)) if output.status.success() => parse_hook_stdout(&output.stdout),
+            Ok(Ok(output)) => {
+                let reason = String::from_utf8_lossy(&output.stderr)
+                    .trim()
+                    .chars()
+                    .take(4_000)
+                    .collect::<String>();
+                HookResponse {
+                    decision: HookDecision::Deny {
+                        reason: if reason.is_empty() {
+                            format!("hook exited with {}", output.status)
+                        } else {
+                            reason
+                        },
+                    },
+                }
+            }
+            Ok(Err(e)) => HookResponse {
                 decision: HookDecision::Deny {
                     reason: format!("hook wait failed: {e}"),
                 },
             },
-            Err(_) => {
-                let _ = child.kill().await;
-                HookResponse {
-                    decision: HookDecision::Deny {
-                        reason: "hook timeout".into(),
-                    },
-                }
-            }
+            Err(_) => HookResponse {
+                decision: HookDecision::Deny {
+                    reason: "hook timeout".into(),
+                },
+            },
         }
     }
 }
@@ -108,17 +137,26 @@ pub struct HttpHook {
     pub url: String,
     pub timeout: Duration,
     pub allow_hosts: Vec<String>,
+    pub tool_pattern: Option<String>,
 }
 
 #[async_trait::async_trait]
 impl HookHandler for HttpHook {
+    fn matches_tool(&self, tool_name: Option<&str>) -> bool {
+        tool_pattern_matches(self.tool_pattern.as_deref(), tool_name)
+    }
+
     async fn handle(&self, request: HookRequest) -> HookResponse {
         if let Err(reason) = validate_http_hook_url(&self.url, &self.allow_hosts) {
             return HookResponse {
                 decision: HookDecision::Deny { reason },
             };
         }
-        let client = match reqwest::Client::builder().timeout(self.timeout).build() {
+        let client = match reqwest::Client::builder()
+            .timeout(self.timeout)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+        {
             Ok(c) => c,
             Err(e) => {
                 return HookResponse {
@@ -165,12 +203,55 @@ fn parse_hook_stdout(stdout: &[u8]) -> HookResponse {
     }
     match serde_json::from_str::<Value>(trimmed) {
         Ok(value) => {
+            if value.get("continue").and_then(Value::as_bool) == Some(false) {
+                return HookResponse {
+                    decision: HookDecision::Deny {
+                        reason: value
+                            .get("stopReason")
+                            .or_else(|| value.get("systemMessage"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("blocked by hook")
+                            .to_string(),
+                    },
+                };
+            }
+            if let Some(output) = value.get("hookSpecificOutput") {
+                if output
+                    .get("permissionDecision")
+                    .and_then(Value::as_str)
+                    == Some("deny")
+                {
+                    return HookResponse {
+                        decision: HookDecision::Deny {
+                            reason: output
+                                .get("permissionDecisionReason")
+                                .and_then(Value::as_str)
+                                .unwrap_or("denied by hook")
+                                .to_string(),
+                        },
+                    };
+                }
+                if let Some(updated) = output.get("updatedInput") {
+                    return HookResponse {
+                        decision: HookDecision::Modify {
+                            payload: updated.clone(),
+                        },
+                    };
+                }
+                if let Some(context) = output.get("additionalContext").and_then(Value::as_str) {
+                    return HookResponse {
+                        decision: HookDecision::Inject {
+                            messages: vec![context.to_string()],
+                        },
+                    };
+                }
+            }
             let decision = value
                 .get("decision")
                 .and_then(|d| d.as_str())
                 .unwrap_or("allow");
             match decision {
-                "deny" => HookResponse {
+                "deny" | "block" => HookResponse {
                     decision: HookDecision::Deny {
                         reason: value
                             .get("reason")
@@ -273,6 +354,25 @@ mod tests {
         assert!(validate_http_hook_url("https://evil.example.org/h", &["hooks.example.com".into()]).is_err());
     }
 
+    #[test]
+    fn parses_claude_hook_output() {
+        let denied = parse_hook_stdout(
+            br#"{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"blocked"}}"#,
+        );
+        assert!(matches!(
+            denied.decision,
+            HookDecision::Deny { ref reason } if reason == "blocked"
+        ));
+
+        let modified = parse_hook_stdout(
+            br#"{"hookSpecificOutput":{"updatedInput":{"path":"safe.txt"}}}"#,
+        );
+        assert!(matches!(
+            modified.decision,
+            HookDecision::Modify { ref payload } if payload["path"] == "safe.txt"
+        ));
+    }
+
     #[tokio::test]
     async fn untrusted_command_hook_denied() {
         let hook = CommandHook {
@@ -280,6 +380,8 @@ mod tests {
             args: vec![],
             timeout: Duration::from_secs(1),
             trusted: false,
+            cwd: None,
+            tool_pattern: None,
         };
         let resp = hook
             .handle(HookRequest {

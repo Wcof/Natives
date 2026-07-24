@@ -7,8 +7,8 @@ use agent_core::assemble_context;
 use agent_core::{
     cap_child_permission, default_subagent_tool_allowlist, AgentEngine, EngineError, EngineMessage,
     EngineProvider, EngineProviderEvent, EngineProviderEventStream, EngineRunConfig,
-    EventSequencer, PermissionManager, PermissionProfile, SubAgentConfig, SubAgentManager,
-    SubAgentStatus, ToolSchema,
+    EventSequencer, HookEvent, HookRegistry, HookRequest, PermissionManager, PermissionProfile,
+    SubAgentConfig, SubAgentManager, SubAgentStatus, ToolSchema,
 };
 use assistant_protocol::v2::RunEventKind;
 use capability_gateway::CapabilityGateway;
@@ -340,6 +340,7 @@ impl ProductionRuntime {
         model_id: String,
         key_id: Option<String>,
         permission_profile: String,
+        agent_profile_id: Option<String>,
         user_content: String,
         max_steps: u32,
         project_path: Option<std::path::PathBuf>,
@@ -351,15 +352,14 @@ impl ProductionRuntime {
         let hooks = build_production_hooks_for_project(Some(&project_root));
         // Context budget: min(Profile tokenBudget, model context_window); default 128K.
         // chars/4 is only used when Provider usage is unavailable (engine estimate path).
-        let profile_budget = agent_core::discover_agents_md(&project_root)
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|raw| agent_core::parse_agent_profile_markdown(&raw, None).ok())
-            .and_then(|p| p.token_budget);
+        let profile = agent_profile_id
+            .as_deref()
+            .and_then(|id| agent_core::load_agent_profile(id, Some(&project_root)));
         let model_window = lookup_model_context_window(&provider_id, &model_id);
-        let budget = agent_core::ContextBudget::resolve(profile_budget, model_window);
-        let profile_for_assemble = agent_core::discover_agents_md(&project_root)
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|raw| agent_core::parse_agent_profile_markdown(&raw, None).ok());
+        let budget = agent_core::ContextBudget::resolve(
+            profile.as_ref().and_then(|profile| profile.token_budget),
+            model_window,
+        );
         let cancel = self.ensure_execution_token(&run_id, None).await?;
         let engine = Arc::new(
             AgentEngine::new(self.events.clone())
@@ -402,7 +402,18 @@ impl ProductionRuntime {
             key_id: key_id.clone(),
         };
         // Child subagent runs may have pre-registered a readonly (or custom) surface.
-        let tool_allowlist = self.take_run_tool_allowlist(&run_id).await;
+        let mut tool_allowlist = self
+            .take_run_tool_allowlist(&run_id)
+            .await
+            .or_else(|| profile.as_ref().and_then(|profile| profile.tools.clone()));
+        if let (Some(allowlist), Some(disallowed)) = (
+            tool_allowlist.as_mut(),
+            profile
+                .as_ref()
+                .and_then(|profile| profile.disallowed_tools.as_ref()),
+        ) {
+            allowlist.retain(|tool| !disallowed.iter().any(|denied| denied == tool));
+        }
         let tools = PermissionGatedTools {
             gateway: {
                 let mut g = CapabilityGateway::new();
@@ -427,7 +438,12 @@ impl ProductionRuntime {
             tool_allowlist,
         };
 
-        let assembled = assemble_context(profile_for_assemble.as_ref(), Some(&project_root), None);
+        let skill_prompt = crate::skill_store::prompt_for_project(&project_root);
+        let assembled = assemble_context(
+            profile.as_ref(),
+            Some(&project_root),
+            (!skill_prompt.is_empty()).then_some(skill_prompt.as_str()),
+        );
         // Compact history against resolved token budget (chars/4 fallback estimate).
         let raw_history =
             crate::conversation_store::engine_history(&conversation_id).unwrap_or_default();
@@ -620,6 +636,23 @@ impl ProductionRuntime {
     ) -> Result<String, String> {
         let child_perm = cap_child_permission(parent_permission_profile, &permission_profile);
         let child_allowlist = default_subagent_tool_allowlist();
+        let subagent_hooks = build_production_hooks_for_project(
+            project_root.as_deref().map(std::path::Path::new),
+        );
+        let start_responses = subagent_hooks
+            .dispatch(HookRequest {
+                event: HookEvent::SubagentStart,
+                run_id: parent_run_id.to_string(),
+                tool_name: Some("task".into()),
+                input: serde_json::json!({
+                    "prompt": prompt.clone(),
+                    "provider_id": provider_id.clone(),
+                    "model_id": model_id.clone(),
+                }),
+            })
+            .await;
+        HookRegistry::aggregate_allow(&start_responses)
+            .map_err(|reason| format!("subagent hook denied: {reason}"))?;
         // Depth from parent chain — never hardcode 1 (task-11).
         let depth = self.subagents.depth_for_child(parent_run_id).await;
         let child = self
@@ -696,6 +729,9 @@ impl ProductionRuntime {
         );
 
         tokio::spawn(async move {
+            let child_project_root = project_root_bg
+                .as_deref()
+                .map(std::path::PathBuf::from);
             let provider = RealProvider {
                 provider_id: provider_id.clone(),
                 key_id: Some(key_id.clone()),
@@ -703,8 +739,8 @@ impl ProductionRuntime {
             let tools = PermissionGatedTools {
                 gateway: {
                     let mut g = CapabilityGateway::new();
-                    if let Some(root) = project_root_bg {
-                        g.set_project_root(root);
+                    if let Some(root) = &project_root_bg {
+                        g.set_project_root(root.clone());
                     }
                     register_tools_for_surface(&mut g, Some(&child_allowlist_bg));
                     Arc::new(g)
@@ -725,7 +761,8 @@ impl ProductionRuntime {
                 tool_allowlist: Some(child_allowlist_bg),
             };
             // Same production hook set as parent (M4) — not a reduced AllowAll-only registry.
-            let hooks = build_production_hooks();
+            let hooks =
+                build_production_hooks_for_project(child_project_root.as_deref());
             // Child cancel token is parent.child_token when registry has parent.
             let child_cancel = if let Some(parent_tok) = engines
                 .lock()
@@ -748,13 +785,25 @@ impl ProductionRuntime {
                 .lock()
                 .await
                 .insert(child_run_id.clone(), engine.clone());
+            let mut child_system =
+                "You are a subagent with independent credentials. Complete the task.".to_string();
+            if let Some(root) = child_project_root.as_deref() {
+                let skills = crate::skill_store::prompt_for_project(root);
+                if !skills.is_empty() {
+                    child_system.push_str("\n\n");
+                    child_system.push_str(&skills);
+                }
+            }
+            let child_context = assemble_context(
+                None,
+                child_project_root.as_deref(),
+                Some(&child_system),
+            );
             let config = EngineRunConfig {
                 run_id: child_run_id.clone(),
                 conversation_id: child_conversation_bg,
                 model: model_id,
-                system_prompt: Some(
-                    "You are a subagent with independent credentials. Complete the task.".into(),
-                ),
+                system_prompt: Some(child_context.system_prompt),
                 messages: Vec::new(),
                 user_content: prompt,
                 max_steps: 20,
@@ -815,6 +864,18 @@ impl ProductionRuntime {
                     },
                 );
             }
+            let _ = subagent_hooks
+                .dispatch(HookRequest {
+                    event: HookEvent::SubagentStop,
+                    run_id: parent_owned.clone(),
+                    tool_name: Some("task".into()),
+                    input: serde_json::json!({
+                        "sub_run_id": child_run_id.clone(),
+                        "status": status.clone(),
+                        "output": output.clone(),
+                    }),
+                })
+                .await;
             task_outputs.lock().await.insert(
                 task_id_bg,
                 TaskRecord {

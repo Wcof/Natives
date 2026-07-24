@@ -7,8 +7,8 @@
 
 use agent_core::{
     cap_child_permission, default_subagent_tool_allowlist, AgentEngine, EngineToolRuntime,
-    EventSequencer, PermissionManager, PermissionProfile, SubAgentManager, SubAgentStatus,
-    ToolExecutionResult, ToolSchema,
+    EventSequencer, HookEvent, HookRegistry, HookRequest, PermissionManager, PermissionProfile,
+    SubAgentManager, SubAgentStatus, ToolExecutionResult, ToolSchema,
 };
 use assistant_protocol::v2::RunEventKind;
 use capability_gateway::{CapabilityGateway, SideEffect};
@@ -199,6 +199,32 @@ impl EngineToolRuntime for PermissionGatedTools {
             }
         }
 
+        if name == "skill" {
+            let skill_name = input.get("name").and_then(Value::as_str).unwrap_or("");
+            let Some(project_root) = self.gateway.project_root.as_deref() else {
+                return ToolExecutionResult {
+                    output: serde_json::json!({"error": "project root required to load skill"}),
+                    is_error: true,
+                    duration_ms: 0,
+                };
+            };
+            return match crate::skill_store::load_skill_for_project(
+                std::path::Path::new(project_root),
+                skill_name,
+            ) {
+                Ok(output) => ToolExecutionResult {
+                    output,
+                    is_error: false,
+                    duration_ms: 0,
+                },
+                Err(error) => ToolExecutionResult {
+                    output: serde_json::json!({"error": error}),
+                    is_error: true,
+                    duration_ms: 0,
+                },
+            };
+        }
+
         // Orchestration tools after permission.
         if name == "task" {
             return self.execute_task(input).await;
@@ -365,6 +391,25 @@ impl EngineToolRuntime for PermissionGatedTools {
                             );
                         }
                     }
+                }
+                if name == "notification" {
+                    let hooks = crate::production_hooks::build_production_hooks_for_project(
+                        self.gateway
+                            .project_root
+                            .as_deref()
+                            .map(std::path::Path::new),
+                    );
+                    let _ = hooks
+                        .dispatch(HookRequest {
+                            event: HookEvent::Notification,
+                            run_id: self.parent_run_id.clone(),
+                            tool_name: Some(name.to_string()),
+                            input: serde_json::json!({
+                                "input": input,
+                                "output": out.result.clone(),
+                            }),
+                        })
+                        .await;
                 }
                 ToolExecutionResult {
                     output: out.result,
@@ -606,6 +651,32 @@ impl PermissionGatedTools {
                 return None;
             }
         }
+        let project_root = self
+            .gateway
+            .project_root
+            .as_deref()
+            .map(std::path::Path::new);
+        let permission_hooks =
+            crate::production_hooks::build_production_hooks_for_project(project_root);
+        let hook_responses = permission_hooks
+            .dispatch(HookRequest {
+                event: HookEvent::PermissionRequest,
+                run_id: self.parent_run_id.clone(),
+                tool_name: Some(name.to_string()),
+                input: input.clone(),
+            })
+            .await;
+        if let Err(reason) = HookRegistry::aggregate_allow(&hook_responses) {
+            return Some(ToolExecutionResult {
+                output: serde_json::json!({
+                    "error": reason,
+                    "denied": true,
+                    "denied_by_hook": true,
+                }),
+                is_error: true,
+                duration_ms: 0,
+            });
+        }
 
         let tool_call_id = uuid::Uuid::new_v4().to_string();
         let permission_id = self
@@ -699,6 +770,16 @@ impl PermissionGatedTools {
                 scope: scope.clone(),
             },
         );
+        if !approved {
+            let _ = permission_hooks
+                .dispatch(HookRequest {
+                    event: HookEvent::PermissionDenied,
+                    run_id: self.parent_run_id.clone(),
+                    tool_name: Some(name.to_string()),
+                    input: input.clone(),
+                })
+                .await;
+        }
         // Phase 2: AfterPermissionResolved is a documented safe point. Message
         // mutation lives in AgentEngine (apply_safe_point); the tool layer cannot
         // push into provider history here. Call the harness so the seam is live,

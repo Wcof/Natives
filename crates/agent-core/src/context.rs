@@ -1,6 +1,7 @@
 //! Context Assembler — system prompt, AGENTS.md, profile, skills stubs.
 
 use crate::profile::AgentProfile;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Default)]
@@ -36,24 +37,101 @@ pub fn assemble_context(
     }
 
     if let Some(root) = project_root {
-        for name in ["AGENTS.md", "agents.md", "CLAUDE.md"] {
-            let path = root.join(name);
-            if let Ok(text) = std::fs::read_to_string(&path) {
-                if !text.trim().is_empty() {
-                    parts.push(format!("# {name}\n{}", text.trim()));
-                    sources.push(path.display().to_string());
-                    break;
+        let instruction_dirs = project_instruction_dirs(root);
+        let mut seen_paths = HashSet::new();
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            let home = PathBuf::from(home);
+            for config_root in [
+                home.join(".natives"),
+                home.join(".agents"),
+                home.join(".claude"),
+            ] {
+                for name in ["AGENTS.md", "agents.md", "CLAUDE.md", "Claude.md"] {
+                    append_instruction_file(
+                        &config_root.join(name),
+                        &mut seen_paths,
+                        &mut parts,
+                        &mut sources,
+                    );
+                }
+                let mut rules = std::fs::read_dir(config_root.join("rules"))
+                    .ok()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .filter(|path| {
+                        path.extension()
+                            .and_then(|ext| ext.to_str())
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                    })
+                    .collect::<Vec<_>>();
+                rules.sort();
+                for path in rules {
+                    append_instruction_file(
+                        &path,
+                        &mut seen_paths,
+                        &mut parts,
+                        &mut sources,
+                    );
                 }
             }
         }
-        // Skills stubs: list .claude/skills or .grok/skills directory names
-        for skills_dir in [".claude/skills", ".grok/skills", ".natives/skills"] {
-            let dir = root.join(skills_dir);
+        for dir in &instruction_dirs {
+            for name in ["AGENTS.md", "agents.md", "CLAUDE.md", "Claude.md"] {
+                append_instruction_file(
+                    &dir.join(name),
+                    &mut seen_paths,
+                    &mut parts,
+                    &mut sources,
+                );
+            }
+            for rules_dir in [".agents/rules", ".claude/rules", ".natives/rules"] {
+                let mut rules = std::fs::read_dir(dir.join(rules_dir))
+                    .ok()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .filter(|path| {
+                        path.extension()
+                            .and_then(|ext| ext.to_str())
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                    })
+                    .collect::<Vec<_>>();
+                rules.sort();
+                for path in rules {
+                    append_instruction_file(
+                        &path,
+                        &mut seen_paths,
+                        &mut parts,
+                        &mut sources,
+                    );
+                }
+            }
+        }
+        parts.push(
+            "Project instructions above are ordered from repository root to the current project directory; deeper files take precedence. Before working in a deeper subdirectory, read any additional AGENTS.md, CLAUDE.md, .agents/rules/*.md, or .claude/rules/*.md found there."
+                .to_string(),
+        );
+
+        // Advertise project skills from every applicable directory. Full trusted
+        // skill bodies are injected by the daemon SkillStore.
+        let mut seen_skills = HashSet::new();
+        for dir in instruction_dirs.iter().rev() {
+            for skills_dir in [
+                ".natives/skills",
+                ".grok/skills",
+                ".agents/skills",
+                ".claude/skills",
+            ] {
+                let dir = dir.join(skills_dir);
             if let Ok(rd) = std::fs::read_dir(&dir) {
                 let names: Vec<_> = rd
                     .filter_map(|e| e.ok())
                     .filter(|e| e.path().is_dir() || e.path().extension().map(|x| x == "md").unwrap_or(false))
                     .map(|e| e.file_name().to_string_lossy().to_string())
+                    .filter(|name| seen_skills.insert(name.clone()))
                     .take(20)
                     .collect();
                 if !names.is_empty() {
@@ -63,6 +141,7 @@ pub fn assemble_context(
                     ));
                     sources.push(dir.display().to_string());
                 }
+            }
             }
         }
     }
@@ -75,6 +154,44 @@ pub fn assemble_context(
         estimated_tokens,
         sources,
     }
+}
+
+fn project_instruction_dirs(start: &Path) -> Vec<PathBuf> {
+    let root = start
+        .ancestors()
+        .find(|dir| dir.join(".git").exists())
+        .unwrap_or(start);
+    let mut dirs = Vec::new();
+    let mut current = Some(start);
+    while let Some(dir) = current {
+        dirs.push(dir.to_path_buf());
+        if dir == root {
+            break;
+        }
+        current = dir.parent();
+    }
+    dirs.reverse();
+    dirs
+}
+
+fn append_instruction_file(
+    path: &Path,
+    seen_paths: &mut HashSet<PathBuf>,
+    parts: &mut Vec<String>,
+    sources: &mut Vec<String>,
+) {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if !path.is_file() || !seen_paths.insert(canonical) {
+        return;
+    }
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    if text.trim().is_empty() {
+        return;
+    }
+    parts.push(format!("# From: {}\n{}", path.display(), text.trim()));
+    sources.push(path.display().to_string());
 }
 
 /// Soft context budget: estimate + thresholds used by engine / RPC.
@@ -223,6 +340,45 @@ mod tests {
         assert!(ctx.system_prompt.contains("You are a coder."));
         assert!(ctx.system_prompt.contains("rustfmt"));
         assert!(ctx.sources.iter().any(|s| s.contains("AGENTS.md")));
+    }
+
+    #[test]
+    fn assembles_layered_agents_claude_rules_and_agents_skills() {
+        let root = std::env::temp_dir().join(format!("natives-ctx-{}", uuid::Uuid::new_v4()));
+        let nested = root.join("packages").join("app");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(nested.join(".claude").join("rules")).unwrap();
+        std::fs::create_dir_all(nested.join(".agents").join("rules")).unwrap();
+        std::fs::create_dir_all(nested.join(".agents").join("skills").join("review")).unwrap();
+        std::fs::write(root.join("AGENTS.md"), "repo instruction").unwrap();
+        std::fs::write(nested.join("CLAUDE.md"), "nested instruction").unwrap();
+        std::fs::write(
+            nested.join(".claude").join("rules").join("rust.md"),
+            "claude rule",
+        )
+        .unwrap();
+        std::fs::write(
+            nested.join(".agents").join("rules").join("review.md"),
+            "agents rule",
+        )
+        .unwrap();
+        std::fs::write(
+            nested
+                .join(".agents")
+                .join("skills")
+                .join("review")
+                .join("SKILL.md"),
+            "# Review",
+        )
+        .unwrap();
+
+        let ctx = assemble_context(None, Some(&nested), None);
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(ctx.system_prompt.contains("repo instruction"));
+        assert!(ctx.system_prompt.contains("nested instruction"));
+        assert!(ctx.system_prompt.contains("claude rule"));
+        assert!(ctx.system_prompt.contains("agents rule"));
+        assert!(ctx.system_prompt.contains("- review"));
     }
 
     #[test]

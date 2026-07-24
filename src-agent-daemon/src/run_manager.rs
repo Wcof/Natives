@@ -1676,6 +1676,7 @@ impl RunManager {
                 model_id,
                 key_id,
                 permission_profile,
+                run.agent_profile_id.clone(),
                 content,
                 max_steps,
                 project_path,

@@ -92,27 +92,10 @@ pub fn parse_agent_profile_markdown(raw: &str, path: Option<&Path>) -> Result<Ag
             "completionRequirement" | "completion_requirement" => {
                 profile.completion_requirement = Some(value)
             }
-            "tools" => {
-                profile.tools = Some(
-                    value
-                        .trim_start_matches('[')
-                        .trim_end_matches(']')
-                        .split(',')
-                        .map(|s| s.trim().trim_matches('"').to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect(),
-                );
-            }
+            "tools" => profile.tools = Some(parse_inline_list(&value)),
+            "skills" => profile.skills = Some(parse_inline_list(&value)),
             "disallowedTools" | "disallowed_tools" => {
-                profile.disallowed_tools = Some(
-                    value
-                        .trim_start_matches('[')
-                        .trim_end_matches(']')
-                        .split(',')
-                        .map(|s| s.trim().trim_matches('"').to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect(),
-                );
+                profile.disallowed_tools = Some(parse_inline_list(&value));
             }
             _ => {}
         }
@@ -129,21 +112,63 @@ pub fn parse_agent_profile_markdown(raw: &str, path: Option<&Path>) -> Result<Ag
     Ok(profile)
 }
 
+fn parse_inline_list(value: &str) -> Vec<String> {
+    value
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .split(',')
+        .map(|item| {
+            item.trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string()
+        })
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
 /// Discover profiles from standard directories (highest priority first).
 pub fn default_profile_search_roots(project_root: Option<&Path>) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(root) = project_root {
+        roots.push(root.join(".agents/agents"));
         roots.push(root.join(".grok/agents"));
         roots.push(root.join(".claude/agents"));
         roots.push(root.join(".natives/agents"));
     }
     if let Some(home) = std::env::var_os("HOME") {
         let home = PathBuf::from(home);
+        roots.push(home.join(".agents/agents"));
         roots.push(home.join(".natives/agents"));
         roots.push(home.join(".grok/agents"));
         roots.push(home.join(".claude/agents"));
     }
     roots
+}
+
+pub fn load_agent_profile(
+    profile_id: &str,
+    project_root: Option<&Path>,
+) -> Option<AgentProfile> {
+    if profile_id.is_empty()
+        || profile_id.contains('/')
+        || profile_id.contains('\\')
+        || profile_id.contains("..")
+    {
+        return None;
+    }
+    for root in default_profile_search_roots(project_root) {
+        for extension in ["md", "markdown"] {
+            let path = root.join(format!("{profile_id}.{extension}"));
+            let Ok(raw) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if let Ok(profile) = parse_agent_profile_markdown(&raw, Some(&path)) {
+                return Some(profile);
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -172,5 +197,22 @@ You are a careful coding agent.
             .as_deref()
             .unwrap()
             .contains("careful coding"));
+    }
+
+    #[test]
+    fn loads_agents_project_profile() {
+        let root = std::env::temp_dir().join(format!("natives-profile-{}", uuid::Uuid::new_v4()));
+        let agents = root.join(".agents").join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(
+            agents.join("reviewer.md"),
+            "---\nname: Reviewer\ntokenBudget: 4096\n---\nReview carefully.",
+        )
+        .unwrap();
+        let profile = load_agent_profile("reviewer", Some(&root)).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(profile.name, "Reviewer");
+        assert_eq!(profile.token_budget, Some(4096));
+        assert!(profile.system_prompt.unwrap().contains("Review carefully"));
     }
 }

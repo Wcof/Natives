@@ -41,6 +41,22 @@ impl HookEvent {
     }
 }
 
+pub fn tool_pattern_matches(pattern: Option<&str>, tool_name: Option<&str>) -> bool {
+    let Some(pattern) = pattern.filter(|pattern| !pattern.trim().is_empty()) else {
+        return true;
+    };
+    let Some(tool_name) = tool_name else {
+        return pattern == "*";
+    };
+    pattern.split('|').any(|candidate| {
+        let candidate = candidate.trim();
+        candidate == "*"
+            || candidate == tool_name
+            || (candidate.ends_with('*')
+                && tool_name.starts_with(candidate.trim_end_matches('*')))
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookDecision {
@@ -165,15 +181,7 @@ pub struct MatcherDenyHook {
 #[async_trait::async_trait]
 impl HookHandler for MatcherDenyHook {
     fn matches_tool(&self, tool_name: Option<&str>) -> bool {
-        match tool_name {
-            None => self.tool_pattern == "*",
-            Some(name) => {
-                self.tool_pattern == "*"
-                    || self.tool_pattern == name
-                    || (self.tool_pattern.ends_with('*')
-                        && name.starts_with(self.tool_pattern.trim_end_matches('*')))
-            }
-        }
+        tool_pattern_matches(Some(&self.tool_pattern), tool_name)
     }
 
     async fn handle(&self, _request: HookRequest) -> HookResponse {

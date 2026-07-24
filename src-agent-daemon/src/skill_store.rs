@@ -1,11 +1,12 @@
 //! Skill discovery + trust + enable (Phase 6 minimum).
 //!
-//! Scans `.claude/skills`, `.grok/skills`, `.natives/skills` (project) and
-//! `~/.natives/skills` (user). Skills inject into system prompt only when
+//! Scans `.agents|claude|grok|natives/skills` at project and user scope.
+//! Skills inject into system prompt only when
 //! trusted and enabled; Subagent isolation is enforced by not auto-inheriting
 //! parent skill selection (callers must pass explicit skill ids).
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -42,13 +43,23 @@ impl SkillStore {
 
     pub fn discover_for_project(&self, project: Option<&Path>) {
         if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-            self.scan_dir(
-                &PathBuf::from(home).join(".natives").join("skills"),
-                SkillScope::User,
-            );
+            let home = PathBuf::from(home);
+            for rel in [
+                ".natives/skills",
+                ".grok/skills",
+                ".agents/skills",
+                ".claude/skills",
+            ] {
+                self.scan_dir(&home.join(rel), SkillScope::User);
+            }
         }
         if let Some(root) = project {
-            for rel in [".natives/skills", ".grok/skills", ".claude/skills"] {
+            for rel in [
+                ".natives/skills",
+                ".grok/skills",
+                ".agents/skills",
+                ".claude/skills",
+            ] {
                 self.scan_dir(&root.join(rel), SkillScope::Project);
             }
         }
@@ -149,16 +160,66 @@ impl SkillStore {
         let Some(items) = items else {
             return String::new();
         };
+        let mut skills = items
+            .values()
+            .filter(|skill| skill.enabled && skill.trusted)
+            .collect::<Vec<_>>();
+        skills.sort_by(|left, right| {
+            let scope = |scope: &SkillScope| match scope {
+                SkillScope::Project => 0,
+                SkillScope::User => 1,
+            };
+            scope(&left.scope)
+                .cmp(&scope(&right.scope))
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        let mut seen = std::collections::HashSet::new();
         let mut parts = Vec::new();
-        for s in items.values() {
-            if s.enabled && s.trusted {
-                if let Ok(body) = std::fs::read_to_string(&s.path) {
-                    parts.push(format!("### Skill: {}\n{}", s.name, body));
+        for skill in skills {
+            if seen.insert(skill.name.clone()) {
+                if let Ok(body) = std::fs::read_to_string(&skill.path) {
+                    parts.push(format!("### Skill: {}\n{}", skill.name, body));
                 }
             }
         }
         parts.join("\n\n")
     }
+}
+
+/// Build the trusted skill prompt for one run without leaking project-scoped
+/// records accumulated by the process-global catalog.
+pub fn prompt_for_project(project: &Path) -> String {
+    let skills = SkillStore::new();
+    skills.discover_for_project(Some(project));
+    skills.inject_prompt()
+}
+
+pub fn load_skill_for_project(project: &Path, name: &str) -> Result<Value, String> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err("invalid skill name".into());
+    }
+    let skills = SkillStore::new();
+    skills.discover_for_project(Some(project));
+    let mut matches = skills
+        .list()
+        .into_iter()
+        .filter(|skill| skill.name == name && skill.enabled && skill.trusted)
+        .collect::<Vec<_>>();
+    matches.sort_by_key(|skill| match skill.scope {
+        SkillScope::Project => 0,
+        SkillScope::User => 1,
+    });
+    let skill = matches
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("skill not found: {name}"))?;
+    let body = std::fs::read_to_string(&skill.path).map_err(|error| error.to_string())?;
+    Ok(serde_json::json!({
+        "skill": skill.name,
+        "loaded": true,
+        "path": skill.path,
+        "content": body,
+    }))
 }
 
 static GLOBAL_SKILLS: std::sync::OnceLock<SkillStore> = std::sync::OnceLock::new();
@@ -190,6 +251,26 @@ mod tests {
         let list = s.list();
         assert!(list.iter().any(|x| x.name == "demo"));
         assert!(!s.inject_prompt().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn discovers_agents_skill_md() {
+        let dir = std::env::temp_dir().join(format!("natives-skill-{}", uuid::Uuid::new_v4()));
+        let skill_dir = dir.join(".agents").join("skills").join("review");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "# Review\n\nCheck the actual diff before reporting completion.\n",
+        )
+        .unwrap();
+        let s = SkillStore::new();
+        s.discover_for_project(Some(&dir));
+        assert!(s.list().iter().any(|skill| skill.name == "review"));
+        assert!(s.inject_prompt().contains("actual diff"));
+        let loaded = load_skill_for_project(&dir, "review").unwrap();
+        assert_eq!(loaded["loaded"], true);
+        assert!(loaded["content"].as_str().unwrap().contains("actual diff"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
