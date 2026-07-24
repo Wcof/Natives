@@ -48,6 +48,31 @@ impl InteractionHub {
         self.permission_waiters.lock().await.remove(permission_id)
     }
 
+    /// Remove a waiter only when it belongs to `expected_run_id` (if supplied).
+    /// A mismatch leaves the waiter live so the owning run can still respond.
+    pub async fn resolve_permission_for_run(
+        &self,
+        permission_id: &str,
+        expected_run_id: Option<&str>,
+    ) -> Result<(String, String, oneshot::Sender<(bool, String)>), String> {
+        let mut waiters = self.permission_waiters.lock().await;
+        let Some((run_id, _tool_name, _)) = waiters.get(permission_id) else {
+            return Err(format!(
+                "permission_orphaned: no live waiter for request_id={permission_id}"
+            ));
+        };
+        if let Some(expected) = expected_run_id.filter(|id| !id.is_empty()) {
+            if expected != run_id {
+                return Err(format!(
+                    "permission run_id mismatch: expected {run_id}, got {expected}"
+                ));
+            }
+        }
+        waiters.remove(permission_id).ok_or_else(|| {
+            format!("permission_orphaned: no live waiter for request_id={permission_id}")
+        })
+    }
+
     pub async fn has_permission(&self, permission_id: &str) -> bool {
         self.permission_waiters
             .lock()
@@ -75,12 +100,6 @@ impl InteractionHub {
 
     pub async fn permission_count(&self) -> usize {
         self.permission_waiters.lock().await.len()
-    }
-
-    /// Temporary bridge: clone Arc for PermissionGatedTools until full private ownership.
-    /// Prefer register/resolve/cancel_runs APIs for new code.
-    pub fn permission_waiters_arc(&self) -> Arc<Mutex<PermissionWaiterMap>> {
-        self.permission_waiters.clone()
     }
 
     pub fn register_assignment(

@@ -74,10 +74,8 @@ async fn production_cancel_wakes_permission_waiter_fast() {
     let _tok = rt.ensure_execution_token(run_id, None).await.unwrap();
 
     let (tx, rx) = oneshot::channel::<(bool, String)>();
-    rt.permission_waiters.lock().await.insert(
-        "perm-1".into(),
-        (run_id.into(), "write_file".into(), tx),
-    );
+    rt.insert_permission_waiter("perm-1", run_id, "write_file", tx)
+        .await;
 
     let start = Instant::now();
     let waiter = tokio::spawn(async move {
@@ -93,16 +91,13 @@ async fn production_cancel_wakes_permission_waiter_fast() {
     let (approved, scope) = waiter.await.unwrap();
     let elapsed = start.elapsed();
     assert!(!approved, "cancel must deny permission");
-    assert!(
-        scope == "cancelled" || scope == "once",
-        "scope={scope}"
-    );
+    assert!(scope == "cancelled" || scope == "once", "scope={scope}");
     assert!(
         elapsed < Duration::from_millis(100),
         "permission wait cancel took {elapsed:?} (want <100ms)"
     );
     assert!(
-        !rt.permission_waiters.lock().await.contains_key("perm-1"),
+        !rt.interactions.has_permission("perm-1").await,
         "waiter must be cleared"
     );
 }
@@ -131,10 +126,7 @@ async fn single_process_cancel_does_not_require_parent_token() {
         .expect("spawn sleep");
     assert_eq!(snap.task_id, task_id);
     let cancelled = sup.cancel(&task_id).await.unwrap();
-    assert_eq!(
-        cancelled.state,
-        capability_gateway::ProcessState::Cancelled
-    );
+    assert_eq!(cancelled.state, capability_gateway::ProcessState::Cancelled);
     // Parent run token (if any) is independent — not cancelled by process-only cancel.
     let tok = CancellationToken::new();
     assert!(!tok.is_cancelled());

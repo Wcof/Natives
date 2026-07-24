@@ -26,7 +26,7 @@ pub struct PermissionGatedTools {
     pub gateway: Arc<CapabilityGateway>,
     pub permissions: Arc<PermissionManager>,
     pub events: EventSequencer,
-    pub waiters: Arc<Mutex<HashMap<String, (String, String, oneshot::Sender<(bool, String)>)>>>,
+    pub interactions: Arc<crate::runtime::InteractionHub>,
     pub subagents: Arc<SubAgentManager>,
     pub task_outputs: Arc<Mutex<HashMap<String, TaskRecord>>>,
     /// Shared with ProductionRuntime so kill_task / cascade can cancel live engines.
@@ -632,10 +632,9 @@ impl PermissionGatedTools {
         // (or test responder) can observe PermissionRequested, respond, and
         // lose the race before the channel exists, leaving the engine blocked.
         let (tx, rx) = oneshot::channel::<(bool, String)>();
-        self.waiters.lock().await.insert(
-            permission_id.clone(),
-            (self.parent_run_id.clone(), name.to_string(), tx),
-        );
+        self.interactions
+            .register_permission(&permission_id, &self.parent_run_id, name, tx)
+            .await;
         // Best-effort: persist interaction row for restart recovery.
         let _ = crate::interaction_store::insert_pending(
             &permission_id,
@@ -674,7 +673,7 @@ impl PermissionGatedTools {
         let (approved, scope) = tokio::select! {
             biased;
             _ = cancel.cancelled() => {
-                self.waiters.lock().await.remove(&permission_id);
+                let _ = self.interactions.resolve_permission(&permission_id).await;
                 (false, "cancelled".into())
             }
             res = tokio::time::timeout(Duration::from_secs(120), rx) => {

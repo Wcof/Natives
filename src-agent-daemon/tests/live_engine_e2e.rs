@@ -53,7 +53,7 @@ async fn live_engine_text_turn() {
         },
         permissions: rt.permissions.clone(),
         events: rt.events.clone(),
-        waiters: rt.permission_waiters.clone(),
+        interactions: rt.interactions.clone(),
         subagents: rt.subagents.clone(),
         task_outputs: rt.task_outputs.clone(),
         engines: rt.engines.clone(),
@@ -147,7 +147,7 @@ async fn live_engine_tool_loop() {
         },
         permissions: rt.permissions.clone(),
         events: rt.events.clone(),
-        waiters: rt.permission_waiters.clone(),
+        interactions: rt.interactions.clone(),
         subagents: rt.subagents.clone(),
         task_outputs: rt.task_outputs.clone(),
         engines: rt.engines.clone(),
@@ -261,7 +261,7 @@ async fn live_subagent_task_completes() {
         },
         permissions: rt.permissions.clone(),
         events: rt.events.clone(),
-        waiters: rt.permission_waiters.clone(),
+        interactions: rt.interactions.clone(),
         subagents: rt.subagents.clone(),
         task_outputs: rt.task_outputs.clone(),
         engines: rt.engines.clone(),
@@ -441,7 +441,7 @@ async fn live_engine_cancel_stream() {
             },
             permissions: rt_for_task.permissions.clone(),
             events: rt_for_task.events.clone(),
-            waiters: rt_for_task.permission_waiters.clone(),
+            interactions: rt_for_task.interactions.clone(),
             subagents: rt_for_task.subagents.clone(),
             task_outputs: rt_for_task.task_outputs.clone(),
             engines: rt_for_task.engines.clone(),
@@ -492,7 +492,13 @@ async fn live_engine_cancel_stream() {
         .expect("cancelled live run should stop promptly")
         .expect("join")
         .expect("run");
-    assert!(matches!(status, agent_core::EngineOutcome::Cancelled | agent_core::EngineOutcome::Interrupted { .. }), "{status:?}");
+    assert!(
+        matches!(
+            status,
+            agent_core::EngineOutcome::Cancelled | agent_core::EngineOutcome::Interrupted { .. }
+        ),
+        "{status:?}"
+    );
     // Lifecycle Interrupted/Cancelled events are committed by RunManager, not the engine.
     let _ = events.replay_after(&run_id, 0);
 
@@ -545,7 +551,7 @@ async fn live_cross_provider_subagent_openai_parent_anthropic_child() {
         },
         permissions: rt.permissions.clone(),
         events: rt.events.clone(),
-        waiters: rt.permission_waiters.clone(),
+        interactions: rt.interactions.clone(),
         subagents: rt.subagents.clone(),
         task_outputs: rt.task_outputs.clone(),
         engines: rt.engines.clone(),
@@ -672,7 +678,7 @@ async fn dual_provider_engine_fixture_subagent() {
         },
         permissions: rt.permissions.clone(),
         events: rt.events.clone(),
-        waiters: rt.permission_waiters.clone(),
+        interactions: rt.interactions.clone(),
         subagents: rt.subagents.clone(),
         task_outputs: rt.task_outputs.clone(),
         engines: rt.engines.clone(),
@@ -731,7 +737,10 @@ async fn dual_provider_engine_fixture_subagent() {
         .to_string();
     // Route policy / fixture default_binding assigns credentials; model-supplied
     // provider/key/model are intentionally ignored (security invariant from task-05/11).
-    assert!(!child.output["provider_id"].as_str().unwrap_or("").is_empty());
+    assert!(!child.output["provider_id"]
+        .as_str()
+        .unwrap_or("")
+        .is_empty());
     assert!(!child.output["model_id"].as_str().unwrap_or("").is_empty());
 
     let mut status = String::new();
@@ -773,7 +782,7 @@ async fn fixture_engine_still_works_without_live() {
         },
         permissions: rt.permissions.clone(),
         events: rt.events.clone(),
-        waiters: rt.permission_waiters.clone(),
+        interactions: rt.interactions.clone(),
         subagents: rt.subagents.clone(),
         task_outputs: rt.task_outputs.clone(),
         engines: rt.engines.clone(),
@@ -802,6 +811,9 @@ async fn fixture_engine_still_works_without_live() {
         )
         .await
         .unwrap();
-    assert!(matches!(status, agent_core::EngineOutcome::Completed { .. }), "{status:?}");
+    assert!(
+        matches!(status, agent_core::EngineOutcome::Completed { .. }),
+        "{status:?}"
+    );
     let _ = CancellationToken::new();
 }

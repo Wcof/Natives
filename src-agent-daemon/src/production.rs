@@ -54,7 +54,7 @@ impl crate::runtime::execution_registry::ProcessCancelHook for GlobalProcessCanc
 /// Deep state owners (task-01):
 /// - `execution` → [`crate::runtime::ExecutionRegistry`]
 /// - `tool_policy` → [`crate::runtime::ToolPolicyState`]
-/// - `permission_waiters` / `assignment_*` → InteractionHub maps (still pub for bridge)
+/// - permission and assignment waits → InteractionHub
 /// - `subagents` / `task_outputs` → TaskSupervisor maps
 /// - `engines` → migrating into ExecutionRegistry
 ///
@@ -67,9 +67,6 @@ pub struct ProductionRuntime {
     // hooks: removed dead shared state — each start builds HookRegistry per project (task-01).
     /// Sole interaction waiter owner (permission + assignment).
     pub interactions: Arc<crate::runtime::InteractionHub>,
-    /// Bridge Arc into InteractionHub maps (same storage) for PermissionGatedTools.
-    pub permission_waiters:
-        Arc<Mutex<HashMap<String, (String, String, oneshot::Sender<(bool, String)>)>>>,
     /// task_id → child run status/output
     pub task_outputs: Arc<Mutex<HashMap<String, crate::runtime::TaskRecord>>>,
     pub engines: Arc<Mutex<HashMap<String, Arc<AgentEngine>>>>,
@@ -115,7 +112,6 @@ impl ProductionRuntime {
             permissions: Arc::new(PermissionManager::new(PermissionProfile::ConfirmEach)),
             subagents: Arc::new(SubAgentManager::new(SubAgentConfig::default())),
             interactions: Arc::new(crate::runtime::InteractionHub::new()),
-            permission_waiters: Arc::new(Mutex::new(HashMap::new())),
             task_outputs: Arc::new(Mutex::new(HashMap::new())),
             engines: Arc::new(Mutex::new(HashMap::new())),
             execution: Arc::new(crate::runtime::ExecutionRegistry::new()),
@@ -124,9 +120,8 @@ impl ProductionRuntime {
             assignment_inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
             run_tool_allowlists: Arc::new(Mutex::new(HashMap::new())),
         };
-        // Bind bridge maps to InteractionHub storage (single owner).
+        // Assignment bridges remain until the subagent interaction protocol is moved.
         let mut rt = rt;
-        rt.permission_waiters = rt.interactions.permission_waiters_arc();
         rt.assignment_waiters = rt.interactions.assignment_waiters_arc();
         rt.assignment_inflight = rt.interactions.assignment_inflight_arc();
         // Wire process supervisor force-kill into cancel tree (task-03).
@@ -173,13 +168,6 @@ impl ProductionRuntime {
     }
 
     // ─── Permission waiter facade (task-01 / task-04) ───
-
-    /// Clone waiter map reference for PermissionGatedTools.
-    pub fn permission_waiters_ref(
-        &self,
-    ) -> Arc<Mutex<HashMap<String, (String, String, oneshot::Sender<(bool, String)>)>>> {
-        self.interactions.permission_waiters_arc()
-    }
 
     /// Insert a permission waiter.
     pub async fn insert_permission_waiter(
@@ -256,22 +244,10 @@ impl ProductionRuntime {
             return Err("request_id required".into());
         }
         let scope = normalize_permission_scope(scope.unwrap_or("once"));
-        let mut map = self.permission_waiters.lock().await;
-        let Some((bound_run, _tool_name, tx)) = map.remove(request_id) else {
-            // Stable code for restart/orphan (task-04): never mint a grant.
-            return Err(format!(
-                "permission_orphaned: no live waiter for request_id={request_id}"
-            ));
-        };
-        if let Some(rid) = run_id {
-            if !rid.is_empty() && rid != bound_run {
-                // Re-insert so legitimate owner can still respond.
-                map.insert(request_id.to_string(), (bound_run.clone(), _tool_name, tx));
-                return Err(format!(
-                    "permission run_id mismatch: expected {bound_run}, got {rid}"
-                ));
-            }
-        }
+        let (_bound_run, _tool_name, tx) = self
+            .interactions
+            .resolve_permission_for_run(request_id, run_id)
+            .await?;
         let _ = tx.send((approved, scope.clone()));
         // Best-effort: resolve any matching interaction row for restart recovery.
         let _ = crate::interaction_store::mark_resolved(
@@ -436,7 +412,7 @@ impl ProductionRuntime {
             },
             permissions: self.permissions.clone(),
             events: self.events.clone(),
-            waiters: self.permission_waiters.clone(),
+            interactions: self.interactions.clone(),
             subagents: self.subagents.clone(),
             task_outputs: self.task_outputs.clone(),
             engines: self.engines.clone(),
@@ -703,7 +679,7 @@ impl ProductionRuntime {
         let subagents = self.subagents.clone();
         let task_outputs = self.task_outputs.clone();
         let permissions = self.permissions.clone();
-        let waiters = self.permission_waiters.clone();
+        let interactions = self.interactions.clone();
         let engines = self.engines.clone();
         let task_id_bg = task_id.clone();
         let child_allowlist_bg = child_allowlist;
@@ -735,7 +711,7 @@ impl ProductionRuntime {
                 },
                 permissions,
                 events: events.clone(),
-                waiters,
+                interactions,
                 subagents: subagents.clone(),
                 task_outputs: task_outputs.clone(),
                 engines: engines.clone(),
@@ -1289,22 +1265,19 @@ mod permission_bind_tests {
     async fn rejects_mismatched_run_id() {
         let rt = ProductionRuntime::new();
         let (tx, _rx) = oneshot::channel();
-        rt.permission_waiters
-            .lock()
-            .await
-            .insert("p1".into(), ("run-a".into(), "tool".into(), tx));
+        rt.insert_permission_waiter("p1", "run-a", "tool", tx).await;
         let err = rt
             .respond_permission("p1", true, Some("run-b"), Some("once"))
             .await
             .unwrap_err();
         assert!(err.contains("mismatch"), "{err}");
         // Still present for correct owner
-        assert!(rt.permission_waiters.lock().await.contains_key("p1"));
+        assert!(rt.interactions.has_permission("p1").await);
         let ok = rt
             .respond_permission("p1", false, Some("run-a"), Some("once"))
             .await;
         assert!(ok.is_ok());
-        assert!(!rt.permission_waiters.lock().await.contains_key("p1"));
+        assert!(!rt.interactions.has_permission("p1").await);
     }
 }
 
@@ -1769,7 +1742,7 @@ mod tool_allowlist_tests {
             },
             permissions: rt.permissions.clone(),
             events: rt.events.clone(),
-            waiters: rt.permission_waiters.clone(),
+            interactions: rt.interactions.clone(),
             subagents: Arc::new(SubAgentManager::new(SubAgentConfig::default())),
             task_outputs: rt.task_outputs.clone(),
             engines: rt.engines.clone(),
