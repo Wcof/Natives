@@ -68,7 +68,8 @@ pub struct ProductionRuntime {
     // hooks: removed dead shared state — each start builds HookRegistry per project (task-01).
     /// permission_id → (run_id, resolver). run_id binding prevents cross-run responds.
     /// Owned by InteractionHub conceptually; field kept for bridge compatibility until full private facade.
-    pub permission_waiters: Arc<Mutex<HashMap<String, (String, String, oneshot::Sender<(bool, String)>)>>>,
+    pub permission_waiters:
+        Arc<Mutex<HashMap<String, (String, String, oneshot::Sender<(bool, String)>)>>>,
     /// task_id → child run status/output
     pub task_outputs: Arc<Mutex<HashMap<String, crate::runtime::TaskRecord>>>,
     pub engines: Arc<Mutex<HashMap<String, Arc<AgentEngine>>>>,
@@ -103,7 +104,6 @@ pub struct ToolGrant {
     /// "this_run" | "project"
     pub scope: String,
 }
-
 
 pub use crate::runtime::TaskRecord;
 
@@ -357,10 +357,10 @@ impl ProductionRuntime {
         tool_name: &str,
         tx: oneshot::Sender<(bool, String)>,
     ) {
-        self.permission_waiters
-            .lock()
-            .await
-            .insert(id.to_string(), (run_id.to_string(), tool_name.to_string(), tx));
+        self.permission_waiters.lock().await.insert(
+            id.to_string(),
+            (run_id.to_string(), tool_name.to_string(), tx),
+        );
     }
 
     /// Remove a permission waiter (on respond or cancel).
@@ -374,9 +374,7 @@ impl ProductionRuntime {
     // ─── Task output facade (task-01) ───
 
     /// Clone task output map reference for PermissionGatedTools.
-    pub fn task_outputs_ref(
-        &self,
-    ) -> Arc<Mutex<HashMap<String, TaskRecord>>> {
+    pub fn task_outputs_ref(&self) -> Arc<Mutex<HashMap<String, TaskRecord>>> {
         self.task_outputs.clone()
     }
 
@@ -388,14 +386,12 @@ impl ProductionRuntime {
             .insert(id.to_string(), record);
     }
 
-
     /// Remove a task output record.
     pub async fn remove_task_output(&self, id: &str) -> Option<TaskRecord> {
         self.task_outputs.lock().await.remove(id)
     }
 
     // ─── CLI cancel flag facade (task-01) ───
-
 
     /// Take a CLI cancel flag (consumes).
     pub async fn take_cli_cancel(&self, run_id: &str) -> Option<CancellationToken> {
@@ -422,9 +418,7 @@ impl ProductionRuntime {
     }
 
     /// Clone assignment inflight map for subagent store.
-    pub fn assignment_inflight_ref(
-        &self,
-    ) -> Arc<std::sync::Mutex<HashMap<String, String>>> {
+    pub fn assignment_inflight_ref(&self) -> Arc<std::sync::Mutex<HashMap<String, String>>> {
         self.assignment_inflight.clone()
     }
 
@@ -471,10 +465,7 @@ impl ProductionRuntime {
         if let Some(rid) = run_id {
             if !rid.is_empty() && rid != bound_run {
                 // Re-insert so legitimate owner can still respond.
-                map.insert(
-                    request_id.to_string(),
-                    (bound_run.clone(), _tool_name, tx),
-                );
+                map.insert(request_id.to_string(), (bound_run.clone(), _tool_name, tx));
                 return Err(format!(
                     "permission run_id mismatch: expected {bound_run}, got {rid}"
                 ));
@@ -510,13 +501,8 @@ impl ProductionRuntime {
         } else {
             serde_json::json!({})
         };
-        let inv = crate::runtime::invocation_from_gate(
-            tool_name,
-            &input,
-            conversation_id,
-            run_id,
-            None,
-        );
+        let inv =
+            crate::runtime::invocation_from_gate(tool_name, &input, conversation_id, run_id, None);
         let _ = self
             .tool_policy
             .remember(&inv, scope, Some("permission_respond"))
@@ -552,13 +538,8 @@ impl ProductionRuntime {
             // Empty input for non-pattern tools: only exact empty-constraint grants match.
             serde_json::json!({})
         };
-        let inv = crate::runtime::invocation_from_gate(
-            tool_name,
-            &input,
-            conversation_id,
-            run_id,
-            None,
-        );
+        let inv =
+            crate::runtime::invocation_from_gate(tool_name, &input, conversation_id, run_id, None);
         matches!(
             self.tool_policy.check(&inv).await,
             crate::runtime::GrantDecision::Allowed { .. }
@@ -572,6 +553,8 @@ impl ProductionRuntime {
         self.tool_policy.check(inv).await
     }
 
+    /// Execute a production engine turn. Returns `EngineOutcome` only — never commits
+    /// Run lifecycle status or terminal lifecycle events. RunManager is the sole committer.
     pub async fn start_run(
         &self,
         run_id: String,
@@ -583,7 +566,7 @@ impl ProductionRuntime {
         user_content: String,
         max_steps: u32,
         project_path: Option<std::path::PathBuf>,
-    ) -> Result<(), String> {
+    ) -> Result<agent_core::EngineOutcome, String> {
         let project_root = project_path.ok_or_else(|| {
             "project_path is required for daemon runs; process cwd fallback is disabled".to_string()
         })?;
@@ -667,20 +650,15 @@ impl ProductionRuntime {
             tool_allowlist,
         };
 
-        let assembled = assemble_context(
-            profile_for_assemble.as_ref(),
-            Some(&project_root),
-            None,
-        );
+        let assembled = assemble_context(profile_for_assemble.as_ref(), Some(&project_root), None);
         // Compact history against resolved token budget (chars/4 fallback estimate).
-        let raw_history = crate::conversation_store::engine_history(&conversation_id)
-            .unwrap_or_default();
+        let raw_history =
+            crate::conversation_store::engine_history(&conversation_id).unwrap_or_default();
         let history_pairs: Vec<(String, String)> = raw_history
             .iter()
             .map(|m| (m.role.clone(), m.content.clone()))
             .collect();
-        let (compacted, _) =
-            agent_core::compact_messages(&history_pairs, budget.token_budget);
+        let (compacted, _) = agent_core::compact_messages(&history_pairs, budget.token_budget);
         // Map compacted (role, content) back to EngineMessage, preserving tool fields
         // for messages still present (match by role+content).
         let messages: Vec<EngineMessage> = compacted
@@ -720,57 +698,27 @@ impl ProductionRuntime {
             Ok(o) => o,
             Err(e) => agent_core::EngineOutcome::failed(e.code(), e.to_string(), e.retryable()),
         };
-        // RunManager owns lifecycle status; production only maps outcome for local control flow.
-        let status = match &outcome {
-            agent_core::EngineOutcome::Completed { .. } => "completed".to_string(),
-            agent_core::EngineOutcome::Failed { .. } => "failed".to_string(),
-            agent_core::EngineOutcome::Cancelled => "cancelled".to_string(),
-            agent_core::EngineOutcome::Interrupted { .. } => "interrupted".to_string(),
-        };
         // Finalize checkpoint — failure closes related side effects (no silent half-state).
         if let Err(e) = crate::checkpoint::global_checkpoint_manager().finalize_run(&run_id) {
             eprintln!("[production] checkpoint finalize_run failed: {e}");
-            // Fail closed for completed path: still record assistant turn only if finalize ok.
-            if status == "completed" {
-                // Keep event log terminal, but do not claim durable file snapshots exist.
-            }
         }
-        if status == "completed" {
+        let success = matches!(outcome, agent_core::EngineOutcome::Completed { .. });
+        if success {
             crate::conversation_store::append_assistant_turn_from_events(
                 &conversation_id,
                 &run_id,
                 &self.events.replay_after(&run_id, 0),
             )?;
         }
-        // Best-effort commit through RunManager (sole status authority).
-        let _ = crate::run_manager::global_run_manager().commit_outcome(&run_id, &outcome);
-        self.events.append(
-            &run_id,
-            if status == "completed" {
-                RunEventKind::Completed {
-                    reason: "stop".into(),
-                }
-            } else if status == "interrupted" {
-                RunEventKind::Interrupted {
-                    reason: "cancelled".into(),
-                }
-            } else {
-                RunEventKind::Failed {
-                    error: "engine ended".into(),
-                    code: status.clone(),
-                }
-            },
-        );
-        // Completed may already be emitted by engine; duplicate is ok for terminal detection.
+        // Do NOT commit_outcome or append terminal lifecycle events here.
+        // RunManager is the sole lifecycle committer after this returns.
         self.engines.lock().await.remove(&run_id);
 
         // SessionCoordinator: drain next prompt / cancel-and-send after real terminal.
         // Never re-executes the just-finished run — only starts a *new* queued item.
-        let success = status == "completed";
-        let _ = crate::prompt_queue_store::on_run_terminal(&conversation_id, &run_id, success)
-            .await;
-        let _ = status;
-        Ok(())
+        let _ =
+            crate::prompt_queue_store::on_run_terminal(&conversation_id, &run_id, success).await;
+        Ok(outcome)
     }
 
     /// Sole production cancel API: cancel `run_id` and every nested descendant
@@ -849,16 +797,8 @@ impl ProductionRuntime {
             }
         }
 
-        // Domain event only — RunManager commits authoritative Cancelled status.
-        // Keep Cancelled event for replay compat until task-02 full journal lands.
-        for rid in &run_ids {
-            self.events.append(
-                rid,
-                RunEventKind::Cancelled {
-                    reason: "cancelled".into(),
-                },
-            );
-        }
+        // No terminal lifecycle events here — RunManager::cancel commits Cancelled/Failed
+        // after cleanup quiet. Domain cleanup only.
     }
 
     /// Alias for tree cancel — never cancel a single node without descendants.
@@ -867,9 +807,7 @@ impl ProductionRuntime {
     }
 
     /// Daemon shutdown entry (task-13 wiring): cancel every root and wait quiet.
-    pub async fn cancel_all_execution_roots(
-        &self,
-    ) -> Vec<crate::runtime::CancelCleanupOutcome> {
+    pub async fn cancel_all_execution_roots(&self) -> Vec<crate::runtime::CancelCleanupOutcome> {
         self.execution.cancel_all_execution_roots().await
     }
 
@@ -908,11 +846,7 @@ impl ProductionRuntime {
             } else {
                 // Parent missing (legacy): still create child root but record parent link.
                 self.execution
-                    .register_with_token(
-                        run_id,
-                        Some(parent.to_string()),
-                        CancellationToken::new(),
-                    )
+                    .register_with_token(run_id, Some(parent.to_string()), CancellationToken::new())
                     .await?
             }
         } else {
@@ -937,8 +871,7 @@ impl ProductionRuntime {
         parent_permission_profile: &str,
         project_root: Option<String>,
     ) -> Result<String, String> {
-        let child_perm =
-            cap_child_permission(parent_permission_profile, &permission_profile);
+        let child_perm = cap_child_permission(parent_permission_profile, &permission_profile);
         let child_allowlist = default_subagent_tool_allowlist();
         // Depth from parent chain — never hardcode 1 (task-11).
         let depth = self.subagents.depth_for_child(parent_run_id).await;
@@ -1097,16 +1030,13 @@ impl ProductionRuntime {
                         agent_core::EngineOutcome::Cancelled => "cancelled".to_string(),
                         agent_core::EngineOutcome::Interrupted { .. } => "interrupted".to_string(),
                     };
-                    let _ = crate::run_manager::global_run_manager()
-                        .commit_outcome(&child_run_id, o);
+                    let _ =
+                        crate::run_manager::global_run_manager().commit_outcome(&child_run_id, o);
                     (status, Some(text))
                 }
                 Err(e) => {
-                    let outcome = agent_core::EngineOutcome::failed(
-                        e.code(),
-                        e.to_string(),
-                        e.retryable(),
-                    );
+                    let outcome =
+                        agent_core::EngineOutcome::failed(e.code(), e.to_string(), e.retryable());
                     let _ = crate::run_manager::global_run_manager()
                         .commit_outcome(&child_run_id, &outcome);
                     ("failed".into(), Some(e.to_string()))
@@ -1193,10 +1123,7 @@ impl ProductionRuntime {
     /// Returns the task record on success; `"timeout"` or `"unknown task_id: …"` on error.
     pub async fn wait_task(&self, task_id: &str, timeout_ms: u64) -> Result<TaskRecord, String> {
         fn is_terminal(status: &str) -> bool {
-            matches!(
-                status,
-                "completed" | "failed" | "cancelled" | "interrupted"
-            )
+            matches!(status, "completed" | "failed" | "cancelled" | "interrupted")
         }
 
         let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms.max(1));
@@ -1250,7 +1177,9 @@ mod task_surface_tests {
 
         let listed = rt.list_tasks().await;
         assert_eq!(listed.len(), 2);
-        assert!(listed.iter().any(|(id, r)| id == "task-1" && r.status == "running"));
+        assert!(listed
+            .iter()
+            .any(|(id, r)| id == "task-1" && r.status == "running"));
         assert!(listed
             .iter()
             .any(|(id, r)| id == "task-2" && r.output.as_deref() == Some("done")));
@@ -1312,7 +1241,6 @@ mod task_surface_tests {
     }
 }
 
-
 #[cfg(test)]
 mod tool_grant_tests {
     use super::*;
@@ -1349,8 +1277,14 @@ mod tool_grant_tests {
         let rt = Arc::new(ProductionRuntime::new());
         rt.remember_tool_grant("c1", "r1", "run_terminal", "cargo test", "project")
             .await;
-        assert!(rt.has_tool_grant("c1", "r1", "run_terminal", "cargo test").await);
-        assert!(!rt.has_tool_grant("c1", "r1", "run_terminal", "rm -rf /").await);
+        assert!(
+            rt.has_tool_grant("c1", "r1", "run_terminal", "cargo test")
+                .await
+        );
+        assert!(
+            !rt.has_tool_grant("c1", "r1", "run_terminal", "rm -rf /")
+                .await
+        );
     }
 }
 
@@ -1809,7 +1743,9 @@ mod permission_bind_tests {
         assert!(err.contains("mismatch"), "{err}");
         // Still present for correct owner
         assert!(rt.permission_waiters.lock().await.contains_key("p1"));
-        let ok = rt.respond_permission("p1", false, Some("run-a"), Some("once")).await;
+        let ok = rt
+            .respond_permission("p1", false, Some("run-a"), Some("once"))
+            .await;
         assert!(ok.is_ok());
         assert!(!rt.permission_waiters.lock().await.contains_key("p1"));
     }
@@ -1865,7 +1801,6 @@ fn redact_cred_err(msg: &str) -> String {
     }
     out
 }
-
 
 /// Register gateway tools for a run. Parent (`allowlist=None`) gets full builtins.
 /// Child (`Some`) only registers the intersection so unauthorized tools are not present.
@@ -2104,7 +2039,9 @@ impl EngineToolRuntime for PermissionGatedTools {
             .project_root
             .as_ref()
             .map(|s| std::path::PathBuf::from(s))
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+            .unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            });
         let cancel = if let Some(rt) = &self.runtime {
             rt.execution
                 .token(&self.parent_run_id)
@@ -2268,11 +2205,7 @@ impl EngineToolRuntime for PermissionGatedTools {
                 &batch_specs
                     .iter()
                     .map(|(call_id, _input, name, prompt)| {
-                        (
-                            call_id.clone(),
-                            name.clone(),
-                            prompt.clone(),
-                        )
+                        (call_id.clone(), name.clone(), prompt.clone())
                     })
                     .collect::<Vec<_>>(),
             )
@@ -2420,7 +2353,6 @@ fn extract_write_paths(name: &str, input: &Value) -> Vec<String> {
     paths
 }
 
-
 fn normalize_permission_scope(scope: &str) -> String {
     match scope.trim().to_ascii_lowercase().as_str() {
         "run" | "this_run" | "session" => "this_run".into(),
@@ -2447,7 +2379,11 @@ fn persist_tool_grant_db(grant: &ToolGrant) -> Result<(), String> {
     let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .or_else(|| std::env::var("NATIVES_DB_PATH").ok().filter(|s| !s.trim().is_empty()));
+        .or_else(|| {
+            std::env::var("NATIVES_DB_PATH")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        });
     let Some(db_path) = db_path else {
         return Ok(());
     };
@@ -2494,7 +2430,11 @@ fn load_tool_grant_match(
     let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .or_else(|| std::env::var("NATIVES_DB_PATH").ok().filter(|s| !s.trim().is_empty()));
+        .or_else(|| {
+            std::env::var("NATIVES_DB_PATH")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        });
     let Some(db_path) = db_path else {
         return false;
     };
@@ -2611,10 +2551,8 @@ impl PermissionGatedTools {
                 "input": input,
             }),
         );
-        crate::prompt_queue_store::global_harness().set_pending_interaction(
-            &self.conversation_id,
-            Some(permission_id.clone()),
-        );
+        crate::prompt_queue_store::global_harness()
+            .set_pending_interaction(&self.conversation_id, Some(permission_id.clone()));
         let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
         self.events.append(
             &self.parent_run_id,
@@ -2722,14 +2660,7 @@ impl PermissionGatedTools {
             }
         }
         let _ = self.subagents.cascade_cancel_metadata(run_id).await;
-        for rid in &run_ids {
-            self.events.append(
-                rid,
-                RunEventKind::Interrupted {
-                    reason: "cancelled".into(),
-                },
-            );
-        }
+        // No terminal lifecycle events here — RunManager::cancel is the sole committer.
     }
 
     async fn kill_task_tree(&self, task_id: &str) -> bool {
@@ -2812,10 +2743,7 @@ impl PermissionGatedTools {
             CancellationToken::new()
         };
         match crate::runtime::mcp_invocation::invoke_mcp_tool(
-            &server_id,
-            &tool_name,
-            arguments,
-            &cancel,
+            &server_id, &tool_name, arguments, &cancel,
         )
         .await
         {
@@ -3003,11 +2931,8 @@ impl PermissionGatedTools {
         ) {
             Ok(r) => r,
             Err(e) => {
-                let _ = crate::subagent_store::close_subagent_session(
-                    &session_id,
-                    "failed",
-                    Some(&e),
-                );
+                let _ =
+                    crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&e));
                 return ToolExecutionResult {
                     output: serde_json::json!({"error": format!("create child run failed: {e}")}),
                     is_error: true,
@@ -3041,11 +2966,8 @@ impl PermissionGatedTools {
         {
             Ok(c) => c,
             Err(e) => {
-                let _ = crate::subagent_store::close_subagent_session(
-                    &session_id,
-                    "failed",
-                    Some(&e),
-                );
+                let _ =
+                    crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&e));
                 return ToolExecutionResult {
                     output: serde_json::json!({"error": e}),
                     is_error: true,
@@ -3103,11 +3025,7 @@ impl PermissionGatedTools {
             },
         );
         if let Err(e) = start_result {
-            let _ = crate::subagent_store::close_subagent_session(
-                &session_id,
-                "failed",
-                Some(&e),
-            );
+            let _ = crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&e));
             if let Some(rec) = self.task_outputs.lock().await.get_mut(&task_id) {
                 rec.status = "failed".into();
                 rec.output = Some(e.clone());
@@ -3163,15 +3081,9 @@ impl PermissionGatedTools {
                         },
                     );
                 } else {
-                    let err_msg = run
-                        .error_code
-                        .clone()
-                        .unwrap_or_else(|| status.clone());
+                    let err_msg = run.error_code.clone().unwrap_or_else(|| status.clone());
                     let _ = subagents
-                        .update_status(
-                            &mem_task_id_bg,
-                            SubAgentStatus::Failed(err_msg.clone()),
-                        )
+                        .update_status(&mem_task_id_bg, SubAgentStatus::Failed(err_msg.clone()))
                         .await;
                     let _ = crate::subagent_store::close_subagent_session(
                         &session_id_bg,
@@ -3245,8 +3157,9 @@ impl PermissionGatedTools {
         let default_binding = self.default_binding();
 
         // Existing policy: assign from pool without UI.
-        if let Some(policy) =
-            crate::subagent_store::get_route_policy(&self.conversation_id).ok().flatten()
+        if let Some(policy) = crate::subagent_store::get_route_policy(&self.conversation_id)
+            .ok()
+            .flatten()
         {
             let mut map = HashMap::new();
             let mut attempted = Vec::new();
@@ -3397,8 +3310,9 @@ impl PermissionGatedTools {
             // Wait for policy written by the owner of the oneshot.
             let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
             loop {
-                if let Some(policy) =
-                    crate::subagent_store::get_route_policy(&self.conversation_id).ok().flatten()
+                if let Some(policy) = crate::subagent_store::get_route_policy(&self.conversation_id)
+                    .ok()
+                    .flatten()
                 {
                     let mut map = HashMap::new();
                     let mut attempted = Vec::new();
@@ -3552,14 +3466,12 @@ impl PermissionGatedTools {
             .cloned()
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_else(|| {
-                map.values()
-                    .cloned()
-                    .fold(Vec::new(), |mut acc, b| {
-                        if !acc.iter().any(|x| x == &b) {
-                            acc.push(b);
-                        }
-                        acc
-                    })
+                map.values().cloned().fold(Vec::new(), |mut acc, b| {
+                    if !acc.iter().any(|x| x == &b) {
+                        acc.push(b);
+                    }
+                    acc
+                })
             });
         if !pool_for_policy.is_empty() {
             let _ = crate::subagent_store::upsert_route_policy(
@@ -3645,7 +3557,11 @@ pub fn validate_route_binding(binding: &crate::subagent_store::RouteBinding) -> 
         return Err("route binding model_id is required".into());
     }
     // Reject values that look like secrets rather than IDs.
-    for (label, v) in [("provider_id", provider), ("key_id", key), ("model_id", model)] {
+    for (label, v) in [
+        ("provider_id", provider),
+        ("key_id", key),
+        ("model_id", model),
+    ] {
         if v.len() > 256 {
             return Err(format!("route binding {label} is too long"));
         }
@@ -3811,7 +3727,11 @@ async fn reaper_tick() -> Result<(), String> {
     let now = chrono::Utc::now();
     for sess in sessions {
         // Never close while a live task_output still says running.
-        if let Some(rec) = crate::global_run_manager().runtime.task_output(&sess.id).await {
+        if let Some(rec) = crate::global_run_manager()
+            .runtime
+            .task_output(&sess.id)
+            .await
+        {
             if rec.status == "running" {
                 continue;
             }
@@ -3831,7 +3751,11 @@ async fn reaper_tick() -> Result<(), String> {
             crate::subagent_store::parent_heartbeat_recent(&sess.parent_conversation_id, 90);
         let limit_secs = if parent_active { 300i64 } else { 120i64 };
         if idle.num_seconds() >= limit_secs {
-            if let Some(rec) = crate::global_run_manager().runtime.task_output(&sess.id).await {
+            if let Some(rec) = crate::global_run_manager()
+                .runtime
+                .task_output(&sess.id)
+                .await
+            {
                 if rec.status == "running" {
                     continue;
                 }
@@ -4034,7 +3958,9 @@ mod tool_allowlist_tests {
             .map(|t| t.name)
             .collect();
         assert!(names.contains(&"read_file".into()));
-        assert!(!names.iter().any(|n| n == "write_file" || n == "task" || n == "run_terminal"));
+        assert!(!names
+            .iter()
+            .any(|n| n == "write_file" || n == "task" || n == "run_terminal"));
 
         let denied = tools
             .execute_tool(
@@ -4131,7 +4057,12 @@ mod tool_allowlist_tests {
             ok.output.get("permission_profile").and_then(|v| v.as_str()),
             Some("full_access")
         );
-        let task_id = ok.output.get("task_id").and_then(|v| v.as_str()).unwrap().to_string();
+        let task_id = ok
+            .output
+            .get("task_id")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .to_string();
         let child = tools.subagents.get(&task_id).await.expect("child record");
         assert_eq!(
             child.tool_allowlist,
@@ -4163,7 +4094,7 @@ mod tool_allowlist_tests {
 
         // Parent ask: cannot upgrade to full_access (cap before spawn).
         // Use full_access permission_profile field on tools so task gate doesn't block,
-        // but cap_child_permission still sees parent profile "ask" via a custom field? 
+        // but cap_child_permission still sees parent profile "ask" via a custom field?
         // We call the helper directly for the pure cap assertion, and use spawn path
         // with parent tools.permission_profile = ask under autonomous class by temporarily
         // using full_access for the parent tools gate while asserting cap_child_permission.
@@ -4186,7 +4117,11 @@ mod tool_allowlist_tests {
             )
             .await;
         assert!(!empty.is_error, "{:?}", empty.output);
-        let empty_id = empty.output.get("task_id").and_then(|v| v.as_str()).unwrap();
+        let empty_id = empty
+            .output
+            .get("task_id")
+            .and_then(|v| v.as_str())
+            .unwrap();
         let empty_child = tools.subagents.get(empty_id).await.unwrap();
         assert!(empty_child.tool_allowlist.is_empty());
 
@@ -4216,7 +4151,9 @@ mod tool_allowlist_tests {
     async fn execute_task_ignores_model_key_id_auto_when_policy_exists() {
         let _env_guard = crate::storage::DataStore::env_test_lock();
         let dir = tempfile::tempdir().unwrap();
-        let db = dir.path().join(format!("task-auto-{}.db", uuid::Uuid::new_v4()));
+        let db = dir
+            .path()
+            .join(format!("task-auto-{}.db", uuid::Uuid::new_v4()));
         let art = dir.path().join("artifacts");
         crate::storage::set_test_db_override(Some(db.clone()), Some(art.clone()));
         let _warm = crate::storage::DataStore::new(&db, &art).expect("migrate");

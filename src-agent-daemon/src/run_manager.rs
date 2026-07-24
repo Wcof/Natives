@@ -3,16 +3,16 @@
 use crate::production::{FixtureMode, FixtureProvider, ProductionRuntime};
 use crate::storage::DataStore;
 use agent_core::{
-    AgentEngine, CommitError, EngineOutcome, EngineRunConfig, EventSequencer, RunLifecycleAuthority,
-    TransitionMetadata,
+    AgentEngine, CommitError, EngineOutcome, EngineRunConfig, EventSequencer,
+    RunLifecycleAuthority, TransitionMetadata,
 };
 use assistant_protocol::v2::{
     CancelRunRequest, CreateRunRequest, DaemonCapabilities, ReplayRunRequest, RetryRunRequest,
     RunEventKind, RunEventV2, RunStatusV2, RunV2, StartRunRequest, PROTOCOL_V2,
 };
 use std::collections::HashMap;
-use tokio_util::sync::CancellationToken;
 use std::sync::{Arc, Mutex};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 /// Active and historical runs held by the daemon process.
@@ -402,7 +402,6 @@ impl RunManager {
         let _ = self.commit_status(run_id, RunStatusV2::Failed, meta);
     }
 
-
     /// Map a status target to a lifecycle event payload.
     fn lifecycle_event_for(target: RunStatusV2, metadata: &TransitionMetadata) -> RunEventKind {
         let reason = metadata
@@ -486,7 +485,8 @@ impl RunManager {
         if let Some(steps) = metadata.step_count {
             run.step_count = steps;
         }
-        if matches!(target, RunStatusV2::Preparing | RunStatusV2::Running) && run.started_at.is_none()
+        if matches!(target, RunStatusV2::Preparing | RunStatusV2::Running)
+            && run.started_at.is_none()
         {
             run.started_at = Some(chrono::Utc::now());
         }
@@ -533,12 +533,12 @@ impl RunManager {
             Ok(_) => self
                 .get_run(run_id)
                 .ok_or_else(|| "run disappeared after commit".into()),
-            Err(CommitError::AlreadyTerminal { .. }) => self
-                .get_run(run_id)
-                .ok_or_else(|| "run not found".into()),
-            Err(CommitError::CasConflict { status, .. }) if status.is_terminal() => self
-                .get_run(run_id)
-                .ok_or_else(|| "run not found".into()),
+            Err(CommitError::AlreadyTerminal { .. }) => {
+                self.get_run(run_id).ok_or_else(|| "run not found".into())
+            }
+            Err(CommitError::CasConflict { status, .. }) if status.is_terminal() => {
+                self.get_run(run_id).ok_or_else(|| "run not found".into())
+            }
             Err(e) => Err(e.to_string()),
         }
     }
@@ -550,9 +550,7 @@ impl RunManager {
             .map(|r| r.status)
             .unwrap_or(RunStatusV2::Running);
         if status.is_terminal() {
-            return self
-                .get_run(run_id)
-                .ok_or_else(|| "run not found".into());
+            return self.get_run(run_id).ok_or_else(|| "run not found".into());
         }
         let (mut target, mut meta) = agent_core::outcome_commit_parts(outcome);
         // Pre-task-03: cooperative cancel mid-run -> Interrupted; cancel() path uses Cancelled.
@@ -622,7 +620,6 @@ impl RunManager {
         }
         Ok(())
     }
-
 
     /// Startup recovery (task-04): one transaction, no Engine Future restart.
     ///
@@ -835,13 +832,17 @@ impl RunManager {
             }
         }
 
-
         // Resolve stable ProjectIdentity when a path is provided (task-10).
         // Never store raw path as conversation.project_id.
         let mut bound_project_id: Option<String> = None;
         let mut bound_identity_version: Option<u32> = None;
         let mut bound_canonical: Option<String> = None;
-        if let Some(pp) = req.project_path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(pp) = req
+            .project_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             if let Some(store) = &self.data_store {
                 if let Ok(conn) = store.conn() {
                     match crate::project_identity::store::register_or_get(&conn, pp) {
@@ -853,9 +854,7 @@ impl RunManager {
                         Err(e) => {
                             // Missing path: keep diagnostic snapshot path, leave project_id
                             // unbound (orphaned). Side-effect tools must re-bind first.
-                            eprintln!(
-                                "[run_manager] project identity not bound for '{pp}': {e}"
-                            );
+                            eprintln!("[run_manager] project identity not bound for '{pp}': {e}");
                             bound_canonical = Some(pp.to_string());
                         }
                     }
@@ -988,35 +987,36 @@ impl RunManager {
     }
 
     pub async fn cancel(&self, req: CancelRunRequest) -> Result<RunV2, String> {
-        // Phase 1: commit Cancelling (best-effort until full RunJournal CAS lands).
-        let (was_terminal, revision_before) = {
-            let mut runs = self.runs.lock().map_err(|e| e.to_string())?;
-            let run = runs
-                .get_mut(&req.run_id)
+        // Phase 1: journal Cancelling via commit_status (sole lifecycle authority).
+        // Never mutate memory Run.status directly — DB + lifecycle event + memory + broadcast
+        // must succeed as one commit_transition.
+        {
+            let current = self
+                .get_run(&req.run_id)
                 .ok_or_else(|| "run not found".to_string())?;
-            if run.status.is_terminal() {
-                return Ok(run.clone());
+            if current.status.is_terminal() {
+                return Ok(current);
             }
-            let rev = run.revision;
-            if run.status != RunStatusV2::Cancelling {
-                // Validate via agent-core sole transition rules when possible.
-                let _ = agent_core::transition(run.status, RunStatusV2::Cancelling);
-                run.status = RunStatusV2::Cancelling;
-                run.revision = rev.saturating_add(1);
-                let mid = run.clone();
-                drop(runs);
-                let _ = self.persist_run_row(&mid);
-                (false, rev)
-            } else {
-                (false, rev)
+            if current.status != RunStatusV2::Cancelling {
+                if let Err(e) = self.commit_status(
+                    &req.run_id,
+                    RunStatusV2::Cancelling,
+                    TransitionMetadata::empty()
+                        .with_reason("cancelling")
+                        .with_lifecycle_hint("cancelling"),
+                ) {
+                    // Fail-safe: still signal cancel tree so work stops, but do not claim
+                    // success or invent a pseudo-terminal status.
+                    self.runtime.cancel_run(&req.run_id).await;
+                    return Err(e);
+                }
             }
-        };
-        let _ = (was_terminal, revision_before);
+        }
 
-        // Phase 2: signal tree + grace + force cleanup.
+        // Phase 2: signal tree + grace + force cleanup (domain only; no status writes).
         self.runtime.cancel_run(&req.run_id).await;
+
         // Phase 3: Cancelled only after registry quiet (or Failed on cleanup fail).
-        // Status commits go through commit_status (Agent A sole authority).
         let quiet = self.runtime.execution.active_count().await == 0
             || !self.runtime.execution.is_registered(&req.run_id).await;
         let current = self
@@ -1061,10 +1061,7 @@ impl RunManager {
             if can_write_messages
                 && run.trigger_message_id.is_none()
                 && (req.content.as_ref().is_some_and(|c| !c.trim().is_empty())
-                    || req
-                        .attachments
-                        .as_ref()
-                        .is_some_and(|a| !a.is_empty()))
+                    || req.attachments.as_ref().is_some_and(|a| !a.is_empty()))
             {
                 if let Some(id) = self.append_user_message_on_store(
                     &run.conversation_id,
@@ -1202,10 +1199,7 @@ impl RunManager {
         )
         .map_err(|e| e.to_string())?;
         for (index, block) in blocks.iter().enumerate() {
-            let block_type = block
-                .get("type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("text");
+            let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("text");
             let content = if block_type == "text" {
                 serde_json::json!({
                     "text": block.get("text").and_then(|v| v.as_str()).unwrap_or_default()
@@ -1247,7 +1241,12 @@ impl RunManager {
         let run = self.ensure_run_for_start(&req)?;
 
         // Honest runtime gate (REQ-T01/T02): codex never executable; claude_cli only if binary present.
-        if let Some(rt) = req.runtime_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(rt) = req
+            .runtime_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             match rt {
                 "native" | "" => {}
                 "codex_cli" => {
@@ -1260,7 +1259,9 @@ impl RunManager {
                 }
                 "claude_cli" => {
                     if !crate::cli_runtime_bridge::claude_cli_available() {
-                        return Err("runtime claude_cli unavailable (claude binary not found)".into());
+                        return Err(
+                            "runtime claude_cli unavailable (claude binary not found)".into()
+                        );
                     }
                 }
                 other => {
@@ -1306,7 +1307,12 @@ impl RunManager {
         let run = rm.ensure_run_for_start(&req)?;
 
         // Honest runtime gate (REQ-T01/T02): codex never executable; claude_cli only if binary present.
-        if let Some(rt) = req.runtime_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(rt) = req
+            .runtime_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             match rt {
                 "native" | "" => {}
                 "codex_cli" => {
@@ -1319,7 +1325,9 @@ impl RunManager {
                 }
                 "claude_cli" => {
                     if !crate::cli_runtime_bridge::claude_cli_available() {
-                        return Err("runtime claude_cli unavailable (claude binary not found)".into());
+                        return Err(
+                            "runtime claude_cli unavailable (claude binary not found)".into()
+                        );
                     }
                 }
                 other => {
@@ -1413,7 +1421,7 @@ impl RunManager {
             }
         }
 
-                // REQ-T02: Codex remains fail-closed (app-server not implemented).
+        // REQ-T02: Codex remains fail-closed (app-server not implemented).
         if runtime_id == "codex_cli" {
             let cancel = CancellationToken::new();
             self.runtime
@@ -1453,7 +1461,7 @@ impl RunManager {
             });
         }
 
-// REQ-T01: Claude CLI session main path (stream-json → v2 events).
+        // REQ-T01: Claude CLI session main path (stream-json → v2 events).
         if runtime_id == "claude_cli"
             && std::env::var("NATIVES_DAEMON_FIXTURE").ok().as_deref() != Some("1")
             && !cfg!(test)
@@ -1479,28 +1487,35 @@ impl RunManager {
             {
                 Ok(s) => s,
                 Err(e) => {
-                    self.runtime.events.append(
-                        &run.id,
-                        RunEventKind::Failed {
-                            error: e.clone(),
-                            code: "CLI_RUNTIME".into(),
-                        },
-                    );
-                    "failed".to_string()
+                    // Do not append terminal events here; commit_status is sole lifecycle writer.
+                    let meta = TransitionMetadata::empty()
+                        .with_error_code("CLI_RUNTIME")
+                        .with_reason(e)
+                        .with_lifecycle_hint("failed");
+                    let _ = self.commit_status(&run.id, RunStatusV2::Failed, meta);
+                    return self
+                        .get_run(&run.id)
+                        .ok_or_else(|| "run missing after cli turn".to_string());
                 }
             };
             self.runtime.clear_cli_cancel(&run.id).await;
             let final_status = match terminal.as_str() {
                 "completed" => RunStatusV2::Completed,
-                "interrupted" | "cancelled" => RunStatusV2::Interrupted,
+                "cancelled" => RunStatusV2::Cancelled,
+                "interrupted" => RunStatusV2::Interrupted,
                 _ => RunStatusV2::Failed,
             };
-            let meta = if final_status == RunStatusV2::Failed {
-                TransitionMetadata::empty()
+            let meta = match final_status {
+                RunStatusV2::Failed => TransitionMetadata::empty()
                     .with_error_code("CLI_RUNTIME")
-                    .with_lifecycle_hint("failed")
-            } else {
-                TransitionMetadata::empty().with_lifecycle_hint(final_status.as_str())
+                    .with_lifecycle_hint("failed"),
+                RunStatusV2::Cancelled => TransitionMetadata::empty()
+                    .with_reason("cancelled")
+                    .with_lifecycle_hint("cancelled"),
+                RunStatusV2::Interrupted => TransitionMetadata::empty()
+                    .with_reason("cancelled")
+                    .with_lifecycle_hint("interrupted"),
+                _ => TransitionMetadata::empty().with_lifecycle_hint(final_status.as_str()),
             };
             let _ = self.commit_status(&run.id, final_status, meta);
             return self
@@ -1538,7 +1553,7 @@ impl RunManager {
         let use_fixture_engine =
             std::env::var("NATIVES_DAEMON_FIXTURE").ok().as_deref() == Some("1") || cfg!(test);
 
-        let final_status = if use_fixture_engine {
+        if use_fixture_engine {
             // Deterministic offline path for tests — real engine + permission tools,
             // never EchoProvider fake success text.
             let mut hooks = agent_core::HookRegistry::new();
@@ -1613,72 +1628,33 @@ impl RunManager {
                 );
             }
             self.runtime.remove_engine(&run.id).await;
-            // Commit terminal from outcome; return status for legacy local var.
-            let committed = self.commit_outcome(&run.id, &outcome)?;
-            committed.status
-        } else {
-            let project_path = self.resolve_project_path(&run.id, request_project_path.as_deref());
-            self.store_project_path(
-                &run.id,
-                project_path
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .as_deref(),
-            );
-            self.runtime
-                .start_run(
-                    run.id.clone(),
-                    run.conversation_id.clone(),
-                    provider_id,
-                    model_id,
-                    key_id,
-                    permission_profile,
-                    content,
-                    max_steps,
-                    project_path,
-                )
-                .await?;
-            // Infer terminal from last event
-            let events = self.runtime.events.replay_after(&run.id, 0);
-            if events.iter().any(|e| {
-                matches!(
-                    e.payload,
-                    RunEventKind::Cancelled { .. } | RunEventKind::Interrupted { .. }
-                )
-            }) {
-                if events
-                    .iter()
-                    .any(|e| matches!(e.payload, RunEventKind::Cancelled { .. }))
-                {
-                    RunStatusV2::Cancelled
-                } else {
-                    RunStatusV2::Interrupted
-                }
-            } else if events
-                .iter()
-                .any(|e| matches!(e.payload, RunEventKind::Failed { .. }))
-            {
-                RunStatusV2::Failed
-            } else {
-                RunStatusV2::Completed
-            }
-        };
-
-        // Fixture path already committed via commit_outcome; production path may still
-        // need a terminal commit from inferred status.
-        if let Some(existing) = self.get_run(&run.id) {
-            if existing.status.is_terminal() {
-                return Ok(existing);
-            }
+            return self.commit_outcome(&run.id, &outcome);
         }
-        let meta = if final_status == RunStatusV2::Failed {
-            TransitionMetadata::empty()
-                .with_error_code("engine_failed")
-                .with_lifecycle_hint("failed")
-        } else {
-            TransitionMetadata::empty().with_lifecycle_hint(final_status.as_str())
-        };
-        self.commit_status(&run.id, final_status, meta)
+
+        let project_path = self.resolve_project_path(&run.id, request_project_path.as_deref());
+        self.store_project_path(
+            &run.id,
+            project_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .as_deref(),
+        );
+        let outcome = self
+            .runtime
+            .start_run(
+                run.id.clone(),
+                run.conversation_id.clone(),
+                provider_id,
+                model_id,
+                key_id,
+                permission_profile,
+                content,
+                max_steps,
+                project_path,
+            )
+            .await?;
+        // Sole terminal commit from EngineOutcome — never scan events or default Completed.
+        self.commit_outcome(&run.id, &outcome)
     }
 
     /// Start with explicit seams (tests / advanced callers).
@@ -1709,9 +1685,9 @@ impl RunManager {
                 parent_run_id: None,
                 project_path: None,
                 idempotency_key: req.idempotency_key.clone(),
-                        effort: None,
-            runtime_id: None,
-        })?
+                effort: None,
+                runtime_id: None,
+            })?
         };
 
         // Empty default: do not invent a synthetic "continue" user turn when the
@@ -1723,9 +1699,8 @@ impl RunManager {
             .ensure_execution_token(&run.id, run.parent_run_id.as_deref())
             .await
             .unwrap_or_else(|_| CancellationToken::new());
-        let engine = Arc::new(
-            AgentEngine::new(self.runtime.events.clone()).with_cancel_token(cancel),
-        );
+        let engine =
+            Arc::new(AgentEngine::new(self.runtime.events.clone()).with_cancel_token(cancel));
         self.runtime.register_engine(&run.id, engine.clone()).await;
         let _ = self.commit_status(
             &run.id,
@@ -1754,7 +1729,11 @@ impl RunManager {
             )
             .is_err()
         {
-            EngineOutcome::failed("persist_assistant", "failed to persist assistant turn", false)
+            EngineOutcome::failed(
+                "persist_assistant",
+                "failed to persist assistant turn",
+                false,
+            )
         } else {
             outcome
         };
@@ -1822,8 +1801,6 @@ impl RunManager {
 pub fn protocol_version() -> &'static str {
     PROTOCOL_V2
 }
-
-
 
 impl RunLifecycleAuthority for RunManager {
     fn commit_transition(
@@ -1944,8 +1921,8 @@ impl RunLifecycleAuthority for RunManager {
                 )
                 .map_err(|e| CommitError::Storage(e.to_string()))?;
             let mut event = RunEventV2::new(run_id, next_seq as u64, lifecycle.clone());
-            let payload = serde_json::to_string(&event)
-                .map_err(|e| CommitError::Storage(e.to_string()))?;
+            let payload =
+                serde_json::to_string(&event).map_err(|e| CommitError::Storage(e.to_string()))?;
             tx.execute(
                 "INSERT INTO run_event (run_id, sequence, event_type, payload, timestamp, event_id)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -2017,7 +1994,6 @@ impl RunLifecycleAuthority for RunManager {
     }
 }
 
-
 fn run_status_from_db(status: &str) -> RunStatusV2 {
     match status {
         "created" => RunStatusV2::Created,
@@ -2076,7 +2052,7 @@ mod tests {
             parent_run_id: None,
             project_path: None,
             idempotency_key: Some("idem-1".into()),
-                    effort: None,
+            effort: None,
             runtime_id: None,
         };
         let a = rm.create_run(req.clone()).unwrap();
@@ -2091,7 +2067,10 @@ mod tests {
             let db_path = dir.path().join("natives.db");
             std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
             std::env::set_var("NATIVES_DB_PATH", &db_path);
-            crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
+            crate::storage::set_test_db_override(
+                Some(db_path.clone()),
+                Some(dir.path().join("artifacts")),
+            );
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
@@ -2120,9 +2099,9 @@ mod tests {
                     parent_run_id: None,
                     project_path: None,
                     idempotency_key: Some(format!("sqlite-event-{}", Uuid::new_v4())),
-                            effort: None,
-            runtime_id: None,
-        })
+                    effort: None,
+                    runtime_id: None,
+                })
                 .unwrap();
 
             let (count, event_type): (i64, String) = store
@@ -2152,7 +2131,10 @@ mod tests {
             let db_path = dir.path().join("natives.db");
             std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
             std::env::set_var("NATIVES_DB_PATH", &db_path);
-            crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
+            crate::storage::set_test_db_override(
+                Some(db_path.clone()),
+                Some(dir.path().join("artifacts")),
+            );
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
@@ -2182,9 +2164,9 @@ mod tests {
                     parent_run_id: Some("parent-run-1".into()),
                     project_path: Some("/tmp/natives-project".into()),
                     idempotency_key: Some(idempotency_key.clone()),
-                            effort: None,
-            runtime_id: None,
-        })
+                    effort: None,
+                    runtime_id: None,
+                })
                 .unwrap();
 
             let row: (String, String, String, String, String, String, String, i64) = store
@@ -2227,7 +2209,10 @@ mod tests {
             let db_path = dir.path().join("natives.db");
             std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
             std::env::set_var("NATIVES_DB_PATH", &db_path);
-            crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
+            crate::storage::set_test_db_override(
+                Some(db_path.clone()),
+                Some(dir.path().join("artifacts")),
+            );
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
@@ -2255,9 +2240,9 @@ mod tests {
                 parent_run_id: None,
                 project_path: Some("/tmp/sqlite-idem".into()),
                 idempotency_key: Some(idempotency_key.clone()),
-                        effort: None,
-            runtime_id: None,
-        };
+                effort: None,
+                runtime_id: None,
+            };
 
             let first = RunManager::new_with_store(store.clone())
                 .create_run(req.clone())
@@ -2293,7 +2278,10 @@ mod tests {
             let db_path = dir.path().join("natives.db");
             std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
             std::env::set_var("NATIVES_DB_PATH", &db_path);
-            crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
+            crate::storage::set_test_db_override(
+                Some(db_path.clone()),
+                Some(dir.path().join("artifacts")),
+            );
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
@@ -2328,9 +2316,9 @@ mod tests {
                     parent_run_id: None,
                     project_path: None,
                     idempotency_key: Some(run_id.clone()),
-                            effort: None,
-            runtime_id: None,
-        })
+                    effort: None,
+                    runtime_id: None,
+                })
                 .unwrap_err();
             assert!(err.contains("PERSISTENCE_FAILED"), "{err}");
             assert!(rm.get_run(&run_id).is_none());
@@ -2359,7 +2347,10 @@ mod tests {
             std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
 
             std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
-            crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
+            crate::storage::set_test_db_override(
+                Some(db_path.clone()),
+                Some(dir.path().join("artifacts")),
+            );
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
@@ -2393,9 +2384,9 @@ mod tests {
                     max_steps: None,
                     project_path: None,
                     idempotency_key: Some(format!("trigger-clean-{}", Uuid::new_v4())),
-                            effort: None,
-            runtime_id: None,
-        })
+                    effort: None,
+                    runtime_id: None,
+                })
                 .unwrap_err();
             assert!(err.contains("PERSISTENCE_FAILED"), "{err}");
             let messages: i64 = store
@@ -2434,7 +2425,10 @@ mod tests {
             std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
 
             std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
-            crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
+            crate::storage::set_test_db_override(
+                Some(db_path.clone()),
+                Some(dir.path().join("artifacts")),
+            );
             let store =
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap();
             let conversation_id = "trigger-conversation";
@@ -2463,9 +2457,9 @@ mod tests {
                     max_steps: None,
                     project_path: None,
                     idempotency_key: Some("trigger-idem".into()),
-                            effort: None,
-            runtime_id: None,
-        })
+                    effort: None,
+                    runtime_id: None,
+                })
                 .unwrap();
             assert_eq!(run.permission_profile, "readonly");
             assert!(run.trigger_message_id.is_some());
@@ -2681,9 +2675,9 @@ mod tests {
                 parent_run_id: None,
                 project_path: None,
                 idempotency_key: None,
-                        effort: None,
-            runtime_id: None,
-        })
+                effort: None,
+                runtime_id: None,
+            })
             .unwrap();
         let retried = rm
             .retry(RetryRunRequest {
@@ -2705,7 +2699,10 @@ mod tests {
         std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
-        crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
+        crate::storage::set_test_db_override(
+            Some(db_path.clone()),
+            Some(dir.path().join("artifacts")),
+        );
         let store = Arc::new(
             crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
         );
@@ -2729,9 +2726,9 @@ mod tests {
                 parent_run_id: None,
                 project_path: Some(dir.path().to_string_lossy().into_owned()),
                 idempotency_key: Some("detach-1".into()),
-                        effort: None,
-            runtime_id: None,
-        })
+                effort: None,
+                runtime_id: None,
+            })
             .unwrap();
 
         let immediate = rm
@@ -2748,9 +2745,9 @@ mod tests {
                 max_steps: Some(5),
                 project_path: Some(dir.path().to_string_lossy().into_owned()),
                 idempotency_key: None,
-                        effort: None,
-            runtime_id: None,
-        })
+                effort: None,
+                runtime_id: None,
+            })
             .unwrap();
         // Must not wait for engine terminal status.
         assert!(
@@ -2794,9 +2791,9 @@ mod tests {
                 max_steps: None,
                 project_path: None,
                 idempotency_key: None,
-                        effort: None,
-            runtime_id: None,
-        })
+                effort: None,
+                runtime_id: None,
+            })
             .unwrap_err();
         assert!(
             err.contains("terminal") || err.contains("retry"),
@@ -2846,9 +2843,9 @@ mod tests {
                     parent_run_id: None,
                     project_path: Some("/tmp/proj".into()),
                     idempotency_key: Some(format!("restore-{}", Uuid::new_v4())),
-                            effort: None,
-            runtime_id: None,
-        })
+                    effort: None,
+                    runtime_id: None,
+                })
                 .unwrap();
             // Force active status then snapshot.
             {
@@ -2893,7 +2890,10 @@ mod tests {
             let db_path = dir.path().join("natives.db");
             std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
             std::env::set_var("NATIVES_DB_PATH", &db_path);
-            crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
+            crate::storage::set_test_db_override(
+                Some(db_path.clone()),
+                Some(dir.path().join("artifacts")),
+            );
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
@@ -2965,15 +2965,22 @@ mod tests {
             std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
             std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
             std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
-            crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
+            crate::storage::set_test_db_override(
+                Some(db_path.clone()),
+                Some(dir.path().join("artifacts")),
+            );
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
-            store.conn().unwrap().execute(
-                "INSERT INTO conversation (id, mode, title, provider_id, model_id)
+            store
+                .conn()
+                .unwrap()
+                .execute(
+                    "INSERT INTO conversation (id, mode, title, provider_id, model_id)
                  VALUES ('c-idem-start', 'agent', 'Idem', 'openai', 'gpt-4o')",
-                [],
-            ).unwrap();
+                    [],
+                )
+                .unwrap();
             let rm = Arc::new(RunManager::new_with_store(store.clone()));
             let created = rm
                 .create_run(CreateRunRequest {
@@ -2989,9 +2996,9 @@ mod tests {
                     parent_run_id: None,
                     project_path: None,
                     idempotency_key: Some(format!("idem-start-{}", uuid::Uuid::new_v4())),
-                            effort: None,
-            runtime_id: None,
-        })
+                    effort: None,
+                    runtime_id: None,
+                })
                 .unwrap();
             let req = StartRunRequest {
                 run_id: Some(created.id.clone()),
@@ -3006,9 +3013,9 @@ mod tests {
                 max_steps: Some(5),
                 project_path: None,
                 idempotency_key: None,
-                        effort: None,
-            runtime_id: None,
-        };
+                effort: None,
+                runtime_id: None,
+            };
             let a = rm.start_detached(req.clone()).unwrap();
             let b = rm.start_detached(req).unwrap();
             assert_eq!(a.id, b.id);
@@ -3031,7 +3038,10 @@ mod tests {
         std::env::set_var("NATIVES_DB_PATH", &db_path);
         std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db_path);
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
-        crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
+        crate::storage::set_test_db_override(
+            Some(db_path.clone()),
+            Some(dir.path().join("artifacts")),
+        );
         let store = Arc::new(
             crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
         );
@@ -3055,9 +3065,9 @@ mod tests {
                 max_steps: Some(5),
                 project_path: Some(dir.path().to_string_lossy().into_owned()),
                 idempotency_key: None,
-                        effort: None,
-            runtime_id: None,
-        })
+                effort: None,
+                runtime_id: None,
+            })
             .await
             .unwrap();
         assert_eq!(run.status, RunStatusV2::Completed);
@@ -3122,9 +3132,9 @@ mod tests {
                 max_steps: Some(5),
                 project_path: None,
                 idempotency_key: None,
-                        effort: None,
-            runtime_id: None,
-        })
+                effort: None,
+                runtime_id: None,
+            })
             .await
             .unwrap();
         assert_eq!(retried_done.status, RunStatusV2::Completed);
@@ -3179,9 +3189,9 @@ mod tests {
                 parent_run_id: None,
                 project_path: None,
                 idempotency_key: Some("tree-parent".into()),
-                        effort: None,
-            runtime_id: None,
-        })
+                effort: None,
+                runtime_id: None,
+            })
             .unwrap();
 
         // Spawn real subagent identity under parent run_id.
@@ -3211,15 +3221,19 @@ mod tests {
 
         // Register a live child AgentEngine on child.run_id (production path).
         let child_engine = Arc::new(AgentEngine::new(rm.runtime.events.clone()));
-        rm.runtime.register_engine(&child.run_id, child_engine.clone()).await;
-        rm.runtime.insert_task_output(
-            &child.id,
-            crate::production::TaskRecord {
-                run_id: child.run_id.clone(),
-                status: "running".into(),
-                output: None,
-            },
-        ).await;
+        rm.runtime
+            .register_engine(&child.run_id, child_engine.clone())
+            .await;
+        rm.runtime
+            .insert_task_output(
+                &child.id,
+                crate::production::TaskRecord {
+                    run_id: child.run_id.clone(),
+                    status: "running".into(),
+                    output: None,
+                },
+            )
+            .await;
 
         // Child tool observes cancel flag (same bar as cancel_mid).
         let seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -3237,7 +3251,7 @@ mod tests {
             let _ = child_run;
         });
 
-        // Sole cancel API: cancel parent tree.
+        // Domain tree signal via cancel_run_tree; authoritative Cancelled via RunManager::cancel.
         rm.runtime.cancel_run_tree(&parent.id).await;
 
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), watch).await;
@@ -3264,13 +3278,34 @@ mod tests {
             .map(|t| t.status.clone());
         assert_eq!(task_status.as_deref(), Some("cancelled"));
 
-        let child_interrupted = rm
-            .runtime
-            .events
-            .replay_after(&child.run_id, 0)
+        // Lifecycle Cancelled is committed only by RunManager::cancel (journal), not domain cleanup.
+        let cancelled = rm
+            .cancel(CancelRunRequest {
+                run_id: parent.id.clone(),
+            })
+            .await
+            .expect("cancel parent via journal");
+        assert!(
+            cancelled.status.is_terminal(),
+            "parent must be terminal after RunManager::cancel"
+        );
+        let parent_lifecycle = rm.runtime.events.replay_after(&parent.id, 0);
+        let terminal_count = parent_lifecycle
             .iter()
-            .any(|e| matches!(e.payload, RunEventKind::Cancelled { .. }));
-        assert!(child_interrupted, "child run must get Cancelled event");
+            .filter(|e| {
+                matches!(
+                    e.payload,
+                    RunEventKind::Cancelled { .. }
+                        | RunEventKind::Failed { .. }
+                        | RunEventKind::Completed { .. }
+                        | RunEventKind::Interrupted { .. }
+                )
+            })
+            .count();
+        assert_eq!(
+            terminal_count, 1,
+            "parent must have exactly one terminal lifecycle event after cancel"
+        );
 
         if let Ok(dir) = std::env::var("NATIVES_TEST_SCRATCH") {
             let evidence = serde_json::json!({
@@ -3279,8 +3314,8 @@ mod tests {
                 "child_task_id": child.id,
                 "child_engine_cancel_flag": true,
                 "child_status": "cancelled",
-                "child_interrupted_event": true,
-                "api": "cancel_run_tree",
+                "parent_terminal_lifecycle_events": terminal_count,
+                "api": "cancel_run_tree+RunManager::cancel",
             });
             let _ = std::fs::write(
                 std::path::Path::new(&dir).join("cascade-cancel-tree.json"),
@@ -3312,9 +3347,9 @@ mod tests {
                 parent_run_id: None,
                 project_path: None,
                 idempotency_key: Some("cancel-mid".into()),
-                        effort: None,
-            runtime_id: None,
-        })
+                effort: None,
+                runtime_id: None,
+            })
             .unwrap();
 
         let cancel_flag_seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -3436,9 +3471,9 @@ mod tests {
                         max_steps: Some(5),
                         project_path: None,
                         idempotency_key: None,
-                                effort: None,
-            runtime_id: None,
-        },
+                        effort: None,
+                        runtime_id: None,
+                    },
                     &ToolThenSlow,
                     &tools,
                 )
@@ -3471,17 +3506,12 @@ mod tests {
         let _ = start_result;
 
         let engine_cancelled = cancel_flag_seen.load(std::sync::atomic::Ordering::SeqCst);
-        let has_cancel_lifecycle = rm
-            .runtime
-            .events
-            .replay_after(&run.id, 0)
-            .iter()
-            .any(|e| {
-                matches!(
-                    e.payload,
-                    RunEventKind::Cancelled { .. } | RunEventKind::Interrupted { .. }
-                )
-            });
+        let has_cancel_lifecycle = rm.runtime.events.replay_after(&run.id, 0).iter().any(|e| {
+            matches!(
+                e.payload,
+                RunEventKind::Cancelled { .. } | RunEventKind::Interrupted { .. }
+            )
+        });
 
         if let Ok(dir) = std::env::var("NATIVES_TEST_SCRATCH") {
             let evidence = serde_json::json!({
@@ -3536,9 +3566,9 @@ mod tests {
                 parent_run_id: None,
                 project_path: None,
                 idempotency_key: Some(run_key),
-                        effort: None,
-            runtime_id: None,
-        })
+                effort: None,
+                runtime_id: None,
+            })
             .unwrap();
 
         // Tool-calling fixture provider + permission gated tools.
@@ -3605,9 +3635,9 @@ mod tests {
                     max_steps: Some(5),
                     project_path: None,
                     idempotency_key: None,
-                            effort: None,
-            runtime_id: None,
-        },
+                    effort: None,
+                    runtime_id: None,
+                },
                 &provider,
                 &tools,
             ),
@@ -4288,7 +4318,10 @@ mod tests {
             std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
 
             std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
-            crate::storage::set_test_db_override(Some(db_path.clone()), Some(dir.path().join("artifacts")));
+            crate::storage::set_test_db_override(
+                Some(db_path.clone()),
+                Some(dir.path().join("artifacts")),
+            );
             let store = Arc::new(
                 crate::storage::DataStore::new(&db_path, &dir.path().join("artifacts")).unwrap(),
             );
@@ -4372,7 +4405,10 @@ mod tests {
                     runtime_id: Some("native".into()),
                 })
                 .unwrap();
-            assert_eq!(again.trigger_message_id.as_deref(), Some(daemon_msg_id.as_str()));
+            assert_eq!(
+                again.trigger_message_id.as_deref(),
+                Some(daemon_msg_id.as_str())
+            );
             let count: i64 = store
                 .conn()
                 .unwrap()
@@ -4395,5 +4431,148 @@ mod tests {
                 std::env::remove_var("NATIVES_RUNTIME_DIR");
             }
         });
+    }
+
+    #[tokio::test]
+    async fn cancel_vs_complete_race_single_terminal_and_consistent() {
+        // 100 concurrent cancel-vs-complete races: each run ends with exactly one
+        // terminal lifecycle event, and memory status matches that event.
+        std::env::set_var("NATIVES_DAEMON_FIXTURE", "1");
+        let mut terminal_mismatch = 0u32;
+        let mut multi_terminal = 0u32;
+        for i in 0..100 {
+            let rm = Arc::new(RunManager::new());
+            let run = rm
+                .create_run(CreateRunRequest {
+                    conversation_id: format!("c-race-{i}"),
+                    provider_id: "openai".into(),
+                    model_id: "gpt-4o".into(),
+                    key_id: Some("k".into()),
+                    agent_profile_id: None,
+                    permission_profile: Some("ask".into()),
+                    content: Some("race".into()),
+                    attachments: None,
+                    max_steps: Some(3),
+                    parent_run_id: None,
+                    project_path: None,
+                    idempotency_key: Some(format!("race-key-{i}")),
+                    effort: None,
+                    runtime_id: None,
+                })
+                .unwrap();
+            let run_id = run.id.clone();
+
+            let rm_start = rm.clone();
+            let rid = run_id.clone();
+            let start_h = tokio::spawn(async move {
+                rm_start
+                    .start(StartRunRequest {
+                        run_id: Some(rid),
+                        conversation_id: None,
+                        provider_id: None,
+                        model_id: None,
+                        key_id: None,
+                        content: Some("race".into()),
+                        attachments: None,
+                        trigger_message_id: None,
+                        permission_profile: Some("full_access".into()),
+                        max_steps: Some(3),
+                        project_path: None,
+                        idempotency_key: None,
+                        effort: None,
+                        runtime_id: None,
+                    })
+                    .await
+            });
+            // Small jitter so cancel sometimes wins, sometimes loses.
+            if i % 2 == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+            let rm_cancel = rm.clone();
+            let rid2 = run_id.clone();
+            let cancel_h =
+                tokio::spawn(
+                    async move { rm_cancel.cancel(CancelRunRequest { run_id: rid2 }).await },
+                );
+
+            let start_res = start_h.await.unwrap();
+            let cancel_res = cancel_h.await.unwrap();
+            // Both may succeed or one may see already-terminal — both ok.
+            let _ = (start_res, cancel_res);
+
+            let final_run = rm.get_run(&run_id).expect("run present");
+            assert!(
+                final_run.status.is_terminal(),
+                "run {i} must be terminal, got {:?}",
+                final_run.status
+            );
+
+            let events = rm.runtime.events.replay_after(&run_id, 0);
+            let terminals: Vec<_> = events
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        e.payload,
+                        RunEventKind::Completed { .. }
+                            | RunEventKind::Failed { .. }
+                            | RunEventKind::Cancelled { .. }
+                            | RunEventKind::Interrupted { .. }
+                    )
+                })
+                .collect();
+            if terminals.len() != 1 {
+                multi_terminal += 1;
+            }
+            if let Some(ev) = terminals.first() {
+                let status_from_event = match &ev.payload {
+                    RunEventKind::Completed { .. } => RunStatusV2::Completed,
+                    RunEventKind::Failed { .. } => RunStatusV2::Failed,
+                    RunEventKind::Cancelled { .. } => RunStatusV2::Cancelled,
+                    RunEventKind::Interrupted { .. } => RunStatusV2::Interrupted,
+                    _ => unreachable!(),
+                };
+                if status_from_event != final_run.status {
+                    terminal_mismatch += 1;
+                }
+            } else {
+                terminal_mismatch += 1;
+            }
+
+            // Late outcome / cancel must be idempotent (no second terminal).
+            let _ = rm.commit_outcome(&run_id, &EngineOutcome::completed("late"));
+            let _ = rm
+                .cancel(CancelRunRequest {
+                    run_id: run_id.clone(),
+                })
+                .await;
+            let after = rm.runtime.events.replay_after(&run_id, 0);
+            let after_term = after
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        e.payload,
+                        RunEventKind::Completed { .. }
+                            | RunEventKind::Failed { .. }
+                            | RunEventKind::Cancelled { .. }
+                            | RunEventKind::Interrupted { .. }
+                    )
+                })
+                .count();
+            assert_eq!(
+                after_term,
+                terminals.len().max(1),
+                "late commit/cancel must not add a second terminal (run {i})"
+            );
+            let reopened = rm.get_run(&run_id).unwrap();
+            assert_eq!(
+                reopened.status, final_run.status,
+                "reopen status must match final (run {i})"
+            );
+        }
+        assert_eq!(
+            multi_terminal, 0,
+            "some runs had != 1 terminal lifecycle event"
+        );
+        assert_eq!(terminal_mismatch, 0, "some runs had event/status mismatch");
     }
 }
