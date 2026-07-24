@@ -7,24 +7,53 @@ use std::sync::Arc;
 use super::provider_catalog::provider_model_pair_available;
 use super::{error_response, success_response, RpcResponse};
 
-pub(crate) async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
-    let conversation_id = match params.get("conversation_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return error_response("MISSING_PARAM", "conversation_id is required"),
-    };
+struct RunStartRequest {
+    conversation_id: String,
+    provider_id: String,
+    model_id: String,
+    content: Option<String>,
+    effort: Option<String>,
+    runtime_id: Option<String>,
+    attachments: Vec<Value>,
+    project_path: Option<String>,
+}
 
-    let provider_id = match params.get("provider_id").and_then(Value::as_str) {
-        Some(id) => id,
-        None => return error_response("MISSING_PARAM", "provider_id is required"),
+pub(crate) async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
+    let req = match parse_run_start_request(params) {
+        Ok(r) => r,
+        Err(resp) => return resp,
     };
-    let model_id = match params.get("model_id").and_then(Value::as_str) {
-        Some(id) => id,
-        None => return error_response("MISSING_PARAM", "model_id is required"),
+    let normalized = match normalize_attachments(&req.attachments) {
+        Ok(a) => a,
+        Err(resp) => return resp,
     };
+    if let Err(resp) = preflight_run_start(data_store, &req).await {
+        return resp;
+    }
+    create_and_start_run(data_store, &req, normalized).await
+}
+
+fn parse_run_start_request(params: &Value) -> Result<RunStartRequest, RpcResponse> {
+    let conversation_id = params
+        .get("conversation_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| error_response("MISSING_PARAM", "conversation_id is required"))?
+        .to_string();
+    let provider_id = params
+        .get("provider_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| error_response("MISSING_PARAM", "provider_id is required"))?
+        .to_string();
+    let model_id = params
+        .get("model_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| error_response("MISSING_PARAM", "model_id is required"))?
+        .to_string();
     let content = params
         .get("content")
         .and_then(Value::as_str)
-        .filter(|content| !content.trim().is_empty());
+        .filter(|content| !content.trim().is_empty())
+        .map(str::to_string);
     let effort = params
         .get("effort")
         .and_then(Value::as_str)
@@ -44,27 +73,55 @@ pub(crate) async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value
         .cloned()
         .unwrap_or_default();
     if attachments.len() > 10 {
-        return error_response("INVALID_INPUT", "At most 10 attachments are allowed");
+        return Err(error_response(
+            "INVALID_INPUT",
+            "At most 10 attachments are allowed",
+        ));
     }
+    let project_path = params
+        .get("project_path")
+        .or_else(|| params.get("workspace_path"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| std::env::var("NATIVES_PROJECT_PATH").ok())
+        .filter(|path| !path.trim().is_empty());
+    Ok(RunStartRequest {
+        conversation_id,
+        provider_id,
+        model_id,
+        content,
+        effort,
+        runtime_id,
+        attachments,
+        project_path,
+    })
+}
+
+fn normalize_attachments(attachments: &[Value]) -> Result<Vec<Value>, RpcResponse> {
     let mut normalized_attachments = Vec::with_capacity(attachments.len());
-    for attachment in &attachments {
+    for attachment in attachments {
         let path = match attachment.get("path").and_then(Value::as_str) {
             Some(path) if !path.trim().is_empty() => path.trim(),
-            _ => return error_response("INVALID_INPUT", "attachment path is required"),
+            _ => {
+                return Err(error_response(
+                    "INVALID_INPUT",
+                    "attachment path is required",
+                ))
+            }
         };
         let metadata = match crate::file_manager::read_file(path) {
             Ok(metadata) if !metadata.truncated => metadata,
             Ok(_) => {
-                return error_response(
+                return Err(error_response(
                     "INVALID_INPUT",
                     "attachments must be UTF-8 files smaller than 2 MB",
-                )
+                ))
             }
             Err(error) => {
-                return error_response(
+                return Err(error_response(
                     "INVALID_INPUT",
                     &format!("Attachment cannot be read: {error}"),
-                )
+                ))
             }
         };
         let name = attachment
@@ -79,7 +136,6 @@ pub(crate) async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value
                     .unwrap_or(path)
                     .to_string()
             });
-        // Frontend historically sent camelCase `mimeType`; accept both wire shapes.
         let mime_type = attachment
             .get("mime_type")
             .or_else(|| attachment.get("mimeType"))
@@ -97,37 +153,51 @@ pub(crate) async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value
             "size": size,
         }));
     }
-    // Host preflight only: project_path + provider/model availability.
-    // Runtime writes (messages / runs / events) are Daemon-only (assistant.db).
-    let project_path = params
-        .get("project_path")
-        .or_else(|| params.get("workspace_path"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .or_else(|| std::env::var("NATIVES_PROJECT_PATH").ok())
-        .filter(|path| !path.trim().is_empty());
-    if project_path.is_none()
+    Ok(normalized_attachments)
+}
+
+async fn preflight_run_start(
+    data_store: &Arc<DataStore>,
+    req: &RunStartRequest,
+) -> Result<(), RpcResponse> {
+    if req.project_path.is_none()
         && std::env::var("NATIVES_REQUIRE_PROJECT_PATH")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(true)
     {
-        return error_response(
+        return Err(error_response(
             "PROJECT_PATH_REQUIRED",
             "project_path must be provided by UI (daemon cwd is not a valid default)",
-        );
+        ));
     }
-
     {
         let conn = data_store.conn();
-        if !provider_model_pair_available(provider_id, model_id, &conn) {
-            return error_response("INVALID_PARAM", "Provider/model pair is not available");
+        if !provider_model_pair_available(&req.provider_id, &req.model_id, &conn) {
+            return Err(error_response(
+                "INVALID_PARAM",
+                "Provider/model pair is not available",
+            ));
         }
     }
+    if let Ok(runs) = daemon_authority::list_runs(Some(&req.conversation_id)).await {
+        if runs.iter().any(|r| !r.status.is_terminal()) {
+            return Err(error_response(
+                "RUN_ALREADY_ACTIVE",
+                "This conversation already has an active run",
+            ));
+        }
+    }
+    Ok(())
+}
 
-    // Permission profile from Daemon conversation row (canonical), not host mirror.
+async fn create_and_start_run(
+    _data_store: &Arc<DataStore>,
+    req: &RunStartRequest,
+    normalized_attachments: Vec<Value>,
+) -> RpcResponse {
     let permission_profile = match daemon_authority::request(
         "conversation.get",
-        serde_json::json!({ "id": conversation_id }),
+        serde_json::json!({ "id": req.conversation_id }),
     )
     .await
     {
@@ -140,17 +210,7 @@ pub(crate) async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value
         Err(_) => "ask".to_string(),
     };
 
-    // Active-run gate from Daemon (no host assistant_runs).
-    if let Ok(runs) = daemon_authority::list_runs(Some(conversation_id)).await {
-        if runs.iter().any(|r| !r.status.is_terminal()) {
-            return error_response(
-                "RUN_ALREADY_ACTIVE",
-                "This conversation already has an active run",
-            );
-        }
-    }
-
-    let user_content = content.unwrap_or("").to_string();
+    let user_content = req.content.clone().unwrap_or_default();
     let daemon_attachments: Vec<assistant_protocol::v2::AttachmentRef> = normalized_attachments
         .iter()
         .filter_map(|attachment| {
@@ -175,12 +235,11 @@ pub(crate) async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value
         Some(daemon_attachments)
     };
 
-    // Idempotency key for this start attempt (Daemon create/start, not host row id).
     let idempotency_key = uuid::Uuid::new_v4().to_string();
     let daemon_run = match daemon_authority::create_run(assistant_protocol::v2::CreateRunRequest {
-        conversation_id: conversation_id.to_string(),
-        provider_id: provider_id.to_string(),
-        model_id: model_id.to_string(),
+        conversation_id: req.conversation_id.clone(),
+        provider_id: req.provider_id.clone(),
+        model_id: req.model_id.clone(),
         key_id: None,
         agent_profile_id: None,
         permission_profile: Some(permission_profile.clone()),
@@ -188,10 +247,10 @@ pub(crate) async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value
         attachments: daemon_attachments_opt.clone(),
         max_steps: Some(50),
         parent_run_id: None,
-        project_path: project_path.clone(),
+        project_path: req.project_path.clone(),
         idempotency_key: Some(idempotency_key.clone()),
-        effort: effort.clone(),
-        runtime_id: runtime_id.clone(),
+        effort: req.effort.clone(),
+        runtime_id: req.runtime_id.clone(),
     })
     .await
     {
@@ -200,19 +259,19 @@ pub(crate) async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value
     };
     let start_req = assistant_protocol::v2::StartRunRequest {
         run_id: Some(daemon_run.id.clone()),
-        conversation_id: Some(conversation_id.to_string()),
-        provider_id: Some(provider_id.to_string()),
-        model_id: Some(model_id.to_string()),
+        conversation_id: Some(req.conversation_id.clone()),
+        provider_id: Some(req.provider_id.clone()),
+        model_id: Some(req.model_id.clone()),
         key_id: None,
         content: Some(user_content),
         attachments: daemon_attachments_opt,
         trigger_message_id: None,
         permission_profile: Some(permission_profile.clone()),
         max_steps: Some(50),
-        project_path,
+        project_path: req.project_path.clone(),
         idempotency_key: None,
-        effort: effort.clone(),
-        runtime_id: runtime_id.clone(),
+        effort: req.effort.clone(),
+        runtime_id: req.runtime_id.clone(),
     };
     let mode_label = daemon_authority::authority_mode_label();
     let started_daemon = match daemon_authority::start_run(start_req).await {
@@ -229,13 +288,12 @@ pub(crate) async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value
         .map(|t| t.to_rfc3339())
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
 
-    // No host projection loop: UI reads runs/events/messages from Daemon.
     success_response(serde_json::json!({
         "id": started_daemon.id,
-        "conversation_id": conversation_id,
+        "conversation_id": req.conversation_id,
         "status": status,
-        "provider_id": provider_id,
-        "model_id": model_id,
+        "provider_id": req.provider_id,
+        "model_id": req.model_id,
         "permission_profile": started_daemon.permission_profile,
         "started_at": started_at,
         "execution": "agent_daemon_run_manager",
@@ -244,7 +302,10 @@ pub(crate) async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value
     }))
 }
 
-pub(crate) async fn handle_run_subscribe(_data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
+pub(crate) async fn handle_run_subscribe(
+    _data_store: &Arc<DataStore>,
+    params: &Value,
+) -> RpcResponse {
     let run_id = match params.get("run_id").and_then(Value::as_str) {
         Some(id) => id,
         None => return error_response("MISSING_PARAM", "run_id is required"),
@@ -280,38 +341,36 @@ pub(crate) async fn handle_run_subscribe(_data_store: &Arc<DataStore>, params: &
     // Forward only — no host projection of events/messages/runs.
     let data = match daemon_authority::request("run.subscribe", params_forward).await {
         Ok(data) => data,
-        Err(error) => {
-            match daemon_authority::replay_events(run_id, after_sequence).await {
-                Ok(events) => {
-                    let daemon_terminal = daemon_authority::get_run(run_id)
-                        .await
-                        .ok()
-                        .flatten()
-                        .map(|r| r.status.is_terminal())
-                        .unwrap_or(false);
-                    let event_values: Vec<Value> = events
-                        .into_iter()
-                        .map(|e| {
-                            serde_json::json!({
-                                "run_id": e.run_id,
-                                "sequence": e.effective_run_sequence(),
-                                "timestamp": e.timestamp.to_rfc3339(),
-                                "type": e.payload.type_name(),
-                                "payload": e.payload,
-                            })
+        Err(error) => match daemon_authority::replay_events(run_id, after_sequence).await {
+            Ok(events) => {
+                let daemon_terminal = daemon_authority::get_run(run_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|r| r.status.is_terminal())
+                    .unwrap_or(false);
+                let event_values: Vec<Value> = events
+                    .into_iter()
+                    .map(|e| {
+                        serde_json::json!({
+                            "run_id": e.run_id,
+                            "sequence": e.effective_run_sequence(),
+                            "timestamp": e.timestamp.to_rfc3339(),
+                            "type": e.payload.type_name(),
+                            "payload": e.payload,
                         })
-                        .collect();
-                    return success_response(serde_json::json!({
-                        "run_id": run_id,
-                        "events": event_values,
-                        "terminal": daemon_terminal,
-                        "mode": "subscribe_fallback_replay",
-                        "error": error,
-                    }));
-                }
-                Err(e2) => return error_response("DAEMON_RPC_ERROR", &format!("{error}; {e2}")),
+                    })
+                    .collect();
+                return success_response(serde_json::json!({
+                    "run_id": run_id,
+                    "events": event_values,
+                    "terminal": daemon_terminal,
+                    "mode": "subscribe_fallback_replay",
+                    "error": error,
+                }));
             }
-        }
+            Err(e2) => return error_response("DAEMON_RPC_ERROR", &format!("{error}; {e2}")),
+        },
     };
 
     let daemon_terminal = data
@@ -338,6 +397,4 @@ pub(crate) async fn handle_run_subscribe(_data_store: &Arc<DataStore>, params: &
     }))
 }
 
-
 // ─── Permission (host still dual-writes until task-04 integration) ───
-

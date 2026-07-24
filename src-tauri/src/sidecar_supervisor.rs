@@ -52,7 +52,6 @@ pub struct SupervisorConfig {
     pub runtime_dir: PathBuf,
     pub socket_path: PathBuf,
     pub pid_path: PathBuf,
-    pub lock_path: PathBuf,
     pub bootstrap_path: PathBuf,
     pub daemon_bin: PathBuf,
     pub natives_db_path: PathBuf,
@@ -106,7 +105,6 @@ impl SupervisorConfig {
 
         Self {
             pid_path: runtime_dir.join("agent-daemon.pid"),
-            lock_path: runtime_dir.join("agent-daemon.lock"),
             bootstrap_path: runtime_dir.join("bootstrap.token"),
             runtime_dir,
             socket_path,
@@ -299,10 +297,7 @@ impl SidecarSupervisor {
                     std::env::set_var("NATIVES_DAEMON_MODE", "uds");
                 }
                 std::env::set_var("NATIVES_DB_PATH", &self.config.natives_db_path);
-                std::env::set_var(
-                    "NATIVES_ASSISTANT_DB_PATH",
-                    &self.config.assistant_db_path,
-                );
+                std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &self.config.assistant_db_path);
                 // Drop cached UDS client so next call re-handshakes after restart.
                 // (async reset is best-effort from callers; env bootstrap is source of truth.)
                 inner.status.state = SupervisorState::Healthy;
@@ -345,10 +340,7 @@ impl SidecarSupervisor {
         cmd.env("NATIVES_DAEMON_SOCKET", &self.config.socket_path)
             .env("NATIVES_DAEMON_BOOTSTRAP", &bootstrap)
             .env("NATIVES_DB_PATH", &self.config.natives_db_path)
-            .env(
-                "NATIVES_ASSISTANT_DB_PATH",
-                &self.config.assistant_db_path,
-            )
+            .env("NATIVES_ASSISTANT_DB_PATH", &self.config.assistant_db_path)
             .env("NATIVES_RUNTIME_DIR", &self.config.runtime_dir)
             // Host→Daemon lifeline: Host holds write end; Host exit closes pipe → Daemon EOF.
             .env("NATIVES_PARENT_LIFELINE", "stdio")
@@ -633,7 +625,6 @@ impl SidecarSupervisor {
     }
 }
 
-
 fn force_kill_child_tree(child: &mut Child) -> Result<(), String> {
     #[cfg(unix)]
     {
@@ -641,15 +632,31 @@ fn force_kill_child_tree(child: &mut Child) -> Result<(), String> {
         // Negative pid: signal the process group started via setpgid in spawn.
         let rc = unsafe { libc::kill(-pid, libc::SIGKILL) };
         if rc != 0 {
-            child
-                .kill()
-                .map_err(|e| format!("kill child {pid}: {e}"))?;
+            child.kill().map_err(|e| format!("kill child {pid}: {e}"))?;
         }
+        let _ = child.try_wait();
         Ok(())
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        child.kill().map_err(|e| format!("kill child: {e}"))
+        let pid = child.id();
+        // Kill full process tree, then wait/reap.
+        let status = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .status()
+            .map_err(|e| format!("taskkill spawn failed: {e}"))?;
+        if !status.success() {
+            // Fallback to direct kill if taskkill fails.
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+        Ok(())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        child.kill().map_err(|e| format!("kill child: {e}"))?;
+        let _ = child.wait();
+        Ok(())
     }
 }
 
@@ -793,7 +800,6 @@ mod tests {
             runtime_dir: dir.clone(),
             socket_path: dir.join("t.sock"),
             pid_path: dir.join("t.pid"),
-            lock_path: dir.join("t.lock"),
             bootstrap_path: dir.join("boot"),
             daemon_bin: PathBuf::from("/nonexistent/natives-agent-daemon-xyz"),
             natives_db_path: dir.join("natives.db"),
@@ -826,7 +832,6 @@ mod tests {
             runtime_dir: dir.clone(),
             socket_path: dir.join("t.sock"),
             pid_path: dir.join("t.pid"),
-            lock_path: dir.join("t.lock"),
             bootstrap_path: dir.join("boot"),
             daemon_bin: PathBuf::from("/unused"),
             natives_db_path: dir.join("natives.db"),
@@ -843,9 +848,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-
     fn spawn_lifeline_fixture(ignore_eof: bool) -> (Child, PathBuf) {
-        let script = std::env::temp_dir().join(format!("natives-lifeline-fixture-{}.sh", uuid_like()));
+        let script =
+            std::env::temp_dir().join(format!("natives-lifeline-fixture-{}.sh", uuid_like()));
         let body = concat!(
             "#!/bin/sh\n",
             "if [ \"${NATIVES_FIXTURE_IGNORE_EOF:-0}\" = \"1\" ]; then\n",
@@ -886,7 +891,10 @@ mod tests {
         (child, script)
     }
 
-    fn wait_timeout(child: &mut Child, dur: Duration) -> std::io::Result<Option<std::process::ExitStatus>> {
+    fn wait_timeout(
+        child: &mut Child,
+        dur: Duration,
+    ) -> std::io::Result<Option<std::process::ExitStatus>> {
         let start = Instant::now();
         loop {
             if let Some(st) = child.try_wait()? {
@@ -930,7 +938,6 @@ mod tests {
             runtime_dir: dir.clone(),
             socket_path: dir.join("t.sock"),
             pid_path: dir.join("t.pid"),
-            lock_path: dir.join("t.lock"),
             bootstrap_path: dir.join("boot"),
             daemon_bin: script.clone(),
             natives_db_path: dir.join("natives.db"),
