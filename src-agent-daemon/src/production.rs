@@ -80,9 +80,6 @@ pub struct ProductionRuntime {
     pub execution: Arc<crate::runtime::ExecutionRegistry>,
     /// Structured tool grant policy (task-09). Agent C relocates in task-01.
     pub tool_policy: Arc<crate::runtime::ToolPolicyState>,
-    /// Legacy in-memory tool grants — retained for tests; production path uses tool_policy.
-    #[allow(dead_code)] // legacy in-memory; production path uses tool_policy
-    tool_grants: Arc<Mutex<Vec<ToolGrant>>>,
     /// interaction_id → oneshot for subagent_assignment batch waits.
     /// std mutex so interaction.respond can wake without re-entering tokio runtime.
     pub(crate) assignment_waiters: Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<Value>>>>,
@@ -91,18 +88,6 @@ pub struct ProductionRuntime {
     /// Per-run tool allowlist registered before RunManager starts a child run.
     /// `Some(list)` = hard allowlist; entry removed once the run starts.
     pub run_tool_allowlists: Arc<Mutex<HashMap<String, Vec<String>>>>,
-}
-
-/// Remembered tool approval (once is not stored; this_run/project are).
-#[derive(Debug, Clone)]
-pub struct ToolGrant {
-    pub conversation_id: String,
-    pub run_id: Option<String>,
-    pub tool_name: String,
-    /// Empty = any input; for run_terminal, command pattern when scoped.
-    pub pattern: String,
-    /// "this_run" | "project"
-    pub scope: String,
 }
 
 #[cfg(test)]
@@ -139,7 +124,6 @@ impl ProductionRuntime {
             cli_cancel_flags: Arc::new(Mutex::new(HashMap::new())),
             execution: Arc::new(crate::runtime::ExecutionRegistry::new()),
             tool_policy: Arc::new(crate::runtime::ToolPolicyState::new()),
-            tool_grants: Arc::new(Mutex::new(Vec::new())),
             assignment_waiters: Arc::new(std::sync::Mutex::new(HashMap::new())),
             assignment_inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
             run_tool_allowlists: Arc::new(Mutex::new(HashMap::new())),
@@ -1436,117 +1420,6 @@ pub(crate) fn normalize_permission_scope(scope: &str) -> String {
         "project" | "always" | "forever" => "project".into(),
         _ => "once".into(),
     }
-}
-
-#[allow(dead_code)]
-fn persist_tool_grant_db(grant: &ToolGrant) -> Result<(), String> {
-    // Prefer assistant.db path used by daemon stores.
-    let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| {
-            std::env::var("NATIVES_DB_PATH")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-        });
-    let Some(db_path) = db_path else {
-        return Ok(());
-    };
-    let path = std::path::PathBuf::from(db_path);
-    if !path.exists() {
-        return Ok(());
-    }
-    let art = path
-        .parent()
-        .map(|p| p.join("artifacts"))
-        .unwrap_or_else(std::env::temp_dir);
-    let store = crate::storage::DataStore::new(&path, &art)?;
-    let conn = store.conn()?;
-    let id = uuid::Uuid::new_v4().to_string();
-    let grant_type = match grant.scope.as_str() {
-        "this_run" => "session",
-        "project" => "always",
-        _ => "once",
-    };
-    conn.execute(
-        "INSERT OR REPLACE INTO tool_grant
-         (id, conversation_id, run_id, tool_name, scope, grant_type, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))",
-        rusqlite::params![
-            id,
-            grant.conversation_id,
-            grant.run_id,
-            grant.tool_name,
-            grant.pattern,
-            grant_type,
-        ],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[allow(dead_code)]
-fn load_tool_grant_match(
-    conversation_id: &str,
-    run_id: &str,
-    tool_name: &str,
-    pattern: &str,
-) -> bool {
-    let db_path = std::env::var("NATIVES_ASSISTANT_DB_PATH")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| {
-            std::env::var("NATIVES_DB_PATH")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-        });
-    let Some(db_path) = db_path else {
-        return false;
-    };
-    let path = std::path::PathBuf::from(db_path);
-    if !path.exists() {
-        return false;
-    }
-    let art = path
-        .parent()
-        .map(|p| p.join("artifacts"))
-        .unwrap_or_else(std::env::temp_dir);
-    let Ok(store) = crate::storage::DataStore::new(&path, &art) else {
-        return false;
-    };
-    let Ok(conn) = store.conn() else {
-        return false;
-    };
-    let mut stmt = match conn.prepare(
-        "SELECT run_id, scope, grant_type FROM tool_grant
-         WHERE conversation_id = ?1 AND tool_name = ?2
-           AND (scope IS NULL OR scope = '' OR scope = ?3)",
-    ) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    let rows = stmt.query_map(
-        rusqlite::params![conversation_id, tool_name, pattern],
-        |row| {
-            Ok((
-                row.get::<_, Option<String>>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        },
-    );
-    let Ok(rows) = rows else {
-        return false;
-    };
-    for row in rows.flatten() {
-        let (rid, _scope_pat, grant_type) = row;
-        match grant_type.as_str() {
-            "always" => return true,
-            "session" if rid.as_deref() == Some(run_id) => return true,
-            _ => {}
-        }
-    }
-    false
 }
 
 /// Wake a pending `subagent_assignment` waiter (from interaction.respond).
