@@ -158,6 +158,7 @@ pub async fn install_dependencies(
     // postinstall scripts) is cleaned up as a tree on kill_on_drop / app exit.
     #[cfg(unix)]
     unsafe {
+        use std::os::unix::process::CommandExt;
         cmd.pre_exec(|| {
             if libc::setpgid(0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
@@ -167,6 +168,7 @@ pub async fn install_dependencies(
     }
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x00000200); // CREATE_NEW_PROCESS_GROUP
     }
 

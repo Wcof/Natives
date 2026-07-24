@@ -30,6 +30,7 @@
 |------|----------|-----------|------|----------|------|
 | 内部生成 / 本地包 | `internal` | `workshop_static` | 既有 `modules` 等 | Unique Origin iframe + Bridge | Workshop 权限中心 |
 | GitHub Release 容器 | `external_github` | `docker_compose` / `docker_run` | 新表 `external_creative_apps` + `creative_app_env` | 主窗口内 Tauri 子 WebView | 无 Bridge / 无主应用 capability |
+| 用户本地项目 | `local_project` | `local_static` / `node_dev_server` | `local_creative_apps` + `local_creative_env` | 主窗口内 Tauri 子 WebView | 无 Bridge / 无主应用 capability |
 
 - 统一只读投影：`CreativeAppSummary`（列表、状态、动作可用性）。
 - **禁止**迁移或改写既有 `modules` 表语义以容纳容器。
@@ -132,6 +133,7 @@ Host 面     — GitHub API、Docker CLI、安装目录、加密 env、生命周
 - [ ] 设置「运行时」页：Docker 状态 + GitHub Token 掩码
 - [ ] 中英文 i18n、数据表清单、安全自检
 - [ ] KI-1～KI-5 未被外部运行时绕过
+- [x] 本地项目第三来源：受控启动方案、加密 env、统一列表与内置浏览器（详见 `docs/architecture/creative-app-local-project-remediation.md`）
 
 ---
 

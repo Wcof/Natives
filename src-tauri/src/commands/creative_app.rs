@@ -399,8 +399,8 @@ pub async fn creative_app_update_local(
     let _guard = lock.lock().await;
     let handle = app_handle.clone();
     tokio::task::spawn_blocking(move || {
-        let c = conn(&pool)?;
-        let summary = update_local_app(&c, request)?;
+        let mut c = conn(&pool)?;
+        let summary = update_local_app(&mut c, request)?;
         crate::emit_db_state_changed(
             &handle,
             "creative-app",
@@ -429,7 +429,7 @@ pub fn creative_app_rescan_local(
 }
 
 fn create_local_app(
-    conn: &rusqlite::Connection,
+    conn: &mut rusqlite::Connection,
     request: CreateLocalRequest,
 ) -> Result<CreativeAppSummary> {
     use crate::creative_app::local::{self, fingerprint_plan, validate_launch_plan};
@@ -542,19 +542,18 @@ fn create_local_app(
         updated_at: now,
     };
 
-    // Atomic-ish: insert app then env; on env failure roll back app row.
-    local::insert_app(conn, &rec)?;
+    // Keep the record and encrypted env in one SQLite transaction.
+    let tx = conn.transaction().map_err(Error::Database)?;
+    local::insert_app(&tx, &rec)?;
     if !request.env.is_empty() {
         let pairs: Vec<(String, String)> = request
             .env
             .into_iter()
             .map(|p| (p.key, p.value))
             .collect();
-        if let Err(e) = local::store::replace_env(conn, &id, &pairs) {
-            let _ = local::delete_app(conn, &id);
-            return Err(e);
-        }
+        local::store::replace_env(&tx, &id, &pairs)?;
     }
+    tx.commit().map_err(Error::Database)?;
 
     // startAfterSave is intentionally not auto-started here; UI calls start explicitly.
     let _ = request.start_after_save;
@@ -565,7 +564,7 @@ fn create_local_app(
 }
 
 fn update_local_app(
-    conn: &rusqlite::Connection,
+    conn: &mut rusqlite::Connection,
     request: UpdateLocalRequest,
 ) -> Result<CreativeAppSummary> {
     use crate::creative_app::local::{self, fingerprint_plan, validate_launch_plan};
@@ -625,20 +624,22 @@ fn update_local_app(
         rec.auto_open = validated.auto_open;
     }
 
+    let tx = conn.transaction().map_err(Error::Database)?;
     if let Some(env) = request.env {
         let pairs: Vec<(String, String)> = env.into_iter().map(|p| (p.key, p.value)).collect();
-        local::store::replace_env(conn, &rec.id, &pairs)?;
+        local::store::replace_env(&tx, &rec.id, &pairs)?;
     }
     if let Some(upsert) = request.env_upsert {
         let pairs: Vec<(String, String)> = upsert.into_iter().map(|p| (p.key, p.value)).collect();
-        local::store::upsert_env(conn, &rec.id, &pairs)?;
+        local::store::upsert_env(&tx, &rec.id, &pairs)?;
     }
     if let Some(remove) = request.env_remove_keys {
-        local::store::remove_env_keys(conn, &rec.id, &remove)?;
+        local::store::remove_env_keys(&tx, &rec.id, &remove)?;
     }
 
     rec.updated_at = chrono::Utc::now().to_rfc3339();
-    local::update_app(conn, &rec)?;
+    local::update_app(&tx, &rec)?;
+    tx.commit().map_err(Error::Database)?;
     Ok(local::summary_from_local(&rec))
 }
 

@@ -310,6 +310,42 @@ pub fn run() {
                 }
             }
 
+            // The local runtime owns Child handles only while this process is alive.
+            // Poll independently of the renderer so an exited dev server cannot
+            // remain shown as running until the user revisits the Workshop page.
+            {
+                let watchdog_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
+                    loop {
+                        tick.tick().await;
+                        let pool = watchdog_handle.state::<AppState>().db.clone();
+                        let runtime = watchdog_handle
+                            .state::<creative_app::local::LocalRuntimeHandle>()
+                            .inner()
+                            .clone();
+                        let lock = watchdog_handle
+                            .state::<creative_app::service::MutationLock>()
+                            .inner()
+                            .clone();
+                        let handle = watchdog_handle.clone();
+                        let _guard = lock.lock().await;
+                        let _ = tokio::task::spawn_blocking(move || {
+                            let c = pool.get().map_err(|e| {
+                                Error::Internal(format!("local watchdog db: {e}"))
+                            })?;
+                            let rt = tokio::runtime::Handle::current();
+                            rt.block_on(creative_app::local::lifecycle::poll_and_reconcile_exits(
+                                &c,
+                                Some(&handle),
+                                runtime.as_ref(),
+                            ))
+                        })
+                        .await;
+                    }
+                });
+            }
+
             // ── Initialize Assistant Store (in-process, no sidecar) ──
             // The assistant database (~/.natives/assistant.db) is managed directly
             // through the DataStore, which handles its own migrations and WAL setup.

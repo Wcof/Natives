@@ -3,7 +3,7 @@
 //! Designed for Vite/Vue/Node dev servers. Does not use shell. Does not
 //! auto-take over orphan PIDs without identity verification.
 
-use super::logs::{LogLine, LogRegistry, LogStream, LocalLogStore};
+use super::logs::{append_with_secrets, LogLine, LogRegistry, LogStream, LocalLogStore};
 use crate::creative_app::model::{LaunchPlan, LaunchProgram, LocalLaunchRuntime, ProcessIdentity};
 use crate::{Error, Result};
 use std::collections::HashMap;
@@ -211,6 +211,11 @@ impl LocalRuntimeManager {
             .envs(std::env::vars().filter(|(k, _)| is_safe_inherited_env(k)))
             .env("HOST", "127.0.0.1")
             .env("PORT", port.to_string());
+        let secret_values: Vec<String> = env
+            .iter()
+            .map(|(_, value)| value.clone())
+            .filter(|value| value.trim().len() >= 4)
+            .collect();
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -260,11 +265,17 @@ impl LocalRuntimeManager {
         let app_handle = app.clone();
         let app_id_out = app_id.to_string();
         let log_out = log.clone();
+        let stdout_secrets = secret_values.clone();
         if let Some(out) = stdout {
             tokio::spawn(async move {
                 let mut lines = BufReader::new(out).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let entry = log_out.append(LogStream::Stdout, &line);
+                    let entry = append_with_secrets(
+                        log_out.as_ref(),
+                        LogStream::Stdout,
+                        &line,
+                        &stdout_secrets,
+                    );
                     emit_log(&app_handle, &app_id_out, &entry);
                 }
             });
@@ -272,11 +283,17 @@ impl LocalRuntimeManager {
         let app_handle = app.clone();
         let app_id_err = app_id.to_string();
         let log_err = log.clone();
+        let stderr_secrets = secret_values;
         if let Some(err) = stderr {
             tokio::spawn(async move {
                 let mut lines = BufReader::new(err).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let entry = log_err.append(LogStream::Stderr, &line);
+                    let entry = append_with_secrets(
+                        log_err.as_ref(),
+                        LogStream::Stderr,
+                        &line,
+                        &stderr_secrets,
+                    );
                     emit_log(&app_handle, &app_id_err, &entry);
                 }
             });
