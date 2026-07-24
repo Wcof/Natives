@@ -35,7 +35,18 @@
 - Daemon conversation pagination 单测：通过。
 - Daemon adapter、workspace reducer 测试：25 项通过；10,000 事件窗口保持 2,000 条上限。
 
-仍需在最终 Release 包上由验收人员使用 Web Inspector/Instruments 补录冷启动 p75、交互 p95、FPS、CPU、RSS 和 30 分钟导航内存曲线；这些运行时指标不能由静态构建输出代替。
+Release 包已成功生成：
+
+- `target/release/bundle/macos/Natives.app`
+- `target/release/bundle/dmg/Natives_0.1.0_aarch64.dmg`
+
+真实运行采样（从上述 `.app` 启动）：
+
+- 冷启动到主进程出现：约 98ms（单次样本，进程出现时间，不等同于 UI 可交互时间）。
+- 启动后约 16 秒：主窗口 RSS 86.9MB / CPU 0.1%；Daemon RSS 8.2MB / CPU 0.0%。
+- 启动后约 66 秒空闲：主窗口 RSS 42.2MB / CPU 0.4%；Daemon RSS 8.2MB / CPU 0.0%。
+
+仍需在最终验收机上使用 Web Inspector/Instruments 补录冷启动 p75、交互 p95、FPS 和 30 分钟导航内存曲线；这些运行时指标不能由单次进程采样代替。
 
 ## 约束
 

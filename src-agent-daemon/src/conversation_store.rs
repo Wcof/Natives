@@ -298,7 +298,7 @@ fn get_messages(params: Value) -> Result<Value, String> {
     let cursor_id = cursor.and_then(|v| v.get("id")).and_then(Value::as_str);
     let store = store()?;
     let conn = store.conn()?;
-    let messages: Vec<Value> = if let Some(limit) = page_limit {
+    let mut messages: Vec<Value> = if let Some(limit) = page_limit {
         let mut stmt = conn.prepare(
             "SELECT id, role, conversation_id, parent_message_id, status, input_tokens, output_tokens, created_at
              FROM message WHERE conversation_id = ?1
