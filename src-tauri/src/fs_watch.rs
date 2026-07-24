@@ -2,7 +2,9 @@
 //!
 //! Implements recursive directory watching with:
 //! - Noise filtering (atime, metadata-only, self-triggered writes)
-//! - Debounce (300ms batch window)
+//! - Immediate per-event emission to the frontend (no debounce/batching).
+//!   The 300ms value below is only the notify poll interval used by the
+//!   fallback poll-based backend, not a debounce window.
 //! - Tauri Event emission to frontend
 
 use crate::{Error, Result};

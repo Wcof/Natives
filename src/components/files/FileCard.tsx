@@ -41,6 +41,8 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
   const [dropTarget, setDropTarget] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const heatDecayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rippleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -53,9 +55,11 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
         setShowRipple(true);
 
         // Clear flash after animation
-        setTimeout(() => setFlash(false), 1200);
+        if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+        flashTimerRef.current = setTimeout(() => setFlash(false), 1200);
         // Clear ripple after animation
-        setTimeout(() => setShowRipple(false), 800);
+        if (rippleTimerRef.current) clearTimeout(rippleTimerRef.current);
+        rippleTimerRef.current = setTimeout(() => setShowRipple(false), 800);
 
         // Decay heat over time
         if (heatDecayRef.current) clearTimeout(heatDecayRef.current);
@@ -66,6 +70,9 @@ export default function FileCard({ entry, onSelect, onContextMenu, selected, onD
     return () => {
       window.removeEventListener('file-flash', handler);
       if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+      if (rippleTimerRef.current) clearTimeout(rippleTimerRef.current);
+      if (heatDecayRef.current) clearTimeout(heatDecayRef.current);
     };
   }, [entry.path]);
 

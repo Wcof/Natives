@@ -26,18 +26,21 @@ export default function FileRow({ entry, onSelect, onContextMenu, showDir, selec
   const [flash, setFlash] = useState(false);
   const [dropTarget, setDropTarget] = useState(false);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const handler = (e: Event) => {
       if ((e as CustomEvent).detail === entry.path) {
         setFlash(true);
-        setTimeout(() => setFlash(false), 1200);
+        if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+        flashTimerRef.current = setTimeout(() => setFlash(false), 1200);
       }
     };
     window.addEventListener('file-flash', handler);
     return () => {
       window.removeEventListener('file-flash', handler);
       if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
     };
   }, [entry.path]);
 

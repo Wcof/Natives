@@ -178,6 +178,8 @@ function useFileBlobUrl(path: string, kind?: string): string | null {
     }
 
     let cancelled = false;
+    // Track the object URL created by *this* effect so cleanup revokes only its own.
+    let createdUrl: string | null = null;
     (async () => {
       try {
         if (api?.fs?.readFile) {
@@ -206,11 +208,18 @@ function useFileBlobUrl(path: string, kind?: string): string | null {
           } else {
             blob = new Blob([content], { type: mime });
           }
-          if (!cancelled) setUrl(URL.createObjectURL(blob));
+          if (!cancelled) {
+            createdUrl = URL.createObjectURL(blob);
+            setUrl(createdUrl);
+          }
         }
       } catch { /* ignore */ }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      // Revoke the blob URL created by this effect to avoid leaking one per file switch/unmount.
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
+    };
   }, [path, kind]);
 
   return url;

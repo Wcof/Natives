@@ -60,15 +60,22 @@ async function loadFromDb(): Promise<string[]> {
 async function saveToDb(paths: string[]): Promise<void> {
   try {
     await window.nativesAPI?.db?.set(STORAGE_KEY, paths.slice(0, MAX_ENTRIES));
-  } catch {
-    /* non-fatal */
+  } catch (err) {
+    // 不静默：DB 写入失败会导致 localStorage 与 DB 漂移
+    console.warn('[recent-files] failed to persist to DB', err);
   }
 }
 
-/** 同步 localStorage 缓存与 DB */
-async function syncCache(): Promise<void> {
-  const dbPaths = await loadFromDb();
-  writeRaw(dbPaths);
+/**
+ * 同步 localStorage 缓存与 DB
+ * 纳入 writeChain 串行执行，避免与 pushRecentFile 并发时用 DB 旧值覆盖新值
+ */
+export function syncCache(): Promise<void> {
+  writeChain = writeChain.then(async () => {
+    const dbPaths = await loadFromDb();
+    writeRaw(dbPaths);
+  });
+  return writeChain;
 }
 
 /**
@@ -88,6 +95,24 @@ export function pushRecentFile(filePath: string): Promise<void> {
     writeRaw(filtered);
 
     // 异步持久化到 DB
+    await saveToDb(filtered);
+  });
+
+  return writeChain;
+}
+
+/**
+ * 从最近打开列表移除一个文件（例如删除/移动后清理死链接）
+ * 同样纳入 writeChain 串行，保持 localStorage 优先语义
+ */
+export function removeRecentFile(filePath: string): Promise<void> {
+  if (!filePath) return Promise.resolve();
+
+  writeChain = writeChain.then(async () => {
+    const paths = readRaw();
+    const filtered = paths.filter((p) => p !== filePath);
+    if (filtered.length === paths.length) return; // 不存在，无需写
+    writeRaw(filtered);
     await saveToDb(filtered);
   });
 

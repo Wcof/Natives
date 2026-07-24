@@ -140,6 +140,10 @@ pub fn fs_save_blob(dir: String, name: String, base64_data: String) -> Result<St
     let canonical_base = base_dir
         .canonicalize()
         .map_err(|e| Error::Internal(format!("failed to resolve base dir: {e}")))?;
+    // Enforce the shared allowlist/blocklist on the target directory itself.
+    // The name-traversal check below only keeps the file inside `dir`; without
+    // this, `dir` could be ~/.ssh or any other blocklisted location.
+    file_manager::validate_path(&canonical_base)?;
     let canonical_target = target_path
         .canonicalize()
         .unwrap_or_else(|_| target_path.clone());

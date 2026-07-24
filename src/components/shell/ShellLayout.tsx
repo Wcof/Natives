@@ -456,6 +456,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           {state.rightPanelMode === 'file-preview' && selectedFile && (
             <Suspense fallback={<LazyFallback />}>
               <LazyFilePreview
+                key={selectedFile.path}
                 entry={selectedFile}
                 subMode={state.previewSubMode}
                 editMode={editMode}

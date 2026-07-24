@@ -1,6 +1,6 @@
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 const MAX_FULL_READ: u64 = 2 * 1024 * 1024; // 2MB
 const MAX_TRUNCATED_READ: u64 = 256 * 1024; // 256KB
@@ -99,10 +99,20 @@ fn expand_tilde(path: &str) -> PathBuf {
 }
 
 /// Validate path security (allowlist: home, /tmp, /private/tmp, macOS per-user temp)
-fn validate_path(path: &Path) -> Result<()> {
+pub(crate) fn validate_path(path: &Path) -> Result<()> {
     let path_str = path.to_string_lossy();
     if path_str.contains('\0') {
         return Err(Error::InvalidInput("path contains null byte".into()));
+    }
+
+    // Reject any `..` component before allowlist checks. canonicalize() fails on
+    // non-existent targets (new-file writes) and then falls back to the raw path,
+    // where Path::starts_with compares components literally and never resolves
+    // `..` — so `~/../../etc/xxx` would slip past the allowlist and the OS would
+    // resolve `..` at rename time, writing outside the allowlist. Rejecting
+    // ParentDir up front keeps brand-new file paths safe too.
+    if path.components().any(|c| c == Component::ParentDir) {
+        return Err(Error::InvalidInput("path must not contain '..'".into()));
     }
 
     let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -247,6 +257,10 @@ pub fn list_dir(dir_path: &str, options: &ListDirOptions) -> Result<Vec<FileEntr
 pub fn list_dir_detailed(dir_path: &str, options: &ListDirOptions) -> Result<ListDirResult> {
     let path = expand_tilde(dir_path);
     let canon = std::fs::canonicalize(&path).map_err(Error::Io)?;
+    // Enforce the same allowlist as read/write. `canon` is already resolved, so
+    // normal home-subdir browsing is unaffected; only blocklisted/out-of-scope
+    // roots are rejected. Keeps the listing boundary consistent with I/O.
+    validate_path(&canon)?;
 
     let meta = std::fs::metadata(&canon).map_err(Error::Io)?;
     if !meta.is_dir() {
@@ -585,7 +599,7 @@ pub fn rename_entry(old_path: &str, new_path: &str) -> Result<String> {
         }
     }
 
-    let target = deduplicate_path(&new);
+    let target = deduplicate_path(&new)?;
     std::fs::rename(&old, &target).map_err(Error::Io)?;
     Ok(target.to_string_lossy().to_string())
 }
@@ -615,7 +629,7 @@ pub fn move_entry(from: &str, to: &str) -> Result<String> {
         dst
     };
 
-    let target = deduplicate_path(&dst);
+    let target = deduplicate_path(&dst)?;
 
     match std::fs::rename(&src, &target) {
         Ok(()) => Ok(target.to_string_lossy().to_string()),
@@ -655,9 +669,21 @@ pub fn copy_entry(from: &str, to: &str) -> Result<String> {
     } else {
         dst
     };
-    let target = deduplicate_path(&dst);
+    let target = deduplicate_path(&dst)?;
 
     if src.is_dir() {
+        // Prevent copying a directory into itself / its descendant, which would
+        // recurse forever and exhaust the disk. Mirror move_entries' guard.
+        let src_canon = std::fs::canonicalize(&src).unwrap_or_else(|_| src.clone());
+        let dst_canon = target
+            .parent()
+            .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()))
+            .unwrap_or_else(|| target.clone());
+        if dst_canon.starts_with(&src_canon) {
+            return Err(Error::InvalidInput(
+                "cannot copy a folder into itself".into(),
+            ));
+        }
         copy_dir_recursive(&src, &target)?;
     } else {
         std::fs::copy(&src, &target).map_err(Error::Io)?;
@@ -672,7 +698,7 @@ pub fn duplicate_entry(file_path: &str) -> Result<String> {
     if !src.exists() {
         return Err(Error::NotFound(file_path.to_string()));
     }
-    let target = deduplicate_path(&src);
+    let target = deduplicate_path(&src)?;
     if src.is_dir() {
         copy_dir_recursive(&src, &target)?;
     } else {
@@ -736,6 +762,10 @@ pub fn trash_entry(file_path: &str) -> Result<()> {
     if !path.exists() {
         return Err(Error::NotFound(file_path.to_string()));
     }
+    // Enforce allowlist on the resolved target so trashing can't reach
+    // blocklisted/out-of-scope paths.
+    let canon = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+    validate_path(&canon)?;
 
     // Use trash crate
     trash::delete(&path).map_err(|e| Error::Internal(format!("trash failed: {e}")))
@@ -887,6 +917,10 @@ pub fn open_with(target: &str, with: &str) -> Result<serde_json::Value> {
     if !path.exists() {
         return Err(Error::NotFound(target.to_string()));
     }
+    // Enforce allowlist on the resolved target so open/reveal/terminal/editor
+    // can't act on blocklisted/out-of-scope paths.
+    let canon = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+    validate_path(&canon)?;
 
     match with {
         "reveal" => {
@@ -1146,13 +1180,16 @@ pub fn import_files(source_paths: &[String], dest_dir: &str) -> Result<Vec<Strin
     for src_str in source_paths {
         let src = PathBuf::from(src_str);
         if !src.exists() {
+            // Frontend contract is Vec<String> of imported paths; keep the shape
+            // but surface skipped sources in the log instead of silently dropping.
+            eprintln!("import_files: skipping missing source: {src_str}");
             continue;
         }
         let file_name = src
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("file");
-        let target = deduplicate_path(&dest.join(file_name));
+        let target = deduplicate_path(&dest.join(file_name))?;
 
         if src.is_dir() {
             copy_dir_recursive(&src, &target)?;
@@ -1168,6 +1205,9 @@ pub fn import_files(source_paths: &[String], dest_dir: &str) -> Result<Vec<Strin
 pub fn recent_files(root: &str) -> Result<Vec<serde_json::Value>> {
     let path = expand_tilde(root);
     let canon = std::fs::canonicalize(&path).map_err(Error::Io)?;
+    // Consistent boundary with list_dir/read: reject blocklisted/out-of-scope
+    // roots. `canon` is resolved so legitimate home subdirs still pass.
+    validate_path(&canon)?;
 
     let ignore_dirs: std::collections::HashSet<&str> = [
         "node_modules",
@@ -1251,9 +1291,9 @@ fn rand_suffix() -> u32 {
     rand::random::<u32>()
 }
 
-fn deduplicate_path(path: &Path) -> PathBuf {
+fn deduplicate_path(path: &Path) -> Result<PathBuf> {
     if !path.exists() {
-        return path.to_path_buf();
+        return Ok(path.to_path_buf());
     }
     let parent = path.parent().unwrap_or_else(|| Path::new("/"));
     let stem = path
@@ -1270,19 +1310,50 @@ fn deduplicate_path(path: &Path) -> PathBuf {
         let new_name = format!("{stem} ({i}){ext}");
         let new_path = parent.join(new_name);
         if !new_path.exists() {
-            return new_path;
+            return Ok(new_path);
         }
     }
-    path.to_path_buf()
+    // Exhausted all counters: return an error rather than the original path,
+    // which would silently overwrite the existing file on the ensuing copy/move.
+    Err(Error::InvalidInput(
+        "too many name collisions; could not find a free filename".into(),
+    ))
 }
 
 fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
     std::fs::create_dir_all(dest).map_err(Error::Io)?;
+    // Resolve dest once so we can skip copying it into itself (fallback guard for
+    // callers that reach here directly).
+    let dest_canon = std::fs::canonicalize(dest).unwrap_or_else(|_| dest.to_path_buf());
     for entry in std::fs::read_dir(src).map_err(Error::Io)? {
         let entry = entry.map_err(Error::Io)?;
         let src_path = entry.path();
         let dest_path = dest.join(entry.file_name());
-        if src_path.is_dir() {
+
+        // Bottom-out guard: never descend into the destination itself.
+        let src_canon = std::fs::canonicalize(&src_path).unwrap_or_else(|_| src_path.clone());
+        if src_canon == dest_canon {
+            continue;
+        }
+
+        // Use file_type() (does NOT follow symlinks). Following links would copy
+        // a link target's whole contents, and a link to an ancestor would recurse
+        // without bound. Recreate symlinks verbatim instead.
+        let file_type = entry.file_type().map_err(Error::Io)?;
+        if file_type.is_symlink() {
+            #[cfg(unix)]
+            {
+                let link_target = std::fs::read_link(&src_path).map_err(Error::Io)?;
+                std::os::unix::fs::symlink(&link_target, &dest_path).map_err(Error::Io)?;
+            }
+            #[cfg(not(unix))]
+            {
+                // Non-unix fallback: copy the link target's file bytes if any.
+                if src_path.is_file() {
+                    std::fs::copy(&src_path, &dest_path).map_err(Error::Io)?;
+                }
+            }
+        } else if file_type.is_dir() {
             copy_dir_recursive(&src_path, &dest_path)?;
         } else {
             std::fs::copy(&src_path, &dest_path).map_err(Error::Io)?;
@@ -1315,7 +1386,9 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
                     loop {
                         match a_iter.clone().next() {
                             Some(c) if c.is_ascii_digit() => {
-                                a_num = a_num * 10 + (c as u8 - b'0') as u64;
+                                a_num = a_num
+                                    .saturating_mul(10)
+                                    .saturating_add((c as u8 - b'0') as u64);
                                 a_iter.next();
                             }
                             _ => break,
@@ -1324,7 +1397,9 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
                     loop {
                         match b_iter.clone().next() {
                             Some(c) if c.is_ascii_digit() => {
-                                b_num = b_num * 10 + (c as u8 - b'0') as u64;
+                                b_num = b_num
+                                    .saturating_mul(10)
+                                    .saturating_add((c as u8 - b'0') as u64);
                                 b_iter.next();
                             }
                             _ => break,
@@ -1616,12 +1691,11 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn deduplicate_path_adds_counter() {
         let base = tmp_dir("dedupe");
         let f = base.join("doc.txt");
         std::fs::write(&f, b"a").unwrap();
-        let next = deduplicate_path(&f);
+        let next = deduplicate_path(&f).unwrap();
         assert_eq!(next.file_name().unwrap().to_str().unwrap(), "doc (1).txt");
         let _ = std::fs::remove_dir_all(&base);
     }
