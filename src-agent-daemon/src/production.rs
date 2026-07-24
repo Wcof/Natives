@@ -1903,6 +1903,15 @@ impl EngineToolRuntime for PermissionGatedTools {
             return Self::deny_not_allowlisted(name);
         }
 
+        // ProjectIdentity fail-closed for mutating/process/network/MCP tools.
+        if let Err(err) = self.ensure_verified_project_for_tool(name).await {
+            return ToolExecutionResult {
+                output: serde_json::json!({"error": err, "denied": true, "code": "PROJECT_IDENTITY_REQUIRED"}),
+                is_error: true,
+                duration_ms: 0,
+            };
+        }
+
         let tool = self.gateway.get_tool(name);
         let is_mcp = name == "mcp_call" || name.starts_with("mcp__");
         if tool.is_none()
@@ -2029,14 +2038,6 @@ impl EngineToolRuntime for PermissionGatedTools {
         let stream_tool_call_id = uuid::Uuid::new_v4().to_string();
 
         // Create tool call context
-        let project_root = self
-            .gateway
-            .project_root
-            .as_ref()
-            .map(|s| std::path::PathBuf::from(s))
-            .unwrap_or_else(|| {
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-            });
         let cancel = if let Some(rt) = &self.runtime {
             rt.execution
                 .token(&self.parent_run_id)
@@ -2045,14 +2046,9 @@ impl EngineToolRuntime for PermissionGatedTools {
         } else {
             CancellationToken::new()
         };
-        let tool_context = capability_gateway::ToolCallContext::with_cancel(
-            project_root,
-            self.parent_run_id.clone(),
-            self.conversation_id.clone(),
-            stream_tool_call_id.clone(),
-            self.permission_profile.clone(),
-            cancel,
-        );
+        let tool_context = self
+            .build_tool_call_context(stream_tool_call_id.clone(), cancel)
+            .await;
 
         match self.gateway.execute(name, input, &tool_context).await {
             Ok(out) => {
@@ -2480,20 +2476,102 @@ fn load_tool_grant_match(
 }
 
 impl PermissionGatedTools {
+    /// Resolve verified ProjectIdentity for the parent run (None if unbound/orphan).
+    async fn verified_project_identity(&self) -> Option<crate::project_identity::ProjectIdentity> {
+        let run = crate::run_manager::global_run_manager().get_run(&self.parent_run_id)?;
+        let project_id = run.project_id.as_deref()?;
+        // Prefer daemon DataStore used by RunManager (same assistant.db as create_run).
+        let store = crate::run_manager::global_run_manager().data_store_ref()?;
+        let conn = store.conn().ok()?;
+        crate::project_identity::store::verify_for_invocation(&conn, project_id).ok()
+    }
+
+    async fn ensure_verified_project_for_tool(&self, name: &str) -> Result<(), String> {
+        if !crate::runtime::tool_requires_verified_project(name) {
+            return Ok(());
+        }
+        // Production: require verified ProjectIdentity when RunManager has a DataStore.
+        // Fixture/unit tests (no data_store on global RunManager) keep gateway root as
+        // workspace bound and are not fail-closed here — host create_run always binds
+        // identity when a project path is provided.
+        let has_store = crate::run_manager::global_run_manager()
+            .data_store_ref()
+            .is_some();
+        if !has_store {
+            return Ok(());
+        }
+        match self.verified_project_identity().await {
+            Some(_) => Ok(()),
+            None => Err(format!(
+                "tool `{name}` requires a verified ProjectIdentity on the run (unbound/orphaned/fingerprint mismatch)"
+            )),
+        }
+    }
+
+    async fn build_tool_invocation(
+        &self,
+        name: &str,
+        input: &Value,
+    ) -> crate::runtime::ToolInvocation {
+        if let Some(identity) = self.verified_project_identity().await {
+            return crate::runtime::invocation_from_verified_identity(
+                name,
+                input,
+                &self.conversation_id,
+                &self.parent_run_id,
+                None,
+                &identity,
+            );
+        }
+        crate::runtime::invocation_from_gate(
+            name,
+            input,
+            &self.conversation_id,
+            &self.parent_run_id,
+            self.gateway.project_root.as_deref(),
+        )
+    }
+
+    async fn build_tool_call_context(
+        &self,
+        tool_call_id: String,
+        cancel: CancellationToken,
+    ) -> capability_gateway::ToolCallContext {
+        if let Some(identity) = self.verified_project_identity().await {
+            return capability_gateway::ToolCallContext::from_verified_identity_with_cancel(
+                identity.project_id.clone(),
+                identity.identity_version,
+                std::path::PathBuf::from(&identity.canonical_path),
+                self.parent_run_id.clone(),
+                self.conversation_id.clone(),
+                tool_call_id,
+                self.permission_profile.clone(),
+                cancel,
+            );
+        }
+        let project_root = self
+            .gateway
+            .project_root
+            .as_ref()
+            .map(|s| std::path::PathBuf::from(s))
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        capability_gateway::ToolCallContext::with_cancel(
+            project_root,
+            self.parent_run_id.clone(),
+            self.conversation_id.clone(),
+            tool_call_id,
+            self.permission_profile.clone(),
+            cancel,
+        )
+    }
+
     async fn await_tool_permission(
         &self,
         name: &str,
         input: &Value,
     ) -> Option<ToolExecutionResult> {
         let pattern = tool_pattern(name, input);
-        let project_root = self.gateway.project_root.as_deref();
-        let inv = crate::runtime::invocation_from_gate(
-            name,
-            input,
-            &self.conversation_id,
-            &self.parent_run_id,
-            project_root,
-        );
+        let inv = self.build_tool_invocation(name, input).await;
         // Skip ask when structured grant already covers this invocation.
         if let Some(rt) = &self.runtime {
             if matches!(
@@ -2738,7 +2816,11 @@ impl PermissionGatedTools {
             CancellationToken::new()
         };
         match crate::runtime::mcp_invocation::invoke_mcp_tool(
-            &server_id, &tool_name, arguments, &cancel,
+            &server_id,
+            &tool_name,
+            arguments,
+            &cancel,
+            Some(&self.parent_run_id),
         )
         .await
         {

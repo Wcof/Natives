@@ -15,6 +15,7 @@ pub use execution_registry::{
 pub use interaction_hub::InteractionHub;
 pub use task_supervisor::{TaskRecord, TaskSupervisor};
 pub use tool_policy::{
-    invocation_from_gate, permission_class_for_tool, GrantDecision, StructuredToolGrant,
-    ToolInvocation, ToolPolicyState, TOOL_GRANT_POLICY_VERSION,
+    invocation_from_gate, invocation_from_verified_identity, permission_class_for_tool,
+    tool_allows_unbound_project, tool_requires_verified_project, GrantDecision,
+    StructuredToolGrant, ToolInvocation, ToolPolicyState, TOOL_GRANT_POLICY_VERSION,
 };

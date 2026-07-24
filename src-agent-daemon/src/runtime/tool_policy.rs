@@ -285,7 +285,11 @@ fn build_constraint(inv: &ToolInvocation) -> BuiltConstraint {
     }
 }
 
-fn grant_matches(g: &StructuredToolGrant, inv: &ToolInvocation, now: chrono::DateTime<chrono::Utc>) -> bool {
+fn grant_matches(
+    g: &StructuredToolGrant,
+    inv: &ToolInvocation,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
     // Legacy / wrong policy version never match.
     if g.policy_version == 0 || g.policy_version != TOOL_GRANT_POLICY_VERSION {
         return false;
@@ -331,12 +335,10 @@ fn grant_matches(g: &StructuredToolGrant, inv: &ToolInvocation, now: chrono::Dat
                 return false;
             }
         }
-        "session" => {
-            match (&g.session_id, &inv.session_id) {
-                (Some(gs), Some(is)) if gs == is => {}
-                _ => return false,
-            }
-        }
+        "session" => match (&g.session_id, &inv.session_id) {
+            (Some(gs), Some(is)) if gs == is => {}
+            _ => return false,
+        },
         "project" => {}
         _ => return false,
     }
@@ -345,9 +347,7 @@ fn grant_matches(g: &StructuredToolGrant, inv: &ToolInvocation, now: chrono::Dat
     if g.path_scope_json != Value::Null && g.path_scope_json != built.path_scope {
         return false;
     }
-    if g.argument_constraint_json != Value::Null
-        && g.argument_constraint_json != built.argument
-    {
+    if g.argument_constraint_json != Value::Null && g.argument_constraint_json != built.argument {
         return false;
     }
     true
@@ -401,9 +401,7 @@ fn canonical_rel_path(project_root: Option<&str>, path: &str) -> String {
             }
         }
         if p.starts_with(root) {
-            return p[root.len()..]
-                .trim_start_matches('/')
-                .replace('\\', "/");
+            return p[root.len()..].trim_start_matches('/').replace('\\', "/");
         }
     }
     p.trim_start_matches("./").replace('\\', "/")
@@ -634,7 +632,8 @@ pub fn permission_class_for_tool(tool_name: &str) -> String {
     }
 }
 
-/// Build invocation from permission gate fields (project identity filled when A lands).
+/// Build invocation with **no** project identity binding (readonly-only / tests).
+/// Prefer [`invocation_from_verified_identity`] for mutating tools.
 pub fn invocation_from_gate(
     tool_name: &str,
     input: &Value,
@@ -648,13 +647,50 @@ pub fn invocation_from_gate(
         conversation_id: conversation_id.to_string(),
         run_id: run_id.to_string(),
         session_id: None,
-        // Until task-10 ProjectIdentity: use project_root string as soft project_id.
-        project_id: project_root.map(|s| s.to_string()),
+        // Soft path-as-id removed: project_id must come from verified ProjectIdentity.
+        project_id: None,
         project_identity_version: None,
         project_fingerprint: None,
         input: input.clone(),
         project_root: project_root.map(|s| s.to_string()),
     }
+}
+
+/// Build invocation from a verified ProjectIdentity.
+/// Callers cannot omit fingerprint/version — they are taken from identity only.
+pub fn invocation_from_verified_identity(
+    tool_name: &str,
+    input: &Value,
+    conversation_id: &str,
+    run_id: &str,
+    session_id: Option<&str>,
+    identity: &crate::project_identity::ProjectIdentity,
+) -> ToolInvocation {
+    ToolInvocation {
+        tool_name: tool_name.to_string(),
+        permission_class: permission_class_for_tool(tool_name),
+        conversation_id: conversation_id.to_string(),
+        run_id: run_id.to_string(),
+        session_id: session_id.map(|s| s.to_string()),
+        project_id: Some(identity.project_id.clone()),
+        project_identity_version: Some(identity.identity_version.to_string()),
+        project_fingerprint: Some(identity.filesystem_fingerprint.clone()),
+        input: input.clone(),
+        project_root: Some(identity.canonical_path.clone()),
+    }
+}
+
+/// True when the tool may proceed without a bound ProjectIdentity.
+pub fn tool_allows_unbound_project(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "read_file" | "list_dir" | "grep" | "glob" | "task_output" | "task" | "kill_task"
+    )
+}
+
+/// Side-effect / mutating tools require a verified project binding.
+pub fn tool_requires_verified_project(tool_name: &str) -> bool {
+    !tool_allows_unbound_project(tool_name)
 }
 
 #[cfg(test)]
@@ -780,5 +816,47 @@ mod tests {
         let g = pol.remember(&inv, "project", None).await.unwrap().unwrap();
         pol.revoke(&g.id).await;
         assert_eq!(pol.check(&inv).await, GrantDecision::NeedsApproval);
+    }
+
+    #[test]
+    fn invocation_from_verified_identity_binds_all_fields() {
+        let id = crate::project_identity::ProjectIdentity {
+            project_id: "pid-1".into(),
+            canonical_path: "/tmp/proj".into(),
+            filesystem_fingerprint: "fp-abc".into(),
+            identity_version: 3,
+            verified_at: 0,
+        };
+        let inv = invocation_from_verified_identity(
+            "write_file",
+            &serde_json::json!({"path": "a.rs"}),
+            "c1",
+            "r1",
+            Some("sess"),
+            &id,
+        );
+        assert_eq!(inv.project_id.as_deref(), Some("pid-1"));
+        assert_eq!(inv.project_identity_version.as_deref(), Some("3"));
+        assert_eq!(inv.project_fingerprint.as_deref(), Some("fp-abc"));
+        assert_eq!(inv.project_root.as_deref(), Some("/tmp/proj"));
+        assert_eq!(inv.session_id.as_deref(), Some("sess"));
+        assert!(tool_requires_verified_project("write_file"));
+        assert!(tool_requires_verified_project("run_terminal"));
+        assert!(tool_requires_verified_project("mcp_call"));
+        assert!(!tool_requires_verified_project("read_file"));
+    }
+
+    #[test]
+    fn invocation_from_gate_does_not_use_path_as_project_id() {
+        let inv = invocation_from_gate(
+            "write_file",
+            &serde_json::json!({}),
+            "c",
+            "r",
+            Some("/some/path"),
+        );
+        assert!(inv.project_id.is_none());
+        assert!(inv.project_fingerprint.is_none());
+        assert_eq!(inv.project_root.as_deref(), Some("/some/path"));
     }
 }
