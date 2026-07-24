@@ -560,12 +560,6 @@ function applyOneEvent(
   const runId = event.runId;
   if (!runId || !Number.isFinite(event.sequence)) return state;
 
-  const seen = state.seenSequencesByRun[runId] ?? {};
-  if (seen[event.sequence]) {
-    // Idempotent: ignore duplicates
-    return state;
-  }
-
   const last = state.lastSequenceByRun[runId] ?? 0;
 
   // Out of order (older than last without being the next): ignore if not gap fill
@@ -582,12 +576,9 @@ function applyOneEvent(
     };
   }
 
-  const nextSeenEntries = Object.entries({ ...seen, [event.sequence]: true as const }).slice(-2000);
-  const nextSeen = Object.fromEntries(nextSeenEntries) as Record<number, true>;
   const retained = [...(state.eventsByRun[runId] ?? []), event].slice(-2000);
   let next: AssistantWorkspaceState = {
     ...state,
-    seenSequencesByRun: { ...state.seenSequencesByRun, [runId]: nextSeen },
     lastSequenceByRun: { ...state.lastSequenceByRun, [runId]: event.sequence },
     eventsByRun: {
       ...state.eventsByRun,
@@ -1327,9 +1318,6 @@ function applyOneEventForReplay(
   event: RunEvent,
 ): AssistantWorkspaceState {
   const runId = event.runId;
-  const seen = state.seenSequencesByRun[runId] ?? {};
-  if (seen[event.sequence]) return state;
-
   // Pretend last is event.sequence - 1 so gap check passes
   const patched: AssistantWorkspaceState = {
     ...state,

@@ -67,7 +67,6 @@ export interface AssistantWorkspaceState {
   lastSequenceByRun: Record<string, number>;
   /** Runs currently recovering from sequence gap */
   recoveringRuns: Record<string, boolean>;
-  seenSequencesByRun: Record<string, Record<number, true>>;
 
   interactions: Record<string, InteractionRequest>;
   /** Ordered interaction ids waiting for user */
@@ -104,7 +103,6 @@ export function createInitialWorkspaceState(): AssistantWorkspaceState {
     eventsByRun: {},
     lastSequenceByRun: {},
     recoveringRuns: {},
-    seenSequencesByRun: {},
     interactions: {},
     interactionOrder: [],
     promptQueues: {},

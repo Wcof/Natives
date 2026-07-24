@@ -35,6 +35,19 @@ function getFsApi() {
   return native;
 }
 
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const result: R[] = [];
+  let cursor = 0;
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor++;
+      result[index] = await fn(items[index]!);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return result;
+}
+
 interface FileBrowserProps {
   onFileSelect?: (entry: FileEntry) => void;
 }
@@ -58,6 +71,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const [newItemTarget, setNewItemTarget] = useState<{ parentDir: string; type: 'file' | 'folder' } | null>(null);
   const [newItemName, setNewItemName] = useState('');
   const [toast, setToast] = useState<string | null>(null);
+  const [flashPaths, setFlashPaths] = useState<Set<string>>(new Set());
   const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
   const [diskUsageTarget, setDiskUsageTarget] = useState<string | null>(null);
   const [locale, setLocale] = useState<Locale>('zh');
@@ -79,6 +93,23 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     }
     return 'md';
   });
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const path = (event as CustomEvent<string>).detail;
+      if (!path) return;
+      setFlashPaths((prev) => new Set(prev).add(path));
+      window.setTimeout(() => {
+        setFlashPaths((prev) => {
+          const next = new Set(prev);
+          next.delete(path);
+          return next;
+        });
+      }, 1200);
+    };
+    window.addEventListener('file-flash', handler);
+    return () => window.removeEventListener('file-flash', handler);
+  }, []);
 
   // Navigation history for back/forward
   const historyRef = useRef<string[]>(['/']);
@@ -304,8 +335,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       if (recentOpenedMode) {
         // 最近打开模式：读取 LRU（客户端记录），逐项 stat 过滤死链接
         const paths = recentOpenedPathsRef.current;
-        const settled = await Promise.all(
-          paths.map(async (p) => {
+        const settled = await mapWithConcurrency(paths, 8, async (p) => {
             try {
               const st = await fsApi.stat(p);
               if (!st?.found || st.isDir) return null; // 死链接或已变成目录 → 跳过
@@ -325,8 +355,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             } catch {
               return null;
             }
-          }),
-        );
+          });
         if (rid !== loadIdRef.current) return;
         setEntries(settled.filter((e): e is FileEntry => e !== null));
       } else if (recentMode) {
@@ -1275,6 +1304,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             cutPaths={clipBoard?.mode === 'cut' ? new Set(clipBoard.paths) : undefined}
             onMoveDrop={handleInternalMove}
             dragPaths={selectedPaths.size > 0 ? Array.from(selectedPaths) : undefined}
+            flashPaths={flashPaths}
           />
         ) : (
           <FileList
@@ -1293,6 +1323,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             cutPaths={clipBoard?.mode === 'cut' ? new Set(clipBoard.paths) : undefined}
             onMoveDrop={handleInternalMove}
             dragPaths={selectedPaths.size > 0 ? Array.from(selectedPaths) : undefined}
+            flashPaths={flashPaths}
           />
         )}
       </div>

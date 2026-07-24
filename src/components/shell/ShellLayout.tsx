@@ -38,6 +38,20 @@ const LazyFallback = () => (
     <MathCurveLoader size={48} />
   </div>
 );
+
+function IdleUpdateNotification({ locale }: { locale: Locale }) {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const schedule = (window as Window & { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
+    if (schedule) {
+      const id = schedule(() => setReady(true));
+      return () => (window as Window & { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback?.(id);
+    }
+    const id = window.setTimeout(() => setReady(true), 1000);
+    return () => window.clearTimeout(id);
+  }, []);
+  return ready ? <Suspense fallback={null}><LazyUpdateNotification locale={locale} /></Suspense> : null;
+}
 import { useLayoutEvents } from './hooks/useLayoutEvents';
 import { useModuleEvents } from './hooks/useModuleEvents';
 import { useFileEvents } from './hooks/useFileEvents';
@@ -566,7 +580,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       /></Suspense>
 
       {/* Phase 3: Update Notification */}
-      <Suspense fallback={null}><LazyUpdateNotification locale={locale} /></Suspense>
+      <IdleUpdateNotification locale={locale} />
     </div>
     </div>
     </>

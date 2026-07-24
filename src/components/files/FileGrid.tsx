@@ -19,6 +19,7 @@ interface FileGridProps {
   cutPaths?: Set<string>;
   onMoveDrop?: (sourcePaths: string[], destDir: string) => void;
   dragPaths?: string[];
+  flashPaths?: Set<string>;
 }
 
 const GRID_COLS: Record<string, string> = {
@@ -28,7 +29,7 @@ const GRID_COLS: Record<string, string> = {
 };
 
 const FileGrid = forwardRef<HTMLDivElement, FileGridProps>(function FileGrid(
-  { entries, onSelect, onContextMenu, selectedIndex = -1, selectedPaths, gridSize = 'md', onEditRequest, favorites, onFavoriteToggle, cutPaths, onMoveDrop, dragPaths },
+  { entries, onSelect, onContextMenu, selectedIndex = -1, selectedPaths, gridSize = 'md', onEditRequest, favorites, onFavoriteToggle, cutPaths, onMoveDrop, dragPaths, flashPaths },
   ref,
 ) {
   const locale = useLocale();
@@ -79,6 +80,7 @@ const FileGrid = forwardRef<HTMLDivElement, FileGridProps>(function FileGrid(
           dimmed={cutPaths?.has(entry.path)}
           onMoveDrop={onMoveDrop}
           dragPaths={dragPaths}
+          flash={flashPaths?.has(entry.path)}
         />
       ))}
       {count < entries.length && <div ref={sentinelRef} style={{ minHeight: 1, gridColumn: '1 / -1' }} />}

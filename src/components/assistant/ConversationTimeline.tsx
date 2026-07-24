@@ -38,7 +38,7 @@ interface ConversationTimelineProps {
   eventsByRun?: Record<string, RunEvent[]>;
   hasMoreOlder?: boolean;
   loadingOlder?: boolean;
-  onLoadOlder?: () => void;
+  onLoadOlder?: () => void | Promise<void>;
 }
 
 const NEAR_BOTTOM_PX = 80;
@@ -258,6 +258,16 @@ export default function ConversationTimeline({
     (message) => message.status === 'streaming' || message.status === 'running',
   );
 
+  const loadOlder = async () => {
+    const el = scrollRef.current;
+    const before = el ? { height: el.scrollHeight, top: el.scrollTop } : null;
+    await onLoadOlder?.();
+    if (!el || !before) return;
+    requestAnimationFrame(() => {
+      el.scrollTop = before.top + (el.scrollHeight - before.height);
+    });
+  };
+
   useEffect(() => {
     if (!hasActive) return;
     setNow(Date.now());
@@ -325,7 +335,7 @@ export default function ConversationTimeline({
     >
       <div className="mx-auto flex w-full max-w-[860px] flex-col gap-7 px-5 py-7">
         {hasMoreOlder && onLoadOlder && (
-          <button type="button" onClick={onLoadOlder} disabled={loadingOlder} className="self-center rounded border px-3 py-1 text-xs text-[var(--text-secondary)]">
+          <button type="button" onClick={() => void loadOlder()} disabled={loadingOlder} className="self-center rounded border px-3 py-1 text-xs text-[var(--text-secondary)]">
             {loadingOlder ? (zh ? '加载中…' : 'Loading…') : (zh ? '加载更早消息' : 'Load older messages')}
           </button>
         )}

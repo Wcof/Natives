@@ -88,13 +88,16 @@ export function useCreativeAppCatalog(options: { enabled?: boolean } = {}) {
     if (visibleRef.current) reconcile();
     const timer = setInterval(() => {
       if (!visibleRef.current) return;
-      reconcile();
+      const runningExternal = (data ?? []).some(
+        (app) => app.source === 'external_github' && app.state === 'running',
+      );
+      if (runningExternal) reconcile();
     }, 30000);
     return () => {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', onVis);
     };
-  }, [enabled, reload]);
+  }, [data, enabled, reload]);
 
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
 
@@ -108,7 +111,10 @@ export function useCreativeAppCatalog(options: { enabled?: boolean } = {}) {
         next.delete(id);
         return next;
       });
-      void reload();
+      const api = typeof window !== 'undefined' ? window.nativesAPI : undefined;
+      const reconcile = api?.creativeApp?.reconcile;
+      if (reconcile) void reconcile().catch(() => {}).finally(() => reload());
+      else void reload();
     }
   }, [reload]);
 

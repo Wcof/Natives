@@ -22,9 +22,10 @@ interface FileListProps {
   cutPaths?: Set<string>;
   onMoveDrop?: (sourcePaths: string[], destDir: string) => void;
   dragPaths?: string[];
+  flashPaths?: Set<string>;
 }
 
-export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, onContextMenu, showDir, selectedIndex = -1, selectedPaths, onEditRequest, favorites, onFavoriteToggle, cutPaths, onMoveDrop, dragPaths }: FileListProps) {
+export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, onContextMenu, showDir, selectedIndex = -1, selectedPaths, onEditRequest, favorites, onFavoriteToggle, cutPaths, onMoveDrop, dragPaths, flashPaths }: FileListProps) {
   const [locale, setLocale] = useState<Locale>('zh');
   const [count, setCount] = useState(200);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -114,6 +115,7 @@ export default function FileList({ entries, sortBy, sortDir, onSort, onSelect, o
             dimmed={cutPaths?.has(entry.path)}
             onMoveDrop={onMoveDrop}
             dragPaths={dragPaths}
+            flash={flashPaths?.has(entry.path)}
           />
         ))
       )}

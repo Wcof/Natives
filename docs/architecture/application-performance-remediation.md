@@ -16,10 +16,10 @@
 ## 整改状态（2026-07-24）
 
 - [x] 规范、Agent 入口和 Bundle 门禁（门禁脚本/CI 已加入；预算仍会阻断超标入口）
-- [~] 主线程阻塞、缩略图、Shell 和加载动画（系统采样、缩略图、渲染副作用、CSS loader 已完成；拖拽 rAF 尚未完成）
-- [~] 助理事件限额、批处理、计时器和分页（事件窗口、计时器、分页 API/UI、迁移索引已完成；单状态 batch 仍待后续优化）
-- [x] Bundle、文件浏览、个人创意和 Dashboard（懒加载、可见缩略图、文件分批、reconcile 降频已完成）
-- [x] Release 人工性能证据（Release `.app`/`.dmg` 已生成，并完成 5 次冷启动、空闲 CPU/RSS 采样）
+- [~] 主线程阻塞、缩略图、Shell 和加载动画（系统采样、缩略图、渲染副作用、CSS loader、拖拽局部状态已完成；完整可见性取消仍待实测）
+- [~] 助理事件限额、批处理、计时器和分页（事件窗口、序号集合移除、分页 API/UI、旧消息滚动锚点、迁移索引已完成；单状态 batch 与 delta 不入历史仍待后续优化）
+- [~] Bundle、文件浏览、个人创意和 Dashboard（懒加载、可见缩略图、文件分批、单监听、stat 并发上限、reconcile 降频已完成；Dashboard 隐藏态专项证据缺失）
+- [~] Release 人工性能证据（Release `.app`/`.dmg` 已生成，并完成 5 次冷启动、空闲 CPU/RSS 采样；7 项大数据集人工场景未执行）
 
 当前实测：`/page` 183.2KB、`/modules/page` 215.2KB、`/files/page` 199.1KB gzip，全部通过 350KB 门禁。
 
@@ -32,8 +32,7 @@
 - `npm run build`：Next production build 通过。
 - `npm run perf:bundle`：`/page 183.2KB`、`/modules/page 215.2KB`、`/files 199.1KB`，均为 `ok`。
 - `cargo build --release -p natives-agent-daemon`：通过。
-- Daemon conversation pagination 单测：通过。
-- Daemon adapter、workspace reducer 测试：25 项通过；10,000 事件窗口保持 2,000 条上限。
+- 按本轮要求未新增、未执行相关自动化测试；仅执行类型检查和 diff 静态检查。
 
 Release 包已成功生成：
 
@@ -46,7 +45,7 @@ Release 包已成功生成：
 - 启动后约 16 秒：主窗口 RSS 86.9MB / CPU 0.1%；Daemon RSS 8.2MB / CPU 0.0%。
 - 启动后约 66 秒空闲：主窗口 RSS 42.2MB / CPU 0.4%；Daemon RSS 8.2MB / CPU 0.0%。
 
-本次证据覆盖进程启动与资源基线；交互 p95、FPS 和 30 分钟导航内存曲线仍属于更长的专项 Instruments 测试，不作为本轮代码合入阻断项。
+本次证据覆盖进程启动与资源基线；交互 p95、FPS、30 分钟导航内存曲线及 7 项大数据集人工场景未执行，不能宣称预算已验收。
 
 ## 约束
 
