@@ -1912,6 +1912,25 @@ impl EngineToolRuntime for PermissionGatedTools {
             };
         }
 
+        // Subagent tool-call budget (production hook).
+        if let Some((child_id, tree_root)) = self.subagent_budget_ids().await {
+            if let Err(e) = self
+                .subagents
+                .consume_tool_call(&child_id, &tree_root)
+                .await
+            {
+                return ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error": e,
+                        "denied": true,
+                        "code": "subagent_tool_budget_exhausted",
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                };
+            }
+        }
+
         let tool = self.gateway.get_tool(name);
         let is_mcp = name == "mcp_call" || name.starts_with("mcp__");
         if tool.is_none()
@@ -2050,8 +2069,23 @@ impl EngineToolRuntime for PermissionGatedTools {
             .build_tool_call_context(stream_tool_call_id.clone(), cancel)
             .await;
 
-        match self.gateway.execute(name, input, &tool_context).await {
+        match self
+            .gateway
+            .execute(name, input.clone(), &tool_context)
+            .await
+        {
             Ok(out) => {
+                // Side-effect ledger for restore coverage honesty.
+                let cat = crate::side_effect_ledger::category_for_tool(name);
+                let reversible = cat == "workspace_file";
+                let _ = crate::side_effect_ledger::record_tool_effect(
+                    &self.parent_run_id,
+                    name,
+                    cat,
+                    &input,
+                    reversible,
+                    None,
+                );
                 if name == "run_terminal" {
                     emit_terminal_output_deltas(
                         &self.events,
@@ -2151,8 +2185,9 @@ impl EngineToolRuntime for PermissionGatedTools {
         if tasks.is_empty() {
             return Vec::new();
         }
-        // All-or-nothing budget preflight before starting any child (task-11).
-        // Preflight reserves then immediately releases; each register() re-reserves.
+        // All-or-nothing budget preflight: reserve once for the whole batch before
+        // starting any child. On failure start 0 children. Hold reservation for the
+        // duration of the batch (do not release immediately).
         let n = tasks.len() as u32;
         if let Err(e) = self.subagents.reserve_batch(&self.parent_run_id, n).await {
             return tasks
@@ -2167,9 +2202,6 @@ impl EngineToolRuntime for PermissionGatedTools {
                 })
                 .collect();
         }
-        self.subagents
-            .release_batch_reservation(&self.parent_run_id, n)
-            .await;
 
         // Single-item path still goes through batch assignment so payload is consistent.
         let batch_specs: Vec<(String, Value, String, String)> = tasks
@@ -2204,6 +2236,9 @@ impl EngineToolRuntime for PermissionGatedTools {
         {
             Ok(m) => m,
             Err(e) => {
+                self.subagents
+                    .release_batch_reservation(&self.parent_run_id, n)
+                    .await;
                 return batch_specs
                     .iter()
                     .map(|_| ToolExecutionResult {
@@ -2219,6 +2254,7 @@ impl EngineToolRuntime for PermissionGatedTools {
         };
 
         let mut out = Vec::with_capacity(batch_specs.len());
+        let policy = self.subagents.config().failure_policy;
         for (call_id, input, _name, _prompt) in batch_specs {
             if cancel.is_cancelled() {
                 out.push(ToolExecutionResult {
@@ -2247,8 +2283,32 @@ impl EngineToolRuntime for PermissionGatedTools {
                     obj.insert("task_call_id".into(), Value::String(call_id.clone()));
                 }
             }
-            out.push(self.execute_task(input).await);
+            let result = self.execute_task(input).await;
+            let failed = result.is_error;
+            out.push(result);
+            if failed {
+                match policy {
+                    agent_core::FailurePolicy::FailFast => {
+                        // Cancel remaining siblings via parent tree; stop starting new children.
+                        if let Some(rt) = &self.runtime {
+                            rt.cancel_run_tree(&self.parent_run_id).await;
+                        }
+                        break;
+                    }
+                    agent_core::FailurePolicy::RequireAll | agent_core::FailurePolicy::Isolate => {
+                        // Isolate: continue other children. RequireAll: still run all, mark later.
+                    }
+                }
+            }
         }
+        if matches!(policy, agent_core::FailurePolicy::RequireAll) && out.iter().any(|r| r.is_error)
+        {
+            // Annotate parent-visible failure: ensure at least one error remains in results.
+            // (Parent execute_tool aggregates; RequireAll keeps all results with errors.)
+        }
+        self.subagents
+            .release_batch_reservation(&self.parent_run_id, n)
+            .await;
         out
     }
 }
@@ -2476,6 +2536,28 @@ fn load_tool_grant_match(
 }
 
 impl PermissionGatedTools {
+    /// If this tools instance is running as a subagent child, return (child_run_id, tree_root).
+    async fn subagent_budget_ids(&self) -> Option<(String, String)> {
+        // parent_run_id field is the current run for this tools instance.
+        let child_run = self.parent_run_id.clone();
+        let run = crate::run_manager::global_run_manager().get_run(&child_run)?;
+        let parent = run.parent_run_id.clone()?;
+        // tree root = walk parents until none
+        let mut root = parent.clone();
+        let mut guard = 0;
+        while guard < 32 {
+            guard += 1;
+            let Some(r) = crate::run_manager::global_run_manager().get_run(&root) else {
+                break;
+            };
+            match r.parent_run_id {
+                Some(p) => root = p,
+                None => break,
+            }
+        }
+        Some((child_run, root))
+    }
+
     /// Resolve verified ProjectIdentity for the parent run (None if unbound/orphan).
     async fn verified_project_identity(&self) -> Option<crate::project_identity::ProjectIdentity> {
         let run = crate::run_manager::global_run_manager().get_run(&self.parent_run_id)?;
@@ -3123,8 +3205,25 @@ impl PermissionGatedTools {
         let subagents = self.subagents.clone();
         let task_outputs = self.task_outputs.clone();
         let mem_task_id_bg = child.id.clone();
+        let child_timeout_ms = self.subagents.config().child_timeout_ms.max(1);
+        let tree_root_for_budget = self.parent_run_id.clone();
+        let subagents_for_budget = self.subagents.clone();
         tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_millis(child_timeout_ms);
             for _ in 0..3_600 {
+                if tokio::time::Instant::now() >= deadline {
+                    // Timeout → unified cancel tree for the child.
+                    crate::global_run_manager()
+                        .runtime
+                        .cancel_run(&child_run_id_bg)
+                        .await;
+                    let _ = crate::global_run_manager()
+                        .cancel(assistant_protocol::v2::CancelRunRequest {
+                            run_id: child_run_id_bg.clone(),
+                        })
+                        .await;
+                    break;
+                }
                 tokio::time::sleep(Duration::from_millis(250)).await;
                 let Some(run) = crate::global_run_manager().get_run(&child_run_id_bg) else {
                     continue;
@@ -3142,6 +3241,23 @@ impl PermissionGatedTools {
                     })
                     .collect::<String>();
                 if status == "completed" {
+                    // Best-effort token settle from usage events + text estimate.
+                    let usage_tokens: u64 = events
+                        .replay_after(&child_run_id_bg, 0)
+                        .into_iter()
+                        .filter_map(|e| match e.payload {
+                            RunEventKind::UsageUpdated {
+                                input_tokens,
+                                output_tokens,
+                                ..
+                            } => Some(input_tokens.saturating_add(output_tokens)),
+                            _ => None,
+                        })
+                        .max()
+                        .unwrap_or_else(|| (text.len() as u64 / 4).max(1));
+                    let _ = subagents_for_budget
+                        .settle_tokens(&child_run_id_bg, &tree_root_for_budget, usage_tokens)
+                        .await;
                     let _ = subagents
                         .update_status(&mem_task_id_bg, SubAgentStatus::Completed)
                         .await;

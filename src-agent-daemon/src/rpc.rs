@@ -223,9 +223,7 @@ async fn handle_connection(
             &mut writer,
             &protocol_version.to_string(),
             &daemon_version,
-            format!(
-                "Protocol mismatch: client v{client_version}, daemon v{protocol_version}"
-            ),
+            format!("Protocol mismatch: client v{client_version}, daemon v{protocol_version}"),
         )
         .await?;
         return Ok(());
@@ -631,10 +629,7 @@ async fn handle_rpc(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             let run_id = request.params.get("run_id").and_then(|v| v.as_str());
-            let scope = request
-                .params
-                .get("scope")
-                .and_then(|v| v.as_str());
+            let scope = request.params.get("scope").and_then(|v| v.as_str());
             if request_id.is_empty() {
                 send_error(
                     writer,
@@ -701,9 +696,9 @@ async fn handle_rpc(
                                 max_steps: Some(new_run.max_steps),
                                 project_path: new_run.project_path.clone(),
                                 idempotency_key: None,
-                                        effort: None,
-            runtime_id: None,
-        };
+                                effort: None,
+                                runtime_id: None,
+                            };
                             match crate::run_manager::RunManager::start_detached_global(start_req) {
                                 Ok(run) => {
                                     send_success(
@@ -892,7 +887,8 @@ async fn handle_rpc(
         | names::PROMPT_QUEUE_REORDER
         | names::PROMPT_QUEUE_SEND_NOW
         | names::PROMPT_QUEUE_INTERJECT => {
-            match crate::prompt_queue_store::request(&request.method, request.params.clone()).await {
+            match crate::prompt_queue_store::request(&request.method, request.params.clone()).await
+            {
                 Ok(value) => {
                     send_success(
                         writer,
@@ -914,11 +910,7 @@ async fn handle_rpc(
                     } else {
                         ErrorCategory::Validation
                     };
-                    send_error(
-                        writer,
-                        &DaemonError::new(code, category, false, e),
-                    )
-                    .await
+                    send_error(writer, &DaemonError::new(code, category, false, e)).await
                 }
             }
         }
@@ -945,11 +937,7 @@ async fn handle_rpc(
                     } else {
                         ErrorCategory::Validation
                     };
-                    send_error(
-                        writer,
-                        &DaemonError::new(code, category, false, e),
-                    )
-                    .await
+                    send_error(writer, &DaemonError::new(code, category, false, e)).await
                 }
             }
         }
@@ -976,11 +964,7 @@ async fn handle_rpc(
                     } else {
                         ErrorCategory::Validation
                     };
-                    send_error(
-                        writer,
-                        &DaemonError::new(code, category, false, e),
-                    )
-                    .await
+                    send_error(writer, &DaemonError::new(code, category, false, e)).await
                 }
             }
         }
@@ -1646,11 +1630,7 @@ async fn handle_rpc(
                     .get("timeout_ms")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(60_000);
-                match run_manager()
-                    .runtime
-                    .wait_task(&task_id, timeout_ms)
-                    .await
-                {
+                match run_manager().runtime.wait_task(&task_id, timeout_ms).await {
                     Ok(rec) => {
                         send_success(
                             writer,
@@ -2104,32 +2084,30 @@ async fn handle_rpc(
                 }
             }
         }
-        "conversation.getContextUsage" => {
-            match handle_context_usage_rpc(&request.params) {
-                Ok(value) => {
-                    send_success(
-                        writer,
-                        &request.request_id,
-                        &request.client_id,
-                        &request.session_token,
-                        value,
-                    )
-                    .await
-                }
-                Err(e) => {
-                    send_error(
-                        writer,
-                        &DaemonError::new(
-                            error_codes::INVALID_INPUT,
-                            ErrorCategory::Validation,
-                            false,
-                            e,
-                        ),
-                    )
-                    .await
-                }
+        "conversation.getContextUsage" => match handle_context_usage_rpc(&request.params) {
+            Ok(value) => {
+                send_success(
+                    writer,
+                    &request.request_id,
+                    &request.client_id,
+                    &request.session_token,
+                    value,
+                )
+                .await
             }
-        }
+            Err(e) => {
+                send_error(
+                    writer,
+                    &DaemonError::new(
+                        error_codes::INVALID_INPUT,
+                        ErrorCategory::Validation,
+                        false,
+                        e,
+                    ),
+                )
+                .await
+            }
+        },
         _ => {
             let status = assistant_protocol::v2::method_status(&request.method);
             let code = match status {
@@ -2151,7 +2129,10 @@ async fn handle_rpc(
     }
 }
 
-fn handle_rewind_rpc(method: &str, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+fn handle_rewind_rpc(
+    method: &str,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
     use crate::checkpoint::global_checkpoint_manager;
     let run_id = params
         .get("run_id")
@@ -2159,9 +2140,16 @@ fn handle_rewind_rpc(method: &str, params: &serde_json::Value) -> Result<serde_j
         .ok_or("run_id is required")?;
     // Project path is taken from the bound run identity — callers cannot inject
     // an arbitrary path to restore files into another project (task-07/10).
-    let bound_path = crate::run_manager::global_run_manager()
+    let run = crate::run_manager::global_run_manager()
         .get_run(run_id)
-        .and_then(|r| r.project_path.map(std::path::PathBuf::from));
+        .ok_or_else(|| format!("run not found: {run_id}"))?;
+    // Legacy unbound ProjectIdentity: refuse restore entirely (no caller path injection).
+    if run.project_id.is_none() {
+        return Err(
+            "workspace.restore refused: run has no verified ProjectIdentity; restored=0".into(),
+        );
+    }
+    let bound_path = run.project_path.map(std::path::PathBuf::from);
     let project_path = if let Some(bound) = bound_path {
         if let Some(caller) = params
             .get("project_path")
@@ -2179,12 +2167,10 @@ fn handle_rewind_rpc(method: &str, params: &serde_json::Value) -> Result<serde_j
         }
         bound
     } else {
-        params
-            .get("project_path")
-            .or_else(|| params.get("project_root"))
-            .and_then(|v| v.as_str())
-            .map(std::path::PathBuf::from)
-            .ok_or_else(|| "project_path required when run has no bound project".to_string())?
+        return Err(
+            "workspace.restore refused: run has project_id but no bound project_path; restored=0"
+                .into(),
+        );
     };
     let paths: Option<Vec<String>> = params.get("paths").and_then(|v| {
         v.as_array().map(|a| {
@@ -2211,14 +2197,12 @@ fn handle_rewind_rpc(method: &str, params: &serde_json::Value) -> Result<serde_j
             }))
         }
         "workspace.restorePreview" => {
-            let preview = mgr.rewind_preview(
-                run_id,
-                &project_path,
-                paths.as_deref(),
-            )?;
+            let preview = mgr.rewind_preview(run_id, &project_path, paths.as_deref())?;
             let mut value = serde_json::to_value(preview).unwrap_or_default();
             if let Some(obj) = value.as_object_mut() {
-                obj.insert("coverage".into(), serde_json::json!("partial"));
+                let coverage = crate::side_effect_ledger::coverage_for_run(run_id)
+                    .unwrap_or_else(|| "unknown".into());
+                obj.insert("coverage".into(), serde_json::json!(coverage));
                 obj.insert("scope".into(), serde_json::json!("workspace_file_only"));
             }
             Ok(value)

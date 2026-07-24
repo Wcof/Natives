@@ -70,6 +70,18 @@ impl RunManager {
     }
 
     pub fn new_with_store(data_store: Arc<DataStore>) -> Self {
+        match Self::try_new_with_store(data_store) {
+            Ok(mgr) => mgr,
+            Err(e) => {
+                // Fail closed: never serve with incomplete recovery. Panic in daemon
+                // constructors is intentional — process must not continue with active runs.
+                panic!("RunManager recovery failed (fail-closed): {e}");
+            }
+        }
+    }
+
+    /// Fallible constructor: interrupt transaction failure aborts startup.
+    pub fn try_new_with_store(data_store: Arc<DataStore>) -> Result<Self, String> {
         let mgr = Self {
             runs: Mutex::new(HashMap::new()),
             idempotency: Mutex::new(HashMap::new()),
@@ -79,11 +91,14 @@ impl RunManager {
             data_store: Some(data_store.clone()),
             runtime: Arc::new(ProductionRuntime::new_with_event_store(data_store)),
         };
-        let _ = mgr.interrupt_active_sqlite_runs();
+        // Fail-closed: must not swallow recovery errors (task-04 / Phase 4).
+        mgr.interrupt_active_sqlite_runs()?;
         let _ = mgr.restore_runs_snapshot();
         // Hydrate SessionCoordinator from durable queue/actor rows (no auto re-exec).
         let _ = crate::prompt_queue_store::recover_session_actors_on_startup();
-        mgr
+        // Expire any in-memory waiters (oneshot futures are never restored).
+        // InteractionHub starts empty on new process — no action required.
+        Ok(mgr)
     }
 
     fn store_from_env() -> Option<Arc<DataStore>> {
