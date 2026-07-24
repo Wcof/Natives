@@ -36,6 +36,9 @@ interface ConversationTimelineProps {
   onRetry?: () => void;
   /** Full event streams keyed by run id (for live tool nesting). */
   eventsByRun?: Record<string, RunEvent[]>;
+  hasMoreOlder?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => void;
 }
 
 const NEAR_BOTTOM_PX = 80;
@@ -240,6 +243,9 @@ export default function ConversationTimeline({
   locale,
   onRetry,
   eventsByRun = {},
+  hasMoreOlder = false,
+  loadingOlder = false,
+  onLoadOlder,
 }: ConversationTimelineProps) {
   const zh = locale.startsWith('zh');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -318,6 +324,11 @@ export default function ConversationTimeline({
       className="relative h-full overflow-y-auto"
     >
       <div className="mx-auto flex w-full max-w-[860px] flex-col gap-7 px-5 py-7">
+        {hasMoreOlder && onLoadOlder && (
+          <button type="button" onClick={onLoadOlder} disabled={loadingOlder} className="self-center rounded border px-3 py-1 text-xs text-[var(--text-secondary)]">
+            {loadingOlder ? (zh ? '加载中…' : 'Loading…') : (zh ? '加载更早消息' : 'Load older messages')}
+          </button>
+        )}
         {messages.map((message) => (
           <MessageRow
             key={message.id}

@@ -79,6 +79,16 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
     setRightPanelMode,
   } = useShellState();
 
+  const handleSidebarResize = useCallback((width: number) => {
+    setState((prev) => ({ ...prev, sidebarWidth: clampSidebarWidth(width) }));
+  }, [setState]);
+  const handleRightPanelResize = useCallback((width: number) => {
+    setState((prev) => ({ ...prev, rightPanelWidth: clampRightPanelWidth(width) }));
+  }, [setState]);
+  const handleTerminalResize = useCallback((height: number) => {
+    setState((prev) => ({ ...prev, terminalHeight: height }));
+  }, [setState]);
+
   // ── Event hooks ──
   useLayoutEvents({
     stateRef,
@@ -345,10 +355,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           isCollapsed={effectiveSidebarCollapsed}
           onToggle={toggleSidebar}
           width={state.sidebarWidth}
-          onResize={(w) => setState((prev) => ({
-            ...prev,
-            sidebarWidth: clampSidebarWidth(w),
-          }))}
+          onResize={handleSidebarResize}
           activeModuleId={activeView}
           onModuleSelect={handleModuleSelect}
           onNotificationClick={() => toggleRightPanel('notifications')}
@@ -403,7 +410,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
             isCollapsed={state.terminalCollapsed}
             onToggle={toggleTerminal}
             height={state.terminalHeight}
-            onResize={(h) => setState((prev) => ({ ...prev, terminalHeight: h }))}
+            onResize={handleTerminalResize}
             isMaximized={state.terminalMaximized}
             onMaximizeToggle={toggleMaximized}
             onSessionCreated={(id) => { terminalSessionIdRef.current = id; }}
@@ -421,10 +428,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           previewSubMode={state.previewSubMode}
           onPreviewSubModeChange={setPreviewSubMode}
           width={state.rightPanelWidth}
-          onResize={(w) => setState((prev) => ({
-            ...prev,
-            rightPanelWidth: clampRightPanelWidth(w),
-          }))}
+          onResize={handleRightPanelResize}
           title={state.rightPanelMode === 'file-preview' && selectedFile ? selectedFile.name : undefined}
           extraHeaderContent={
             state.rightPanelMode === 'file-preview' && selectedFile && state.previewSubMode === 'preview'

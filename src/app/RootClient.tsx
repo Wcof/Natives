@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import { useHydrated } from '@/hooks/useHydrated';
 import '@/lib/tauri-adapter';
-import ShellLayout from '@/components/shell/ShellLayout';
+const LazyShellLayout = lazy(() => import('@/components/shell/ShellLayout'));
 import { ThemeProvider } from '@/context/ThemeContext';
 import { ToastProvider } from '@/components/ui/Toast';
 import { AssistantWorkspaceProvider } from '@/components/assistant/AssistantWorkspaceContext';
@@ -37,7 +37,7 @@ export default function RootClient({ children }: { children: ReactNode }) {
       <ToastProvider>
         <AssistantWorkspaceProvider>
           <div className="h-full w-full overflow-hidden bg-transparent [&_div[data-sidebar]]:h-full [&_[data-shell-content]]:h-full">
-            <ShellLayout>{children}</ShellLayout>
+            <Suspense fallback={null}><LazyShellLayout>{children}</LazyShellLayout></Suspense>
           </div>
         </AssistantWorkspaceProvider>
       </ToastProvider>

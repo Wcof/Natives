@@ -525,6 +525,7 @@ export interface ConversationSnapshot {
   tasks?: BackgroundTask[];
   contextUsage?: ContextUsage | null;
   capabilities?: DaemonCapabilities | null;
+  messagePageInfo?: { hasMore: boolean; nextCursor: { createdAt: string; id: string } | null };
 }
 
 // ─── RPC methods (subset of Rust ALL_METHODS + GUI needs) ─
@@ -538,9 +539,11 @@ export type AssistantMethod =
   | 'provider.test'
   | 'conversation.create'
   | 'conversation.list'
+  | 'conversation.listPage'
   | 'conversation.get'
   | 'conversation.update'
   | 'conversation.getMessages'
+  | 'conversation.getMessagesPage'
   | 'conversation.appendMessage'
   | 'conversation.rename'
   | 'conversation.update_model'

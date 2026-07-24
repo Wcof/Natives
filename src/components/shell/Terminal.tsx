@@ -35,6 +35,7 @@ export default function TerminalPanel({
   onFollowModeToggle,
 }: TerminalPanelProps) {
   const [isDragging, setIsDragging] = useState(false);
+  const [draftHeight, setDraftHeight] = useState(height);
   const [isDragOver, setIsDragOver] = useState(false);
   const locale = useLocale();
 
@@ -105,13 +106,16 @@ export default function TerminalPanel({
     setIsDragging(true);
     const startY = e.clientY;
     const startH = height;
+    let latest = startH;
 
     const handleMove = (ev: MouseEvent) => {
       const delta = startY - ev.clientY;
       const newHeight = Math.max(200, Math.min(window.innerHeight * 0.5, startH + delta));
-      onResize(newHeight);
+      latest = newHeight;
+      setDraftHeight(newHeight);
     };
     const handleUp = () => {
+      onResize(latest);
       setIsDragging(false);
       document.removeEventListener('mousemove', handleMove);
       document.removeEventListener('mouseup', handleUp);
@@ -285,7 +289,7 @@ export default function TerminalPanel({
   return (
     <div
       className={`terminal-panel ${isCollapsed ? 'collapsed' : ''} ${isMaximized ? 'terminal-maximized' : ''}`}
-      style={{ height: isMaximized ? '100%' : isCollapsed ? 0 : height }}
+      style={{ height: isMaximized ? '100%' : isCollapsed ? 0 : (isDragging ? draftHeight : height) }}
       role="terminal"
       aria-label={t(locale, 'terminal.title')}
       onDragOver={handleDragOver}

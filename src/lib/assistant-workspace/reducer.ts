@@ -873,6 +873,9 @@ function applySnapshot(
     ...next,
     messages,
     messagesByConversation: { ...next.messagesByConversation, [c.id]: order },
+    messagePageInfoByConversation: snapshot.messagePageInfo
+      ? { ...next.messagePageInfoByConversation, [c.id]: { hasMore: snapshot.messagePageInfo.hasMore, nextCursor: snapshot.messagePageInfo.nextCursor } }
+      : next.messagePageInfoByConversation,
   };
 
   const runs = { ...next.runs };
@@ -1015,6 +1018,25 @@ export function workspaceReducer(
 
     case 'snapshot/apply':
       return applySnapshot(state, action.snapshot);
+
+    case 'messages/prependPage': {
+      const existing = state.messagesByConversation[action.conversationId] ?? [];
+      const incoming = action.messages.filter((message) => !state.messages[message.id]);
+      const messages = { ...state.messages };
+      for (const message of incoming) messages[message.id] = message;
+      return {
+        ...state,
+        messages,
+        messagesByConversation: {
+          ...state.messagesByConversation,
+          [action.conversationId]: [...incoming.map((message) => message.id), ...existing],
+        },
+        messagePageInfoByConversation: {
+          ...state.messagePageInfoByConversation,
+          [action.conversationId]: action.pageInfo,
+        },
+      };
+    }
 
     case 'run/upsert': {
       const run = action.run;

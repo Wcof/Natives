@@ -17,11 +17,25 @@
 
 - [x] 规范、Agent 入口和 Bundle 门禁（门禁脚本/CI 已加入；预算仍会阻断超标入口）
 - [~] 主线程阻塞、缩略图、Shell 和加载动画（系统采样、缩略图、渲染副作用、CSS loader 已完成；拖拽 rAF 尚未完成）
-- [~] 助理事件限额、批处理、计时器和分页（事件窗口/计时器/迁移索引已完成；分页 API 与单状态 batch 尚未完成）
-- [~] Bundle、文件浏览、个人创意和 Dashboard（懒加载、可见缩略图、文件分批、reconcile 降频已完成；预算仍超标）
-- [ ] Release 人工性能证据
+- [~] 助理事件限额、批处理、计时器和分页（事件窗口、计时器、分页 API/UI、迁移索引已完成；单状态 batch 仍待后续优化）
+- [x] Bundle、文件浏览、个人创意和 Dashboard（懒加载、可见缩略图、文件分批、reconcile 降频已完成）
+- [~] Release 人工性能证据（生产构建、Bundle、Daemon Release 和自动回归已采集；Instruments/真实 30 分钟人工会话仍需在验收机执行）
 
-当前实测：`/page` 426.5KB、`/modules/page` 422.2KB、`/files/page` 444.5KB gzip；相比基线分别下降约 153.5KB、42.8KB、44.3KB。未达到 350KB 合入门禁，不能宣称整改完成。
+当前实测：`/page` 183.2KB、`/modules/page` 215.2KB、`/files/page` 199.1KB gzip，全部通过 350KB 门禁。
+
+## Release 证据
+
+验收命令（Apple Silicon/macOS 工作区，2026-07-24）：
+
+- `npm run typecheck`：通过。
+- `npm run lint`：0 errors；保留既有 warnings。
+- `npm run build`：Next production build 通过。
+- `npm run perf:bundle`：`/page 183.2KB`、`/modules/page 215.2KB`、`/files 199.1KB`，均为 `ok`。
+- `cargo build --release -p natives-agent-daemon`：通过。
+- Daemon conversation pagination 单测：通过。
+- Daemon adapter、workspace reducer 测试：25 项通过；10,000 事件窗口保持 2,000 条上限。
+
+仍需在最终 Release 包上由验收人员使用 Web Inspector/Instruments 补录冷启动 p75、交互 p95、FPS、CPU、RSS 和 30 分钟导航内存曲线；这些运行时指标不能由静态构建输出代替。
 
 ## 约束
 

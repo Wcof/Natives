@@ -58,6 +58,7 @@ export interface AssistantWorkspaceState {
 
   messagesByConversation: Record<string, string[]>;
   messages: Record<string, Message>;
+  messagePageInfoByConversation: Record<string, { hasMore: boolean; nextCursor: { createdAt: string; id: string } | null }>;
 
   runs: Record<string, Run>;
   /** Active (latest) run per conversation */
@@ -97,6 +98,7 @@ export function createInitialWorkspaceState(): AssistantWorkspaceState {
     activeConversationId: null,
     messagesByConversation: {},
     messages: {},
+    messagePageInfoByConversation: {},
     runs: {},
     activeRunByConversation: {},
     eventsByRun: {},
@@ -152,5 +154,6 @@ export type WorkspaceAction =
   | { type: 'messages/appendOptimistic'; message: Message }
   /** Drop a stuck optimistic user bubble / clear live run after send failure. */
   | { type: 'messages/remove'; id: string; conversationId: string }
+  | { type: 'messages/prependPage'; conversationId: string; messages: Message[]; pageInfo: { hasMore: boolean; nextCursor: { createdAt: string; id: string } | null } }
   | { type: 'run/clearActive'; conversationId: string; runId?: string }
   | { type: 'disconnect/soft' };

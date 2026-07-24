@@ -356,6 +356,7 @@ export default function Sidebar({
 
   // ── Width resize (right-edge drag handle) ──
   const [isResizing, setIsResizing] = useState(false);
+  const [draftWidth, setDraftWidth] = useState(width);
   const widthRef = useRef(width);
   widthRef.current = width;
 
@@ -376,13 +377,17 @@ export default function Sidebar({
     setIsResizing(true);
     const startX = e.clientX;
     const startW = widthRef.current;
+    let latest = startW;
+    setDraftWidth(startW);
 
     const handleMove = (ev: MouseEvent) => {
       // Handle sits on the right edge: moving right grows the sidebar.
       const delta = ev.clientX - startX;
-      onResize(clampSidebarWidth(startW + delta));
+      latest = clampSidebarWidth(startW + delta);
+      setDraftWidth(latest);
     };
     const handleUp = () => {
+      onResize(latest);
       setIsResizing(false);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
@@ -463,7 +468,7 @@ export default function Sidebar({
   };
 
   const normalizedLocale = locale.startsWith('zh') ? 'zh' : 'en';
-  const sidebarWidth = isCollapsed ? SIDEBAR_COLLAPSED_WIDTH : width;
+  const sidebarWidth = isCollapsed ? SIDEBAR_COLLAPSED_WIDTH : (isResizing ? draftWidth : width);
 
   return (
     <div className={`doppelrand-outer h-full ${isCollapsed ? 'w-0 !border-0 !border-none overflow-visible' : 'relative'}`} style={isCollapsed ? { border: 'none' } : undefined}>

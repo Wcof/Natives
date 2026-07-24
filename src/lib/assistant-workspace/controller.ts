@@ -39,10 +39,12 @@ export async function loadConversations(
   gateway: AssistantGateway,
   dispatch: Dispatch,
 ): Promise<void> {
-  const list = await gateway.request<Array<Record<string, unknown> | import('@/lib/assistant-protocol').Conversation>>(
-    'conversation.list',
-    { include_archived: false },
+  const listRaw = await gateway.request<unknown>('conversation.listPage', { limit: 100 }).catch(() =>
+    gateway.request<unknown>('conversation.list', { include_archived: false }),
   );
+  const list = Array.isArray(listRaw)
+    ? listRaw
+    : ((listRaw as { conversations?: unknown[] } | null)?.conversations ?? []);
   // Accept already-mapped Conversation objects from fixture or wire shapes
   const { mapWireConversation } = await import('@/lib/assistant-protocol');
   const conversations = (Array.isArray(list) ? list : []).map((c) => {
