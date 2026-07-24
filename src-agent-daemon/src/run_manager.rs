@@ -1560,11 +1560,7 @@ impl RunManager {
                     .with_cancel_token(cancel)
                     .with_hooks(hooks),
             );
-            self.runtime
-                .engines
-                .lock()
-                .await
-                .insert(run.id.clone(), engine.clone());
+            self.runtime.register_engine(&run.id, engine.clone()).await;
             let provider = FixtureProvider {
                 mode: FixtureMode::TextOnly,
             };
@@ -1582,10 +1578,10 @@ impl RunManager {
                 },
                 permissions: self.runtime.permissions.clone(),
                 events: self.runtime.events.clone(),
-                waiters: self.runtime.permission_waiters.clone(),
+                waiters: self.runtime.permission_waiters_ref(),
                 subagents: self.runtime.subagents.clone(),
-                task_outputs: self.runtime.task_outputs.clone(),
-                engines: self.runtime.engines.clone(),
+                task_outputs: self.runtime.task_outputs_ref(),
+                engines: self.runtime.engine_handles().await,
                 runtime: Some(self.runtime.clone()),
                 provider_id: provider_id.clone(),
                 key_id: key_id.clone(),
@@ -1616,7 +1612,7 @@ impl RunManager {
                     &self.runtime.events.replay_after(&run.id, 0),
                 );
             }
-            self.runtime.engines.lock().await.remove(&run.id);
+            self.runtime.remove_engine(&run.id).await;
             // Commit terminal from outcome; return status for legacy local var.
             let committed = self.commit_outcome(&run.id, &outcome)?;
             committed.status
@@ -1730,11 +1726,7 @@ impl RunManager {
         let engine = Arc::new(
             AgentEngine::new(self.runtime.events.clone()).with_cancel_token(cancel),
         );
-        self.runtime
-            .engines
-            .lock()
-            .await
-            .insert(run.id.clone(), engine.clone());
+        self.runtime.register_engine(&run.id, engine.clone()).await;
         let _ = self.commit_status(
             &run.id,
             RunStatusV2::Preparing,
@@ -1766,7 +1758,7 @@ impl RunManager {
         } else {
             outcome
         };
-        self.runtime.engines.lock().await.remove(&run.id);
+        self.runtime.remove_engine(&run.id).await;
         self.commit_outcome(&run.id, &outcome)
     }
 
@@ -3219,19 +3211,15 @@ mod tests {
 
         // Register a live child AgentEngine on child.run_id (production path).
         let child_engine = Arc::new(AgentEngine::new(rm.runtime.events.clone()));
-        rm.runtime
-            .engines
-            .lock()
-            .await
-            .insert(child.run_id.clone(), child_engine.clone());
-        rm.runtime.task_outputs.lock().await.insert(
-            child.id.clone(),
+        rm.runtime.register_engine(&child.run_id, child_engine.clone()).await;
+        rm.runtime.insert_task_output(
+            &child.id,
             crate::production::TaskRecord {
                 run_id: child.run_id.clone(),
                 status: "running".into(),
                 output: None,
             },
-        );
+        ).await;
 
         // Child tool observes cancel flag (same bar as cancel_mid).
         let seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -3390,7 +3378,7 @@ mod tests {
                         }
                         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
                     }
-                    let _ = (&self.engines, &self.run_id);
+                    let _ = &self.run_id;
                     agent_core::ToolExecutionResult {
                         output: serde_json::json!({}),
                         is_error: false,
@@ -3429,7 +3417,7 @@ mod tests {
                 }
             }
             let tools = CancelAwareTools {
-                engines: rm_start.runtime.engines.clone(),
+                engines: rm_start.runtime.engine_handles().await,
                 run_id: rid.clone(),
                 seen: cancel_flag_seen_bg,
             };
@@ -3459,13 +3447,13 @@ mod tests {
 
         // Wait until engine is registered, then cancel → request_cancel.
         for _ in 0..50 {
-            if rm.runtime.engines.lock().await.contains_key(&run.id) {
+            if rm.runtime.has_engine(&run.id).await {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         assert!(
-            rm.runtime.engines.lock().await.contains_key(&run.id),
+            rm.runtime.has_engine(&run.id).await,
             "engine must be registered before cancel"
         );
         let cancelled = rm
@@ -3563,10 +3551,10 @@ mod tests {
             },
             permissions: rm.runtime.permissions.clone(),
             events: events.clone(),
-            waiters: rm.runtime.permission_waiters.clone(),
+            waiters: rm.runtime.permission_waiters_ref(),
             subagents: rm.runtime.subagents.clone(),
-            task_outputs: rm.runtime.task_outputs.clone(),
-            engines: rm.runtime.engines.clone(),
+            task_outputs: rm.runtime.task_outputs_ref(),
+            engines: rm.runtime.engine_handles().await,
             runtime: None,
             provider_id: "openai".into(),
             key_id: None,
@@ -3769,7 +3757,7 @@ mod tests {
             waiters: rt.permission_waiters.clone(),
             subagents: rt.subagents.clone(),
             task_outputs: rt.task_outputs.clone(),
-            engines: rt.engines.clone(),
+            engines: rt.engine_handles().await,
             runtime: None,
             provider_id: "openai".into(),
             key_id: Some("parent-run-key".into()),
@@ -3880,7 +3868,7 @@ mod tests {
                     waiters: prt.permission_waiters.clone(),
                     subagents: prt.subagents.clone(),
                     task_outputs: prt.task_outputs.clone(),
-                    engines: prt.engines.clone(),
+                    engines: prt.engine_handles().await,
                     runtime: None,
                     provider_id: "openai".into(),
                     key_id: Some("parent-key-A".into()),
@@ -4013,7 +4001,7 @@ mod tests {
             waiters: rt.permission_waiters.clone(),
             subagents: rt.subagents.clone(),
             task_outputs: rt.task_outputs.clone(),
-            engines: rt.engines.clone(),
+            engines: rt.engine_handles().await,
             runtime: None,
             provider_id: "openai".into(),
             key_id: None,

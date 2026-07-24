@@ -435,7 +435,7 @@ async fn wait_host_permission(
 ) -> bool {
     let (tx, rx) = oneshot::channel();
     {
-        let mut map = runtime.permission_waiters.lock().await;
+        let _waiters = runtime.permission_waiters_ref(); let mut map = _waiters.lock().await;
         map.insert(permission_id.to_string(), (run_id.to_string(), "cli".into(), tx));
     }
     let cancel = runtime
@@ -450,16 +450,14 @@ async fn wait_host_permission(
         c
     } else {
         runtime
-            .cli_cancel_flags
-            .try_lock()
-            .ok()
-            .and_then(|g| g.get(run_id).cloned())
+            .get_cli_cancel(run_id)
+            .await
             .unwrap_or_else(CancellationToken::new)
     };
     tokio::select! {
         biased;
         _ = cancel.cancelled() => {
-            let mut map = runtime.permission_waiters.lock().await;
+            let _waiters = runtime.permission_waiters_ref(); let mut map = _waiters.lock().await;
             map.remove(permission_id);
             false
         }
@@ -467,7 +465,7 @@ async fn wait_host_permission(
             match res {
                 Ok(Ok((approved, _scope))) => approved,
                 _ => {
-                    let mut map = runtime.permission_waiters.lock().await;
+                    let _waiters = runtime.permission_waiters_ref(); let mut map = _waiters.lock().await;
                     map.remove(permission_id);
                     false
                 }

@@ -74,18 +74,19 @@ pub struct ProductionRuntime {
     pub engines: Arc<Mutex<HashMap<String, Arc<AgentEngine>>>>,
     /// CLI runtime cancel flags (run_id → flag). Prefer [`Self::execution`] token tree (task-03).
     /// Kept as a compatibility mirror while CLI bridge migrates fully to ExecutionRegistry.
-    pub cli_cancel_flags: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    cli_cancel_flags: Arc<Mutex<HashMap<String, CancellationToken>>>,
     /// Sole cancel-token + join/resource registry (task-03). Agent C relocates in task-01.
     pub execution: Arc<crate::runtime::ExecutionRegistry>,
     /// Structured tool grant policy (task-09). Agent C relocates in task-01.
     pub tool_policy: Arc<crate::runtime::ToolPolicyState>,
     /// Legacy in-memory tool grants — retained for tests; production path uses tool_policy.
-    pub tool_grants: Arc<Mutex<Vec<ToolGrant>>>,
+    #[allow(dead_code)] // legacy in-memory; production path uses tool_policy
+    tool_grants: Arc<Mutex<Vec<ToolGrant>>>,
     /// interaction_id → oneshot for subagent_assignment batch waits.
     /// std mutex so interaction.respond can wake without re-entering tokio runtime.
-    pub assignment_waiters: Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<Value>>>>,
+    assignment_waiters: Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<Value>>>>,
     /// Ensure only one assignment interaction is pending per parent conversation.
-    pub assignment_inflight: Arc<std::sync::Mutex<HashMap<String, String>>>,
+    assignment_inflight: Arc<std::sync::Mutex<HashMap<String, String>>>,
     /// Per-run tool allowlist registered before RunManager starts a child run.
     /// `Some(list)` = hard allowlist; entry removed once the run starts.
     pub run_tool_allowlists: Arc<Mutex<HashMap<String, Vec<String>>>>,
@@ -315,6 +316,116 @@ impl ProductionRuntime {
 
     pub async fn take_run_tool_allowlist(&self, run_id: &str) -> Option<Vec<String>> {
         self.run_tool_allowlists.lock().await.remove(run_id)
+    }
+
+    // ─── Engine registry facade (task-01) ───
+
+    /// Register an engine handle for a run.
+    pub async fn register_engine(&self, run_id: &str, engine: Arc<AgentEngine>) {
+        self.engines.lock().await.insert(run_id.to_string(), engine);
+    }
+
+    /// Remove engine handle. Returns true if it existed.
+    pub async fn remove_engine(&self, run_id: &str) -> bool {
+        self.engines.lock().await.remove(run_id).is_some()
+    }
+
+    /// Check if a run has a live engine.
+    pub async fn has_engine(&self, run_id: &str) -> bool {
+        self.engines.lock().await.contains_key(run_id)
+    }
+
+    /// Clone engine handles for PermissionGatedTools construction.
+    pub async fn engine_handles(&self) -> Arc<Mutex<HashMap<String, Arc<AgentEngine>>>> {
+        self.engines.clone()
+    }
+
+    // ─── Permission waiter facade (task-01 / task-04) ───
+
+    /// Clone waiter map reference for PermissionGatedTools.
+    pub fn permission_waiters_ref(
+        &self,
+    ) -> Arc<Mutex<HashMap<String, (String, String, oneshot::Sender<(bool, String)>)>>> {
+        self.permission_waiters.clone()
+    }
+
+    /// Insert a permission waiter.
+    pub async fn insert_permission_waiter(
+        &self,
+        id: &str,
+        run_id: &str,
+        tool_name: &str,
+        tx: oneshot::Sender<(bool, String)>,
+    ) {
+        self.permission_waiters
+            .lock()
+            .await
+            .insert(id.to_string(), (run_id.to_string(), tool_name.to_string(), tx));
+    }
+
+    /// Remove a permission waiter (on respond or cancel).
+    pub async fn remove_permission_waiter(
+        &self,
+        id: &str,
+    ) -> Option<(String, String, oneshot::Sender<(bool, String)>)> {
+        self.permission_waiters.lock().await.remove(id)
+    }
+
+    // ─── Task output facade (task-01) ───
+
+    /// Clone task output map reference for PermissionGatedTools.
+    pub fn task_outputs_ref(
+        &self,
+    ) -> Arc<Mutex<HashMap<String, TaskRecord>>> {
+        self.task_outputs.clone()
+    }
+
+    /// Insert a task output record.
+    pub async fn insert_task_output(&self, id: &str, record: TaskRecord) {
+        self.task_outputs
+            .lock()
+            .await
+            .insert(id.to_string(), record);
+    }
+
+
+    /// Remove a task output record.
+    pub async fn remove_task_output(&self, id: &str) -> Option<TaskRecord> {
+        self.task_outputs.lock().await.remove(id)
+    }
+
+    // ─── CLI cancel flag facade (task-01) ───
+
+
+    /// Take a CLI cancel flag (consumes).
+    pub async fn take_cli_cancel(&self, run_id: &str) -> Option<CancellationToken> {
+        self.cli_cancel_flags.lock().await.remove(run_id)
+    }
+
+    /// Clone CLI cancel flag reference (does not consume).
+    pub async fn get_cli_cancel(&self, run_id: &str) -> Option<CancellationToken> {
+        self.cli_cancel_flags.lock().await.get(run_id).cloned()
+    }
+
+    /// Remove CLI cancel flag.
+    pub async fn remove_cli_cancel(&self, run_id: &str) -> bool {
+        self.cli_cancel_flags.lock().await.remove(run_id).is_some()
+    }
+
+    // ─── Assignment facade (task-01 / task-11) ───
+
+    /// Clone assignment waiters map for PermissionGatedTools.
+    pub fn assignment_waiters_ref(
+        &self,
+    ) -> Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<Value>>>> {
+        self.assignment_waiters.clone()
+    }
+
+    /// Clone assignment inflight map for subagent store.
+    pub fn assignment_inflight_ref(
+        &self,
+    ) -> Arc<std::sync::Mutex<HashMap<String, String>>> {
+        self.assignment_inflight.clone()
     }
 
     /// Register a cancel flag for a CLI-backed run (REQ-T01).
