@@ -150,10 +150,7 @@ pub fn retry_after_ms(headers: &reqwest::header::HeaderMap) -> Option<u64> {
             } else {
                 epoch.saturating_mul(1_000)
             };
-            reset_ms
-                .saturating_sub(now_ms)
-                .try_into()
-                .ok()
+            reset_ms.saturating_sub(now_ms).try_into().ok()
         })
 }
 
@@ -290,17 +287,46 @@ pub async fn stream_responses(
     request: ProviderRequest,
 ) -> Result<std::pin::Pin<Box<dyn futures_util::Stream<Item = ProviderEvent> + Send>>, ProviderError>
 {
-    use crate::stream::openai_responses::parse_responses_event;
-
     let mut request = request;
     request.stream = true;
     let url = format!("{}/responses", base_url.trim_end_matches('/'));
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        reqwest::header::HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|_| {
+            ProviderError {
+                code: "invalid_credential".into(),
+                message: "invalid OpenAI credential".into(),
+                category: ProviderErrorCategory::Auth,
+                retryable: false,
+                retry_after_ms: None,
+            }
+        })?,
+    );
+    stream_responses_with_headers(client, &url, headers, request).await
+}
+
+/// Stream a Responses endpoint with caller-provided authentication/identity headers.
+///
+/// This is used by the Codex OAuth adapter, whose upstream has a different URL and
+/// required account headers but emits the same Responses SSE vocabulary.
+pub async fn stream_responses_with_headers(
+    client: &Client,
+    url: &str,
+    headers: reqwest::header::HeaderMap,
+    mut request: ProviderRequest,
+) -> Result<std::pin::Pin<Box<dyn futures_util::Stream<Item = ProviderEvent> + Send>>, ProviderError>
+{
+    use crate::stream::openai_responses::parse_responses_event;
+
+    request.stream = true;
     let body = build_responses_body(&request);
 
     let response = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {api_key}"))
+        .post(url)
+        .headers(headers)
         .header("Content-Type", "application/json")
+        .header("Accept", "text/event-stream")
         .timeout(Duration::from_secs(300))
         .json(&body)
         .send()

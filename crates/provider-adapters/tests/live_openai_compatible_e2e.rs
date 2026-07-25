@@ -37,6 +37,7 @@ fn credential() -> Credential {
     Credential {
         api_key,
         base_url,
+        proxy_url: None,
         key_id: Some("live-e2e".into()),
         provider_type: Some("openai_compatible".into()),
     }
@@ -96,7 +97,10 @@ async fn live_text_stream_completes() {
         "provider errors (key redacted): {:?}",
         errors
             .iter()
-            .map(|m| m.replace(&std::env::var("NATIVES_TEST_OPENAI_KEY").unwrap_or_default(), "[KEY]"))
+            .map(|m| m.replace(
+                &std::env::var("NATIVES_TEST_OPENAI_KEY").unwrap_or_default(),
+                "[KEY]"
+            ))
             .collect::<Vec<_>>()
     );
     assert!(completed || !text.is_empty(), "no text and no completed");
@@ -147,8 +151,9 @@ async fn live_tool_roundtrip_body_and_second_turn() {
         messages: vec![ProviderMessage {
             role: "user".into(),
             content: vec![ProviderContentBlock::Text {
-                text: "Use the echo_box tool with text=hello_natives. Do not answer without the tool."
-                    .into(),
+                text:
+                    "Use the echo_box tool with text=hello_natives. Do not answer without the tool."
+                        .into(),
             }],
         }],
         system_prompt: Some("You must use tools when asked.".into()),
@@ -252,7 +257,9 @@ async fn live_tool_roundtrip_body_and_second_turn() {
     });
     let messages = body["messages"].as_array().expect("messages");
     assert!(
-        messages.iter().any(|m| m["role"] == "tool" && m["tool_call_id"] == call_id),
+        messages
+            .iter()
+            .any(|m| m["role"] == "tool" && m["tool_call_id"] == call_id),
         "tool result must keep tool_call_id in wire body: {body}"
     );
     assert!(

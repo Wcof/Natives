@@ -6,22 +6,23 @@ use tokio::sync::Mutex as TokioMutex;
 mod agent;
 mod archive;
 pub mod assistant_service;
-pub mod daemon;
+pub mod commands;
 pub mod context_window;
 pub mod contract_linter;
-pub mod executor_catalog;
-pub mod sequence_id;
-pub mod vendor_whitelist;
-pub mod commands;
+pub mod creative_app;
+pub mod credential_broker;
+pub mod daemon;
+pub mod daemon_authority;
 mod db;
 mod disk_usage;
 mod env_manager;
 mod error;
+pub mod executor_catalog;
 pub mod file_manager;
 mod fs_watch;
+mod ghostty_config;
 #[cfg(feature = "ghostty-vt")]
 mod ghostty_vt;
-mod ghostty_config;
 mod git;
 mod html_preview;
 mod http_server;
@@ -29,24 +30,24 @@ pub mod key_lease;
 mod lid_guard;
 pub mod log_sanitizer;
 mod module_manager;
-pub mod creative_app;
 mod permission_center;
+pub mod provider_accounts;
 pub mod provider_key_manager;
-pub mod credential_broker;
-pub mod daemon_authority;
-pub mod sidecar_supervisor;
 mod release_wizard;
 mod runtime;
 mod scheduler;
 mod screenshot;
 mod search;
+pub mod sequence_id;
+pub mod sidecar_supervisor;
 mod terminal;
 mod terminal_recorder;
 mod thumbnail;
 mod token_manager;
 pub mod update_checker;
-mod wechat;
 pub mod usage;
+pub mod vendor_whitelist;
+mod wechat;
 
 pub use error::{Error, Result};
 
@@ -219,7 +220,8 @@ pub fn run() {
             // NSVisualEffectView via the raw window handle (app.get_webview_window("main").unwrap()).
 
             // Initialize token manager (needs a connection from the pool)
-            let init_conn = pool.get()
+            let init_conn = pool
+                .get()
                 .map_err(|e| format!("failed to get DB connection: {e}"))?;
             let tm = std::sync::Arc::new(token_manager::TokenManager::new(&init_conn));
             drop(init_conn); // return connection to pool
@@ -235,7 +237,8 @@ pub fn run() {
 
             // Pre-warm env encryption key cache from SQLite settings.
             {
-                let pool_conn = pool.get()
+                let pool_conn = pool
+                    .get()
                     .map_err(|e| format!("failed to get DB connection for env key init: {e}"))?;
                 let conn: &rusqlite::Connection = &*pool_conn;
                 env_manager::init_env_encryption_key(conn)
@@ -251,7 +254,8 @@ pub fn run() {
 
             // Ensure builtin tools have DB rows (INSERT OR IGNORE — idempotent)
             {
-                let seed_conn = pool.get()
+                let seed_conn = pool
+                    .get()
                     .map_err(|e| format!("failed to get DB connection: {e}"))?;
                 let _ = db::seed_builtin_tool(&seed_conn, "terminal", "native");
                 let _ = db::seed_builtin_tool(&seed_conn, "editor", "native");
@@ -269,7 +273,9 @@ pub fn run() {
                 terminal_manager,
                 ghostty_manager: terminal::GhosttyManager::new(),
                 terminal_recorder,
-                screenshot_stop_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                screenshot_stop_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                    false,
+                )),
                 usage_cache: usage::UsageCache::new(),
                 fs_watcher: fs_watch::FsWatcher::new(app.handle().clone()),
                 lid_guard: lid_guard::LidGuard::new(),
@@ -299,7 +305,8 @@ pub fn run() {
                             .build();
                         if let Ok(rt) = rt {
                             let _ = rt.block_on(async {
-                                let _ = creative_app::install::reconcile_all(&conn, Some(&handle)).await;
+                                let _ = creative_app::install::reconcile_all(&conn, Some(&handle))
+                                    .await;
                                 let _ = creative_app::local::lifecycle::reconcile_local_apps(
                                     &conn,
                                     Some(&handle),
@@ -331,9 +338,9 @@ pub fn run() {
                         let handle = watchdog_handle.clone();
                         let _guard = lock.lock().await;
                         let _ = tokio::task::spawn_blocking(move || {
-                            let c = pool.get().map_err(|e| {
-                                Error::Internal(format!("local watchdog db: {e}"))
-                            })?;
+                            let c = pool
+                                .get()
+                                .map_err(|e| Error::Internal(format!("local watchdog db: {e}")))?;
                             let rt = tokio::runtime::Handle::current();
                             rt.block_on(creative_app::local::lifecycle::poll_and_reconcile_exits(
                                 &c,
@@ -351,14 +358,12 @@ pub fn run() {
             // through the DataStore, which handles its own migrations and WAL setup.
             let assistant_db_path = data_dir.join("assistant.db");
             let assistant_data_store = std::sync::Arc::new(
-                daemon::data::DataStore::new(
-                    &assistant_db_path.to_string_lossy(),
-                )
-                .map_err(|e| format!("failed to init assistant store: {e}"))?,
+                daemon::data::DataStore::new(&assistant_db_path.to_string_lossy())
+                    .map_err(|e| format!("failed to init assistant store: {e}"))?,
             );
-            app.manage(TokioMutex::new(
-                assistant_service::AssistantStore::new(assistant_data_store),
-            ));
+            app.manage(TokioMutex::new(assistant_service::AssistantStore::new(
+                assistant_data_store,
+            )));
 
             // ── P1 Runtime 抽象层：仅注册独立 CLI runtime ──
             // Native Assistant 的生产执行入口是 Protocol v2 Agent Daemon；
@@ -661,6 +666,17 @@ pub fn run() {
             commands::assistant::assistant_update_session_model,
             commands::provider::provider_test,
             commands::provider::test_provider_raw,
+            // Provider routing / Sub2API account pool (Host-owned configuration)
+            provider_accounts::provider_accounts_list,
+            provider_accounts::provider_accounts_preview_import,
+            provider_accounts::provider_accounts_commit_import,
+            provider_accounts::provider_accounts_batch_delete,
+            provider_accounts::provider_accounts_create_pool,
+            provider_accounts::provider_routing_get_settings,
+            provider_accounts::provider_routing_update_settings,
+            provider_accounts::provider_routing_rotate_local_token,
+            provider_accounts::provider_routing_list_bindings,
+            provider_accounts::provider_routing_update_bindings,
             // Library (fanbox clone — G4)
             commands::library::library_list_folders,
             commands::library::library_create_folder,

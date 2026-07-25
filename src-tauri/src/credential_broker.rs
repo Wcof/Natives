@@ -9,6 +9,7 @@
 use crate::error::{Error, Result};
 use crate::provider_key_manager::envelope_decrypt;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,6 +72,7 @@ pub fn resolve_for_daemon(
         Ok(resp) => Ok(provider_adapters::capabilities::Credential {
             api_key: resp.api_key,
             base_url: resp.base_url,
+            proxy_url: global_proxy_for_daemon().ok().flatten(),
             key_id: Some(resp.key_id),
             provider_type: resp.provider_type,
         }),
@@ -79,6 +81,56 @@ pub fn resolve_for_daemon(
             Err(msg)
         }
     }
+}
+
+pub(crate) fn global_proxy_for_daemon() -> std::result::Result<Option<String>, String> {
+    let db = crate::db::get_main_conn().map_err(|e| e.to_string())?;
+    let raw: Option<String> = db
+        .query_row(
+            "SELECT global_proxy_json FROM provider_routing_settings WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let value = serde_json::from_str::<Value>(&raw).unwrap_or(Value::Null);
+    if value.get("enabled").and_then(Value::as_bool) != Some(true) {
+        return Ok(None);
+    }
+    let url = match (
+        value.get("url_encrypted").and_then(Value::as_str),
+        value.get("dek_encrypted").and_then(Value::as_str),
+    ) {
+        (Some(encrypted), Some(dek)) => envelope_decrypt(encrypted, dek, &db)
+            .map_err(|_| "global proxy decrypt failed".to_string())?,
+        _ => value
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+    };
+    let url = url.trim();
+    if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("socks5://") {
+        Ok(Some(url.to_string()))
+    } else {
+        Ok(None)
+    }
+}
+
+pub(crate) fn outbound_http_client(
+    timeout: std::time::Duration,
+) -> std::result::Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder().timeout(timeout);
+    if let Some(url) = global_proxy_for_daemon()? {
+        builder = builder.proxy(
+            reqwest::Proxy::all(&url).map_err(|_| "global proxy URL is invalid".to_string())?,
+        );
+    }
+    builder
+        .build()
+        .map_err(|error| format!("failed to build outbound HTTP client: {error}"))
 }
 
 /// Resolve and decrypt a single provider key for an active run.
@@ -210,34 +262,37 @@ mod tests {
 
     #[test]
     fn rejects_empty_provider_id() {
-        let err = tauri::async_runtime::block_on(credential_broker_resolve(
-            CredentialBrokerRequest {
+        let err =
+            tauri::async_runtime::block_on(credential_broker_resolve(CredentialBrokerRequest {
                 key_id: "k".into(),
                 provider_id: "".into(),
                 run_id: "r".into(),
                 session_id: None,
-            },
-        ))
-        .unwrap_err();
+            }))
+            .unwrap_err();
         assert!(matches!(err, Error::InvalidInput(_)));
     }
 
     #[test]
     fn lifecycle_requires_ids_and_run() {
-        assert!(broker_lifecycle_resolve_validated(&CredentialBrokerRequest {
-            key_id: "".into(),
-            provider_id: "openai".into(),
-            run_id: "r1".into(),
-            session_id: None,
-        })
-        .is_err());
-        assert!(broker_lifecycle_resolve_validated(&CredentialBrokerRequest {
-            key_id: "k1".into(),
-            provider_id: "openai".into(),
-            run_id: "r1".into(),
-            session_id: None,
-        })
-        .is_ok());
+        assert!(
+            broker_lifecycle_resolve_validated(&CredentialBrokerRequest {
+                key_id: "".into(),
+                provider_id: "openai".into(),
+                run_id: "r1".into(),
+                session_id: None,
+            })
+            .is_err()
+        );
+        assert!(
+            broker_lifecycle_resolve_validated(&CredentialBrokerRequest {
+                key_id: "k1".into(),
+                provider_id: "openai".into(),
+                run_id: "r1".into(),
+                session_id: None,
+            })
+            .is_ok()
+        );
     }
 
     #[test]
@@ -321,14 +376,13 @@ mod tests {
     #[test]
     fn resolve_missing_provider_does_not_leak_fabricated_key() {
         // Without DB, resolve fails — must not invent offline success material.
-        let result = tauri::async_runtime::block_on(credential_broker_resolve(
-            CredentialBrokerRequest {
+        let result =
+            tauri::async_runtime::block_on(credential_broker_resolve(CredentialBrokerRequest {
                 key_id: "missing-key".into(),
                 provider_id: "openai".into(),
                 run_id: "run-audit".into(),
                 session_id: None,
-            },
-        ));
+            }));
         assert!(result.is_err());
         let msg = format!("{:?}", result.unwrap_err());
         assert!(!msg.contains("sk-"));

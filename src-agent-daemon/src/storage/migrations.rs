@@ -24,6 +24,7 @@ pub const ALL: &[(i64, &str)] = &[
     (17, MIGRATION_017),
     (18, MIGRATION_018),
     (19, MIGRATION_019),
+    (20, MIGRATION_020),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -649,4 +650,18 @@ CREATE INDEX IF NOT EXISTS idx_message_conversation_created_id
     ON message(conversation_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_message_block_message_sort
     ON message_block(message_id, sort_order ASC, id ASC);
+";
+
+/// Migration 020: durable provider-route circuit state. No credentials live here.
+const MIGRATION_020: &str = "
+CREATE TABLE IF NOT EXISTS provider_route_health (
+    route_key TEXT PRIMARY KEY,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    open_until_ms INTEGER,
+    half_open_in_flight INTEGER NOT NULL DEFAULT 0,
+    in_flight INTEGER NOT NULL DEFAULT 0,
+    last_selected_at TEXT,
+    last_error TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 ";

@@ -1,11 +1,9 @@
 //! Anthropic Messages API adapter — real HTTP streaming.
 
-use async_trait::async_trait;
 use crate::capabilities::*;
-use crate::stream::{
-    split_sse_lines, sse_data_payload, AnthropicSseParser, ProviderEvent,
-};
-use assistant_protocol::v1::provider::{ProviderType, ModelCapabilities};
+use crate::stream::{split_sse_lines, sse_data_payload, AnthropicSseParser, ProviderEvent};
+use assistant_protocol::v1::provider::{ModelCapabilities, ProviderType};
+use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::Client;
 use std::time::Duration;
@@ -40,7 +38,8 @@ fn build_messages_body(request: &ProviderRequest) -> serde_json::Value {
     // Anthropic requires tool_result blocks to live in a user message, possibly batched.
     let mut pending_tool_results: Vec<serde_json::Value> = Vec::new();
 
-    let flush_tool_results = |messages: &mut Vec<serde_json::Value>, pending: &mut Vec<serde_json::Value>| {
+    let flush_tool_results = |messages: &mut Vec<serde_json::Value>,
+                              pending: &mut Vec<serde_json::Value>| {
         if !pending.is_empty() {
             messages.push(serde_json::json!({
                 "role": "user",
@@ -89,7 +88,11 @@ fn build_messages_body(request: &ProviderRequest) -> serde_json::Value {
             }
         }
 
-        if message.role == "tool" || (is_tool_result_only && !pending_tool_results.is_empty() && content_blocks.is_empty()) {
+        if message.role == "tool"
+            || (is_tool_result_only
+                && !pending_tool_results.is_empty()
+                && content_blocks.is_empty())
+        {
             // Keep accumulating tool_result blocks; flushed before next non-tool message.
             continue;
         }
@@ -178,6 +181,7 @@ impl ProviderAdapter for AnthropicAdapter {
                 Credential {
                     api_key: self.api_key.clone().unwrap_or_default(),
                     base_url: Some(self.base_url.clone()),
+                    proxy_url: None,
                     key_id: None,
                     provider_type: Some("anthropic".into()),
                 },
@@ -200,8 +204,10 @@ impl ProviderAdapter for AnthropicAdapter {
     async fn chat_stream(
         &self,
         _request: ProviderRequest,
-    ) -> Result<Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>, ProviderError>
-    {
+    ) -> Result<
+        Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>,
+        ProviderError,
+    > {
         Err(ProviderError {
             code: "use_stream".into(),
             message: "Use stream(request, credential) for Anthropic; offline mock removed".into(),
@@ -229,14 +235,16 @@ impl ProviderAdapter for AnthropicAdapter {
                 retry_after_ms: None,
             })?
         };
-        let base = credential
-            .base_url
-            .unwrap_or_else(|| self.base_url.clone());
+        let proxy_url = credential.proxy_url.clone();
+        let base = credential.base_url.unwrap_or_else(|| self.base_url.clone());
         let url = format!("{}/v1/messages", base.trim_end_matches('/'));
         let body = build_messages_body(&request);
 
-        let response = self
-            .client
+        let client = match proxy_url.as_deref() {
+            Some(url) if !url.trim().is_empty() => crate::http_client::client(Some(url))?,
+            _ => self.client.clone(),
+        };
+        let response = client
             .post(&url)
             .header("x-api-key", &key)
             .header("anthropic-version", "2023-06-01")
@@ -257,7 +265,11 @@ impl ProviderAdapter for AnthropicAdapter {
             let status = response.status().as_u16();
             let headers = response.headers().clone();
             let text = response.text().await.unwrap_or_default();
-            return Err(crate::http_stream::map_http_status(status, &text, Some(&headers)));
+            return Err(crate::http_stream::map_http_status(
+                status,
+                &text,
+                Some(&headers),
+            ));
         }
 
         let byte_stream = response.bytes_stream();
@@ -300,24 +312,22 @@ impl ProviderAdapter for AnthropicAdapter {
         Ok(Box::pin(stream))
     }
     async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
-        Ok(vec![
-            ModelInfo {
-                id: "claude-sonnet-4-20250514".into(),
-                display_name: Some("Claude Sonnet 4".into()),
-                context_window: 200_000,
-                max_output: 16_384,
-                capabilities: ModelCapabilities {
-                    streaming: true,
-                    image_input: true,
-                    file_input: false,
-                    reasoning: true,
-                    tool_calling: true,
-                    structured_output: false,
-                    function_calling: true,
-                    system_prompt: true,
-                },
+        Ok(vec![ModelInfo {
+            id: "claude-sonnet-4-20250514".into(),
+            display_name: Some("Claude Sonnet 4".into()),
+            context_window: 200_000,
+            max_output: 16_384,
+            capabilities: ModelCapabilities {
+                streaming: true,
+                image_input: true,
+                file_input: false,
+                reasoning: true,
+                tool_calling: true,
+                structured_output: false,
+                function_calling: true,
+                system_prompt: true,
             },
-        ])
+        }])
     }
     async fn test_connection(&self) -> Result<ProviderTestResult, ProviderError> {
         Ok(ProviderTestResult {

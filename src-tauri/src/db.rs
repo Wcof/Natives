@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 use crate::{Error, Result};
-use rusqlite::OptionalExtension;
-use rusqlite::Connection;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::Connection;
+use rusqlite::OptionalExtension;
 use std::path::Path;
 
 /// Database connection pool type alias
@@ -28,7 +28,8 @@ pub fn register_main_pool(pool: DbPool) {
 pub fn get_main_conn() -> Result<r2d2::PooledConnection<SqliteConnectionManager>> {
     let guard = MAIN_DB_POOL.lock().unwrap();
     match guard.as_ref() {
-        Some(pool) => pool.get()
+        Some(pool) => pool
+            .get()
             .map_err(|e| Error::Internal(format!("Failed to get main DB connection: {e}"))),
         None => Err(Error::Internal("main DB pool not initialized".into())),
     }
@@ -46,7 +47,8 @@ pub fn init_assistant_db() -> Result<()> {
     let pool = init_db_pool(&db_path)?;
 
     // Create assistant-specific tables
-    let conn = pool.get()
+    let conn = pool
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     conn.execute_batch(
         "
@@ -94,13 +96,15 @@ pub fn init_assistant_db() -> Result<()> {
         conn.execute(
             "ALTER TABLE assistant_sessions ADD COLUMN runtime_override TEXT",
             [],
-        ).map_err(Error::Database)?;
+        )
+        .map_err(Error::Database)?;
     }
     if !existing_cols.iter().any(|c| c == "sdk_session_id") {
         conn.execute(
             "ALTER TABLE assistant_sessions ADD COLUMN sdk_session_id TEXT",
             [],
-        ).map_err(Error::Database)?;
+        )
+        .map_err(Error::Database)?;
     }
 
     // scheduled_tasks + task_runs 表（Slice J Task Scheduler）
@@ -130,7 +134,8 @@ pub fn init_assistant_db() -> Result<()> {
             error TEXT
         );
         ",
-    ).map_err(Error::Database)?;
+    )
+    .map_err(Error::Database)?;
 
     let mut guard = ASSISTANT_DB_POOL.lock().unwrap();
     *guard = Some(pool);
@@ -141,16 +146,20 @@ pub fn init_assistant_db() -> Result<()> {
 pub fn get_assistant_db_conn() -> Result<r2d2::PooledConnection<SqliteConnectionManager>> {
     let guard = ASSISTANT_DB_POOL.lock().unwrap();
     match guard.as_ref() {
-        Some(pool) => pool.get()
+        Some(pool) => pool
+            .get()
             .map_err(|e| Error::Internal(format!("Failed to get assistant DB connection: {e}"))),
         None => {
             drop(guard);
             init_assistant_db()?;
             let guard = ASSISTANT_DB_POOL.lock().unwrap();
             match guard.as_ref() {
-                Some(pool) => pool.get()
-                    .map_err(|e| Error::Internal(format!("Failed to get assistant DB connection: {e}"))),
-                None => Err(Error::Internal("Failed to initialize assistant DB".to_string())),
+                Some(pool) => pool.get().map_err(|e| {
+                    Error::Internal(format!("Failed to get assistant DB connection: {e}"))
+                }),
+                None => Err(Error::Internal(
+                    "Failed to initialize assistant DB".to_string(),
+                )),
             }
         }
     }
@@ -174,15 +183,14 @@ pub fn init_db(path: &Path) -> Result<Connection> {
 /// Initialize a connection pool (size 4, idle timeout 30s).
 /// Each connection gets WAL mode, foreign keys, and busy_timeout set.
 pub fn init_db_pool(path: &Path) -> Result<DbPool> {
-    let manager = SqliteConnectionManager::file(path)
-        .with_init(|conn| {
-            conn.execute_batch(
-                "PRAGMA journal_mode = WAL;
+    let manager = SqliteConnectionManager::file(path).with_init(|conn| {
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
                  PRAGMA foreign_keys = ON;
                  PRAGMA busy_timeout = 5000;",
-            )?;
-            Ok(())
-        });
+        )?;
+        Ok(())
+    });
     let pool = Pool::builder()
         .max_size(4)
         .idle_timeout(Some(std::time::Duration::from_secs(30)))
@@ -190,7 +198,8 @@ pub fn init_db_pool(path: &Path) -> Result<DbPool> {
         .map_err(|e| Error::Internal(format!("failed to create DB pool: {e}")))?;
 
     // Run schema creation/migration on one connection
-    let conn = pool.get()
+    let conn = pool
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     create_tables(&conn)?;
     apply_migrations(&conn)?;
@@ -331,6 +340,65 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             created_at TEXT NOT NULL
         );
 
+        -- 14. Imported Sub2API account pools. Credentials and proxy passwords
+        -- are envelope-encrypted and never projected to the renderer.
+        CREATE TABLE IF NOT EXISTS provider_account_proxies (
+            id TEXT PRIMARY KEY,
+            provider_id TEXT NOT NULL REFERENCES user_providers(id) ON DELETE CASCADE,
+            proxy_key_hash TEXT NOT NULL,
+            config_encrypted TEXT NOT NULL,
+            dek_encrypted TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(provider_id, proxy_key_hash)
+        );
+        CREATE TABLE IF NOT EXISTS provider_accounts (
+            id TEXT PRIMARY KEY,
+            provider_id TEXT NOT NULL REFERENCES user_providers(id) ON DELETE CASCADE,
+            name TEXT NOT NULL DEFAULT '',
+            platform TEXT NOT NULL,
+            account_type TEXT NOT NULL,
+            credentials_encrypted TEXT NOT NULL,
+            dek_encrypted TEXT NOT NULL,
+            extra_json TEXT NOT NULL DEFAULT '{}',
+            proxy_id TEXT REFERENCES provider_account_proxies(id) ON DELETE SET NULL,
+            concurrency INTEGER NOT NULL DEFAULT 1,
+            priority INTEGER NOT NULL DEFAULT 0,
+            expires_at TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            identity_fingerprint TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(provider_id, identity_fingerprint)
+        );
+        CREATE INDEX IF NOT EXISTS idx_provider_accounts_pool
+            ON provider_accounts(provider_id, status, priority);
+
+        -- 15. Host-owned routing configuration. Runtime health remains in assistant.db.
+        CREATE TABLE IF NOT EXISTS provider_routing_settings (
+            id INTEGER PRIMARY KEY CHECK(id=1),
+            enabled INTEGER NOT NULL DEFAULT 0,
+            local_enabled INTEGER NOT NULL DEFAULT 0,
+            local_port INTEGER NOT NULL DEFAULT 15721,
+            local_token_encrypted TEXT,
+            local_token_dek_encrypted TEXT,
+            rectifier_json TEXT NOT NULL DEFAULT '{}',
+            global_proxy_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS provider_route_bindings (
+            id TEXT PRIMARY KEY,
+            position INTEGER NOT NULL DEFAULT 0,
+            provider_id TEXT NOT NULL REFERENCES user_providers(id) ON DELETE CASCADE,
+            credential_kind TEXT NOT NULL CHECK(credential_kind IN ('api_key', 'sub2api_pool')),
+            credential_id TEXT,
+            model_id TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_provider_route_bindings_position
+            ON provider_route_bindings(position);
+
         -- Indexes
         CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(read, created_at);
         CREATE INDEX IF NOT EXISTS idx_audit_log_module ON permission_audit_log(module_id, created_at);
@@ -347,7 +415,7 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
     // If absent, schema is considered v1 (initial state from create_tables).
 
     let current_version: i32 = conn
-        . query_row(
+        .query_row(
             "SELECT value FROM settings WHERE key = '_schema_version'",
             [],
             |row| row.get::<_, String>(0),
@@ -681,6 +749,133 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
     )
     .map_err(Error::Database)?;
 
+    // Migration v8→v9: Sub2API account pools and provider routing settings.
+    if current_version < 9 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS provider_account_proxies (
+                id TEXT PRIMARY KEY,
+                provider_id TEXT NOT NULL REFERENCES user_providers(id) ON DELETE CASCADE,
+                proxy_key_hash TEXT NOT NULL,
+                config_encrypted TEXT NOT NULL,
+                dek_encrypted TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(provider_id, proxy_key_hash)
+            );
+            CREATE TABLE IF NOT EXISTS provider_accounts (
+                id TEXT PRIMARY KEY,
+                provider_id TEXT NOT NULL REFERENCES user_providers(id) ON DELETE CASCADE,
+                name TEXT NOT NULL DEFAULT '',
+                platform TEXT NOT NULL,
+                account_type TEXT NOT NULL,
+                credentials_encrypted TEXT NOT NULL,
+                dek_encrypted TEXT NOT NULL,
+                extra_json TEXT NOT NULL DEFAULT '{}',
+                proxy_id TEXT REFERENCES provider_account_proxies(id) ON DELETE SET NULL,
+                concurrency INTEGER NOT NULL DEFAULT 1,
+                priority INTEGER NOT NULL DEFAULT 0,
+                expires_at TEXT,
+                status TEXT NOT NULL DEFAULT 'active',
+                identity_fingerprint TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(provider_id, identity_fingerprint)
+            );
+            CREATE INDEX IF NOT EXISTS idx_provider_accounts_pool
+                ON provider_accounts(provider_id, status, priority);
+            CREATE TABLE IF NOT EXISTS provider_routing_settings (
+                id INTEGER PRIMARY KEY CHECK(id=1),
+                enabled INTEGER NOT NULL DEFAULT 0,
+                local_enabled INTEGER NOT NULL DEFAULT 0,
+                local_port INTEGER NOT NULL DEFAULT 15721,
+                local_token_encrypted TEXT,
+                local_token_dek_encrypted TEXT,
+                rectifier_json TEXT NOT NULL DEFAULT '{}',
+                global_proxy_json TEXT NOT NULL DEFAULT '{}',
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS provider_route_bindings (
+                id TEXT PRIMARY KEY,
+                position INTEGER NOT NULL DEFAULT 0,
+                provider_id TEXT NOT NULL REFERENCES user_providers(id) ON DELETE CASCADE,
+                credential_kind TEXT NOT NULL CHECK(credential_kind IN ('api_key', 'sub2api_pool')),
+                credential_id TEXT,
+                model_id TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_provider_route_bindings_position
+                ON provider_route_bindings(position);
+            INSERT OR IGNORE INTO provider_routing_settings (id, updated_at) VALUES (1, datetime('now'));
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '9');
+            ",
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // Repair path for v9 tables when a database carries an advanced marker.
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS provider_account_proxies (
+            id TEXT PRIMARY KEY,
+            provider_id TEXT NOT NULL REFERENCES user_providers(id) ON DELETE CASCADE,
+            proxy_key_hash TEXT NOT NULL,
+            config_encrypted TEXT NOT NULL,
+            dek_encrypted TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(provider_id, proxy_key_hash)
+        );
+        CREATE TABLE IF NOT EXISTS provider_accounts (
+            id TEXT PRIMARY KEY,
+            provider_id TEXT NOT NULL REFERENCES user_providers(id) ON DELETE CASCADE,
+            name TEXT NOT NULL DEFAULT '',
+            platform TEXT NOT NULL,
+            account_type TEXT NOT NULL,
+            credentials_encrypted TEXT NOT NULL,
+            dek_encrypted TEXT NOT NULL,
+            extra_json TEXT NOT NULL DEFAULT '{}',
+            proxy_id TEXT REFERENCES provider_account_proxies(id) ON DELETE SET NULL,
+            concurrency INTEGER NOT NULL DEFAULT 1,
+            priority INTEGER NOT NULL DEFAULT 0,
+            expires_at TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            identity_fingerprint TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(provider_id, identity_fingerprint)
+        );
+        CREATE INDEX IF NOT EXISTS idx_provider_accounts_pool
+            ON provider_accounts(provider_id, status, priority);
+        CREATE TABLE IF NOT EXISTS provider_routing_settings (
+            id INTEGER PRIMARY KEY CHECK(id=1),
+            enabled INTEGER NOT NULL DEFAULT 0,
+            local_enabled INTEGER NOT NULL DEFAULT 0,
+            local_port INTEGER NOT NULL DEFAULT 15721,
+            local_token_encrypted TEXT,
+            local_token_dek_encrypted TEXT,
+            rectifier_json TEXT NOT NULL DEFAULT '{}',
+            global_proxy_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS provider_route_bindings (
+            id TEXT PRIMARY KEY,
+            position INTEGER NOT NULL DEFAULT 0,
+            provider_id TEXT NOT NULL REFERENCES user_providers(id) ON DELETE CASCADE,
+            credential_kind TEXT NOT NULL CHECK(credential_kind IN ('api_key', 'sub2api_pool')),
+            credential_id TEXT,
+            model_id TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_provider_route_bindings_position
+            ON provider_route_bindings(position);
+        INSERT OR IGNORE INTO provider_routing_settings (id, updated_at) VALUES (1, datetime('now'));
+        ",
+    )
+    .map_err(Error::Database)?;
+
     Ok(())
 }
 
@@ -730,7 +925,11 @@ mod tests {
 const APP_MODULE_ID: &str = "_app";
 
 /// Generic module_data read (used by state persistence)
-pub fn db_get_module_data(conn: &Connection, module_id: &str, key: &str) -> Result<Option<serde_json::Value>> {
+pub fn db_get_module_data(
+    conn: &Connection,
+    module_id: &str,
+    key: &str,
+) -> Result<Option<serde_json::Value>> {
     let mut stmt = conn
         .prepare("SELECT value FROM module_data WHERE module_id = ?1 AND key = ?2")
         .map_err(Error::Database)?;
@@ -751,7 +950,12 @@ pub fn db_get_module_data(conn: &Connection, module_id: &str, key: &str) -> Resu
 }
 
 /// Generic module_data write (used by state persistence)
-pub fn db_set_module_data(conn: &Connection, module_id: &str, key: &str, value: &serde_json::Value) -> Result<()> {
+pub fn db_set_module_data(
+    conn: &Connection,
+    module_id: &str,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<()> {
     let serialized = serde_json::to_string(value).map_err(Error::Json)?;
     conn.execute(
         "INSERT INTO module_data (module_id, key, value) VALUES (?1, ?2, ?3)
@@ -878,8 +1082,11 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
 
 /// Delete a setting value by key
 pub fn delete_setting(conn: &Connection, key: &str) -> Result<()> {
-    conn.execute("DELETE FROM settings WHERE key = ?1", rusqlite::params![key])
-        .map_err(Error::Database)?;
+    conn.execute(
+        "DELETE FROM settings WHERE key = ?1",
+        rusqlite::params![key],
+    )
+    .map_err(Error::Database)?;
     Ok(())
 }
 
@@ -1018,9 +1225,18 @@ pub fn upsert_usage_stat(
             request_count = excluded.request_count,
             cost_usd = excluded.cost_usd,
             source_path = excluded.source_path",
-        rusqlite::params![date, source, source_path, model,
-            input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-            request_count, cost_usd],
+        rusqlite::params![
+            date,
+            source,
+            source_path,
+            model,
+            input_tokens,
+            output_tokens,
+            cache_creation_tokens,
+            cache_read_tokens,
+            request_count,
+            cost_usd
+        ],
     )
     .map_err(Error::Database)?;
     Ok(())
@@ -1036,16 +1252,28 @@ pub fn query_usage_stats(
     to_date: Option<&str>,
 ) -> Result<Vec<serde_json::Value>> {
     let mut sql = "SELECT date, source, source_path, model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, request_count, cost_usd FROM usage_stats WHERE 1=1".to_string();
-    if source.is_some() { sql.push_str(" AND source = ?"); }
-    if from_date.is_some() { sql.push_str(" AND date >= ?"); }
-    if to_date.is_some() { sql.push_str(" AND date <= ?"); }
+    if source.is_some() {
+        sql.push_str(" AND source = ?");
+    }
+    if from_date.is_some() {
+        sql.push_str(" AND date >= ?");
+    }
+    if to_date.is_some() {
+        sql.push_str(" AND date <= ?");
+    }
     sql.push_str(" ORDER BY date DESC, model");
 
     let mut stmt = conn.prepare(&sql).map_err(Error::Database)?;
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-    if let Some(s) = source { params.push(Box::new(s.to_string())); }
-    if let Some(d) = from_date { params.push(Box::new(d.to_string())); }
-    if let Some(d) = to_date { params.push(Box::new(d.to_string())); }
+    if let Some(s) = source {
+        params.push(Box::new(s.to_string()));
+    }
+    if let Some(d) = from_date {
+        params.push(Box::new(d.to_string()));
+    }
+    if let Some(d) = to_date {
+        params.push(Box::new(d.to_string()));
+    }
 
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
     let rows = stmt
@@ -1101,17 +1329,31 @@ pub fn query_skill_usage(
     from_date: Option<&str>,
     to_date: Option<&str>,
 ) -> Result<Vec<serde_json::Value>> {
-    let mut sql = "SELECT date, source, source_path, skill_name, trigger_count FROM skill_usage WHERE 1=1".to_string();
-    if skill_name.is_some() { sql.push_str(" AND skill_name = ?"); }
-    if from_date.is_some() { sql.push_str(" AND date >= ?"); }
-    if to_date.is_some() { sql.push_str(" AND date <= ?"); }
+    let mut sql =
+        "SELECT date, source, source_path, skill_name, trigger_count FROM skill_usage WHERE 1=1"
+            .to_string();
+    if skill_name.is_some() {
+        sql.push_str(" AND skill_name = ?");
+    }
+    if from_date.is_some() {
+        sql.push_str(" AND date >= ?");
+    }
+    if to_date.is_some() {
+        sql.push_str(" AND date <= ?");
+    }
     sql.push_str(" ORDER BY date DESC, skill_name");
 
     let mut stmt = conn.prepare(&sql).map_err(Error::Database)?;
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-    if let Some(s) = skill_name { params.push(Box::new(s.to_string())); }
-    if let Some(d) = from_date { params.push(Box::new(d.to_string())); }
-    if let Some(d) = to_date { params.push(Box::new(d.to_string())); }
+    if let Some(s) = skill_name {
+        params.push(Box::new(s.to_string()));
+    }
+    if let Some(d) = from_date {
+        params.push(Box::new(d.to_string()));
+    }
+    if let Some(d) = to_date {
+        params.push(Box::new(d.to_string()));
+    }
 
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
     let rows = stmt

@@ -1,11 +1,12 @@
 //! Provider adapter implementations for six launch providers.
 
-pub mod openai;
 pub mod anthropic;
-pub mod gemini;
 pub mod deepseek;
-pub mod openai_compatible;
+pub mod gemini;
 pub mod ollama;
+pub mod openai;
+pub mod openai_codex;
+pub mod openai_compatible;
 
 use crate::capabilities::ProviderAdapter;
 

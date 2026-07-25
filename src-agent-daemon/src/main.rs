@@ -124,6 +124,9 @@ async fn main() {
     println!("Natives Agent Daemon v{}", config.version);
     // Credential broker from natives.db when NATIVES_DB_PATH is set (sidecar mode).
     let broker_ok = natives_agent_daemon::try_install_natives_db_broker();
+    // The loopback listener remains entirely daemon-owned and polls only its
+    // Host-owned configuration; no Renderer can access provider credentials.
+    natives_agent_daemon::loopback::spawn_supervisor();
 
     // Initialize governor from persisted settings if available.
     let mut rl_settings = natives_agent_daemon::governor::EngineRateLimitSettings::default();

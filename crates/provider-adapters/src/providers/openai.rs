@@ -1,10 +1,10 @@
 //! OpenAI provider adapter — real HTTP streaming via Chat Completions SSE.
 
-use async_trait::async_trait;
 use crate::capabilities::*;
 use crate::http_stream::{chat_completions, stream_chat_completions, stream_responses};
 use crate::stream::ProviderEvent;
-use assistant_protocol::v1::provider::{ProviderType, ModelCapabilities};
+use assistant_protocol::v1::provider::{ModelCapabilities, ProviderType};
+use async_trait::async_trait;
 use reqwest::Client;
 use std::time::Instant;
 
@@ -34,7 +34,10 @@ impl OpenAiAdapter {
         self
     }
 
-    fn resolve_credential(&self, credential: &Credential) -> Result<(String, String), ProviderError> {
+    fn resolve_credential(
+        &self,
+        credential: &Credential,
+    ) -> Result<(String, String), ProviderError> {
         let key = if !credential.api_key.is_empty() {
             credential.api_key.clone()
         } else {
@@ -106,7 +109,8 @@ impl ProviderAdapter for OpenAiAdapter {
         }
         if let Some(tool_calls) = tools {
             for (id, name, args) in tool_calls {
-                let input = serde_json::from_str(&args).unwrap_or(serde_json::json!({ "raw": args }));
+                let input =
+                    serde_json::from_str(&args).unwrap_or(serde_json::json!({ "raw": args }));
                 blocks.push(ProviderResponseBlock::ToolCall { id, name, input });
             }
         }
@@ -119,8 +123,10 @@ impl ProviderAdapter for OpenAiAdapter {
     async fn chat_stream(
         &self,
         request: ProviderRequest,
-    ) -> Result<Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>, ProviderError>
-    {
+    ) -> Result<
+        Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>,
+        ProviderError,
+    > {
         // No offline mock success path — require credentials (use stream() with Credential).
         if self.api_key.is_none() {
             return Err(ProviderError {
@@ -177,11 +183,12 @@ impl ProviderAdapter for OpenAiAdapter {
         ProviderError,
     > {
         let (key, base) = self.resolve_credential(&credential)?;
+        let client = crate::http_client::client(credential.proxy_url.as_deref())?;
         // Production HTTP for both Chat Completions and Responses APIs.
         if prefers_responses_api(&request) {
-            stream_responses(&self.client, &base, &key, request).await
+            stream_responses(&client, &base, &key, request).await
         } else {
-            stream_chat_completions(&self.client, &base, &key, request).await
+            stream_chat_completions(&client, &base, &key, request).await
         }
     }
 
@@ -233,6 +240,7 @@ impl ProviderAdapter for OpenAiAdapter {
         self.test_connection_with_credential(Credential {
             api_key: self.api_key.clone().unwrap_or_default(),
             base_url: Some(self.base_url.clone()),
+            proxy_url: None,
             key_id: None,
             provider_type: Some("openai".into()),
         })

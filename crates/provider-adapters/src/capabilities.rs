@@ -337,6 +337,8 @@ pub enum ProviderErrorCategory {
 pub struct Credential {
     pub api_key: String,
     pub base_url: Option<String>,
+    /// Per-request outbound proxy. Kept memory-only alongside the credential.
+    pub proxy_url: Option<String>,
     pub key_id: Option<String>,
     pub provider_type: Option<String>,
 }

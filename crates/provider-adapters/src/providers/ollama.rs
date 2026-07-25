@@ -1,10 +1,10 @@
 //! Ollama provider adapter — local OpenAI-compatible API.
 
-use async_trait::async_trait;
 use crate::capabilities::*;
 use crate::http_stream::stream_chat_completions;
 use crate::stream::ProviderEvent;
-use assistant_protocol::v1::provider::{ProviderType, ModelCapabilities};
+use assistant_protocol::v1::provider::{ModelCapabilities, ProviderType};
+use async_trait::async_trait;
 use reqwest::Client;
 
 pub struct OllamaAdapter {
@@ -38,7 +38,11 @@ impl ProviderAdapter for OllamaAdapter {
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             provider_type: ProviderType::Ollama,
-            features: vec!["streaming".into(), "tool_calls".into(), "system_prompt".into()],
+            features: vec![
+                "streaming".into(),
+                "tool_calls".into(),
+                "system_prompt".into(),
+            ],
             max_context_window: 32_000,
             streaming: true,
             tool_calls: true,
@@ -60,6 +64,7 @@ impl ProviderAdapter for OllamaAdapter {
                 Credential {
                     api_key: "ollama".into(),
                     base_url: Some(self.base_url.clone()),
+                    proxy_url: None,
                     key_id: None,
                     provider_type: Some("ollama".into()),
                 },
@@ -83,8 +88,10 @@ impl ProviderAdapter for OllamaAdapter {
     async fn chat_stream(
         &self,
         _request: ProviderRequest,
-    ) -> Result<Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>, ProviderError>
-    {
+    ) -> Result<
+        Box<dyn tokio_stream::Stream<Item = ProviderStreamEvent> + Send + Unpin>,
+        ProviderError,
+    > {
         Err(ProviderError {
             code: "use_stream".into(),
             message: "Use stream(request, credential) for Ollama; offline mock removed".into(),
@@ -107,10 +114,9 @@ impl ProviderAdapter for OllamaAdapter {
         } else {
             credential.api_key
         };
-        let base = credential
-            .base_url
-            .unwrap_or_else(|| self.base_url.clone());
-        stream_chat_completions(&self.client, &base, &key, request).await
+        let base = credential.base_url.unwrap_or_else(|| self.base_url.clone());
+        let client = crate::http_client::client(credential.proxy_url.as_deref())?;
+        stream_chat_completions(&client, &base, &key, request).await
     }
     async fn list_models(&self) -> Result<Vec<ModelInfo>, ProviderError> {
         Ok(vec![ModelInfo {

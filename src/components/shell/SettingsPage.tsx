@@ -10,6 +10,7 @@ import { SPACING } from '@/lib/design-tokens';
 import { Palette, Globe, Package, RefreshCw, Trash, Loader, RotateCcw, Sun, Terminal } from 'lucide-react';
 import RuntimePanel from '@/components/assistant/RuntimePanel';
 import ProviderDetail from '@/components/settings/ProviderDetail';
+import { ProviderSettingsWorkspace } from '@/components/settings/provider-routing/ProviderSettingsWorkspace';
 import AddProviderDialog from '@/components/settings/AddProviderDialog';
 import EngineCapabilitiesPanel from '@/components/settings/EngineCapabilitiesPanel';
 import type { ProviderSummary, TestKeyResult } from '@/types/provider';
@@ -637,13 +638,15 @@ export default function SettingsPage({
             </button>
           }
         />
-        <ProviderDetail
-          locale={locale} providers={providers} loading={providersLoading}
-          showAddProvider={() => setShowAddProvider(true)}
-          onSaveDefaults={handleSaveDefaults} onAddKey={handleAddKey} onTestKey={handleTestKey}
-          onSetPrimaryKey={handleSetPrimaryKey} onDeleteKey={handleDeleteKey}
-          onDeleteProvider={(id) => setDeleteProviderTarget(id)}
-        />
+        <ProviderSettingsWorkspace locale={locale} providers={providers} onProviderCreated={loadProviders} management={
+          <ProviderDetail
+            locale={locale} providers={providers} loading={providersLoading}
+            showAddProvider={() => setShowAddProvider(true)}
+            onSaveDefaults={handleSaveDefaults} onAddKey={handleAddKey} onTestKey={handleTestKey}
+            onSetPrimaryKey={handleSetPrimaryKey} onDeleteKey={handleDeleteKey}
+            onDeleteProvider={(id) => setDeleteProviderTarget(id)}
+          />
+        } />
       </>
     );
   }
