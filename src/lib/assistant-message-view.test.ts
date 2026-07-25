@@ -19,7 +19,7 @@ test('formats reasoning elapsed time', () => {
   assert.equal(formatReasoningDuration(3200, 'en'), '3.2s');
 });
 
-test('timeline live clock ticks at 100ms for 0.1s elapsed precision', () => {
+test('timeline footer and thinking duration share the bounded 1Hz clock', () => {
   const timeline = readFileSync(
     resolve(process.cwd(), 'src/components/assistant/ConversationTimeline.tsx'),
     'utf8',
@@ -28,15 +28,13 @@ test('timeline live clock ticks at 100ms for 0.1s elapsed precision', () => {
     resolve(process.cwd(), 'src/components/assistant/ThinkingActivity.tsx'),
     'utf8',
   );
-  // Parent timeline still ticks for footer total; thinking strip owns its own clock.
-  assert.match(timeline, /setInterval\(\(\) => setNow\(Date\.now\(\)\), 100\)/);
-  assert.match(thinking, /setInterval\(\(\) => setNow\(Date\.now\(\)\), 100\)/);
-  assert.equal(timeline.includes('setInterval(() => setNow(Date.now()), 1000)'), false);
-  assert.equal(thinking.includes('setInterval(() => setNow(Date.now()), 1000)'), false);
-  // Thinking strip owns its own clock; local var name is fine but props must not be a frozen label.
+  // One parent clock updates all live durations, keeping pure time counters bounded to 1Hz.
+  assert.match(timeline, /setInterval\(\(\) => setNow\(Date\.now\(\)\), 1000\)/);
+  assert.equal(thinking.includes('setInterval('), false);
+  // The thinking strip receives the live timestamp rather than a frozen duration label.
   assert.equal(/thinkingDurationLabel\?:/.test(thinking), false);
   assert.match(thinking, /thinkingStartedAtMs/);
-  assert.match(thinking, /setInterval\(\(\) => setNow\(Date\.now\(\)\), 100\)/);
+  assert.match(thinking, /nowMs/);
 });
 
 test('extracts a stage title from reasoning headings and steps', () => {
