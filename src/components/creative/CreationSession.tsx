@@ -31,6 +31,11 @@ interface CreationSessionProps {
   locale: Locale;
   /** Called after every model turn so the preview can pick up a new revision. */
   onDraftMayHaveChanged: () => void;
+  /** 生成中状态上报：draft.state 从未被引擎驱动，预览的「生成中」以此为真源。 */
+  onGeneratingChange?: (generating: boolean) => void;
+  /** 预览侧软失败（渲染报错等）的回填文案；随下一条消息带给模型后消费。 */
+  pendingFeedback?: string | null;
+  onFeedbackConsumed?: () => void;
 }
 
 /**
@@ -45,6 +50,9 @@ export default function CreationSession({
   draft,
   locale,
   onDraftMayHaveChanged,
+  onGeneratingChange,
+  pendingFeedback,
+  onFeedbackConsumed,
 }: CreationSessionProps) {
   const state = useAssistantStore();
   const dispatch = useAssistantDispatch();
@@ -55,11 +63,15 @@ export default function CreationSession({
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [providers, setProviders] = useState<ProviderWithModels[]>([]);
+  // 用户可选模型：此前 onSelectModel 是空函数，下拉是画出来的假控件
+  const [selection, setSelection] = useState<{ providerId: string; modelId: string } | null>(null);
+  // 权限档同理：此前 onPermissionChange 为空 async，选择无任何效果
+  const [permissionProfile, setPermissionProfile] = useState<'readonly' | 'ask' | 'full_access'>('ask');
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  const provider = providers[0];
-  const modelId = provider?.models?.[0]?.id ?? '';
+  const provider = (selection && providers.find((p) => p.id === selection.providerId)) ?? providers[0];
+  const modelId = selection?.modelId ?? provider?.models?.[0]?.id ?? '';
 
   const storeMessages = conversationId ? selectConversationMessages(state, conversationId) : [];
   const messages = useMemo(
@@ -137,7 +149,7 @@ export default function CreationSession({
           title: draft.name,
           provider_id: provider.id,
           model_id: modelId,
-          permission_profile_id: 'ask',
+          permission_profile_id: permissionProfile,
         },
       );
       const created =
@@ -156,7 +168,7 @@ export default function CreationSession({
     } finally {
       setCreating(false);
     }
-  }, [conversationId, provider, modelId, gateway, dispatch, draft.name, locale]);
+  }, [conversationId, provider, modelId, gateway, dispatch, draft.name, draft.draftId, locale, permissionProfile]);
 
   const send = useCallback(
     async (composed: AssistantDraft): Promise<boolean> => {
@@ -166,7 +178,9 @@ export default function CreationSession({
         // The model cannot see the draft it is editing unless we say which one.
         // P0 carries it in the message; a dedicated agent binding is the eventual
         // home for this, but it must not block the first working loop.
-        const content = `[draft:${draft.draftId}]\n${composed.content}`;
+        const feedback = pendingFeedback ? `\n[preview-error] ${pendingFeedback}` : '';
+        const content = `[draft:${draft.draftId}]${feedback}\n${composed.content}`;
+        if (pendingFeedback) onFeedbackConsumed?.();
         const result = await sendOrQueue(gateway, dispatch, stateRef.current, {
           conversationId: id,
           content,
@@ -184,7 +198,7 @@ export default function CreationSession({
         return false;
       }
     },
-    [ensureConversation, gateway, dispatch, draft.draftId, provider, modelId, ensureRunSubscription],
+    [ensureConversation, gateway, dispatch, draft.draftId, provider, modelId, ensureRunSubscription, pendingFeedback, onFeedbackConsumed],
   );
 
   // A finished turn is the only moment a new revision can exist on disk.
@@ -193,6 +207,12 @@ export default function CreationSession({
     if (wasStreaming.current && !isStreaming) onDraftMayHaveChanged();
     wasStreaming.current = isStreaming;
   }, [isStreaming, onDraftMayHaveChanged]);
+
+  // 生成中状态上报给父级（预览 loader 的真源；draft.state 无人驱动）
+  useEffect(() => {
+    onGeneratingChange?.(isStreaming);
+    return () => onGeneratingChange?.(false);
+  }, [isStreaming, onGeneratingChange]);
 
   return (
     <div className="flex h-full flex-col">
@@ -217,15 +237,23 @@ export default function CreationSession({
         isStreaming={isStreaming}
         disabled={!provider}
         inputDisabledReason={!provider ? 'no_provider' : null}
-        permissionProfile="ask"
-        onPermissionChange={async () => {}}
+        permissionProfile={permissionProfile}
+        onPermissionChange={async (profile) => {
+          setPermissionProfile(profile);
+          // 会话已存在时同步到引擎（与 AssistantWorkbench 相同的持久化通道）
+          if (conversationId) {
+            await gateway
+              .request('conversation.update_permission', {
+                id: conversationId,
+                permission_profile_id: profile,
+              })
+              .catch(() => undefined);
+          }
+        }}
         providers={providers}
         selectedProviderId={provider?.id ?? ''}
         selectedModel={modelId}
-        onSelectModel={() => {
-          // Model choice belongs to the provider module; the creator surface
-          // follows the assistant's selection rather than keeping its own.
-        }}
+        onSelectModel={(providerId, model) => setSelection({ providerId, modelId: model })}
       />
     </div>
   );

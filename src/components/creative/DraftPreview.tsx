@@ -23,6 +23,11 @@ export interface DraftSoftFailure {
 interface DraftPreviewProps {
   draft: CreativeDraft | null;
   locale: string;
+  /**
+   * 会话侧的流式状态。draft.state 从未被引擎驱动（恒为 drafting），
+   * 「生成中」以此实时信号为准。
+   */
+  generating?: boolean;
   /** Re-resolve the preview URL after the local HTTP service comes up. */
   onRetry?: () => void;
   /** Wired to the toolbar's undo so the L2 banner can act, not just warn. */
@@ -52,10 +57,13 @@ export function resolvePreviewPhase(input: {
   draft: CreativeDraft | null;
   urlState: UrlState;
   frameLoaded: boolean;
+  /** 会话流式中 = 生成中；draft.state 的 generating/publishing 无人驱动，仅作兜底。 */
+  generating?: boolean;
 }): PreviewPhase {
-  const { draft, urlState, frameLoaded } = input;
+  const { draft, urlState, frameLoaded, generating } = input;
   if (!draft) return 'no-draft';
-  if (draft.state === 'generating') return 'generating';
+  // 首个版本尚不存在时优先显示「生成中」而非静态空状态
+  if ((generating || draft.state === 'generating') && draft.currentRevision < 1) return 'generating';
   if (draft.state === 'publishing') return 'publishing';
   if (draft.currentRevision < 1) return 'empty';
   if (urlState === 'port-unavailable') return 'port-unavailable';
@@ -85,6 +93,7 @@ function Centered({ children }: { children: React.ReactNode }) {
 export default function DraftPreview({
   draft,
   locale,
+  generating,
   onRetry,
   onUndo,
   onSoftFailure,
@@ -181,7 +190,7 @@ export default function DraftPreview({
     onRetry?.();
   }, [onRetry, resolveUrl]);
 
-  const phase = resolvePreviewPhase({ draft, urlState, frameLoaded });
+  const phase = resolvePreviewPhase({ draft, urlState, frameLoaded, generating });
   // The URL itself is stable across generate/undo, so the revision has to ride
   // along as a query param (stripped by `sanitize_path`) to defeat the HTTP
   // cache; the matching `key` forces a fresh frame rather than a re-navigation.

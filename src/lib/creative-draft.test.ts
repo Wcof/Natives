@@ -81,6 +81,16 @@ describe('creative-draft actions', () => {
     });
   });
 
+  it('drafting with revisions unlocks undo/publish (engine never advances state)', () => {
+    // 现实流：daemon 只写 revision、state 恒为 drafting——能力由 revision 推导
+    assert.deepEqual(draftActions('drafting', 2), {
+      canGenerate: true,
+      canUndo: true,
+      canPublish: true,
+      canDelete: true,
+    });
+  });
+
   it('ready unlocks generate/publish, undo needs a second revision', () => {
     assert.deepEqual(draftActions('ready', 1), {
       canGenerate: true,

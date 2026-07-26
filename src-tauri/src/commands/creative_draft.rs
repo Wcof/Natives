@@ -45,6 +45,27 @@ pub fn create_creative_draft(
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
 
+    // 种子读取放在 INSERT 之前：读失败时不得留下无事件、UI 不可见的孤儿草稿行。
+    // 同时校验 origin_module_id 形状——它拼进文件路径，不能包含路径分隔符。
+    let seed_html: Option<String> = match origin_module_id.as_deref() {
+        Some(module_id) => {
+            let valid = !module_id.is_empty()
+                && module_id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+            if !valid {
+                return Err(Error::InvalidInput(format!(
+                    "invalid origin module id: {module_id}"
+                )));
+            }
+            let seed = modules_dir().join(module_id).join("index.html");
+            Some(std::fs::read_to_string(&seed).map_err(|e| {
+                Error::NotFound(format!("cannot seed draft from module {module_id}: {e}"))
+            })?)
+        }
+        None => None,
+    };
+
     let draft_id = new_draft_id();
     let draft = store::create_draft(
         conn,
@@ -57,11 +78,7 @@ pub fn create_creative_draft(
 
     // Continuing an existing module seeds rev-1 with what is currently live, so
     // the model edits the real thing instead of regenerating from scratch.
-    if let Some(module_id) = origin_module_id.as_deref() {
-        let seed = modules_dir().join(module_id).join("index.html");
-        let html = std::fs::read_to_string(&seed).map_err(|e| {
-            Error::NotFound(format!("cannot seed draft from module {module_id}: {e}"))
-        })?;
+    if let Some(html) = seed_html {
         store::append_revision(conn, &natives_dir(), &draft_id, &html)?;
     }
 

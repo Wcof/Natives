@@ -350,7 +350,23 @@ export const zh = {
     closeDraft: '关闭草稿',
     session: {
       noModel: '尚未配置可用模型，请先在设置中添加供应商',
-      title: '与助手一起修改',
+    },
+    drafts: {
+      title: '进行中的草稿',
+      open: '打开',
+      deleted: '草稿已删除',
+      deleteConfirm: '删除草稿',
+      deleteMessage: '确定要删除草稿「{name}」吗？其修订记录将一并删除。',
+    },
+    publish: {
+      action: '保存为个人创作',
+      title: '保存为个人创作',
+      name: '名称',
+      moduleId: '模块 ID',
+      moduleIdHint: '仅限小写字母、数字与连字符（2-40 位，字母或数字开头）',
+      overwriteHint: '将覆盖同 ID 的现有模块（可通过返回的旧内容一键回滚）',
+      publishing: '保存中…',
+      success: '已保存为个人创作，可在列表中打开',
     },
     preview: {
       title: '预览',

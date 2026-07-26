@@ -357,7 +357,23 @@ export const en = {
     closeDraft: 'Close draft',
     session: {
       noModel: 'No model configured — add a provider in settings first',
-      title: 'Refine with the assistant',
+    },
+    drafts: {
+      title: 'Drafts in progress',
+      open: 'Open',
+      deleted: 'Draft deleted',
+      deleteConfirm: 'Delete draft',
+      deleteMessage: 'Delete draft "{name}"? Its revision history will be removed too.',
+    },
+    publish: {
+      action: 'Save as personal creation',
+      title: 'Save as personal creation',
+      name: 'Name',
+      moduleId: 'Module ID',
+      moduleIdHint: 'Lowercase letters, digits and hyphens only (2-40 chars, starts with a letter or digit)',
+      overwriteHint: 'This will overwrite the existing module with the same ID (one-click rollback is available via the returned old content)',
+      publishing: 'Saving…',
+      success: 'Saved as a personal creation — find it in the catalog',
     },
     preview: {
       title: 'Preview',
