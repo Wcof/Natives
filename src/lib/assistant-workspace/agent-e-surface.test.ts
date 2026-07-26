@@ -116,7 +116,10 @@ test('workbench returns Promise from permission handlers and uses multi-run subS
     'utf8',
   );
   assert.match(workbench, /return handlePermission\(/);
-  assert.match(workbench, /subSignalsRef/);
+  // Multi-run subscription signals moved into useAssistantRun; the Workbench is
+  // now one of two consumers rather than the owner.
+  assert.match(workbench, /useAssistantRun\(\)/);
+  assert.match(workbench, /retainSubscriptions/);
   assert.match(workbench, /selectedRootConversationId/);
   assert.match(workbench, /selectedChildConversationId/);
   assert.match(workbench, /subagent\.touch/);
