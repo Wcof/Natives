@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef } from 'react';
-import { Package, Edit2, Trash2, Archive, ClipboardList, Ruler, RotateCcw } from 'lucide-react';
+import { useState, useCallback, useRef } from 'react';
+import { Package, Edit2, Trash2, Archive, ClipboardList, FolderOpen, Ruler, RotateCcw } from 'lucide-react';
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
-import { t, type Locale } from '@/i18n';
-import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { t as tr, useLocale } from '@/i18n';
+import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 import { classifyError } from '@/lib/error-classifier'; // toast+classifyError for catch
 import { useToast } from '@/components/ui/Toast';
 import { fsApi, hasNativeFiles } from '@/lib/files-api';
@@ -111,7 +111,9 @@ export default function AIFileOrganizer() {
   const [analyzing, setAnalyzing] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [currentDir, setCurrentDir] = useState('~');
-  const [locale, setLocale] = useState<Locale>('zh');
+  // 旧实现 locale 恒为 'zh'（setLocale 从未被调用），英文用户看到全中文
+  const locale = useLocale();
+  const t = useCallback((key: string, params?: Record<string, string | number>) => tr(locale, key, params), [locale]);
   const [analysisMode, setAnalysisMode] = useState<'organize' | 'duplicates' | 'large-files'>('organize');
   const [lastRollback, setLastRollback] = useState<RollbackLog | null>(null);
   const briefContentRef = useRef<string>('');
@@ -127,7 +129,6 @@ export default function AIFileOrganizer() {
       // Read brief file for organize preferences (Natives2)
       const brief = await readBriefFile();
       briefContentRef.current = brief;
-      const hasPreferences = brief.trim().length > 0;
 
       const dir = currentDir || '~';
       const entries = await fsApi().listDir(dir, { sortBy: 'name', sortDir: 'asc', showHidden: false });
@@ -156,7 +157,7 @@ export default function AIFileOrganizer() {
                 id: `move-${id++}`,
                 action: 'move',
                 filePath: file.path,
-                reason: t(locale, 'aiWorkbench.organizer.proposalReason')
+                reason: t('aiWorkbench.organizer.proposalReason')
                   .replace('{n}', String(files.length))
                   .replace('{cat}', cat)
                   .replace('{folder}', folder),
@@ -173,7 +174,7 @@ export default function AIFileOrganizer() {
               id: `del-${id++}`,
               action: 'delete',
               filePath: entry.path,
-              reason: t(locale, 'aiWorkbench.organizer.deleteReason'),
+              reason: t('aiWorkbench.organizer.deleteReason'),
             });
           }
         }
@@ -195,7 +196,7 @@ export default function AIFileOrganizer() {
                 id: `dup-${id++}`,
                 action: 'delete',
                 filePath: files[i]!.path,
-                reason: `Duplicate of ${files[0]!.name}`,
+                reason: t('aiWorkbench.organizer.duplicateOf', { name: files[0]!.name }),
               });
             }
           }
@@ -210,7 +211,7 @@ export default function AIFileOrganizer() {
               id: `large-${id++}`,
               action: 'archive',
               filePath: entry.path,
-              reason: `Large file (${(size / 1024 / 1024).toFixed(1)}MB) — consider archiving`,
+              reason: t('aiWorkbench.organizer.largeFile', { mb: (size / 1024 / 1024).toFixed(1) }),
               targetPath: `${dir}/_Large/${entry.name}`,
             });
           }
@@ -231,45 +232,58 @@ export default function AIFileOrganizer() {
       const fs = fsOrNull();
       const approvedProposals = proposals.filter((p) => approved.has(p.id));
       const rollbackMoves: RollbackEntry[] = [];
+      // 逐条执行并记录成败：旧实现单条失败即中断整批，且已执行项不从列表移除，
+      // 用户无从知道哪些做了哪些没做
+      const succeeded = new Set<string>();
+      let failed = 0;
 
       for (const p of approvedProposals) {
-        if (p.action === 'move' && p.targetPath) {
-          // Create target directory if needed
-          const targetDir = p.targetPath.substring(0, p.targetPath.lastIndexOf('/'));
-          await fs?.createEntry(targetDir, 'directory').catch(() => {});
-          await fs?.moveEntry(p.filePath, p.targetPath);
-          rollbackMoves.push({ from: p.targetPath, to: p.filePath, action: 'move' });
-        } else if (p.action === 'delete') {
-          await fs?.trashEntry(p.filePath);
-          rollbackMoves.push({ from: p.filePath, to: '', action: 'trash' });
-        } else if (p.action === 'archive' && p.targetPath) {
-          const targetDir = p.targetPath.substring(0, p.targetPath.lastIndexOf('/'));
-          await fs?.createEntry(targetDir, 'directory').catch(() => {});
-          await fs?.moveEntry(p.filePath, p.targetPath);
-          rollbackMoves.push({ from: p.targetPath, to: p.filePath, action: 'move' });
+        try {
+          if (p.action === 'move' && p.targetPath) {
+            const targetDir = p.targetPath.substring(0, p.targetPath.lastIndexOf('/'));
+            await fs?.createEntry(targetDir, 'directory').catch(() => {});
+            await fs?.moveEntry(p.filePath, p.targetPath);
+            rollbackMoves.push({ from: p.targetPath, to: p.filePath, action: 'move' });
+            succeeded.add(p.id);
+          } else if (p.action === 'delete') {
+            await fs?.trashEntry(p.filePath);
+            rollbackMoves.push({ from: p.filePath, to: '', action: 'trash' });
+            succeeded.add(p.id);
+          } else if (p.action === 'archive' && p.targetPath) {
+            const targetDir = p.targetPath.substring(0, p.targetPath.lastIndexOf('/'));
+            await fs?.createEntry(targetDir, 'directory').catch(() => {});
+            await fs?.moveEntry(p.filePath, p.targetPath);
+            rollbackMoves.push({ from: p.targetPath, to: p.filePath, action: 'move' });
+            succeeded.add(p.id);
+          }
+        } catch {
+          failed += 1;
         }
       }
 
       // Write rollback log + preference sedimentation in parallel (Natives2)
-      setLastRollback({ dir: currentDir, at: Date.now(), moves: rollbackMoves });
-      const moveCount = approvedProposals.filter(p => p.action === 'move').length;
-      const deleteCount = approvedProposals.filter(p => p.action === 'delete').length;
-      const writes: Promise<void>[] = [writeRollbackLog(currentDir, rollbackMoves)];
-      if (moveCount > 0 || deleteCount > 0) {
-        const summary = `Organized ${currentDir}: ${moveCount} moves, ${deleteCount} deletions`;
+      if (rollbackMoves.length > 0) {
+        setLastRollback({ dir: currentDir, at: Date.now(), moves: rollbackMoves });
+        const writes: Promise<void>[] = [writeRollbackLog(currentDir, rollbackMoves)];
+        const summary = `Organized ${currentDir}: ${rollbackMoves.length} operations`;
         writes.push(appendPreference(summary, briefContentRef.current));
+        await Promise.all(writes);
       }
-      await Promise.all(writes);
 
-      // Clear executed proposals
-      setProposals((prev) => prev.filter((p) => !approved.has(p.id)));
+      // 只移除真正执行成功的建议
+      setProposals((prev) => prev.filter((p) => !succeeded.has(p.id)));
       setApproved(new Set());
+      if (failed > 0) {
+        toast(t('aiWorkbench.organizer.partialFailure', { n: failed }), 'error');
+      } else if (succeeded.size > 0) {
+        toast(t('aiWorkbench.organizer.executeSuccess', { n: succeeded.size }), 'success');
+      }
     } catch (err) {
       toast(classifyError(err).userMessage, 'error');
     } finally {
       setExecuting(false);
     }
-  }, [proposals, approved, currentDir, toast]);
+  }, [proposals, approved, currentDir, toast, t]);
 
   const handleUndo = useCallback(() => {
     setProposals([]);
@@ -306,15 +320,16 @@ export default function AIFileOrganizer() {
         padding: '8px 10px', borderBottom: '1px solid var(--border)',
       }}>
         <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-          {t(locale, 'aiWorkbench.aiFileOrganizer')}
+          {t('aiWorkbench.aiFileOrganizer')}
         </div>
         <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)', marginTop: 2 }}>
-          {t(locale, 'aiWorkbench.organizer.description')}
+          {t('aiWorkbench.organizer.description')}
         </div>
         <div style={{ display: 'flex', gap: SPACING.xs, marginTop: 6 }}>
           {(['organize', 'duplicates', 'large-files'] as const).map((mode) => (
             <button
               key={mode}
+              type="button"
               className="btn-ghost"
               onClick={() => setAnalysisMode(mode)}
               style={{
@@ -324,9 +339,35 @@ export default function AIFileOrganizer() {
                 background: analysisMode === mode ? 'var(--primary-soft)' : 'transparent',
               }}
             >
-              {mode === 'organize' ? <><Package size={10} /> Organize</> : mode === 'duplicates' ? <><ClipboardList size={10} /> Duplicates</> : <><Ruler size={10} /> Large Files</>}
+              {mode === 'organize'
+                ? <><Package size={10} /> {t('aiWorkbench.organizer.modeOrganize')}</>
+                : mode === 'duplicates'
+                  ? <><ClipboardList size={10} /> {t('aiWorkbench.organizer.modeDuplicates')}</>
+                  : <><Ruler size={10} /> {t('aiWorkbench.organizer.modeLargeFiles')}</>}
             </button>
           ))}
+        </div>
+        {/* 目标目录：旧实现永远分析 ~，无法整理下载目录等 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: SPACING.xs, marginTop: 6 }}>
+          <span style={{
+            fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0,
+          }} title={currentDir}>
+            {currentDir}
+          </span>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={async () => {
+              const picked = await window.nativesAPI?.dialog?.pickDirectory?.();
+              if (picked) { setCurrentDir(picked); setProposals([]); setApproved(new Set()); }
+            }}
+            title={t('aiWorkbench.organizer.pickDirectory')}
+            aria-label={t('aiWorkbench.organizer.pickDirectory')}
+            style={{ fontSize: FONT_SIZE.xs, padding: '2px 6px', display: 'inline-flex', alignItems: 'center', gap: 3, color: 'var(--text-secondary)' }}
+          >
+            <FolderOpen size={11} /> {t('aiWorkbench.organizer.pickDirectory')}
+          </button>
         </div>
       </div>
 
@@ -335,7 +376,7 @@ export default function AIFileOrganizer() {
         {proposals.length === 0 ? (
           <div style={{ textAlign: 'center', padding: SPACING.xl }}>
             <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-disabled)', marginBottom: SPACING.md }}>
-              {analyzing ? t(locale, 'aiWorkbench.organizer.analyzing') : t(locale, 'aiWorkbench.noSuggestions')}
+              {analyzing ? t('aiWorkbench.organizer.analyzing') : t('aiWorkbench.noSuggestions')}
             </div>
             <button
               className="btn btn-primary"
@@ -343,7 +384,7 @@ export default function AIFileOrganizer() {
               onClick={handleAnalyze}
               disabled={analyzing}
             >
-              {analyzing ? <><MathCurveLoader size={12} strokeWidth={1} particleCount={6} /> {t(locale, 'aiWorkbench.organizer.analyzing')}</> : <><Package size={12} /> {t(locale, 'aiWorkbench.analyze')}</>}
+              {analyzing ? <><MathCurveLoader size={12} strokeWidth={1} particleCount={6} /> {t('aiWorkbench.organizer.analyzing')}</> : <><Package size={12} /> {t('aiWorkbench.analyze')}</>}
             </button>
           </div>
         ) : (
@@ -371,7 +412,7 @@ export default function AIFileOrganizer() {
                     <div style={{ color: 'var(--text)', display: 'flex', alignItems: 'center', gap: SPACING.xs, flexWrap: 'wrap' }}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: SPACING.xs, color: 'var(--primary)' }}>
                         {p.action === 'move' ? <Package size={12} /> : p.action === 'rename' ? <Edit2 size={12} /> : p.action === 'delete' ? <Trash2 size={12} /> : <Archive size={12} />}
-                        <span>{t(locale, `aiWorkbench.organizer.actions.${p.action}`)}</span>
+                        <span>{t(`aiWorkbench.organizer.actions.${p.action}`)}</span>
                       </span>
                       <span style={{ fontFamily: 'var(--font-mono)' }}>{p.filePath.split('/').pop()}</span>
                     </div>
@@ -396,28 +437,31 @@ export default function AIFileOrganizer() {
                   {executing ? (
                     <>
                       <MathCurveLoader size={11} strokeWidth={1} particleCount={6} style={{ display: 'inline-block' }} />
-                      <span>{t(locale, 'aiWorkbench.execute')}</span>
+                      <span>{t('aiWorkbench.execute')}</span>
                     </>
                   ) : (
-                    `✓ ${t(locale, 'aiWorkbench.execute')}`
+                    `✓ ${t('aiWorkbench.execute')}`
                   )} ({approved.size})
                 </button>
                 <button
+                  type="button"
                   className="btn btn-ghost"
                   style={{ fontSize: FONT_SIZE.sm }}
                   onClick={handleUndo}
                 >
-                  {t(locale, 'aiWorkbench.undoAll')}
+                  {/* 原标签「撤销全部」名不副实：该按钮只清空未执行的建议列表 */}
+                  {t('aiWorkbench.organizer.clearProposals')}
                 </button>
                 {lastRollback && (
                   <button
+                    type="button"
                     className="btn btn-ghost"
                     style={{ fontSize: FONT_SIZE.sm, display: 'inline-flex', alignItems: 'center', gap: SPACING.xs }}
                     onClick={handleUndoLast}
                     disabled={executing}
-                    title={`${lastRollback.moves.length} operations from ${new Date(lastRollback.at).toLocaleTimeString()}`}
+                    title={t('aiWorkbench.organizer.undoLastHint', { n: lastRollback.moves.length })}
                   >
-                    <RotateCcw size={11} /> Undo Last
+                    <RotateCcw size={11} /> {t('aiWorkbench.organizer.undoLast')}
                   </button>
                 )}
               </div>

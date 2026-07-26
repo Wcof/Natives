@@ -5,9 +5,9 @@ import { useLocale, t } from '@/i18n';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 import type { UsageDashboardResponse, UsageCacheReadResult } from '@/types/usage';
 import { filterUsageRecords, aggregateUsageMetrics } from '@/lib/usage-dashboard';
-import { RefreshCw, AlertCircle, Database, Coins, Zap } from 'lucide-react';
+import { RefreshCw, AlertCircle, Database, Zap } from 'lucide-react';
 import { classifyError } from '@/lib/error-classifier';
-import { EmptyState, ErrorState } from '@/components/ui/EmptyState';
+import { EmptyState, LoadingState } from '@/components/ui/EmptyState';
 
 export default function UsagePanel() {
   const locale = useLocale();
@@ -72,6 +72,11 @@ export default function UsagePanel() {
     const { daily, sessions } = filterUsageRecords(usageData, null, null, null, null);
     return aggregateUsageMetrics(daily, sessions, usageData.sources);
   }, [usageData]);
+
+  // 首载 loading 不得伪装成「无缓存」空态（R-E10 三态）
+  if (loading && !usageData) {
+    return <LoadingState message={t(locale, 'common.loading')} />;
+  }
 
   if (error && !usageData) {
     return (
@@ -146,6 +151,14 @@ export default function UsagePanel() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: `${SPACING.xs}px ${SPACING.sm}px`, borderRadius: BORDER_RADIUS.sm, background: 'var(--surface-hover)', fontSize: FONT_SIZE.xs, color: 'var(--text)' }}>
           <Zap size={12} style={{ color: 'var(--warning)' }} />
           {t(locale, 'usage.rtkSavings')}: {usageData.rtk.totalSavedTokens.toLocaleString()} {t(locale, 'usage.tokens')}
+        </div>
+      )}
+
+      {/* 已有数据时的同步失败不再静默（原来 error 只在无数据分支渲染） */}
+      {error && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: `${SPACING.xs}px ${SPACING.sm}px`, borderRadius: BORDER_RADIUS.sm, background: 'var(--danger-soft)', fontSize: FONT_SIZE.xs, color: 'var(--danger)' }}>
+          <AlertCircle size={10} />
+          {error}
         </div>
       )}
 

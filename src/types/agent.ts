@@ -33,17 +33,18 @@ export interface AgentProject {
   sessionCount: number;
 }
 
-/** 会话信息 */
+/** 会话信息 — 与 src-tauri/src/agent.rs SessionInfo（camelCase）对齐 */
 export interface AgentSession {
+  /** 会话 UUID（可直接 `claude --resume <id>`） */
   id: string;
-  engine: AgentEngine;
-  projectPath: string;
-  title: string;
-  startTime: number;
-  endTime?: number;
-  filesModified: string[];
-  fileTimestamps: Record<string, number>;
-  skillsUsed: string[];
+  /** jsonl 转写文件绝对路径 */
+  path: string;
+  /** 最后活动时间（epoch ms） */
+  mtimeMs: number;
+  /** 转写文件大小（字节） */
+  size: number;
+  /** 会话摘要（可能缺失） */
+  title?: string | null;
 }
 
 /** Skill 信息 */
@@ -113,27 +114,6 @@ export interface ModelTokenUsage {
   costUSD: number;
 }
 
-/** RTK CLI 代理命令统计 */
-export interface RtkCommandHistory {
-  command: string;
-  timestamp: number;
-  tokensSaved: number;
-}
-
-export interface RtkCommandStat {
-  command: string;
-  count: number;
-  totalSaved: number;
-}
-
-/** RTK 用量 */
-export interface RtkUsage {
-  totalSaved: number;
-  totalCommands: number;
-  history: RtkCommandHistory[];
-  topCommands: RtkCommandStat[];
-}
-
 // ── Constants ──
 
 /** 所有 Skill 来源 */
@@ -153,10 +133,9 @@ export const SKILL_ISSUES: SkillIssue[] = [
   'residue-files',
 ];
 
-/** 文件变更事件 */
+/** 文件变更事件 — 来源为真实 fs-watch-change 管道（fsWatch.onChange） */
 export interface FileChangeEvent {
   path: string;
   type: 'create' | 'modify' | 'delete';
   timestamp: number;
-  sessionId?: string;
 }

@@ -1,78 +1,63 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { t, type Locale } from '@/i18n';
+import { useState } from 'react';
+import { t as tr, useLocale } from '@/i18n';
 import AgentDashboard from './AgentDashboard';
-import SessionReplay from './SessionReplay';
+import AgentSessions from './AgentSessions';
 import SkillsPanel from './SkillsPanel';
-import ProjectMemory from './ProjectMemory';
 import UsagePanel from './UsagePanel';
 import RtkPanel from './RtkPanel';
 import ChangeInbox from './ChangeInbox';
-import FollowModeUI from './FollowModeUI';
 import AIFileOrganizer from './AIFileOrganizer';
 
-type AiTab = 'agents' | 'sessions' | 'skills' | 'memory' | 'usage' | 'inbox' | 'files';
+// 原 'memory'（ProjectMemory）与 'sessions'（SessionReplay）读同一数据源且均为假面板，
+// 已合并为真实数据驱动的 AgentSessions；'files' 页签中冗余的 FollowModeUI（终端跟随开关
+// 已在终端工具栏中有真实实现）一并移除。
+type AiTab = 'agents' | 'sessions' | 'skills' | 'usage' | 'inbox' | 'files';
 
 export default function AiWorkbench() {
   const [tab, setTab] = useState<AiTab>('agents');
-  const [locale, setLocale] = useState<Locale>('zh');
-
-  useEffect(() => {
-    async function loadLocale() {
-      try {
-        const saved = await window.nativesAPI?.getLocale?.();
-        if (saved) setLocale(saved === 'en' ? 'en' : 'zh');
-      } catch { /* ignore */ }
-    }
-    loadLocale();
-  }, []);
+  const locale = useLocale();
 
   const tabs: { id: AiTab; label: string }[] = [
-    { id: 'agents', label: t(locale, 'aiWorkbench.tabs.agents') },
-    { id: 'sessions', label: t(locale, 'aiWorkbench.tabs.sessions') },
-    { id: 'skills', label: t(locale, 'aiWorkbench.tabs.skills') },
-    { id: 'memory', label: t(locale, 'aiWorkbench.tabs.memory') },
-    { id: 'usage', label: t(locale, 'aiWorkbench.tabs.usage') },
-    { id: 'inbox', label: t(locale, 'aiWorkbench.tabs.inbox') },
-    { id: 'files', label: t(locale, 'aiWorkbench.tabs.files') },
+    { id: 'agents', label: tr(locale, 'aiWorkbench.tabs.agents') },
+    { id: 'sessions', label: tr(locale, 'aiWorkbench.tabs.sessions') },
+    { id: 'skills', label: tr(locale, 'aiWorkbench.tabs.skills') },
+    { id: 'usage', label: tr(locale, 'aiWorkbench.tabs.usage') },
+    { id: 'inbox', label: tr(locale, 'aiWorkbench.tabs.inbox') },
+    { id: 'files', label: tr(locale, 'aiWorkbench.tabs.files') },
   ];
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border)', padding: '0 12px' }}>
-        {tabs.map((t) => (
+        {tabs.map((item) => (
           <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
+            key={item.id}
+            type="button"
+            onClick={() => setTab(item.id)}
             style={{
               padding: '10px 14px',
               fontSize: 'var(--fs-sm)',
               fontWeight: 500,
               background: 'none',
               border: 'none',
-              borderBottom: tab === t.id ? '2px solid var(--primary)' : '2px solid transparent',
-              color: tab === t.id ? 'var(--text)' : 'var(--text-secondary)',
+              borderBottom: tab === item.id ? '2px solid var(--primary)' : '2px solid transparent',
+              color: tab === item.id ? 'var(--text)' : 'var(--text-secondary)',
               cursor: 'pointer',
             }}
           >
-            {t.label}
+            {item.label}
           </button>
         ))}
       </div>
       <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-md)' }}>
         {tab === 'agents' && <AgentDashboard />}
-        {tab === 'sessions' && <SessionReplay />}
+        {tab === 'sessions' && <AgentSessions />}
         {tab === 'skills' && <SkillsPanel />}
-        {tab === 'memory' && <ProjectMemory />}
         {tab === 'usage' && <><UsagePanel /><RtkPanel /></>}
         {tab === 'inbox' && <ChangeInbox />}
-        {tab === 'files' && (
-          <div>
-            <FollowModeUI />
-            <AIFileOrganizer />
-          </div>
-        )}
+        {tab === 'files' && <AIFileOrganizer />}
       </div>
     </div>
   );
