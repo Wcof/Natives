@@ -32,7 +32,7 @@ export default function UsernameOnboarding({ locale, onComplete }: UsernameOnboa
           {t(locale, 'common.welcome')}
         </h1>
         <p style={{ fontSize: FONT_SIZE.lg, color: 'var(--text-secondary)', marginBottom: SPACING.xl }}>
-          What should we call you?
+          {t(locale, 'common.askName')}
         </p>
         <input
           type="text"
@@ -41,7 +41,8 @@ export default function UsernameOnboarding({ locale, onComplete }: UsernameOnboa
           placeholder={t(locale, 'common.namePlaceholder')}
           onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
           style={{
-            width: '100%', padding: `px px`, fontSize: FONT_SIZE.xl, textAlign: 'center',
+            // 原为 `px px` 模板串残缺——无任何内边距
+            width: '100%', padding: `${SPACING.sm}px ${SPACING.md}px`, fontSize: FONT_SIZE.xl, textAlign: 'center',
             background: 'var(--surface)', border: '1px solid var(--border)',
             borderRadius: BORDER_RADIUS.md, color: 'var(--text)', outline: 'none', marginBottom: SPACING.lg,
           }}
