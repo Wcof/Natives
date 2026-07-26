@@ -5,6 +5,7 @@
 - **决策者**: 产品方（用户）
 - **关联**: [ADR-0012](./0012-product-identity-workshop-scope.md)、`docs/architecture/creative-app-github-container-install.md`、实施方案《双来源应用升级实施方案》
 - **归类**: Workshop 面（统一目录）+ Embed 面（外部容器 GUI）+ Host 面（GitHub / Docker / 持久化）
+- **后续**: [ADR-0014](./0014-creative-app-creator-workbench.md) 在本 ADR 之上补齐**创作侧**主流程。本 ADR 的双来源目录与运行时分轨完整保留，但在 UI 上降为第二职责——个人创意的第一职责改为「创造内部应用」。
 
 ---
 
