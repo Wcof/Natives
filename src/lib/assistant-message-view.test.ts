@@ -5,18 +5,27 @@ import { resolve } from 'node:path';
 import {
   extractReasoningStage,
   formatElapsed,
+  formatRunElapsed,
   formatReasoningDuration,
   messagePlainText,
   reasoningToggleLabel,
 } from './assistant-message-view';
 
 test('formats reasoning elapsed time', () => {
-  assert.equal(formatElapsed(850), '0.9s');
-  assert.equal(formatElapsed(100), '0.1s');
-  assert.equal(formatElapsed(700), '0.7s');
-  assert.equal(formatElapsed(65_000), '1m 5s');
+  assert.equal(formatElapsed(0), null);
+  assert.equal(formatElapsed(850), '0.8s');
+  assert.equal(formatElapsed(11_100), '11.1s');
+  assert.equal(formatElapsed(59_900), '59.9s');
+  assert.equal(formatElapsed(60_000), '1m00.0s');
+  assert.equal(formatElapsed(2_051_100), '34m11.1s');
+  assert.equal(formatElapsed(3_599_900), '59m59.9s');
+  assert.equal(formatElapsed(3_600_000), '1h00m00.0s');
+  assert.equal(formatElapsed(5_651_100), '1h34m11.1s');
+  assert.equal(formatRunElapsed(5_651_100, true, 'zh'), '已完成 1h34m11.1s');
+  assert.equal(formatRunElapsed(11_100, false, 'zh'), '运行中 11.1s');
   assert.equal(formatReasoningDuration(3200, 'zh'), '3.2 秒');
   assert.equal(formatReasoningDuration(3200, 'en'), '3.2s');
+  assert.equal(formatReasoningDuration(0, 'zh'), null);
 });
 
 test('timeline footer and thinking duration share the bounded 1Hz clock', () => {
@@ -63,6 +72,10 @@ test('reasoning toggle label is dynamic while live and summary when done', () =>
   assert.equal(
     reasoningToggleLabel({ live: false, expanded: false, durationMs: 4200, locale: 'en' }),
     'Thought for 4.2s',
+  );
+  assert.equal(
+    reasoningToggleLabel({ live: false, expanded: false, durationMs: 0, locale: 'zh' }),
+    '查看思考过程',
   );
 });
 

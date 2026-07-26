@@ -707,6 +707,8 @@ export interface NativesAPI {
   git: {
     status: (dirPath: string) => Promise<unknown>;
     diff: (filePath: string) => Promise<string>;
+    commit: (dirPath: string, message: string) => Promise<unknown>;
+    push: (dirPath: string) => Promise<unknown>;
   };
   disk: {
     usage: (dirPath: string) => Promise<unknown>;
@@ -885,6 +887,7 @@ export interface NativesAPI {
   project: {
     list(): Promise<ProjectSummary[]>;
     register(path: string): Promise<ProjectSummary>;
+    rename(id: string, label: string): Promise<void>;
     remove(id: string): Promise<void>;
   };
   /** Dialog (file/directory picker) */
@@ -1375,6 +1378,8 @@ const nativesAPI: NativesAPI = {
   git: {
     status: (dirPath: string) => cmd('git_status', { dirPath }),
     diff: (filePath: string) => cmd('git_diff', { filePath }),
+    commit: (dirPath: string, message: string) => cmd('git_commit', { dirPath, message }),
+    push: (dirPath: string) => cmd('git_push', { dirPath }),
   },
 
   // Disk
@@ -1774,6 +1779,7 @@ const nativesAPI: NativesAPI = {
   project: {
     list: (): Promise<ProjectSummary[]> => cmd<ProjectSummary[]>('project_list'),
     register: (path: string): Promise<ProjectSummary> => cmd<ProjectSummary>('project_register', { path }),
+    rename: (id: string, label: string): Promise<void> => cmd<void>('project_rename', { id, label }),
     remove: (id: string): Promise<void> => cmd<void>('project_remove', { id }),
   },
 };

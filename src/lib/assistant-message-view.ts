@@ -1,14 +1,46 @@
 import type { ContentBlock } from '@/components/assistant/blocks';
 
-export function formatElapsed(milliseconds: number): string {
-  const seconds = Math.max(0, milliseconds) / 1000;
-  if (seconds < 60) return `${(Math.round(seconds * 10) / 10).toFixed(1)}s`;
-  return `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
+export function formatElapsed(durationMs: number | null | undefined): string | null {
+  if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 100) {
+    return null;
+  }
+  const totalSec = durationMs / 1000;
+  if (totalSec < 60) {
+    return `${totalSec.toFixed(1)}s`;
+  }
+  const totalMin = Math.floor(totalSec / 60);
+  const remSecVal = totalSec % 60;
+  const remSecStr = remSecVal.toFixed(1).padStart(4, '0'); // e.g. "00.0", "05.2", "11.1"
+  if (totalMin < 60) {
+    return `${totalMin}m${remSecStr}s`;
+  }
+  const hours = Math.floor(totalMin / 60);
+  const remMinStr = Math.floor(totalMin % 60).toString().padStart(2, '0');
+  return `${hours}h${remMinStr}m${remSecStr}s`;
 }
 
-/** Localized duration for reasoning headers, e.g. "3.2 秒" / "3.2s". */
-export function formatReasoningDuration(milliseconds: number, locale = 'zh'): string {
+/**
+ * Format total run time with status prefix:
+ * e.g., "运行中 11.1s" / "已完成 1h34m11.1s"
+ */
+export function formatRunElapsed(
+  durationMs: number | null | undefined,
+  isFinished = true,
+  locale = 'zh',
+): string | null {
+  const formatted = formatElapsed(durationMs);
+  if (!formatted) return null;
+  const zh = locale.startsWith('zh');
+  if (isFinished) {
+    return zh ? `已完成 ${formatted}` : `Completed ${formatted}`;
+  }
+  return zh ? `运行中 ${formatted}` : `Running ${formatted}`;
+}
+
+/** Localized duration for reasoning headers, e.g. "3.2 秒" / "3.2s". Returns null if duration is under 0.1s. */
+export function formatReasoningDuration(milliseconds: number, locale = 'zh'): string | null {
   const seconds = Math.max(0, milliseconds) / 1000;
+  if (seconds < 0.1) return null;
   if (locale.startsWith('zh')) {
     if (seconds < 60) return `${(Math.round(seconds * 10) / 10).toFixed(1)} 秒`;
     return `${Math.floor(seconds / 60)} 分 ${Math.floor(seconds % 60)} 秒`;

@@ -28,8 +28,9 @@ docs/standards/
 ├── technical/                         ← 技术架构规范
 │   ├── 01-layering.md                   四类边界、分层依赖、IPC/协议
 │   ├── 02-security.md                   五大防线 + 安全红线
-│   └── 03-data.md                       SQLite / 命名空间 / 迁移 / 凭证
-│   └── 04-performance.md                性能预算、主线程与增长边界
+│   ├── 03-data.md                       SQLite / 命名空间 / 迁移 / 凭证
+│   ├── 04-performance.md                性能预算、主线程与增长边界
+│   └── 05-backend.md                    错误处理、日志脱敏、共享 crate、子进程监督
 ├── frontend/                          ← 前端架构规范
 │   ├── 01-structure.md                  目录 / 命名 / 组件分层
 │   ├── 02-state-and-data.md             状态 / IPC / 无假数据
@@ -50,7 +51,7 @@ docs/standards/
 | 引擎整改契约 | [`NATIVE_ENGINE_FULL_REMEDIATION.md`](../architecture/NATIVE_ENGINE_FULL_REMEDIATION.md) | technical/01 · product/02 |
 | 外部容器应用 | [ADR-0013](../adr/0013-creative-app-dual-source.md) + design 文 | product/01 · technical/02 |
 
-共 14 篇规范 + 关联架构指南。**新增功能或重构必须先检索相关规范篇。**
+共 15 篇规范 + 关联架构指南。**新增功能或重构必须先检索相关规范篇。**
 
 ---
 

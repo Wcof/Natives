@@ -18,6 +18,10 @@ import {
   nextSlashIndex,
   type SlashCommand,
 } from '@/lib/assistant-slash';
+import {
+  loadPersistedQuestionHistory,
+  savePersistedQuestionHistory,
+} from '@/lib/assistant-workspace/persistence';
 import ModelSelectorDropdown, { type ProviderWithModels } from './ModelSelectorDropdown';
 import SlashCommandPopover from './SlashCommandPopover';
 import FileMentionPopover, { type ProjectFileHit } from './FileMentionPopover';
@@ -41,6 +45,7 @@ interface MessageInputProps {
   onStop: () => void;
   onBlockedSend?: () => void;
   isStreaming: boolean;
+  isStopping?: boolean;
   /** When true, Enter while streaming queues via onSend instead of blocking. */
   allowQueueWhileStreaming?: boolean;
   disabled?: boolean;
@@ -96,7 +101,7 @@ function agentAccent(id: string) {
 
 export default function MessageInput(props: MessageInputProps) {
   const {
-    locale, onSend, onForceSend, onInterject, onStop, onBlockedSend, isStreaming,
+    locale, onSend, onForceSend, onInterject, onStop, onBlockedSend, isStreaming, isStopping = false,
     allowQueueWhileStreaming = false, disabled = false, inputDisabledReason = null,
     permissionProfile, onPermissionChange, providers, selectedProviderId, selectedModel, onSelectModel,
     draftText, onDraftChange, draftKey = null, projectPath = null,
@@ -112,7 +117,9 @@ export default function MessageInput(props: MessageInputProps) {
   const [mentionQuery, setMentionQuery] = useState('');
   const [permissionOpen, setPermissionOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [questionHistory, setQuestionHistory] = useState<string[]>(() => loadPersistedQuestionHistory(projectPath));
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const composingRef = useRef(false);
   const lastSlashIndex = useRef(-1);
   const lastAtIndex = useRef(-1);
   const onDraftChangeRef = useRef(onDraftChange);
@@ -124,6 +131,8 @@ export default function MessageInput(props: MessageInputProps) {
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** True while local input is ahead of the last store draftText we adopted. */
   const localDirtyRef = useRef(false);
+  const questionHistoryIndexRef = useRef(questionHistory.length);
+  const questionHistoryDraftRef = useRef(input);
   const effectiveDisabled = disabled || inputDisabledReason === 'no_provider' || inputDisabledReason === 'no_model' || inputDisabledReason === 'creating';
   const activeAccent = activeSubagent ? agentAccent(activeSubagent.id) : null;
 
@@ -189,6 +198,14 @@ export default function MessageInput(props: MessageInputProps) {
     if (draftText !== input) setInput(draftText);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- input is local authority while dirty
   }, [draftText]);
+
+  useEffect(() => {
+    const history = loadPersistedQuestionHistory(projectPath);
+    setQuestionHistory(history);
+    questionHistoryIndexRef.current = history.length;
+    questionHistoryDraftRef.current = input;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- project change resets its history cursor
+  }, [projectPath]);
 
   useEffect(() => {
     if (!textareaRef.current) return;
@@ -276,6 +293,10 @@ export default function MessageInput(props: MessageInputProps) {
           setInput((current) => current || draft.content);
           scheduleDraftToStore(draft.content, { immediate: true });
           setAttachments((current) => (current.length ? current : draft.attachments));
+        } else {
+          const history = savePersistedQuestionHistory(projectPath, draft.content);
+          setQuestionHistory(history);
+          questionHistoryIndexRef.current = history.length;
         }
         return;
       }
@@ -285,6 +306,10 @@ export default function MessageInput(props: MessageInputProps) {
         setInput(current => current || draft.content);
         scheduleDraftToStore(draft.content, { immediate: true });
         setAttachments(current => current.length ? current : draft.attachments);
+      } else {
+        const history = savePersistedQuestionHistory(projectPath, draft.content);
+        setQuestionHistory(history);
+        questionHistoryIndexRef.current = history.length;
       }
     } finally {
       setSubmitting(false);
@@ -341,6 +366,9 @@ export default function MessageInput(props: MessageInputProps) {
 
   const handleTextareaKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.defaultPrevented) return;
+    // Chromium reports the Enter that confirms some IME candidates after
+    // compositionend, with isComposing already false but keyCode still 229.
+    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || event.key === 'Process' || composingRef.current) return;
 
     // Slash menu keyboard ownership (no document listener).
     if (slashOpen) {
@@ -381,6 +409,19 @@ export default function MessageInput(props: MessageInputProps) {
       // Shift+Enter falls through → newline (default).
     }
 
+    if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && questionHistory.length > 0) {
+      event.preventDefault();
+      const currentIndex = questionHistoryIndexRef.current;
+      if (currentIndex === questionHistory.length) questionHistoryDraftRef.current = input;
+      const nextIndex = Math.max(0, Math.min(questionHistory.length, currentIndex + (event.key === 'ArrowUp' ? -1 : 1)));
+      const next = nextIndex === questionHistory.length ? questionHistoryDraftRef.current : questionHistory[nextIndex]!;
+      questionHistoryIndexRef.current = nextIndex;
+      setInput(next);
+      scheduleDraftToStore(next, { immediate: true });
+      syncSlashFromValue(next);
+      return;
+    }
+
     // Shift+Enter → newline (default)
     if (event.key === 'Enter' && event.shiftKey) return;
 
@@ -405,7 +446,7 @@ export default function MessageInput(props: MessageInputProps) {
 
   return (
     <div className="mx-auto w-full max-w-[860px] px-5 pb-5 pt-2">
-      {(subagents.length > 0 || changeSummary?.fileCount) && (
+      {(subagents.length > 0 || Boolean(changeSummary && changeSummary.fileCount > 0)) && (
         <div className="mb-2 flex flex-wrap items-center gap-2">
           {subagents.map((agent) => {
             const accent = agentAccent(agent.id);
@@ -429,7 +470,7 @@ export default function MessageInput(props: MessageInputProps) {
               </button>
             );
           })}
-          {changeSummary?.fileCount ? (
+          {changeSummary && changeSummary.fileCount > 0 ? (
             <span className="ml-auto flex items-center gap-1.5 text-xs text-[var(--text-secondary)]" title={zh ? '本次对话文件变更' : 'Changes in this conversation'}>
               <Bot size={14} className="text-[var(--text-disabled)]" />
               <span>{zh ? `${changeSummary.fileCount} 个文件` : `${changeSummary.fileCount} files`}</span>
@@ -482,6 +523,8 @@ export default function MessageInput(props: MessageInputProps) {
           value={input}
           onChange={event => handleInputChange(event.target.value)}
           onKeyDown={handleTextareaKeyDown}
+          onCompositionStart={() => { composingRef.current = true; }}
+          onCompositionEnd={() => { composingRef.current = false; }}
           placeholder={
             isStreaming && allowQueueWhileStreaming
               ? onInterject
@@ -542,7 +585,7 @@ export default function MessageInput(props: MessageInputProps) {
           <div className="flex min-w-0 items-center gap-1">
             <ModelSelectorDropdown providers={providers} selectedProviderId={selectedProviderId} selectedModel={selectedModel} onSelect={onSelectModel} locale={locale} />
             {isStreaming || submitting ? (
-              <button type="button" onClick={onStop} title={zh ? '停止生成' : 'Stop'} className="grid h-8 w-8 place-items-center rounded-full bg-[var(--text)] text-[var(--surface)]"><Square size={12} fill="currentColor" /></button>
+              <button type="button" onClick={onStop} disabled={isStopping} title={isStopping ? (zh ? '停止中…' : 'Stopping…') : (zh ? '停止生成' : 'Stop')} className="grid h-8 w-8 place-items-center rounded-full bg-[var(--text)] text-[var(--surface)] disabled:opacity-50"><Square size={12} fill="currentColor" /></button>
             ) : (
               <button type="button" onClick={() => void handleSend()} disabled={effectiveDisabled || !canSendAssistantDraft(input, attachments)} title={zh ? '发送' : 'Send'} className="grid h-8 w-8 place-items-center rounded-full bg-[var(--text)] text-[var(--surface)] transition disabled:opacity-25"><Send size={15} /></button>
             )}

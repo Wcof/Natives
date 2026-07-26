@@ -102,7 +102,7 @@ export const THEME_TOKENS = {
 
 // ── Component Token Presets ──
 
-/** Standard Card (V1.0 规范 §7) */
+/** Standard Card (V1.0 规范第 7 节) */
 export const CARD_STYLE: React.CSSProperties = {
   background: THEME_TOKENS.surface,
   border: `1px solid ${THEME_TOKENS.border}`,
@@ -111,7 +111,7 @@ export const CARD_STYLE: React.CSSProperties = {
   transition: `all ${TRANSITION.normal}`,
 };
 
-/** Standard Input (V1.0 规范 §6) */
+/** Standard Input (V1.0 规范第 6 节) */
 export const INPUT_STYLE: React.CSSProperties = {
   width: '100%',
   height: 40,

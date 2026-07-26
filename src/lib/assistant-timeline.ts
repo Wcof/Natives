@@ -35,15 +35,16 @@ export interface TimelineThinkingActivity {
   live: boolean;
   startedAt?: string | null;
   finishedAt?: string | null;
+  segmentId?: string;
+  summary?: string;
+  summaryStatus?: 'completed' | 'failed';
 }
 
 /** Blocks that belong in the durable answer body (Markdown text, plan, etc.). */
 export function isBodyContentBlock(block: ContentBlock): boolean {
   const type = block.type;
   if (type === 'tool_call' || type === 'tool_result') return false;
-  // Live reasoning is rendered by ThinkingActivity; finished reasoning stays
-  // as a collapsible body block when present on the message.
-  if (type === 'reasoning' && block.live) return false;
+  if (type === 'reasoning' && block.live === true) return false;
   return true;
 }
 
@@ -57,10 +58,28 @@ export function extractLiveThinking(
   const live = blocks.find((b) => b.type === 'reasoning' && b.live);
   if (!live) return null;
   const text = (live.reasoning ?? live.text ?? '').trim();
-  if (!text) {
-    return { text: '', live: true };
+  return {
+    text,
+    live: true,
+    segmentId: live.segmentId,
+    summary: live.summary,
+    summaryStatus: live.summaryStatus,
+  };
+}
+
+export function extractThinking(blocks: ContentBlock[]): TimelineThinkingActivity | null {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index]!;
+    if (block.type !== 'reasoning') continue;
+    return {
+      text: (block.reasoning ?? block.text ?? '').trim(),
+      live: Boolean(block.live),
+      segmentId: block.segmentId,
+      summary: block.summary,
+      summaryStatus: block.summaryStatus,
+    };
   }
-  return { text, live: true };
+  return null;
 }
 
 function inputPaths(value: unknown): string[] {

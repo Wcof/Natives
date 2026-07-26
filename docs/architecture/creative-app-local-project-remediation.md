@@ -1,6 +1,7 @@
 # 个人创意 · 本地项目收敛方案
 
 > 状态：实施中；基线：`deploy@4f130256`；关联：[ADR-0013](../adr/0013-creative-app-dual-source.md)
+> gap 设计来源见 [creative-app-local-remediation.md](./creative-app-local-remediation.md)（9 项整改设计，B1–B4/F5–F9）；本文是同域的收敛现状与验收方案，两者非重复进度快照
 
 ## 目标与边界
 

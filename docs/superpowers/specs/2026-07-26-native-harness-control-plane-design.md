@@ -51,6 +51,51 @@ This works at runtime, but it lacks:
 - a Settings control center;
 - a clean distinction between fixed stages, safe points, and Hook points.
 
+### 2.1 Three competing Hook models (resolved in Phase 1)
+
+The first draft of this section described only the `agent-core` Hook runtime.
+Implementation found **three** Hook models in the tree, two of them unreachable:
+
+| | `agent-core` (live) | `src-tauri/runtime/native` (orphan) | `assistant-protocol` v1 (orphan) |
+|---|---|---|---|
+| Event enum | `HookEvent` ×16 | `HookPoint` ×9 | `HookPoint` ×10, different naming |
+| Hook identity | none | none | `id` |
+| Ordering | implicit registration order | implicit registration order | `priority` |
+| Failure policy | hard-coded fail-closed | non-zero exit **allowed** | `Fail`/`Skip`/`Default` |
+| Tool matcher | yes | yes, plus `*suffix` | none |
+| Typed conditions | none | string form `Bash(git commit:*)` | none |
+| Self-description | none | `HookInfo` | is data by construction |
+| Script protocol | strict: async, timeout, IO cap, non-zero denies | same protocol, lax on failure | none |
+
+`src-tauri/src/runtime/native/` (~5.4k lines: `AgentLoop`, `CapabilityRegistry`,
+`HookPipeline`, `RuleEngine`, `plugin_system`, `subagent`) was never registered
+in `runtime::registry` and had no caller outside itself. A module-level
+`#![allow(dead_code, unused_imports, unused_variables)]` had kept it warning-free.
+`assistant-protocol`'s `HookRegistration`/`HookPoint`/`HookFailStrategy` had no
+production reference and no client speaking their wire form.
+
+Resolution:
+
+- `agent-core` remains the **only** Hook execution authority. Its script handling
+  is the strictest of the three and was left untouched.
+- The data-model concepts the orphans alone carried were absorbed into
+  `harness-core`: stable identity, explicit ordering, explicit failure policy,
+  self-description, and typed conditions.
+- `RuleEngine`'s typed `ConditionOperator` (`regex_match`, `contains`,
+  `not_contains`, `equals`, `path_match`) was preferred over the orphan
+  `Bash(git commit:*)` expression string, because a typed operator renders as a
+  dropdown plus a field while an expression renders only as a text box — and
+  rendering is the point of this project. Its `.local.md` rule loading and
+  `RuleAction` were **not** absorbed; rules are not Hooks, and reviving them
+  needs its own ADR.
+- Both orphan trees were deleted.
+
+Known remainder, deliberately out of scope: `assistant-protocol`'s
+`SkillManifest` is also unreferenced, and `AgentRuntime`'s execution surface
+(`stream`/`interrupt`/`dispose`) has no caller now that CLI runtimes are used
+only for capability metadata. Neither is a competing Hook model; both belong to
+the Phase 5 cleanup.
+
 ## 3. Goals
 
 ### 3.1 Product goals
@@ -714,13 +759,40 @@ The implementation must satisfy existing budgets:
 
 ## 19. Migration Strategy
 
-### Phase 1: behavior-preserving extraction
+### Phase 1: behavior-preserving extraction — **done**
 
-- Add `harness-core`.
-- Move Session Actor behavior with existing tests.
-- Introduce Hook definition/binding types.
-- Keep compatibility adapters for current call sites.
-- Prove the default compiled `RunHarness` matches current behavior.
+- Add `harness-core`. ✅ `hooks/definition.rs` + `session_actor.rs`.
+- Move Session Actor behavior with existing tests. ✅ 829 lines and 12 tests
+  moved; `agent-core::session_coordinator` is now a re-export shim.
+- Introduce Hook definition/binding types. ✅ `HookDefinition` carries `HookId`,
+  `HookSource`, `order`, `matcher`, `conditions`, `timeout_ms`,
+  `HookFailurePolicy`, and `HookKind` (with `trusted` on command hooks).
+- Keep compatibility adapters for current call sites. ✅ Every existing import
+  path still resolves; `SessionHarness`/`HarnessAction` aliases retained.
+- Prove the default compiled `RunHarness` matches current behavior. ✅
+  `production_hooks.rs` split into `discover_production_hooks` (data) and
+  `compile_production_hooks` (registry), guarded by a behaviour-snapshot suite
+  written *before* the split.
+
+`HookRegistry` now stores definition and handler together and exposes
+`describe()` / `describe_event()`. Dispatch consults the definition's matcher
+and conditions in addition to the handler's own matcher, so the catalog cannot
+misreport what actually runs.
+
+Scope decisions taken during implementation:
+
+- Hook invocation timing (`duration_ms`) was **not** added here; telemetry is
+  Phase 3 by this document's own sequencing.
+- `tool_pattern_matches` was moved verbatim. Two quirks — a `None` tool name
+  matching only the whole pattern `"*"`, and no `*suffix` support — are pinned
+  by test rather than fixed, because changing a security-relevant matcher is a
+  behaviour change that needs its own review and has no current demand.
+- A pre-existing `agent-core::subagents::FailurePolicy` (`Isolate`/`FailFast`/
+  `RequireAll`) forced the Hook one to be named `HookFailurePolicy`; two
+  unrelated concepts must not share a domain term.
+- `HookFailurePolicy` is recorded but not yet enforced: every discovered Hook
+  uses `Fail`, matching today's behaviour. Making it effective is Phase 4 work,
+  alongside the UI that sets it.
 
 ### Phase 2: control plane and snapshots
 

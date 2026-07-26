@@ -71,6 +71,9 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
   const [deletingConversation, setDeletingConversation] = useState(false);
   const [removeProjectTarget, setRemoveProjectTarget] = useState<{ id: string; label: string; path: string } | null>(null);
+  const [removingProject, setRemovingProject] = useState(false);
+  const [renameProjectTarget, setRenameProjectTarget] = useState<{ id: string; path: string; label: string } | null>(null);
+  const [renamingProject, setRenamingProject] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
 
   // Load persisted collapsed state
@@ -289,6 +292,9 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                 <button
                   type="button"
                   onClick={() => toggleProject(group.id)}
+                  onDoubleClick={() => {
+                    if (group.path) setRenameProjectTarget({ id: group.id, path: group.path, label: group.label });
+                  }}
                   aria-expanded={!isCollapsed}
                   title={group.path ?? undefined}
                   className="drag-none flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-inherit font-inherit"
@@ -450,6 +456,9 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                   <button type="button" role="menuitem" onClick={() => { togglePinned(group.id); setMenuId(null); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
                     {pinned.has(group.id) ? <PinOff size={12} /> : <Pin size={12} />}{pinned.has(group.id) ? t(locale, 'assistant.unpinProject') : t(locale, 'assistant.pinProject')}
                   </button>
+                  <button type="button" role="menuitem" onClick={() => { setMenuId(null); setRenameProjectTarget({ id: group.id, path: group.path!, label: group.label }); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
+                    <Pencil size={12} />{t(locale, 'assistant.renameProject')}
+                  </button>
                   <button type="button" role="menuitem" onClick={() => { setMenuId(null); void window.nativesAPI?.shell.showItemInFolder(group.path!); }} className="drag-none flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)] transition-all">
                     <FolderSearch size={12} />{t(locale, 'assistant.showProjectInFinder')}
                   </button>
@@ -516,6 +525,26 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
         </form>
       </Modal>
 
+      <Modal isOpen={Boolean(renameProjectTarget)} onClose={() => setRenameProjectTarget(null)} title={t(locale, 'assistant.renameProject')} width={400}>
+        <form onSubmit={(event) => void (async () => {
+          event.preventDefault();
+          const target = renameProjectTarget;
+          if (!target || !target.label.trim() || !actions?.renameProject || renamingProject) return;
+          setRenamingProject(true);
+          const renamed = await actions.renameProject(target.path, target.label.trim());
+          setRenamingProject(false);
+          if (!renamed) {
+            toast(zh ? '重命名项目失败，请重试' : 'Could not rename project. Please retry.', 'error');
+            return;
+          }
+          setRenameProjectTarget(null);
+          toast(zh ? '项目已重命名' : 'Project renamed', 'success');
+        })()}>
+          <input autoFocus value={renameProjectTarget?.label ?? ''} onChange={event => setRenameProjectTarget(target => target ? { ...target, label: event.target.value } : null)} className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm outline-none focus:border-[var(--primary)]" />
+          <div className="mt-4 flex justify-end gap-2"><button type="button" disabled={renamingProject} onClick={() => setRenameProjectTarget(null)} className="btn btn-sm">{t(locale, 'common.cancel')}</button><button type="submit" disabled={renamingProject || !renameProjectTarget?.label.trim()} className="btn btn-sm btn-primary">{renamingProject ? (zh ? '保存中…' : 'Saving…') : t(locale, 'common.save')}</button></div>
+        </form>
+      </Modal>
+
       {/* ── Delete Modal ── */}
       <Modal isOpen={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} title={t(locale, 'assistant.deleteConversation')} width={420}>
         <p className="text-sm text-[var(--text-secondary)]">{t(locale, 'assistant.deleteConversationConfirm', { title: deleteTarget?.title || '' })}</p>
@@ -534,7 +563,8 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
           </button>
           <button
             type="button"
-            onClick={() => {
+            disabled={removingProject}
+            onClick={() => void (async () => {
               if (!removeProjectTarget) return;
               if (!actions?.removeProject) {
                 toast(
@@ -543,17 +573,23 @@ export default function AssistantSidebarSection({ locale, activeNavigationId, on
                 );
                 return;
               }
-              actions.removeProject(removeProjectTarget.path);
+              setRemovingProject(true);
+              const removed = await actions.removeProject(removeProjectTarget.path);
+              setRemovingProject(false);
+              if (!removed) {
+                toast(zh ? '移除项目失败，请重试' : 'Could not remove project. Please retry.', 'error');
+                return;
+              }
               const next = new Set(pinned);
               next.delete(removeProjectTarget.id);
               setPinned(next);
               void window.nativesAPI?.db?.set('assistant:pinnedProjects', JSON.stringify([...next]));
               setRemoveProjectTarget(null);
               toast(zh ? '已移除项目' : 'Project removed', 'success');
-            }}
+            })()}
             className="btn btn-sm bg-[var(--danger)] text-white"
           >
-            {zh ? '移除' : 'Remove'}
+            {removingProject ? (zh ? '移除中…' : 'Removing…') : (zh ? '移除' : 'Remove')}
           </button>
         </div>
       </Modal>

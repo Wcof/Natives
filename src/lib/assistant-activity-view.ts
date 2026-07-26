@@ -13,7 +13,7 @@ export interface ActivityTodo {
   status: TodoStatus;
 }
 
-export type ArtifactBucket = 'created' | 'modified';
+export type ArtifactBucket = 'used' | 'created' | 'modified';
 
 /** Shared empty todos — effect / useMemo deps stay referentially stable. */
 const EMPTY_TODOS: ActivityTodo[] = [];
@@ -178,6 +178,9 @@ function coerceChangeBucket(raw: string | undefined | null): ArtifactBucket {
   const s = String(raw ?? '')
     .trim()
     .toLowerCase();
+  if (s === 'used' || s === 'reference' || s === 'attachment' || s === 'input') {
+    return 'used';
+  }
   if (s === 'created' || s === 'create' || s === 'added' || s === 'add' || s === 'new') {
     return 'created';
   }
@@ -208,8 +211,13 @@ function applyFileEvent(
     map.set(path, { path, changeType: bucket, at, runId });
     return;
   }
+  // Created wins over modified; used remains used unless explicitly created/modified
   const nextType: ArtifactBucket =
-    existing.changeType === 'created' || bucket === 'created' ? 'created' : 'modified';
+    existing.changeType === 'created' || bucket === 'created'
+      ? 'created'
+      : existing.changeType === 'modified' || bucket === 'modified'
+        ? 'modified'
+        : bucket;
   map.set(path, {
     path,
     changeType: nextType,
@@ -220,7 +228,7 @@ function applyFileEvent(
 }
 
 /**
- * Aggregate artifact files from fileChanges, optional fileEvents, artifacts, and/or raw events.
+ * Aggregate artifact files into three buckets: used, created, modified.
  * Dedupes by normalized full path; created wins over later modified.
  */
 export function aggregateArtifactFiles(options: {
@@ -228,45 +236,63 @@ export function aggregateArtifactFiles(options: {
   fileEvents?: FileEventInput[];
   artifacts?: Artifact[];
   events?: RunEvent[];
-}): { created: ArtifactFileItem[]; modified: ArtifactFileItem[] } {
+  usedFiles?: string[];
+}): { used: ArtifactFileItem[]; created: ArtifactFileItem[]; modified: ArtifactFileItem[] } {
   const map = new Map<string, ArtifactFileItem>();
 
-  // Prefer explicit chronological fileEvents when provided.
+  // Explicit used files (attachments, external references)
+  if (options.usedFiles?.length) {
+    for (const uf of options.usedFiles) {
+      applyFileEvent(map, uf, 'used');
+    }
+  }
+
+  // Explicit chronological fileEvents
   if (options.fileEvents?.length) {
     for (const fe of options.fileEvents) {
       applyFileEvent(map, fe.path, fe.changeType, fe.at, fe.runId);
     }
   }
 
-  // file_changed events (fallback / merge)
+  // file_changed and file_reference events
   if (options.events?.length) {
     for (const event of options.events) {
-      if (event.type !== 'file_changed') continue;
-      const p = (event.payload ?? {}) as Record<string, unknown>;
-      applyFileEvent(
-        map,
-        String(p.path ?? ''),
-        String(p.change_type ?? p.changeType ?? 'modified'),
-        event.timestamp,
-        event.runId,
-      );
+      const type = String(event.type ?? '');
+      if (type === 'file_changed') {
+        const p = (event.payload ?? {}) as Record<string, unknown>;
+        applyFileEvent(
+          map,
+          String(p.path ?? ''),
+          String(p.change_type ?? p.changeType ?? 'modified'),
+          event.timestamp,
+          event.runId,
+        );
+      } else if (type === 'file_reference') {
+        const p = (event.payload ?? {}) as Record<string, unknown>;
+        applyFileEvent(
+          map,
+          String(p.path ?? p.filePath ?? p.file_path ?? ''),
+          'used',
+          event.timestamp,
+          event.runId,
+        );
+      }
     }
   }
 
-  // Aggregated FileChange list from workspace store
+  // Workspace fileChanges
   if (options.fileChanges?.length) {
     for (const fc of options.fileChanges) {
       applyFileEvent(map, fc.path, fc.changeType, undefined, fc.runId);
     }
   }
 
-  // Non-file artifacts that still carry a path → default 新增
+  // Artifacts
   if (options.artifacts?.length) {
     for (const a of options.artifacts) {
       const path = normalizeArtifactPath(a.path);
       if (!path) continue;
       if (map.has(path)) {
-        // Keep created-wins; only fill missing metadata
         const existing = map.get(path)!;
         map.set(path, {
           ...existing,
@@ -276,9 +302,12 @@ export function aggregateArtifactFiles(options: {
         continue;
       }
       const kind = String(a.kind ?? 'file').toLowerCase();
-      // Explicit file-ish kinds still default to created when only seen as artifact.
       const bucket: ArtifactBucket =
-        kind === 'modified' || kind === 'edit' || kind === 'edited' ? 'modified' : 'created';
+        kind === 'modified' || kind === 'edit' || kind === 'edited'
+          ? 'modified'
+          : kind === 'used' || kind === 'reference'
+            ? 'used'
+            : 'created';
       map.set(path, {
         path,
         changeType: bucket,
@@ -288,18 +317,21 @@ export function aggregateArtifactFiles(options: {
     }
   }
 
+  const used: ArtifactFileItem[] = [];
   const created: ArtifactFileItem[] = [];
   const modified: ArtifactFileItem[] = [];
   for (const item of map.values()) {
-    if (item.changeType === 'created') created.push(item);
+    if (item.changeType === 'used') used.push(item);
+    else if (item.changeType === 'created') created.push(item);
     else modified.push(item);
   }
 
   // Stable sort by path for deterministic UI
   const byPath = (a: ArtifactFileItem, b: ArtifactFileItem) => a.path.localeCompare(b.path);
+  used.sort(byPath);
   created.sort(byPath);
   modified.sort(byPath);
-  return { created, modified };
+  return { used, created, modified };
 }
 
 /**

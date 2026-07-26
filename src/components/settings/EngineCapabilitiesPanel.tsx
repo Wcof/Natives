@@ -77,20 +77,19 @@ export default function EngineCapabilitiesPanel({ locale }: { locale: Locale }) 
     try {
       const gateway = createDefaultGateway(false);
       await gateway.connect().catch(() => {});
-      const snapshot = await updateRateLimit(gateway, {
+      await updateRateLimit(gateway, {
         enabled: editEnabled,
         requests_per_minute: rpm,
       });
-      setRateLimit(snapshot);
-      setEditEnabled(snapshot.settings.enabled);
-      setEditRpm(snapshot.settings.requests_per_minute);
       toast(t(locale, 'rateLimit.saveSuccess'), 'success');
+      // Refresh full snapshot — this also resyncs edit states
+      await load();
     } catch {
       toast(t(locale, 'rateLimit.saveFailed'), 'error');
     } finally {
       setSaving(false);
     }
-  }, [editEnabled, editRpm, locale, toast]);
+  }, [editEnabled, editRpm, locale, toast, load]);
 
   const zh = locale === 'zh';
   const rpmValid = Number.isInteger(editRpm) && editRpm >= 1 && editRpm <= 600;
@@ -187,7 +186,9 @@ export default function EngineCapabilitiesPanel({ locale }: { locale: Locale }) 
                   height: 36,
                   padding: '0 10px',
                   background: 'var(--surface)',
-                  border: `1px solid ${rpmValid || !editEnabled ? 'var(--border)' : 'var(--danger)'}`,
+                  borderWidth: 1,
+                  borderStyle: 'solid',
+                  borderColor: rpmValid || !editEnabled ? 'var(--border)' : 'var(--danger)',
                   borderRadius: 8,
                   color: 'var(--text)',
                   fontSize: 14,

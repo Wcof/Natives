@@ -84,6 +84,9 @@ function mapWireBlock(block: Record<string, unknown>): ContentBlock {
         type: 'reasoning',
         reasoning: str(content.text ?? content.reasoning ?? content.content),
         durationMs: num(content.duration_ms ?? content.durationMs),
+        segmentId: optStr(content.segment_id ?? content.segmentId) ?? undefined,
+        summary: optStr(content.summary) ?? undefined,
+        summaryStatus: (content.summary_status ?? content.summaryStatus) as ContentBlock['summaryStatus'],
       };
     case 'tool_call':
       return {

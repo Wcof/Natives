@@ -20,8 +20,10 @@ import {
 } from './controller';
 import {
   loadPersistedDrafts,
+  loadPersistedQuestionHistory,
   loadPersistedView,
   savePersistedDrafts,
+  savePersistedQuestionHistory,
   savePersistedView,
 } from './persistence';
 import { createInitialWorkspaceState as initialFromState } from './state';
@@ -193,6 +195,12 @@ test('persistence helpers round-trip view and drafts (non-execution only)', () =
   });
   const drafts = loadPersistedDrafts();
   assert.equal(drafts.c1?.text, 'draft-hello');
+
+  for (let index = 0; index < 101; index++) {
+    savePersistedQuestionHistory('/project-a', `question-${index}`);
+  }
+  assert.deepEqual(loadPersistedQuestionHistory('/project-a'), Array.from({ length: 100 }, (_, index) => `question-${index + 1}`));
+  assert.deepEqual(loadPersistedQuestionHistory('/project-b'), []);
 
   // cleanup
   // @ts-expect-error cleanup

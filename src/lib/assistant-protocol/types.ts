@@ -175,6 +175,9 @@ export interface ContentBlock {
   artifactId?: string;
   subRunId?: string;
   question?: AskUserInteraction['question'];
+  segmentId?: string;
+  summary?: string;
+  summaryStatus?: 'completed' | 'failed';
 }
 
 // ─── Run ─────────────────────────────────────────────────

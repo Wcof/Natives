@@ -1,6 +1,6 @@
 # Natives 文档索引
 
-> **最后整理**: 2026-07-23  
+> **最后整理**: 2026-07-26  
 > **原则**: 约束进 `standards/`；决策进 `adr/`；现状与领域设计进 `architecture/`。冲突时 **standards > ADR（产品冻结类）> architecture 现状描述 > 历史讨论**。
 
 ---
@@ -28,22 +28,31 @@ docs/
 │   ├── README.md
 │   ├── 00-glossary.md
 │   ├── product/              定位、无假数据、功能治理
-│   ├── technical/            分层、安全、数据
+│   ├── technical/            分层、安全、数据、性能、后端
 │   ├── frontend/             结构、状态、i18n
 │   └── ui-ux/                令牌、交互、反馈
 ├── adr/                      ← 决策（为什么）
 │   ├── 0001 … 0011           安全/主题/引擎/迁移等
 │   ├── 0012-…                产品身份冻结 ⭐
-│   └── 0013-…                创意双来源（内部+GitHub 容器）
+│   ├── 0013-…                创意双来源（内部+GitHub 容器）
+│   └── 0014-…                创作台 P0 主流程冻结（AI 生成主流程）
 ├── architecture/             ← 现状与领域设计（描述，非红线）
 │   ├── ARCHITECTURE.md       总览（已对齐 ADR-0012）
 │   ├── DESIGN_DISCUSSION.md  历史 Q&A（被 ADR 修订处见文首）
 │   ├── module-workshop-kernel-runtime.md   Workshop KI-1…5
 │   ├── CODE_MODULE_GUIDELINES.md           模块边界与规模
 │   ├── creative-app-github-container-install.md
+│   ├── creative-app-creator-workbench.md   创作台落地设计（决策见 ADR-0014）
+│   ├── creative-app-local-remediation.md   本地项目 gap 整改设计（9 项，B1–B4/F5–F9）
+│   ├── creative-app-local-project-remediation.md  同域收敛现状与验收（承接上行 gap 设计，基线 deploy@4f130256）
+│   ├── provider-routing-sub2api.md         供应商路由与 Sub2API 账号池
+│   ├── application-performance-remediation.md     全应用性能整改记录
+│   ├── FILE_MANAGER_AUDIT.md               文件管理器审计（对照 fanbox，Hub 面）
 │   ├── NATIVE-DAEMON-CAPABILITY-MAP.md
 │   ├── NATIVE_ENGINE_FULL_REMEDIATION.md   引擎契约与进度（唯一进度源）
 │   └── NATIVE_ENGINE_ENV.md
+├── superpowers/              ← harness 控制面设计稿
+│   └── specs/2026-07-26-native-harness-control-plane-design.md
 └── img/                      说明性截图
 ```
 
@@ -59,6 +68,10 @@ docs/
 | 分层 / Daemon / IPC | `standards/technical/01-layering.md` + `CODE_MODULE_GUIDELINES.md` |
 | Workshop 内核 | `module-workshop-kernel-runtime.md` |
 | 外部 GitHub 容器应用 | ADR-0013 + `creative-app-github-container-install.md` |
+| 创作台（AI 生成主流程） | ADR-0014 + `creative-app-creator-workbench.md` |
+| 后端 Rust 编码 | `standards/technical/05-backend.md` |
+| 性能改动 | `standards/technical/04-performance.md` + `application-performance-remediation.md` |
+| Provider 路由 / 账号池 | `provider-routing-sub2api.md` |
 | Agent 引擎能力与整改 | `NATIVE_ENGINE_FULL_REMEDIATION.md` + `NATIVE-DAEMON-CAPABILITY-MAP.md` |
 | 历史决策溯源 | `DESIGN_DISCUSSION.md`（以 ADR 修订为准） |
 

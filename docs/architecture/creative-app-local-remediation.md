@@ -6,6 +6,7 @@
 > **基石源码**: `src-tauri/src/creative_app/local/` · `src/components/shell/WorkshopPage.tsx`
 > **状态**: 实施中（分支 `feat/creative-app-local-remediation`）
 > **日期**: 2026-07-24
+> **同域文档**: 收敛现状与验收见 [creative-app-local-project-remediation.md](./creative-app-local-project-remediation.md)（基线 `deploy@4f130256`）；本文是 gap 整改设计（9 项，B1–B4/F5–F9），两者非重复进度快照
 
 ---
 

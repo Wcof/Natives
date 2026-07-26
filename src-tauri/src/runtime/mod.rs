@@ -4,12 +4,23 @@
 //! Native Assistant 生产执行入口已切换为 Protocol v2 Agent Daemon，不走这里。
 //! `resolve_runtime` 按可用性自动分流。详见 CONTEXT.md「执行引擎」与
 //! docs/architecture/EXECUTION-ENGINE-DESIGN.md P1。
+//!
+//! 曾有一个 `native` 子模块（AgentLoop / CapabilityRegistry / HookPipeline /
+//! RuleEngine，约 5.4k 行）停在这里，从未注册进 `registry`，也没有任何外部调用
+//! 方。它已被删除；其中值得保留的 Hook 概念（身份、来源、条件匹配）已吸收进
+//! `harness-core`。
+//!
+//! 遗留待办：`AgentRuntime` 的执行面（`stream` / `interrupt` / `dispose`）目前
+//! 无调用方——CLI runtime 只经 `registry::list_runtime_metadata` 用于能力展示。
+//! 与 Harness 控制面设计中「Claude/Codex CLI 只读所有权视图」一致，清理排在
+//! Phase 5。下面的 `dead_code` 豁免仅为此保留；原先的 blanket 豁免（含
+//! `unused_imports`/`unused_variables`）已移除，它曾把整个 native 子树的死代码
+//! 一并隐藏。
+#![allow(dead_code)]
 
-#![allow(dead_code, unused_imports, unused_variables)]
 pub mod claude_cli;
 pub mod cli_permission;
 pub mod codex_cli;
-pub mod native;
 pub mod registry;
 
 use async_trait::async_trait;

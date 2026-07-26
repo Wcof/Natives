@@ -2,10 +2,11 @@
 
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, Check, Copy, FileDiff, RefreshCw, Undo2 } from 'lucide-react';
-import { formatElapsed, messagePlainText } from '@/lib/assistant-message-view';
+import { formatRunElapsed, messagePlainText } from '@/lib/assistant-message-view';
 import type { RunEvent } from '@/lib/assistant-protocol';
 import {
   deriveToolActivityFromEvents,
+  extractThinking,
   extractLiveThinking,
   filterTimelineBodyBlocks,
   summarizeConversationChanges,
@@ -68,13 +69,13 @@ function ChangeSummaryCard({
     () => summarizeConversationChanges(events, fileChanges),
     [events, fileChanges],
   );
-  const [showAll, setShowAll] = useState(false);
+  const [pinnedOpen, setPinnedOpen] = useState(false);
+  const [hovered, setHovered] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [rollingBack, setRollingBack] = useState(false);
   const [rolledBack, setRolledBack] = useState(false);
   if (summary.files.length === 0) return null;
-  const shown = showAll ? summary.files : summary.files.slice(0, 3);
-  const extra = summary.files.length - shown.length;
+  const expanded = pinnedOpen || hovered;
   const restore = async () => {
     if (!onRollbackChanges || rollingBack) return;
     setRollingBack(true);
@@ -88,8 +89,8 @@ function ChangeSummaryCard({
   };
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)]" data-change-summary>
-      <div className="flex items-center gap-3 px-4 py-3">
+    <section className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)]" data-change-summary onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
+      <div role="button" tabIndex={0} aria-expanded={expanded} onClick={() => setPinnedOpen(open => !open)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setPinnedOpen(open => !open); } }} className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-[var(--surface-hover)]">
         <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[var(--surface-hover)] text-[var(--text-secondary)]"><FileDiff size={20} /></div>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold text-[var(--text)]">{zh ? `已编辑 ${summary.files.length} 个文件` : `Edited ${summary.files.length} files`}</div>
@@ -98,26 +99,24 @@ function ChangeSummaryCard({
         {onRollbackChanges && !rolledBack && (
           confirming ? (
             <div className="flex shrink-0 items-center gap-1">
-              <button type="button" onClick={() => setConfirming(false)} disabled={rollingBack} className="rounded-lg px-2 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">{zh ? '取消' : 'Cancel'}</button>
-              <button type="button" onClick={() => void restore()} disabled={rollingBack} className="rounded-lg border border-[var(--danger)]/40 px-2 py-1.5 text-xs font-medium text-[var(--danger)] hover:bg-red-500/10 disabled:opacity-50">{rollingBack ? (zh ? '撤销中…' : 'Undoing…') : (zh ? '确认撤销' : 'Confirm undo')}</button>
+              <button type="button" onClick={(event) => { event.stopPropagation(); setConfirming(false); }} disabled={rollingBack} className="rounded-lg px-2 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">{zh ? '取消' : 'Cancel'}</button>
+              <button type="button" onClick={(event) => { event.stopPropagation(); void restore(); }} disabled={rollingBack} className="rounded-lg border border-[var(--danger)]/40 px-2 py-1.5 text-xs font-medium text-[var(--danger)] hover:bg-red-500/10 disabled:opacity-50">{rollingBack ? (zh ? '撤销中…' : 'Undoing…') : (zh ? '确认撤销' : 'Confirm undo')}</button>
             </div>
           ) : (
-            <button type="button" onClick={() => setConfirming(true)} className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1.5 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"><Undo2 size={15} />{zh ? '撤销' : 'Undo'}</button>
+            <button type="button" onClick={(event) => { event.stopPropagation(); setConfirming(true); }} className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1.5 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"><Undo2 size={15} />{zh ? '撤销' : 'Undo'}</button>
           )
         )}
         {rolledBack && <span className="shrink-0 text-xs text-[var(--text-disabled)]">{zh ? '已撤销' : 'Undone'}</span>}
       </div>
-      <div className="border-t border-[var(--border-subtle)] px-4 py-1">
-        {shown.map((file) => (
+      {expanded && <div className="border-t border-[var(--border-subtle)] px-4 py-1">
+        {summary.files.map((file) => (
           <div key={file.path} className="flex items-center gap-3 py-2 text-sm">
             <span className="min-w-0 flex-1 truncate text-[var(--text-secondary)]">{file.path}</span>
             <span className="shrink-0 tabular-nums text-emerald-500">+{file.additions}</span>
             <span className="shrink-0 tabular-nums text-red-500">−{file.deletions}</span>
           </div>
         ))}
-        {extra > 0 && <button type="button" onClick={() => setShowAll(true)} className="py-2 text-left text-sm text-[var(--text-secondary)] hover:text-[var(--text)]">{zh ? `再显示 ${extra} 个文件` : `Show ${extra} more files`}</button>}
-        {showAll && summary.files.length > 3 && <button type="button" onClick={() => setShowAll(false)} className="py-2 text-left text-sm text-[var(--text-secondary)] hover:text-[var(--text)]">{zh ? '收起' : 'Show less'}</button>}
-      </div>
+      </div>}
     </section>
   );
 }
@@ -159,7 +158,7 @@ const MessageRow = memo(function MessageRow({
       : Number.isFinite(start)
         ? start
         : now;
-  const duration = Number.isFinite(start) ? formatElapsed(end - start) : null;
+  const duration = Number.isFinite(start) ? formatRunElapsed(end - start) : null;
   const tokens = (message.inputTokens ?? 0) + (message.outputTokens ?? 0);
 
   // Prefer dedicated reasoning clock; fall back to run/message start so the
@@ -179,6 +178,10 @@ const MessageRow = memo(function MessageRow({
   const liveThinking = useMemo(
     () => (messageLive ? extractLiveThinking(message.contentBlocks) : null),
     [message.contentBlocks, messageLive],
+  );
+  const thinking = useMemo(
+    () => liveThinking ?? extractThinking(message.contentBlocks),
+    [liveThinking, message.contentBlocks],
   );
 
   const reasoningFinishedKnown = Number.isFinite(reasoningFinished);
@@ -214,7 +217,7 @@ const MessageRow = memo(function MessageRow({
   const toolActivity = useMemo(() => {
     if (!messageLive) return EMPTY_TOOL_ACTIVITY;
     return deriveToolActivityFromEvents(runEvents);
-  }, [runEvents, messageLive]);
+  }, [messageLive, runEvents]);
 
   const hasReasoning = bodyBlocks.some((block) => block.type === 'reasoning');
 
@@ -227,10 +230,10 @@ const MessageRow = memo(function MessageRow({
             : 'text-left text-black dark:text-white'
         }
       >
-        {!user && (liveThinking || toolActivity.length > 0) && (
+        {!user && (thinking || toolActivity.length > 0) && (
           <ThinkingActivity
             locale={locale}
-            thinking={liveThinking}
+            thinking={thinking}
             tools={toolActivity}
             thinkingStartedAtMs={Number.isFinite(reasoningStart) ? reasoningStart : null}
             thinkingFinishedAtMs={

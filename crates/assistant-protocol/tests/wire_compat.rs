@@ -312,13 +312,10 @@ fn test_extension_kind_serialization() {
     );
 }
 
-#[test]
-fn test_hook_point_serialization() {
-    assert_eq!(
-        serde_json::to_value(&HookPoint::BeforeToolCall).unwrap(),
-        "before_tool_call"
-    );
-}
+// `test_hook_point_serialization` covered the removed v1 `HookPoint`, a Hook
+// event enum with no production reference and no client speaking its wire form.
+// The live Hook event contract is `harness_core::hooks::HookEvent`, exercised by
+// `harness-core`'s own round-trip tests.
 
 // ---------------------------------------------------------------------------
 // Context model tests

@@ -69,7 +69,6 @@ import {
   sendOrQueue,
   subscribeRun,
 } from '@/lib/assistant-workspace/controller';
-import { hydrateFileDiffContents } from '@/lib/assistant-workspace/file-diff-contents';
 import { createDefaultGateway, FixtureAssistantAdapter } from '@/lib/assistant-gateway';
 import { goldenTextStream } from '@/lib/assistant-fixtures/golden';
 import { isActiveRunStatus, mapWireConversation, mapWireMessage } from '@/lib/assistant-protocol';
@@ -199,6 +198,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const resubAttemptsRef = useRef<Record<string, number>>({});
 
   const [providers, setProviders] = useState<ProviderWithModels[]>([]);
+  const [stoppingRunId, setStoppingRunId] = useState<string | null>(null);
   const [providerReadiness, setProviderReadiness] = useState<ProviderReadiness>('no_provider');
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
@@ -207,9 +207,6 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const [rightPanelOpen, setRightPanelOpen] = useState(!state.view.rightCollapsed);
   const [loadingConversations, setLoadingConversations] = useState(true);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [fileContentsByPath, setFileContentsByPath] = useState<
-    Record<string, { before: string; after: string }>
-  >({});
   /** Project list / navigation always use root; timeline/input use surface. */
   const [selectedRootConversationId, setSelectedRootConversationId] = useState<string | null>(
     null,
@@ -464,64 +461,6 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     return () => window.removeEventListener('resize', update);
   }, [dispatch]);
 
-  // Populate DiffViewer contents from file_changed events (+ optional fs read)
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      if (fileChanges.length === 0 && events.length === 0) {
-        if (!cancelled) {
-          setFileContentsByPath((prev) =>
-            Object.keys(prev).length === 0 ? prev : {},
-          );
-        }
-        return;
-      }
-      const readFile = async (path: string): Promise<string | null> => {
-        try {
-          const api = window.nativesAPI?.fs;
-          if (!api?.readFile) return null;
-          const result = await api.readFile(path);
-          if (result == null) return null;
-          if (typeof result === 'string') return result;
-          const rec = result as Record<string, unknown>;
-          if (typeof rec.content === 'string') return rec.content;
-          return String(result);
-        } catch {
-          return null;
-        }
-      };
-      const next = await hydrateFileDiffContents({
-        fileChanges,
-        events,
-        readFile,
-      });
-      if (cancelled) return;
-      // Bail when path→content map is unchanged. selectEventsForRunTree used to
-      // allocate a fresh [] every render, which re-fired this effect and
-      // setFileContentsByPath(newObject) in a tight loop (Maximum update depth).
-      setFileContentsByPath((prev) => {
-        const prevKeys = Object.keys(prev);
-        const nextKeys = Object.keys(next);
-        if (prevKeys.length === nextKeys.length) {
-          let same = true;
-          for (const key of nextKeys) {
-            const a = prev[key];
-            const b = next[key];
-            if (!a || !b || a.before !== b.before || a.after !== b.after) {
-              same = false;
-              break;
-            }
-          }
-          if (same) return prev;
-        }
-        return next;
-      });
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [fileChanges, events]);
-
   const startSubscription = useCallback(
     async (runId: string, afterSequence: number) => {
       // Abort only this run's previous soft-resub loop; other runs keep polling.
@@ -608,6 +547,8 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   );
 
   const loadAssignmentKeys = useCallback(async () => {
+    const preferredProviderId = activeConversation?.providerId ?? rootConversation?.providerId ?? '';
+    const preferredModelId = activeConversation?.modelId ?? rootConversation?.modelId ?? '';
     try {
       const list = await window.nativesAPI?.provider?.list?.();
       if (!Array.isArray(list)) {
@@ -621,7 +562,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               providerName: p.name,
               keyId: k.id,
               keyLabel: k.label || k.maskedKey || k.id,
-              modelId: p.defaultModel || p.models?.[0]?.id || '',
+              modelId: p.id === preferredProviderId ? (preferredModelId || p.defaultModel || p.models?.[0]?.id || '') : (p.defaultModel || p.models?.[0]?.id || ''),
               models: (p.models ?? []).map((m) => ({
                 id: m.id,
                 displayName: m.displayName,
@@ -631,6 +572,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             });
           }
         }
+        opts.sort((left, right) => Number(right.providerId === preferredProviderId) - Number(left.providerId === preferredProviderId));
         setAssignmentKeyOptions(opts);
         return;
       }
@@ -666,18 +608,19 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
             providerName: provider.displayName || provider.name || provider.id,
             keyId: k.id,
             keyLabel: k.label || k.maskedKey || k.id,
-            modelId: provider.defaultModel || models[0]?.id || '',
+            modelId: provider.id === preferredProviderId ? (preferredModelId || provider.defaultModel || models[0]?.id || '') : (provider.defaultModel || models[0]?.id || ''),
             models,
             isActive: true,
             status: (k.status as AssignmentKeyOption['status']) ?? 'valid',
           });
         }
       }
+      opts.sort((left, right) => Number(right.providerId === preferredProviderId) - Number(left.providerId === preferredProviderId));
       setAssignmentKeyOptions(opts);
     } catch {
       setAssignmentKeyOptions([]);
     }
-  }, [providers]);
+  }, [providers, activeConversation?.providerId, activeConversation?.modelId, rootConversation?.providerId, rootConversation?.modelId]);
 
   // Boot: connect + list conversations + providers
   useEffect(() => {
@@ -1261,16 +1204,19 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   );
 
   const handleStop = useCallback(async () => {
-    if (!activeRunId) return;
+    if (!activeRunId || stoppingRunId === activeRunId) return;
+    setStoppingRunId(activeRunId);
     try {
       await cancelRun(gateway, dispatch, activeRunId);
     } catch (err) {
       toast(classifyError(err).userMessage, 'error');
+    } finally {
+      setStoppingRunId((current) => current === activeRunId ? null : current);
     }
   }, [
     // React Compiler cannot prove selector results immutable; callback dependencies are intentional.
     // eslint-disable-next-line react-hooks/preserve-manual-memoization
-    activeRunId, gateway, dispatch, toast,
+    activeRunId, gateway, dispatch, toast, stoppingRunId,
   ]);
 
   const handleRetry = useCallback(async () => {
@@ -1512,25 +1458,34 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
           tempSession: session,
           pendingCreateProjectPath: undefined,
         }));
-      },      removeProject: (path) => {
-        void (async () => {
-          try {
-            const projects = (await window.nativesAPI?.project?.list?.()) ?? [];
-            const match = projects.find((p) => p.path === path || p.id === path);
-            if (match?.id) {
-              await window.nativesAPI?.project?.remove?.(match.id);
-            } else if (path) {
-              await window.nativesAPI?.project?.remove?.(path);
-            }
-          } catch (err) {
-            toast(classifyError(err).userMessage, 'error');
-          }
+      },      removeProject: async (path) => {
+        try {
+          const projects = (await window.nativesAPI?.project?.list?.()) ?? [];
+          const match = projects.find((p) => p.path === path || p.id === path);
+          await window.nativesAPI?.project?.remove?.(match?.id ?? path);
           const next = (await window.nativesAPI?.project?.list?.()) ?? [];
-          setRegisteredProjects(next);
-          if (activeProjectPath === path) {
-            setActiveProjectPath(null);
+          if (next.some((project) => project.path === path || project.id === path)) {
+            throw new Error('Project remains registered after removal');
           }
-        })();
+          setRegisteredProjects(next);
+          if (activeProjectPath === path) setActiveProjectPath(null);
+          return true;
+        } catch (err) {
+          toast(classifyError(err).userMessage, 'error');
+          return false;
+        }
+      },
+      renameProject: async (path, label) => {
+        try {
+          const projects = (await window.nativesAPI?.project?.list?.()) ?? [];
+          const match = projects.find((p) => p.path === path || p.id === path);
+          await window.nativesAPI?.project?.rename?.(match?.id ?? path, label);
+          setRegisteredProjects((await window.nativesAPI?.project?.list?.()) ?? []);
+          return true;
+        } catch (err) {
+          toast(classifyError(err).userMessage, 'error');
+          return false;
+        }
       },
       renameConversation: (id, title) => {
         void gateway.request('conversation.rename', { id, title }).then(() => {
@@ -2192,6 +2147,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
                 : undefined
             }
             onStop={() => void handleStop()}
+            isStopping={stoppingRunId === activeRunId}
             isStreaming={isStreaming}
             allowQueueWhileStreaming
             inputDisabledReason={
@@ -2362,6 +2318,8 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               fileChanges={fileChanges}
               contextUsage={contextUsage}
               locale={locale}
+              providers={providers}
+              projectPath={activeProjectPath}
               activeTab={state.view.inspectorTab}
               onTabChange={(tab: InspectorTab) =>
                 dispatch({ type: 'view/patch', patch: { inspectorTab: tab } })
@@ -2373,7 +2331,6 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               onRevealArtifact={(a) =>
                 void gateway.request('artifact.reveal', { id: a.id, path: a.path })
               }
-              fileContentsByPath={fileContentsByPath}
               onOpenFile={(path) => void gateway.request('artifact.open', { path })}
               capabilities={state.capabilities}
               gateway={gateway}
@@ -2395,15 +2352,6 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               }}
               onRefreshTasks={() => void refreshSubagentSessions(rootConversationId)}
               showingChildSession={Boolean(selectedChildConversationId)}
-              onRollbackFile={
-                allowRewind
-                  ? (path) => {
-                      if (!window.confirm(zh ? `确定撤销 ${path} 的本次修改？` : `Undo this run's changes to ${path}?`)) return;
-                      const change = [...fileChanges].reverse().find((item) => item.path === path);
-                      void handleRollbackChanges([{ path, runId: change?.runId }]);
-                    }
-                  : undefined
-              }
             />
           </ResizableRightPanel>
         )}

@@ -575,6 +575,8 @@ pub fn run() {
             // Git
             commands::git::git_status,
             commands::git::git_diff,
+            commands::git::git_commit,
+            commands::git::git_push,
             // Disk
             commands::disk::disk_usage,
             commands::disk::disk_system_info,
@@ -629,6 +631,7 @@ pub fn run() {
             commands::project::project_list,
             commands::project::project_register,
             commands::project::project_open,
+            commands::project::project_rename,
             commands::project::project_remove,
             // Widget
             commands::widget::open_widget_window,

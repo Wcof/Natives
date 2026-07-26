@@ -752,6 +752,13 @@ impl PermissionGatedTools {
             }
         };
         let scope = normalize_permission_scope(&scope);
+        // A timeout/cancellation has no UI RPC response to mark the durable
+        // interaction complete. Leaving it pending makes reconnect replay an
+        // orphaned approval card after its oneshot waiter has gone away.
+        let _ = crate::interaction_store::mark_resolved(
+            &permission_id,
+            serde_json::json!({ "approved": approved, "scope": scope }),
+        );
         if approved {
             if let Some(rt) = &self.runtime {
                 // Structured grant only — empty write_file pattern no longer means any path.
@@ -1013,13 +1020,13 @@ impl PermissionGatedTools {
             .unwrap_or("")
             .to_string();
 
-        // Child permission never exceeds parent; default request is ask (not full_access).
+        // Child permission inherits parent permission_profile by default when unspecified
         let requested_perm = input
             .get("permission_profile")
             .and_then(|v| v.as_str())
             .unwrap_or("ask");
         let child_perm = cap_child_permission(&self.permission_profile, requested_perm);
-        // Explicit tool_allowlist on task input, else default readonly surface.
+        // Explicit tool_allowlist on task input, else inherit parent tool allowlist or fallback to default
         let child_allowlist: Vec<String> = if let Some(arr) = input.get("tool_allowlist") {
             arr.as_array()
                 .map(|items| {
@@ -1030,7 +1037,9 @@ impl PermissionGatedTools {
                 })
                 .unwrap_or_else(default_subagent_tool_allowlist)
         } else {
-            default_subagent_tool_allowlist()
+            self.tool_allowlist
+                .clone()
+                .unwrap_or_else(default_subagent_tool_allowlist)
         };
 
         // Prefer binding injected by execute_task_batch; else resolve (single-task path).
@@ -1386,15 +1395,38 @@ impl PermissionGatedTools {
             .ok()
             .flatten()
         {
-            let mut map = HashMap::new();
-            let mut attempted = Vec::new();
-            for (call_id, _, _) in tasks {
-                let b = crate::subagent_store::pick_binding(&policy, &attempted)?;
-                attempted.push(b.clone());
-                // Prefer not repeating until pool exhausted (pick_binding already cycles).
-                map.insert(call_id.clone(), b);
+            // If the stored policy has no bindings (e.g. because the policy was
+            // saved before a provider reset or after a user cancellation), fall
+            // back to the main-session credential rather than hard-failing.
+            if policy.bindings.is_empty() {
+                if !default_binding.key_id.trim().is_empty() {
+                    // Repair the stale policy so next subagent benefits too.
+                    let _ = crate::subagent_store::upsert_route_policy(
+                        &self.conversation_id,
+                        "default",
+                        &[default_binding.clone()],
+                    );
+                    let mut map = HashMap::new();
+                    for (call_id, _, _) in tasks {
+                        map.insert(call_id.clone(), default_binding.clone());
+                    }
+                    return Ok(map);
+                }
+                // No usable default either — drop the broken policy row so the
+                // assignment interaction is shown to the user on the next call.
+                let _ = crate::subagent_store::delete_route_policy(&self.conversation_id);
+                // Fall through to assignment interaction below.
+            } else {
+                let mut map = HashMap::new();
+                let mut attempted = Vec::new();
+                for (call_id, _, _) in tasks {
+                    let b = crate::subagent_store::pick_binding(&policy, &attempted)?;
+                    attempted.push(b.clone());
+                    // Prefer not repeating until pool exhausted (pick_binding already cycles).
+                    map.insert(call_id.clone(), b);
+                }
+                return Ok(map);
             }
-            return Ok(map);
         }
 
         if use_fixture {
@@ -1589,22 +1621,11 @@ impl PermissionGatedTools {
             .unwrap_or_default();
 
         let mut map = HashMap::new();
-        if mode == "default" {
-            if default_binding.key_id.trim().is_empty() {
-                if let Ok(mut i) = rt.assignment_inflight.lock() {
-                    i.remove(&self.conversation_id);
-                }
-                return Err(
-                    "default_binding.key_id missing on parent run; cannot confirm default mode"
-                        .into(),
-                );
-            }
-            crate::production::validate_route_binding(&default_binding)?;
-            for (call_id, _, _) in tasks {
-                map.insert(call_id.clone(), default_binding.clone());
-            }
-        } else if !assignments.is_empty() {
-            for a in assignments {
+        // A caller can explicitly confirm a usable main-session route when
+        // an older parent run did not persist default_binding.key_id. Use that
+        // confirmed route before falling back to the legacy default binding.
+        if !assignments.is_empty() {
+            for a in &assignments {
                 let call_id = a
                     .get("call_id")
                     .and_then(Value::as_str)
@@ -1632,27 +1653,19 @@ impl PermissionGatedTools {
                     map.insert(call_id, b);
                 }
             }
-            // Fill any missing call_ids from pool if present.
-            if map.len() < tasks.len() {
-                let pool: Vec<crate::subagent_store::RouteBinding> = response
-                    .get("pool")
-                    .or_else(|| response.get("bindings"))
-                    .cloned()
-                    .and_then(|v| serde_json::from_value(v).ok())
-                    .unwrap_or_default();
-                let mut pi = 0usize;
-                for (call_id, _, _) in tasks {
-                    if map.contains_key(call_id) {
-                        continue;
-                    }
-                    if pool.is_empty() {
-                        break;
-                    }
-                    let b = pool[pi % pool.len()].clone();
-                    crate::production::validate_route_binding(&b)?;
-                    map.insert(call_id.clone(), b);
-                    pi += 1;
+        } else if mode == "default" {
+            if default_binding.key_id.trim().is_empty() {
+                if let Ok(mut i) = rt.assignment_inflight.lock() {
+                    i.remove(&self.conversation_id);
                 }
+                return Err(
+                    "default_binding.key_id missing on parent run; cannot confirm default mode"
+                        .into(),
+                );
+            }
+            crate::production::validate_route_binding(&default_binding)?;
+            for (call_id, _, _) in tasks {
+                map.insert(call_id.clone(), default_binding.clone());
             }
         } else {
             let bindings: Vec<crate::subagent_store::RouteBinding> = response
@@ -1673,6 +1686,26 @@ impl PermissionGatedTools {
             let mut pi = 0usize;
             for (call_id, _, _) in tasks {
                 map.insert(call_id.clone(), bindings[pi % bindings.len()].clone());
+                pi += 1;
+            }
+        }
+
+        // Partial custom assignments may use the confirmed pool for remaining tasks.
+        if !assignments.is_empty() && map.len() < tasks.len() {
+            let pool: Vec<crate::subagent_store::RouteBinding> = response
+                .get("pool")
+                .or_else(|| response.get("bindings"))
+                .cloned()
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_default();
+            let mut pi = 0usize;
+            for (call_id, _, _) in tasks {
+                if map.contains_key(call_id) || pool.is_empty() {
+                    continue;
+                }
+                let b = pool[pi % pool.len()].clone();
+                crate::production::validate_route_binding(&b)?;
+                map.insert(call_id.clone(), b);
                 pi += 1;
             }
         }

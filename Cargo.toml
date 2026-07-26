@@ -2,6 +2,7 @@
 members = [
     "src-tauri",
     "crates/assistant-protocol",
+    "crates/harness-core",
     "crates/agent-core",
     "crates/provider-adapters",
     "crates/capability-gateway",

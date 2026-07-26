@@ -7,6 +7,8 @@ import type { AssistantViewState, ComposerDraft } from './state';
 
 const VIEW_KEY = 'natives.assistant.view.v1';
 const DRAFTS_KEY = 'natives.assistant.drafts.v1';
+const QUESTION_HISTORY_KEY = 'natives.assistant.questionHistory.v1';
+const QUESTION_HISTORY_LIMIT = 100;
 
 function canUseStorage(): boolean {
   return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
@@ -82,6 +84,31 @@ export function clearPersistedDraft(conversationId: string): void {
   if (!(conversationId in all)) return;
   delete all[conversationId];
   savePersistedDrafts(all);
+}
+
+export function loadPersistedQuestionHistory(projectPath: string | null | undefined): string[] {
+  if (!projectPath || !canUseStorage()) return [];
+  try {
+    const raw = window.localStorage.getItem(`${QUESTION_HISTORY_KEY}:${projectPath}`);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).slice(-QUESTION_HISTORY_LIMIT)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export function savePersistedQuestionHistory(projectPath: string | null | undefined, question: string): string[] {
+  if (!projectPath || !question.trim()) return loadPersistedQuestionHistory(projectPath);
+  const next = [...loadPersistedQuestionHistory(projectPath), question.trim()].slice(-QUESTION_HISTORY_LIMIT);
+  if (!canUseStorage()) return next;
+  try {
+    window.localStorage.setItem(`${QUESTION_HISTORY_KEY}:${projectPath}`, JSON.stringify(next));
+  } catch {
+    /* quota / private mode */
+  }
+  return next;
 }
 
 

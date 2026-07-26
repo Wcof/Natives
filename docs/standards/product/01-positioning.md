@@ -42,7 +42,7 @@ Natives 最大的产品风险是**边界漂移**：把「本机工作台」写�
 | | **capability** | MCP / CLI / Agent 等进程化能力；独立权限与生命周期 |
 
 - **禁止**用单一 `modules` manifest 硬揉 SPA 与 MCP/Agent 两种物理模型。
-- **禁止**把远程登录态站点塞进 Workshop Unique Origin 租户模型（见 ADR-0012 §5、ADR-0013）。
+- **禁止**把远程登录态站点塞进 Workshop Unique Origin 租户模型（见 ADR-0012 第 5 节、ADR-0013）。
 - **为什么**：三面/双轨是安全与数据模型可证明的前提。
 - **检查方法**：PR 描述缺「面/轨」声明即不合规；reviewer 核验实现路径是否匹配。
 

@@ -694,7 +694,7 @@ impl DataStore {
             for (event_type, payload) in &events {
                 let value: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
                 match event_type.as_str() {
-                    "assistant_delta" => text.push_str(
+                    "assistant_delta" | "text_delta" => text.push_str(
                         value
                             .get("text")
                             .and_then(serde_json::Value::as_str)
@@ -1205,6 +1205,35 @@ mod tests {
             )
             .unwrap();
         assert_eq!(version, 14);
+    }
+
+    #[test]
+    fn stale_run_recovery_preserves_text_delta() {
+        let store = DataStore::new(":memory:").unwrap();
+        store.run_migrations().unwrap();
+        let conn = store.conn();
+        conn.execute(
+            "INSERT INTO assistant_conversations (id, title, provider_id, model_id, created_at, updated_at) VALUES ('c1', 'C', 'p1', 'm1', 'now', 'now')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO assistant_runs (id, conversation_id, status, provider_id, model_id, started_at) VALUES ('r1', 'c1', 'running', 'p1', 'm1', 'now')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO assistant_run_events (run_id, sequence, timestamp, event_type, payload) VALUES ('r1', 1, 'now', 'text_delta', '{\"text\":\"partial answer\"}')",
+            [],
+        ).unwrap();
+        drop(conn);
+
+        store.recover_stale_runs().unwrap();
+
+        let content: String = store.conn().query_row(
+            "SELECT content FROM assistant_message_blocks WHERE message_id IN (SELECT id FROM assistant_messages WHERE conversation_id = 'c1' AND role = 'assistant')",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert!(content.contains("partial answer"));
     }
 
     #[test]

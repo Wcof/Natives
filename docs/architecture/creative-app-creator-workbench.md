@@ -165,7 +165,7 @@ drafting ──generate──▶ generating ──lint ok──▶ ready
 执行序：
 
 1. 校验 `draftId` 归属当前 `conversationId` —— 不匹配直接拒绝（防跨草稿写入）。
-2. 跑共享 crate 的 `contract_linter::lint_html(htmlContent)`（见 §4.1）。**失败 → 立即返回错误原文，不触碰磁盘、不改 DB。**
+2. 跑共享 crate 的 `contract_linter::lint_html(htmlContent)`（见 4.1 节）。**失败 → 立即返回错误原文，不触碰磁盘、不改 DB。**
 3. 通过 → 原子写 `rev-<current+1>.html`（temp → fsync → rename，复用 `module_manager::atomic_write`）。
 4. `INSERT creative_draft_revisions` + `UPDATE creative_drafts SET current_revision, updated_at`。
 5. 广播 `db-state-changed` channel = `creative-draft`，前端刷新预览。

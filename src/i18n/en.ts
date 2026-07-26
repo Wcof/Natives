@@ -1458,6 +1458,7 @@ export const en = {
     noModelHint: 'Configure an available model first',
     openDesktopApp: 'Open desktop app',
     renameConversation: 'Rename conversation',
+    renameProject: 'Rename project',
     pinConversation: 'Pin conversation',
     unpinConversation: 'Unpin conversation',
     pinProject: 'Pin project',

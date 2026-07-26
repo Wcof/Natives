@@ -1,12 +1,53 @@
-//! Production HookRegistry assembly (extracted from `production.rs`, task-01 structure).
+//! Production Hook assembly — discovery and compilation.
 //!
-//! Rust lifecycle hooks are always present (fail-open allow defaults + fail-closed
-//! security), plus optional trusted command/HTTP hooks from env and project
-//! `.claude|grok|natives/hooks.json` command hooks.
+//! Split into two halves so Hooks can be inspected as data before they become
+//! opaque handlers:
+//!
+//! - [`discover_production_hooks`] reads builtin defaults, project and user
+//!   files, and environment configuration into [`HookDefinition`] values that
+//!   carry identity, provenance, order, and policy.
+//! - [`compile_production_hooks`] turns those definitions into an executable
+//!   [`HookRegistry`].
+//!
+//! [`build_production_hooks_for_project`] is their composition and is what the
+//! run path calls. Discovery order is dispatch order; the two must never drift.
+//!
+//! Rust lifecycle hooks are always present (fail-open allow defaults +
+//! fail-closed security), plus optional trusted command/HTTP hooks from env and
+//! project `.claude|grok|natives/hooks.json` command hooks.
 
-use agent_core::{AllowAllHook, CommandHook, HookEvent, HookRegistry, HttpHook};
+use agent_core::{AllowAllHook, CommandHook, HookRegistry, HttpHook};
+use harness_core::hooks::{
+    HookFailurePolicy, HookDefinition, HookEvent, HookId, HookKind, HookScope, HookSource,
+};
 use serde_json::Value;
+use std::collections::HashMap;
+use std::path::Path;
 use std::time::Duration;
+
+/// Name of the built-in allow-all default, as it appears in Hook identities.
+const BUILTIN_ALLOW_ALL: &str = "allow-all";
+
+/// Project-root-relative candidate files, in load order.
+const PROJECT_CANDIDATES: [[&str; 2]; 7] = [
+    [".claude", "hooks.json"],
+    [".claude", "settings.json"],
+    [".claude", "settings.local.json"],
+    [".agents", "hooks.json"],
+    [".agents", "settings.json"],
+    [".grok", "hooks.json"],
+    [".natives", "hooks.json"],
+];
+
+/// Home-relative candidate files, in load order.
+#[cfg_attr(test, allow(dead_code))]
+const USER_CANDIDATES: [[&str; 2]; 5] = [
+    [".natives", "hooks.json"],
+    [".agents", "hooks.json"],
+    [".agents", "settings.json"],
+    [".claude", "settings.json"],
+    [".claude", "settings.local.json"],
+];
 
 /// Build the production HookRegistry using the current working directory for
 /// project hook discovery. Prefer [`build_production_hooks_for_project`] with an
@@ -16,10 +57,300 @@ pub fn build_production_hooks() -> HookRegistry {
 }
 
 /// Same as [`build_production_hooks`] with an explicit project path for hook discovery.
-pub fn build_production_hooks_for_project(project: Option<&std::path::Path>) -> HookRegistry {
+pub fn build_production_hooks_for_project(project: Option<&Path>) -> HookRegistry {
+    compile_production_hooks(&discover_production_hooks(project), project)
+}
+
+/// Enumerate every Hook that would be registered for `project`, as data.
+///
+/// The returned order is the dispatch order: builtin defaults first, then
+/// project files, then user files, then environment hooks. `order` is the
+/// per-event ordinal, so it always agrees with actual dispatch sequence.
+pub fn discover_production_hooks(project: Option<&Path>) -> Vec<HookDefinition> {
+    let mut out = Vec::new();
+    let mut ordinals: HashMap<HookEvent, i32> = HashMap::new();
+
+    // Built-in allow defaults; project/user hooks may still Deny (aggregate fail-closed).
+    for event in HookEvent::ALL {
+        let source = HookSource::builtin(BUILTIN_ALLOW_ALL);
+        out.push(HookDefinition {
+            id: HookId::new(&source, event),
+            event,
+            source,
+            order: next_ordinal(&mut ordinals, event),
+            matcher: None,
+            conditions: Vec::new(),
+            timeout_ms: 0,
+            failure_policy: HookFailurePolicy::Fail,
+            kind: HookKind::Builtin {
+                name: BUILTIN_ALLOW_ALL.to_string(),
+            },
+        });
+    }
+
+    if let Some(root) = project {
+        for [dir, file] in PROJECT_CANDIDATES {
+            let path = root.join(dir).join(file);
+            let origin = format!("{dir}/{file}");
+            collect_file_hooks(&path, HookScope::Project, &origin, &mut ordinals, &mut out);
+        }
+        // User-level hooks (optional). Unit tests must not execute the
+        // developer's real ~/.claude hook commands.
+        #[cfg(not(test))]
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            let home = std::path::PathBuf::from(home);
+            for [dir, file] in USER_CANDIDATES {
+                let path = home.join(dir).join(file);
+                let origin = format!("{dir}/{file}");
+                collect_file_hooks(&path, HookScope::User, &origin, &mut ordinals, &mut out);
+            }
+        }
+    }
+
+    // Trusted command hook: NATIVES_HOOK_CMD=/path/to/binary (argv only, never shell).
+    if let Ok(program) = std::env::var("NATIVES_HOOK_CMD") {
+        if !program.trim().is_empty() {
+            let source = HookSource::env("NATIVES_HOOK_CMD");
+            out.push(HookDefinition {
+                id: HookId::new(&source, HookEvent::PreToolUse),
+                event: HookEvent::PreToolUse,
+                source,
+                order: next_ordinal(&mut ordinals, HookEvent::PreToolUse),
+                matcher: None,
+                conditions: Vec::new(),
+                timeout_ms: 10_000,
+                failure_policy: HookFailurePolicy::Fail,
+                kind: HookKind::Command {
+                    program,
+                    args: std::env::var("NATIVES_HOOK_CMD_ARGS")
+                        .ok()
+                        .map(|s| s.split_whitespace().map(str::to_string).collect())
+                        .unwrap_or_default(),
+                    trusted: true,
+                },
+            });
+        }
+    }
+    // HTTP hook with host allowlist: NATIVES_HOOK_HTTP=https://hooks.example/pre
+    if let Ok(url) = std::env::var("NATIVES_HOOK_HTTP") {
+        if !url.trim().is_empty() {
+            let source = HookSource::env("NATIVES_HOOK_HTTP");
+            out.push(HookDefinition {
+                id: HookId::new(&source, HookEvent::PostToolUse),
+                event: HookEvent::PostToolUse,
+                source,
+                order: next_ordinal(&mut ordinals, HookEvent::PostToolUse),
+                matcher: None,
+                conditions: Vec::new(),
+                timeout_ms: 5_000,
+                failure_policy: HookFailurePolicy::Fail,
+                kind: HookKind::Http {
+                    url,
+                    allow_hosts: std::env::var("NATIVES_HOOK_HTTP_ALLOW")
+                        .ok()
+                        .map(|s| s.split(',').map(|h| h.trim().to_string()).collect())
+                        .unwrap_or_default(),
+                },
+            });
+        }
+    }
+    out
+}
+
+/// Compile definitions into an executable registry, preserving their order.
+///
+/// `project` supplies the working directory handed to command hooks; it is not
+/// re-read for discovery.
+pub fn compile_production_hooks(
+    definitions: &[HookDefinition],
+    project: Option<&Path>,
+) -> HookRegistry {
     let mut hooks = HookRegistry::new();
-    // Full target event surface (fail-open allow-all defaults; project hooks may deny).
-    for event in [
+    for definition in definitions {
+        let handler: Box<dyn agent_core::HookHandler> = match &definition.kind {
+            HookKind::Builtin { name } if name == BUILTIN_ALLOW_ALL => Box::new(AllowAllHook),
+            // Unknown builtins are inert rather than fatal: an older Daemon
+            // must not crash on a definition a newer one wrote.
+            HookKind::Builtin { .. } => continue,
+            HookKind::Command {
+                program,
+                args,
+                trusted,
+            } => Box::new(CommandHook {
+                program: program.clone(),
+                args: args.clone(),
+                timeout: definition.timeout(),
+                trusted: *trusted,
+                cwd: project.map(Path::to_path_buf),
+                tool_pattern: definition.matcher.clone(),
+            }),
+            HookKind::Http { url, allow_hosts } => Box::new(HttpHook {
+                url: url.clone(),
+                timeout: definition.timeout(),
+                allow_hosts: allow_hosts.clone(),
+                tool_pattern: definition.matcher.clone(),
+            }),
+        };
+        hooks.register_defined(definition.clone(), handler);
+    }
+    // Enable fail-closed last so removing all handlers cannot open tools.
+    hooks.enable_security_fail_closed();
+    hooks
+}
+
+fn next_ordinal(ordinals: &mut HashMap<HookEvent, i32>, event: HookEvent) -> i32 {
+    let slot = ordinals.entry(event).or_insert(0);
+    let current = *slot;
+    *slot += 1;
+    current
+}
+
+/// Parse one candidate file into definitions, appending in file order.
+///
+/// Unreadable, malformed, or structurally unexpected files are skipped
+/// silently — a broken editor config must not stop a Run from starting.
+fn collect_file_hooks(
+    path: &Path,
+    scope: HookScope,
+    origin: &str,
+    ordinals: &mut HashMap<HookEvent, i32>,
+    out: &mut Vec<HookDefinition>,
+) {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+        return;
+    };
+    let Some(obj) = value
+        .get("hooks")
+        .and_then(Value::as_object)
+        .or_else(|| value.as_object())
+    else {
+        return;
+    };
+    for (event_name, groups) in obj {
+        let Some(event) = HookEvent::parse(event_name) else {
+            continue;
+        };
+        let Some(groups) = groups.as_array() else {
+            continue;
+        };
+        for (group_index, group) in groups.iter().enumerate() {
+            let matcher = group
+                .get("matcher")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            if let Some(handlers) = group.get("hooks").and_then(Value::as_array) {
+                for (entry_index, handler) in handlers.iter().enumerate() {
+                    push_handler_definition(
+                        event,
+                        matcher.clone(),
+                        handler,
+                        HookSource::file(scope, origin, group_index, entry_index),
+                        ordinals,
+                        out,
+                    );
+                }
+            } else {
+                push_handler_definition(
+                    event,
+                    matcher,
+                    group,
+                    HookSource::file(scope, origin, group_index, 0),
+                    ordinals,
+                    out,
+                );
+            }
+        }
+    }
+}
+
+fn push_handler_definition(
+    event: HookEvent,
+    matcher: Option<String>,
+    handler: &Value,
+    source: HookSource,
+    ordinals: &mut HashMap<HookEvent, i32>,
+    out: &mut Vec<HookDefinition>,
+) {
+    let timeout_ms = handler
+        .get("timeout")
+        .and_then(Value::as_u64)
+        .unwrap_or(10)
+        .clamp(1, 600)
+        * 1_000;
+
+    let kind = match handler
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("command")
+    {
+        "command" => {
+            let Some(command) = handler.get("command").and_then(Value::as_str) else {
+                return;
+            };
+            if command.trim().is_empty() {
+                return;
+            }
+            let explicit_args = handler.get("args").and_then(Value::as_array).map(|args| {
+                args.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            });
+            let (program, args) = if let Some(args) = explicit_args {
+                (command.to_string(), args)
+            } else if cfg!(windows) {
+                ("cmd.exe".to_string(), vec!["/C".into(), command.to_string()])
+            } else {
+                (
+                    "/bin/sh".to_string(),
+                    vec!["-lc".into(), command.to_string()],
+                )
+            };
+            HookKind::Command {
+                program,
+                args,
+                trusted: true,
+            }
+        }
+        "http" => {
+            let Some(url) = handler.get("url").and_then(Value::as_str) else {
+                return;
+            };
+            HookKind::Http {
+                url: url.to_string(),
+                allow_hosts: Vec::new(),
+            }
+        }
+        _ => return,
+    };
+
+    out.push(HookDefinition {
+        id: HookId::new(&source, event),
+        event,
+        source,
+        order: next_ordinal(ordinals, event),
+        matcher,
+        conditions: Vec::new(),
+        timeout_ms,
+        failure_policy: HookFailurePolicy::Fail,
+        kind,
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_core::{HookDecision, HookRequest, HookRegistry, HookResponse};
+
+    /// Behaviour snapshot for the pre-`discover`/`compile` split (task T0).
+    ///
+    /// The registry stores opaque `Box<dyn HookHandler>`, so these tests pin
+    /// observable dispatch behaviour rather than internal structure. The
+    /// refactor must keep every assertion below byte-identical.
+    const ALL_EVENTS: [HookEvent; 16] = [
         HookEvent::SessionStart,
         HookEvent::SessionEnd,
         HookEvent::UserPromptSubmit,
@@ -36,226 +367,588 @@ pub fn build_production_hooks_for_project(project: Option<&std::path::Path>) -> 
         HookEvent::Stop,
         HookEvent::StopFailure,
         HookEvent::Error,
-    ] {
-        // Built-in allow defaults; project/user hooks may still Deny (aggregate fail-closed).
-        hooks.register(event, Box::new(AllowAllHook));
-    }
-    // After defaults, enable fail-closed so removing all handlers cannot open tools.
-    hooks.enable_security_fail_closed();
-
-    if let Some(root) = project {
-        load_project_hooks(root, &mut hooks);
-    }
-
-    // Trusted command hook: NATIVES_HOOK_CMD=/path/to/binary (argv only, never shell).
-    if let Ok(program) = std::env::var("NATIVES_HOOK_CMD") {
-        if !program.trim().is_empty() {
-            hooks.register(
-                HookEvent::PreToolUse,
-                Box::new(CommandHook {
-                    program,
-                    args: std::env::var("NATIVES_HOOK_CMD_ARGS")
-                        .ok()
-                        .map(|s| s.split_whitespace().map(str::to_string).collect())
-                        .unwrap_or_default(),
-                    timeout: Duration::from_secs(10),
-                    trusted: true,
-                    cwd: project.map(std::path::Path::to_path_buf),
-                    tool_pattern: None,
-                }),
-            );
-        }
-    }
-    // HTTP hook with host allowlist: NATIVES_HOOK_HTTP=https://hooks.example/pre
-    if let Ok(url) = std::env::var("NATIVES_HOOK_HTTP") {
-        if !url.trim().is_empty() {
-            let allow = std::env::var("NATIVES_HOOK_HTTP_ALLOW")
-                .ok()
-                .map(|s| s.split(',').map(|h| h.trim().to_string()).collect())
-                .unwrap_or_default();
-            hooks.register(
-                HookEvent::PostToolUse,
-                Box::new(HttpHook {
-                    url,
-                    timeout: Duration::from_secs(5),
-                    allow_hosts: allow,
-                    tool_pattern: None,
-                }),
-            );
-        }
-    }
-    hooks
-}
-
-/// Load project/user hooks from native files and Claude-compatible settings.
-fn load_project_hooks(project: &std::path::Path, hooks: &mut HookRegistry) {
-    let candidates = [
-        project.join(".claude").join("hooks.json"),
-        project.join(".claude").join("settings.json"),
-        project.join(".claude").join("settings.local.json"),
-        project.join(".agents").join("hooks.json"),
-        project.join(".agents").join("settings.json"),
-        project.join(".grok").join("hooks.json"),
-        project.join(".natives").join("hooks.json"),
     ];
-    for path in candidates {
-        load_hooks_file(&path, project, hooks);
+
+    /// A loopback URL is rejected by `validate_http_hook_url` before any socket
+    /// is opened, so an `http` hook is a fast, hermetic handler-counting probe.
+    const PROBE_URL: &str = "http://127.0.0.1:1/hook";
+
+    struct TempProject {
+        root: std::path::PathBuf,
     }
-    // User-level hooks (optional). Unit tests must not execute the developer's
-    // real ~/.claude hook commands.
-    #[cfg(not(test))]
-    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-        let home = std::path::PathBuf::from(home);
-        for path in [
-            home.join(".natives").join("hooks.json"),
-            home.join(".agents").join("hooks.json"),
-            home.join(".agents").join("settings.json"),
-            home.join(".claude").join("settings.json"),
-            home.join(".claude").join("settings.local.json"),
+
+    impl TempProject {
+        fn new() -> Self {
+            let root =
+                std::env::temp_dir().join(format!("natives-hooks-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&root).unwrap();
+            Self { root }
+        }
+
+        fn write(&self, rel: &str, body: &str) -> &Self {
+            let path = self.root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+            self
+        }
+
+        fn hooks(&self) -> HookRegistry {
+            build_production_hooks_for_project(Some(&self.root))
+        }
+    }
+
+    impl Drop for TempProject {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    async fn dispatch(
+        hooks: &HookRegistry,
+        event: HookEvent,
+        tool: Option<&str>,
+    ) -> Vec<HookResponse> {
+        hooks
+            .dispatch(HookRequest {
+                event,
+                run_id: "run".into(),
+                tool_name: tool.map(str::to_string),
+                input: serde_json::json!({}),
+            })
+            .await
+    }
+
+    /// `build_production_hooks_for_project` reads two ambient env vars. Tests
+    /// must account for them rather than assume a clean environment.
+    fn env_hook_count(var: &str) -> usize {
+        usize::from(
+            std::env::var(var)
+                .ok()
+                .is_some_and(|v| !v.trim().is_empty()),
+        )
+    }
+
+    fn probe_group(event: &str, command: &str) -> String {
+        format!(
+            r#"{{"hooks":{{"{event}":[{{"hooks":[{{"type":"http","url":"{command}"}}]}}]}}}}"#
+        )
+    }
+
+    #[tokio::test]
+    async fn builtin_defaults_allow_every_event_without_project_hooks() {
+        let hooks = build_production_hooks_for_project(None);
+        for event in ALL_EVENTS {
+            let extra = match event {
+                HookEvent::PreToolUse => env_hook_count("NATIVES_HOOK_CMD"),
+                HookEvent::PostToolUse => env_hook_count("NATIVES_HOOK_HTTP"),
+                _ => 0,
+            };
+            let responses = dispatch(&hooks, event, Some("read_file")).await;
+            assert_eq!(
+                responses.len(),
+                1 + extra,
+                "event {event:?} should have exactly one builtin default handler"
+            );
+            assert!(
+                matches!(responses[0].decision, HookDecision::Allow),
+                "event {event:?} builtin default must Allow"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn security_fail_closed_is_enabled_after_build() {
+        assert!(build_production_hooks_for_project(None).fail_closed_security);
+    }
+
+    #[tokio::test]
+    async fn builtin_default_dispatches_before_project_hooks() {
+        let project = TempProject::new();
+        project.write(
+            ".claude/hooks.json",
+            &probe_group("PreToolUse", PROBE_URL),
+        );
+        let responses = dispatch(&project.hooks(), HookEvent::PreToolUse, Some("read_file")).await;
+
+        assert_eq!(responses.len(), 2 + env_hook_count("NATIVES_HOOK_CMD"));
+        assert!(
+            matches!(responses[0].decision, HookDecision::Allow),
+            "builtin allow-all must be registered before project hooks"
+        );
+        assert!(matches!(responses[1].decision, HookDecision::Deny { .. }));
+    }
+
+    #[tokio::test]
+    async fn every_candidate_project_file_is_loaded() {
+        let project = TempProject::new();
+        for rel in [
+            ".claude/hooks.json",
+            ".claude/settings.json",
+            ".claude/settings.local.json",
+            ".agents/hooks.json",
+            ".agents/settings.json",
+            ".grok/hooks.json",
+            ".natives/hooks.json",
         ] {
-            load_hooks_file(&path, project, hooks);
+            project.write(rel, &probe_group("Notification", PROBE_URL));
         }
+        let responses = dispatch(&project.hooks(), HookEvent::Notification, None).await;
+        assert_eq!(
+            responses.len(),
+            8,
+            "one builtin default plus seven candidate project files"
+        );
     }
-}
 
-fn load_hooks_file(
-    path: &std::path::Path,
-    project: &std::path::Path,
-    hooks: &mut HookRegistry,
-) {
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return;
-    };
-    let Ok(value) = serde_json::from_str::<Value>(&raw) else {
-        return;
-    };
-    let Some(obj) = value
-        .get("hooks")
-        .and_then(Value::as_object)
-        .or_else(|| value.as_object())
-    else {
-        return;
-    };
-    for (event_name, groups) in obj {
-        let Some(event) = parse_hook_event(event_name) else {
-            continue;
-        };
-        let Some(groups) = groups.as_array() else {
-            continue;
-        };
-        for group in groups {
-            let matcher = group
-                .get("matcher")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            if let Some(handlers) = group.get("hooks").and_then(Value::as_array) {
-                for handler in handlers {
-                    register_handler(event, matcher.clone(), handler, project, hooks);
-                }
-            } else {
-                register_handler(event, matcher, group, project, hooks);
-            }
-        }
-    }
-}
-
-fn parse_hook_event(name: &str) -> Option<HookEvent> {
-    Some(match name {
-        "PreToolUse" | "pre_tool_use" => HookEvent::PreToolUse,
-        "PostToolUse" | "post_tool_use" => HookEvent::PostToolUse,
-        "PostToolUseFailure" | "post_tool_use_failure" => HookEvent::PostToolUseFailure,
-        "Stop" | "stop" => HookEvent::Stop,
-        "StopFailure" | "stop_failure" => HookEvent::StopFailure,
-        "SessionStart" | "session_start" => HookEvent::SessionStart,
-        "SessionEnd" | "session_end" => HookEvent::SessionEnd,
-        "UserPromptSubmit" | "user_prompt_submit" => HookEvent::UserPromptSubmit,
-        "PermissionRequest" | "permission_request" => HookEvent::PermissionRequest,
-        "PermissionDenied" | "permission_denied" => HookEvent::PermissionDenied,
-        "SubagentStart" | "subagent_start" => HookEvent::SubagentStart,
-        "SubagentStop" | "SubagentEnd" | "subagent_stop" => HookEvent::SubagentStop,
-        "CompactStart" | "PreCompact" | "pre_compact" => HookEvent::PreCompact,
-        "CompactEnd" | "PostCompact" | "post_compact" => HookEvent::PostCompact,
-        "Notification" | "notification" => HookEvent::Notification,
-        "Error" | "error" => HookEvent::Error,
-        _ => return None,
-    })
-}
-
-fn register_handler(
-    event: HookEvent,
-    matcher: Option<String>,
-    handler: &Value,
-    project: &std::path::Path,
-    hooks: &mut HookRegistry,
-) {
-    let timeout = Duration::from_secs(
-        handler
-            .get("timeout")
-            .and_then(Value::as_u64)
-            .unwrap_or(10)
-            .clamp(1, 600),
-    );
-    match handler.get("type").and_then(Value::as_str).unwrap_or("command") {
-        "command" => {
-            let Some(command) = handler.get("command").and_then(Value::as_str) else {
-                return;
+    #[tokio::test]
+    async fn unknown_event_names_are_ignored() {
+        let project = TempProject::new();
+        project.write(
+            ".natives/hooks.json",
+            &probe_group("BogusEventName", PROBE_URL),
+        );
+        for event in ALL_EVENTS {
+            let extra = match event {
+                HookEvent::PreToolUse => env_hook_count("NATIVES_HOOK_CMD"),
+                HookEvent::PostToolUse => env_hook_count("NATIVES_HOOK_HTTP"),
+                _ => 0,
             };
-            if command.trim().is_empty() {
-                return;
-            }
-            let explicit_args = handler
-                .get("args")
-                .and_then(Value::as_array)
-                .map(|args| {
-                    args.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string)
-                        .collect()
-                });
-            let (program, args) = if let Some(args) = explicit_args {
-                (command.to_string(), args)
-            } else if cfg!(windows) {
-                ("cmd.exe".to_string(), vec!["/C".into(), command.to_string()])
-            } else {
-                (
-                    "/bin/sh".to_string(),
-                    vec!["-lc".into(), command.to_string()],
-                )
-            };
-            hooks.register(
-                event,
-                Box::new(CommandHook {
-                    program,
-                    args,
-                    timeout,
-                    trusted: true,
-                    cwd: Some(project.to_path_buf()),
-                    tool_pattern: matcher,
-                }),
+            assert_eq!(
+                dispatch(&project.hooks(), event, None).await.len(),
+                1 + extra,
+                "unknown event name must not register a handler on {event:?}"
             );
         }
-        "http" => {
-            let Some(url) = handler.get("url").and_then(Value::as_str) else {
-                return;
-            };
-            hooks.register(
-                event,
-                Box::new(HttpHook {
-                    url: url.to_string(),
-                    timeout,
-                    allow_hosts: Vec::new(),
-                    tool_pattern: matcher,
-                }),
+    }
+
+    #[tokio::test]
+    async fn snake_case_event_aliases_are_accepted() {
+        let project = TempProject::new();
+        project.write(
+            ".natives/hooks.json",
+            &probe_group("pre_compact", PROBE_URL),
+        );
+        assert_eq!(
+            dispatch(&project.hooks(), HookEvent::PreCompact, None)
+                .await
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn bare_object_without_hooks_wrapper_is_parsed() {
+        let project = TempProject::new();
+        project.write(
+            ".natives/hooks.json",
+            &format!(
+                r#"{{"Notification":[{{"hooks":[{{"type":"http","url":"{PROBE_URL}"}}]}}]}}"#
+            ),
+        );
+        assert_eq!(
+            dispatch(&project.hooks(), HookEvent::Notification, None)
+                .await
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn group_without_inner_hooks_array_is_a_single_handler() {
+        let project = TempProject::new();
+        project.write(
+            ".natives/hooks.json",
+            &format!(
+                r#"{{"hooks":{{"Notification":[{{"type":"http","url":"{PROBE_URL}"}}]}}}}"#
+            ),
+        );
+        assert_eq!(
+            dispatch(&project.hooks(), HookEvent::Notification, None)
+                .await
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_and_incomplete_entries_are_skipped() {
+        let project = TempProject::new();
+        project
+            .write(".claude/hooks.json", "{ not json at all")
+            .write(
+                ".claude/settings.json",
+                r#"{"hooks":{"Notification":[{"hooks":[{"type":"command"}]}]}}"#,
+            )
+            .write(
+                ".agents/hooks.json",
+                r#"{"hooks":{"Notification":[{"hooks":[{"type":"command","command":"   "}]}]}}"#,
+            )
+            .write(
+                ".grok/hooks.json",
+                r#"{"hooks":{"Notification":[{"hooks":[{"type":"http"}]}]}}"#,
+            )
+            .write(
+                ".natives/hooks.json",
+                r#"{"hooks":{"Notification":[{"hooks":[{"type":"websocket","url":"ws://x"}]}]}}"#,
+            );
+        assert_eq!(
+            dispatch(&project.hooks(), HookEvent::Notification, None)
+                .await
+                .len(),
+            1,
+            "invalid JSON, missing command, blank command, missing url, and \
+             unknown handler type must all be skipped"
+        );
+    }
+
+    #[tokio::test]
+    async fn matcher_scopes_handlers_to_tool_names() {
+        let project = TempProject::new();
+        project.write(
+            ".natives/hooks.json",
+            &format!(
+                r#"{{"hooks":{{"Notification":[
+                    {{"matcher":"Bash|run_*","hooks":[{{"type":"http","url":"{PROBE_URL}"}}]}},
+                    {{"matcher":"*","hooks":[{{"type":"http","url":"{PROBE_URL}"}}]}}
+                ]}}}}"#
+            ),
+        );
+        let hooks = project.hooks();
+        assert_eq!(dispatch(&hooks, HookEvent::Notification, Some("Bash")).await.len(), 3);
+        assert_eq!(
+            dispatch(&hooks, HookEvent::Notification, Some("run_command"))
+                .await
+                .len(),
+            3
+        );
+        assert_eq!(
+            dispatch(&hooks, HookEvent::Notification, Some("read_file"))
+                .await
+                .len(),
+            2,
+            "only the wildcard matcher applies to an unmatched tool"
+        );
+    }
+
+    // ── Discovery layer (task T3) ──────────────────────────────────────────
+    //
+    // These assert facts the pre-split code could not express at all, because a
+    // registered Hook was an opaque `Box<dyn HookHandler>`.
+
+    fn definitions_from(project: &TempProject) -> Vec<HookDefinition> {
+        discover_production_hooks(Some(&project.root))
+    }
+
+    fn file_definitions(project: &TempProject) -> Vec<HookDefinition> {
+        definitions_from(project)
+            .into_iter()
+            .filter(|d| d.source.scope == HookScope::Project)
+            .collect()
+    }
+
+    #[test]
+    fn discovery_yields_one_builtin_default_per_event_first() {
+        let defs = discover_production_hooks(None);
+        let builtins: Vec<_> = defs
+            .iter()
+            .filter(|d| d.source.scope == HookScope::Builtin)
+            .collect();
+
+        assert_eq!(builtins.len(), 16);
+        assert_eq!(
+            builtins.iter().map(|d| d.event).collect::<Vec<_>>(),
+            HookEvent::ALL.to_vec(),
+            "builtin defaults must be discovered in canonical event order"
+        );
+        for def in builtins {
+            assert_eq!(def.order, 0, "builtin default must dispatch first");
+            assert_eq!(
+                def.id.as_str(),
+                format!("builtin/allow-all#{}", def.event.as_str())
             );
         }
-        _ => {}
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use agent_core::{HookRequest, HookRegistry};
+    #[test]
+    fn discovery_records_file_group_and_entry_provenance() {
+        let project = TempProject::new();
+        project.write(
+            ".claude/settings.json",
+            &format!(
+                r#"{{"hooks":{{"PostToolUse":[
+                    {{"matcher":"Edit","hooks":[
+                        {{"type":"http","url":"{PROBE_URL}"}},
+                        {{"type":"http","url":"{PROBE_URL}"}}
+                    ]}},
+                    {{"matcher":"Write","hooks":[{{"type":"http","url":"{PROBE_URL}"}}]}}
+                ]}}}}"#
+            ),
+        );
+        let defs = file_definitions(&project);
+
+        assert_eq!(defs.len(), 3);
+        assert_eq!(
+            defs.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
+            vec![
+                "project/.claude/settings.json#PostToolUse[0]/0",
+                "project/.claude/settings.json#PostToolUse[0]/1",
+                "project/.claude/settings.json#PostToolUse[1]/0",
+            ]
+        );
+        assert_eq!(
+            defs.iter().map(|d| d.matcher.as_deref()).collect::<Vec<_>>(),
+            vec![Some("Edit"), Some("Edit"), Some("Write")]
+        );
+        // The builtin default already claimed ordinal 0 for this event.
+        assert_eq!(defs.iter().map(|d| d.order).collect::<Vec<_>>(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn timeout_is_clamped_between_one_and_six_hundred_seconds() {
+        let project = TempProject::new();
+        project.write(
+            ".natives/hooks.json",
+            &format!(
+                r#"{{"hooks":{{"Notification":[{{"hooks":[
+                    {{"type":"http","url":"{PROBE_URL}","timeout":0}},
+                    {{"type":"http","url":"{PROBE_URL}","timeout":9999}},
+                    {{"type":"http","url":"{PROBE_URL}","timeout":30}},
+                    {{"type":"http","url":"{PROBE_URL}"}}
+                ]}}]}}}}"#
+            ),
+        );
+        assert_eq!(
+            file_definitions(&project)
+                .iter()
+                .map(|d| d.timeout_ms)
+                .collect::<Vec<_>>(),
+            vec![1_000, 600_000, 30_000, 10_000],
+            "clamp to [1s, 600s] with a 10s default"
+        );
+    }
+
+    #[test]
+    fn command_hooks_are_shell_wrapped_unless_args_are_explicit() {
+        let project = TempProject::new();
+        project.write(
+            ".natives/hooks.json",
+            r#"{"hooks":{"Notification":[{"hooks":[
+                {"type":"command","command":"echo hi"},
+                {"type":"command","command":"/usr/bin/echo","args":["hi"]}
+            ]}]}}"#,
+        );
+        let defs = file_definitions(&project);
+        assert_eq!(defs.len(), 2);
+
+        let expected_wrapper: (&str, Vec<String>) = if cfg!(windows) {
+            ("cmd.exe", vec!["/C".into(), "echo hi".into()])
+        } else {
+            ("/bin/sh", vec!["-lc".into(), "echo hi".into()])
+        };
+        assert_eq!(
+            defs[0].kind,
+            HookKind::Command {
+                program: expected_wrapper.0.to_string(),
+                args: expected_wrapper.1,
+                trusted: true,
+            }
+        );
+        assert_eq!(
+            defs[1].kind,
+            HookKind::Command {
+                program: "/usr/bin/echo".into(),
+                args: vec!["hi".into()],
+                trusted: true,
+            }
+        );
+    }
+
+    #[test]
+    fn discovery_covers_all_seven_project_candidates_in_load_order() {
+        let project = TempProject::new();
+        for [dir, file] in PROJECT_CANDIDATES {
+            project.write(
+                &format!("{dir}/{file}"),
+                &probe_group("Notification", PROBE_URL),
+            );
+        }
+        assert_eq!(
+            file_definitions(&project)
+                .iter()
+                .map(|d| d.source.origin.clone())
+                .collect::<Vec<_>>(),
+            PROJECT_CANDIDATES
+                .iter()
+                .map(|[dir, file]| format!("{dir}/{file}"))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn every_discovered_hook_has_a_unique_identity() {
+        let project = TempProject::new();
+        for [dir, file] in PROJECT_CANDIDATES {
+            project.write(
+                &format!("{dir}/{file}"),
+                &format!(
+                    r#"{{"hooks":{{"Notification":[{{"hooks":[
+                        {{"type":"http","url":"{PROBE_URL}"}},
+                        {{"type":"http","url":"{PROBE_URL}"}}
+                    ]}}]}}}}"#
+                ),
+            );
+        }
+        let ids: Vec<_> = definitions_from(&project)
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
+        let unique: std::collections::BTreeSet<_> = ids.iter().cloned().collect();
+        assert_eq!(ids.len(), unique.len(), "hook identities must not collide");
+    }
+
+    #[tokio::test]
+    async fn discovery_order_is_dispatch_order() {
+        let project = TempProject::new();
+        project.write(
+            ".natives/hooks.json",
+            &format!(
+                r#"{{"hooks":{{"Notification":[{{"hooks":[
+                    {{"type":"http","url":"{PROBE_URL}"}},
+                    {{"type":"http","url":"ftp://example.test/hook"}}
+                ]}}]}}}}"#
+            ),
+        );
+        let defs = definitions_from(&project);
+        let notification: Vec<_> = defs
+            .iter()
+            .filter(|d| d.event == HookEvent::Notification)
+            .collect();
+        assert_eq!(notification.len(), 3);
+
+        let responses = dispatch(
+            &compile_production_hooks(&defs, Some(&project.root)),
+            HookEvent::Notification,
+            None,
+        )
+        .await;
+        assert_eq!(responses.len(), notification.len());
+        assert!(matches!(responses[0].decision, HookDecision::Allow));
+        // Distinct denial reasons prove the two file hooks kept their order.
+        let reason_of = |i: usize| match &responses[i].decision {
+            HookDecision::Deny { reason } => reason.clone(),
+            other => panic!("expected Deny, got {other:?}"),
+        };
+        assert!(reason_of(1).contains("private/loopback"));
+        assert!(reason_of(2).contains("only http/https"));
+    }
+
+    #[tokio::test]
+    async fn compiling_discovered_definitions_matches_the_direct_build() {
+        let project = TempProject::new();
+        project
+            .write(".claude/hooks.json", &probe_group("PreToolUse", PROBE_URL))
+            .write(
+                ".natives/hooks.json",
+                &probe_group("Notification", PROBE_URL),
+            );
+
+        let direct = build_production_hooks_for_project(Some(&project.root));
+        let composed = compile_production_hooks(&definitions_from(&project), Some(&project.root));
+
+        for event in HookEvent::ALL {
+            assert_eq!(
+                dispatch(&direct, event, Some("Bash")).await.len(),
+                dispatch(&composed, event, Some("Bash")).await.len(),
+                "handler count diverged on {event:?}"
+            );
+        }
+        assert_eq!(direct.fail_closed_security, composed.fail_closed_security);
+    }
+
+    #[test]
+    fn unknown_builtin_names_compile_to_nothing_rather_than_panicking() {
+        let source = HookSource::builtin("from-a-newer-daemon");
+        let definition = HookDefinition {
+            id: HookId::new(&source, HookEvent::Notification),
+            event: HookEvent::Notification,
+            source,
+            order: 0,
+            matcher: None,
+            conditions: Vec::new(),
+            timeout_ms: 0,
+            failure_policy: HookFailurePolicy::Fail,
+            kind: HookKind::Builtin {
+                name: "from-a-newer-daemon".into(),
+            },
+        };
+        let hooks = compile_production_hooks(&[definition], None);
+        assert!(hooks.fail_closed_security);
+    }
+
+    /// Phase 1 acceptance: a built registry can answer, for any project, which
+    /// Hooks are attached, where each came from, in what order, what it matches,
+    /// how long it may run, and whether it is trusted.
+    #[test]
+    fn built_registry_answers_the_full_provenance_question() {
+        let project = TempProject::new();
+        project
+            .write(
+                ".claude/settings.json",
+                r#"{"hooks":{"PreToolUse":[{"matcher":"Bash|run_*","hooks":[
+                    {"type":"command","command":"./scripts/audit.sh","timeout":45}
+                ]}]}}"#,
+            )
+            .write(
+                ".natives/hooks.json",
+                &format!(
+                    r#"{{"hooks":{{"PreToolUse":[{{"hooks":[
+                        {{"type":"http","url":"{PROBE_URL}"}}
+                    ]}}]}}}}"#
+                ),
+            );
+
+        let described = build_production_hooks_for_project(Some(&project.root))
+            .describe_event(HookEvent::PreToolUse);
+
+        let env_extra = env_hook_count("NATIVES_HOOK_CMD");
+        assert_eq!(described.len(), 3 + env_extra);
+
+        // 1. builtin default, first
+        assert_eq!(described[0].source.scope, HookScope::Builtin);
+        assert_eq!(described[0].order, 0);
+
+        // 2. the project command hook, with file, group, and entry provenance
+        let audit = &described[1];
+        assert_eq!(audit.id.as_str(), "project/.claude/settings.json#PreToolUse[0]/0");
+        assert_eq!(audit.source.scope, HookScope::Project);
+        assert_eq!(audit.source.origin, ".claude/settings.json");
+        assert_eq!(audit.source.group_index, Some(0));
+        assert_eq!(audit.source.entry_index, Some(0));
+        assert_eq!(audit.order, 1);
+        assert_eq!(audit.matcher.as_deref(), Some("Bash|run_*"));
+        assert_eq!(audit.timeout(), Duration::from_secs(45));
+        assert_eq!(audit.failure_policy, HookFailurePolicy::Fail);
+        assert!(
+            matches!(&audit.kind, HookKind::Command { trusted, .. } if *trusted),
+            "project command hooks are trusted"
+        );
+
+        // 3. the second file's http hook, ordered after it
+        assert_eq!(described[2].source.origin, ".natives/hooks.json");
+        assert_eq!(described[2].order, 2);
+        assert!(matches!(described[2].kind, HookKind::Http { .. }));
+    }
+
+    #[test]
+    fn describe_covers_every_event_that_has_a_handler() {
+        let hooks = build_production_hooks_for_project(None);
+        let described = hooks.describe();
+        assert_eq!(
+            described.iter().map(|d| d.event).collect::<Vec<_>>(),
+            HookEvent::ALL.to_vec(),
+            "the sixteen builtin defaults must all be describable"
+        );
+    }
 
     #[cfg(unix)]
     #[tokio::test]

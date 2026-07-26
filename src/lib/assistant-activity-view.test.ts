@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { Artifact, FileChange, RunEvent } from '@/lib/assistant-protocol';
 import {
   aggregateArtifactFiles,
@@ -9,6 +11,19 @@ import {
   summarizeTodoStatus,
   type ActivityTodo,
 } from './assistant-activity-view';
+
+test('task list auto-load uses stable query inputs and reserves external refresh for the user action', () => {
+  const inspector = readFileSync(
+    resolve(process.cwd(), 'src/components/assistant/ActivityInspector.tsx'),
+    'utf8',
+  );
+
+  assert.match(inspector, /const runId = run\?\.id \?\? null;/);
+  assert.match(inspector, /\}, \[useTaskList, gateway, runId, conversationId\]\);/);
+  assert.match(inspector, /\}, \[effectiveTab, useTaskList, refreshTasks\]\);/);
+  assert.equal(inspector.includes('onRefreshTasks?.();\n    if (!useTaskList'), false);
+  assert.match(inspector, /const handleRefreshTasks = useCallback\(/);
+});
 
 function ev(
   sequence: number,

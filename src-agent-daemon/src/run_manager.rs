@@ -747,7 +747,7 @@ impl RunManager {
         run_id: &str,
         request_path: Option<&str>,
     ) -> Option<std::path::PathBuf> {
-        // Explicit only — never daemon process cwd (full remediation §五).
+        // Explicit only — never daemon process cwd (full remediation 第五节).
         if let Some(p) = request_path.map(str::trim).filter(|s| !s.is_empty()) {
             return Some(std::path::PathBuf::from(p));
         }

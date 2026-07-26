@@ -1,6 +1,6 @@
 //! In-memory monotonic event sequence per run (persist-first seam).
 //!
-//! Persistence is **on by default** (full remediation §十三). Override with:
+//! Persistence is **on by default** (full remediation 第十三节). Override with:
 //! - `NATIVES_EVENT_LOG_DIR` — explicit directory
 //! - `NATIVES_RUNTIME_DIR/events` — when runtime dir is set
 //! - `~/.natives/events` — default home path

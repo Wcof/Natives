@@ -12,6 +12,18 @@ pub fn git_diff(file_path: String) -> Result<String> {
     git::git_diff(&file_path)
 }
 
+#[tauri::command]
+pub fn git_commit(dir_path: String, message: String) -> Result<JsonValue> {
+    let status = git::git_commit(&dir_path, &message)?;
+    serde_json::to_value(status).map_err(|e| Error::Internal(e.to_string()))
+}
+
+#[tauri::command]
+pub fn git_push(dir_path: String) -> Result<JsonValue> {
+    let status = git::git_push(&dir_path)?;
+    serde_json::to_value(status).map_err(|e| Error::Internal(e.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

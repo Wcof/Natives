@@ -1446,6 +1446,7 @@ export const zh = {
     noModelHint: '请先配置可用模型',
     openDesktopApp: '打开桌面应用',
     renameConversation: '重命名会话',
+    renameProject: '重命名项目',
     pinConversation: '置顶会话',
     unpinConversation: '取消置顶会话',
     pinProject: '置顶项目',

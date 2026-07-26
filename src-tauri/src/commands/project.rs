@@ -143,6 +143,26 @@ pub fn project_open(id: String) -> Result<()> {
     Ok(())
 }
 
+/// Rename only the assistant-side project label. The source directory is never moved.
+#[tauri::command]
+pub fn project_rename(id: String, label: String) -> Result<()> {
+    let label = label.trim();
+    if label.is_empty() {
+        return Err("Project name cannot be empty".into());
+    }
+    let conn = db::get_assistant_db_conn().map_err(|e| e.to_string())?;
+    let changed = conn
+        .execute(
+            "UPDATE assistant_projects SET label = ?1 WHERE (id = ?2 OR path = ?2) AND deleted_at IS NULL",
+            rusqlite::params![label, id],
+        )
+        .map_err(|e| format!("Failed to rename project: {e}"))?;
+    if changed == 0 {
+        return Err("Project not found".into());
+    }
+    Ok(())
+}
+
 /// Soft-remove a project registration (logical delete).
 /// Sessions keep their project_id so they reappear when the project is re-added.
 #[tauri::command]

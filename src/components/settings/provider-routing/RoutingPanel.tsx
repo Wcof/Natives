@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ChevronDown, Globe2, HeartPulse, Route, Sparkles } from 'lucide-react';
+import { Bot, ChevronDown, Globe2, HeartPulse, Route, Sparkles } from 'lucide-react';
 import { BORDER_RADIUS, FONT_SIZE, SPACING } from '@/lib/design-tokens';
 import { t, type Locale } from '@/i18n';
 import type { ProviderRoutingSettings } from '@/types/provider-routing';
@@ -22,11 +22,13 @@ interface RoutingPanelProps {
 }
 
 export function RoutingPanel({ locale, providers, bindings, settings, loading, saving, error, onSave, onSaveBindings, onRetry }: RoutingPanelProps) {
-  const [expanded, setExpanded] = useState<string | null>('local');
+  const [expanded, setExpanded] = useState<string | null>('subagent');
   if (loading) return <div style={stateStyle}>{t(locale, 'common.loading')}</div>;
   if (error || !settings) return <div role="alert" style={errorStyle}><span>{error ?? t(locale, 'settings.routingUnavailable')}</span><button type="button" className="btn" onClick={onRetry}>{t(locale, 'common.retry')}</button></div>;
   const update = (patch: Partial<ProviderRoutingSettings>) => void onSave({ ...settings, ...patch });
+  const zh = locale.startsWith('zh');
   const sections = [
+    { id: 'subagent', icon: <Bot size={20} />, title: zh ? '子智能体供应商' : 'Subagent Providers', description: zh ? '配置允许子智能体使用的供应商范围' : 'Select allowed providers for subagents', body: <SubagentProviderSettings locale={locale} providers={providers} /> },
     { id: 'local', icon: <Route size={20} />, title: t(locale, 'settings.localRouting'), description: t(locale, 'settings.localRoutingDesc'), body: <LocalRouting locale={locale} settings={settings} onSave={update} /> },
     { id: 'failover', icon: <HeartPulse size={20} />, title: t(locale, 'settings.autoFailover'), description: t(locale, 'settings.autoFailoverDesc'), body: <FailoverSettings locale={locale} providers={providers} bindings={bindings} onSave={onSaveBindings} /> },
     { id: 'rectifier', icon: <Sparkles size={20} />, title: t(locale, 'settings.requestRectifier'), description: t(locale, 'settings.requestRectifierDesc'), body: <ToggleRow locale={locale} labelKey="settings.requestRectifierEnabled" checked={settings.rectifierEnabled} onChange={(checked) => update({ rectifierEnabled: checked })} /> },
@@ -106,3 +108,98 @@ const errorStyle: React.CSSProperties = { display: 'flex', alignItems: 'center',
 const bindingListStyle: React.CSSProperties = { display: 'grid', gap: SPACING.xs };
 const bindingRowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: SPACING.sm, padding: SPACING.sm, border: '1px solid var(--border)', borderRadius: BORDER_RADIUS.sm, color: 'var(--text)', fontSize: FONT_SIZE.xs };
 const bindingEditorStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto', gap: SPACING.sm };
+
+export function SubagentProviderSettings({
+  locale,
+  providers,
+}: {
+  locale: Locale;
+  providers: ProviderSummary[];
+}) {
+  const zh = locale.startsWith('zh');
+  const [allowedProviders, setAllowedProviders] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const api = (window as unknown as { nativesAPI?: { db?: { get: (k: string) => Promise<unknown> }; settings?: { get: (k: string) => Promise<unknown> } } }).nativesAPI;
+        const raw = (await api?.settings?.get?.('subagent_allowed_providers')) ?? (await api?.db?.get?.('subagent_allowed_providers'));
+        if (typeof raw === 'string') {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) setAllowedProviders(parsed.map(String));
+        } else if (Array.isArray(raw)) {
+          setAllowedProviders(raw.map(String));
+        }
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const toggleProvider = async (id: string) => {
+    const next = allowedProviders.includes(id)
+      ? allowedProviders.filter((p) => p !== id)
+      : [...allowedProviders, id];
+    setAllowedProviders(next);
+    const api = (window as unknown as { nativesAPI?: { db?: { set: (k: string, v: unknown) => Promise<unknown> }; settings?: { set: (k: string, v: unknown) => Promise<unknown> } } }).nativesAPI;
+    if (api?.settings?.set) {
+      await api.settings.set('subagent_allowed_providers', next);
+    } else if (api?.db?.set) {
+      await api.db.set('subagent_allowed_providers', JSON.stringify(next));
+    }
+  };
+
+  if (loading) return <div style={hintStyle}>{t(locale, 'common.loading')}</div>;
+
+  return (
+    <div style={formStyle}>
+      <p style={hintStyle}>
+        {zh
+          ? '多选允许子智能体使用的供应商。未勾选时默认仅允许使用主会话的供应商。'
+          : 'Select allowed providers for subagents. Defaults to main session provider when unconfigured.'}
+      </p>
+      <div style={{ display: 'grid', gap: SPACING.xs }}>
+        {providers.map((p) => {
+          const checked = allowedProviders.includes(p.id);
+          const hasKeys = p.keys.length > 0;
+          return (
+            <label
+              key={p.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: SPACING.md,
+                padding: '6px 10px',
+                border: '1px solid var(--border)',
+                borderRadius: BORDER_RADIUS.sm,
+                background: 'var(--surface)',
+                cursor: 'pointer',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => void toggleProvider(p.id)}
+                  style={{ accentColor: 'var(--primary)', width: 16, height: 16 }}
+                />
+                <span style={{ fontWeight: 500, fontSize: FONT_SIZE.sm }}>{p.displayName}</span>
+              </div>
+              <span style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-disabled)' }}>
+                {hasKeys
+                  ? zh
+                    ? `${p.keys.length} 个有效密钥`
+                    : `${p.keys.length} keys`
+                  : zh
+                    ? '无密钥'
+                    : 'No keys'}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

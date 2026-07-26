@@ -195,6 +195,22 @@ pub fn pick_binding(
     }
 }
 
+/// Remove a route policy for a parent conversation (e.g. when bindings are broken/empty).
+pub fn delete_route_policy(parent_conversation_id: &str) -> Result<(), String> {
+    let parent = parent_conversation_id.trim();
+    if parent.is_empty() {
+        return Ok(());
+    }
+    let s = store()?;
+    let conn = s.conn().map_err(|e| format!("conn lock: {e}"))?;
+    conn.execute(
+        "DELETE FROM subagent_route_policy WHERE parent_conversation_id = ?1",
+        params![parent],
+    )
+    .map_err(|e| format!("delete_route_policy failed: {e}"))?;
+    Ok(())
+}
+
 /// Create a hidden child conversation under parent + subagent_session row.
 /// Returns (session_id, child_conversation_id).
 pub fn create_hidden_child_session(

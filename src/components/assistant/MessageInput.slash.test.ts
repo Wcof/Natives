@@ -84,3 +84,23 @@ test('closing menu or sending keeps free-form /text as ordinary message content'
   assert.equal(closeFn.includes('setInput'), false);
   assert.equal(closeFn.includes('onDraftChange'), false);
 });
+
+test('up/down browse the active project question history without taking slash-menu keys', () => {
+  assert.match(messageInput, /loadPersistedQuestionHistory\(projectPath\)/);
+  assert.match(messageInput, /savePersistedQuestionHistory\(projectPath, draft\.content\)/);
+  assert.match(messageInput, /event\.key === 'ArrowUp' \|\| event\.key === 'ArrowDown'/);
+  assert.match(messageInput, /questionHistory\.length > 0/);
+  const slashBlock = messageInput.slice(
+    messageInput.indexOf('if (slashOpen)'),
+    messageInput.indexOf('// Shift+Enter'),
+  );
+  assert.ok(slashBlock.indexOf("event.key === 'ArrowUp'") >= 0);
+  assert.ok(messageInput.indexOf('if (slashOpen)') < messageInput.indexOf('questionHistory.length > 0'));
+});
+
+test('IME composition confirmation never sends the draft', () => {
+  assert.match(messageInput, /event\.nativeEvent\.keyCode === 229/);
+  assert.match(messageInput, /event\.key === 'Process'/);
+  assert.match(messageInput, /onCompositionStart/);
+  assert.match(messageInput, /onCompositionEnd/);
+});

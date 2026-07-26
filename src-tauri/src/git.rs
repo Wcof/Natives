@@ -444,6 +444,50 @@ pub fn git_status(dir_path: &str) -> Result<GitStatus> {
     })
 }
 
+/// Stage all current worktree changes and create one user-requested commit.
+pub fn git_commit(dir_path: &str, message: &str) -> Result<GitStatus> {
+    let message = message.trim();
+    if message.is_empty() {
+        return Err(Error::InvalidInput("commit_message_required".into()));
+    }
+    let path = Path::new(dir_path);
+    with_repository_mutation_lock(path, || {
+        let add = Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(path)
+            .output()
+            .map_err(|e| Error::Internal(format!("git add failed: {e}")))?;
+        if !add.status.success() {
+            return Err(git_command_error("git add", &add.stderr));
+        }
+        let commit = Command::new("git")
+            .args(["commit", "-m", message])
+            .current_dir(path)
+            .output()
+            .map_err(|e| Error::Internal(format!("git commit failed: {e}")))?;
+        if !commit.status.success() {
+            return Err(git_command_error("git commit", &commit.stderr));
+        }
+        git_status(dir_path)
+    })
+}
+
+/// Push the current branch using the repository's configured upstream.
+pub fn git_push(dir_path: &str) -> Result<GitStatus> {
+    let path = Path::new(dir_path);
+    with_repository_mutation_lock(path, || {
+        let push = Command::new("git")
+            .arg("push")
+            .current_dir(path)
+            .output()
+            .map_err(|e| Error::Internal(format!("git push failed: {e}")))?;
+        if !push.status.success() {
+            return Err(git_command_error("git push", &push.stderr));
+        }
+        git_status(dir_path)
+    })
+}
+
 /// Get git diff for a file
 pub fn git_diff(file_path: &str) -> Result<String> {
     let path = Path::new(file_path);

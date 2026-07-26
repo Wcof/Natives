@@ -2021,7 +2021,7 @@ async fn handle_workspace_inspect(request: &RpcRequest) -> RpcResponse {
     // NOTE: Git branch/dirty state is intentionally NOT probed here.
     // The single authoritative Git implementation lives in `src-tauri/src/git.rs`
     // and is exposed to the renderer through `window.nativesAPI.git.*`. The daemon
-    // must not run a parallel Git workflow (Assistant Workspace Integration Design §1).
+    // must not run a parallel Git workflow (Assistant Workspace Integration Design, Section 1).
     // This RPC only reports filesystem-level workspace identity; branch/dirty come
     // from the shared Tauri Git adapter on the consumer side.
     let project_path = match request.params.get("project_path").and_then(|v| v.as_str()) {

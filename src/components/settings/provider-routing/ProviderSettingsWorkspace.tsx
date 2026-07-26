@@ -1,13 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { t, type Locale } from '@/i18n';
 import { classifyError } from '@/lib/error-classifier';
 import type { ProviderSummary } from '@/types/provider';
 import type { ProviderRoutingSettings } from '@/types/provider-routing';
 import type { ProviderRouteBinding } from '@/types/provider-routing';
 import { ProviderSettingsTabs, type ProviderSettingsTab } from './ProviderSettingsTabs';
-import { RoutingPanel } from './RoutingPanel';
+import { RoutingPanel, SubagentProviderSettings } from './RoutingPanel';
 import { Sub2ApiAccountPool } from './Sub2ApiAccountPool';
 
 export function ProviderSettingsWorkspace({ locale, providers, management, onProviderCreated }: { locale: Locale; providers: ProviderSummary[]; management: React.ReactNode; onProviderCreated: () => Promise<void> }) {
@@ -17,7 +17,10 @@ export function ProviderSettingsWorkspace({ locale, providers, management, onPro
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const api = typeof window === 'undefined' ? undefined : window.nativesAPI?.providerRouting;
+  const api = useMemo(
+    () => (typeof window === 'undefined' ? undefined : window.nativesAPI?.providerRouting),
+    [],
+  );
   const load = useCallback(async () => {
     if (!api?.getSettings) { setError(t(locale, 'settings.routingUnavailable')); return; }
     setLoading(true); setError(null);
@@ -45,6 +48,12 @@ export function ProviderSettingsWorkspace({ locale, providers, management, onPro
   };
   return <>
     <ProviderSettingsTabs locale={locale} activeTab={tab} onChange={setTab} />
-    {tab === 'management' ? <>{management}<Sub2ApiAccountPool locale={locale} providers={providers} api={api} onProviderCreated={onProviderCreated} /></> : <RoutingPanel locale={locale} providers={providers} bindings={bindings} settings={settings} loading={loading} saving={saving} error={error} onSave={save} onSaveBindings={saveBindings} onRetry={() => void load()} />}
+    {tab === 'management' ? (
+      <>{management}<Sub2ApiAccountPool locale={locale} providers={providers} api={api} onProviderCreated={onProviderCreated} /></>
+    ) : tab === 'subagents' ? (
+      <SubagentProviderSettings locale={locale} providers={providers} />
+    ) : (
+      <RoutingPanel locale={locale} providers={providers} bindings={bindings} settings={settings} loading={loading} saving={saving} error={error} onSave={save} onSaveBindings={saveBindings} onRetry={() => void load()} />
+    )}
   </>;
 }

@@ -126,15 +126,29 @@ function upsertTextBlock(blocks: ContentBlock[], text: string): ContentBlock[] {
   return next;
 }
 
-function upsertReasoning(blocks: ContentBlock[], text: string): ContentBlock[] {
+function upsertReasoning(
+  blocks: ContentBlock[],
+  text: string,
+  segmentId?: string,
+): ContentBlock[] {
   const next = [...blocks];
-  const idx = next.findIndex((b) => b.type === 'reasoning');
+  let idx = segmentId
+    ? next.findIndex((b) => b.type === 'reasoning' && b.segmentId === segmentId)
+    : -1;
+  if (idx < 0 && next.length > 0 && next[next.length - 1]!.type === 'reasoning') {
+    idx = next.length - 1;
+  }
   if (idx >= 0) {
     const cur = next[idx]!;
-    next[idx] = { ...cur, reasoning: `${cur.reasoning ?? ''}${text}`, live: true };
+    next[idx] = {
+      ...cur,
+      reasoning: `${cur.reasoning ?? ''}${text}`,
+      segmentId: segmentId ?? cur.segmentId,
+      live: true,
+    };
   } else {
-    // Append in stream order (do not force reasoning above prior text/tools).
-    next.push({ type: 'reasoning', reasoning: text, live: true });
+    // Append in stream order (supports Thinking -> Tool -> Thinking interleaving)
+    next.push({ type: 'reasoning', reasoning: text, segmentId, live: true });
   }
   return next;
 }
@@ -221,10 +235,39 @@ function applyEventToLive(
       live.blocks = upsertTextBlock(live.blocks, text);
       break;
     }
+    case 'reasoning_segment_start':
+    case 'reasoning_start': {
+      const segmentId = p.segment_id != null ? String(p.segment_id) : p.segmentId != null ? String(p.segmentId) : undefined;
+      live.reasoningStartedAt = live.reasoningStartedAt ?? event.timestamp;
+      if (segmentId && !live.blocks.some((b) => b.type === 'reasoning' && b.segmentId === segmentId)) {
+        live.blocks = [...live.blocks, { type: 'reasoning', reasoning: '', segmentId, live: true }];
+      }
+      break;
+    }
+    case 'reasoning_segment_end': {
+      const segmentId = p.segment_id != null ? String(p.segment_id) : p.segmentId != null ? String(p.segmentId) : undefined;
+      const durationMs = typeof p.duration_ms === 'number' ? p.duration_ms : typeof p.durationMs === 'number' ? p.durationMs : undefined;
+      const summary = p.summary != null ? String(p.summary) : undefined;
+      const summaryStatus = (p.summary_status ?? p.summaryStatus) as ContentBlock['summaryStatus'];
+      live.blocks = live.blocks.map((b) => {
+        if (b.type === 'reasoning' && (!segmentId || b.segmentId === segmentId)) {
+          return {
+            ...b,
+            live: false,
+            durationMs: durationMs ?? b.durationMs,
+            summary: summary ?? b.summary,
+            summaryStatus: summaryStatus ?? b.summaryStatus,
+          };
+        }
+        return b;
+      });
+      break;
+    }
     case 'reasoning_delta': {
       const text = String(p.text ?? p.reasoning ?? '');
+      const segmentId = p.segment_id != null ? String(p.segment_id) : p.segmentId != null ? String(p.segmentId) : undefined;
       live.reasoningStartedAt = live.reasoningStartedAt ?? event.timestamp;
-      live.blocks = upsertReasoning(live.blocks, text);
+      live.blocks = upsertReasoning(live.blocks, text, segmentId);
       break;
     }
     case 'tool_call_requested':
@@ -884,6 +927,18 @@ function applySnapshot(
   };
 
   if (snapshot.eventsByRun) {
+    // Reset sequence watermarks and event buffers for runs included in this
+    // snapshot so that applyOneEvent never silently drops them.
+    // Without this, returning to a conversation re-applies the same events
+    // but they are all skipped because sequence <= lastSequenceByRun.
+    const lastSequenceByRun = { ...next.lastSequenceByRun };
+    const eventsByRun = { ...next.eventsByRun };
+    for (const runId of Object.keys(snapshot.eventsByRun)) {
+      delete lastSequenceByRun[runId];
+      delete eventsByRun[runId];
+    }
+    next = { ...next, lastSequenceByRun, eventsByRun };
+
     for (const events of Object.values(snapshot.eventsByRun)) {
       // Apply via event pipeline for consistency (sorted)
       const sorted = [...events].sort((a, b) => a.sequence - b.sequence);

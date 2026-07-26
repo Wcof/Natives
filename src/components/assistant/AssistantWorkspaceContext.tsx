@@ -59,7 +59,8 @@ export interface AssistantWorkspaceActions {
   addProjectFolder(): void;
   createConversation(): void;
   createConversationInProject(path: string): void;
-  removeProject(path: string): void;
+  removeProject(path: string): Promise<boolean>;
+  renameProject(path: string, label: string): Promise<boolean>;
   renameConversation(id: string, title: string): void;
   archiveConversation(id: string): void;
   deleteConversation(id: string): Promise<boolean>;
@@ -518,26 +519,32 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
         publishNavigation((prev) => withFreshTempSession(prev, path));
         void writeActiveProject(window.nativesAPI, path).catch(() => undefined);
       },
-      removeProject: (path) => {
-        void (async () => {
-          try {
-            if (workbenchActions) {
-              workbenchActions.removeProject(path);
-            } else {
-              const projects = (await window.nativesAPI?.project?.list?.()) ?? [];
-              const match = projects.find((p) => p.path === path || p.id === path);
-              if (match?.id) {
-                await window.nativesAPI?.project?.remove?.(match.id);
-              } else if (path) {
-                await window.nativesAPI?.project?.remove?.(path);
-              }
-            }
-            // Soft-delete: sessions keep their project_id, just refresh the project list.
-            await refreshNavigationFromHost();
-          } catch (e) {
-            console.error('Failed to remove project:', e);
-          }
-        })();
+      removeProject: async (path) => {
+        try {
+          if (workbenchActions) return await workbenchActions.removeProject(path);
+          const projects = (await window.nativesAPI?.project?.list?.()) ?? [];
+          const match = projects.find((p) => p.path === path || p.id === path);
+          await window.nativesAPI?.project?.remove?.(match?.id ?? path);
+          // Soft-delete: sessions keep their project_id, just refresh the project list.
+          await refreshNavigationFromHost();
+          return true;
+        } catch (e) {
+          console.error('Failed to remove project:', e);
+          return false;
+        }
+      },
+      renameProject: async (path, label) => {
+        try {
+          if (workbenchActions) return await workbenchActions.renameProject(path, label);
+          const projects = (await window.nativesAPI?.project?.list?.()) ?? [];
+          const match = projects.find((p) => p.path === path || p.id === path);
+          await window.nativesAPI?.project?.rename?.(match?.id ?? path, label);
+          await refreshNavigationFromHost();
+          return true;
+        } catch (e) {
+          console.error('Failed to rename project:', e);
+          return false;
+        }
       },
       renameConversation: (id, title) => {
         workbenchActions?.renameConversation(id, title);

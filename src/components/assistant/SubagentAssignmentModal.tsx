@@ -89,12 +89,22 @@ function seedBindingsForTasks(
   validKeys: AssignmentKeyOption[],
   defaultBinding: SubagentRouteBinding | null | undefined,
 ): SubagentRouteBinding[] {
-  const seed =
-    defaultBinding && defaultBinding.providerId && defaultBinding.keyId && defaultBinding.modelId
-      ? defaultBinding
-      : validKeys[0]
-        ? bindingFromKey(validKeys[0])
-        : null;
+  let seed: SubagentRouteBinding | null = null;
+  if (defaultBinding && defaultBinding.providerId) {
+    const keyMatch = defaultBinding.keyId
+      ? defaultBinding.keyId
+      : validKeys.find((k) => k.providerId === defaultBinding.providerId)?.keyId ?? '';
+    const modelMatch = defaultBinding.modelId
+      ? defaultBinding.modelId
+      : validKeys.find((k) => k.providerId === defaultBinding.providerId && k.keyId === keyMatch)?.modelId ?? '';
+    seed = {
+      providerId: defaultBinding.providerId,
+      keyId: keyMatch,
+      modelId: modelMatch,
+    };
+  } else if (validKeys[0]) {
+    seed = bindingFromKey(validKeys[0]);
+  }
   if (!seed) return tasks.map(() => ({ providerId: '', keyId: '', modelId: '' }));
   return tasks.map(() => ({ ...seed }));
 }
@@ -108,10 +118,14 @@ export default function SubagentAssignmentModal({
   onClose,
   onConfirm,
 }: SubagentAssignmentModalProps) {
+  const zh = locale.startsWith('zh');
+  const [page, setPage] = useState<'confirm' | 'custom'>('confirm');
+  const [countdown, setCountdown] = useState(10);
   const [mode, setMode] = useState<SubagentAssignmentMode>('default');
   const [bindings, setBindings] = useState<SubagentRouteBinding[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [allowedProviders, setAllowedProviders] = useState<string[]>([]);
 
   const isSwitch = Boolean(switchSessionId);
   const tasks = useMemo(() => taskList(interaction), [interaction]);
@@ -120,26 +134,44 @@ export default function SubagentAssignmentModal({
     defaultBinding?.providerId && defaultBinding?.keyId && defaultBinding?.modelId,
   );
 
-  // Random / custom only allow active+valid keys.
-  const validKeys = useMemo(() => keys.filter(isValidKey), [keys]);
+  useEffect(() => {
+    if (!open) return;
+    void (async () => {
+      try {
+        const api = (window as unknown as { nativesAPI?: { db?: { get: (k: string) => Promise<unknown> }; settings?: { get: (k: string) => Promise<unknown> } } }).nativesAPI;
+        const raw = (await api?.settings?.get?.('subagent_allowed_providers')) ?? (await api?.db?.get?.('subagent_allowed_providers'));
+        if (typeof raw === 'string') {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) setAllowedProviders(parsed.map(String));
+        } else if (Array.isArray(raw)) {
+          setAllowedProviders(raw.map(String));
+        }
+      } catch {
+        // ignore
+      }
+    })();
+  }, [open]);
+
+  // Valid keys strictly filtered by allowed providers if configured
+  const validKeys = useMemo(() => {
+    const filtered = keys.filter(isValidKey);
+    if (allowedProviders.length > 0) {
+      return filtered.filter((k) => allowedProviders.includes(k.providerId));
+    }
+    return filtered;
+  }, [keys, allowedProviders]);
+
   const hasValidKeys = validKeys.length > 0;
 
   useEffect(() => {
     if (!open) return;
     setError(null);
     setSubmitting(false);
+    setPage('confirm');
     setMode('default');
+    setCountdown(10);
     setBindings(seedBindingsForTasks(tasks, validKeys, defaultBinding));
   }, [open, interaction?.id, switchSessionId, tasks, validKeys, defaultBinding]);
-
-  const title = isSwitch
-    ? t(locale, 'assistant.subagentAssignment.switchKeyTitle')
-    : t(locale, 'assistant.subagentAssignment.title');
-  const reason =
-    interaction?.reason ||
-    (isSwitch
-      ? t(locale, 'assistant.subagentAssignment.switchKeyHint')
-      : t(locale, 'assistant.subagentAssignment.reason'));
 
   const updateBinding = useCallback(
     (index: number, patch: Partial<SubagentRouteBinding>) => {
@@ -166,19 +198,16 @@ export default function SubagentAssignmentModal({
 
   const confirmDisabled = useMemo(() => {
     if (submitting) return true;
-    if (mode === 'default') {
-      // Switch flow may not carry default_binding — fall back to first valid key.
-      if (isSwitch) return !hasDefaultBinding && !hasValidKeys;
-      return !hasDefaultBinding;
+    if (page === 'confirm' || mode === 'default') {
+      return !hasDefaultBinding && !hasValidKeys;
     }
     if (mode === 'random') return !hasValidKeys;
-    // custom: every task row must be complete
     if (bindings.length !== tasks.length) return true;
     return bindings.some((b) => !b.providerId || !b.keyId || !b.modelId);
   }, [
     submitting,
+    page,
     mode,
-    isSwitch,
     hasDefaultBinding,
     hasValidKeys,
     bindings,
@@ -192,7 +221,9 @@ export default function SubagentAssignmentModal({
     let pool: SubagentAssignmentConfirmPayload['pool'] = [];
     let flatBindings: SubagentRouteBinding[] = [];
 
-    if (mode === 'default') {
+    const effectiveMode = page === 'custom' ? mode : 'default';
+
+    if (effectiveMode === 'default') {
       const seed =
         hasDefaultBinding && defaultBinding
           ? defaultBinding
@@ -210,14 +241,13 @@ export default function SubagentAssignmentModal({
         modelId: seed.modelId,
       }));
       flatBindings = [seed];
-    } else if (mode === 'random') {
+    } else if (effectiveMode === 'random') {
       if (!hasValidKeys) {
         setError(t(locale, 'assistant.subagentAssignment.needValidKey'));
         return;
       }
       pool = validKeys.map((k) => bindingFromKey(k));
       flatBindings = pool;
-      // Still emit assignments (daemon may ignore) using first pool entry per task.
       const first = pool[0]!;
       assignments = tasks.map((task) => ({
         callId: task.callId,
@@ -226,7 +256,6 @@ export default function SubagentAssignmentModal({
         modelId: first.modelId,
       }));
     } else {
-      // custom — fixed rows, one per task
       if (bindings.length !== tasks.length || bindings.some((b) => !b.providerId || !b.keyId || !b.modelId)) {
         setError(t(locale, 'assistant.subagentAssignment.needBinding'));
         return;
@@ -244,13 +273,12 @@ export default function SubagentAssignmentModal({
     setError(null);
     try {
       await onConfirm({
-        mode,
+        mode: effectiveMode,
         assignments,
         pool,
         bindings: flatBindings,
         sessionId: switchSessionId,
       });
-      // Keep locked; parent closes modal on success.
     } catch (err) {
       setError(
         err instanceof Error && err.message
@@ -262,6 +290,7 @@ export default function SubagentAssignmentModal({
   }, [
     submitting,
     confirmDisabled,
+    page,
     mode,
     hasDefaultBinding,
     defaultBinding,
@@ -274,11 +303,33 @@ export default function SubagentAssignmentModal({
     switchSessionId,
   ]);
 
+  // Countdown effect on Page 1
+  useEffect(() => {
+    if (!open || page !== 'confirm' || submitting) return;
+    setCountdown(10);
+    const timer = setInterval(() => {
+      setCountdown((c) => {
+        if (c <= 1) {
+          clearInterval(timer);
+          void handleConfirm();
+          return 0;
+        }
+        return c - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [open, page, submitting, handleConfirm]);
+
   if (!open) return null;
 
-  const defaultSummary = hasDefaultBinding && defaultBinding
-    ? `${defaultBinding.providerId} · ${defaultBinding.keyId.slice(0, 8)} · ${defaultBinding.modelId}`
-    : null;
+  const title = isSwitch
+    ? t(locale, 'assistant.subagentAssignment.switchKeyTitle')
+    : t(locale, 'assistant.subagentAssignment.title');
+  const reason =
+    interaction?.reason ||
+    (isSwitch
+      ? t(locale, 'assistant.subagentAssignment.switchKeyHint')
+      : t(locale, 'assistant.subagentAssignment.reason'));
 
   return (
     <div
@@ -289,199 +340,169 @@ export default function SubagentAssignmentModal({
       data-testid="subagent-assignment-modal"
     >
       <div className="w-full max-w-lg rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-xl">
-        <div className="border-b border-[var(--border)] px-4 py-3">
-          <h2 className="text-sm font-semibold text-[var(--text)]">{title}</h2>
-          <p className="mt-1 text-xs text-[var(--text-secondary)]">{reason}</p>
+        <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
+          <div>
+            <h2 className="text-sm font-semibold text-[var(--text)]">{title}</h2>
+            <p className="mt-1 text-xs text-[var(--text-secondary)]">{reason}</p>
+          </div>
+          {page === 'confirm' && (
+            <div className="rounded-full bg-[var(--primary)]/10 px-3 py-1 font-mono text-xs font-semibold text-[var(--primary)]">
+              {countdown}s
+            </div>
+          )}
         </div>
 
         <div className="space-y-3 px-4 py-3 text-sm">
-          {/* Task list — always show full batch */}
-          {!isSwitch && tasks.length > 0 ? (
-            <div>
-              <div className="mb-1 text-[11px] font-medium text-[var(--text-disabled)]">
-                {t(locale, 'assistant.subagentAssignment.tasks')}
+          {page === 'confirm' ? (
+            /* ── Page 1: Subagent Batch Confirmation ── */
+            <div className="space-y-3">
+              <div>
+                <div className="mb-1.5 text-[11px] font-medium text-[var(--text-disabled)]">
+                  {zh ? '即将在 10 秒后自动批量创建并执行以下子智能体：' : 'Subagents to be created in 10s:'}
+                </div>
+                <ul
+                  className="max-h-36 space-y-1 overflow-y-auto rounded border border-[var(--border)] bg-[var(--background)] px-3 py-2"
+                  data-testid="assignment-task-list"
+                >
+                  {tasks.map((task) => (
+                    <li key={task.callId} className="flex items-center justify-between text-xs">
+                      <span className="font-medium text-[var(--text)]">{task.name}</span>
+                      {task.prompt && task.prompt !== task.name ? (
+                        <span className="truncate text-[var(--text-disabled)] max-w-[200px]">
+                          {task.prompt}
+                        </span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
               </div>
-              <ul
-                className="max-h-28 space-y-1 overflow-y-auto rounded border border-[var(--border)] bg-[var(--background)] px-2 py-1.5"
-                data-testid="assignment-task-list"
-              >
-                {tasks.map((task) => (
-                  <li
-                    key={task.callId}
-                    className="truncate text-xs text-[var(--text-secondary)]"
-                    title={task.prompt || task.name}
-                  >
-                    <span className="font-medium text-[var(--text)]">{task.name}</span>
-                    {task.prompt && task.prompt !== task.name ? (
-                      <span className="text-[var(--text-disabled)]"> — {task.prompt}</span>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
 
-          <div>
-            <div className="mb-1 text-[11px] font-medium text-[var(--text-disabled)]">
-              {t(locale, 'assistant.subagentAssignment.mode')}
-            </div>
-            <div className="flex flex-col gap-1.5">
-              {(
-                [
-                  ['default', 'assistant.subagentAssignment.modeDefault'],
-                  ['random', 'assistant.subagentAssignment.modeRandom'],
-                  ['custom', 'assistant.subagentAssignment.modeCustom'],
-                ] as const
-              ).map(([value, key]) => {
-                const disabled =
-                  (value === 'default' && !hasDefaultBinding && !isSwitch) ||
-                  ((value === 'random' || value === 'custom') && !hasValidKeys);
-                return (
-                  <label
-                    key={value}
-                    className={`flex items-center gap-2 rounded px-2 py-1.5 ${
-                      disabled ? 'opacity-40' : 'hover:bg-[var(--surface-hover)]'
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="subagent-assign-mode"
-                      value={value}
-                      checked={mode === value}
-                      disabled={disabled || submitting}
-                      onChange={() => setMode(value)}
-                    />
-                    <span>{t(locale, key)}</span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-
-          {mode === 'default' ? (
-            hasDefaultBinding && defaultSummary ? (
-              <div
-                className="rounded border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--text-secondary)]"
-                data-testid="assignment-default-binding"
-              >
-                {t(locale, 'assistant.subagentAssignment.defaultBindingLabel')}: {defaultSummary}
+              <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-hover)]/60 p-2.5 text-xs text-[var(--text-secondary)]">
+                {zh
+                  ? '默认继承主会话供应商、默认密钥与模型。'
+                  : 'Defaults to main session provider, default key, and model.'}
               </div>
-            ) : (
-              <div
-                className="rounded border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-xs text-[var(--warning)]"
-                role="alert"
-                data-testid="assignment-missing-default"
-              >
-                {t(locale, 'assistant.subagentAssignment.missingDefaultBinding')}
-              </div>
-            )
-          ) : null}
-
-          {(mode === 'random' || mode === 'custom') && !hasValidKeys ? (
-            <div className="rounded border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-xs text-[var(--warning)]">
-              {t(locale, 'assistant.subagentAssignment.needValidKey')}
             </div>
-          ) : null}
-
-          {mode === 'random' && hasValidKeys ? (
-            <div className="text-xs text-[var(--text-secondary)]">
-              {t(locale, 'assistant.subagentAssignment.randomPoolHint').replace(
-                '{count}',
-                String(validKeys.length),
-              )}
-            </div>
-          ) : null}
-
-          {mode === 'custom' && hasValidKeys ? (
-            <div>
-              <div className="mb-1 text-[11px] font-medium text-[var(--text-disabled)]">
-                {t(locale, 'assistant.subagentAssignment.bindings')}
-              </div>
-              <div className="space-y-2">
-                {tasks.map((task, index) => {
-                  const b = bindings[index] ?? {
-                    providerId: validKeys[0]?.providerId ?? '',
-                    keyId: validKeys[0]?.keyId ?? '',
-                    modelId:
-                      validKeys[0]?.modelId || validKeys[0]?.models[0]?.id || '',
-                  };
-                  const keyOpts = validKeys.filter((k) => k.providerId === b.providerId);
-                  const providerIds = Array.from(new Set(validKeys.map((k) => k.providerId)));
-                  const models =
-                    validKeys.find(
-                      (k) => k.providerId === b.providerId && k.keyId === b.keyId,
-                    )?.models ?? [];
-                  return (
-                    <div
-                      key={task.callId}
-                      className="space-y-1 rounded border border-[var(--border)] p-2"
-                      data-testid={`assignment-row-${task.callId}`}
+          ) : (
+            /* ── Page 2: Separate Settings ── */
+            <div className="space-y-3">
+              <div>
+                <div className="mb-1 text-[11px] font-medium text-[var(--text-disabled)]">
+                  {t(locale, 'assistant.subagentAssignment.mode')}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  {(
+                    [
+                      ['default', 'assistant.subagentAssignment.modeDefault'],
+                      ['custom', 'assistant.subagentAssignment.modeCustom'],
+                    ] as const
+                  ).map(([value, key]) => (
+                    <label
+                      key={value}
+                      className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-[var(--surface-hover)]"
                     >
-                      <div className="truncate text-[11px] font-medium text-[var(--text)]">
-                        {task.name}
-                      </div>
-                      <div className="grid grid-cols-3 gap-1.5">
-                        <select
-                          className="rounded border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs"
-                          value={b.providerId}
-                          disabled={submitting}
-                          onChange={(e) => {
-                            const pid = e.target.value;
-                            const first = validKeys.find((k) => k.providerId === pid);
-                            updateBinding(index, {
-                              providerId: pid,
-                              keyId: first?.keyId ?? '',
-                              modelId: first?.modelId || first?.models[0]?.id || '',
-                            });
-                          }}
-                          aria-label={t(locale, 'assistant.subagentAssignment.provider')}
-                        >
-                          {providerIds.map((pid) => {
-                            const name =
-                              validKeys.find((k) => k.providerId === pid)?.providerName ?? pid;
-                            return (
-                              <option key={pid} value={pid}>
-                                {name}
-                              </option>
-                            );
-                          })}
-                        </select>
-                        <select
-                          className="rounded border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs"
-                          value={b.keyId}
-                          disabled={submitting}
-                          onChange={(e) => updateBinding(index, { keyId: e.target.value })}
-                          aria-label={t(locale, 'assistant.subagentAssignment.key')}
-                        >
-                          {(keyOpts.length ? keyOpts : validKeys).map((k) => (
-                            <option key={k.keyId} value={k.keyId}>
-                              {k.keyLabel || k.keyId}
-                            </option>
-                          ))}
-                        </select>
-                        <select
-                          className="rounded border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs"
-                          value={b.modelId}
-                          disabled={submitting}
-                          onChange={(e) => updateBinding(index, { modelId: e.target.value })}
-                          aria-label={t(locale, 'assistant.subagentAssignment.model')}
-                        >
-                          {(models.length
-                            ? models
-                            : [{ id: b.modelId, displayName: b.modelId }]
-                          ).map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.displayName || m.id}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                  );
-                })}
+                      <input
+                        type="radio"
+                        name="subagent-assign-mode"
+                        value={value}
+                        checked={mode === value}
+                        disabled={submitting}
+                        onChange={() => setMode(value)}
+                      />
+                      <span>{t(locale, key)}</span>
+                    </label>
+                  ))}
+                </div>
               </div>
+
+              {mode === 'custom' && hasValidKeys ? (
+                <div>
+                  <div className="mb-1 text-[11px] font-medium text-[var(--text-disabled)]">
+                    {t(locale, 'assistant.subagentAssignment.bindings')}
+                  </div>
+                  <div className="space-y-2">
+                    {tasks.map((task, index) => {
+                      const b = bindings[index] ?? {
+                        providerId: validKeys[0]?.providerId ?? '',
+                        keyId: validKeys[0]?.keyId ?? '',
+                        modelId: validKeys[0]?.modelId || validKeys[0]?.models[0]?.id || '',
+                      };
+                      const keyOpts = validKeys.filter((k) => k.providerId === b.providerId);
+                      const providerIds = Array.from(new Set(validKeys.map((k) => k.providerId)));
+                      const models =
+                        validKeys.find(
+                          (k) => k.providerId === b.providerId && k.keyId === b.keyId,
+                        )?.models ?? [];
+                      return (
+                        <div
+                          key={task.callId}
+                          className="space-y-1 rounded border border-[var(--border)] p-2"
+                          data-testid={`assignment-row-${task.callId}`}
+                        >
+                          <div className="truncate text-[11px] font-medium text-[var(--text)]">
+                            {task.name}
+                          </div>
+                          <div className="grid grid-cols-3 gap-1.5">
+                            <select
+                              className="rounded border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs"
+                              value={b.providerId}
+                              disabled={submitting}
+                              onChange={(e) => {
+                                const pid = e.target.value;
+                                const first = validKeys.find((k) => k.providerId === pid);
+                                updateBinding(index, {
+                                  providerId: pid,
+                                  keyId: first?.keyId ?? '',
+                                  modelId: first?.modelId || first?.models[0]?.id || '',
+                                });
+                              }}
+                            >
+                              {providerIds.map((pid) => {
+                                const name =
+                                  validKeys.find((k) => k.providerId === pid)?.providerName ?? pid;
+                                return (
+                                  <option key={pid} value={pid}>
+                                    {name}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                            <select
+                              className="rounded border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs"
+                              value={b.keyId}
+                              disabled={submitting}
+                              onChange={(e) => updateBinding(index, { keyId: e.target.value })}
+                            >
+                              {(keyOpts.length ? keyOpts : validKeys).map((k) => (
+                                <option key={k.keyId} value={k.keyId}>
+                                  {k.keyLabel || k.keyId}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              className="rounded border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs"
+                              value={b.modelId}
+                              disabled={submitting}
+                              onChange={(e) => updateBinding(index, { modelId: e.target.value })}
+                            >
+                              {(models.length
+                                ? models
+                                : [{ id: b.modelId, displayName: b.modelId }]
+                              ).map((m) => (
+                                <option key={m.id} value={m.id}>
+                                  {m.displayName || m.id}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
             </div>
-          ) : null}
+          )}
 
           {error ? (
             <div
@@ -493,28 +514,55 @@ export default function SubagentAssignmentModal({
           ) : null}
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-[var(--border)] px-4 py-3">
-          <button
-            type="button"
-            className="rounded border border-[var(--border)] px-3 py-1.5 text-xs hover:bg-[var(--surface-hover)]"
-            disabled={submitting}
-            onClick={onClose}
-          >
-            {t(locale, 'assistant.subagentAssignment.cancel')}
-          </button>
-          <button
-            type="button"
-            className="rounded bg-[var(--primary)] px-3 py-1.5 text-xs text-white disabled:opacity-50"
-            disabled={confirmDisabled}
-            onClick={() => void handleConfirm()}
-            data-testid="subagent-assignment-confirm"
-          >
-            {submitting
-              ? t(locale, 'assistant.subagentAssignment.processing')
-              : isSwitch
-                ? t(locale, 'assistant.subagentAssignment.switchConfirm')
-                : t(locale, 'assistant.subagentAssignment.confirm')}
-          </button>
+        <div className="flex items-center justify-between border-t border-[var(--border)] px-4 py-3">
+          {page === 'confirm' ? (
+            <button
+              type="button"
+              className="rounded border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--primary)] hover:bg-[var(--surface-hover)]"
+              disabled={submitting}
+              onClick={() => {
+                setPage('custom');
+                setMode('custom');
+              }}
+            >
+              {zh ? '单独设置' : 'Separate Settings'}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="rounded border border-[var(--border)] px-3 py-1.5 text-xs hover:bg-[var(--surface-hover)]"
+              disabled={submitting}
+              onClick={() => {
+                setPage('confirm');
+                setMode('default');
+                setCountdown(10);
+              }}
+            >
+              {zh ? '返回倒计时' : 'Back to Countdown'}
+            </button>
+          )}
+
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="rounded border border-[var(--border)] px-3 py-1.5 text-xs hover:bg-[var(--surface-hover)]"
+              disabled={submitting}
+              onClick={onClose}
+            >
+              {t(locale, 'assistant.subagentAssignment.cancel')}
+            </button>
+            <button
+              type="button"
+              className="rounded bg-[var(--primary)] px-3 py-1.5 text-xs text-white disabled:opacity-50"
+              disabled={confirmDisabled}
+              onClick={() => void handleConfirm()}
+              data-testid="subagent-assignment-confirm"
+            >
+              {submitting
+                ? t(locale, 'assistant.subagentAssignment.processing')
+                : (zh ? `确认并创建 (${countdown}s)` : `Confirm & Create (${countdown}s)`)}
+            </button>
+          </div>
         </div>
       </div>
     </div>

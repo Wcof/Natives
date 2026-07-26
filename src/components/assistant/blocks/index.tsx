@@ -48,6 +48,9 @@ export interface ContentBlock {
   permissionId?: string;
   artifactId?: string;
   subRunId?: string;
+  segmentId?: string;
+  summary?: string;
+  summaryStatus?: 'completed' | 'failed';
 }
 
 // ─── Block Renderers ────────────────────────────────────
@@ -62,9 +65,8 @@ function TextBlock({ block }: { block: ContentBlock }) {
 
 function ReasoningBlock({ block }: { block: ContentBlock }) {
   const live = Boolean(block.live);
-  // Default: expanded while live, collapsed when finished.
+  const zh = (block.locale ?? 'zh').startsWith('zh');
   const [expanded, setExpanded] = React.useState(live);
-  // Once the user toggles, stream updates must not override their choice.
   const userOverrideRef = React.useRef(false);
 
   React.useEffect(() => {
@@ -79,6 +81,9 @@ function ReasoningBlock({ block }: { block: ContentBlock }) {
     durationMs: block.durationMs,
     locale: block.locale,
   });
+
+  const hasSummary = Boolean(!live && block.summary);
+  const summaryFailed = Boolean(!live && block.summaryStatus === 'failed');
 
   return (
     <div className="my-3 border-b border-[var(--border-subtle)] py-2">
@@ -99,7 +104,21 @@ function ReasoningBlock({ block }: { block: ContentBlock }) {
           <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--primary)]" aria-hidden />
         )}
         <span>{label}</span>
+        {summaryFailed && (
+          <span className="text-[10px] text-[var(--warning)] ml-1">
+            ({zh ? '总结生成失败' : 'Summary failed'})
+          </span>
+        )}
       </button>
+
+      {/* Completed state summary (when collapsed and summary exists) */}
+      {!expanded && hasSummary && (
+        <div className="mt-1 text-xs text-[var(--text-secondary)] italic">
+          {block.summary}
+        </div>
+      )}
+
+      {/* Full reasoning body when expanded */}
       {expanded && block.reasoning && (
         <div className="mt-1 max-h-[280px] overflow-y-auto rounded bg-[var(--surface-hover)]/60 px-2 py-1 text-sm text-[var(--text-secondary)] italic whitespace-pre-wrap">
           {block.reasoning}

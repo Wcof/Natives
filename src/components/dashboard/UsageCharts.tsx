@@ -376,22 +376,26 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
 
           {heatmap.length > 0 && hasHourlySources ? (
             <div className={styles.chartBody} style={{ alignItems: 'stretch' }}>
-              <div style={{ flex: 1, display: 'flex', gap: 8 }}>
-                {/* Day labels */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 3, justifyContent: 'space-between', paddingBottom: 14 }}>
-                  {DAY_LABELS.map((day) => (
-                    <span key={day} style={{ fontSize: '9px', color: 'var(--text-dim)', height: 11, display: 'flex', alignItems: 'center', minWidth: 20 }}>
-                      {day}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 3, justifyContent: 'center' }}>
+                {grid.matrix.map((row, rIdx) => (
+                  <div key={rIdx} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {/* Day label directly aligned with row */}
+                    <span
+                      style={{
+                        fontSize: '9px',
+                        color: 'var(--text-dim)',
+                        minWidth: 22,
+                        flexShrink: 0,
+                        textAlign: 'right',
+                        userSelect: 'none',
+                      }}
+                    >
+                      {DAY_LABELS[rIdx]}
                     </span>
-                  ))}
-                </div>
 
-                {/* Grid */}
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                  {grid.matrix.map((row, rIdx) => (
-                    <div key={rIdx} style={{ display: 'flex', gap: 3 }}>
+                    {/* Row Cells */}
+                    <div style={{ flex: 1, display: 'flex', gap: 3 }}>
                       {row.map((val, cIdx) => {
-                        const hasVal = val > 0;
                         const level = getChartVolumeLevel(val, grid.maxVal);
                         const colorVar = `var(--chart-volume-${level})`;
 
@@ -441,10 +445,13 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
                         );
                       })}
                     </div>
-                  ))}
+                  </div>
+                ))}
 
-                  {/* Hour labels */}
-                  <div style={{ display: 'flex', position: 'relative', marginTop: 2, height: 12 }}>
+                {/* Hour labels */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2, height: 12 }}>
+                  <div style={{ minWidth: 22, flexShrink: 0 }} />
+                  <div style={{ flex: 1, position: 'relative', height: 12 }}>
                     {[0, 6, 12, 18, 23].map((hour) => {
                       const leftPercent = (hour / 23) * 100;
                       return (

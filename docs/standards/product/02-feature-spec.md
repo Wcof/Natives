@@ -1,7 +1,7 @@
 # 产品架构 02 · 功能治理与无假数据红线
 
-> **版本**: 1.1.0 · **日期**: 2026-07-23  
-> **关联 ADR**: [ADR-0012](../../adr/0012-product-identity-workshop-scope.md)、[ADR-0013](../../adr/0013-creative-app-dual-source.md)  
+> **版本**: 1.2.0 · **日期**: 2026-07-26  
+> **关联 ADR**: [ADR-0012](../../adr/0012-product-identity-workshop-scope.md)、[ADR-0013](../../adr/0013-creative-app-dual-source.md)、[ADR-0014](../../adr/0014-creative-app-creator-workbench.md)  
 > **关联源文件**: `src/lib/error-classifier.ts`、`src/components/ui/EmptyState.tsx`、各功能组件  
 > **承接**: 根 `CLAUDE.md`「No fake data」；能力广告 ⊆ 可调（引擎契约）
 
@@ -92,9 +92,9 @@
 
 ## 五、功能树（按产品维度）
 
-以下按产品维度梳理所有功能。每个功能标注优先级（`P0`/`P1`/`P2`）和所属组件。
+以下按产品维度梳理所有功能。每个功能标注优先级（`P0`/`P1`/`P2`）和所属组件。各域按 ADR-0012 的三面（Hub / Workshop / Embed）归类，标注在域标题后（【Hub】【Workshop】【Embed】【全局】）；G–J 为按代码现状补录的新域，每个条目均可追溯到真实源文件或已冻结的 ADR 设计（后者显式标注状态，遵守 R-F2 无假数据红线）。
 
-### A. 文件管理（File Manager）— P0
+### A. 文件管理（File Manager）【Hub】— P0
 
 ```
 文件管理
@@ -143,7 +143,7 @@
     └── 命令面板（cmd palette）              P2
 ```
 
-### B. 终端管理（Terminal）— P0
+### B. 终端管理（Terminal）【Hub】— P0
 
 ```
 终端管理
@@ -161,7 +161,7 @@
     └── 字体配置（Nerd Font 优先）             P1
 ```
 
-### C. Settings 设置 — P0
+### C. Settings 设置【全局】— P0
 
 ```
 设置（Settings）
@@ -182,7 +182,7 @@
     └── 系统信息                              P1
 ```
 
-### D. Dashboard 仪表盘 — P1
+### D. Dashboard 仪表盘【Hub】— P1
 
 ```
 Dashboard
@@ -194,7 +194,7 @@ Dashboard
 └── Kanban 看板                               P2
 ```
 
-### E. 预览与查看（Preview）— P1
+### E. 预览与查看（Preview）【Hub】— P1
 
 ```
 预览与查看
@@ -205,7 +205,7 @@ Dashboard
 └── 文件跟随（follow mode + 产物卡片）         P1
 ```
 
-### F. 安全与信任 — P0
+### F. 安全与信任【全局】— P0
 
 ```
 安全与信任

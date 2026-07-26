@@ -60,7 +60,7 @@ export async function readActiveProject(
   if (legacy) {
     // One-time migration: write to the authoritative DB store and drop the
     // legacy localStorage value. localStorage must never be re-warmed as a
-    // parallel authority (Assistant Workspace Integration Design §6).
+    // parallel authority (Assistant Workspace Integration Design, Section 6).
     await writeActiveProject(api, legacy);
     try { window.localStorage.removeItem(LEGACY_KEY); } catch { /* ignore */ }
     return legacy;

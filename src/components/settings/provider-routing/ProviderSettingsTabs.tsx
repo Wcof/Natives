@@ -1,19 +1,21 @@
 'use client';
 
-import { Route, Store } from 'lucide-react';
+import { Bot, Route, Store } from 'lucide-react';
 import { BORDER_RADIUS, FONT_SIZE, SPACING } from '@/lib/design-tokens';
 import { t, type Locale } from '@/i18n';
 
-export type ProviderSettingsTab = 'management' | 'routing';
+export type ProviderSettingsTab = 'management' | 'routing' | 'subagents';
 
 export function ProviderSettingsTabs({ locale, activeTab, onChange }: {
   locale: Locale;
   activeTab: ProviderSettingsTab;
   onChange: (tab: ProviderSettingsTab) => void;
 }) {
+  const zh = locale.startsWith('zh');
   const tabs: Array<{ id: ProviderSettingsTab; label: string; icon: React.ReactNode }> = [
     { id: 'management', label: t(locale, 'settings.providerManagementTab'), icon: <Store size={15} /> },
     { id: 'routing', label: t(locale, 'settings.providerRoutingTab'), icon: <Route size={15} /> },
+    { id: 'subagents', label: zh ? '子智能体' : 'Subagents', icon: <Bot size={15} /> },
   ];
   return (
     <div role="tablist" aria-label={t(locale, 'settings.providerTabsLabel')} style={tabListStyle}>
