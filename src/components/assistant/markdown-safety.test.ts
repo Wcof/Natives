@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   isSafeMarkdownUrl,
+  isSafeImageSource,
   transformMarkdownUrl,
   pluginsFilter,
   rewriteMarkdownNode,
@@ -88,6 +89,67 @@ test('SAFE_MARKDOWN_ELEMENTS includes GFM structure and excludes script/style', 
   assert.ok(!(SAFE_MARKDOWN_ELEMENTS as readonly string[]).includes('script'));
   assert.ok(!(SAFE_MARKDOWN_ELEMENTS as readonly string[]).includes('style'));
   assert.ok(!(SAFE_MARKDOWN_ELEMENTS as readonly string[]).includes('iframe'));
+});
+
+test('img src allows base64 raster data URLs only (G13)', () => {
+  const png = 'data:image/png;base64,iVBORw0KGgo=';
+  const webp = 'data:image/webp;base64,AAAA';
+  const jpeg = 'data:image/jpeg;base64,AAAA';
+  assert.equal(isSafeImageSource(png), true);
+  assert.equal(isSafeImageSource(webp), true);
+  assert.equal(isSafeImageSource(jpeg), true);
+  assert.equal(isSafeImageSource('data:image/svg+xml;base64,AAAA'), false, 'svg can script');
+  assert.equal(isSafeImageSource('data:text/html;base64,AAAA'), false);
+  assert.equal(isSafeImageSource('data:image/png,notbase64'), false);
+  assert.equal(isSafeImageSource('https://example.com/x.png'), true);
+
+  // urlTransform is tag-aware: img src passes, everything else keeps rejecting data:
+  assert.equal(transformMarkdownUrl(png, 'src', { tagName: 'img' }), png);
+  assert.equal(transformMarkdownUrl(png, 'href', { tagName: 'a' }), '');
+  assert.equal(transformMarkdownUrl(png), '');
+  assert.equal(
+    transformMarkdownUrl('data:image/svg+xml;base64,AAAA', 'src', { tagName: 'img' }),
+    '',
+  );
+
+  // rehype rewrite mirrors the same rule
+  const img = {
+    type: 'element',
+    tagName: 'img',
+    properties: { src: png } as Record<string, unknown>,
+  };
+  rewriteMarkdownNode(img);
+  assert.equal(img.properties.src, png);
+  const evilImg = {
+    type: 'element',
+    tagName: 'img',
+    properties: { src: 'data:text/html;base64,AAAA' } as Record<string, unknown>,
+  };
+  rewriteMarkdownNode(evilImg);
+  assert.equal(evilImg.properties.src, '');
+});
+
+test('table gets scroll-container class without widening the allowlist (G8)', () => {
+  const table = {
+    type: 'element',
+    tagName: 'table',
+    properties: {} as Record<string, unknown>,
+    children: [],
+  };
+  rewriteMarkdownNode(table);
+  assert.deepEqual(table.properties.className, ['md-table-overflow']);
+
+  // idempotent + preserves existing classes
+  const classed = {
+    type: 'element',
+    tagName: 'table',
+    properties: { className: 'foo md-table-overflow' } as Record<string, unknown>,
+  };
+  rewriteMarkdownNode(classed);
+  assert.deepEqual(classed.properties.className, ['foo', 'md-table-overflow']);
+
+  // div stays out of SAFE_MARKDOWN_ELEMENTS (no wrapper element security widening)
+  assert.ok(!(SAFE_MARKDOWN_ELEMENTS as readonly string[]).includes('div'));
 });
 
 test('empty / whitespace sources are considered non-content by callers', () => {

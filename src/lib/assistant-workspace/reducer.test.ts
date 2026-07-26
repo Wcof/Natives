@@ -495,3 +495,248 @@ test('snapshot apply rebuilds messages without wiping other conversations', () =
   assert.equal(state.messages['other-msg']!.contentBlocks[0]!.text, 'other');
   assert.equal(state.messages.m1!.contentBlocks[0]!.text, 'hello');
 });
+
+// ─── F1 regression: G1/G2/G3/G6/G9/P0-5/P0-13/G10 ────────
+
+test('interaction_responded removes pending interaction (engine wire name)', () => {
+  let state = withRun(createInitialWorkspaceState());
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 1, 'interaction_requested', {
+      interaction_id: 'i1',
+      id: 'i1',
+      kind: 'ask_user',
+      prompt: 'Pick one',
+    }),
+  });
+  assert.equal(state.runs.r1!.status, 'waiting_user');
+  assert.equal(selectPendingInteractions(state, 'c1').length, 1);
+
+  // Engine emits interaction_responded (RunEventKind::InteractionResponded),
+  // not interaction_resolved — the card must still disappear.
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 2, 'interaction_responded', {
+      interaction_id: 'i1',
+      response: { option: 'a' },
+    }),
+  });
+  assert.equal(selectPendingInteractions(state, 'c1').length, 0);
+  assert.deepEqual(state.interactionOrder, []);
+  assert.equal(state.runs.r1!.status, 'running');
+});
+
+test('interaction_resolved still removes pending interaction (legacy name)', () => {
+  let state = withRun(createInitialWorkspaceState());
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 1, 'interaction_requested', { id: 'i1', kind: 'ask_user', prompt: 'q' }),
+  });
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 2, 'interaction_resolved', { id: 'i1' }),
+  });
+  assert.equal(selectPendingInteractions(state, 'c1').length, 0);
+});
+
+test('terminal run event clears its pending interactions (no zombie cards)', () => {
+  let state = withRun(createInitialWorkspaceState());
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 1, 'permission_requested', {
+      permission_id: 'p1',
+      tool_call_id: 'tc',
+      tool_name: 'Write',
+      reason: 'need',
+      input: {},
+    }),
+  });
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 2, 'interaction_requested', { id: 'i1', kind: 'ask_user', prompt: 'q' }),
+  });
+  assert.equal(state.interactionOrder.length, 2);
+
+  // Another run's interaction must survive r1's terminal event.
+  state = withRun(state, 'r2', 'c2');
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r2', 1, 'interaction_requested', { id: 'i-other', kind: 'ask_user', prompt: 'x' }),
+  });
+
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 3, 'cancelled', { reason: 'user' }),
+  });
+  assert.equal(state.runs.r1!.status, 'cancelled');
+  assert.deepEqual(state.interactionOrder, ['i-other']);
+  assert.equal(state.interactions.p1, undefined);
+  assert.equal(state.interactions.i1, undefined);
+  assert.ok(state.interactions['i-other']);
+});
+
+test('context_compressed produces a structured compaction block that persists', () => {
+  let state = withRun(createInitialWorkspaceState());
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 1, 'text_delta', { text: 'before' }),
+  });
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 2, 'context_compressed', {
+      before_tokens: 12000,
+      after_tokens: 4000,
+      summary: 'dropped old tool outputs',
+    }),
+  });
+  const live = state.liveByRun.r1!.blocks.find((b) => b.type === 'compaction');
+  assert.ok(live, 'compaction block appended to live bubble');
+  assert.equal(live!.beforeTokens, 12000);
+  assert.equal(live!.afterTokens, 4000);
+  assert.equal(live!.summary, 'dropped old tool outputs');
+
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 3, 'completed', { reason: 'ok' }),
+  });
+  const msg = Object.values(state.messages).find((m) => m.runId === 'r1');
+  assert.ok(msg);
+  assert.ok(
+    msg!.contentBlocks.some((b) => b.type === 'compaction' && b.beforeTokens === 12000),
+    'compaction survives promotion to message',
+  );
+});
+
+test('generation_attempt_failed(retrying) surfaces a retry notice block', () => {
+  let state = withRun(createInitialWorkspaceState());
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 1, 'generation_attempt_failed', {
+      attempt: 1,
+      code: 'HTTP_503',
+      retryable: true,
+      retrying: true,
+    }),
+  });
+  const notice = state.liveByRun.r1!.blocks.find(
+    (b) => b.type === 'system_notice' && b.noticeKind === 'generation_retry',
+  );
+  assert.ok(notice, 'retry notice block appended');
+  assert.equal(notice!.noticeData!.attempt, 1);
+  assert.equal(notice!.noticeData!.code, 'HTTP_503');
+  assert.equal(notice!.noticeData!.retrying, true);
+});
+
+test('generation_attempt_failed(final) does not add a notice (failed event owns it)', () => {
+  let state = withRun(createInitialWorkspaceState());
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 1, 'generation_attempt_failed', {
+      attempt: 3,
+      code: 'HTTP_503',
+      retryable: true,
+      retrying: false,
+    }),
+  });
+  const notices = state.liveByRun.r1?.blocks.filter((b) => b.type === 'system_notice') ?? [];
+  assert.equal(notices.length, 0);
+});
+
+test('text -> tool -> text keeps two text blocks in stream order (no gluing)', () => {
+  let state = withRun(createInitialWorkspaceState());
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 1, 'text_delta', { text: 'explain A' }),
+  });
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 2, 'tool_call_started', { id: 't1', name: 'read_file' }),
+  });
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 3, 'tool_call_completed', { id: 't1', output: 'ok' }),
+  });
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 4, 'text_delta', { text: 'explain B' }),
+  });
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 5, 'text_delta', { text: ' more' }),
+  });
+  const types = state.liveByRun.r1!.blocks.map((b) => b.type);
+  assert.deepEqual(types, ['text', 'tool_call', 'text']);
+  assert.equal(state.liveByRun.r1!.blocks[0]!.text, 'explain A');
+  assert.equal(state.liveByRun.r1!.blocks[2]!.text, 'explain B more');
+});
+
+test('checkpoint / subagent events produce visible notice blocks', () => {
+  let state = withRun(createInitialWorkspaceState());
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 1, 'checkpoint_created', { checkpoint_id: 'cp-1', label: 'run start' }),
+  });
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 2, 'subagent_created', { sub_run_id: 'sub1', task: 'Explore' }),
+  });
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: ev('r1', 3, 'checkpoint_rewound', { checkpoint_id: 'cp-1', paths: ['a.ts', 'b.ts'] }),
+  });
+  const blocks = state.liveByRun.r1!.blocks;
+  const created = blocks.find((b) => b.noticeKind === 'checkpoint_created');
+  assert.ok(created);
+  assert.equal(created!.noticeData!.checkpointId, 'cp-1');
+  const sub = blocks.find((b) => b.type === 'subagent');
+  assert.ok(sub);
+  assert.equal(sub!.subRunId, 'sub1');
+  assert.equal(sub!.noticeData!.task, 'Explore');
+  const rewound = blocks.find((b) => b.noticeKind === 'checkpoint_rewound');
+  assert.ok(rewound);
+  assert.equal(rewound!.noticeData!.count, 2);
+  // state-level child tracking still intact
+  assert.deepEqual(state.childRunsByParent.r1, ['sub1']);
+});
+
+test('eventsByRun LRU: old terminal run buffers evicted, active runs kept', () => {
+  let state = createInitialWorkspaceState();
+  const evAt = (runId: string, sequence: number, type: string, iso: string): RunEvent => ({
+    runId,
+    sequence,
+    timestamp: iso,
+    type,
+    payload: {},
+  });
+  // 10 terminal runs with strictly increasing finish times
+  for (let i = 1; i <= 10; i += 1) {
+    const runId = `run-${String(i).padStart(2, '0')}`;
+    state = withRun(state, runId, 'c1');
+    const iso = `2026-07-17T12:${String(i).padStart(2, '0')}:00.000Z`;
+    state = workspaceReducer(state, {
+      type: 'event/apply',
+      event: evAt(runId, 1, 'started', iso),
+    });
+    state = workspaceReducer(state, {
+      type: 'event/apply',
+      event: evAt(runId, 2, 'completed', iso),
+    });
+  }
+  // one active run with events
+  state = withRun(state, 'run-live', 'c1');
+  state = workspaceReducer(state, {
+    type: 'event/apply',
+    event: evAt('run-live', 1, 'text_delta', '2026-07-17T13:00:00.000Z'),
+  });
+
+  const terminalKeys = Object.keys(state.eventsByRun).filter((id) => id !== 'run-live');
+  assert.equal(terminalKeys.length, 8, 'keeps only the 8 most recent terminal runs');
+  assert.ok(!state.eventsByRun['run-01'], 'oldest evicted');
+  assert.ok(!state.eventsByRun['run-02'], 'second oldest evicted');
+  assert.ok(state.eventsByRun['run-10'], 'newest terminal kept');
+  assert.ok(state.eventsByRun['run-live'], 'active run never evicted');
+  // watermark survives eviction so late duplicates still dedupe
+  assert.equal(state.lastSequenceByRun['run-01'], 2);
+  // promoted messages are untouched by event eviction
+  assert.ok(Object.values(state.messages).some((m) => m.runId === 'run-01'));
+});

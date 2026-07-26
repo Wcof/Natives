@@ -73,8 +73,18 @@ export function mapWireConversation(raw: Record<string, unknown>): Conversation 
   };
 }
 
-function mapWireBlock(block: Record<string, unknown>): ContentBlock {
+/**
+ * Daemon-internal bookkeeping blocks that carry no user-visible content.
+ * `run_reference` is prepended to every assistant message by the daemon
+ * (conversation_store.rs) to link the message to its run; rendering it as a
+ * legacy block produced a dashed "Legacy block (run_reference)" box on every
+ * refreshed message. Filter these out at the wire boundary.
+ */
+const INTERNAL_WIRE_BLOCK_TYPES = new Set(['run_reference']);
+
+function mapWireBlock(block: Record<string, unknown>): ContentBlock | null {
   const type = str(block.type, 'legacy') as ContentBlock['type'];
+  if (INTERNAL_WIRE_BLOCK_TYPES.has(type)) return null;
   const content = (block.content ?? block) as Record<string, unknown>;
   switch (type) {
     case 'text':
@@ -151,7 +161,9 @@ export function mapWireMessage(raw: Record<string, unknown>): Message {
     inputTokens: num(raw.input_tokens ?? raw.inputTokens),
     outputTokens: num(raw.output_tokens ?? raw.outputTokens),
     createdAt: str(raw.created_at ?? raw.createdAt, new Date().toISOString()),
-    contentBlocks: blocksRaw.map((b) => mapWireBlock((b ?? {}) as Record<string, unknown>)),
+    contentBlocks: blocksRaw
+      .map((b) => mapWireBlock((b ?? {}) as Record<string, unknown>))
+      .filter((b): b is ContentBlock => b !== null),
     runId: optStr(raw.run_id ?? raw.runId),
   };
 }

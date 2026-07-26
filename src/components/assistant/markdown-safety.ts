@@ -68,8 +68,31 @@ export function isSafeMarkdownUrl(raw: string): boolean {
   return true;
 }
 
-/** react-markdown urlTransform: unsafe → empty string (dropped). */
-export function transformMarkdownUrl(url: string): string {
+/**
+ * Inline image payloads: only raster data URLs with strict mime + base64 body.
+ * Applies to <img src> ONLY — every other tag/attribute keeps rejecting data:.
+ */
+const SAFE_IMAGE_DATA_URL = /^data:image\/(?:png|jpe?g|gif|webp);base64,[a-zA-Z0-9+/=]+$/;
+
+export function isSafeImageSource(raw: string): boolean {
+  const value = String(raw ?? '').trim();
+  if (SAFE_IMAGE_DATA_URL.test(value)) return true;
+  return isSafeMarkdownUrl(value);
+}
+
+/**
+ * react-markdown urlTransform: unsafe → empty string (dropped).
+ * react-markdown calls this as (url, key, node); when the target is an
+ * <img src>, base64 raster data URLs are additionally allowed.
+ */
+export function transformMarkdownUrl(
+  url: string,
+  key?: string,
+  node?: { tagName?: string } | null,
+): string {
+  if (key === 'src' && node?.tagName?.toLowerCase() === 'img') {
+    return isSafeImageSource(url) ? url : '';
+  }
   return isSafeMarkdownUrl(url) ? url : '';
 }
 
@@ -134,9 +157,24 @@ export function rewriteMarkdownNode(node: unknown): void {
 
   if (tag === 'img' && n.properties) {
     const src = n.properties.src;
-    if (typeof src === 'string' && !isSafeMarkdownUrl(src)) {
+    if (typeof src === 'string' && !isSafeImageSource(src)) {
       n.properties.src = '';
     }
+  }
+
+  if (tag === 'table') {
+    // Wide GFM tables must scroll inside their own box instead of blowing the
+    // conversation column open. A dedicated class keeps the CSS hook explicit
+    // (styled in MarkdownText.module.css) without widening the element allowlist.
+    n.properties = n.properties ?? {};
+    const existing = n.properties.className;
+    const classes = Array.isArray(existing)
+      ? existing.map(String)
+      : typeof existing === 'string' && existing
+        ? existing.split(/\s+/)
+        : [];
+    if (!classes.includes('md-table-overflow')) classes.push('md-table-overflow');
+    n.properties.className = classes;
   }
 
   if (tag === 'input' && n.properties) {

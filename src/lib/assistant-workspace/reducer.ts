@@ -75,6 +75,8 @@ function statusFromEventType(type: string): RunStatus | null {
     case 'usage_updated':
     case 'file_changed':
     case 'permission_responded':
+    case 'interaction_resolved':
+    case 'interaction_responded':
       return 'running';
     case 'permission_requested':
       return 'waiting_permission';
@@ -116,10 +118,14 @@ function ensureLive(state: AssistantWorkspaceState, run: Run): LiveBubble {
 
 function upsertTextBlock(blocks: ContentBlock[], text: string): ContentBlock[] {
   const next = [...blocks];
-  const idx = next.findIndex((b) => b.type === 'text');
-  if (idx >= 0) {
-    const cur = next[idx]!;
-    next[idx] = { ...cur, text: `${cur.text ?? ''}${text}` };
+  // Stream-order merge (mirrors upsertReasoning): only append to the text block
+  // when it is the LAST block. Anything in between (tool card, notice, …) starts
+  // a new text block, so "explain A → tool → explain B" keeps its order instead
+  // of gluing B onto A.
+  const lastIdx = next.length - 1;
+  if (lastIdx >= 0 && next[lastIdx]!.type === 'text') {
+    const cur = next[lastIdx]!;
+    next[lastIdx] = { ...cur, text: `${cur.text ?? ''}${text}` };
   } else {
     next.push({ type: 'text', text });
   }
@@ -221,6 +227,102 @@ function applyEventToLive(
         live.attemptSnapshots = { ...live.attemptSnapshots };
         delete live.attemptSnapshots[attempt];
       }
+      break;
+    }
+    case 'generation_attempt_failed': {
+      // Upstream retry visibility: while the engine retries (503/EMPTY_RESPONSE…)
+      // the user otherwise only sees "thinking". Surface a lightweight notice.
+      // Non-retrying failures are followed by a `failed` event (error block),
+      // so only the retrying case emits a notice. Structured data only — the
+      // rendering layer formats/localizes it.
+      const retrying = Boolean(p.retrying);
+      if (retrying) {
+        live.blocks = [
+          ...live.blocks,
+          {
+            type: 'system_notice',
+            noticeKind: 'generation_retry',
+            noticeData: {
+              attempt: Number(p.attempt ?? 0),
+              maxAttempts:
+                p.max_attempts != null || p.maxAttempts != null
+                  ? Number(p.max_attempts ?? p.maxAttempts)
+                  : undefined,
+              code: String(p.code ?? ''),
+              retryable: Boolean(p.retryable),
+              retrying,
+            },
+          },
+        ];
+      }
+      break;
+    }
+    case 'context_compressed': {
+      // Engine compacted the conversation context; make it visible as a
+      // compaction divider block (before/after tokens + summary).
+      live.blocks = [
+        ...live.blocks,
+        {
+          type: 'compaction',
+          beforeTokens: Number(p.before_tokens ?? p.beforeTokens ?? 0),
+          afterTokens: Number(p.after_tokens ?? p.afterTokens ?? 0),
+          summary: String(p.summary ?? ''),
+        },
+      ];
+      break;
+    }
+    case 'checkpoint_created': {
+      live.blocks = [
+        ...live.blocks,
+        {
+          type: 'system_notice',
+          noticeKind: 'checkpoint_created',
+          noticeData: {
+            checkpointId: String(p.checkpoint_id ?? p.checkpointId ?? ''),
+            label: p.label != null ? String(p.label) : undefined,
+          },
+        },
+      ];
+      break;
+    }
+    case 'checkpoint_rewound': {
+      const paths = Array.isArray(p.paths) ? p.paths.map(String) : [];
+      live.blocks = [
+        ...live.blocks,
+        {
+          type: 'system_notice',
+          noticeKind: 'checkpoint_rewound',
+          noticeData: {
+            checkpointId: String(p.checkpoint_id ?? p.checkpointId ?? ''),
+            paths,
+            count: paths.length,
+            conflictPolicy:
+              p.conflict_policy != null || p.conflictPolicy != null
+                ? String(p.conflict_policy ?? p.conflictPolicy)
+                : undefined,
+          },
+        },
+      ];
+      break;
+    }
+    case 'subagent_created': {
+      // State-level tracking (childRunsByParent…) happens in applyOneEvent;
+      // here we add a timeline block so the spawn is visible in the answer body.
+      live.blocks = [
+        ...live.blocks,
+        {
+          type: 'subagent',
+          subRunId: String(p.sub_run_id ?? p.subRunId ?? ''),
+          noticeKind: 'subagent_created',
+          noticeData: {
+            task: String(p.task ?? ''),
+            agentProfileId:
+              p.agent_profile_id != null || p.agentProfileId != null
+                ? String(p.agent_profile_id ?? p.agentProfileId)
+                : undefined,
+          },
+        },
+      ];
       break;
     }
     case 'text_delta':
@@ -514,8 +616,12 @@ function applyEventToLive(
       }
       break;
     }
-    case 'interaction_resolved': {
-      removeInteractionId = String(p.id ?? p.interaction_id ?? '');
+    // The engine emits `interaction_responded` (Rust RunEventKind::InteractionResponded);
+    // older paths used `interaction_resolved`. Accept both so cross-device /
+    // timeout resolves actually dismiss the pending card and unlock the composer.
+    case 'interaction_resolved':
+    case 'interaction_responded': {
+      removeInteractionId = String(p.id ?? p.interaction_id ?? p.interactionId ?? '');
       break;
     }
     case 'artifact_created': {
@@ -559,6 +665,43 @@ function applyEventToLive(
 
 type ConflictFiles = Array<{ path: string; base?: string; ours?: string; theirs?: string }>;
 type AskOpts = Array<{ id: string; label: string; description?: string }>;
+
+const TERMINAL_EVENT_TYPES = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
+
+/**
+ * Max number of TERMINAL runs whose event buffers stay resident.
+ * Per-run buffers are already capped at 2000 events, but run keys were never
+ * evicted, so long sessions grew without bound (P0-13). Active runs are never
+ * evicted; `lastSequenceByRun` is kept so late duplicates still dedupe.
+ *
+ * NOTE(P0-13, messages): `messages` / `messagesByConversation` also only grow.
+ * They cannot be LRU-evicted safely here because messagesByConversation order
+ * is the timeline source of truth and messagePageInfoByConversation cursors
+ * assume a contiguous prefix; dropping mid-list ids would corrupt pagination
+ * ("load earlier") and copy paths. Deferred to a follow-up round with a
+ * per-conversation windowing design that keeps page cursors consistent.
+ */
+const TERMINAL_RUN_EVENT_CACHE = 8;
+
+/** Evict event buffers of the least-recently-finished terminal runs (LRU). */
+function evictTerminalRunEvents(state: AssistantWorkspaceState): AssistantWorkspaceState {
+  const terminalIds = Object.keys(state.eventsByRun).filter((id) => {
+    const run = state.runs[id];
+    return run ? isTerminalRunStatus(run.status) : false;
+  });
+  if (terminalIds.length <= TERMINAL_RUN_EVENT_CACHE) return state;
+  const newestFirst = terminalIds.sort((a, b) => {
+    const fa = state.runs[a]?.finishedAt ?? '';
+    const fb = state.runs[b]?.finishedAt ?? '';
+    if (fa !== fb) return fb.localeCompare(fa);
+    return (state.runs[b]?.lastEventSequence ?? 0) - (state.runs[a]?.lastEventSequence ?? 0);
+  });
+  const eventsByRun = { ...state.eventsByRun };
+  for (const id of newestFirst.slice(TERMINAL_RUN_EVENT_CACHE)) {
+    delete eventsByRun[id];
+  }
+  return { ...state, eventsByRun };
+}
 
 function mergeLiveIntoMessages(
   state: AssistantWorkspaceState,
@@ -861,6 +1004,26 @@ function applyOneEvent(
       interactions,
       interactionOrder: next.interactionOrder.filter((id) => id !== removeInteractionId),
     };
+  }
+
+  // Run reached a terminal state: pending interactions bound to this run can
+  // never be answered anymore — drop them so cards do not linger and lock the
+  // composer (P0-5), and evict event buffers of old terminal runs (P0-13).
+  if (TERMINAL_EVENT_TYPES.has(String(event.type))) {
+    const staleIds = next.interactionOrder.filter(
+      (id) => next.interactions[id]?.runId === runId,
+    );
+    if (staleIds.length > 0) {
+      const stale = new Set(staleIds);
+      const interactions = { ...next.interactions };
+      for (const id of staleIds) delete interactions[id];
+      next = {
+        ...next,
+        interactions,
+        interactionOrder: next.interactionOrder.filter((id) => !stale.has(id)),
+      };
+    }
+    next = evictTerminalRunEvents(next);
   }
 
   next = mergeLiveIntoMessages(next, next.runs[runId]!, live, isTerminalRunStatus(next.runs[runId]!.status));

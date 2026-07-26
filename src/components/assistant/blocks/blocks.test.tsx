@@ -125,3 +125,57 @@ describe('ContentBlockRenderers', () => {
     assert.ok(reasoning !== null);
     assert.ok(tool !== null);
   });
+
+  it('compaction block renders as its own expandable divider (G2)', () => {
+    const result = renderBlock({
+      type: 'compaction',
+      beforeTokens: 12000,
+      afterTokens: 4000,
+      summary: 'dropped old tool outputs',
+    }, 0) as { type?: { name?: string } };
+    assert.ok(result !== null, 'Compaction block should render');
+    assert.equal(
+      typeof result.type === 'function' ? result.type.name : String(result.type),
+      'CompactionBlock',
+      'compaction must not fall through to the generic notice placeholder',
+    );
+  });
+
+  it('system_notice / subagent blocks route to SystemNoticeBlock (G10)', () => {
+    const retry = renderBlock({
+      type: 'system_notice',
+      noticeKind: 'generation_retry',
+      noticeData: { attempt: 2, maxAttempts: 3, code: 'HTTP_503', retrying: true },
+    }, 0) as { type?: { name?: string } };
+    assert.equal(typeof retry.type === 'function' ? retry.type.name : '', 'SystemNoticeBlock');
+
+    const checkpoint = renderBlock({
+      type: 'system_notice',
+      noticeKind: 'checkpoint_created',
+      noticeData: { checkpointId: 'cp-1' },
+    }, 1);
+    assert.ok(checkpoint !== null);
+
+    const rewound = renderBlock({
+      type: 'system_notice',
+      noticeKind: 'checkpoint_rewound',
+      noticeData: { count: 2, paths: ['a.ts', 'b.ts'] },
+    }, 2);
+    assert.ok(rewound !== null);
+
+    const subagent = renderBlock({
+      type: 'subagent',
+      subRunId: 'sub1',
+      noticeKind: 'subagent_created',
+      noticeData: { task: 'Explore' },
+    }, 3) as { type?: { name?: string } };
+    assert.equal(typeof subagent.type === 'function' ? subagent.type.name : '', 'SystemNoticeBlock');
+
+    // Unknown notice kinds must not crash the timeline (existing contract).
+    const unknownKind = renderBlock({
+      type: 'system_notice',
+      noticeKind: 'some_future_kind',
+      noticeData: {},
+    }, 4);
+    assert.ok(unknownKind !== null);
+  });
