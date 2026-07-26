@@ -58,6 +58,8 @@ export default function JobsPage() {
   const [editing, setEditing] = useState<JobDetail | null>(null);
   const [deleting, setDeleting] = useState<JobSummary | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [lastSuccessAt, setLastSuccessAt] = useState<number | null>(null);
+  const [staleFailures, setStaleFailures] = useState(0);
 
   // 首个语句即 await，effect 内不产生同步 setState（react-hooks/set-state-in-effect）
   const refresh = useCallback(async (silent: boolean) => {
@@ -65,8 +67,12 @@ export default function JobsPage() {
       const result = await jobList();
       setData(result);
       setLoadError(null);
+      setLastSuccessAt(Date.now());
+      setStaleFailures(0);
     } catch (err) {
-      // 静默轮询失败不清空已展示的数据，仅在首屏加载失败时全屏报错
+      // 静默轮询失败不清空已展示的数据，仅在首屏加载失败时全屏报错；
+      // 连续失败计数用于「数据可能已过期」的轻量提示（三态诚实）
+      setStaleFailures((n) => n + 1);
       if (!silent) setLoadError(err instanceof Error ? err.message : String(err));
     } finally {
       if (!silent) setLoading(false);
@@ -237,6 +243,29 @@ export default function JobsPage() {
           {t(locale, 'jobs.createJob')}
         </button>
       </div>
+
+      {/* 静默轮询连续失败 → 数据可能过期（不清空列表，仅轻量提示） */}
+      {data != null && staleFailures >= 2 && (
+        <div
+          role="status"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '6px 12px',
+            borderRadius: 10,
+            border: '1px solid var(--border)',
+            color: 'var(--text-secondary)',
+            fontSize: '0.75rem',
+            flexShrink: 0,
+          }}
+        >
+          <AlertTriangle size={13} style={{ flexShrink: 0, color: 'var(--warning)' }} />
+          {t(locale, 'jobs.staleBanner', {
+            time: lastSuccessAt != null ? fmtDateTime(lastSuccessAt) : '—',
+          })}
+        </div>
+      )}
 
       {/* 执行链路未接线提示（三态诚实） */}
       {data != null && !dispatcherWired && (
