@@ -37,6 +37,7 @@ const LazyAnnotationEditor = lazy(() => import('@/components/screenshot/Annotati
 const LazyReleaseWizardDialog = lazy(() => import('@/components/release/ReleaseWizardDialog'));
 const LazyUpdateNotification = lazy(() => import('@/components/update/UpdateNotification'));
 const LazyModuleDetails = lazy(() => import('./ModuleDetails'));
+const LazyUsernameOnboarding = lazy(() => import('@/components/onboarding/UsernameOnboarding'));
 const LazyFallback = () => (
   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 16 }}>
     <MathCurveLoader size={48} />
@@ -348,12 +349,15 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
   const effectiveSidebarCollapsed = isSettingsMode ? false : state.sidebarCollapsed;
 
 
-  // P1-5: Show onboarding if no username is set
-  // Bypassed to directly render the demo
-  // if (needsOnboarding === null) return null;
-  // if (needsOnboarding) {
-  //   return <UsernameOnboarding locale={locale} onComplete={() => setNeedsOnboarding(false)} />;
-  // }
+  // P1-5: 首次运行未设置用户名时进入引导页（此前被 demo 时期的注释旁路，导致
+  // UsernameOnboarding 成为死代码、主页问候语无名可用）
+  if (!isWidgetMode && needsOnboarding) {
+    return (
+      <Suspense fallback={null}>
+        <LazyUsernameOnboarding locale={locale} onComplete={() => setNeedsOnboarding(false)} />
+      </Suspense>
+    );
+  }
 
   // Widget mode — bypass chrome, render ControlHub directly
   if (isWidgetMode) {
