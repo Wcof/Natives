@@ -99,7 +99,6 @@ CREATE TABLE IF NOT EXISTS creative_draft_revisions (
     draft_id     TEXT NOT NULL REFERENCES creative_drafts(draft_id) ON DELETE CASCADE,
     revision     INTEGER NOT NULL,
     content_hash TEXT NOT NULL,                -- SHA256(html)，与 KI-1 同算法
-    lint_passed  INTEGER NOT NULL DEFAULT 1,   -- 恒为 1：lint 失败的修订不落盘
     created_at   TEXT NOT NULL,
     PRIMARY KEY (draft_id, revision)
 );
@@ -108,7 +107,9 @@ CREATE INDEX IF NOT EXISTS idx_creative_drafts_state ON creative_drafts(state);
 CREATE INDEX IF NOT EXISTS idx_creative_drafts_conversation ON creative_drafts(conversation_id);
 ```
 
-迁移写在 `db.rs::apply_migrations` 的 `current_version < 10` 分支，末尾 `INSERT OR REPLACE ... '_schema_version', '10'`。仅新建表，**不 ALTER 既有表、不 DROP**。
+迁移写在 `db.rs::apply_migrations` 的 `current_version < 10` 分支，末尾 `INSERT OR REPLACE ... '_schema_version', '10'`，并按 v9 的既有模式附一段版本外 repair path（`CREATE TABLE IF NOT EXISTS`），使携带超前版本标记的库也能补建表。仅新建表，**不 ALTER 既有表、不 DROP**。
+
+> 早期草案里 `creative_draft_revisions` 有一列 `lint_passed INTEGER NOT NULL DEFAULT 1`。实现时删除：lint 失败的修订根本不落盘，该列恒为 1，删掉不损失任何信息，留着反而暗示存在 `lint_passed = 0` 的行。
 
 ### 3.2 文件布局
 

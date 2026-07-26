@@ -13,6 +13,7 @@ pub mod context_window;
 /// existing `natives_lib::contract_linter::…` call sites intact.
 pub use contract_linter;
 pub mod creative_app;
+pub mod creative_draft;
 pub mod credential_broker;
 pub mod daemon;
 pub mod daemon_authority;

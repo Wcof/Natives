@@ -814,6 +814,44 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
         .map_err(Error::Database)?;
     }
 
+    // Migration v9→v10: creative draft store (ADR-0014).
+    //
+    // Drafts are deliberately kept out of `modules`: a draft has no contract_id,
+    // no sidebar entry and no domain namespace until the user publishes it.
+    // Revision content lives on disk under ~/.natives/drafts/<draft_id>/;
+    // only metadata is relational.
+    if current_version < 10 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS creative_drafts (
+                draft_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                intent TEXT NOT NULL,
+                conversation_id TEXT,
+                origin_module_id TEXT,
+                current_revision INTEGER NOT NULL DEFAULT 0,
+                state TEXT NOT NULL DEFAULT 'drafting'
+                    CHECK(state IN ('drafting','generating','ready','publishing','published','archived')),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS creative_draft_revisions (
+                draft_id TEXT NOT NULL REFERENCES creative_drafts(draft_id) ON DELETE CASCADE,
+                revision INTEGER NOT NULL,
+                content_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (draft_id, revision)
+            );
+            CREATE INDEX IF NOT EXISTS idx_creative_drafts_state
+                ON creative_drafts(state);
+            CREATE INDEX IF NOT EXISTS idx_creative_drafts_conversation
+                ON creative_drafts(conversation_id);
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '10');
+            ",
+        )
+        .map_err(Error::Database)?;
+    }
+
     // Repair path for v9 tables when a database carries an advanced marker.
     conn.execute_batch(
         "
@@ -872,6 +910,36 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_provider_route_bindings_position
             ON provider_route_bindings(position);
         INSERT OR IGNORE INTO provider_routing_settings (id, updated_at) VALUES (1, datetime('now'));
+        ",
+    )
+    .map_err(Error::Database)?;
+
+    // Repair path for v10 tables when a database carries an advanced marker.
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS creative_drafts (
+            draft_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            intent TEXT NOT NULL,
+            conversation_id TEXT,
+            origin_module_id TEXT,
+            current_revision INTEGER NOT NULL DEFAULT 0,
+            state TEXT NOT NULL DEFAULT 'drafting'
+                CHECK(state IN ('drafting','generating','ready','publishing','published','archived')),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS creative_draft_revisions (
+            draft_id TEXT NOT NULL REFERENCES creative_drafts(draft_id) ON DELETE CASCADE,
+            revision INTEGER NOT NULL,
+            content_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (draft_id, revision)
+        );
+        CREATE INDEX IF NOT EXISTS idx_creative_drafts_state
+            ON creative_drafts(state);
+        CREATE INDEX IF NOT EXISTS idx_creative_drafts_conversation
+            ON creative_drafts(conversation_id);
         ",
     )
     .map_err(Error::Database)?;
