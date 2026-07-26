@@ -669,7 +669,7 @@ export interface NativesAPI {
   };
   /**
    * Draft lifecycle for the creation loop. Publishing is a host command, not a
-   * model tool: the user's click is the authorization (ADR-0014 §9).
+   * model tool: the user's click is the authorization (ADR-0014, Section 9).
    */
   creativeDraft: {
     create: (request: {
@@ -682,6 +682,14 @@ export interface NativesAPI {
     get: (draftId: string) => Promise<CreativeDraft>;
     /** Current revision's HTML — what the preview pane and "continue" show. */
     read: (draftId: string) => Promise<{ draftId: string; html: string }>;
+    /**
+     * Link the draft to the conversation editing it. The conversation only
+     * exists after the first message, so the link is made then — not at create.
+     */
+    bindConversation: (
+      draftId: string,
+      conversationId: string,
+    ) => Promise<{ ok: boolean; draftId: string }>;
     /** Step the revision pointer back one: the user-facing "undo last change". */
     rollback: (draftId: string) => Promise<{ draftId: string; revision: number }>;
     publish: (request: {
@@ -745,6 +753,11 @@ export interface NativesAPI {
     recentFiles: (root: string) => Promise<unknown[]>;
     saveBlob: (dir: string, name: string, base64Data: string) => Promise<string>;
     convertFileSrc: (filePath: string) => string;
+    // image_convert.rs：HEIC/TIFF 等 webview 不支持的格式 → 缓存 jpeg（仅 macOS）
+    convertImagePreview: (filePath: string) => Promise<{ ok: boolean; jpegPath: string; cached: boolean }>;
+    // locate.rs：终端路径定位链（直接 stat → 空格扩展 → 多根搜索 → spotlight）
+    locate: (query: string, cwd?: string, roots?: string[]) => Promise<{ found: boolean; path?: string; isDir?: boolean; method?: string }>;
+    verifyPaths: (candidates: string[]) => Promise<Array<{ path: string; exists: boolean; isDir: boolean }>>;
     trashEntries: (paths: string[]) => Promise<{ ok: boolean; trashed?: string[]; errors?: Array<{ path: string; error: string }>; count?: number }>;
     moveEntries: (paths: string[], destDir: string) => Promise<{ ok: boolean; moved?: string[]; errors?: Array<{ path: string; error: string }>; count?: number }>;
     copyEntries: (paths: string[], destDir: string) => Promise<{ ok: boolean; copied?: string[]; errors?: Array<{ path: string; error: string }>; count?: number }>;
@@ -754,7 +767,11 @@ export interface NativesAPI {
     clipboardCopyImage: (filePath: string) => Promise<{ ok: boolean }>;
   };
   archive: {
-    list: (archivePath: string) => Promise<unknown[]>;
+    // 后端 ArchiveListing（archive.rs）：{ entries: [{name,size,isDir?}...], truncated }
+    list: (archivePath: string) => Promise<{ entries: Array<{ name: string; size: number; isDir?: boolean }>; truncated: boolean }>;
+    // archive_ops.rs：safe 解压（防 zip-slip/符号链接）与 zip 打包
+    extract: (archivePath: string, destDir?: string) => Promise<{ ok: boolean; destPath: string; entryCount: number }>;
+    compress: (paths: string[], destZipPath?: string) => Promise<{ ok: boolean; zipPath: string; entryCount: number }>;
   };
   search: {
     grep: (query: string, root: string, options?: unknown) => Promise<unknown>;
@@ -964,14 +981,6 @@ export interface NativesAPI {
     detectCli: () => Promise<{ claude_cli: boolean; codex_cli: boolean }>;
     setCapabilityEnabled: (name: string, enabled: boolean) => Promise<void>;
   };
-  /** Task Scheduler（Slice J） */
-  scheduler: {
-    listTasks: () => Promise<Array<{
-      id: string; name: string; prompt: string; scheduleType: string;
-      scheduleValue: string; enabled: boolean; lastStatus: string | null;
-      consecutiveErrors: number; nextRun: string;
-    }>>;
-  };
   /** Library (fanbox clone — G4) */
   library: {
     listFolders: () => Promise<unknown>;
@@ -1001,6 +1010,17 @@ export interface NativesAPI {
     run: (data: { subagentId: string; inputText: string }) => Promise<unknown>;
     listRuns: (subagentId: string) => Promise<unknown>;
     resolveBinding: (subagentId: string) => Promise<unknown>;
+  };
+  /** Job module（任务）— 契约 v1：8 个 job_* 命令，JSON snake_case；强类型见 src/lib/jobs-api.ts */
+  jobs: {
+    list: () => Promise<unknown>;
+    get: (id: string) => Promise<unknown>;
+    create: (payload: Record<string, unknown>) => Promise<unknown>;
+    update: (payload: Record<string, unknown>) => Promise<unknown>;
+    delete: (id: string) => Promise<unknown>;
+    setEnabled: (id: string, enabled: boolean) => Promise<unknown>;
+    runNow: (id: string) => Promise<unknown>;
+    listRuns: (params: { job_id?: string; limit?: number; offset?: number }) => Promise<unknown>;
   };
 }
 
@@ -1275,6 +1295,11 @@ const nativesAPI: NativesAPI = {
     get: (draftId: string) => cmd<CreativeDraft>('get_creative_draft', { draftId }),
     read: (draftId: string) =>
       cmd<{ draftId: string; html: string }>('read_creative_draft', { draftId }),
+    bindConversation: (draftId: string, conversationId: string) =>
+      cmd<{ ok: boolean; draftId: string }>('bind_creative_draft_conversation', {
+        draftId,
+        conversationId,
+      }),
     rollback: (draftId: string) =>
       cmd<{ draftId: string; revision: number }>('rollback_creative_draft', { draftId }),
     publish: (request) =>
@@ -1393,6 +1418,9 @@ const nativesAPI: NativesAPI = {
     saveBlob: (dir: string, name: string, base64Data: string) =>
       cmd('fs_save_blob', { dir, name, base64Data }),
     convertFileSrc: (filePath: string) => convertFileSrc(filePath),
+    convertImagePreview: (filePath: string) => cmd('fs_convert_image_preview', { filePath }),
+    locate: (query: string, cwd?: string, roots?: string[]) => cmd('fs_locate', { query, cwd, roots }),
+    verifyPaths: (candidates: string[]) => cmd('fs_verify_paths', { candidates }),
     trashEntries: async (paths: string[]) => {
       try {
         return await cmd('fs_trash_entries', { paths });
@@ -1436,6 +1464,8 @@ const nativesAPI: NativesAPI = {
   // Archive
   archive: {
     list: (archivePath: string) => cmd('archive_list', { archivePath }),
+    extract: (archivePath: string, destDir?: string) => cmd('fs_extract_archive', { archivePath, destDir }),
+    compress: (paths: string[], destZipPath?: string) => cmd('fs_compress_entries', { paths, destZipPath }),
   },
 
   // Search
@@ -1710,9 +1740,17 @@ const nativesAPI: NativesAPI = {
       cmd('runtime_set_capability_enabled', { name, enabled }),
   },
 
-  // Task Scheduler（Slice J）
-  scheduler: {
-    listTasks: () => cmd('scheduler_list_tasks'),
+  // Job module（任务）— 契约 v1：入参 JSON snake_case，与后端命令面一致
+  jobs: {
+    list: () => cmd('job_list'),
+    get: (id: string) => cmd('job_get', { id }),
+    create: (payload: Record<string, unknown>) => cmd('job_create', payload),
+    update: (payload: Record<string, unknown>) => cmd('job_update', payload),
+    delete: (id: string) => cmd('job_delete', { id }),
+    setEnabled: (id: string, enabled: boolean) => cmd('job_set_enabled', { id, enabled }),
+    runNow: (id: string) => cmd('job_run_now', { id }),
+    listRuns: (params: { job_id?: string; limit?: number; offset?: number }) =>
+      cmd('job_runs_list', params as Record<string, unknown>),
   },
 
   // Window Controls

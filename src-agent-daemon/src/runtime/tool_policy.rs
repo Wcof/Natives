@@ -686,10 +686,26 @@ pub fn invocation_from_verified_identity(
 }
 
 /// True when the tool may proceed without a bound ProjectIdentity.
+///
+/// The creative draft tools are here despite being mutating: a draft is not a
+/// project. They address their target by a validated `draftId` and can only ever
+/// touch `~/.natives/drafts/<draftId>/`, so a project binding would add a
+/// requirement the creator workbench cannot satisfy — it has no project to bind —
+/// while protecting nothing that the id validation does not already cover.
 pub fn tool_allows_unbound_project(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "read_file" | "list_dir" | "grep" | "glob" | "task_output" | "task" | "kill_task"
+        "read_file"
+            | "list_dir"
+            | "grep"
+            | "glob"
+            | "task_output"
+            | "task"
+            | "kill_task"
+            | "write_draft_module"
+            | "read_draft_module"
+            | "rollback_draft_revision"
+            | "lint_draft_module"
     )
 }
 

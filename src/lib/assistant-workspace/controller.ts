@@ -319,6 +319,11 @@ export async function sendOrQueue(
     effort?: string | null;
     /** Optional runtime id: native | claude_cli | … (REQ-T01). */
     runtimeId?: string | null;
+    /**
+     * Surface selector. The daemon resolves the tool allowlist from this, which
+     * is how the creator workbench gets the draft tools and nothing else.
+     */
+    agentProfileId?: string | null;
   },
 ): Promise<SendResult> {
   const {
@@ -331,6 +336,7 @@ export async function sendOrQueue(
     forceImmediate,
     effort,
     runtimeId,
+    agentProfileId,
   } = params;
   const runId = state.activeRunByConversation[conversationId];
   const run = runId ? state.runs[runId] : null;
@@ -439,6 +445,9 @@ export async function sendOrQueue(
       project_path: projectPath,
       ...(effort && effort.trim() ? { effort: effort.trim() } : {}),
       ...(runtimeId && runtimeId.trim() ? { runtime_id: runtimeId.trim() } : {}),
+      ...(agentProfileId && agentProfileId.trim()
+        ? { agent_profile_id: agentProfileId.trim() }
+        : {}),
     });
   } catch (err) {
     dispatch({ type: 'messages/remove', id: optimisticUserId, conversationId });

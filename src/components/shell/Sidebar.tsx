@@ -9,6 +9,7 @@ import type {
 import type { LucideIcon } from 'lucide-react';
 import {
   Bell,
+  CalendarClock,
   Download,
   FileText,
   Layers,
@@ -47,6 +48,7 @@ import {
   type FavoriteItem,
 } from '@/lib/favorites-client';
 import AssistantSidebarSection from '@/components/assistant/AssistantSidebarSection';
+import SidebarDirTree from './SidebarDirTree';
 import { useAssistantActions } from '@/components/assistant/AssistantWorkspaceContext';
 import {
   isSettingsView,
@@ -169,6 +171,7 @@ function getNavigationId(activeModuleId?: string): string | null {
     return '__workshop__';
   }
   if (activeModuleId === 'assistant' || activeModuleId === '__assistant__') return '__assistant__';
+  if (activeModuleId === 'jobs' || activeModuleId === '__jobs__') return '__jobs__';
   if (activeModuleId.startsWith('module:')) return activeModuleId;
   if (activeModuleId.startsWith('__files__:')) return activeModuleId;
   if (activeModuleId.startsWith('builtin:')) return activeModuleId;
@@ -307,6 +310,16 @@ export default function Sidebar({
   const handleFavoriteClick = useCallback(
     (item: FavoriteItem) => {
       const target = favoritesNavTarget(item);
+      selectNavigation(target, target);
+    },
+    [selectNavigation],
+  );
+
+  // 目录树子行跳转：与 Quick Access/收藏一致走 `__files__:<path>`
+  // （ShellLayout 侧统一 setActiveView('files') + navigateToFiles）
+  const handleDirTreeNavigate = useCallback(
+    (path: string) => {
+      const target = `__files__:${path}`;
       selectNavigation(target, target);
     },
     [selectNavigation],
@@ -659,9 +672,9 @@ export default function Sidebar({
                 const Icon = item.icon;
                 const isActive = activeNavigationId === item.target;
                 const label = t(locale, 'sidebar.quickAccessDirs.' + item.id);
-                return (
+                // 行渲染保持原样；arrow 为目录树注入的行首 ▸/▾（不可用时为 null）
+                const row = (arrow: ReactNode) => (
                   <button
-                    key={item.id}
                     type="button"
                     onClick={() => selectNavigation(item.target, item.target)}
                     className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left transition-all ${
@@ -671,9 +684,22 @@ export default function Sidebar({
                     }`}
                     title={label}
                   >
+                    {arrow}
                     <Icon size={15} className="shrink-0" />
                     <span className="truncate text-sm">{label}</span>
                   </button>
+                );
+                // 非目录项（主页）无树；目录项包懒加载目录树（fanbox navDirLi 行为）
+                if (!item.path) return <div key={item.id}>{row(null)}</div>;
+                return (
+                  <SidebarDirTree
+                    key={item.id}
+                    path={item.path}
+                    locale={locale}
+                    activeNavigationId={activeNavigationId}
+                    onNavigate={handleDirTreeNavigate}
+                    renderRow={row}
+                  />
                 );
               })}
             </div>
@@ -693,9 +719,9 @@ export default function Sidebar({
                     const navTarget = favoritesNavTarget(item);
                     const isActive = activeNavigationId === navTarget;
                     const title = item.kind === 'file' ? item.target : item.label;
-                    return (
+                    // 行渲染保持原样；arrow 为目录树注入的行首 ▸/▾（非目录/不可用为 null）
+                    const row = (arrow: ReactNode) => (
                       <div
-                        key={item.id}
                         role="listitem"
                         className={`group flex w-full items-center gap-1 rounded-lg transition-all ${
                           isActive
@@ -709,6 +735,7 @@ export default function Sidebar({
                           className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-1.5 text-left"
                           title={title}
                         >
+                          {arrow}
                           {favoriteIcon(item)}
                           <span className="truncate text-sm">{item.label}</span>
                         </button>
@@ -726,6 +753,19 @@ export default function Sidebar({
                           <X size={12} />
                         </button>
                       </div>
+                    );
+                    // 目录收藏（isDir 缺省按目录处理，与 favoriteIcon 一致）挂懒加载目录树
+                    const isDirFavorite = item.kind === 'file' && item.isDir !== false;
+                    if (!isDirFavorite) return <div key={item.id}>{row(null)}</div>;
+                    return (
+                      <SidebarDirTree
+                        key={item.id}
+                        path={item.target}
+                        locale={locale}
+                        activeNavigationId={activeNavigationId}
+                        onNavigate={handleDirTreeNavigate}
+                        renderRow={row}
+                      />
                     );
                   })}
                   {hiddenFavoriteCount > 0 && (
@@ -865,6 +905,18 @@ export default function Sidebar({
             >
               <Bell size={16} />
               <span>{t(locale, 'notifications.title')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => selectNavigation('__jobs__', '__jobs__')}
+              className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
+                activeNavigationId === '__jobs__'
+                  ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
+              }`}
+            >
+              <CalendarClock size={16} />
+              <span>{t(locale, 'nav.jobs')}</span>
             </button>
             <button
               type="button"

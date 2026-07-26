@@ -4,7 +4,10 @@ import { useCallback, useMemo, useState } from 'react';
 import { t, type Locale } from '@/i18n';
 import { useCreativeDrafts } from '@/hooks/useCreativeDrafts';
 import type { CreativeAppSummary, CreativeDraft } from '@/lib/tauri-adapter';
+import { AssistantStoreProvider } from '@/lib/assistant-workspace';
+import { createDefaultGateway } from '@/lib/assistant-gateway';
 import CreationComposer from './CreationComposer';
+import CreationSession from './CreationSession';
 import CreativeCatalog from './CreativeCatalog';
 import DraftPreview from './DraftPreview';
 
@@ -54,6 +57,10 @@ export default function CreativeHome({
   onRunSettings,
 }: CreativeHomeProps) {
   const { drafts, reload: reloadDrafts } = useCreativeDrafts();
+  // The creation conversation gets its own store: it is a different thread from
+  // whatever the assistant workbench has open, and sharing one active-conversation
+  // pointer between the two surfaces would make each one steal the other's.
+  const gateway = useMemo(() => createDefaultGateway(), []);
   const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -139,12 +146,23 @@ export default function CreativeHome({
               {t(locale, 'creative.closeDraft')}
             </button>
           </header>
-          <div className="h-[420px]">
-            <DraftPreview
-              draft={activeDraft}
-              locale={locale}
-              onUndo={() => void undoRevision()}
-            />
+          <div className="grid h-[460px] grid-cols-1 lg:grid-cols-2">
+            <div className="min-h-0 border-b border-neutral-200 lg:border-b-0 lg:border-r dark:border-neutral-800">
+              <AssistantStoreProvider gateway={gateway}>
+                <CreationSession
+                  draft={activeDraft}
+                  locale={locale}
+                  onDraftMayHaveChanged={() => void reloadDrafts()}
+                />
+              </AssistantStoreProvider>
+            </div>
+            <div className="min-h-0">
+              <DraftPreview
+                draft={activeDraft}
+                locale={locale}
+                onUndo={() => void undoRevision()}
+              />
+            </div>
           </div>
         </section>
       )}

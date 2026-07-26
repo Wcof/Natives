@@ -12,6 +12,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { thumbnailApi } from '@/lib/files-api';
 
 const MAX_CACHE = 128;
 const cache = new Map<string, string>();
@@ -24,10 +25,8 @@ async function loadThumbnail(filePath: string, width: number): Promise<string> {
   const active = pending.get(key);
   if (active) return active;
   const request = (async () => {
-    const api = (window as any).nativesAPI;
-    if (!api?.thumbnail?.generate) throw new Error('thumbnail.generate API not available');
-    const result = await api.thumbnail.generate(filePath, width);
-    const base64 = typeof result === 'string' ? result : result?.buffer;
+    const result = await thumbnailApi().generate(filePath, width);
+    const base64 = typeof result === 'string' ? result : (result as { buffer?: string } | null)?.buffer;
     if (!base64) throw new Error('thumbnail returned empty');
     const dataUrl = `data:image/jpeg;base64,${base64}`;
     cache.set(key, dataUrl);

@@ -56,7 +56,9 @@ export default function EngineRecoveryPage({
         ) : null}
       </div>
       <div className="flex flex-wrap items-center justify-center gap-2">
-        {onRetry ? (
+        {/* Retry can never fix a protocol/version mismatch — hide it for
+            `incompatible` and promote copy-diagnostics to the primary action. */}
+        {onRetry && connection !== 'incompatible' ? (
           <button
             type="button"
             onClick={onRetry}
@@ -71,7 +73,11 @@ export default function EngineRecoveryPage({
           <button
             type="button"
             onClick={onCopyDiagnostics}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
+            className={
+              connection === 'incompatible'
+                ? 'inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white'
+                : 'inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]'
+            }
             data-testid="engine-recovery-copy"
           >
             <Copy size={14} />

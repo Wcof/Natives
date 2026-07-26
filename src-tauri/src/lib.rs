@@ -5,6 +5,7 @@ use tokio::sync::Mutex as TokioMutex;
 
 mod agent;
 mod archive;
+mod archive_ops;
 pub mod assistant_service;
 pub mod commands;
 pub mod context_window;
@@ -30,8 +31,11 @@ mod ghostty_vt;
 mod git;
 mod html_preview;
 mod http_server;
+mod image_convert;
+pub mod jobs;
 pub mod key_lease;
 mod lid_guard;
+mod locate;
 pub mod log_sanitizer;
 mod module_manager;
 mod permission_center;
@@ -39,7 +43,6 @@ pub mod provider_accounts;
 pub mod provider_key_manager;
 mod release_wizard;
 mod runtime;
-mod scheduler;
 mod screenshot;
 mod search;
 pub mod sequence_id;
@@ -238,6 +241,10 @@ pub fn run() {
             // Initialize assistant database (isolated from core natives.db)
             db::init_assistant_db()
                 .map_err(|e| format!("failed to init assistant database: {e}"))?;
+
+            // Job 任务模块：常驻 30s tick 循环（Once 幂等；列迁移已在
+            // init_assistant_db 内经 jobs::store::ensure_schema 补齐）
+            jobs::runner::start();
 
             // Pre-warm env encryption key cache from SQLite settings.
             {
@@ -495,6 +502,7 @@ pub fn run() {
             commands::creative_draft::list_creative_drafts,
             commands::creative_draft::get_creative_draft,
             commands::creative_draft::read_creative_draft,
+            commands::creative_draft::bind_creative_draft_conversation,
             commands::creative_draft::rollback_creative_draft,
             commands::creative_draft::publish_creative_draft,
             commands::creative_draft::delete_creative_draft,
@@ -575,10 +583,15 @@ pub fn run() {
             commands::fs::fs_clipboard_copy_image,
             // Archive
             commands::archive::archive_list,
+            commands::archive::fs_extract_archive,
+            commands::archive::fs_compress_entries,
             // Search
             commands::search::search_grep,
             commands::search::search_files,
             commands::search::search_spotlight,
+            // Locate（终端路径定位链）
+            commands::locate::fs_verify_paths,
+            commands::locate::fs_locate,
             // State
             commands::state::state_save,
             commands::state::state_load,
@@ -594,6 +607,7 @@ pub fn run() {
             commands::disk::system_metrics,
             // Thumbnail
             commands::thumbnail::thumbnail_generate,
+            commands::thumbnail::fs_convert_image_preview,
             // Agent
             commands::agent::agent_scan_projects,
             commands::agent::agent_get_sessions,
@@ -663,13 +677,15 @@ pub fn run() {
             commands::runtime::runtime_list_available,
             commands::runtime::runtime_detect_cli,
             commands::runtime::runtime_set_capability_enabled,
-            // Scheduler (Slice J)
-            crate::scheduler::scheduler_list_tasks,
-            crate::scheduler::scheduler_create_task,
-            crate::scheduler::scheduler_update_task,
-            crate::scheduler::scheduler_delete_task,
-            crate::scheduler::scheduler_run_task_now,
-            crate::scheduler::scheduler_list_runs,
+            // Jobs（任务模块，Job Module — 契约第 5 节）
+            commands::jobs::job_list,
+            commands::jobs::job_get,
+            commands::jobs::job_create,
+            commands::jobs::job_update,
+            commands::jobs::job_delete,
+            commands::jobs::job_set_enabled,
+            commands::jobs::job_run_now,
+            commands::jobs::job_runs_list,
             commands::assistant::assistant_list_sessions,
             commands::assistant::assistant_get_messages,
             commands::assistant::assistant_create_session,

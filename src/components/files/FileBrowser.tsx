@@ -2,7 +2,7 @@
 
 import { startTransition, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
-import { type FileEntry, detectFileKind } from '@/types/file';
+import { type FileEntry, type StatResult } from '@/types/file';
 import { t, type Locale } from '@/i18n';
 import FileGrid from './FileGrid';
 import FileList from './FileList';
@@ -25,15 +25,22 @@ import {
 } from '@/lib/favorites-client';
 import { fmtSize } from '@/lib/format';
 import { useFileDrop } from '@/lib/use-file-drop';
+import { useFsWatch } from '@/lib/use-fs-watch';
+import { isNoisyChangePath, topChildOf, SelfOpenedTracker } from '@/lib/fs-change-filter';
+import { fsApi, archiveApi, hasNativeFiles } from '@/lib/files-api';
+import {
+  FILE_EVENTS,
+  dispatchFileEvent,
+  onFileEvent,
+  consumePendingNavigate,
+  setPendingSelectFile,
+  consumePendingSelectFile,
+  type HeaderFileAction,
+  type HeaderFileState,
+  type NavigateFilesPayload,
+} from '@/lib/file-events';
 
 export type { FavoriteItem };
-
-/** Tauri IPC 可用时用 nativesAPI.fs，否则抛出错误 */
-function getFsApi() {
-  const native = (window as any).nativesAPI?.fs;
-  if (!native) throw new Error('[FileBrowser] fs API not available (Tauri IPC required)');
-  return native;
-}
 
 async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const result: R[] = [];
@@ -55,6 +62,14 @@ interface FileBrowserProps {
 export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   const [currentPath, setCurrentPath] = useState('/');
   const [entries, setEntries] = useState<FileEntry[]>([]);
+  /** 当前目录项目类型（node/web/python/rust/go/git），来源：后端 list_dir_detailed */
+  const [dirProject, setDirProject] = useState<string | null>(null);
+  /** 浏览器 dev 模式（无 Tauri IPC）：渲染明确的降级占位，不再静默报错。
+   *  用 effect 置位而非直接读，避免 SSR 首帧与客户端不一致（hydration mismatch）。 */
+  const [nativeMissing, setNativeMissing] = useState(false);
+  useEffect(() => {
+    if (!hasNativeFiles()) setNativeMissing(true);
+  }, []);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [sortBy, setSortBy] = useState<'name' | 'mtime' | 'size'>('name');
@@ -95,8 +110,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   });
 
   useEffect(() => {
-    const handler = (event: Event) => {
-      const path = (event as CustomEvent<string>).detail;
+    return onFileEvent(FILE_EVENTS.fileFlash, (path) => {
       if (!path) return;
       setFlashPaths((prev) => new Set(prev).add(path));
       window.setTimeout(() => {
@@ -106,9 +120,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           return next;
         });
       }, 1200);
-    };
-    window.addEventListener('file-flash', handler);
-    return () => window.removeEventListener('file-flash', handler);
+    });
   }, []);
 
   // Navigation history for back/forward
@@ -207,7 +219,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     // Expand bare ~ to home if roots available
     if (path === '~' || path.startsWith('~/')) {
       try {
-        const roots = await (window as any).nativesAPI?.fs?.roots?.();
+        const roots = hasNativeFiles() ? await fsApi().roots() : null;
         const home = Array.isArray(roots) ? roots.find((r: any) => r.id === 'home') : null;
         if (home?.path) {
           path = path === '~' ? home.path : home.path + path.slice(1);
@@ -219,9 +231,9 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);
 
     try {
-      const fsApi = (window as any).nativesAPI?.fs;
-      if (fsApi?.stat) {
-        const st = await fsApi.stat(path);
+      const fs = hasNativeFiles() ? fsApi() : null;
+      if (fs?.stat) {
+        const st = await fs.stat(path);
         if (st?.found) {
           if (st.isDir) {
             navigateTo(st.path || path);
@@ -229,7 +241,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
             const parent = (st.path || path).substring(0, (st.path || path).lastIndexOf('/')) || '/';
             navigateTo(parent);
             // Soft-select after list loads: stash intended selection
-            (window as any).__pendingSelectFile = st.path || path;
+            setPendingSelectFile(st.path || path);
           }
           return;
         }
@@ -255,9 +267,9 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       } catch { /* ignore */ }
       // Prefer real home root over "/" (fanbox roots)
       try {
-        const fsApi = (window as any).nativesAPI?.fs;
-        if (fsApi?.roots && currentPath === '/') {
-          const roots = await fsApi.roots();
+        const fs = hasNativeFiles() ? fsApi() : null;
+        if (fs?.roots && currentPath === '/') {
+          const roots = await fs.roots();
           const home = Array.isArray(roots) ? roots.find((r: any) => r.id === 'home') : null;
           if (home?.path) {
             historyRef.current = [home.path];
@@ -330,26 +342,27 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     const rid = ++loadIdRef.current;
     setLoading(true);
     try {
-      const fsApi = getFsApi();
+      const fs = fsApi();
 
       if (recentOpenedMode) {
-        // 最近打开模式：读取 LRU（客户端记录），逐项 stat 过滤死链接
+        // 最近打开模式：读取 LRU（客户端记录），逐项 stat 过滤死链接。
+        // kind/name/dirHint 由后端 stat（StatResult）下发，前端不再本地推断。
         const paths = recentOpenedPathsRef.current;
         const settled = await mapWithConcurrency(paths, 8, async (p) => {
             try {
-              const st = await fsApi.stat(p);
+              const st = await fs.stat(p) as StatResult;
               if (!st?.found || st.isDir) return null; // 死链接或已变成目录 → 跳过
-              const dir = p.substring(0, p.lastIndexOf('/')) || '/';
               const name = st.name || p.split('/').pop() || '';
+              const dir = st.dirHint || p.substring(0, p.lastIndexOf('/')) || '/';
               return {
                 name,
                 path: st.path || p,
                 isDir: false,
-                kind: detectFileKind(name),
+                kind: st.kind ?? 'other',
                 hidden: name.startsWith('.'),
                 size: st.size || 0,
                 mtime: st.mtime || 0,
-                btime: 0,
+                btime: st.btime || 0,
                 dirHint: dir === currentPath ? undefined : dir,
               } as FileEntry;
             } catch {
@@ -359,44 +372,33 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
         if (rid !== loadIdRef.current) return;
         setEntries(settled.filter((e): e is FileEntry => e !== null));
       } else if (recentMode) {
-        // 最近修改模式：调用后端递归扫描，返回按 mtime 降序的文件
-        const recentData = await fsApi.recentFiles(currentPath);
+        // 最近修改模式：后端递归扫描直接返回完整 FileEntry（含 kind/dirHint）
+        const recentData = await fs.recentFiles(currentPath) as FileEntry[] | null;
         if (rid !== loadIdRef.current) return;
-        if (recentData && Array.isArray(recentData)) {
-          // 转换 WalkFile 格式 → FileEntry，填入 dirHint
-          const recentEntries: FileEntry[] = recentData.map((f: any) => {
-            const dir = f.path.substring(0, f.path.lastIndexOf('/')) || '/';
-            const name = f.path.split('/').pop() || '';
-            return {
-              name,
-              path: f.path,
-              isDir: false,
-              kind: detectFileKind(name),
-              hidden: name.startsWith('.'),
-              size: f.size || 0,
-              mtime: f.mtime || 0,
-              btime: 0,
-              dirHint: dir === currentPath ? undefined : dir,
-            };
-          });
-          setEntries(recentEntries);
+        if (Array.isArray(recentData)) {
+          // 唯一的前端归一化：当前目录内的文件不显示来源目录提示
+          setEntries(recentData.map((f) => (
+            f.dirHint === currentPath ? { ...f, dirHint: undefined } : f
+          )));
         } else {
           setEntries([]);
         }
       } else {
         const options = { sortBy, sortDir, showHidden, probeProjects: true };
         // Prefer detailed list (entries + project badges on subdirs); fall back to plain listDir
-        if (typeof fsApi.listDirDetailed === 'function') {
-          const detailed = await fsApi.listDirDetailed(currentPath, options) as {
+        if (typeof fs.listDirDetailed === 'function') {
+          const detailed = await fs.listDirDetailed(currentPath, options) as {
             entries?: FileEntry[];
             project?: string | null;
           };
           if (rid !== loadIdRef.current) return;
           setEntries(Array.isArray(detailed?.entries) ? detailed.entries : []);
+          setDirProject(detailed?.project ?? null);
         } else {
-          const data = await fsApi.listDir(currentPath, options);
+          const data = await fs.listDir(currentPath, options);
           if (rid !== loadIdRef.current) return;
           setEntries((data as FileEntry[]) || []);
+          setDirProject(null);
         }
       }
     } catch (err) {
@@ -419,6 +421,45 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     void loadEntries();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recentOpenedPaths, recentOpenedMode]);
+
+  // ── fs_watch 接线：当前目录的真实文件变更 → 卡片点亮（改·N/heat）+ 防抖自动刷新 ──
+  const selfOpenedRef = useRef(new SelfOpenedTracker());
+  const watchRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingFlashRef = useRef<Set<string>>(new Set());
+  const flashFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useFsWatch(
+    currentPath && currentPath !== '/' ? currentPath : null,
+    useCallback((event) => {
+      if (isNoisyChangePath(event.path, currentPath)) return;
+      if (selfOpenedRef.current.isSelfNoise(event.path)) return;
+      // 点亮直接子项卡片；事件风暴（npm install 级）下按 150ms 合并 dispatch，
+      // 避免逐条事件触发 setState 重渲染
+      const child = topChildOf(currentPath, event.path);
+      if (child) {
+        pendingFlashRef.current.add(child);
+        if (!flashFlushTimerRef.current) {
+          flashFlushTimerRef.current = setTimeout(() => {
+            flashFlushTimerRef.current = null;
+            const paths = pendingFlashRef.current;
+            pendingFlashRef.current = new Set();
+            paths.forEach((p) => dispatchFileEvent(FILE_EVENTS.fileFlash, p));
+          }, 150);
+        }
+      }
+      // 250ms 防抖整目录刷新（fanbox 同参）；loadEntries 自带代次守卫防过期写回
+      if (watchRefreshTimerRef.current) clearTimeout(watchRefreshTimerRef.current);
+      watchRefreshTimerRef.current = setTimeout(() => {
+        watchRefreshTimerRef.current = null;
+        void loadEntries();
+      }, 250);
+    }, [currentPath, loadEntries]),
+  );
+
+  useEffect(() => () => {
+    if (watchRefreshTimerRef.current) clearTimeout(watchRefreshTimerRef.current);
+    if (flashFlushTimerRef.current) clearTimeout(flashFlushTimerRef.current);
+  }, []);
 
   // Drag-and-drop: files from Finder + images from WeChat/browser
   const { isDragging, dragHandlers } = useFileDrop({
@@ -468,81 +509,77 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     localStorage.setItem('file-grid-size', gridSize);
   }, [gridSize]);
 
-  // Listen for Header action events
+  // Listen for Header action events（payload 契约见 file-events.ts HeaderFileAction）
   useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (!detail) return;
-      if (detail.type === 'viewMode') setViewMode(detail.value);
-      if (detail.type === 'sortBy') {
-        const next = detail.value as FileSortBy;
-        // Same field → toggle direction (so "按名称排序" is never a no-op).
-        // New field → natural default (name asc; mtime/size desc).
-        const resolved = nextSortForField(
-          sortRef.current.sortBy,
-          sortRef.current.sortDir,
-          next,
-        );
-        setSortBy(resolved.sortBy);
-        setSortDir(resolved.sortDir);
+    return onFileEvent(FILE_EVENTS.headerFileAction, (action: HeaderFileAction) => {
+      if (!action) return;
+      switch (action.type) {
+        case 'viewMode': setViewMode(action.value); break;
+        case 'sortBy': {
+          // Same field → toggle direction (so "按名称排序" is never a no-op).
+          // New field → natural default (name asc; mtime/size desc).
+          const resolved = nextSortForField(
+            sortRef.current.sortBy,
+            sortRef.current.sortDir,
+            action.value as FileSortBy,
+          );
+          setSortBy(resolved.sortBy);
+          setSortDir(resolved.sortDir);
+          break;
+        }
+        case 'sortDir': setSortDir(nextSortDir(sortRef.current.sortDir, action.value)); break;
+        case 'showHidden': setShowHidden((prev) => !prev); break;
+        case 'search': setSearchQuery(action.value ?? ''); break;
+        case 'newFolder': {
+          const dir = action.value ?? '';
+          if (dir) setNewItemTarget({ parentDir: dir, type: 'folder' });
+          break;
+        }
+        case 'newFile': {
+          const dir = action.value ?? '';
+          if (dir) setNewItemTarget({ parentDir: dir, type: 'file' });
+          break;
+        }
+        case 'gridSize': setGridSize(action.value); break;
+        case 'back': goBack(); break;
+        case 'forward': goForward(); break;
+        case 'up': goUp(); break;
+        case 'refresh': void loadEntries(); break;
+        case 'toggleRecent': handleToggleRecent(); break;
+        case 'toggleFavorite': void toggleFavorite(); break;
+        case 'globalSearch': setGlobalSearchOpen(true); break;
+        case 'goToPath':
+          if (typeof action.value === 'string') void resolveAndNavigate(action.value);
+          break;
       }
-      if (detail.type === 'sortDir') {
-        setSortDir(nextSortDir(sortRef.current.sortDir, detail.value));
-      }
-      if (detail.type === 'showHidden') setShowHidden((prev) => !prev);
-      if (detail.type === 'search') setSearchQuery(detail.value ?? '');
-      if (detail.type === 'newFolder') {
-        // Use detail.value or fall back to current path from state
-        const dir = detail.value ?? '';
-        if (dir) setNewItemTarget({ parentDir: dir, type: 'folder' });
-      }
-      if (detail.type === 'newFile') {
-        const dir = detail.value ?? '';
-        if (dir) setNewItemTarget({ parentDir: dir, type: 'file' });
-      }
-      if (detail.type === 'gridSize') setGridSize(detail.value);
-      if (detail.type === 'back') goBack();
-      if (detail.type === 'forward') goForward();
-      if (detail.type === 'up') goUp();
-      if (detail.type === 'refresh') void loadEntries();
-      if (detail.type === 'toggleRecent') handleToggleRecent();
-      if (detail.type === 'toggleFavorite') void toggleFavorite();
-      if (detail.type === 'globalSearch') setGlobalSearchOpen(true);
-      if (detail.type === 'goToPath' && typeof detail.value === 'string') {
-        void resolveAndNavigate(detail.value);
-      }
-    };
-    window.addEventListener('header-file-action', handler);
-    return () => window.removeEventListener('header-file-action', handler);
+    });
   }, [goBack, goForward, goUp, loadEntries, toggleFavorite, resolveAndNavigate, handleToggleRecent]);
 
   // Listen for external navigation events (sidebar quick access / favorites)
   useEffect(() => {
-    const applyNav = (raw: unknown) => {
+    const applyNav = (raw: NavigateFilesPayload) => {
       let path: string | undefined;
       if (typeof raw === 'string') path = raw;
       else if (raw && typeof raw === 'object') {
-        const d = raw as { path?: string; directory?: string };
-        path = d.path ?? d.directory;
+        path = raw.path ?? raw.directory;
       }
       if (!path) return;
       // resolveAndNavigate: file → parent dir + soft-select; dir → open
       void resolveAndNavigate(path);
     };
 
-    // Check for pending path set before mount (race condition fix)
-    const pending = (window as any).__pendingNavigateFiles;
-    if (typeof pending === 'string') {
+    // 挂载前发出的跳转（挂载竞态）：consume pending 兜底
+    const pending = consumePendingNavigate();
+    if (pending) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       applyNav(pending);
-      delete (window as any).__pendingNavigateFiles;
     }
 
-    const handler = (e: Event) => {
-      applyNav((e as CustomEvent).detail);
-    };
-    window.addEventListener('navigate-files', handler);
-    return () => window.removeEventListener('navigate-files', handler);
+    return onFileEvent(FILE_EVENTS.navigateFiles, (payload) => {
+      // 事件到达即代表在线处理，清掉发起方留下的 pending，防止下次挂载重放
+      consumePendingNavigate();
+      applyNav(payload);
+    });
   }, [resolveAndNavigate]);
 
   const filteredEntries = useMemo(() => {
@@ -589,6 +626,8 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     if (entry.isDir) {
       navigateTo(entry.path);
     } else {
+      // 登记 selfOpened：打开动作本身触发的假变更（LaunchServices xattr）3s 内忽略
+      selfOpenedRef.current.mark(entry.path);
       pushRecentFile(entry.path);
       onFileSelect?.(entry);
     }
@@ -639,10 +678,10 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     const parentDir = renameTarget.path.substring(0, renameTarget.path.lastIndexOf('/')) || '/';
     const newPath = `${parentDir}/${renameValue.trim()}`;
     try {
-      const result = await getFsApi().renameEntry(renameTarget.path, newPath);
+      const result = await fsApi().renameEntry(renameTarget.path, newPath);
       if (result?.ok) {
         showToast(t(locale, 'fileBrowser.renamed'));
-        window.dispatchEvent(new CustomEvent('file-renamed', { detail: { oldPath: renameTarget.path, newPath } }));
+        dispatchFileEvent(FILE_EVENTS.fileRenamed, { oldPath: renameTarget.path, newPath });
         await loadEntries();
       } else {
         showToast(result?.error || t(locale, 'fileBrowser.renameFailed'));
@@ -662,11 +701,11 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     }
     void (async () => {
       try {
-        const result = await getFsApi().trashEntry(entry.path);
+        const result = await fsApi().trashEntry(entry.path);
         if (result?.ok) {
           showToast(t(locale, 'fileBrowser.trashed'));
           void removeRecentFile(entry.path);
-          window.dispatchEvent(new CustomEvent('file-trashed', { detail: { path: entry.path } }));
+          dispatchFileEvent(FILE_EVENTS.fileTrashed, { path: entry.path });
           setSelectedPaths(prev => {
             const n = new Set(prev); n.delete(entry.path); return n;
           });
@@ -682,17 +721,17 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
 
   const handleDuplicate = useCallback(async (entry: FileEntry) => {
     try {
-      const fsApi = getFsApi();
-      if (typeof fsApi.duplicateEntry !== 'function') {
+      const fs = fsApi();
+      if (typeof fs.duplicateEntry !== 'function') {
         showToast(t(locale, 'fileBrowser.duplicateFailed'));
         return;
       }
-      const result = await fsApi.duplicateEntry(entry.path);
+      const result = await fs.duplicateEntry(entry.path);
       if (result?.ok) {
         showToast(t(locale, 'fileBrowser.duplicated'));
         await loadEntries();
         if (result.path) {
-          window.dispatchEvent(new CustomEvent('file-flash', { detail: result.path }));
+          dispatchFileEvent(FILE_EVENTS.fileFlash, result.path);
         }
       } else {
         showToast(result?.error || t(locale, 'fileBrowser.duplicateFailed'));
@@ -712,15 +751,51 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     return [] as string[];
   }, [selectedPaths, selectedIndex, filteredEntries]);
 
+  // ── W7 解压 / 压缩（后端 archive_ops.rs：safe 解压防 zip-slip，zip 打包）──
+  const handleExtract = useCallback(async (entry: FileEntry) => {
+    showToast(t(locale, 'fileBrowser.extracting'));
+    try {
+      const result = await archiveApi().extract(entry.path);
+      if (result?.ok) {
+        showToast(t(locale, 'fileBrowser.extracted').replace('{count}', String(result.entryCount)));
+        dispatchFileEvent(FILE_EVENTS.fileFlash, result.destPath);
+        await loadEntries();
+      } else {
+        showToast(t(locale, 'fileBrowser.extractFailed'));
+      }
+    } catch {
+      showToast(t(locale, 'fileBrowser.extractFailed'));
+    }
+  }, [loadEntries, showToast, locale]);
+
+  const handleCompress = useCallback(async (entry?: FileEntry) => {
+    // 右键目标在多选集内 → 打包整个选中集（与批量删除/移动同语义）
+    const paths = resolveTargetPaths(entry ?? null);
+    if (paths.length === 0) return;
+    showToast(t(locale, 'fileBrowser.compressing'));
+    try {
+      const result = await archiveApi().compress(paths);
+      if (result?.ok) {
+        showToast(t(locale, 'fileBrowser.compressed').replace('{name}', result.zipPath.split('/').pop() || 'zip'));
+        dispatchFileEvent(FILE_EVENTS.fileFlash, result.zipPath);
+        await loadEntries();
+      } else {
+        showToast(t(locale, 'fileBrowser.compressFailed'));
+      }
+    } catch {
+      showToast(t(locale, 'fileBrowser.compressFailed'));
+    }
+  }, [resolveTargetPaths, loadEntries, showToast, locale]);
+
   const handleCopyEntry = useCallback(async (entry?: FileEntry) => {
     const paths = resolveTargetPaths(entry);
     if (paths.length === 0) return;
     setClipBoard({ mode: 'copy', paths });
     // System pasteboard for Finder paste (fanbox copyFile)
     try {
-      const fsApi = getFsApi();
-      if (typeof fsApi.clipboardCopyFiles === 'function') {
-        await fsApi.clipboardCopyFiles(paths);
+      const fs = fsApi();
+      if (typeof fs.clipboardCopyFiles === 'function') {
+        await fs.clipboardCopyFiles(paths);
       } else {
         await navigator.clipboard.writeText(paths.join('\n'));
       }
@@ -735,9 +810,9 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     if (paths.length === 0) return;
     setClipBoard({ mode: 'cut', paths });
     try {
-      const fsApi = getFsApi();
-      if (typeof fsApi.clipboardCopyFiles === 'function') {
-        await fsApi.clipboardCopyFiles(paths);
+      const fs = fsApi();
+      if (typeof fs.clipboardCopyFiles === 'function') {
+        await fs.clipboardCopyFiles(paths);
       }
     } catch { /* ignore */ }
     showToast(t(locale, 'fileBrowser.cutDone').replace('{count}', String(paths.length)));
@@ -749,27 +824,27 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
       return;
     }
     try {
-      const fsApi = getFsApi();
+      const fs = fsApi();
       if (clipBoard.mode === 'copy') {
-        if (typeof fsApi.copyEntries !== 'function') {
+        if (typeof fs.copyEntries !== 'function') {
           // fallback sequential
           for (const p of clipBoard.paths) {
-            await fsApi.copyEntry?.(p, currentPath);
+            await fs.copyEntry?.(p, currentPath);
           }
           showToast(t(locale, 'fileBrowser.pasted').replace('{count}', String(clipBoard.paths.length)));
         } else {
-          const result = await fsApi.copyEntries(clipBoard.paths, currentPath);
+          const result = await fs.copyEntries(clipBoard.paths, currentPath);
           const count = result?.count ?? clipBoard.paths.length;
           showToast(t(locale, 'fileBrowser.pasted').replace('{count}', String(count)));
         }
       } else {
-        if (typeof fsApi.moveEntries !== 'function') {
+        if (typeof fs.moveEntries !== 'function') {
           for (const p of clipBoard.paths) {
-            await fsApi.moveEntry?.(p, currentPath);
+            await fs.moveEntry?.(p, currentPath);
           }
           showToast(t(locale, 'fileBrowser.batchMoved').replace('{count}', String(clipBoard.paths.length)));
         } else {
-          const result = await fsApi.moveEntries(clipBoard.paths, currentPath);
+          const result = await fs.moveEntries(clipBoard.paths, currentPath);
           const count = result?.count ?? clipBoard.paths.length;
           showToast(t(locale, 'fileBrowser.batchMoved').replace('{count}', String(count)));
         }
@@ -792,12 +867,12 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
 
   const handleCopyImage = useCallback(async (entry: FileEntry) => {
     try {
-      const fsApi = getFsApi();
-      if (typeof fsApi.clipboardCopyImage !== 'function') {
+      const fs = fsApi();
+      if (typeof fs.clipboardCopyImage !== 'function') {
         showToast(t(locale, 'fileBrowser.clipboardImageFailed'));
         return;
       }
-      const r = await fsApi.clipboardCopyImage(entry.path);
+      const r = await fs.clipboardCopyImage(entry.path);
       showToast(r?.ok ? t(locale, 'fileBrowser.clipboardImageCopied') : t(locale, 'fileBrowser.clipboardImageFailed'));
     } catch {
       showToast(t(locale, 'fileBrowser.clipboardImageFailed'));
@@ -805,14 +880,15 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   }, [showToast, locale]);
 
   const handleOpenWith = useCallback(async (entry: FileEntry, withApp: 'default' | 'reveal' | 'terminal' | 'editor' = 'default') => {
+    if (!entry.isDir) selfOpenedRef.current.mark(entry.path);
     try {
-      const fsApi = getFsApi();
-      if (typeof fsApi.openWith === 'function') {
-        await fsApi.openWith(entry.path, withApp);
+      const fs = fsApi();
+      if (typeof fs.openWith === 'function') {
+        await fs.openWith(entry.path, withApp);
         return;
       }
     } catch { /* fall through */ }
-    const api = (window as any).nativesAPI?.shell;
+    const api = window.nativesAPI?.shell;
     if (withApp === 'reveal' && api?.showItemInFolder) api.showItemInFolder(entry.path);
     else if (api?.openPath) api.openPath(entry.path);
   }, []);
@@ -826,12 +902,12 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     }
     // Multi: confirm via first name style message then trash
     try {
-      const fsApi = getFsApi();
-      if (typeof fsApi.trashEntries === 'function') {
-        const r = await fsApi.trashEntries(paths);
+      const fs = fsApi();
+      if (typeof fs.trashEntries === 'function') {
+        const r = await fs.trashEntries(paths);
         showToast(t(locale, 'fileBrowser.batchTrashed').replace('{count}', String(r?.count ?? paths.length)));
       } else {
-        for (const p of paths) await fsApi.trashEntry(p);
+        for (const p of paths) await fs.trashEntry(p);
         showToast(t(locale, 'fileBrowser.batchTrashed').replace('{count}', String(paths.length)));
       }
       paths.forEach((p) => { void removeRecentFile(p); });
@@ -849,12 +925,12 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     const safe = sourcePaths.filter(p => p !== destDir && !destDir.startsWith(p + '/'));
     if (!safe.length) return;
     try {
-      const fsApi = getFsApi();
-      if (typeof fsApi.moveEntries === 'function') {
-        const r = await fsApi.moveEntries(safe, destDir);
+      const fs = fsApi();
+      if (typeof fs.moveEntries === 'function') {
+        const r = await fs.moveEntries(safe, destDir);
         showToast(t(locale, 'fileBrowser.batchMoved').replace('{count}', String(r?.count ?? safe.length)));
       } else {
-        for (const pth of safe) await fsApi.moveEntry?.(pth, destDir);
+        for (const pth of safe) await fs.moveEntry?.(pth, destDir);
         showToast(t(locale, 'fileBrowser.batchMoved').replace('{count}', String(safe.length)));
       }
       setSelectedPaths(new Set());
@@ -866,7 +942,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
 
   // Shell operations
   const handleRevealInFinder = useCallback((entry: FileEntry) => {
-    const api = (window as any).nativesAPI?.shell;
+    const api = window.nativesAPI?.shell;
     if (api?.showItemInFolder) {
       api.showItemInFolder(entry.path);
     } else {
@@ -875,7 +951,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   }, [showToast, locale]);
 
   const handleOpenInEditor = useCallback((entry: FileEntry) => {
-    const api = (window as any).nativesAPI?.shell;
+    const api = window.nativesAPI?.shell;
     if (api?.openPath) {
       api.openPath(entry.path);
     } else {
@@ -885,12 +961,12 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   }, [showToast, locale]);
 
   const handleOpenInTerminal = useCallback(async (dir: string) => {
-    const api = (window as any).nativesAPI;
+    const api = window.nativesAPI;
     if (api?.terminal?.create && api?.terminal?.write) {
       try {
         // 打开终端面板 → 新建 PTY 会话 → cd 进目标目录
         // 用幂等的 open-terminal（仅在折叠时展开），避免终端已打开时被 toggle 关闭
-        window.dispatchEvent(new CustomEvent('open-terminal'));
+        dispatchFileEvent(FILE_EVENTS.openTerminal);
         const result = await api.terminal.create() as { sessionId?: string; error?: string };
         const sessionId = result?.sessionId;
         if (!sessionId) {
@@ -911,10 +987,12 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   }, [showToast, locale]);
 
   const handlePreview = useCallback((entry: FileEntry) => {
+    if (!entry.isDir) selfOpenedRef.current.mark(entry.path);
     onFileSelect?.(entry);
   }, [onFileSelect]);
 
   const handleEditRequest = useCallback((entry: FileEntry) => {
+    if (!entry.isDir) selfOpenedRef.current.mark(entry.path);
     onFileSelect?.(entry);
   }, [onFileSelect]);
 
@@ -926,11 +1004,11 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     if (!trashTarget) return;
     const trashedPath = trashTarget.path;
     try {
-      const result = await getFsApi().trashEntry(trashedPath);
+      const result = await fsApi().trashEntry(trashedPath);
       if (result?.ok) {
         showToast(t(locale, 'fileBrowser.trashed'));
         void removeRecentFile(trashedPath);
-        window.dispatchEvent(new CustomEvent('file-trashed', { detail: { path: trashedPath } }));
+        dispatchFileEvent(FILE_EVENTS.fileTrashed, { path: trashedPath });
         await loadEntries();
       } else {
         showToast(result?.error || t(locale, 'fileBrowser.trashFailed'));
@@ -956,7 +1034,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     if (!newItemTarget || !newItemName.trim()) return;
     const targetPath = `${newItemTarget.parentDir}/${newItemName.trim()}`;
     try {
-      const result = await getFsApi().createEntry(targetPath, newItemTarget.type);
+      const result = await fsApi().createEntry(targetPath, newItemTarget.type);
       if (result?.ok) {
         showToast(t(locale, 'fileBrowser.created'));
         await loadEntries();
@@ -1136,14 +1214,17 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   // Reset selection when entries or path change; honor pending file selection from path bar
   useEffect(() => {
     startTransition(() => {
-      const pending = (window as any).__pendingSelectFile as string | undefined;
-      if (pending && entries.some((e) => e.path === pending)) {
+      const pending = consumePendingSelectFile();
+      if (pending) {
         const idx = entries.findIndex((e) => e.path === pending);
-        setSelectedIndex(idx);
-        setSelectedPaths(new Set([pending]));
-        lastClickedIndexRef.current = idx;
-        delete (window as any).__pendingSelectFile;
-        return;
+        if (idx >= 0) {
+          setSelectedIndex(idx);
+          setSelectedPaths(new Set([pending]));
+          lastClickedIndexRef.current = idx;
+          return;
+        }
+        // 目标还没随 entries 到货（导航刚发起）：放回，等下一次 entries 更新再消费
+        setPendingSelectFile(pending);
       }
       setSelectedIndex(-1);
       setSelectedPaths(new Set());
@@ -1160,17 +1241,9 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     el?.scrollIntoView({ block: 'nearest' });
   }, [selectedIndex, filteredEntries]);
 
-  // Detect project badge from current directory entries
-  const detectedProject = useMemo(() => {
-    const names = new Set(entries.filter(e => !e.isDir).map(e => e.name.toLowerCase()));
-    if (names.has('package.json')) return 'node' as const;
-    if (names.has('index.html')) return 'web' as const;
-    if (names.has('requirements.txt') || names.has('pyproject.toml')) return 'python' as const;
-    if (names.has('cargo.toml')) return 'rust' as const;
-    if (names.has('go.mod')) return 'go' as const;
-    if (entries.some(e => e.isDir && e.name === '.git')) return 'git' as const;
-    return null;
-  }, [entries]);
+  // 当前目录的项目类型：以后端 list_dir_detailed 的 project 为唯一来源
+  // （detect_project_badge 只在 Rust 实现一份，前端不再重复探测）
+  const detectedProject = dirProject;
 
   // Persist active project path and badge to localStorage for other components (like Assistant) to read
   useEffect(() => {
@@ -1189,14 +1262,30 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
 
   // ── Event bridge: broadcast file-browser state for Header ──
   useEffect(() => {
-    const detail = {
+    const detail: HeaderFileState = {
       viewMode, sortBy, sortDir, showHidden, gridSize,
       segments: segments.length > 0 ? segments : ['/'],
       isFavorite, breadcrumbPath: currentPath, projectBadge: detectedProject,
       canGoBack, canGoForward, canGoUp, recentMode, recentOpenedMode, searchQuery, loading,
     };
-    window.dispatchEvent(new CustomEvent('header-file-state', { detail }));
+    dispatchFileEvent(FILE_EVENTS.headerFileState, detail);
   }, [viewMode, sortBy, sortDir, showHidden, gridSize, segments, isFavorite, currentPath, detectedProject, canGoBack, canGoForward, canGoUp, recentMode, recentOpenedMode, searchQuery, loading, historyTick]);
+
+  // 浏览器模式：整页明确降级（文件管理需要桌面端 IPC）
+  if (nativeMissing) {
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        height: '100%', gap: SPACING.sm, background: 'var(--surface)',
+        color: 'var(--text-secondary)', fontSize: FONT_SIZE.md, textAlign: 'center', padding: SPACING.md,
+      }}>
+        <div style={{ fontSize: FONT_SIZE.lg, fontWeight: 600, color: 'var(--text)' }}>
+          {t(locale, 'fileBrowser.desktopOnly')}
+        </div>
+        <div>{t(locale, 'fileBrowser.desktopOnlyHint')}</div>
+      </div>
+    );
+  }
 
   return (
     <div style={{
@@ -1426,6 +1515,8 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           canPaste={!!clipBoard && clipBoard.paths.length > 0}
           onCopyPath={handleCopyPath}
           onCopyImage={handleCopyImage}
+          onExtract={(entry) => { void handleExtract(entry); }}
+          onCompress={(entry) => { void handleCompress(entry); }}
           onOpenDefault={(entry) => { void handleOpenWith(entry, 'default'); }}
           onNewFile={handleNewFile}
           onNewFolder={handleNewFolder}

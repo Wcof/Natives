@@ -70,6 +70,7 @@ import {
   subscribeRun,
 } from '@/lib/assistant-workspace/controller';
 import { createDefaultGateway, FixtureAssistantAdapter } from '@/lib/assistant-gateway';
+import { useAssistantRun } from '@/lib/assistant-workspace/use-assistant-run';
 import { goldenTextStream } from '@/lib/assistant-fixtures/golden';
 import { isActiveRunStatus, mapWireConversation, mapWireMessage } from '@/lib/assistant-protocol';
 import type {
@@ -194,8 +195,6 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const stateRef = useRef(state);
   stateRef.current = state;
   /** Per-run soft-resubscribe abort + attempt counts (multi-run table). */
-  const subSignalsRef = useRef<Record<string, { aborted: boolean }>>({});
-  const resubAttemptsRef = useRef<Record<string, number>>({});
 
   const [providers, setProviders] = useState<ProviderWithModels[]>([]);
   const [stoppingRunId, setStoppingRunId] = useState<string | null>(null);
@@ -461,71 +460,18 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     return () => window.removeEventListener('resize', update);
   }, [dispatch]);
 
-  const startSubscription = useCallback(
-    async (runId: string, afterSequence: number) => {
-      // Abort only this run's previous soft-resub loop; other runs keep polling.
-      const prev = subSignalsRef.current[runId];
-      if (prev) prev.aborted = true;
-      const signal = { aborted: false };
-      subSignalsRef.current[runId] = signal;
-      try {
-        await subscribeRun(
-          gateway,
-          dispatch,
-          () => stateRef.current,
-          runId,
-          afterSequence,
-          signal,
-        );
-      } catch {
-        // Real transport/IPC errors flip connection in controller; soft-resub below if still active.
-      }
-      if (signal.aborted) return;
-      const run = stateRef.current.runs[runId];
-      if (!run || !isActiveRunStatus(run.status)) {
-        delete resubAttemptsRef.current[runId];
-        delete subSignalsRef.current[runId];
-        return;
-      }
-      // Quiet soft resubscribe with backoff only. Normal long-poll / iterator end
-      // without a terminal event must NOT promote the global connection to
-      // "reconnecting" (that mis-fired after ~40 quiet polls during healthy runs).
-      const nextSeq = stateRef.current.lastSequenceByRun[runId] ?? afterSequence;
-      // Progress (received events) resets quiet-resub delay; no progress only stretches delay.
-      if (nextSeq > afterSequence) {
-        resubAttemptsRef.current[runId] = 0;
-      }
-      const n = (resubAttemptsRef.current[runId] ?? 0) + 1;
-      resubAttemptsRef.current[runId] = n;
-      const delay = Math.min(250 * n, 2000);
-      if (typeof console !== 'undefined' && typeof console.debug === 'function') {
-        console.debug('[assistant] soft-resubscribe', {
-          runId,
-          lastSequence: nextSeq,
-          quietAttempt: n,
-          reason: 'subscribe_ended_without_terminal',
-        });
-      }
-      window.setTimeout(() => {
-        if (!signal.aborted && subSignalsRef.current[runId] === signal) {
-          void startSubscription(runId, nextSeq);
-        }
-      }, delay);
-    },
-    [gateway, dispatch],
-  );
-
-  const ensureRunSubscription = useCallback(
-    (runId: string | null | undefined) => {
-      if (!runId) return;
-      const run = stateRef.current.runs[runId];
-      if (!run || !isActiveRunStatus(run.status)) return;
-      // Already tracking this run — leave the soft-resub loop alone.
-      if (subSignalsRef.current[runId] && !subSignalsRef.current[runId]!.aborted) return;
-      void startSubscription(runId, stateRef.current.lastSequenceByRun[runId] ?? 0);
-    },
-    [startSubscription],
-  );
+  // Run lifecycle (subscription loop, quiet resubscribe, cancel/retry/permission)
+  // lives in useAssistantRun so the creator workbench runs the identical logic
+  // instead of a second copy that would have to rediscover the same edge cases.
+  const {
+    startSubscription,
+    ensureRunSubscription,
+    retainSubscriptions,
+    abortAllSubscriptions,
+    stop: stopRun,
+    retry: retryRunViaHook,
+    respondPermission: respondPermissionViaHook,
+  } = useAssistantRun();
 
   const refreshSubagentSessions = useCallback(
     async (parentConversationId: string | null | undefined) => {
@@ -681,10 +627,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     })();
     return () => {
       cancelled = true;
-      for (const signal of Object.values(subSignalsRef.current)) {
-        signal.aborted = true;
-      }
-      subSignalsRef.current = {};
+      abortAllSubscriptions();
       void gateway.disconnect();
     };
   }, [gateway, dispatch, toast]);
@@ -721,17 +664,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     // Drop soft-resub loops for runs no longer in the wanted set (switch session /
     // terminal child / parent left). Without this, every historical active run kept
     // polling → multi-subscription thrash and wasted gateway traffic.
-    for (const runId of Object.keys(subSignalsRef.current)) {
-      if (!wanted.has(runId)) {
-        const signal = subSignalsRef.current[runId];
-        if (signal) signal.aborted = true;
-        delete subSignalsRef.current[runId];
-        delete resubAttemptsRef.current[runId];
-      }
-    }
-    for (const runId of wanted) {
-      ensureRunSubscription(runId);
-    }
+    retainSubscriptions(wanted);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- children/subagentSessions captured; identity churn ignored via *SubKey
   }, [rootRun?.id, rootRun?.status, childrenSubKey, subagentSubKey, ensureRunSubscription]);
 

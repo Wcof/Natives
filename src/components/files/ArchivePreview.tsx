@@ -5,6 +5,7 @@ import { SPACING, FONT_SIZE } from '@/lib/design-tokens';
 import { FbFolder, FbText } from '@/lib/file-icons';
 import { t, type Locale } from '@/i18n';
 import { formatSize } from '@/lib/diff-utils';
+import { archiveApi } from '@/lib/files-api';
 
 interface ArchiveEntry {
   name: string;
@@ -26,7 +27,7 @@ export default function ArchivePreview({ path, locale }: ArchivePreviewProps) {
     let cancelled = false;
     (async () => {
       try {
-        const result = await window.nativesAPI?.archive?.list?.(path) as { entries: ArchiveEntry[]; truncated: boolean } | undefined;
+        const result = await archiveApi().list(path) as { entries: ArchiveEntry[]; truncated: boolean } | undefined;
         if (!cancelled && result) {
           setEntries(result.entries || []);
           setTruncated(result.truncated || false);

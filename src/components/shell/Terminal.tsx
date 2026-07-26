@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { t, useLocale, type Locale } from '@/i18n';
 import { Terminal as TerminalIcon, Clipboard, X, Plus, Link2, VolumeX, Volume2, Crosshair, Maximize2, Minimize2, ChevronDown, ChevronUp, Check, Sparkles, Code2 } from 'lucide-react';
 import { setFileFollow } from '@/lib/follow-mode';
+import { FILE_EVENTS, dispatchFileEvent } from '@/lib/file-events';
 import { playDoneChime } from '@/lib/chime';
 import { copyToClipboard } from '@/lib/clipboard';
 import { FONT_SIZE, SPACING, BORDER_RADIUS } from '@/lib/design-tokens';
@@ -432,7 +433,7 @@ export default function TerminalPanel({
                 const result = await window.nativesAPI?.terminal?.cwd?.(activeSessionId) as
                   { cwd?: string; source?: string } | undefined;
                 if (result?.cwd) {
-                  window.dispatchEvent(new CustomEvent('navigate-files', { detail: result.cwd }));
+                  dispatchFileEvent(FILE_EVENTS.navigateFiles, result.cwd);
                 }
               } catch { /* ignore */ }
             }}

@@ -22,11 +22,15 @@ import '@/types'; // ensure Window.nativesAPI type
 import { Edit2, Eye } from 'lucide-react';
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 import { getExt, isMarkdownFile, isCsvFile, isArchiveFile } from '@/lib/follow-mode';
+import { navigateToFiles } from '@/lib/file-events';
+import { onFollowChange } from '@/lib/follow-mode';
+import { fsApi, hasNativeFiles, thumbnailApi } from '@/lib/files-api';
 import type { FileEntry } from '@/types/file';
 import type { PreviewSubMode } from '@/components/files/FilePreview';
 
 // Right panel lazy imports (not in MainContent)
 const LazyFilePreview = lazy(() => import('@/components/files/FilePreview'));
+const LazyFollowRenderer = lazy(() => import('@/components/ai/FollowRenderer'));
 const LazyCommandPalette = lazy(() => import('./CommandPalette'));
 const LazyScreenshotCard = lazy(() => import('@/components/screenshot/ScreenshotCard'));
 const LazyAnnotationEditor = lazy(() => import('@/components/screenshot/AnnotationEditor'));
@@ -138,6 +142,25 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
 
   // Crash state: track crashed modules for overlay display
   const [iframeReloadKey, setIframeReloadKey] = useState(0);
+
+  // ── 文件跟随（file-follow）：状态机产出 → 右面板 FollowRenderer ──
+  // follow-mode.ts 的引擎（fs_watch 喂 followChange）在切到该档位时启动；
+  // 这里只消费 onFollowChange：agent 刚写的文件自动出现在右面板实时渲染。
+  const [followPath, setFollowPath] = useState<string | null>(null);
+  useEffect(() => {
+    return onFollowChange((path) => {
+      setFollowPath(path);
+      if (path) setRightPanelMode('follow');
+    });
+  }, [setRightPanelMode]);
+  // 档位切离 file-follow 时收起跟随面板
+  useEffect(() => {
+    if (followMode !== 'file-follow' && stateRef.current.rightPanelMode === 'follow') {
+      setRightPanelMode('closed');
+      setFollowPath(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [followMode]);
 
   // FOUC guard + locale/theme init + state persistence LOAD（只执行一次）
   useEffect(() => {
@@ -267,16 +290,16 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       setActiveView('modules');
     } else if (moduleId === '__assistant__') {
       setActiveView('assistant');
+    } else if (moduleId === '__jobs__' || moduleId === 'jobs') {
+      setActiveView('jobs');
     } else if (moduleId === '__notifications__') {
       toggleRightPanel('notifications');
     } else if (moduleId.startsWith('__files__:')) {
       // Navigate file browser to a specific path
       const path = moduleId.slice(10);
       setActiveView('files');
-      // Store path for FileBrowser to pick up after mount (race condition fix)
-      (window as any).__pendingNavigateFiles = path;
-      // Also dispatch event for already-mounted FileBrowser
-      window.dispatchEvent(new CustomEvent('navigate-files', { detail: path }));
+      // 统一入口：dispatch + 挂载竞态 pending 兜底（替代 window.__pendingNavigateFiles）
+      navigateToFiles(path);
     } else if (moduleId.startsWith('builtin:')) {
       setActiveView(moduleId);
       const toolId = moduleId.slice('builtin:'.length);
@@ -443,7 +466,13 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           onPreviewSubModeChange={setPreviewSubMode}
           width={state.rightPanelWidth}
           onResize={handleRightPanelResize}
-          title={state.rightPanelMode === 'file-preview' && selectedFile ? selectedFile.name : undefined}
+          title={
+            state.rightPanelMode === 'file-preview' && selectedFile
+              ? selectedFile.name
+              : state.rightPanelMode === 'follow' && followPath
+                ? followPath.split('/').pop()
+                : undefined
+          }
           extraHeaderContent={
             state.rightPanelMode === 'file-preview' && selectedFile && state.previewSubMode === 'preview'
               ? (() => {
@@ -485,6 +514,11 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
           {state.rightPanelMode === 'module-details' && activeView.startsWith('module:') && (
             <Suspense fallback={<LazyFallback />}><LazyModuleDetails moduleId={activeView.slice(7)} locale={locale} /></Suspense>
           )}
+          {state.rightPanelMode === 'follow' && (
+            <Suspense fallback={<LazyFallback />}>
+              <LazyFollowRenderer filePath={followPath} />
+            </Suspense>
+          )}
         </RightPanel>
         </div>
       )}
@@ -510,30 +544,35 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         }}
         onSaveToMaterial={async (filePath) => {
           try {
-            // Copy file to Desktop/素材 via IPC
-            const api = window.nativesAPI;
-            if (!api?.fs?.readFile || !api?.fs?.writeFileAtomic) return;
-            const result = await api.fs.readFile(filePath);
-            const readResult = result as { content?: string };
-            if (!readResult?.content) return;
+            // files-api 契约：fs 不可用（浏览器 dev）时静默跳过
+            if (!hasNativeFiles()) return;
             const fileName = filePath.split('/').pop() || filePath;
-            await api.fs.writeFileAtomic(`~/Desktop/素材/${fileName}`, readResult.content);
+            // 字节级复制（copy_entry 自动建父目录 + 同名去重）；
+            // 禁止 readFile+writeFileAtomic 文本中转——会损坏 PNG 二进制
+            await fsApi().copyEntry(filePath, `~/Desktop/素材/${fileName}`);
           } catch { /* ignore in browser mode */ }
         }}
         onAnnotate={async (filePath) => {
           // Load image as data URL for the annotation editor (CSP-safe, no file://)
           setAnnotatingFile(filePath);
           try {
-            const api = window.nativesAPI;
-            if (api?.thumbnail?.generate) {
-              const dataUrl = await api.thumbnail.generate(filePath, 0) as unknown as string;
+            // files-api 契约：先探测能力再调用，保持原「缺哪个就跳过哪个」的降级链
+            const thumbnail = (() => {
+              try {
+                return thumbnailApi();
+              } catch {
+                return null;
+              }
+            })();
+            if (thumbnail) {
+              const dataUrl = await thumbnail.generate(filePath, 0) as unknown as string;
               if (dataUrl) {
                 setAnnotationImageUrl(dataUrl);
                 return;
               }
             }
-            if (api?.fs?.readFile) {
-              const result = await api.fs.readFile(filePath) as any;
+            if (hasNativeFiles()) {
+              const result = await fsApi().readFile(filePath) as any;
               if (result?.content && result?.encoding === 'base64') {
                 const ext = (filePath.split('.').pop() || 'png').toLowerCase();
                 const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'image/png';

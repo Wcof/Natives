@@ -132,7 +132,9 @@ useAssistantRun({ agentKind, draftId? })
 
 ### 8.1 跨进程约束（本方案最大的新风险）
 
-Agent Daemon 与 Tauri Host 是**两个进程**：`contract_linter` 与 `write_generated_module` 都在 Tauri crate 内，daemon 的 `natives_db_broker` 是**只读**凭证桥（自述 "Opens DB read-only"），不能用作通用写通道。
+Agent Daemon 与 Tauri Host 是**两个进程**：`contract_linter` 与 `write_generated_module` 都在 Tauri crate 内，daemon 访问不到。
+
+> **修正（2026-07-26 实施期查证）**：本节初稿称 daemon 的 `natives_db_broker` 是只读凭证桥、不能写 natives.db —— 依据是该文件的头部注释 "Opens DB read-only"。**那句注释与代码不符**：同文件的 `write_setting`（约 492 行）用可写 `Connection::open` 执行 INSERT/UPDATE。daemon 因此本就具备读写 natives.db 的能力，草稿工具可以自己维护修订指针，不需要回调 Host。
 
 决策：**把 `contract_linter` 提取为共享 crate `crates/contract-linter`**，Tauri 与 daemon 同时依赖。理由：
 

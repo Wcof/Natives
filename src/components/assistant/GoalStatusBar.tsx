@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Loader2, Pause, Play, Trash2 } from 'lucide-react';
 import type { Run } from '@/lib/assistant-protocol';
 import { isActiveRunStatus, isTerminalRunStatus } from '@/lib/assistant-protocol';
+import { runStatusLabel, type RunStatusLabel } from '@/lib/assistant-run-status-labels';
 
 export interface GoalStatusBarProps {
   goalTitle: string;
@@ -18,32 +19,12 @@ export interface GoalStatusBarProps {
   onDelete?: () => void;
 }
 
-function statusLabel(status: string | undefined, zh: boolean): string {
-  if (!status) return zh ? '待命' : 'Idle';
-  const map: Record<string, [string, string]> = {
-    connecting: ['连接中', 'Connecting'],
-    preparing: ['准备中', 'Preparing'],
-    reasoning: ['思考中', 'Reasoning'],
-    generating: ['生成中', 'Generating'],
-    running: ['运行中', 'Running'],
-    running_tool: ['执行工具', 'Running tool'],
-    waiting_permission: ['等待权限', 'Waiting permission'],
-    waiting_user: ['等待回答', 'Waiting for you'],
-    waiting_subagent: ['等待子任务', 'Waiting subagent'],
-    compacting: ['压缩上下文', 'Compacting'],
-    reconnecting: ['重连中', 'Reconnecting'],
-    recovering: ['恢复中', 'Recovering'],
-    cancelling: ['正在停止', 'Cancelling'],
-    completed: ['已完成', 'Completed'],
-    failed: ['失败', 'Failed'],
-    interrupted: ['已暂停', 'Paused'],
-    background_watching: ['后台监视', 'Background'],
-    queued: ['排队中', 'Queued'],
-  };
-  const pair = map[status];
-  if (!pair) return status;
-  return zh ? pair[0] : pair[1];
-}
+// Goal mode presents interruption as pause (paired with the Resume button),
+// so it overrides the canonical 已中断 / Interrupted wording.
+const GOAL_STATUS_OVERRIDES: Partial<Record<'interrupted' | 'cancelled', RunStatusLabel>> = {
+  interrupted: { zh: '已暂停', en: 'Paused' },
+  cancelled: { zh: '已暂停', en: 'Paused' },
+};
 
 function formatElapsed(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return '0.0s';
@@ -121,7 +102,7 @@ export default function GoalStatusBar({
               Goal
             </span>
             <span className="font-medium text-[var(--text)]">
-              {statusLabel(run?.status, zh)}
+              {runStatusLabel(run?.status, zh, GOAL_STATUS_OVERRIDES)}
               {run?.activity ? `：${run.activity}` : ''}
             </span>
             {elapsed && (

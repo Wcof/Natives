@@ -474,9 +474,12 @@ impl ProductionRuntime {
             model_id.clone(),
         ));
         // Child subagent runs may have pre-registered a readonly (or custom) surface.
+        // A built-in surface name (e.g. the creative session) resolves next; it has
+        // no profile on disk, so this is the only place its allowlist can come from.
         let mut tool_allowlist = self
             .take_run_tool_allowlist(&run_id)
             .await
+            .or_else(|| agent_profile_id.as_deref().and_then(builtin_surface_allowlist))
             .or_else(|| profile.as_ref().and_then(|profile| profile.tools.clone()));
         if let (Some(allowlist), Some(disallowed)) = (
             tool_allowlist.as_mut(),
@@ -521,11 +524,23 @@ impl ProductionRuntime {
         // both of which were already resolved and capped above.
         let directive = self.take_run_agent_directive(&run_id).await;
         let effective_profile = merge_agent_directive(profile.clone(), directive.as_deref());
-        let assembled = assemble_context(
+        let mut assembled = assemble_context(
             effective_profile.as_ref(),
             Some(&project_root),
             (!skill_prompt.is_empty()).then_some(skill_prompt.as_str()),
         );
+        // Built-in surfaces have no profile on disk, so their working
+        // instructions are prepended here. Project/skill context still applies.
+        if let Some(surface_prompt) = agent_profile_id
+            .as_deref()
+            .and_then(builtin_surface_system_prompt)
+        {
+            assembled.system_prompt = if assembled.system_prompt.is_empty() {
+                surface_prompt.to_string()
+            } else {
+                format!("{surface_prompt}\n\n{}", assembled.system_prompt)
+            };
+        }
         // Compact history against resolved token budget (chars/4 fallback estimate).
         let raw_history =
             crate::conversation_store::engine_history(&conversation_id).unwrap_or_default();
@@ -1241,6 +1256,65 @@ mod provider_error_message_tests {
     }
 }
 
+/// Agent kind of the creative session (ADR-0014 section 8). Carried on a run as
+/// `agent_profile_id`, which is the only per-run surface selector that reaches
+/// `start_run`.
+pub(crate) const CREATIVE_DRAFT_AGENT_KIND: &str = "creative-draft";
+
+/// Resolve a built-in surface name to its allowlist.
+///
+/// Returns `None` for anything that is not a built-in surface, so the caller
+/// falls back to the run-scoped or agent-profile allowlist and behaviour for
+/// every existing agent kind is unchanged.
+///
+/// The creative surface is defined by omission as much as by inclusion: no
+/// `write_file`, `edit_file`, `apply_patch` or `run_terminal`. That is what keeps
+/// ADR-0014 invariant #3 ("the model cannot reach the real module directory")
+/// true without a second gate — publishing stays a host command.
+pub(crate) fn builtin_surface_allowlist(agent_kind: &str) -> Option<Vec<String>> {
+    match agent_kind {
+        CREATIVE_DRAFT_AGENT_KIND | "creative_draft" => Some(
+            capability_gateway::tools::CREATIVE_DRAFT_TOOL_NAMES
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// Working instructions for the creative surface.
+///
+/// Tool schemas alone tell the model what it *can* call, not what the session is
+/// for. Without this it treats "make me a pomodoro timer" as a chat request and
+/// answers with prose instead of writing a revision — the tools are registered
+/// but never used. The creative surface has no agent profile on disk, so this is
+/// where its behaviour is defined.
+const CREATIVE_DRAFT_SYSTEM_PROMPT: &str = r#"You are building a small, self-contained web app for the user inside the Natives creative workshop.
+
+The user's message begins with `[draft:<draftId>]`. That id identifies the draft you are editing — pass it to every draft tool. It is not part of the user's request; do not mention it back to them.
+
+How to work:
+- Write the whole app as a single HTML document with inline CSS and JS, then save it with `write_draft_module`. The user sees a live preview of whatever you save.
+- For a change request, call `read_draft_module` first and edit what is already there. Do not regenerate from scratch and do not drop features the user did not ask you to remove.
+- Save your work with `write_draft_module` before you finish. A reply without a saved revision leaves the user with nothing to look at.
+
+Hard constraints (the save is rejected if you break them):
+- No remote scripts or stylesheets. No CDN links. Everything inline.
+- No `eval` or `new Function`.
+- Persist data with `localStorage` if the app needs to remember anything.
+
+If a save is rejected, the error text says exactly what failed — fix it and save again. Keep replies short: the app itself is the deliverable, not a description of it."#;
+
+/// Working instructions for a built-in surface, or `None` for agent kinds that
+/// carry a profile on disk (whose prompt comes from that profile instead).
+pub(crate) fn builtin_surface_system_prompt(agent_kind: &str) -> Option<&'static str> {
+    match agent_kind {
+        CREATIVE_DRAFT_AGENT_KIND | "creative_draft" => Some(CREATIVE_DRAFT_SYSTEM_PROMPT),
+        _ => None,
+    }
+}
+
 /// Register gateway tools for a run. Parent (`allowlist=None`) gets full builtins.
 /// Child (`Some`) only registers the intersection so unauthorized tools are not present.
 pub(crate) fn register_tools_for_surface(
@@ -1252,7 +1326,13 @@ pub(crate) fn register_tools_for_surface(
         Some(list) => {
             let allowed: std::collections::HashSet<&str> =
                 list.iter().map(|s| s.as_str()).collect();
-            for tool in capability_gateway::tools::builtin_tools() {
+            // Draft tools are deliberately not part of `builtin_tools()`: a general
+            // session has no business writing drafts, so they can only ever appear
+            // where an allowlist names them explicitly.
+            for tool in capability_gateway::tools::builtin_tools()
+                .into_iter()
+                .chain(capability_gateway::tools::creative_draft_tools())
+            {
                 if allowed.contains(tool.name) {
                     gateway.register(tool);
                 }
@@ -1777,6 +1857,35 @@ mod tool_allowlist_tests {
         assert!(names.len() > 5);
         assert!(names.iter().any(|n| n == "write_file"));
         assert!(names.iter().any(|n| n == "task"));
+        // Draft tools are opt-in: the default surface must not carry them.
+        assert!(!names.iter().any(|n| n == "write_draft_module"));
+    }
+
+    /// ADR-0014 invariant #3: the creative surface is exactly the four draft
+    /// tools, and no general write tool rides along.
+    #[test]
+    fn creative_surface_registers_only_draft_tools() {
+        let allowlist =
+            builtin_surface_allowlist(CREATIVE_DRAFT_AGENT_KIND).expect("built-in surface");
+        let mut gateway = CapabilityGateway::new();
+        register_tools_for_surface(&mut gateway, Some(&allowlist));
+
+        let mut names: Vec<&str> = gateway.list_tools().into_iter().map(|t| t.name).collect();
+        names.sort_unstable();
+        let mut expected: Vec<&str> =
+            capability_gateway::tools::CREATIVE_DRAFT_TOOL_NAMES.to_vec();
+        expected.sort_unstable();
+        assert_eq!(names, expected);
+
+        for banned in ["write_file", "edit_file", "apply_patch", "run_terminal"] {
+            assert!(gateway.get_tool(banned).is_none(), "{banned} leaked in");
+        }
+    }
+
+    #[test]
+    fn unknown_agent_kind_keeps_the_existing_fallback() {
+        assert!(builtin_surface_allowlist("general").is_none());
+        assert!(builtin_surface_allowlist("").is_none());
     }
 
     #[tokio::test]

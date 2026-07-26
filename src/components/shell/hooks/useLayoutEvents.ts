@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import type { Locale } from '@/i18n';
+import { FILE_EVENTS, onFileEvent } from '@/lib/file-events';
 
 export interface LayoutPersistSnapshot {
   sidebarWidth: number;
@@ -124,12 +125,13 @@ export function useLayoutEvents({
     return () => window.removeEventListener('toggle-terminal', handler);
   }, [toggleTerminal]);
 
-  // Ensure-open terminal event (idempotent: expands if collapsed, never closes an open panel)
-  useEffect(() => {
-    const handler = () => setState((prev: any) => (prev.terminalCollapsed ? { ...prev, terminalCollapsed: false } : prev));
-    window.addEventListener('open-terminal', handler);
-    return () => window.removeEventListener('open-terminal', handler);
-  }, [setState]);
+  // 展开终端事件（幂等：仅在折叠时展开，绝不关闭已打开面板；file-events 契约）
+  useEffect(
+    () => onFileEvent(FILE_EVENTS.openTerminal, () => {
+      setState((prev: any) => (prev.terminalCollapsed ? { ...prev, terminalCollapsed: false } : prev));
+    }),
+    [setState],
+  );
 
   // Open/toggle command palette from UI chrome (e.g. collapsed sidebar search)
   useEffect(() => {

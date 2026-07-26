@@ -1,7 +1,16 @@
 # 文件管理器完善实施方案（fanbox 迁移 + 超越）
 
 > 2026-07-26 制定。依据：`FILE_MANAGER_AUDIT.md`（现状清单与差距对照，本方案不重复其内容）。
-> 归类：**Hub** 面。状态：**待启动** —— 等待前置两个模块开发完成并合并分支后进入 Phase 0。
+> 归类：**Hub** 面。
+>
+> **进度（2026-07-26 更新）**：
+> - Phase 1（W1–W6）✅ 完成：提交 ea0012dd / cb508a72 / 012c080a
+> - 追加「契约收紧」✅：ts-rs 类型单一来源（`npm run types:generate`）、
+>   files-api / file-events 契约模块、detectFileKind/badge TS 副本删除
+> - Phase 2（W7–W13）✅ 完成：提交 cb8e34c（W10/W9）、21c282a（W12）、
+>   4af9572（W7/W8/W11 后端）、1596617（前端接线）；
+>   W13 审查确认已有完整实现（screenshot.rs 稳定性等待 + ScreenshotCard），无需迁移
+> - Phase 3（W14–W19）⬜ 未启动；全量 cargo test 待并行会话的协议改造完成后统一跑
 
 ## 一、启动门槛（前置分支合并后必做）
 

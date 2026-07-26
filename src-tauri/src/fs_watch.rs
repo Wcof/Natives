@@ -11,13 +11,15 @@ use crate::{Error, Result};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::collections::HashSet;
+use ts_rs::TS;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::Emitter;
 
 /// Event payload sent to the frontend via Tauri event system.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/")]
 #[serde(rename_all = "camelCase")]
 pub struct FsWatchEvent {
     pub path: String,
@@ -118,32 +120,84 @@ impl FsWatcher {
     }
 }
 
+/// Metadata-only / access events carry no content change — drop them.
+fn is_noise_event_kind(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::Modify(notify::event::ModifyKind::Metadata(_)) | EventKind::Access(_)
+    )
+}
+
+/// Paths from our own atomic-write temp files and Finder metadata are noise.
+fn is_noise_path(path_str: &str) -> bool {
+    path_str.contains(".n2-tmp-") || path_str.contains(".tmp-") || path_str.ends_with(".DS_Store")
+}
+
+/// Map a notify event kind to the wire label sent to the frontend.
+fn event_kind_label(kind: &EventKind) -> &'static str {
+    match kind {
+        EventKind::Create(_) => "create",
+        EventKind::Modify(notify::event::ModifyKind::Name(_)) => "rename",
+        EventKind::Modify(_) => "modify",
+        EventKind::Remove(_) => "remove",
+        _ => "modify",
+    }
+}
+
 /// Handle a raw filesystem event: filter noise and emit to frontend.
 fn handle_fs_event(app: &tauri::AppHandle, event: &Event) {
-    match event.kind {
-        EventKind::Modify(notify::event::ModifyKind::Metadata(_)) => return,
-        EventKind::Access(_) => return,
-        _ => {}
+    if is_noise_event_kind(&event.kind) {
+        return;
     }
 
     for path in &event.paths {
         let path_str = path.to_string_lossy();
-        if path_str.contains(".n2-tmp-") || path_str.contains(".tmp-") || path_str.ends_with(".DS_Store") {
+        if is_noise_path(&path_str) {
             continue;
         }
 
-        let kind = match event.kind {
-            EventKind::Create(_) => "create",
-            EventKind::Modify(notify::event::ModifyKind::Name(_)) => "rename",
-            EventKind::Modify(_) => "modify",
-            EventKind::Remove(_) => "remove",
-            _ => "modify",
-        };
-
         let payload = FsWatchEvent {
             path: path_str.to_string(),
-            kind: kind.to_string(),
+            kind: event_kind_label(&event.kind).to_string(),
         };
         let _ = app.emit("fs-watch-change", &payload);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use notify::event::{AccessKind, CreateKind, DataChange, MetadataKind, ModifyKind, RemoveKind, RenameMode};
+
+    #[test]
+    fn metadata_and_access_events_are_noise() {
+        assert!(is_noise_event_kind(&EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any))));
+        assert!(is_noise_event_kind(&EventKind::Access(AccessKind::Any)));
+        assert!(!is_noise_event_kind(&EventKind::Create(CreateKind::File)));
+        assert!(!is_noise_event_kind(&EventKind::Modify(ModifyKind::Data(DataChange::Any))));
+        assert!(!is_noise_event_kind(&EventKind::Remove(RemoveKind::File)));
+    }
+
+    #[test]
+    fn tmp_and_ds_store_paths_are_noise() {
+        assert!(is_noise_path("/p/.tmp-file-123-abc"));
+        assert!(is_noise_path("/p/.n2-tmp-xyz"));
+        assert!(is_noise_path("/p/sub/.DS_Store"));
+        assert!(!is_noise_path("/p/main.rs"));
+        assert!(!is_noise_path("/p/tmp-notes.md"));
+    }
+
+    #[test]
+    fn event_kinds_map_to_wire_labels() {
+        assert_eq!(event_kind_label(&EventKind::Create(CreateKind::File)), "create");
+        assert_eq!(
+            event_kind_label(&EventKind::Modify(ModifyKind::Name(RenameMode::Any))),
+            "rename"
+        );
+        assert_eq!(
+            event_kind_label(&EventKind::Modify(ModifyKind::Data(DataChange::Any))),
+            "modify"
+        );
+        assert_eq!(event_kind_label(&EventKind::Remove(RemoveKind::File)), "remove");
     }
 }

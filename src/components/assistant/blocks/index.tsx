@@ -5,6 +5,7 @@
 
 import React from 'react';
 import { reasoningToggleLabel } from '@/lib/assistant-message-view';
+import { useLocale } from '@/i18n';
 import MarkdownText from '../MarkdownText';
 
 // ─── Block Types ────────────────────────────────────────
@@ -51,6 +52,12 @@ export interface ContentBlock {
   segmentId?: string;
   summary?: string;
   summaryStatus?: 'completed' | 'failed';
+  /** compaction: token counts around a context compression. */
+  beforeTokens?: number;
+  afterTokens?: number;
+  /** system_notice/subagent: structured notice payload (reducer stores data, renderer formats). */
+  noticeKind?: string;
+  noticeData?: Record<string, unknown>;
 }
 
 // ─── Block Renderers ────────────────────────────────────
@@ -118,10 +125,10 @@ function ReasoningBlock({ block }: { block: ContentBlock }) {
         </div>
       )}
 
-      {/* Full reasoning body when expanded */}
+      {/* Full reasoning body when expanded — Markdown (headings/lists/code in thinking) */}
       {expanded && block.reasoning && (
-        <div className="mt-1 max-h-[280px] overflow-y-auto rounded bg-[var(--surface-hover)]/60 px-2 py-1 text-sm text-[var(--text-secondary)] italic whitespace-pre-wrap">
-          {block.reasoning}
+        <div className="mt-1 max-h-[280px] overflow-y-auto rounded bg-[var(--surface-hover)]/60 px-2 py-1 text-sm text-[var(--text-secondary)] italic">
+          <MarkdownText source={block.reasoning} />
         </div>
       )}
     </div>
@@ -376,10 +383,142 @@ function PlanBlock({ block }: { block: ContentBlock }) {
   );
 }
 
-function SystemNoticeBlock({ block }: { block: ContentBlock }) {
+function formatTokenCount(value: number | undefined): string {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(Math.round(n));
+}
+
+/** Context compression divider — collapsed bar with expandable summary. */
+function CompactionBlock({ block }: { block: ContentBlock }) {
+  const appLocale = useLocale();
+  const zh = (block.locale ?? appLocale).startsWith('zh');
+  const [expanded, setExpanded] = React.useState(false);
+  const before = formatTokenCount(block.beforeTokens);
+  const after = formatTokenCount(block.afterTokens);
+  // i18n-pending: inline zh/en until assistant block strings converge in src/i18n
+  const label = zh
+    ? `上下文已压缩 ${before} → ${after} tokens`
+    : `Context compressed ${before} → ${after} tokens`;
+  const hasSummary = Boolean(block.summary && block.summary.trim());
+
   return (
-    <div className="my-2 rounded-md bg-[var(--surface-hover)] px-3 py-2 text-xs text-[var(--text-secondary)]">
-      {block.text ?? block.raw}
+    <div className="my-3" data-block-type="compaction">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        disabled={!hasSummary}
+        aria-expanded={expanded}
+        className="flex w-full items-center gap-2 text-[11px] text-[var(--text-disabled)] hover:text-[var(--text-secondary)] disabled:cursor-default"
+      >
+        <span className="h-px flex-1 bg-[var(--border-subtle)]" aria-hidden />
+        <span className="shrink-0">{label}</span>
+        {hasSummary && (
+          <span className="shrink-0" aria-hidden>
+            {expanded ? '▾' : '▸'}
+          </span>
+        )}
+        <span className="h-px flex-1 bg-[var(--border-subtle)]" aria-hidden />
+      </button>
+      {expanded && hasSummary && (
+        <div className="mt-2 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-hover)]/50 px-3 py-2 text-xs text-[var(--text-secondary)]">
+          <div className="mb-1 text-[10px] uppercase tracking-wide text-[var(--text-disabled)]">
+            {zh ? '压缩摘要' : 'Compaction summary'}
+          </div>
+          <MarkdownText source={block.summary} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Timeline event strip for system notices (retry / checkpoint / subagent …).
+ * Structured data comes from `noticeKind` + `noticeData`; plain notices fall
+ * back to `text` / `raw`. Unknown kinds must render without crashing.
+ */
+function SystemNoticeBlock({ block }: { block: ContentBlock }) {
+  const appLocale = useLocale();
+  const zh = (block.locale ?? appLocale).startsWith('zh');
+  const [showDetail, setShowDetail] = React.useState(false);
+  const data = (block.noticeData ?? {}) as Record<string, unknown>;
+
+  // i18n-pending: inline zh/en until assistant block strings converge in src/i18n
+  let tone: 'info' | 'warning' = 'info';
+  let label: string;
+  let detail: string | null = null;
+
+  switch (block.noticeKind) {
+    case 'generation_retry': {
+      tone = 'warning';
+      const attempt = Number(data.attempt ?? 0);
+      const max = Number(data.maxAttempts ?? 0);
+      const code = String(data.code ?? '');
+      const nOfM = max > 0 ? `${attempt}/${max}` : `${attempt}`;
+      label = zh
+        ? `上游响应失败，第 ${nOfM} 次重试${code ? `（${code}）` : ''}`
+        : `Upstream attempt failed, retry ${nOfM}${code ? ` (${code})` : ''}`;
+      break;
+    }
+    case 'checkpoint_created': {
+      const cpLabel = data.label != null ? String(data.label) : '';
+      label = zh ? '已创建还原点' : 'Restore point created';
+      detail = cpLabel || null;
+      break;
+    }
+    case 'checkpoint_rewound': {
+      const count = Number(data.count ?? (Array.isArray(data.paths) ? data.paths.length : 0));
+      label = zh ? `已回滚 ${count} 个文件` : `Rolled back ${count} file${count === 1 ? '' : 's'}`;
+      detail = Array.isArray(data.paths) && data.paths.length > 0
+        ? data.paths.map(String).join('\n')
+        : null;
+      break;
+    }
+    case 'subagent_created': {
+      const task = String(data.task ?? '');
+      label = zh ? '派生子任务' : 'Subtask spawned';
+      detail = task || null;
+      break;
+    }
+    default: {
+      const fallback = block.text ?? block.raw ?? '';
+      label = fallback || `[${String(block.originalType ?? block.type)}]`;
+      break;
+    }
+  }
+
+  return (
+    <div
+      className="my-2 flex items-start gap-2 rounded-md bg-[var(--surface-hover)]/70 px-3 py-1.5 text-xs text-[var(--text-secondary)]"
+      data-block-type={block.type}
+      data-notice-kind={block.noticeKind}
+    >
+      <span
+        className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full"
+        style={{ backgroundColor: tone === 'warning' ? 'var(--warning)' : 'var(--text-disabled)' }}
+        aria-hidden
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="min-w-0 break-words">{label}</span>
+          {detail && (
+            <button
+              type="button"
+              onClick={() => setShowDetail((value) => !value)}
+              aria-expanded={showDetail}
+              className="shrink-0 text-[10px] text-[var(--text-disabled)] underline hover:text-[var(--text-secondary)]"
+            >
+              {showDetail ? (zh ? '收起' : 'Hide') : (zh ? '详情' : 'Details')}
+            </button>
+          )}
+        </div>
+        {showDetail && detail && (
+          <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] text-[var(--text-disabled)]">
+            {detail}
+          </pre>
+        )}
+      </div>
     </div>
   );
 }
@@ -406,9 +545,11 @@ export function renderBlock(block: ContentBlock, index: number): React.ReactNode
       return <ErrorBlock key={index} block={block} />;
     case 'plan':
       return <PlanBlock key={index} block={block} />;
-    case 'system_notice':
     case 'compaction':
+      return <CompactionBlock key={index} block={block} />;
+    case 'system_notice':
     case 'subagent':
+      return <SystemNoticeBlock key={index} block={block} />;
     case 'artifact':
     case 'permission':
     case 'ask_user':

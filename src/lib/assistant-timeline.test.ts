@@ -111,6 +111,26 @@ test('tool detail keeps input, output, and the changed hunk until the answer com
   assert.deepEqual(tools[0]!.fileChanges, [{ path: 'src/a.ts', before: 'old', after: 'new' }]);
 });
 
+test('body filter keeps compaction/system_notice/subagent blocks and text order', () => {
+  // G2/G3/G10: new structured blocks must reach the answer body renderer.
+  // G6: split text blocks around a tool must both survive, in stream order.
+  const blocks: ContentBlock[] = [
+    { type: 'system_notice', noticeKind: 'checkpoint_created', noticeData: { checkpointId: 'cp-1' } },
+    { type: 'text', text: 'explain A' },
+    { type: 'tool_call', toolCallId: 't1', toolName: 'read_file', toolStatus: 'completed' },
+    { type: 'subagent', subRunId: 'sub1', noticeKind: 'subagent_created', noticeData: { task: 'Explore' } },
+    { type: 'compaction', beforeTokens: 12000, afterTokens: 4000, summary: 's' },
+    { type: 'text', text: 'explain B' },
+  ];
+  const body = filterTimelineBodyBlocks(blocks);
+  assert.deepEqual(
+    body.map((b) => b.type),
+    ['system_notice', 'text', 'subagent', 'compaction', 'text'],
+  );
+  assert.equal(body[1]!.text, 'explain A');
+  assert.equal(body[4]!.text, 'explain B');
+});
+
 test('summarizeConversationChanges reports the net file count and line totals', () => {
   const summary = summarizeConversationChanges(
     [{ runId: 'r1', sequence: 1, timestamp: 't1', type: 'file_changed', payload: { path: 'src/a.ts', before: 'old\nkeep', after: 'new\nkeep\nadded' } }],

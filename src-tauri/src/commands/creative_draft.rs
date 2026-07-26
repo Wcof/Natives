@@ -91,6 +91,21 @@ pub fn get_creative_draft(draft_id: String, state: State<'_, AppState>) -> Resul
     Ok(serde_json::to_value(store::get_draft(&pool_conn, &draft_id)?)?)
 }
 
+/// Link a draft to the conversation editing it, once that conversation exists.
+#[tauri::command]
+pub fn bind_creative_draft_conversation(
+    draft_id: String,
+    conversation_id: String,
+    state: State<'_, AppState>,
+) -> Result<JsonValue> {
+    let pool_conn = state
+        .db
+        .get()
+        .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
+    store::bind_conversation(&pool_conn, &draft_id, &conversation_id)?;
+    Ok(serde_json::json!({ "ok": true, "draftId": draft_id }))
+}
+
 /// Read the revision the draft currently points at — used by the preview pane
 /// and by "continue creating" to show what is on screen.
 #[tauri::command]

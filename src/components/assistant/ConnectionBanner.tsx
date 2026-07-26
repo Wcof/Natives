@@ -46,6 +46,13 @@ export default function ConnectionBanner({
   if (connection === 'incompatible' && clientVersion && daemonVersion) {
     text += ` · client ${clientVersion} / daemon ${daemonVersion}`;
   }
+  if (connection === 'incompatible') {
+    // i18n-pending: i18n files frozen this round; follow file-local zh/en pattern.
+    // Retry can never fix a version mismatch — guide towards diagnostics/upgrade.
+    text += zh
+      ? ' — 重试无法解决版本不匹配，请复制诊断并升级客户端或引擎'
+      : ' — retrying cannot fix a version mismatch; copy diagnostics and upgrade the client or engine';
+  }
 
   const tone =
     connection === 'fatal' || connection === 'incompatible'
@@ -71,7 +78,9 @@ export default function ConnectionBanner({
         {text}
         {error ? ` — ${error}` : ''}
       </span>
-      {onReconnect && (connection === 'offline' || connection === 'reconnecting') && (
+      {/* fatal is retryable via reconnect too — a dead engine must never be a dead end.
+          incompatible is deliberately excluded: retry gives false hope there. */}
+      {onReconnect && (connection === 'offline' || connection === 'reconnecting' || connection === 'fatal') && (
         <button type="button" onClick={onReconnect} className="pointer-events-auto underline">
           {zh ? '重试' : 'Retry'}
         </button>

@@ -1,13 +1,18 @@
 use crate::{Error, Result};
 use serde::Serialize;
 use std::path::Path;
+use ts_rs::TS;
 
-#[derive(Debug, Serialize)]
+/// 磁盘占用条目（目录大小经 du 统计）
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/")]
 pub struct DiskUsageItem {
     pub name: String,
     pub path: String,
     #[serde(rename = "isDir")]
     pub is_dir: bool,
+    // u64 默认生成 bigint，前端契约是 number
+    #[ts(type = "number")]
     pub size: u64,
     #[serde(rename = "sizeFormatted")]
     pub size_formatted: String,

@@ -5,6 +5,7 @@ import { useAsyncData } from '@/hooks/useAsyncData';
 import { type AgentSession } from '@/types/agent';
 import { t, type Locale } from '@/i18n';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { FILE_EVENTS, dispatchFileEvent } from '@/lib/file-events';
 
 interface ReplayStep {
   path: string;
@@ -84,7 +85,7 @@ export default function SessionReplay() {
 
   const handleNavigateToFile = useCallback((path: string) => {
     const dir = path.substring(0, path.lastIndexOf('/')) || '/';
-    window.dispatchEvent(new CustomEvent('navigate-files', { detail: dir }));
+    dispatchFileEvent(FILE_EVENTS.navigateFiles, dir);
   }, []);
 
   return (

@@ -85,6 +85,23 @@ pub fn list_drafts(conn: &Connection) -> Result<Vec<CreativeDraft>> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Bind a draft to the conversation that is editing it.
+///
+/// The conversation does not exist when the draft is created — it is created on
+/// the first message — so this link can only be made afterwards. Without it a
+/// reopened draft loses its history, and the draft tools' cross-session guard
+/// has nothing to compare against.
+pub fn bind_conversation(conn: &Connection, draft_id: &str, conversation_id: &str) -> Result<()> {
+    let changed = conn.execute(
+        "UPDATE creative_drafts SET conversation_id = ?2, updated_at = ?3 WHERE draft_id = ?1",
+        rusqlite::params![draft_id, conversation_id, now()],
+    )?;
+    if changed == 0 {
+        return Err(Error::NotFound(format!("draft not found: {draft_id}")));
+    }
+    Ok(())
+}
+
 /// Move the draft to `to`, rejecting transitions the state machine forbids.
 pub fn set_state(conn: &Connection, draft_id: &str, to: DraftState) -> Result<()> {
     let draft = get_draft(conn, draft_id)?;
@@ -113,6 +130,11 @@ pub fn append_revision(
     let path = paths::revision_path(data_dir, draft_id, next)?;
     let dir = paths::draft_dir(data_dir, draft_id)?;
     std::fs::create_dir_all(&dir).map_err(Error::Io)?;
+
+    // Writing after an undo would otherwise collide with the revision the user
+    // rolled back past. The pointer only ever steps back one at a time, so
+    // anything above it is unreachable forever — drop it before reusing the slot.
+    discard_unreachable_revisions(conn, data_dir, draft_id, draft.current_revision)?;
 
     crate::module_manager::atomic_write(&path, html)?;
 
@@ -177,6 +199,33 @@ pub fn list_revisions(conn: &Connection, draft_id: &str) -> Result<Vec<DraftRevi
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Drop revisions above `current`, which an undo has made unreachable.
+///
+/// Undo deliberately keeps files so it can itself be undone, but that only holds
+/// until the user writes again: the new revision takes the same number, and the
+/// old row would collide on the primary key.
+fn discard_unreachable_revisions(
+    conn: &Connection,
+    data_dir: &Path,
+    draft_id: &str,
+    current: i64,
+) -> Result<()> {
+    let doomed: Vec<i64> = list_revisions(conn, draft_id)?
+        .into_iter()
+        .map(|r| r.revision)
+        .filter(|r| *r > current)
+        .collect();
+    for revision in doomed {
+        let path = paths::revision_path(data_dir, draft_id, revision)?;
+        let _ = std::fs::remove_file(&path);
+        conn.execute(
+            "DELETE FROM creative_draft_revisions WHERE draft_id = ?1 AND revision = ?2",
+            rusqlite::params![draft_id, revision],
+        )?;
+    }
+    Ok(())
 }
 
 /// Drop the oldest revisions past the cap, always keeping rev-1 and the current
@@ -334,9 +383,13 @@ mod tests {
     fn illegal_state_transition_is_rejected() {
         let (conn, dir) = setup();
         create_draft(&conn, "draft-1", "App", "intent", None, None).expect("create");
-        // drafting -> publishing is not on the ADR table.
-        assert!(set_state(&conn, "draft-1", DraftState::Publishing).is_err());
+        // Publishing straight from Drafting is allowed (a seeded draft is already
+        // publishable), but skipping to a terminal state is not.
+        assert!(set_state(&conn, "draft-1", DraftState::Published).is_err());
+        assert!(set_state(&conn, "draft-1", DraftState::Archived).is_err());
         assert!(set_state(&conn, "draft-1", DraftState::Generating).is_ok());
+        // And a run in flight must not be publishable.
+        assert!(set_state(&conn, "draft-1", DraftState::Publishing).is_err());
         drop(dir);
     }
 
@@ -427,6 +480,49 @@ mod tests {
         );
         // Archived drafts drop out of the catalog projection.
         assert!(list_drafts(&conn).expect("list").is_empty());
+    }
+
+    /// The real flow never walks a draft through Generating/Ready — nothing in
+    /// the host drives those. Publishing must work from the state a freshly
+    /// created draft is actually in, which earlier tests hid by stepping the
+    /// state machine by hand.
+    #[test]
+    fn publish_works_from_the_state_a_new_draft_is_actually_in() {
+        let (conn, dir) = setup();
+        create_draft(&conn, "draft-1", "App", "intent", None, None).expect("create");
+        append_revision(&conn, dir.path(), "draft-1", "<html><div>ok</div></html>")
+            .expect("rev1");
+        assert_eq!(
+            get_draft(&conn, "draft-1").expect("draft").state,
+            DraftState::Drafting,
+            "nothing moves a draft out of Drafting today"
+        );
+
+        let modules = dir.path().join("modules");
+        publish(&conn, dir.path(), &modules, "draft-1", "my-app", "My App", &[])
+            .expect("publish must work straight from Drafting");
+        assert!(modules.join("my-app").join("index.html").exists());
+    }
+
+    /// Undo keeps newer files so it can be undone — until the next write reuses
+    /// that revision number, which used to collide on the primary key.
+    #[test]
+    fn writing_after_an_undo_reuses_the_revision_slot() {
+        let (conn, dir) = setup();
+        create_draft(&conn, "draft-1", "App", "intent", None, None).expect("create");
+        append_revision(&conn, dir.path(), "draft-1", "<html>one</html>").expect("rev1");
+        append_revision(&conn, dir.path(), "draft-1", "<html>two</html>").expect("rev2");
+        rollback(&conn, "draft-1").expect("undo");
+
+        let out = append_revision(&conn, dir.path(), "draft-1", "<html>three</html>")
+            .expect("writing after undo must not collide");
+
+        assert_eq!(out.revision, 2, "the pointer, not the directory, picks the slot");
+        assert_eq!(
+            read_current(&conn, dir.path(), "draft-1").expect("read"),
+            "<html>three</html>"
+        );
+        assert_eq!(list_revisions(&conn, "draft-1").expect("list").len(), 2);
     }
 
     #[test]

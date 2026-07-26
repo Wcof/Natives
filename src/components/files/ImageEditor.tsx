@@ -321,18 +321,18 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
   }, [handleUndo, onClose]);
 
   const tools: { tool: Tool; icon: typeof Pen; title: string }[] = [
-    { tool: 'pen', icon: Pen, title: '自由画笔' },
-    { tool: 'rect', icon: Square, title: '矩形框' },
-    { tool: 'line', icon: Minus, title: '直线' },
-    { tool: 'arrow', icon: ArrowRight, title: '箭头' },
-    { tool: 'text', icon: Type, title: '文字' },
-    { tool: 'mosaic', icon: Grid3x3, title: '打码' },
+    { tool: 'pen', icon: Pen, title: t(locale, 'imageEditor.toolPen') },
+    { tool: 'rect', icon: Square, title: t(locale, 'imageEditor.toolRect') },
+    { tool: 'line', icon: Minus, title: t(locale, 'imageEditor.toolLine') },
+    { tool: 'arrow', icon: ArrowRight, title: t(locale, 'imageEditor.toolArrow') },
+    { tool: 'text', icon: Type, title: t(locale, 'imageEditor.toolText') },
+    { tool: 'mosaic', icon: Grid3x3, title: t(locale, 'imageEditor.toolMosaic') },
   ];
 
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full text-sm" style={{ color: 'var(--text-secondary)' }}>
-        加载图片…
+        {t(locale, 'imageEditor.loading')}
       </div>
     );
   }
@@ -340,7 +340,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
   if (oomError) {
     return (
       <div className="flex items-center justify-center h-full text-sm" style={{ color: 'var(--text-secondary)' }}>
-        图片加载失败或过大（&gt;60MP），暂不支持编辑
+        {t(locale, 'imageEditor.oomError')}
       </div>
     );
   }
@@ -409,7 +409,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
       {/* Export bar */}
       <div className="flex items-center gap-3 p-2 border-t" style={{ borderColor: 'var(--border)' }}>
         <label className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
-          格式
+          {t(locale, 'imageEditor.format')}
           <select
             value={format}
             onChange={(e) => setFormat(e.target.value as 'png' | 'jpeg' | 'webp')}
@@ -422,7 +422,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
           </select>
         </label>
         <label className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
-          宽度
+          {t(locale, 'imageEditor.width')}
           <input
             type="number"
             min={16}
@@ -434,7 +434,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
         </label>
         {format !== 'png' && (
           <label className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
-            质量
+            {t(locale, 'imageEditor.quality')}
             <input
               type="range"
               min={10}
@@ -456,7 +456,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
           }}
         >
           <FileOutput size={14} />
-          另存为
+          {t(locale, 'imageEditor.saveAs')}
         </button>
         <button
           onClick={() => handleSave(false)}
@@ -467,7 +467,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
           }}
         >
           <Save size={14} />
-          保存
+          {t(locale, 'imageEditor.save')}
         </button>
       </div>
       {/* Text input dialog — replaces window.prompt() */}
@@ -487,7 +487,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
             onClick={(e) => e.stopPropagation()}
           >
             <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', marginBottom: 12 }}>
-              {locale.startsWith('zh') ? '输入文字' : 'Enter text'}
+              {t(locale, 'imageEditor.textInputTitle')}
             </div>
             <input
               autoFocus
@@ -513,7 +513,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
                 }
                 if (e.key === 'Escape') setShowTextInput(false);
               }}
-              placeholder={locale.startsWith('zh') ? '输入文字…' : 'Type text…'}
+              placeholder={t(locale, 'imageEditor.textInputPlaceholder')}
               style={{
                 width: '100%', padding: '8px 10px', borderRadius: 8,
                 border: '1px solid var(--border)', background: 'var(--background)',
@@ -530,7 +530,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
                   color: 'var(--text)', cursor: 'pointer', fontSize: 13,
                 }}
               >
-                Cancel
+                {t(locale, 'common.cancel')}
               </button>
               <button
                 onClick={() => {
@@ -556,7 +556,7 @@ export default function ImageEditor({ imagePath, imageName, onSave, onClose }: I
                   color: '#FFFFFF', cursor: 'pointer', fontSize: 13, fontWeight: 600,
                 }}
               >
-                OK
+                {t(locale, 'common.ok')}
               </button>
             </div>
           </div>

@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mapWireRunEvent } from './wire';
+import { mapWireMessage, mapWireRunEvent } from './wire';
 import { workspaceReducer, createInitialWorkspaceState } from '../assistant-workspace/reducer';
 import type { Run } from './types';
 
@@ -194,4 +194,29 @@ test('mapWireRunEvent + reducer: failed event surfaces error (no permanent think
   assert.equal(state.runs.r1?.status, 'failed');
   assert.equal(state.runs.r1?.errorCode, 'NO_CREDENTIALS');
   assert.match(String(state.runs.r1?.errorMessage ?? ''), /No credentials/);
+});
+
+test('mapWireMessage: daemon run_reference bookkeeping block is filtered out', () => {
+  // conversation_store.rs prepends { type: "run_reference", run_id } to every
+  // assistant message; it must never surface as a "Legacy block" in the UI.
+  const message = mapWireMessage({
+    id: 'm1',
+    conversation_id: 'c1',
+    role: 'assistant',
+    status: 'complete',
+    created_at: 't',
+    content_blocks: [
+      { type: 'run_reference', run_id: 'r1' },
+      { type: 'text', text: 'answer' },
+      { type: 'unknown_future_type', foo: 1 },
+    ],
+  });
+  assert.equal(message.contentBlocks.length, 2);
+  assert.equal(message.contentBlocks[0]!.type, 'text');
+  assert.equal(message.contentBlocks[0]!.text, 'answer');
+  // Unknown types still degrade to legacy (timeline must not crash) …
+  assert.equal(message.contentBlocks[1]!.type, 'legacy');
+  assert.equal(message.contentBlocks[1]!.originalType, 'unknown_future_type');
+  // … and no legacy shell remains for run_reference.
+  assert.ok(!message.contentBlocks.some((b) => b.originalType === 'run_reference'));
 });

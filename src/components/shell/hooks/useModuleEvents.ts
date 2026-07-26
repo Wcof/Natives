@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { getIframeManager } from '@/lib/iframe-manager';
+import { FILE_EVENTS, dispatchFileEvent, navigateToFiles } from '@/lib/file-events';
 import { classifyError } from '@/lib/error-classifier';
 import { pushRecentModule } from '@/lib/recent-modules';
 import { DEFAULT_SETTINGS_VIEW } from '@/components/shell/settings-navigation';
@@ -113,8 +114,8 @@ export function useModuleEvents({
           const params = new URLSearchParams(view.slice(qIndex + 1));
           const navPath = params.get('path');
           if (navPath) {
-            (window as any).__pendingNavigateFiles = navPath;
-            window.dispatchEvent(new CustomEvent('navigate-files', { detail: navPath }));
+            // 统一入口：自动带挂载竞态的 pending 兜底（替代 window.__pendingNavigateFiles）
+            navigateToFiles(navPath);
           }
         }
       }
@@ -134,7 +135,7 @@ export function useModuleEvents({
       if (channel === 'file:changed') {
         const filePath = typeof data === 'string' ? data : (data as { path?: string })?.path || '';
         if (filePath) {
-          window.dispatchEvent(new CustomEvent('file-flash', { detail: filePath }));
+          dispatchFileEvent(FILE_EVENTS.fileFlash, filePath);
         }
       }
     };

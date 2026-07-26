@@ -113,7 +113,14 @@ export function useShellState(): ShellStateReturn {
   const [editMode, setEditMode] = useState(false);
 
   // ── Follow mode ──
-  const { mode: followMode, cycleMode: cycleFollowMode } = useFollowMode();
+  // 绑定活动终端会话：file-follow 档的写入归属消歧（只认绑定终端 busy/8s 内有输出的写入）
+  const getTerminalSessionId = useCallback(() => terminalSessionIdRef.current, []);
+  const { mode: followMode, cycleMode: cycleFollowMode } = useFollowMode(
+    undefined,
+    undefined,
+    undefined,
+    getTerminalSessionId,
+  );
 
   // ── Crash state ──
   const [crashedModules, setCrashedModules] = useState<Set<string>>(new Set());

@@ -178,6 +178,20 @@ export interface ContentBlock {
   segmentId?: string;
   summary?: string;
   summaryStatus?: 'completed' | 'failed';
+  /** compaction: token counts around a context compression (engine context_compressed). */
+  beforeTokens?: number;
+  afterTokens?: number;
+  /**
+   * system_notice/subagent: structured notice payload. The reducer stores data
+   * only; the rendering layer owns localization/formatting (no hardcoded copy here).
+   */
+  noticeKind?:
+    | 'generation_retry'
+    | 'checkpoint_created'
+    | 'checkpoint_rewound'
+    | 'subagent_created'
+    | string;
+  noticeData?: Record<string, unknown>;
 }
 
 // ─── Run ─────────────────────────────────────────────────
@@ -289,6 +303,8 @@ export type RunEventType =
   | 'prompt_queue_updated'
   | 'interaction_requested'
   | 'interaction_resolved'
+  /** Rust RunEventKind::InteractionResponded wire name (run_event.rs type_name). */
+  | 'interaction_responded'
   | 'unknown';
 
 export interface RunEvent {
@@ -626,4 +642,44 @@ export type AssistantMethod =
   | 'engine.rateLimit.get'
   | 'engine.rateLimit.update'
   | 'engine.rateLimit.acquire'
-  | 'engine.rateLimit.cooldown';
+  | 'engine.rateLimit.cooldown'
+  | 'capability.skill.list'
+  | 'capability.skill.get'
+  | 'capability.skill.update'
+  | 'capability.skill.import'
+  | 'capability.skill.delete'
+  | 'capability.skill.rescan'
+  | 'capability.mcp.list'
+  | 'capability.mcp.get'
+  | 'capability.mcp.create'
+  | 'capability.mcp.update'
+  | 'capability.mcp.delete'
+  | 'capability.mcp.importJson'
+  | 'capability.mcp.hub.search'
+  | 'capability.mcp.hub.get'
+  | 'capability.mcp.hub.install'
+  | 'capability.expert.list'
+  | 'capability.expert.get'
+  | 'capability.expert.create'
+  | 'capability.expert.update'
+  | 'capability.expert.delete'
+  | 'capability.expert.importMd'
+  | 'capability.expert.exportMd'
+  | 'capability.team.list'
+  | 'capability.team.get'
+  | 'capability.team.create'
+  | 'capability.team.update'
+  | 'capability.team.delete'
+  | 'conversation.updateCapabilities'
+  | 'conversation.getCapabilities';
+
+/**
+ * Capability library selection carried on run.start / conversation rows
+ * (ADR-0016). All fields optional; absent = legacy behaviour.
+ */
+export interface CapabilitySelection {
+  skills?: string[];
+  mcp_servers?: string[];
+  expert_id?: string | null;
+  team_id?: string | null;
+}

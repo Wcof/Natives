@@ -1,3 +1,8 @@
+import {
+  RUN_STATUS_LABELS,
+  type RunStatusLabel,
+} from '@/lib/assistant-run-status-labels';
+
 /**
  * Desktop / in-app notification targeting:
  * 项目 → 会话 → Run → Interaction/Block
@@ -35,15 +40,16 @@ export type NotificationKind =
   | 'daemon_fatal';
 
 export function notificationTitle(kind: NotificationKind, zh: boolean): string {
-  const map: Record<NotificationKind, [string, string]> = {
-    run_completed: ['运行完成', 'Run completed'],
-    run_failed: ['运行失败', 'Run failed'],
-    waiting_permission: ['等待权限', 'Permission needed'],
-    waiting_user: ['等待你的回答', 'Waiting for your answer'],
-    subagent_input: ['子任务需要输入', 'Subagent needs input'],
-    scheduler_failed: ['计划任务失败', 'Scheduler failed'],
-    daemon_fatal: ['引擎无法恢复', 'Engine cannot recover'],
+  // waiting_* kinds mirror run statuses; their wording comes from the shared table.
+  const map: Record<NotificationKind, RunStatusLabel> = {
+    run_completed: { zh: '运行完成', en: 'Run completed' },
+    run_failed: { zh: '运行失败', en: 'Run failed' },
+    waiting_permission: RUN_STATUS_LABELS.waiting_permission,
+    waiting_user: RUN_STATUS_LABELS.waiting_user,
+    subagent_input: { zh: '子任务需要输入', en: 'Subagent needs input' },
+    scheduler_failed: { zh: '计划任务失败', en: 'Scheduler failed' },
+    daemon_fatal: { zh: '引擎无法恢复', en: 'Engine cannot recover' },
   };
-  const pair = map[kind];
-  return zh ? pair[0] : pair[1];
+  const label = map[kind];
+  return zh ? label.zh : label.en;
 }

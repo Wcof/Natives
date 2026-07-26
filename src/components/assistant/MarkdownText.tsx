@@ -23,6 +23,7 @@ export type { MarkdownPreviewProps };
 export {
   SAFE_MARKDOWN_ELEMENTS,
   isSafeMarkdownUrl,
+  isSafeImageSource,
   transformMarkdownUrl,
   pluginsFilter,
   rewriteMarkdownNode,

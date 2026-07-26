@@ -10,7 +10,7 @@ import {
   RESIZABLE_RIGHT_PANEL_MIN_WIDTH,
 } from '@/components/ui/ResizableRightPanel';
 
-export type RightPanelMode = 'file-preview' | 'notifications' | 'module-details' | 'closed';
+export type RightPanelMode = 'file-preview' | 'notifications' | 'module-details' | 'follow' | 'closed';
 export type PreviewSubMode = 'preview' | 'info' | 'git';
 
 /** Default open width — also used as double-click reset target. */

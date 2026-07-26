@@ -1,3 +1,5 @@
+import { fsApi, hasNativeFiles } from '@/lib/files-api';
+
 export interface ActiveProjectApi {
   db?: {
     get?: (key: string) => Promise<unknown>;
@@ -26,9 +28,9 @@ function browserLegacyValue(): string | null {
 async function pathExists(path: string): Promise<boolean> {
   if (typeof window === 'undefined') return true;
   try {
-    const api = (window as any).nativesAPI;
-    if (api?.fs?.listDir) {
-      await api.fs.listDir(path);
+    // files-api 契约：先探测可用性，listDir 抛错才代表路径不存在
+    if (hasNativeFiles()) {
+      await fsApi().listDir(path);
       return true;
     }
   } catch {

@@ -12,19 +12,25 @@ const controller = readFileSync(
   'utf8',
 );
 const sidebar = readFileSync(new URL('./AssistantSidebarSection.tsx', import.meta.url), 'utf8');
+// The subscribe loop moved out of the Workbench into a hook both it and the
+// creator workbench consume; the invariant is asserted where it now lives.
+const runHook = readFileSync(
+  new URL('../../lib/assistant-workspace/use-assistant-run.ts', import.meta.url),
+  'utf8',
+);
 
-test('workbench no longer promotes quiet soft-resub to global reconnecting after n>40', () => {
-  assert.equal(workbench.includes('Still waiting for engine terminal event'), false);
-  assert.equal(workbench.includes('n > 40'), false);
-  // Soft resub must still exist with backoff, without connection/set reconnecting.
-  assert.match(workbench, /soft-resubscribe|Quiet soft resubscribe/);
-  assert.match(workbench, /Math\.min\(250 \* n, 2000\)/);
-  // startSubscription must not dispatch reconnecting for quiet polls.
-  const startIdx = workbench.indexOf('const startSubscription = useCallback');
-  assert.ok(startIdx >= 0);
-  const startChunk = workbench.slice(startIdx, startIdx + 1800);
-  assert.equal(startChunk.includes("connection: 'reconnecting'"), false);
-  assert.equal(startChunk.includes('connection/set'), false);
+test('quiet soft-resub is never promoted to global reconnecting', () => {
+  assert.equal(runHook.includes('Still waiting for engine terminal event'), false);
+  assert.equal(runHook.includes('n > 40'), false);
+  // Soft resub must still exist with capped backoff.
+  assert.match(runHook, /quiet|Quiet/);
+  assert.match(runHook, /RESUB_STEP_MS|Math\.min\(/);
+  // The subscribe loop must not touch global connection state on quiet polls.
+  assert.equal(runHook.includes("connection: 'reconnecting'"), false);
+  assert.equal(runHook.includes('connection/set'), false);
+  // And the Workbench must consume that loop rather than keep its own copy.
+  assert.match(workbench, /useAssistantRun\(\)/);
+  assert.equal(workbench.includes('const startSubscription = useCallback'), false);
 });
 
 test('controller quiet iterator end is a no-op on connection; transport errors reconnect', () => {

@@ -8,13 +8,16 @@ import { parseAgentAction, composeNarration } from '@/lib/agent-narration';
 import { highlightCode, extToLanguage } from '@/lib/shiki-utils';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
 import { IFRAME_SANDBOX } from '@/lib/iframe-manager';
+import { fsApi, hasNativeFiles } from '@/lib/files-api';
 import { useTheme } from '@/context/ThemeContext';
+import { t, useLocale } from '@/i18n';
 
 interface FollowRendererProps {
   filePath: string | null;
 }
 
 export default function FollowRenderer({ filePath }: FollowRendererProps) {
+  const locale = useLocale();
   const [content, setContent] = useState<string | null>(null);
   const [lastContent, setLastContent] = useState<string | null>(null);
   const [narration, setNarration] = useState('');
@@ -28,7 +31,8 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
     let cancelled = false;
     (async () => {
       try {
-        const text = await window.nativesAPI?.fs?.readFile?.(filePath) as string | undefined;
+        // files-api 契约：fs 不可用时抛错走 catch 静默降级（与原可选链语义等价）
+        const text = await fsApi().readFile(filePath) as string | undefined;
         if (cancelled || text === undefined) return;
         setLastContent(contentRef.current);
         contentRef.current = text;
@@ -84,7 +88,7 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         height: '100%', color: 'var(--text-disabled)', fontSize: 'var(--fs-sm)',
       }}>
-        Follow mode active — waiting for agent edits...
+        {t(locale, 'terminal.followWaiting')}
       </div>
     );
   }
@@ -103,7 +107,7 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
           {filePath.split('/').pop()}
         </div>
         <div style={{ color: 'var(--text-disabled)', fontSize: FONT_SIZE.sm, marginTop: SPACING.xs }}>
-          Build artifact generated
+          {t(locale, 'terminal.followArtifact')}
         </div>
         {narration && <NarrationBar text={narration} />}
       </div>
@@ -200,13 +204,13 @@ function LiveHtmlPreview({ path }: { path: string }) {
     let cancelled = false;
     (async () => {
       try {
-        const api = window.nativesAPI;
-        if (!api?.fs?.readFile) {
+        // files-api 契约：fs 不可用（浏览器 dev）时保持原告警降级
+        if (!hasNativeFiles()) {
           console.warn('[FollowRenderer] fs.readFile not available');
           return;
         }
 
-        const result = await api.fs.readFile(path);
+        const result = await fsApi().readFile(path);
         if (cancelled || !result) return;
         const content = typeof result === 'string' ? result : (result as { content?: string }).content;
         const mimeType = path.endsWith('.html') || path.endsWith('.htm') ? 'text/html' : 'text/plain';
@@ -250,9 +254,9 @@ function LiveHtmlPreview({ path }: { path: string }) {
     if (dirtyRef.current) {
       dirtyRef.current = false;
       try {
-        const api = window.nativesAPI;
-        if (api?.fs?.readFile) {
-          const result = await api.fs.readFile(path);
+        // files-api 契约：fs 可用才重读（与原可选链探测语义等价）
+        if (hasNativeFiles()) {
+          const result = await fsApi().readFile(path);
           if (result) {
             const content = typeof result === 'string' ? result : (result as any).content;
             const mimeType = path.endsWith('.html') || path.endsWith('.htm') ? 'text/html' : 'text/plain';

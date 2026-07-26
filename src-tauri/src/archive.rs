@@ -2,20 +2,28 @@ use crate::{Error, Result};
 use serde::Serialize;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use ts_rs::TS;
 
-#[derive(Debug, Serialize)]
+/// 压缩包内单个条目
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/")]
 pub struct ArchiveEntry {
     pub name: String,
+    // u64 默认生成 bigint，前端契约是 number
+    #[ts(type = "number")]
     pub size: u64,
     #[serde(rename = "isDir")]
     pub is_dir: bool,
 }
 
-#[derive(Debug, Serialize)]
+/// 压缩包清单（最多 1000 条，超出置 truncated）
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/")]
 pub struct ArchiveListing {
     pub entries: Vec<ArchiveEntry>,
     pub truncated: bool,
     #[serde(rename = "totalSize")]
+    #[ts(type = "number")]
     pub total_size: u64,
 }
 

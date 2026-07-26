@@ -22,6 +22,17 @@ import {
 } from 'lucide-react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
 import { useHydrated } from '@/hooks/useHydrated';
+import { FILE_EVENTS, dispatchFileEvent } from '@/lib/file-events';
+import { searchApi } from '@/lib/files-api';
+
+/** 取搜索能力；非 Tauri 环境返回 null（调用方静默降级，与原可选链语义等价） */
+function searchApiOrNull(): ReturnType<typeof searchApi> | null {
+  try {
+    return searchApi();
+  } catch {
+    return null;
+  }
+}
 
 interface CommandItem {
   id: string;
@@ -146,7 +157,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
       const searchTerm = query.slice(8).trim();
       if (searchTerm.length >= 2) {
         const root = searchScope === 'local' ? (process.env.HOME || '/') : '/';
-        window.nativesAPI?.search?.grep?.(searchTerm, root, { maxResults: 8 }).then((results) => {
+        searchApiOrNull()?.grep(searchTerm, root, { maxResults: 8 }).then((results) => {
           if (Array.isArray(results) && results.length > 0) {
             const contentCommands: CommandItem[] = results.map((r: { path: string; name: string; line?: number; match?: string }) => ({
               id: `__file__:${r.path}`,
@@ -169,7 +180,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
     // Also search files if query looks like a filename (has extension or starts with /)
     if (query.length >= 2 && (query.includes('.') || query.startsWith('/') || query.startsWith('~'))) {
       const root = query.startsWith('~') || query.startsWith('/') ? '/' : (searchScope === 'local' ? (process.env.HOME || '/') : '/');
-      window.nativesAPI?.search?.files?.(query, root, { maxResults: 8 }).then((fileResults) => {
+      searchApiOrNull()?.files(query, root, { maxResults: 8 }).then((fileResults) => {
         if (Array.isArray(fileResults) && fileResults.length > 0) {
           const fileCommands: CommandItem[] = fileResults.map((f: { path: string; name: string }) => ({
             id: `__file__:${f.path}`,
@@ -194,7 +205,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
     if (!q) return;
     const root = searchScope === 'local' ? (process.env.HOME || '/') : '/';
     // Search files by name
-    window.nativesAPI?.search?.files?.(q, root, { maxResults: 8 }).then((fileResults) => {
+    searchApiOrNull()?.files(q, root, { maxResults: 8 }).then((fileResults) => {
       if (Array.isArray(fileResults) && fileResults.length > 0) {
         const fileCommands: CommandItem[] = fileResults.map((f: { path: string; name: string }) => ({
           id: `__file__:${f.path}`,
@@ -211,7 +222,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
       }
     }).catch(() => { /* ignore */ });
     // Search file content
-    window.nativesAPI?.search?.grep?.(q, root, { maxResults: 8 }).then((contentResults) => {
+    searchApiOrNull()?.grep(q, root, { maxResults: 8 }).then((contentResults) => {
       if (Array.isArray(contentResults) && contentResults.length > 0) {
         const contentCommands: CommandItem[] = contentResults.map((r: { path: string; name: string; line?: number; match?: string }) => ({
           id: `__file__:${r.path}`,
@@ -271,7 +282,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
       const filePath = cmd.id.slice(9);
       const dir = filePath.substring(0, filePath.lastIndexOf('/')) || '/';
       onSelect('files');
-      window.dispatchEvent(new CustomEvent('navigate-files', { detail: dir }));
+      dispatchFileEvent(FILE_EVENTS.navigateFiles, dir);
     } else {
       onSelect(cmd.id);
     }

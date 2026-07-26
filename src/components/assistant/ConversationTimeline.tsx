@@ -48,6 +48,54 @@ interface ConversationTimelineProps {
 }
 
 const NEAR_BOTTOM_PX = 80;
+
+// ── Coarse render window (R-P4: never mount the full history) ──────────────
+// Only the newest TIMELINE_WINDOW_SIZE rows mount; older rows are revealed in
+// TIMELINE_WINDOW_STEP increments via the "show earlier" button. Host paging
+// (hasMoreOlder/onLoadOlder) only engages once every local row is revealed.
+
+/** Max message rows mounted before the user asks for more. */
+export const TIMELINE_WINDOW_SIZE = 150;
+/** Rows revealed per "show earlier" click. */
+export const TIMELINE_WINDOW_STEP = 150;
+
+/** First rendered index for a tail-anchored window. Pure — unit tested. */
+export function timelineWindowStart(
+  total: number,
+  revealedOlder: number,
+  windowSize: number = TIMELINE_WINDOW_SIZE,
+): number {
+  if (windowSize <= 0) return 0;
+  return Math.max(0, total - windowSize - Math.max(0, revealedOlder));
+}
+
+export interface TimelineEdgeIds {
+  length: number;
+  firstId: string | null;
+  lastId: string | null;
+}
+
+/**
+ * How the messages array changed between renders. Pure — unit tested.
+ * - 'reset':   conversation switched / cleared → forget local reveals.
+ * - 'prepend': older page arrived at the top → grow window so the rows the
+ *              user just requested do not vanish into the hidden range.
+ * - 'keep':    append / in-place streaming update → window stays tail-anchored.
+ */
+export function classifyTimelineDelta(
+  prev: TimelineEdgeIds | null,
+  next: TimelineEdgeIds,
+): 'reset' | 'prepend' | 'keep' {
+  if (!prev) return 'keep';
+  if (next.length === 0) return 'reset';
+  if (prev.length === 0) return 'reset';
+  if (next.length > prev.length && next.lastId === prev.lastId && next.firstId !== prev.firstId) {
+    return 'prepend';
+  }
+  if (next.firstId !== prev.firstId && next.lastId !== prev.lastId) return 'reset';
+  return 'keep';
+}
+
 /** Shared empty run events so MessageRow memo is not busted by `?? []` each render. */
 const EMPTY_RUN_EVENTS: RunEvent[] = [];
 /** Idle tool strip — avoid allocating `[]` on every finished MessageRow render. */
@@ -338,10 +386,45 @@ export default function ConversationTimeline({
     (message) => message.status === 'streaming' || message.status === 'running',
   );
 
+  // Coarse render window: extra older rows the user revealed locally.
+  const [revealedOlder, setRevealedOlder] = useState(0);
+  const edgesRef = useRef<TimelineEdgeIds | null>(null);
+  useEffect(() => {
+    const next: TimelineEdgeIds = {
+      length: messages.length,
+      firstId: messages[0]?.id ?? null,
+      lastId: messages[messages.length - 1]?.id ?? null,
+    };
+    const prev = edgesRef.current;
+    edgesRef.current = next;
+    const delta = classifyTimelineDelta(prev, next);
+    if (delta === 'reset') {
+      setRevealedOlder((current) => (current === 0 ? current : 0));
+    } else if (delta === 'prepend' && prev) {
+      // Host page landed on top — keep it visible instead of window-hiding it.
+      setRevealedOlder((current) => current + (next.length - prev.length));
+    }
+  }, [messages]);
+
+  const windowStart = timelineWindowStart(messages.length, revealedOlder);
+  const visibleMessages = windowStart > 0 ? messages.slice(windowStart) : messages;
+  const hiddenOlderCount = windowStart;
+
   const loadOlder = async () => {
     const el = scrollRef.current;
     const before = el ? { height: el.scrollHeight, top: el.scrollTop } : null;
     await onLoadOlder?.();
+    if (!el || !before) return;
+    requestAnimationFrame(() => {
+      el.scrollTop = before.top + (el.scrollHeight - before.height);
+    });
+  };
+
+  // Same scroll-position compensation as loadOlder, but for the local window.
+  const revealOlder = () => {
+    const el = scrollRef.current;
+    const before = el ? { height: el.scrollHeight, top: el.scrollTop } : null;
+    setRevealedOlder((current) => current + TIMELINE_WINDOW_STEP);
     if (!el || !before) return;
     requestAnimationFrame(() => {
       el.scrollTop = before.top + (el.scrollHeight - before.height);
@@ -420,12 +503,24 @@ export default function ConversationTimeline({
       className="relative h-full overflow-y-auto"
     >
       <div className="mx-auto flex w-full max-w-[860px] flex-col gap-7 px-5 py-7">
-        {hasMoreOlder && onLoadOlder && (
+        {hiddenOlderCount > 0 ? (
+          <button
+            type="button"
+            onClick={revealOlder}
+            className="self-center rounded border px-3 py-1 text-xs text-[var(--text-secondary)]"
+            data-testid="timeline-show-earlier"
+          >
+            {/* i18n-pending: i18n files frozen this round; follow file-local zh/en pattern. */}
+            {zh
+              ? `显示更早 ${Math.min(TIMELINE_WINDOW_STEP, hiddenOlderCount)} 条（还有 ${hiddenOlderCount} 条未显示）`
+              : `Show ${Math.min(TIMELINE_WINDOW_STEP, hiddenOlderCount)} earlier (${hiddenOlderCount} hidden)`}
+          </button>
+        ) : hasMoreOlder && onLoadOlder ? (
           <button type="button" onClick={() => void loadOlder()} disabled={loadingOlder} className="self-center rounded border px-3 py-1 text-xs text-[var(--text-secondary)]">
             {loadingOlder ? (zh ? '加载中…' : 'Loading…') : (zh ? '加载更早消息' : 'Load older messages')}
           </button>
-        )}
-        {messages.map((message) => (
+        ) : null}
+        {visibleMessages.map((message) => (
           <MessageRow
             key={message.id}
             message={message}
