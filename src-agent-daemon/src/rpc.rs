@@ -385,6 +385,53 @@ async fn test_provider_model(
     }
 }
 
+/// Map an [`McpError`] onto the daemon error envelope.
+///
+/// The distinction that matters is `Unsupported`: "this server does not do
+/// resources" and "you sent bad arguments" are different facts, and collapsing
+/// them into `invalid_input` would make a GUI show a broken-input message for a
+/// server that is working exactly as advertised. `Denied` stays separate for the
+/// same reason — a blocked `file://` read is a policy outcome, not a bug.
+fn mcp_error_to_daemon(err: crate::mcp_runtime::McpError) -> DaemonError {
+    use crate::mcp_runtime::McpError;
+    match err {
+        McpError::Invalid(m) => {
+            DaemonError::new(error_codes::INVALID_INPUT, ErrorCategory::Validation, false, m)
+        }
+        McpError::NotFound(m) => {
+            DaemonError::new(error_codes::NOT_FOUND, ErrorCategory::NotFound, false, m)
+        }
+        // Not `unsupported`: that code is reserved for methods this daemon does
+        // not implement, and this method *is* implemented. The unsupported thing
+        // is the remote server's capability set.
+        McpError::Unsupported(m) => DaemonError::new(
+            error_codes::INVALID_INPUT,
+            ErrorCategory::Validation,
+            false,
+            m,
+        ),
+        McpError::Denied(m) => DaemonError::new(
+            error_codes::PERMISSION_DENIED,
+            ErrorCategory::PermissionDenied,
+            false,
+            m,
+        ),
+        McpError::Transport(m) => {
+            DaemonError::new(error_codes::NETWORK_ERROR, ErrorCategory::Network, true, m)
+        }
+    }
+}
+
+/// Read the MCP server id from either accepted param spelling.
+fn mcp_server_id(request: &RpcRequest) -> &str {
+    request
+        .params
+        .get("server_id")
+        .or_else(|| request.params.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+}
+
 /// Dispatch an RPC request to the appropriate handler.
 ///
 /// Public so the dispatch-coverage contract test (`tests/rpc_dispatch_contract.rs`) can
@@ -1503,8 +1550,22 @@ pub async fn handle_rpc(
             }
         }
         names::MCP_LIST => {
-            let servers = crate::mcp_runtime::global_mcp().list_servers();
-            let tools = crate::mcp_runtime::global_mcp().list_tools();
+            let mcp = crate::mcp_runtime::global_mcp();
+            let servers = mcp.list_servers();
+            let tools = mcp.list_tools();
+            // `capabilities` is per-server and may be null. Null means "no
+            // completed handshake, we do not know" — never "supports nothing".
+            // The GUI must render unknown differently from unsupported, which is
+            // only possible because this field is nullable rather than defaulted.
+            let capabilities: Vec<serde_json::Value> = servers
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "server_id": s.id,
+                        "capabilities": mcp.server_capabilities(&s.id),
+                    })
+                })
+                .collect();
             send_success(
                 writer,
                 &request.request_id,
@@ -1513,7 +1574,8 @@ pub async fn handle_rpc(
                 serde_json::json!({
                     "servers": servers,
                     "tools": tools,
-                    "namespaced": crate::mcp_runtime::global_mcp().namespaced_tools(),
+                    "namespaced": mcp.namespaced_tools(),
+                    "capabilities": capabilities,
                 }),
             )
             .await;
@@ -1797,6 +1859,147 @@ pub async fn handle_rpc(
                     .await;
                 }
             }
+        }
+        names::MCP_RESOURCES_LIST => {
+            let cursor = request.params.get("cursor").and_then(|v| v.as_str());
+            match crate::mcp_runtime::global_mcp().list_resources(mcp_server_id(request), cursor) {
+                Ok(v) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        v,
+                    )
+                    .await;
+                }
+                Err(e) => send_error(writer, &mcp_error_to_daemon(e)).await,
+            }
+        }
+        names::MCP_RESOURCES_TEMPLATES_LIST => {
+            match crate::mcp_runtime::global_mcp().list_resource_templates(mcp_server_id(request)) {
+                Ok(v) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        v,
+                    )
+                    .await;
+                }
+                Err(e) => send_error(writer, &mcp_error_to_daemon(e)).await,
+            }
+        }
+        names::MCP_RESOURCES_READ => {
+            // Human-initiated read only. There is deliberately no model-facing
+            // tool for this: `tools/call` stays closed over RPC because it has
+            // side effects, and a resource read is gated instead by the server's
+            // own published URI set plus the scheme policy in `mcp_runtime`.
+            let uri = request
+                .params
+                .get("uri")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match crate::mcp_runtime::global_mcp().read_resource(mcp_server_id(request), uri) {
+                Ok(v) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        v,
+                    )
+                    .await;
+                }
+                Err(e) => send_error(writer, &mcp_error_to_daemon(e)).await,
+            }
+        }
+        names::MCP_PROMPTS_LIST => {
+            let cursor = request.params.get("cursor").and_then(|v| v.as_str());
+            match crate::mcp_runtime::global_mcp().list_prompts(mcp_server_id(request), cursor) {
+                Ok(v) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        v,
+                    )
+                    .await;
+                }
+                Err(e) => send_error(writer, &mcp_error_to_daemon(e)).await,
+            }
+        }
+        names::MCP_PROMPTS_GET => {
+            let name = request
+                .params
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let arguments = request
+                .params
+                .get("arguments")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            match crate::mcp_runtime::global_mcp().get_prompt(
+                mcp_server_id(request),
+                name,
+                arguments,
+            ) {
+                Ok(v) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        v,
+                    )
+                    .await;
+                }
+                Err(e) => send_error(writer, &mcp_error_to_daemon(e)).await,
+            }
+        }
+        names::MCP_ROOTS_LIST => {
+            // What *we* would hand a server that asks. Empty is a real answer
+            // ("no roots granted"), not a placeholder, so `source` states where
+            // the set came from instead of leaving the GUI to guess.
+            let roots = crate::mcp_runtime::global_mcp().client_roots();
+            send_success(
+                writer,
+                &request.request_id,
+                &request.client_id,
+                &request.session_token,
+                serde_json::json!({
+                    "roots": roots,
+                    "source": if std::env::var("NATIVES_MCP_ROOTS").is_ok() {
+                        "env:NATIVES_MCP_ROOTS"
+                    } else {
+                        "explicit"
+                    },
+                }),
+            )
+            .await;
+        }
+        names::MCP_NOTIFICATIONS_LIST => {
+            let server_id = request
+                .params
+                .get("server_id")
+                .or_else(|| request.params.get("id"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty());
+            let items = crate::mcp_runtime::global_mcp().notifications(server_id);
+            send_success(
+                writer,
+                &request.request_id,
+                &request.client_id,
+                &request.session_token,
+                serde_json::json!({
+                    "server_id": server_id,
+                    "notifications": items,
+                }),
+            )
+            .await;
         }
         names::ARTIFACT_LIST => {
             let run_id = request.params.get("run_id").and_then(|v| v.as_str());

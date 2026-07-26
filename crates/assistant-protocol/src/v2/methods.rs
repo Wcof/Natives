@@ -69,6 +69,13 @@ pub const ALL_METHODS: &[&str] = &[
     "mcp.auth.clear",
     "mcp.auth.oauthStart",
     "mcp.auth.oauthCallback",
+    "mcp.resources.list",
+    "mcp.resources.read",
+    "mcp.resources.templates.list",
+    "mcp.prompts.list",
+    "mcp.prompts.get",
+    "mcp.roots.list",
+    "mcp.notifications.list",
     "artifact.list",
     "artifact.open",
     "artifact.reveal",
@@ -136,6 +143,17 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "mcp.auth.set",
     "mcp.auth.status",
     "mcp.auth.clear",
+    // MCP protocol surface beyond tools. `resources`/`prompts` are read-only
+    // discovery plus a gated read; they are advertised because the daemon really
+    // dispatches them. `mcp.call` stays absent — tool invocation has side effects
+    // and must go through the agent's permission gate, a read does not.
+    "mcp.resources.list",
+    "mcp.resources.read",
+    "mcp.resources.templates.list",
+    "mcp.prompts.list",
+    "mcp.prompts.get",
+    "mcp.roots.list",
+    "mcp.notifications.list",
     "scheduler.list",
     "scheduler.create",
     "scheduler.update",
@@ -268,6 +286,13 @@ pub mod names {
     pub const MCP_AUTH_CLEAR: &str = "mcp.auth.clear";
     pub const MCP_AUTH_OAUTH_START: &str = "mcp.auth.oauthStart";
     pub const MCP_AUTH_OAUTH_CALLBACK: &str = "mcp.auth.oauthCallback";
+    pub const MCP_RESOURCES_LIST: &str = "mcp.resources.list";
+    pub const MCP_RESOURCES_READ: &str = "mcp.resources.read";
+    pub const MCP_RESOURCES_TEMPLATES_LIST: &str = "mcp.resources.templates.list";
+    pub const MCP_PROMPTS_LIST: &str = "mcp.prompts.list";
+    pub const MCP_PROMPTS_GET: &str = "mcp.prompts.get";
+    pub const MCP_ROOTS_LIST: &str = "mcp.roots.list";
+    pub const MCP_NOTIFICATIONS_LIST: &str = "mcp.notifications.list";
     pub const ARTIFACT_LIST: &str = "artifact.list";
     pub const ARTIFACT_OPEN: &str = "artifact.open";
     pub const TASK_LIST: &str = "task.list";
@@ -404,6 +429,46 @@ mod tests {
         assert!(is_daemon_method("permission.listPending"));
         assert!(is_daemon_method("agent.list"));
         assert!(is_daemon_method("conversation.update"));
+    }
+
+    /// The MCP surface beyond tools is advertised only because the daemon really
+    /// dispatches it. Kept as an explicit list so shrinking it is a deliberate edit.
+    #[test]
+    fn mcp_protocol_surface_beyond_tools_is_advertised() {
+        for method in [
+            "mcp.resources.list",
+            "mcp.resources.read",
+            "mcp.resources.templates.list",
+            "mcp.prompts.list",
+            "mcp.prompts.get",
+            "mcp.roots.list",
+            "mcp.notifications.list",
+        ] {
+            assert!(is_known_method(method), "not catalogued: {method}");
+            assert!(is_daemon_method(method), "not advertised: {method}");
+        }
+    }
+
+    /// `sampling/createMessage` and `elicitation/create` are the two MCP calls
+    /// where the **server** drives the client: one spends local inference on a
+    /// remote server's prompt, the other puts a remote server's question in front
+    /// of the user. Both are permission-model changes, not protocol coverage, and
+    /// neither has a consent surface here yet. They must not appear in the
+    /// catalogue at all — a catalogued name is a promise of intent.
+    #[test]
+    fn server_initiated_sampling_and_elicitation_are_not_catalogued() {
+        for method in [
+            "mcp.sampling.createMessage",
+            "mcp.elicitation.create",
+            "mcp.sampling.respond",
+        ] {
+            assert!(
+                !is_known_method(method),
+                "{method} appeared in ALL_METHODS — server-driven MCP calls need a \
+                 consent design before they are catalogued"
+            );
+            assert!(!is_implemented_method(method), "should not advertise: {method}");
+        }
     }
 
     /// Every advertised method must be catalogued. A capability ad for a name that is

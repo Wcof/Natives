@@ -267,6 +267,73 @@ async fn deliberately_unsupported_methods_report_unsupported() {
     }
 }
 
+/// The MCP surface beyond `tools` is the newest advertisement, so pin it by name
+/// rather than relying only on the blanket sweep above. If one of these is ever
+/// dropped from `IMPLEMENTED_METHODS` the sweep goes quiet — it only checks what
+/// is advertised — and the frontend loses the capability with no test turning red.
+/// Naming them here makes removal a deliberate edit to this list.
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_protocol_surface_is_advertised_and_dispatchable() {
+    isolate_env();
+
+    const MCP_SURFACE: &[&str] = &[
+        "mcp.resources.list",
+        "mcp.resources.read",
+        "mcp.resources.templates.list",
+        "mcp.prompts.list",
+        "mcp.prompts.get",
+        "mcp.roots.list",
+        "mcp.notifications.list",
+    ];
+
+    for method in MCP_SURFACE {
+        assert!(
+            IMPLEMENTED_METHODS.contains(method),
+            "{method} dropped out of IMPLEMENTED_METHODS — the daemon still \
+             dispatches it, so the advertisement is now under-honest"
+        );
+        match probe(method).await {
+            Probe::Blocked => {}
+            Probe::Responded { code, body } => {
+                assert!(
+                    !is_fail_closed_miss(code.as_deref(), &body),
+                    "{method} is advertised but has no dispatch arm: {body}"
+                );
+            }
+        }
+    }
+}
+
+/// `sampling/createMessage` and `elicitation/create` let an MCP **server** drive
+/// the client: spend local inference on the server's prompt, or put the server's
+/// question in front of the user. Both invert the trust direction the rest of the
+/// MCP surface assumes, and neither has a consent surface here. They are out of
+/// scope by decision, not by oversight, so they must fail closed as `unsupported`
+/// exactly like the OAuth pair above — never `internal_error`, and never quietly
+/// advertised by a future edit.
+#[tokio::test(flavor = "multi_thread")]
+async fn server_driven_mcp_methods_are_not_advertised() {
+    isolate_env();
+
+    for method in ["mcp.sampling.createMessage", "mcp.elicitation.create"] {
+        assert!(
+            !IMPLEMENTED_METHODS.contains(&method) && !HOST_IMPLEMENTED_METHODS.contains(&method),
+            "{method} must not be advertised — server-driven MCP calls need a \
+             permission design before they are implemented"
+        );
+        match probe(method).await {
+            Probe::Blocked => panic!("{method} unexpectedly has a working handler"),
+            Probe::Responded { code, body } => {
+                assert_eq!(
+                    code.as_deref(),
+                    Some("unsupported"),
+                    "{method} should fail closed as `unsupported`, got: {body}"
+                );
+            }
+        }
+    }
+}
+
 /// Unknown names must also fail closed as `unsupported`, never `internal_error`.
 #[tokio::test(flavor = "multi_thread")]
 async fn unknown_methods_fail_closed_as_unsupported() {
