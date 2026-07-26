@@ -10,6 +10,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Bell,
   Blocks,
+  BookMarked,
   CalendarClock,
   Download,
   FileText,
@@ -174,6 +175,7 @@ function getNavigationId(activeModuleId?: string): string | null {
   if (activeModuleId === 'assistant' || activeModuleId === '__assistant__') return '__assistant__';
   if (activeModuleId === 'jobs' || activeModuleId === '__jobs__') return '__jobs__';
   if (activeModuleId === 'capabilities' || activeModuleId === '__capabilities__') return '__capabilities__';
+  if (activeModuleId === 'library' || activeModuleId === '__library__') return '__library__';
   if (activeModuleId.startsWith('module:')) return activeModuleId;
   if (activeModuleId.startsWith('__files__:')) return activeModuleId;
   if (activeModuleId.startsWith('builtin:')) return activeModuleId;
@@ -933,6 +935,19 @@ export default function Sidebar({
             >
               <Blocks size={16} />
               <span>{t(locale, 'nav.capabilities')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => selectNavigation('__library__', '__library__')}
+              aria-current={activeNavigationId === '__library__' ? 'page' : undefined}
+              className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
+                activeNavigationId === '__library__'
+                  ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
+              }`}
+            >
+              <BookMarked size={16} />
+              <span>{t(locale, 'nav.library')}</span>
             </button>
             <button
               type="button"

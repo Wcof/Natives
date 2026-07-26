@@ -95,7 +95,7 @@ export function useShellState(): ShellStateReturn {
     const routingTable: Record<string, string> = {
       '/': 'dashboard', '/files': 'files', '/tools': 'tools',
       '/ai': 'ai', '/modules': 'modules', '/capabilities': 'capabilities',
-      '/jobs': 'jobs',
+      '/jobs': 'jobs', '/library': 'library', '/store': 'modules',
     };
     return routingTable[path] || 'dashboard';
   });
