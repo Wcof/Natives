@@ -1,0 +1,837 @@
+# Native Harness Control Plane Design
+
+- Status: Approved for planning
+- Date: 2026-07-26
+- Scope: Native execution engine only
+- Settings entry: Settings → Execution Engine → Native Engine
+
+## 1. Summary
+
+Natives will extract the current session coordination and Hook runtime into an
+independently managed Harness module. The module will provide a visual control
+plane for:
+
+- the fixed Native execution topology;
+- Session queue, interjection, safe-point, and drain state;
+- Hook definitions, provenance, ordering, policy, and invocation traces;
+- versioned Blueprint configuration;
+- immutable per-Run Harness snapshots;
+- Live Runs and Audit projections.
+
+The selected design is a deep `HarnessControlPlane` module. It publishes a
+small interface and hides profile inheritance, versioning, Hook discovery,
+Session Actor state, plan compilation, telemetry, and audit projection.
+
+The execution state machine remains fixed. The UI may configure only
+schema-approved policy slots. It must not become a free-form workflow builder.
+
+## 2. Existing State
+
+The current Native path already contains real Harness behavior:
+
+- `crates/agent-core/src/session_coordinator.rs` owns per-conversation queue,
+  interjection, permission interaction, cancel-and-send, and terminal drain.
+- `src-agent-daemon/src/prompt_queue_store.rs` persists queue and actor state.
+- `AgentEngine` receives an optional global `SessionCoordinator` and checks it
+  at safe points.
+- `HookRegistry` stores opaque `HookHandler` trait objects keyed by
+  `HookEvent`.
+- `production_hooks.rs` discovers built-in, project, user, environment,
+  command, and HTTP hooks and rebuilds a registry for each Run.
+- `RuntimePanel` mixes Runtime selection, Native settings, CLI status,
+  capabilities, protection settings, and Job scheduling in one page.
+
+This works at runtime, but it lacks:
+
+- an inspectable Hook identity and provenance model;
+- versioned Harness configuration;
+- immutable evidence of the effective Harness used by a Run;
+- a management RPC surface;
+- a unified execution topology;
+- a Settings control center;
+- a clean distinction between fixed stages, safe points, and Hook points.
+
+## 3. Goals
+
+### 3.1 Product goals
+
+1. Make the full Native execution topology visible.
+2. Show exactly which stages have Hook points and which Hooks are attached.
+3. Show which Hooks ran, were unmatched, modified data, denied execution,
+   failed, or timed out.
+4. Allow safe Hook configuration for future Runs.
+5. Support global templates, project overlays, and session selection.
+6. Support Draft → Validate → Diff → Publish → Rollback.
+7. Bind every Run to an immutable, persisted Harness snapshot.
+8. Aggregate all Native-owned execution settings under Native Engine.
+9. Preserve external CLI Harness ownership.
+
+### 3.2 Engineering goals
+
+1. Replace scattered Harness state with a deep module and a small interface.
+2. Preserve a single authority for Run lifecycle, engine execution, tool
+   safety, events, and persistence.
+3. Migrate incrementally from current behavior without a big-bang rewrite.
+4. Keep execution and configuration behavior independently testable.
+5. Keep runtime data growth, subscriptions, and Renderer work bounded.
+
+## 4. Non-goals
+
+The MVP will not:
+
+- provide a free-form drag-and-drop workflow engine;
+- allow live Hook enable/disable, reorder, or replacement in an active Run;
+- allow users to delete or reconnect fixed engine stages;
+- make Provider routing, permission, context, subagent, or concurrency policy
+  editable;
+- edit Claude CLI or Codex CLI Harness configuration;
+- change Job scheduling or decide the Job module's future UI;
+- move assistant conversation state into Harness;
+- move Provider assets or credentials into Harness;
+- introduce a second Run lifecycle or event authority.
+
+## 5. Hard Compatibility Constraints
+
+This work modifies the Native execution engine. It must not alter the existing
+Assistant or Provider integration contracts.
+
+### 5.1 Assistant integration
+
+- Existing Assistant calls to `run.start`, conversation methods, queue
+  methods, permission methods, and event subscription remain valid.
+- `run.start` gains no new required field.
+- `runtime_id = native` keeps its current meaning.
+- Harness profile and session selection are managed through separate
+  `harness.*` methods and resolved inside the Daemon.
+- Existing Run lifecycle and message events retain their current semantics.
+- New Harness events are additive protocol events.
+- Protocol decoders retain an unknown-event passthrough so Assistant views
+  that do not understand Harness events can safely ignore them.
+- No Assistant reducer becomes an authority for Harness configuration.
+
+### 5.2 Provider integration
+
+- `EngineProvider` remains unchanged.
+- `RoutedProvider`, provider selection, model selection, fallback, credential
+  leasing, streaming, and usage reporting remain unchanged in the MVP.
+- Provider configuration is displayed as read-only topology metadata.
+- `HarnessControlPlane` does not read or write Provider asset databases.
+- Provider credentials never enter Harness Blueprint, snapshots, events, or
+  Renderer state.
+
+### 5.3 Stable insertion seam
+
+Harness resolution occurs inside the Daemon after the existing `run.start`
+validation and before `ProductionRuntime` creates `AgentEngine`.
+
+```text
+Assistant run.start
+  → existing RunManager validation
+  → HarnessControlPlane.resolve_run
+  → persist ResolvedHarnessSnapshot
+  → existing Provider routing and credential lease
+  → existing ProductionRuntime / AgentEngine path
+```
+
+The default migrated Blueprint must compile to behavior equivalent to the
+current production path before any setting becomes editable.
+
+## 6. Product Information Architecture
+
+The Settings sidebar retains one Execution Engine entry.
+
+```text
+Settings
+└── Execution Engine
+    ├── Runtime Overview
+    ├── Native Engine
+    │   ├── Overview
+    │   ├── Blueprint
+    │   ├── Hooks
+    │   ├── Live Runs
+    │   └── Audit
+    ├── Claude CLI (read-only ownership view)
+    └── Codex CLI (read-only ownership view)
+```
+
+Native Engine aggregates:
+
+- Native capabilities;
+- tools and protection;
+- permissions;
+- context and compaction;
+- self-heal and doom-loop protection;
+- Engine Capabilities;
+- Harness topology;
+- Hooks;
+- Live Runs;
+- Audit.
+
+The existing standalone Engine Capabilities Settings section is folded into
+Native Engine.
+
+Job scheduling is removed from `RuntimePanel` and excluded from this project.
+Jobs are an independent module and are not owned by the Native execution
+engine.
+
+The Native Engine workspace may use a wider layout than ordinary Settings
+forms. Blueprint and Live Runs require a three-pane layout and must not be
+constrained to the current 920px content width.
+
+## 7. Module Architecture
+
+### 7.1 Pure Harness module
+
+Create `crates/harness-core/` as the pure domain and runtime coordination
+module. It must not depend on Daemon RPC, SQLite, Renderer, Host, Provider
+adapters, or platform process implementations.
+
+Suggested internal modules:
+
+```text
+crates/harness-core/src/
+├── lib.rs
+├── blueprint.rs
+├── profile.rs
+├── validation.rs
+├── resolver.rs
+├── snapshot.rs
+├── topology.rs
+├── session_actor.rs
+├── run_harness.rs
+├── hooks/
+│   ├── mod.rs
+│   ├── definition.rs
+│   ├── binding.rs
+│   ├── decision.rs
+│   └── dispatch.rs
+└── telemetry.rs
+```
+
+Responsibilities:
+
+- typed Blueprint schema;
+- scope precedence and overlay resolution;
+- canonical serialization and hashing;
+- validation and diff models;
+- immutable snapshot model;
+- fixed Native topology model;
+- current `SessionCoordinator` behavior;
+- Hook identity, ordering, matching, decision aggregation, and trace models;
+- per-Run `RunHarness` interface.
+
+### 7.2 Daemon production module
+
+Create `src-agent-daemon/src/harness/` for production adapters and assembly.
+
+```text
+src-agent-daemon/src/harness/
+├── mod.rs
+├── control_plane.rs
+├── repository.rs
+├── migrations.rs
+├── source_discovery.rs
+├── source_manifest.rs
+├── hook_adapters.rs
+├── telemetry_sink.rs
+├── audit_projection.rs
+├── rpc.rs
+└── compatibility.rs
+```
+
+Responsibilities:
+
+- `HarnessControlPlane` production implementation;
+- SQLite persistence in Daemon-owned `assistant.db`;
+- Hook file and environment discovery;
+- command and HTTP Hook adapters;
+- source drift detection;
+- protocol v2 handlers;
+- Run event persistence;
+- startup recovery;
+- temporary compatibility adapters during migration.
+
+### 7.3 Existing authority remains
+
+| Module | Authority retained |
+|---|---|
+| `RunManager` | Run create/start/cancel/retry/terminal lifecycle |
+| `AgentEngine` | Fixed single-Run execution loop |
+| `CapabilityGateway` | Schema, path scope, permission, execution, audit |
+| `conversation_store` | Assistant conversation and message state |
+| Provider modules | Provider assets, routing, credentials, streaming |
+| `run_events` | Runtime event authority |
+| `HarnessControlPlane` | Harness configuration, resolution, snapshot, topology, Hook metadata |
+
+## 8. Harness Interfaces
+
+`HarnessControlPlane` exposes a small conceptual interface:
+
+```rust
+trait HarnessControlPlane {
+    fn validate(&self, draft: HarnessDraft) -> ValidationReport;
+    fn publish(&self, request: PublishRequest) -> PublishedVersion;
+    fn resolve_run(&self, context: RunHarnessContext) -> ResolvedHarnessSnapshot;
+    fn inspect(&self, query: HarnessInspectionQuery) -> HarnessInspection;
+}
+```
+
+Persistence, source discovery, Hook adapters, and audit projection are internal
+seams. Callers must not orchestrate them.
+
+`RunHarness` is the execution-facing interface:
+
+```rust
+struct RunHarness {
+    snapshot: ResolvedHarnessSnapshot,
+    session: SessionActorHandle,
+    hooks: CompiledHookRuntime,
+    telemetry: HarnessTelemetrySink,
+}
+```
+
+It provides:
+
+- safe-point coordination;
+- Hook dispatch;
+- stable snapshot identity;
+- structured stage and Hook telemetry.
+
+`AgentEngine` must receive a valid `RunHarness`. The current optional
+`session_harness` field and global lookup are removed after migration.
+
+## 9. Configuration and Version Model
+
+### 9.1 Resolution precedence
+
+Effective configuration is resolved in this order:
+
+1. locked built-in topology and safety invariants;
+2. published global template;
+3. optional published project overlay;
+4. optional session selection of a published overlay;
+5. runtime capability validation.
+
+Overlays are typed and sparse. They are not arbitrary JSON merge patches.
+Unknown fields fail validation. Locked fields cannot be overridden.
+
+Session selection references a published profile/version. It does not create an
+untracked session-local configuration copy.
+
+### 9.2 Publishing
+
+```text
+Draft
+  → schema and invariant validation
+  → source and trust validation
+  → diff against current published version
+  → atomic publish
+  → immutable version + canonical hash
+```
+
+Publishing uses optimistic concurrency through a draft `revision`. A stale
+revision returns a conflict and must not overwrite another editor.
+
+Rollback republishes the selected old document as a new immutable version. It
+does not move a mutable "current version" pointer backward without history.
+
+### 9.3 Run resolution
+
+At Run start:
+
+1. resolve exact published layer versions;
+2. discover and validate runtime capabilities;
+3. compile Hook bindings;
+4. canonicalize the effective document;
+5. compute its SHA-256 hash;
+6. persist `harness_run_snapshot`;
+7. construct `RunHarness`;
+8. start the existing Provider and Engine path.
+
+Failure before snapshot persistence means the Run does not execute.
+
+## 10. Persistence Model
+
+All tables live in Daemon-owned `assistant.db`. Migrations are incremental,
+WAL remains enabled, and foreign keys declare cascade behavior.
+
+### `harness_profile`
+
+Logical profile or overlay identity:
+
+- `id`
+- `name`
+- `description`
+- `kind` (`global_template`, `project_overlay`, `session_overlay`)
+- `project_id` when scoped
+- `current_published_version_id`
+- timestamps
+
+### `harness_draft`
+
+Editable state:
+
+- `profile_id`
+- `base_version_id`
+- `document_json`
+- `revision`
+- `updated_at`
+
+### `harness_version`
+
+Immutable published state:
+
+- `id`
+- `profile_id`
+- monotonically increasing `version_number`
+- `parent_version_id`
+- `document_json`
+- `canonical_hash`
+- `source_manifest_json`
+- `validation_summary_json`
+- `created_at`
+
+### `harness_binding`
+
+Scope selection:
+
+- `scope_type` (`global`, `project`, `session`)
+- `scope_id`
+- `profile_id`
+- optional pinned `version_id`
+- binding mode (`follow_published`, `pinned`)
+- `updated_at`
+
+### `harness_run_snapshot`
+
+Execution evidence:
+
+- `run_id`
+- resolved layer/version references
+- `snapshot_json`
+- `canonical_hash`
+- `topology_version`
+- `hook_semantics_version`
+- `resolved_at`
+
+### `harness_audit`
+
+Configuration audit:
+
+- publish;
+- rollback;
+- binding change;
+- source drift acknowledgement;
+- actor and timestamp;
+- redacted change summary.
+
+Runtime Hook traces do not use this table. They remain in `run_events`.
+
+## 11. Native Execution Topology
+
+The topology is versioned but fixed by code:
+
+| Stage | Hook points | Safe points |
+|---|---|---|
+| Session | `SessionStart`, `UserPromptSubmit` | — |
+| Context | — in MVP | — |
+| Provider | — in MVP | `ProviderBatchBoundary` |
+| Tool Gate | `PreToolUse` | `BeforeTool` |
+| Permission | `PermissionRequest`, `PermissionDenied` | `AfterPermissionResolved` |
+| Tool Execute | `PostToolUse`, `PostToolUseFailure` | `AfterTool` |
+| Subagent | `SubagentStart`, `SubagentStop` | — |
+| Compact | `PreCompact`, `PostCompact` | — |
+| Stop | `Stop`, `StopFailure` | — |
+| Terminal | `SessionEnd`, `Error` | — |
+| Cross-stage | `Notification` | — |
+
+The UI distinguishes:
+
+- **Stage**: fixed Engine execution phase;
+- **Safe Point**: point where Session queue/interjection coordination is safe;
+- **Hook Point**: point where Hook definitions may execute.
+
+Users cannot delete, reorder, or reconnect stages.
+
+## 12. Hook Model
+
+### 12.1 Hook definition
+
+Every Hook has inspectable metadata:
+
+- stable `id`;
+- display name;
+- Hook event;
+- kind (`builtin`, `command`, `http`, future adapter kind);
+- source kind (`built_in`, `native`, `imported`, `environment`);
+- source URI/path and source digest;
+- matcher;
+- order;
+- enabled state;
+- timeout;
+- trust state;
+- failure mode;
+- locked state;
+- redacted adapter configuration.
+
+### 12.2 Source ownership
+
+- Built-in safety Hooks are locked.
+- Natives Hooks are editable and versioned in Blueprint.
+- `.claude`, `.agents`, `.grok`, and `.natives` source files remain read-only.
+- A Profile may store enable, order, matcher, timeout, and failure-policy
+  overlays without rewriting the source file.
+- Source content is materialized into the published version's source manifest.
+- Later file changes create Source Drift and a draft candidate. They do not
+  mutate an active published version.
+- Legacy environment Hooks are represented as read-only sources during
+  migration, materialized into the resolved snapshot, and never hidden.
+
+Claude CLI and Codex CLI Harness configuration is read-only in Natives. The UI
+states which external Runtime owns it and how the user can edit it externally.
+
+### 12.3 Deterministic execution
+
+Hooks execute sequentially by:
+
+1. locked priority band;
+2. configured order;
+3. stable Hook ID as a tie-breaker.
+
+Decision semantics:
+
+- each Hook receives the payload produced by the previous Hook;
+- `Deny` terminates the Hook point;
+- `Modify` updates the payload for subsequent Hooks;
+- `Inject` appends messages in execution order;
+- `Rewake` is aggregated with logical OR;
+- security Hook failures and timeouts are fail closed;
+- ordinary Hook failure policy is explicit in the published version.
+
+An active Run uses only its compiled Hook bindings. Publishing, source drift,
+or UI edits cannot change them.
+
+### 12.4 Hook semantics compatibility
+
+`ResolvedHarnessSnapshot` records a non-editable `hook_semantics_version`.
+
+- Migrated compatibility profiles initially use `legacy_v1`, which preserves
+  the current Hook dispatch and aggregation behavior.
+- The approved sequential behavior is `sequential_v2`.
+- Extraction, metadata introduction, and a semantics upgrade must not land as
+  one untestable change.
+- Moving a profile from `legacy_v1` to `sequential_v2` requires validation,
+  an explicit published version, and a visible diff.
+- Active Runs never change semantics version.
+
+New Natives-owned profiles use `sequential_v2`. Automatically migrated
+profiles remain on `legacy_v1` until the parity suite passes and the migration
+is explicitly published.
+
+## 13. Event and Audit Model
+
+Runtime events remain single-authority `run_events`. Additive events:
+
+- `HarnessPlanResolved`
+- `HarnessStageStarted`
+- `HarnessStageCompleted`
+- `HookDispatchStarted`
+- `HookInvocationStarted`
+- `HookInvocationCompleted`
+- `HookDispatchCompleted`
+
+Unmatched Hooks are derived by comparing the immutable snapshot and dispatch
+input. They do not each create a persistent event, preventing event explosion.
+
+Every Hook event contains:
+
+- run and Hook identity;
+- Hook event and source;
+- status and decision;
+- duration;
+- redacted input/output summary;
+- structured error category;
+- truncation metadata.
+
+Event payloads are redacted before persistence. Credentials, leased keys,
+environment secrets, and sensitive fields never enter Renderer state, logs,
+exports, or snapshots.
+
+Live Runs and Audit read projections of the same event source. They do not
+create a second runtime log.
+
+## 14. Protocol and Renderer Data Flow
+
+New protocol methods use a `harness.*` namespace:
+
+- `harness.overview`
+- `harness.profile.list`
+- `harness.profile.get`
+- `harness.profile.create`
+- `harness.profile.archive`
+- `harness.draft.get`
+- `harness.draft.save`
+- `harness.draft.validate`
+- `harness.draft.diff`
+- `harness.draft.publish`
+- `harness.version.list`
+- `harness.version.rollback`
+- `harness.binding.get`
+- `harness.binding.set`
+- `harness.hook.catalog`
+- `harness.run.getSnapshot`
+- `harness.audit.list`
+
+Existing `run.list`, `run.get`, and subscription methods are reused for Live
+Runs. Harness must not duplicate them.
+
+Methods are advertised only when callable. Unsupported partial deployments
+fail honestly.
+
+Renderer data flow:
+
+```text
+Native Engine UI
+  → tauri-adapter
+  → Host ExecutionAuthority façade
+  → protocol v2 / UDS
+  → Daemon HarnessControlPlane
+```
+
+Renderer never opens SQLite, reads project Hook files, executes Hooks, or
+connects directly to the Daemon socket.
+
+## 15. MVP Workspaces
+
+### Overview
+
+- active profile and version;
+- Harness health;
+- Native capability summary;
+- source drift and validation warnings;
+- recent Runs;
+- links to relevant topology nodes.
+
+### Blueprint
+
+- fixed Native execution topology;
+- global/project/session scope selector;
+- stage inspector;
+- read-only policy slots in MVP;
+- Draft, Validate, Diff, Publish, and Rollback.
+
+### Hooks
+
+- catalog across all sources;
+- source and trust filters;
+- enable/disable overlay;
+- order, matcher, timeout, and ordinary failure policy;
+- create/edit Natives-owned Hooks;
+- source drift status.
+
+### Live Runs
+
+- paginated Run list;
+- topology state projection;
+- Hook invocation details;
+- queue and permission state;
+- allowed live actions: cancel, interject, permission response.
+
+It does not allow live configuration mutation.
+
+### Audit
+
+- publish and rollback history;
+- binding changes;
+- Run snapshot lookup;
+- Hook trace search;
+- redacted export.
+
+## 16. Failure Handling
+
+| Failure | Required behavior |
+|---|---|
+| Invalid Draft | Reject publish; active version unchanged |
+| Draft revision conflict | Return conflict and diff; never overwrite |
+| Missing/invalid Harness binding | Native Run does not start |
+| Snapshot persistence failure | Native Run does not start |
+| Enabled Hook cannot compile | Publish or Run resolution fails according to stage |
+| Security Hook timeout/failure | Fail closed |
+| Ordinary Hook timeout/failure | Apply published failure policy |
+| Source file drift | Warn and create draft candidate; active version unchanged |
+| Critical event persistence failure | Stop before new side effects; fail/interrupt Run |
+| Daemon restart | Restore profiles/bindings; never silently re-execute a Run |
+| UI IPC failure | Loading/error/success state; classified user-visible error |
+
+Error codes are structured and mapped through `classifyError`, including:
+
+- `HARNESS_DRAFT_CONFLICT`
+- `HARNESS_VALIDATION_FAILED`
+- `HARNESS_SNAPSHOT_PERSIST_FAILED`
+- `HARNESS_HOOK_COMPILE_FAILED`
+- `HARNESS_SOURCE_DRIFT`
+- `HARNESS_EVENT_PERSIST_FAILED`
+
+## 17. Security and Privacy
+
+- Locked safety Hooks cannot be disabled or reordered out of their priority
+  band.
+- Harness cannot bypass Capability Gateway, broaden path scope, or grant
+  credentials.
+- Command Hooks retain process sandbox, timeout, cancellation, working
+  directory, and trust checks.
+- HTTP Hooks retain allowlist and SSRF protections.
+- Imported files are treated as untrusted configuration until validated.
+- Renderer receives only redacted, typed data.
+- Hook stdout/stderr and payload previews are bounded and redacted.
+- Secret-like fields are removed before persistence, not merely hidden by UI.
+- Configuration writes remain Daemon-owned and broadcast through the existing
+  state/event path.
+
+## 18. Performance Design
+
+- Live Runs and Audit are paginated and windowed.
+- UI lists over 200 rows are virtualized.
+- Stream events are batched per frame.
+- Only the selected Run builds a detailed topology projection.
+- Blueprint graph, trace inspector, and Audit are lazy loaded.
+- No Harness work enters the initial Shell bundle unnecessarily.
+- Hook trace payloads are truncated and never duplicate full model/tool
+  payloads.
+- Session Actors, Run projections, caches, and subscriptions have explicit
+  capacity and terminal cleanup.
+- No Renderer or Tauri synchronous command performs Hook discovery or file IO.
+- Real-time updates use events, not polling.
+- Hidden pages pause expensive projections and clean subscriptions.
+
+The implementation must satisfy existing budgets:
+
+- hot IPC p95 ≤ 50ms;
+- click/input feedback p95 ≤ 100ms;
+- cached page switch p95 ≤ 300ms;
+- individual main-thread tasks ≤ 50ms;
+- `npm run perf:check`.
+
+## 19. Migration Strategy
+
+### Phase 1: behavior-preserving extraction
+
+- Add `harness-core`.
+- Move Session Actor behavior with existing tests.
+- Introduce Hook definition/binding types.
+- Keep compatibility adapters for current call sites.
+- Prove the default compiled `RunHarness` matches current behavior.
+
+### Phase 2: control plane and snapshots
+
+- Add Daemon Harness persistence and migrations.
+- Create default published profiles.
+- Resolve and persist snapshots at Run start.
+- Keep Settings UI hidden.
+
+### Phase 3: telemetry and source manifests
+
+- Add Hook identities, source manifests, redaction, drift detection, and
+  additive Run events.
+- Verify event volume and performance before enabling UI.
+
+### Phase 4: Settings MVP
+
+- Replace the current mixed `RuntimePanel` structure.
+- Aggregate Native settings and Engine Capabilities.
+- Add Overview, Blueprint, Hooks, Live Runs, and Audit.
+- Remove Job UI from RuntimePanel without redesigning the Job module.
+
+### Phase 5: compatibility cleanup
+
+- Remove old `session_harness` shims and global naming.
+- Remove per-Run opaque Hook registry assembly.
+- Remove deprecated Settings sections only after navigation migration.
+
+At no phase may Assistant and Provider integrations be migrated at the same
+time as Harness execution semantics. Each phase first proves parity at the
+existing seams.
+
+## 20. Testing Strategy
+
+### `harness-core`
+
+- global/project/session precedence;
+- typed sparse overlays and locked-field rejection;
+- canonical serialization and stable hash;
+- validation and diff;
+- Hook ordering, matching, sequential payload modification, and decisions;
+- security failure behavior;
+- Session Actor queue, interjection, cancel-and-send, terminal drain, and race
+  tests.
+
+### Daemon
+
+- incremental SQLite migrations and foreign keys;
+- atomic publish and rollback;
+- optimistic edit conflicts;
+- source discovery and drift;
+- startup recovery without silent re-execution;
+- snapshot persistence before engine start;
+- RPC implemented/advertised parity;
+- redaction before event persistence.
+
+### Engine integration
+
+- Run binds the exact resolved snapshot;
+- active Run is unaffected by later publish;
+- all Hook points and safe points fire at the expected stage;
+- security failure closes execution;
+- Provider routing and `EngineProvider` behavior are unchanged;
+- existing Assistant `run.start` path is unchanged.
+
+### Renderer
+
+- Settings navigation and wide Native workspace;
+- loading/error/success states;
+- Blueprint validation, diff, publish, rollback;
+- Hook provenance and overlay controls;
+- Live Runs projection and bounded rendering;
+- Audit search and redaction;
+- event subscription cleanup;
+- Chinese and English strings.
+
+### End-to-end acceptance
+
+1. Publish Harness v1.
+2. Start a Native Run and persist the v1 snapshot.
+3. Observe stage and Hook traces.
+4. Create and publish v2 while the Run is active.
+5. Confirm the active Run remains on v1.
+6. Start a new Run and confirm it uses v2.
+7. Roll back v1 content as v3.
+8. Confirm the next Run uses v3.
+9. Restart the Daemon and confirm profiles, bindings, snapshots, and audit
+   remain available without re-executing Runs.
+10. Confirm Claude/Codex Harness views are read-only.
+11. Confirm no credential or raw sensitive environment value appears in DB,
+    events, Renderer memory, logs, or export.
+
+Before handoff, run:
+
+- `npm run typecheck`
+- `npm run lint`
+- relevant frontend and Rust tests
+- `npm run perf:check`
+
+## 21. Approved Decisions
+
+- Control depth: observe and configure future Runs; no live mutation.
+- Scope: full Native execution topology with fixed state machine.
+- Settings: Execution Engine → Native Engine.
+- Configuration hierarchy: global template → project overlay → session
+  selection.
+- UI: Overview, Blueprint, Hooks, Live Runs, Audit.
+- Hook files: read-only source plus Profile overlay.
+- External CLI: read-only ownership view.
+- Audit: redacted details with explicit expansion; secrets never shown.
+- Publishing: Draft → Validate → Diff → Publish → Rollback.
+- MVP: Hooks editable; other engine policy slots read-only.
+- Jobs: separate module, excluded.
+- Engineering approach: deep Harness control-plane module.
+- Compatibility: no Assistant or Provider integration changes.
