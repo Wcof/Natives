@@ -404,6 +404,20 @@ export const en = {
       undo: 'Undo last change',
       dismiss: 'Dismiss',
     },
+    catalog: {
+      creationsTitle: 'Continue creating',
+      creationsHint: 'Internal apps you created — edit any time',
+      creationsEmptyTitle: 'No creations yet',
+      creationsEmptyDesc: 'Describe an idea in one sentence and AI will generate a runnable app',
+      creationsEmptyAction: 'Start creating',
+      importedTitle: 'Imported apps',
+      importedHint: 'Local projects and GitHub containers — run management only',
+      importedEmptyTitle: 'No imported apps yet',
+      importedEmptyDesc: 'Import an existing app from a local folder or a GitHub repository',
+      importedEmptyAction: 'Import app',
+      actionContinueCreating: 'Continue creating',
+      actionRunSettings: 'Run settings',
+    },
   },
 
   // Settings

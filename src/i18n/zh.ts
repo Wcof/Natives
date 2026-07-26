@@ -397,6 +397,20 @@ export const zh = {
       undo: '撤销上一次修改',
       dismiss: '忽略',
     },
+    catalog: {
+      creationsTitle: '继续创作',
+      creationsHint: '由你创作的内部应用，可随时改',
+      creationsEmptyTitle: '还没有创作过应用',
+      creationsEmptyDesc: '用一句话描述想法，AI 会生成可运行的应用',
+      creationsEmptyAction: '开始创作',
+      importedTitle: '已导入应用',
+      importedHint: '本地项目与 GitHub 容器，仅运行管理',
+      importedEmptyTitle: '还没有导入应用',
+      importedEmptyDesc: '从本地文件夹或 GitHub 仓库导入已有应用',
+      importedEmptyAction: '导入应用',
+      actionContinueCreating: '继续创作',
+      actionRunSettings: '运行设置',
+    },
   },
 
   settings: {
