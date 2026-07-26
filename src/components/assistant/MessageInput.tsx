@@ -22,6 +22,7 @@ import {
   loadPersistedQuestionHistory,
   savePersistedQuestionHistory,
 } from '@/lib/assistant-workspace/persistence';
+import { fsApi } from '@/lib/files-api';
 import ModelSelectorDropdown, { type ProviderWithModels } from './ModelSelectorDropdown';
 import SlashCommandPopover from './SlashCommandPopover';
 import FileMentionPopover, { type ProjectFileHit } from './FileMentionPopover';
@@ -331,7 +332,8 @@ export default function MessageInput(props: MessageInputProps) {
     if (!paths.length) return;
     const selected = (await Promise.all(paths.map(async path => {
       try {
-        const metadata = await window.nativesAPI?.fs?.readFile(path) as unknown as { size?: number } | undefined;
+        // files-api 契约：fs 不可用时抛 FilesApiUnavailableError，由下方 catch 降级为 size 0（与原可选链语义等价）
+        const metadata = await fsApi().readFile(path) as unknown as { size?: number } | undefined;
         return {
           path,
           name: fileNameFromPath(path),

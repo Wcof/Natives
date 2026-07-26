@@ -4,6 +4,13 @@ import { startTransition, Fragment, useEffect, useRef, useState, useCallback, us
 import { motion } from 'framer-motion';
 import { t, type Locale } from '@/i18n';
 import {
+  FILE_EVENTS,
+  dispatchFileEvent,
+  onFileEvent,
+  type HeaderFileAction,
+  type HeaderFileState,
+} from '@/lib/file-events';
+import {
   Grid3x3,
   List,
   Home,
@@ -33,29 +40,15 @@ const VIEW_LABELS: Record<string, string> = {
   files: '',
   ai: 'header.aiWorkbench',
   workshop: 'nav.modules',
+  jobs: 'nav.jobs',
   settings: 'nav.settings',
   tools: 'nav.tools',
   modules: 'nav.modules',
   store: 'nav.modules',
 };
 
-interface FileState {
-  viewMode: 'grid' | 'list';
-  sortBy: 'name' | 'mtime' | 'size';
-  sortDir: 'asc' | 'desc';
-  showHidden: boolean;
-  gridSize: 'sm' | 'md' | 'lg';
-  segments: string[];
-  isFavorite: boolean;
-  breadcrumbPath: string;
-  projectBadge?: string | null;
-  canGoBack?: boolean;
-  canGoForward?: boolean;
-  canGoUp?: boolean;
-  recentMode?: boolean;
-  searchQuery?: string;
-  loading?: boolean;
-}
+// 文件浏览器上行状态的类型契约统一由 file-events.ts 提供
+type FileState = HeaderFileState;
 
 // Elastic breadcrumb. Layout rule (a segment = one clickable dir):
 //   • Always show:  head anchor  →  … →  last two segments
@@ -279,18 +272,12 @@ export default function Header({
     window.nativesAPI?.getLocale?.().then((l) => { if (l === 'en') setLocale('en'); }).catch(() => {});
   }, []);
 
-  // Listen for file-browser state broadcast
-  useEffect(() => {
-    const handler = (e: Event) => {
-      setFileState((e as CustomEvent).detail as FileState);
-    };
-    window.addEventListener('header-file-state', handler);
-    return () => window.removeEventListener('header-file-state', handler);
-  }, []);
+  // 监听文件浏览器状态上行广播（file-events 契约）
+  useEffect(() => onFileEvent(FILE_EVENTS.headerFileState, setFileState), []);
 
-  // Dispatch actions back to FileBrowser
-  const dispatchAction = useCallback((type: string, value?: unknown) => {
-    window.dispatchEvent(new CustomEvent('header-file-action', { detail: { type, value } }));
+  // 下行动作回传 FileBrowser（discriminated union，编译期对齐两端）
+  const dispatchAction = useCallback((action: HeaderFileAction) => {
+    dispatchFileEvent(FILE_EVENTS.headerFileAction, action);
   }, []);
 
   // Click outside to close sort/filter/search popups
@@ -364,7 +351,7 @@ export default function Header({
             <button
               className="btn-secondary-v1 !h-8 !w-8 !p-0 flex items-center justify-center"
               disabled={!fs?.canGoBack}
-              onClick={() => dispatchAction('back')}
+              onClick={() => dispatchAction({ type: 'back' })}
               title={`${t(locale, 'fileBrowser.back')} ⌘[`}
               style={{ opacity: fs?.canGoBack ? 1 : 0.35 }}
             >
@@ -373,7 +360,7 @@ export default function Header({
             <button
               className="btn-secondary-v1 !h-8 !w-8 !p-0 flex items-center justify-center"
               disabled={!fs?.canGoForward}
-              onClick={() => dispatchAction('forward')}
+              onClick={() => dispatchAction({ type: 'forward' })}
               title={`${t(locale, 'fileBrowser.forward')} ⌘]`}
               style={{ opacity: fs?.canGoForward ? 1 : 0.35 }}
             >
@@ -382,7 +369,7 @@ export default function Header({
             <button
               className="btn-secondary-v1 !h-8 !w-8 !p-0 flex items-center justify-center"
               disabled={!fs?.canGoUp}
-              onClick={() => dispatchAction('up')}
+              onClick={() => dispatchAction({ type: 'up' })}
               title={t(locale, 'fileBrowser.goUp')}
               style={{ opacity: fs?.canGoUp ? 1 : 0.35 }}
             >
@@ -390,7 +377,7 @@ export default function Header({
             </button>
             <button
               className="btn-secondary-v1 !h-8 !w-8 !p-0 flex items-center justify-center"
-              onClick={() => dispatchAction('refresh')}
+              onClick={() => dispatchAction({ type: 'refresh' })}
               title={t(locale, 'fileBrowser.refresh')}
             >
               <RefreshCw size={13} style={{ animation: fs?.loading ? 'spin 0.8s linear infinite' : undefined }} />
@@ -404,14 +391,14 @@ export default function Header({
           >
             <BreadcrumbPath
               segments={fs?.segments ?? []}
-              onNavigate={(path) => window.dispatchEvent(new CustomEvent('navigate-files', { detail: path }))}
+              onNavigate={(path) => dispatchFileEvent(FILE_EVENTS.navigateFiles, path)}
               locale={locale}
             />
           </nav>
 
           {/* New Folder */}
           <div className="flex items-center">
-            <button className="btn-secondary-v1 !h-8" onClick={() => dispatchAction('newFolder', fs?.breadcrumbPath ?? '/')} title={t(locale, 'fileBrowser.newFolder')}>
+            <button className="btn-secondary-v1 !h-8" onClick={() => dispatchAction({ type: 'newFolder', value: fs?.breadcrumbPath ?? '/' })} title={t(locale, 'fileBrowser.newFolder')}>
               <FolderPlus size={14} />
               <span className="text-xs">{t(locale, 'fileBrowser.newFolder')}</span>
             </button>
@@ -427,7 +414,7 @@ export default function Header({
                     ? 'bg-[var(--primary-soft)] text-[var(--primary)] shadow-sm'
                     : 'text-[var(--text-secondary)] hover:text-[var(--primary)]'
                 }`}
-                onClick={() => dispatchAction('viewMode', 'grid')}
+                onClick={() => dispatchAction({ type: 'viewMode', value: 'grid' })}
                 title={t(locale, 'fileBrowser.gridView')}
               >
                 <Grid3x3 size={14} />
@@ -438,7 +425,7 @@ export default function Header({
                     ? 'bg-[var(--primary-soft)] text-[var(--primary)] shadow-sm'
                     : 'text-[var(--text-secondary)] hover:text-[var(--primary)]'
                 }`}
-                onClick={() => dispatchAction('viewMode', 'list')}
+                onClick={() => dispatchAction({ type: 'viewMode', value: 'list' })}
                 title={t(locale, 'fileBrowser.listView')}
               >
                 <List size={14} />
@@ -460,7 +447,7 @@ export default function Header({
                         ? 'bg-[var(--primary-soft)] text-[var(--primary)] shadow-sm'
                         : 'text-[var(--text-secondary)] hover:text-[var(--primary)]'
                     }`}
-                    onClick={() => dispatchAction('gridSize', opt.key)}
+                    onClick={() => dispatchAction({ type: 'gridSize', value: opt.key })}
                     title={t(locale, `fileBrowser.gridSize${opt.key.toUpperCase()}` as any)}
                   >
                     {opt.label}
@@ -514,7 +501,7 @@ export default function Header({
                         }`}
                         onClick={() => {
                           // Same field toggles direction; new field switches with natural default.
-                          dispatchAction('sortBy', opt.key);
+                          dispatchAction({ type: 'sortBy', value: opt.key });
                           // Keep menu open when switching field so user can also pick direction.
                           if (active) setSortOpen(false);
                         }}
@@ -548,7 +535,7 @@ export default function Header({
                             : 'text-[var(--text-secondary)] hover:bg-[var(--bg-2)]'
                         }`}
                         onClick={() => {
-                          dispatchAction('sortDir', opt.key);
+                          dispatchAction({ type: 'sortDir', value: opt.key });
                           setSortOpen(false);
                         }}
                       >
@@ -583,7 +570,7 @@ export default function Header({
                         : 'text-[var(--text-secondary)] hover:bg-[var(--surface)]'
                     }`}
                     onClick={() => {
-                      if (fs?.showHidden) dispatchAction('showHidden');
+                      if (fs?.showHidden) dispatchAction({ type: 'showHidden' });
                       setFilterOpen(false);
                     }}
                   >
@@ -597,7 +584,7 @@ export default function Header({
                         : 'text-[var(--text-secondary)] hover:bg-[var(--surface)]'
                     }`}
                     onClick={() => {
-                      if (!fs?.showHidden) dispatchAction('showHidden');
+                      if (!fs?.showHidden) dispatchAction({ type: 'showHidden' });
                       setFilterOpen(false);
                     }}
                   >
@@ -619,12 +606,12 @@ export default function Header({
                     className="bg-transparent border-none outline-none focus-visible:outline-none text-xs text-[var(--text)] w-[120px] placeholder:text-[var(--text-disabled)]"
                     placeholder={t(locale, 'fileBrowser.filterCurrent')}
                     defaultValue={fs?.searchQuery ?? ''}
-                    onChange={(e) => dispatchAction('search', e.target.value)}
+                    onChange={(e) => dispatchAction({ type: 'search', value: e.target.value })}
                     onKeyDown={(e) => e.key === 'Escape' && setSearchOpen(false)}
                   />
                   <button
                     className="flex items-center justify-center text-[var(--text-disabled)] hover:text-[var(--text)] transition-colors"
-                    onClick={() => { setSearchOpen(false); dispatchAction('search', ''); }}
+                    onClick={() => { setSearchOpen(false); dispatchAction({ type: 'search', value: '' }); }}
                     title={t(locale, 'common.close')}
                   >
                     <X size={12} />
@@ -641,7 +628,7 @@ export default function Header({
               )}
               <button
                 className="btn-secondary-v1 !h-8 !w-8 !p-0 flex items-center justify-center"
-                onClick={() => dispatchAction('globalSearch')}
+                onClick={() => dispatchAction({ type: 'globalSearch' })}
                 title={`${t(locale, 'fileBrowser.globalSearch')} ⌘⇧F`}
               >
                 <FolderSearch size={14} />

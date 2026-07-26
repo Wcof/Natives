@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { FollowMode, useFollowMode } from '@/lib/follow-mode';
+import { FILE_EVENTS, dispatchFileEvent } from '@/lib/file-events';
 import { t, type Locale } from '@/i18n';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
 
@@ -33,9 +34,7 @@ export default function FollowModeUI({
         new CustomEvent('follow-cd', { detail: currentDir })
       );
     } else if (mode === 'file-follow' && currentDir) {
-      window.dispatchEvent(
-        new CustomEvent('navigate-files', { detail: { directory: currentDir } })
-      );
+      dispatchFileEvent(FILE_EVENTS.navigateFiles, { directory: currentDir });
     }
   }, [mode, currentDir]);
 

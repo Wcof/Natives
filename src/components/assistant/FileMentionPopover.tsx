@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { fsApi, hasNativeFiles, searchApi } from '@/lib/files-api';
 
 export interface ProjectFileHit {
   path: string;
@@ -17,7 +18,7 @@ interface FileMentionPopoverProps {
 }
 
 /**
- * `@` project file search for composer — best-effort via nativesAPI.fs when available.
+ * `@` project file search for composer — best-effort via files-api（文件域唯一入口）when available.
  */
 export default function FileMentionPopover({
   open,
@@ -36,19 +37,26 @@ export default function FileMentionPopover({
     let cancelled = false;
     (async () => {
       const q = query.trim().toLowerCase();
-      // Prefer project search API if present
-      const api = typeof window !== 'undefined' ? window.nativesAPI : undefined;
+      // Prefer project search API if present（files-api 契约：不可用时探测为 null，静默走降级分支）
+      const search = (() => {
+        try {
+          return searchApi();
+        } catch {
+          return null;
+        }
+      })();
       try {
         let results: ProjectFileHit[] = [];
-        if (api && 'search' in api && typeof (api as { search?: { files?: (q: string, root?: string) => Promise<string[]> } }).search?.files === 'function') {
-          const paths = await (api as { search: { files: (q: string, root?: string) => Promise<string[]> } }).search.files(q || '', projectPath ?? undefined);
+        if (search) {
+          // 保持原行为：projectPath 缺省时以 undefined 作为 root 透传（宽松签名兼容旧调用）
+          const paths = await (search.files as unknown as (q: string, root?: string) => Promise<string[]>)(q || '', projectPath ?? undefined);
           results = (paths ?? []).slice(0, 30).map((path) => ({
             path,
             name: path.split('/').pop() || path,
           }));
-        } else if (projectPath && api?.fs && 'listDir' in (api.fs as object)) {
+        } else if (projectPath && hasNativeFiles()) {
           // Fallback: shallow list
-          const entries = (await (api.fs as { listDir?: (p: string) => Promise<Array<{ name: string; path: string; isDir?: boolean }>> }).listDir?.(projectPath)) ?? [];
+          const entries = ((await fsApi().listDir(projectPath)) ?? []) as Array<{ name: string; path: string; isDir?: boolean }>;
           results = entries
             .filter((e) => !e.isDir)
             .map((e) => ({ path: e.path, name: e.name }))

@@ -7,6 +7,12 @@ import { t, type Locale } from '@/i18n';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
 import { classifyError } from '@/lib/error-classifier'; // toast+classifyError for catch
 import { useToast } from '@/components/ui/Toast';
+import { fsApi, hasNativeFiles } from '@/lib/files-api';
+
+/** files-api 契约：fs 不可用（浏览器 dev）时返回 null，调用方用可选链静默降级（与原可选链语义等价） */
+function fsOrNull(): ReturnType<typeof fsApi> | null {
+  return hasNativeFiles() ? fsApi() : null;
+}
 
 interface AIProposal {
   id: string;
@@ -66,8 +72,7 @@ function getFileCategory(name: string): string {
 /** Read organize preferences brief file (Natives2: ~/.natives/organize-prefs.md) */
 async function readBriefFile(): Promise<string> {
   try {
-    const api = window.nativesAPI;
-    const result = await api?.fs?.readFile?.('~/.natives/organize-prefs.md') as { content?: string } | undefined;
+    const result = await fsOrNull()?.readFile('~/.natives/organize-prefs.md') as { content?: string } | undefined;
     return result?.content || '';
   } catch {
     return '';
@@ -78,12 +83,12 @@ async function readBriefFile(): Promise<string> {
 async function writeRollbackLog(dir: string, moves: RollbackEntry[]): Promise<void> {
   if (moves.length === 0) return;
   try {
-    const api = window.nativesAPI;
+    const fs = fsOrNull();
     // Ensure log directory exists
-    await api?.fs?.createEntry?.('~/.natives/organize-log', 'directory').catch(() => {});
+    await fs?.createEntry('~/.natives/organize-log', 'directory').catch(() => {});
     const log: RollbackLog = { dir, at: Date.now(), moves };
     const filename = `~/.natives/organize-log/${Date.now()}.json`;
-    await api?.fs?.writeFileAtomic?.(filename, JSON.stringify(log, null, 2));
+    await fs?.writeFileAtomic(filename, JSON.stringify(log, null, 2));
   } catch (err) {
     console.warn('[AIFileOrganizer] Failed to write rollback log:', err);
   }
@@ -92,11 +97,10 @@ async function writeRollbackLog(dir: string, moves: RollbackEntry[]): Promise<vo
 /** Append a preference learned from this organize session (Natives2: preference sedimentation) */
 async function appendPreference(preference: string, existingContent?: string): Promise<void> {
   try {
-    const api = window.nativesAPI;
     const existing = existingContent ?? await readBriefFile();
     const timestamp = new Date().toISOString().split('T')[0];
     const newEntry = `\n- [${timestamp}] ${preference}`;
-    await api?.fs?.writeFileAtomic?.('~/.natives/organize-prefs.md', existing + newEntry);
+    await fsOrNull()?.writeFileAtomic('~/.natives/organize-prefs.md', existing + newEntry);
   } catch { /* ignore */ }
 }
 
@@ -117,8 +121,8 @@ export default function AIFileOrganizer() {
     setProposals([]);
     setApproved(new Set());
     try {
-      const api = window.nativesAPI;
-      if (!api?.fs?.listDir) return;
+      // files-api 契约：fs 不可用时直接跳过分析（与原探测语义等价）
+      if (!hasNativeFiles()) return;
 
       // Read brief file for organize preferences (Natives2)
       const brief = await readBriefFile();
@@ -126,7 +130,7 @@ export default function AIFileOrganizer() {
       const hasPreferences = brief.trim().length > 0;
 
       const dir = currentDir || '~';
-      const entries = await api.fs.listDir(dir, { sortBy: 'name', sortDir: 'asc', showHidden: false });
+      const entries = await fsApi().listDir(dir, { sortBy: 'name', sortDir: 'asc', showHidden: false });
       if (!Array.isArray(entries)) return;
 
       const newProposals: AIProposal[] = [];
@@ -224,7 +228,7 @@ export default function AIFileOrganizer() {
   const handleExecute = useCallback(async () => {
     setExecuting(true);
     try {
-      const api = window.nativesAPI;
+      const fs = fsOrNull();
       const approvedProposals = proposals.filter((p) => approved.has(p.id));
       const rollbackMoves: RollbackEntry[] = [];
 
@@ -232,16 +236,16 @@ export default function AIFileOrganizer() {
         if (p.action === 'move' && p.targetPath) {
           // Create target directory if needed
           const targetDir = p.targetPath.substring(0, p.targetPath.lastIndexOf('/'));
-          await api?.fs?.createEntry?.(targetDir, 'directory').catch(() => {});
-          await api?.fs?.moveEntry?.(p.filePath, p.targetPath);
+          await fs?.createEntry(targetDir, 'directory').catch(() => {});
+          await fs?.moveEntry(p.filePath, p.targetPath);
           rollbackMoves.push({ from: p.targetPath, to: p.filePath, action: 'move' });
         } else if (p.action === 'delete') {
-          await api?.fs?.trashEntry?.(p.filePath);
+          await fs?.trashEntry(p.filePath);
           rollbackMoves.push({ from: p.filePath, to: '', action: 'trash' });
         } else if (p.action === 'archive' && p.targetPath) {
           const targetDir = p.targetPath.substring(0, p.targetPath.lastIndexOf('/'));
-          await api?.fs?.createEntry?.(targetDir, 'directory').catch(() => {});
-          await api?.fs?.moveEntry?.(p.filePath, p.targetPath);
+          await fs?.createEntry(targetDir, 'directory').catch(() => {});
+          await fs?.moveEntry(p.filePath, p.targetPath);
           rollbackMoves.push({ from: p.targetPath, to: p.filePath, action: 'move' });
         }
       }
@@ -277,13 +281,13 @@ export default function AIFileOrganizer() {
     if (!lastRollback) return;
     setExecuting(true);
     try {
-      const api = window.nativesAPI;
+      const fs = fsOrNull();
       for (const move of lastRollback.moves) {
         if (move.action === 'move' && move.to) {
           // Reverse the move
           const targetDir = move.to.substring(0, move.to.lastIndexOf('/'));
-          await api?.fs?.createEntry?.(targetDir, 'directory').catch(() => {});
-          await api?.fs?.moveEntry?.(move.from, move.to).catch(() => {});
+          await fs?.createEntry(targetDir, 'directory').catch(() => {});
+          await fs?.moveEntry(move.from, move.to).catch(() => {});
         }
         // Note: trashed files can't be easily untrashed via API
       }

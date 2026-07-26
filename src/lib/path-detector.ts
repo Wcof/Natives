@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { fsApi, hasNativeFiles, searchApi } from '@/lib/files-api';
 
 /* ── Types ── */
 
@@ -164,20 +165,16 @@ export async function locatePath(
 
 /* ── Strategy Implementations ── */
 
-/** Helper: get native fs API (avoids 3x repeated verbose cast) */
-function getNativeFs() {
-  const api = (window as any)?.nativesAPI;
-  return api?.fs as { listDir?: (p: string, opts?: unknown) => Promise<unknown[]> } | undefined;
+/** Helper: 统一走 files-api 契约取 fs 能力；不可用时返回 undefined（调用方静默降级） */
+function getNativeFs(): ReturnType<typeof fsApi> | undefined {
+  return hasNativeFiles() ? fsApi() : undefined;
 }
 
 /** Strategy 1: Direct stat via Tauri IPC (prefers fs.stat, falls back to listDir) */
 async function statPath(candidate: string, currentDir: string): Promise<string | null> {
   const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(currentDir, candidate);
   try {
-    const fs = getNativeFs() as {
-      stat?: (p: string) => Promise<{ found?: boolean; path?: string }>;
-      listDir?: (p: string, opts?: unknown) => Promise<Array<{ name: string; path: string }>>;
-    } | undefined;
+    const fs = getNativeFs();
     if (!fs) return null;
 
     if (typeof fs.stat === 'function') {
@@ -195,7 +192,7 @@ async function statPath(candidate: string, currentDir: string): Promise<string |
     if (!listDir) return null;
     const parentDir = path.dirname(resolved);
     const basename = path.basename(resolved);
-    const entries = await listDir(parentDir, { showHidden: true });
+    const entries = (await listDir(parentDir, { showHidden: true })) as Array<{ name: string; path: string }>;
     const found = entries.find(e => e.name === basename);
     return found?.path ?? null;
   } catch {
@@ -274,13 +271,10 @@ async function spotlightSearch(candidate: string, currentDir: string): Promise<s
   if (!basename || basename.length < 3) return null;
 
   try {
-    const api = (window as any)?.nativesAPI;
-    const spotlight = api?.search?.spotlight as ((q: string, root: string) => Promise<Array<{ path: string }>>) | undefined;
-    if (!spotlight) return null;
-
-    // Use kMDItemDisplayName for CJK-safe substring matching (Natives2 approach)
+    // files-api 契约：search 不可用时抛错走 catch 静默降级（与原可选链语义等价）
     const query = `kMDItemDisplayName == "*${basename}*"`;
-    const results = await spotlight(query, currentDir);
+    // Use kMDItemDisplayName for CJK-safe substring matching (Natives2 approach)
+    const results = (await searchApi().spotlight(query, currentDir)) as Array<{ path: string }>;
     if (results.length > 0) return results[0]!.path;
   } catch { /* ignore */ }
   return null;

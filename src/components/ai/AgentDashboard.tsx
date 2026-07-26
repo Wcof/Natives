@@ -5,6 +5,7 @@ import { X } from 'lucide-react';
 import { type FileChangeEvent } from '@/types/agent';
 import { t, type Locale } from '@/i18n';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { FILE_EVENTS, dispatchFileEvent } from '@/lib/file-events';
 
 export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
   const [changes, setChanges] = useState<FileChangeEvent[]>([]);
@@ -49,7 +50,7 @@ export default function AgentDashboard({ sessionId }: { sessionId?: string }) {
 
   const handleNavigate = useCallback((path: string) => {
     const dir = path.substring(0, path.lastIndexOf('/')) || '/';
-    window.dispatchEvent(new CustomEvent('navigate-files', { detail: dir }));
+    dispatchFileEvent(FILE_EVENTS.navigateFiles, dir);
   }, []);
 
   const filtered = filter === 'all' ? changes : changes.filter((c) => c.type === filter);

@@ -5,6 +5,7 @@ import { type FileChangeEvent } from '@/types/agent';
 import { PlusCircle, XCircle, Edit3, Folder } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { FILE_EVENTS, dispatchFileEvent } from '@/lib/file-events';
 
 // ── Noise filter: exclude system/generated files ──
 const NOISE_PATTERNS = [
@@ -69,7 +70,7 @@ export default function ChangeInbox() {
 
   const handleNavigate = useCallback((path: string) => {
     const dir = path.substring(0, path.lastIndexOf('/')) || '/';
-    window.dispatchEvent(new CustomEvent('navigate-files', { detail: dir }));
+    dispatchFileEvent(FILE_EVENTS.navigateFiles, dir);
   }, []);
 
   // Sort by timestamp (most recent first)

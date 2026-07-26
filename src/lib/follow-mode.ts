@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { FILE_EVENTS, dispatchFileEvent, onFileEvent } from '@/lib/file-events';
 
 export type FollowMode = 'off' | 'terminal-follow' | 'file-follow';
 
@@ -235,8 +236,9 @@ function followSwitch(fullPath: string) {
     followState.htmlBufferPath = fullPath;
     // Pre-render into buffer — the renderer will call followCommitSwap()
     // after the new content is loaded into the hidden buffer
+    // 按 file-events 契约仅传 path（原 selectFile 字段无任何消费方，属死载荷）
     const dir = fullPath.substring(0, fullPath.lastIndexOf('/')) || '/';
-    window.dispatchEvent(new CustomEvent('navigate-files', { detail: { path: dir, selectFile: fullPath } }));
+    dispatchFileEvent(FILE_EVENTS.navigateFiles, { path: dir });
     notifyListeners(fullPath, null);
     // Auto-commit swap after a short delay (fallback if renderer doesn't call it)
     setTimeout(() => {
@@ -249,8 +251,9 @@ function followSwitch(fullPath: string) {
   followState.htmlBufferPath = null;
   followState.swapping = false;
   // Navigate file browser to the file's directory
+  // 按 file-events 契约仅传 path（原 selectFile 字段无任何消费方，属死载荷）
   const dir = fullPath.substring(0, fullPath.lastIndexOf('/')) || '/';
-  window.dispatchEvent(new CustomEvent('navigate-files', { detail: { path: dir, selectFile: fullPath } }));
+  dispatchFileEvent(FILE_EVENTS.navigateFiles, { path: dir });
   notifyListeners(fullPath, null);
 }
 
@@ -297,7 +300,8 @@ export function recordTerminalActivity(sessionId: string) {
 // ── Public API ──
 
 // Manual takeover listener — any navigate-files event NOT from followSwitch pauses follow
-let _manualNavHandler: ((e: Event) => void) | null = null;
+// （file-events 契约：保存 onFileEvent 返回的取消函数）
+let _manualNavUnsub: (() => void) | null = null;
 
 export function setFileFollow(on: boolean, sessionId?: string) {
   if (on) {
@@ -307,14 +311,13 @@ export function setFileFollow(on: boolean, sessionId?: string) {
     followState.paused = false;
     followState.agentStatus = null;
     // Install manual takeover listener
-    if (!_manualNavHandler) {
-      _manualNavHandler = (e: Event) => {
+    if (!_manualNavUnsub) {
+      _manualNavUnsub = onFileEvent(FILE_EVENTS.navigateFiles, () => {
         // If we're not in a follow-initiated switch, treat as manual takeover
         if (!followState.swapping && followState.on) {
           followManualTakeover();
         }
-      };
-      window.addEventListener('navigate-files', _manualNavHandler);
+      });
     }
   } else {
     followState.on = false;
@@ -335,9 +338,9 @@ export function setFileFollow(on: boolean, sessionId?: string) {
       renderTimer = null;
     }
     // Remove manual takeover listener
-    if (_manualNavHandler) {
-      window.removeEventListener('navigate-files', _manualNavHandler);
-      _manualNavHandler = null;
+    if (_manualNavUnsub) {
+      _manualNavUnsub();
+      _manualNavUnsub = null;
     }
   }
   notifyListeners(followState.currentPath, null);
@@ -384,7 +387,7 @@ export function useFollowMode(
       writeToTerminal?.(`cd ${JSON.stringify(currentDir)}`);
     } else if (mode === 'file-follow') {
       onFollowAction?.('file-follow', currentDir);
-      window.dispatchEvent(new CustomEvent('navigate-files', { detail: { path: currentDir } }));
+      dispatchFileEvent(FILE_EVENTS.navigateFiles, { path: currentDir });
       setFileFollow(true);
     } else {
       setFileFollow(false);

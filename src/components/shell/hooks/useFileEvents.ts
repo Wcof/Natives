@@ -2,6 +2,7 @@ import type { RightPanelMode } from '../RightPanel';
 
 import { useEffect } from 'react';
 import type { FileEntry } from '@/types/file';
+import { FILE_EVENTS, onFileEvent } from '@/lib/file-events';
 
 interface UseFileEventsOptions {
   followMode: string;
@@ -21,18 +22,16 @@ export function useFileEvents({
   // Terminal follow mode: send cd to active terminal when file browser navigates
   useEffect(() => {
     if (followMode !== 'terminal-follow') return;
-    const handler = (e: Event) => {
-      const dirPath = (e as CustomEvent).detail;
-      if (typeof dirPath !== 'string' || !dirPath.startsWith('/')) return;
+    // 订阅文件域导航事件（file-events 契约）；仅响应字符串形式的绝对路径
+    return onFileEvent(FILE_EVENTS.navigateFiles, (payload) => {
+      if (typeof payload !== 'string' || !payload.startsWith('/')) return;
       const sessionId = terminalSessionIdRef.current;
       if (!sessionId) return;
       const api = window.nativesAPI;
       if (api?.terminal?.write) {
-        api.terminal.write(sessionId, `cd "${dirPath}"\r`);
+        api.terminal.write(sessionId, `cd "${payload}"\r`);
       }
-    };
-    window.addEventListener('navigate-files', handler);
-    return () => window.removeEventListener('navigate-files', handler);
+    });
   }, [followMode, terminalSessionIdRef]);
 
   // Shell:focus-base from iframes (Cmd+Shift+K)
@@ -52,28 +51,24 @@ export function useFileEvents({
     return () => window.removeEventListener('message', handleMessage);
   }, []);
 
-  // Sync preview when file is renamed or trashed
+  // 重命名 / 移入废纸篓后同步预览面板（file-events 契约）
   useEffect(() => {
-    const handleRenamed = (e: Event) => {
-      const { oldPath, newPath } = (e as CustomEvent).detail || {};
+    const offRenamed = onFileEvent(FILE_EVENTS.fileRenamed, ({ oldPath, newPath }) => {
       if (!selectedFile || !oldPath || !newPath) return;
       if (selectedFile.path === oldPath) {
         const newName = newPath.split('/').pop() || selectedFile.name;
         setSelectedFile({ ...selectedFile, path: newPath, name: newName });
       }
-    };
-    const handleTrashed = (e: Event) => {
-      const { path } = (e as CustomEvent).detail || {};
+    });
+    const offTrashed = onFileEvent(FILE_EVENTS.fileTrashed, ({ path }) => {
       if (selectedFile && selectedFile.path === path) {
         setSelectedFile(null);
         setRightPanelMode('closed');
       }
-    };
-    window.addEventListener('file-renamed', handleRenamed);
-    window.addEventListener('file-trashed', handleTrashed);
+    });
     return () => {
-      window.removeEventListener('file-renamed', handleRenamed);
-      window.removeEventListener('file-trashed', handleTrashed);
+      offRenamed();
+      offTrashed();
     };
   }, [selectedFile, setSelectedFile, setRightPanelMode]);
 }

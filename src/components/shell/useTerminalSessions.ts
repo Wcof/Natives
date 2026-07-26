@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { onThemeChange, TERMINAL_THEMES } from '@/lib/theme-engine';
 import { recordTerminalActivity, followChange } from '@/lib/follow-mode';
 import { recordScrollbackLine } from '@/lib/path-detector';
+import { FILE_EVENTS, dispatchFileEvent } from '@/lib/file-events';
 import { playDoneChime, playAskChime } from '@/lib/chime';
 import { parseAgentAction } from '@/lib/agent-narration';
 import { FONT_SIZE } from '@/lib/design-tokens';
@@ -97,7 +98,7 @@ export function useTerminalSessions({
       if (uri.startsWith('http://') || uri.startsWith('https://')) {
         window.open(uri, '_blank');
       } else if (uri.startsWith('/')) {
-        window.dispatchEvent(new CustomEvent('navigate-files', { detail: uri }));
+        dispatchFileEvent(FILE_EVENTS.navigateFiles, uri);
       }
     });
     term.loadAddon(webLinksAddon);
@@ -236,7 +237,7 @@ export function useTerminalSessions({
     const unsubPwd = api.terminal.onPwdChanged?.((payload: { sessionId: string; pwd: string }) => {
       if (payload.sessionId !== sessionId) return;
       if (payload.pwd) {
-        window.dispatchEvent(new CustomEvent('navigate-files', { detail: payload.pwd }));
+        dispatchFileEvent(FILE_EVENTS.navigateFiles, payload.pwd);
       }
     });
     if (typeof unsubPwd === 'function') unsubscribers.push(unsubPwd);

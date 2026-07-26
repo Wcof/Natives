@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { t, useLocale } from '@/i18n';
+import { diskApi } from '@/lib/files-api';
 import {
   Wifi,
   Bluetooth,
@@ -39,12 +40,17 @@ export default function ControlHubWidget() {
   // Replaces previous Math.random() CPU simulation with real sysinfo backend.
   useEffect(() => {
     let cancelled = false;
-    const api = window.nativesAPI;
-    if (!api?.disk?.systemMetrics) return;
+    // files-api 契约：非 Tauri 环境无 disk 能力时静默不轮询（与原可选链探测语义等价）
+    let disk: ReturnType<typeof diskApi>;
+    try {
+      disk = diskApi();
+    } catch {
+      return;
+    }
 
     const poll = async () => {
       try {
-        const m = await api.disk.systemMetrics();
+        const m = await disk.systemMetrics();
         if (cancelled) return;
         setCpuUsage(Math.round(m.cpuUsage));
         setMemoryUsedBytes(m.memoryUsedBytes);
