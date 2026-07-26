@@ -15,6 +15,8 @@ import {
 } from '@/lib/assistant-project-groups';
 import type { AssistantFileChange, AssistantRunEvent } from '@/lib/assistant-types';
 import { readActiveProject, writeActiveProject } from '@/lib/active-project';
+import { classifyError } from '@/lib/error-classifier';
+import { useToast } from '@/components/ui/Toast';
 import {
   createTempSession,
   isTempConversationId,
@@ -27,7 +29,22 @@ export interface AssistantNavigationSnapshot {
   selectedId: string | null;
   activeProjectPath: string | null;
   loading: boolean;
+  /**
+   * @deprecated Write-only legacy field: published by AssistantWorkbench but never
+   * read anywhere (engine/provider readiness is surfaced elsewhere). Kept only so
+   * AssistantWorkbench.tsx keeps type-checking this round; removal is scheduled
+   * for the next pass together with its Workbench write site. Use `loadError` for
+   * navigation fetch failures instead.
+   */
   creationState: AssistantProjectCreationState;
+  /**
+   * Localized message when the last host navigation refresh failed. While set,
+   * `groups` keeps the previous (possibly stale) data instead of being replaced
+   * by an empty list — an engine outage must never look like "history deleted".
+   * Optional so the Workbench (frozen this round) can keep publishing full
+   * snapshots without the field; absent means "no known failure".
+   */
+  loadError?: string | null;
   isCreatingConversation: boolean;
   pendingCreateProjectPath?: string | null;
   /**
@@ -164,16 +181,62 @@ const emptyNavigation: AssistantNavigationSnapshot = {
   activeProjectPath: null,
   loading: false,
   creationState: 'engine_unavailable',
+  loadError: null,
   isCreatingConversation: false,
   pendingCreateProjectPath: undefined,
   tempSession: null,
 };
 
+/** UI locale for shell-level error copy (same heuristic as newConversationTitle). */
+function uiLocale(): string {
+  if (typeof navigator !== 'undefined' && navigator.language.startsWith('zh')) return 'zh';
+  return 'en';
+}
+
 function newConversationTitle(): string {
-  if (typeof navigator !== 'undefined' && navigator.language.startsWith('zh')) {
-    return '新会话';
+  return uiLocale() === 'zh' ? '新会话' : 'New conversation';
+}
+
+const PINNED_CONVERSATIONS_KEY = 'assistant:pinnedConversations';
+
+/** Read pinned conversation ids (same storage as Workbench pinConversation). Best-effort. */
+async function readPinnedConversationIds(): Promise<Set<string>> {
+  const ids = new Set<string>();
+  try {
+    const raw = await window.nativesAPI?.db?.get?.(PINNED_CONVERSATIONS_KEY);
+    if (!raw) return ids;
+    const map = JSON.parse(String(raw)) as Record<string, string[]>;
+    for (const list of Object.values(map ?? {})) {
+      for (const id of list ?? []) ids.add(id);
+    }
+  } catch {
+    /* pin prefs are cosmetic — render unpinned on read failure */
   }
-  return 'New conversation';
+  return ids;
+}
+
+/** Drop a conversation id from the pin map (parity with Workbench archive/delete). */
+async function removeConversationPin(id: string): Promise<void> {
+  try {
+    const db = window.nativesAPI?.db;
+    if (!db?.get || !db.set) return;
+    const raw = await db.get(PINNED_CONVERSATIONS_KEY);
+    if (!raw) return;
+    const map = JSON.parse(String(raw)) as Record<string, string[]>;
+    let changed = false;
+    for (const key of Object.keys(map)) {
+      const before = map[key] ?? [];
+      const next = before.filter((x) => x !== id);
+      if (next.length !== before.length) {
+        changed = true;
+        if (next.length === 0) delete map[key];
+        else map[key] = next;
+      }
+    }
+    if (changed) await db.set(PINNED_CONVERSATIONS_KEY, JSON.stringify(map));
+  } catch {
+    /* pin cleanup is best-effort */
+  }
 }
 
 /** Replace any prior temp shell with a fresh one for `projectPath` (null = unassigned). */
@@ -227,6 +290,7 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
   const [runtime, setRuntime] = useState(emptyRuntime);
   /** Engine-backed actions registered only while AssistantWorkbench is mounted. */
   const [workbenchActions, setWorkbenchActions] = useState<AssistantWorkspaceActions | null>(null);
+  const { toast } = useToast();
 
   const publishNavigation = useCallback(
     (
@@ -245,6 +309,7 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
           prev.activeProjectPath === next.activeProjectPath &&
           prev.loading === next.loading &&
           prev.creationState === next.creationState &&
+          prev.loadError === next.loadError &&
           prev.isCreatingConversation === next.isCreatingConversation &&
           prev.pendingCreateProjectPath === next.pendingCreateProjectPath &&
           tempSessionEqual(prev.tempSession, next.tempSession) &&
@@ -332,11 +397,15 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
     }
     const unassignedLabel = savedLocale.startsWith('zh') ? '未关联项目' : 'Unassigned';
 
-    const [activeProjectPath, registeredProjects, conversations] = await Promise.all([
+    // `null` = request failed (≠ honest empty list). An engine outage must keep
+    // the previous groups + surface loadError instead of wiping the sidebar.
+    let firstError: unknown = null;
+    const [activeProjectPath, registeredProjects, conversations, pinnedIds] = await Promise.all([
       readActiveProject(api).catch(() => null as string | null),
       api.project.list().then((p) => p ?? []).catch((e) => {
         console.error('Failed to list projects:', e);
-        return [] as Array<{ id: string; path: string; lastOpenedAt?: string | null }>;
+        if (firstError === null) firstError = e;
+        return null;
       }),
       (async () => {
         try {
@@ -374,16 +443,20 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
           }).filter((c) => c.id.length > 0);
         } catch (e) {
           console.error('Failed to list conversations:', e);
-          return [] as Array<{
-            id: string;
-            title: string;
-            mode: 'chat' | 'agent' | 'goal';
-            projectId: string | null;
-            updatedAt: string;
-          }>;
+          if (firstError === null) firstError = e;
+          return null;
         }
       })(),
+      readPinnedConversationIds(),
     ]);
+
+    if (registeredProjects === null || conversations === null) {
+      // Request failure ≠ empty workspace: keep prev.groups untouched and mark
+      // the snapshot so consumers can show "加载失败" instead of "没有历史会话".
+      const message = classifyError(firstError, { locale: savedLocale }).userMessage;
+      publishNavigation((prev) => ({ ...prev, loading: false, loadError: message }));
+      return;
+    }
 
     // Keep host project.list order (last_opened_at DESC). Do not re-sort by session time.
     const projectMetas = registeredProjects.map((project) => {
@@ -397,8 +470,12 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
     // Sessions that reference unregistered / legacy project paths go to unassigned.
     // Do not invent historical project nodes from conversation.projectId alone.
     // Temp shells never come from the host list — keep them out of sidebar groups.
+    // Pin prefs come from the same db key the Workbench writes so the shell
+    // fallback pinConversation is reflected without a Workbench mount.
     const groups = groupAssistantConversations(
-      conversations.filter((c) => !isTempConversationId(c.id)),
+      conversations
+        .filter((c) => !isTempConversationId(c.id))
+        .map((c) => (pinnedIds.has(c.id) ? { ...c, pinned: true } : c)),
       projectMetas,
       unassignedLabel,
     );
@@ -408,6 +485,7 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
       groups,
       activeProjectPath: activeProjectPath ?? prev.activeProjectPath,
       loading: false,
+      loadError: null,
       creationState:
         prev.creationState === 'engine_unavailable' ? 'ready' : prev.creationState,
       // Host refresh must not drop an in-memory temp shell the user is composing.
@@ -440,7 +518,11 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
       } catch (err) {
         console.error('Failed to load initial assistant data:', err);
         if (!cancelled) {
-          publishNavigation((prev) => ({ ...prev, loading: false }));
+          publishNavigation((prev) => ({
+            ...prev,
+            loading: false,
+            loadError: classifyError(err, { locale: uiLocale() }).userMessage,
+          }));
         }
       }
     };
@@ -498,6 +580,7 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
             void writeActiveProject(window.nativesAPI, path).catch(() => undefined);
           } catch (e) {
             console.error('Failed to register project:', e);
+            toast(classifyError(e, { locale: uiLocale() }).userMessage, 'error');
           }
         });
       },
@@ -530,6 +613,7 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
           return true;
         } catch (e) {
           console.error('Failed to remove project:', e);
+          toast(classifyError(e, { locale: uiLocale() }).userMessage, 'error');
           return false;
         }
       },
@@ -543,17 +627,102 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
           return true;
         } catch (e) {
           console.error('Failed to rename project:', e);
+          toast(classifyError(e, { locale: uiLocale() }).userMessage, 'error');
           return false;
         }
       },
       renameConversation: (id, title) => {
-        workbenchActions?.renameConversation(id, title);
+        if (workbenchActions) {
+          workbenchActions.renameConversation(id, title);
+          return;
+        }
+        const trimmed = title.trim();
+        if (!trimmed) return;
+        // Unsent temp shells only exist locally — rename in place, no host RPC.
+        if (isTempConversationId(id)) {
+          publishNavigation((prev) =>
+            prev.tempSession && prev.tempSession.conversation.id === id
+              ? {
+                  ...prev,
+                  tempSession: {
+                    ...prev.tempSession,
+                    conversation: { ...prev.tempSession.conversation, title: trimmed },
+                  },
+                }
+              : prev,
+          );
+          return;
+        }
+        // Workbench may be unmounted (files/settings page) — hit the host directly.
+        void (async () => {
+          try {
+            const request = window.nativesAPI?.assistantV2?.request;
+            if (!request) throw new Error('assistant rpc failed: bridge unavailable');
+            await request('conversation.rename', { id, title: trimmed });
+            await refreshNavigationFromHost();
+          } catch (e) {
+            console.error('Failed to rename conversation on host:', e);
+            toast(classifyError(e, { locale: uiLocale() }).userMessage, 'error');
+          }
+        })();
       },
       archiveConversation: (id) => {
-        workbenchActions?.archiveConversation(id);
+        if (workbenchActions) {
+          workbenchActions.archiveConversation(id);
+          return;
+        }
+        // Archiving an unsent temp shell just discards it locally.
+        if (isTempConversationId(id)) {
+          publishNavigation((prev) => ({
+            ...prev,
+            selectedId: prev.selectedId === id ? null : prev.selectedId,
+            tempSession:
+              prev.tempSession?.conversation.id === id ? null : prev.tempSession,
+          }));
+          return;
+        }
+        void (async () => {
+          try {
+            const request = window.nativesAPI?.assistantV2?.request;
+            if (!request) throw new Error('assistant rpc failed: bridge unavailable');
+            await request('conversation.archive', { id });
+            // Parity with Workbench archive: archived sessions lose their pin.
+            await removeConversationPin(id);
+            await refreshNavigationFromHost();
+          } catch (e) {
+            console.error('Failed to archive conversation on host:', e);
+            toast(classifyError(e, { locale: uiLocale() }).userMessage, 'error');
+          }
+        })();
       },
       pinConversation: (id, projectId, pinned) => {
-        workbenchActions?.pinConversation?.(id, projectId, pinned);
+        if (workbenchActions?.pinConversation) {
+          workbenchActions.pinConversation(id, projectId, pinned);
+          return;
+        }
+        // Temp shells are never persisted — nothing to pin.
+        if (isTempConversationId(id)) return;
+        // Same storage key/shape as Workbench: Record<projectKey, conversationId[]>.
+        void (async () => {
+          try {
+            const db = window.nativesAPI?.db;
+            if (!db?.get || !db.set) throw new Error('No handler for db storage');
+            const key = projectId?.trim() || '__unassigned__';
+            const raw = await db.get(PINNED_CONVERSATIONS_KEY);
+            const map = raw ? (JSON.parse(String(raw)) as Record<string, string[]>) : {};
+            const list = new Set(map[key] ?? []);
+            if (pinned) list.add(id);
+            else list.delete(id);
+            map[key] = [...list];
+            if (map[key].length === 0) delete map[key];
+            await db.set(PINNED_CONVERSATIONS_KEY, JSON.stringify(map));
+            // Refresh re-reads the pin map, so ordering + pin badge update.
+            await refreshNavigationFromHost();
+          } catch (e) {
+            console.error('Failed to pin conversation on host:', e);
+            toast(classifyError(e, { locale: uiLocale() }).userMessage, 'error');
+          }
+        })();
       },
       deleteConversation: async (id) => {
         if (workbenchActions) return workbenchActions.deleteConversation(id);
@@ -594,6 +763,8 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
           }
           console.error('Failed to delete conversation on host:', e);
           // Keep optimistic removal — user asked to delete; do not resurrect.
+          // Still surface that host cleanup failed instead of staying silent.
+          toast(classifyError(e, { locale: uiLocale() }).userMessage, 'warning');
           return true;
         }
       },
@@ -604,7 +775,7 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
         workbenchActions?.respondPermission(requestId, approved);
       },
     }),
-    [workbenchActions, publishNavigation, refreshNavigationFromHost],
+    [workbenchActions, publishNavigation, refreshNavigationFromHost, toast],
   );
 
   const navigationValue = useMemo<NavigationContextValue>(

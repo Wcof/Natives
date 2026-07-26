@@ -31,6 +31,7 @@ import type {
   RunEvent,
 } from '@/lib/assistant-protocol';
 import type { AssistantGateway } from '@/lib/assistant-gateway';
+import { fsApi, hasNativeFiles, searchApi } from '@/lib/files-api';
 import type { ProviderWithModels } from './ModelSelectorDropdown';
 import type { InspectorTab } from '@/lib/assistant-workspace';
 import {
@@ -258,11 +259,13 @@ export default function ActivityInspector({
   const allowTasks = canListTasks(capabilities);
   const useTaskList = canListTaskDepth(capabilities);
   const allowCancelTask = canCancelTask(capabilities);
-  const tabs = TABS.filter((tab) => {
-    if (tab.devOnly && !developerMode) return false;
-    if (tab.id === 'tasks' && !allowTasks) return false;
-    return true;
-  });
+  // Capability-gated tabs stay visible but disabled — hiding them makes the
+  // feature look deleted and leaves ⌘⇧T pointing at a blank panel. devOnly
+  // tabs remain a deliberate user toggle and are still filtered.
+  const tabs = TABS.filter((tab) => !(tab.devOnly && !developerMode)).map((tab) => ({
+    ...tab,
+    disabled: tab.id === 'tasks' && !allowTasks,
+  }));
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
   const [tasksError, setTasksError] = useState<string | null>(null);
@@ -305,12 +308,12 @@ export default function ActivityInspector({
     return groups;
   }, [events]);
 
-  const effectiveTab =
-    activeTab === 'tasks' && !allowTasks
-      ? 'run'
-      : tabs.some((tab) => tab.id === activeTab)
-        ? activeTab
-        : (tabs[0]?.id ?? 'run');
+  // Keyboard shortcuts (⌘⇧T) can still land on a disabled tab; keep it as the
+  // effective tab and render an explanatory empty state instead of a blank panel.
+  const effectiveTab = tabs.some((tab) => tab.id === activeTab)
+    ? activeTab
+    : (tabs[0]?.id ?? 'run');
+  const tasksCapabilityMissing = effectiveTab === 'tasks' && !allowTasks;
 
   const refreshAudit = useCallback(async () => {
     if (!projectPath || !window.nativesAPI?.git?.status) {
@@ -349,10 +352,17 @@ export default function ActivityInspector({
   }, [effectiveTab, refreshAudit]);
 
   useEffect(() => {
-    if (effectiveTab !== 'changes' || !projectPath || !window.nativesAPI?.search?.files) return;
+    if (effectiveTab !== 'changes' || !projectPath) return;
+    // files-api 契约：非 Tauri 环境无 search 能力时静默跳过（与原可选链探测语义等价）
+    let search: ReturnType<typeof searchApi>;
+    try {
+      search = searchApi();
+    } catch {
+      return;
+    }
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      void window.nativesAPI!.search.files(auditQuery, projectPath, { maxResults: 100 }).then((raw) => {
+      void search.files(auditQuery, projectPath, { maxResults: 100 }).then((raw) => {
         if (cancelled) return;
         const root = `${projectPath.replace(/\/$/, '')}/`;
         setProjectFiles((Array.isArray(raw) ? raw : []).flatMap((entry) => {
@@ -371,11 +381,12 @@ export default function ActivityInspector({
       setAuditContent(null);
       return;
     }
-    const readFile = window.nativesAPI?.fs?.readFile;
-    if (!readFile) {
+    // files-api 契约：fs 不可用（浏览器 dev）时保持原“清空内容”降级
+    if (!hasNativeFiles()) {
       setAuditContent(null);
       return;
     }
+    const readFile = fsApi().readFile;
     let cancelled = false;
     const fullPath = `${projectPath.replace(/\/$/, '')}/${relative}`;
     void readFile(fullPath).then((raw) => {
@@ -590,11 +601,23 @@ export default function ActivityInspector({
             key={tab.id}
             type="button"
             onClick={() => onTabChange(tab.id)}
+            aria-disabled={tab.disabled}
+            title={
+              tab.disabled
+                ? // i18n-pending: i18n files frozen this round; follow file-local zh/en pattern.
+                  zh
+                  ? '引擎未广播该能力（task.list / run.listChildren）'
+                  : 'Engine did not advertise this capability (task.list / run.listChildren)'
+                : undefined
+            }
             className={`inline-flex items-center gap-1 px-2.5 py-2 text-[11px] font-medium transition-colors ${
-              effectiveTab === tab.id
-                ? 'border-b-2 border-[var(--primary)] text-[var(--primary)]'
-                : 'text-[var(--text-disabled)] hover:text-[var(--text-secondary)]'
+              tab.disabled
+                ? 'cursor-not-allowed text-[var(--text-disabled)] opacity-50'
+                : effectiveTab === tab.id
+                  ? 'border-b-2 border-[var(--primary)] text-[var(--primary)]'
+                  : 'text-[var(--text-disabled)] hover:text-[var(--text-secondary)]'
             }`}
+            data-testid={`inspector-tab-${tab.id}${tab.disabled ? '-disabled' : ''}`}
           >
             <tab.icon size={12} />
             {zh ? tab.zh : tab.en}
@@ -603,7 +626,22 @@ export default function ActivityInspector({
       </div>
 
       <div className={`flex-1 ${effectiveTab === 'changes' || effectiveTab === 'artifacts' ? 'flex flex-col min-h-0 overflow-hidden' : 'overflow-y-auto'} p-3 text-xs`}>
-        {!run && (
+        {tasksCapabilityMissing && (
+          <div
+            className="py-8 text-center text-[var(--text-disabled)]"
+            data-testid="tasks-capability-not-ready"
+          >
+            {/* i18n-pending: i18n files frozen this round; follow file-local zh/en pattern. */}
+            <div>{zh ? '任务面板暂不可用' : 'Tasks panel unavailable'}</div>
+            <div className="mt-1 text-[10px]">
+              {zh
+                ? '引擎未广播任务能力（task.list / run.listChildren）。等待引擎连接就绪，或升级引擎后重试。'
+                : 'The engine did not advertise task capabilities (task.list / run.listChildren). Wait for the engine to connect, or upgrade the engine.'}
+            </div>
+          </div>
+        )}
+
+        {!run && !tasksCapabilityMissing && (
           <div className="grid h-full place-items-center text-[var(--text-disabled)]">
             {zh ? '选择运行以查看详情' : 'Select a run to inspect'}
           </div>
