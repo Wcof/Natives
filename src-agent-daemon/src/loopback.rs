@@ -1,6 +1,6 @@
 //! Authenticated localhost compatibility API backed by the daemon route provider.
 
-use agent_core::{EngineMessage, EngineProvider, EngineProviderEvent, EngineToolCall};
+use agent_core::{EngineImage, EngineMessage, EngineProvider, EngineProviderEvent, EngineToolCall};
 use futures_util::StreamExt;
 use rusqlite::Connection;
 use serde_json::{json, Value};
@@ -320,7 +320,9 @@ fn protocol_messages(path: &str, body: &Value) -> Result<Vec<EngineMessage>, Str
             .into_iter()
             .map(|item| {
                 let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
-                let text = content_text(item.get("content").unwrap_or(&item));
+                let content = item.get("content").unwrap_or(&item);
+                let text = content_text(content);
+                let images = content_images(content);
                 let tool_calls = item
                     .get("tool_calls")
                     .and_then(Value::as_array)
@@ -358,7 +360,7 @@ fn protocol_messages(path: &str, body: &Value) -> Result<Vec<EngineMessage>, Str
                     tool_call_id,
                     tool_name: item.get("name").and_then(Value::as_str).map(str::to_string),
                     tool_calls,
-                    ..Default::default()
+                    images,
                 })
             })
             .collect(),
@@ -388,6 +390,55 @@ fn content_text(value: &Value) -> String {
             .to_string(),
         _ => String::new(),
     }
+}
+
+/// Pull image parts out of an OpenAI-shaped `content` array.
+///
+/// Two spellings reach this ingress and both are accepted:
+/// - chat completions — `{"type":"image_url","image_url":{"url":…,"detail":…}}`
+/// - Responses API — `{"type":"input_image","image_url":"…"}`
+///
+/// A part whose URL is missing or empty is skipped rather than turned into an
+/// empty [`EngineImage`]: an image the adapters cannot encode would be reported
+/// to the model as a degraded note, which would be a lie about what the caller
+/// actually sent.
+fn content_images(value: &Value) -> Vec<EngineImage> {
+    let Value::Array(parts) = value else {
+        return Vec::new();
+    };
+    parts
+        .iter()
+        .filter_map(|part| {
+            let kind = part.get("type").and_then(Value::as_str).unwrap_or("");
+            if kind != "image_url" && kind != "input_image" {
+                return None;
+            }
+            let source = part.get("image_url")?;
+            // Chat completions nests `{url, detail}`; Responses passes a bare string.
+            let (url, detail) = match source {
+                Value::String(url) => (url.as_str(), None),
+                other => (
+                    other.get("url").and_then(Value::as_str)?,
+                    other.get("detail").and_then(Value::as_str),
+                ),
+            };
+            if url.trim().is_empty() {
+                return None;
+            }
+            Some(EngineImage {
+                url: url.to_string(),
+                // `data:` URIs carry their own MIME type; `media_type` exists for
+                // references that do not, and this ingress has no other source
+                // for it, so leaving it None is honest rather than guessed.
+                media_type: part
+                    .get("media_type")
+                    .or_else(|| part.get("mime_type"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                detail: detail.map(str::to_string),
+            })
+        })
+        .collect()
 }
 
 async fn write_response(
@@ -578,6 +629,73 @@ mod tests {
         assert!(authorized(Some(&"Bearer abc".into()), Some("abc")));
         assert!(!authorized(Some(&"Bearer ab".into()), Some("abc")));
         assert!(!authorized(None, Some("abc")));
+    }
+
+    /// The ingress used to keep only `text` parts, so an image posted to
+    /// `/v1/chat/completions` never became an `EngineImage` at all — the
+    /// adapters' image arms were unreachable and `image_input: true` was an
+    /// empty promise. Pin the whole shape, not just presence.
+    #[test]
+    fn chat_completions_image_parts_reach_the_engine() {
+        let messages = protocol_messages(
+            "/v1/chat/completions",
+            &json!({"messages":[{"role":"user","content":[
+                {"type":"text","text":"what is this"},
+                {"type":"image_url","image_url":{
+                    "url":"data:image/png;base64,iVBORw0KGgo=",
+                    "detail":"high"
+                }}
+            ]}]}),
+        )
+        .unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content, "what is this");
+        assert_eq!(messages[0].images.len(), 1);
+        assert_eq!(messages[0].images[0].url, "data:image/png;base64,iVBORw0KGgo=");
+        assert_eq!(messages[0].images[0].detail.as_deref(), Some("high"));
+    }
+
+    /// The Responses API spells the same thing differently — a bare string
+    /// under `input_image` rather than a nested object.
+    #[test]
+    fn responses_input_image_reaches_the_engine() {
+        let messages = protocol_messages(
+            "/v1/responses",
+            &json!({"input":[{"role":"user","content":[
+                {"type":"input_image","image_url":"https://example.test/a.png"}
+            ]}]}),
+        )
+        .unwrap();
+        assert_eq!(messages[0].images.len(), 1);
+        assert_eq!(messages[0].images[0].url, "https://example.test/a.png");
+    }
+
+    /// An empty or missing URL must not become a placeholder image: the
+    /// adapters would announce a degraded image to the model, claiming the
+    /// caller sent a picture when it sent nothing.
+    #[test]
+    fn image_parts_without_a_url_are_skipped_not_placeheld() {
+        let messages = protocol_messages(
+            "/v1/chat/completions",
+            &json!({"messages":[{"role":"user","content":[
+                {"type":"text","text":"hi"},
+                {"type":"image_url","image_url":{"url":"   "}},
+                {"type":"image_url"}
+            ]}]}),
+        )
+        .unwrap();
+        assert!(messages[0].images.is_empty());
+        assert_eq!(messages[0].content, "hi");
+    }
+
+    #[test]
+    fn text_only_requests_carry_no_images() {
+        let messages = protocol_messages(
+            "/v1/chat/completions",
+            &json!({"messages":[{"role":"user","content":"plain"}]}),
+        )
+        .unwrap();
+        assert!(messages[0].images.is_empty());
     }
 
     #[test]
