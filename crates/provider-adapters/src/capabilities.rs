@@ -493,6 +493,14 @@ pub struct ProviderRequest {
     pub temperature: Option<f64>,
     pub stream: bool,
     pub structured_output: Option<serde_json::Value>,
+    /// Request-side controls that are orthogonal to the message payload.
+    ///
+    /// A caller that sets nothing here gets exactly the bytes it got before
+    /// this field existed — [`RequestControls::default`] is today's behaviour,
+    /// and the field is skipped entirely when serializing a default value.
+    /// See `tests/request_body_golden.rs` for the byte-level guard.
+    #[serde(default, skip_serializing_if = "RequestControls::is_default")]
+    pub controls: RequestControls,
 }
 
 /// A single delta from a streaming response.
@@ -687,6 +695,22 @@ pub enum ReasoningEffort {
 }
 
 impl ReasoningEffort {
+    /// Parse the coarse level carried by `run.start`'s `effort` field.
+    ///
+    /// The protocol types it as a free-form `Option<String>` (it is
+    /// provider-specific by design), so this is the single place that decides
+    /// what the workbench's vocabulary means. Anything else returns `None` —
+    /// an unknown level must not be rounded to a guess, because the difference
+    /// between `low` and `high` is a tenfold thinking budget.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "low" | "minimal" => Some(ReasoningEffort::Low),
+            "medium" | "default" | "standard" => Some(ReasoningEffort::Medium),
+            "high" | "max" | "maximum" => Some(ReasoningEffort::High),
+            _ => None,
+        }
+    }
+
     /// OpenAI `reasoning_effort` string.
     pub fn as_openai_str(self) -> &'static str {
         match self {
@@ -733,6 +757,28 @@ impl ReasoningRequest {
     }
 }
 
+/// Environment kill switch for prompt-cache breakpoints.
+///
+/// Read on every body build (once per model turn, so the cost is noise) rather
+/// than cached, because the point of an escape hatch is that it works on the
+/// next request after someone sets it — including on a long-lived daemon that
+/// nobody wants to restart mid-incident.
+pub const PROMPT_CACHE_ENV: &str = "NATIVES_PROMPT_CACHE";
+
+/// Parse a permissive on/off flag. Returns `None` for anything unrecognised so
+/// a typo falls back to the default instead of silently disabling a feature.
+pub fn parse_bool_flag(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "on" | "true" | "yes" | "enabled" => Some(true),
+        "0" | "off" | "false" | "no" | "disabled" => Some(false),
+        _ => None,
+    }
+}
+
+fn env_prompt_cache_override() -> Option<bool> {
+    parse_bool_flag(&std::env::var(PROMPT_CACHE_ENV).ok()?)
+}
+
 /// Request-side controls that are orthogonal to the message payload.
 ///
 /// [`Default`] is exactly today's behaviour: no forced tool, provider-default
@@ -740,10 +786,11 @@ impl ReasoningRequest {
 /// per-model default (enabled wherever the model supports explicit
 /// breakpoints).
 ///
-/// This rides alongside [`ProviderRequest`] rather than inside it because
-/// `ProviderRequest` is built with struct literals in crates outside this one;
-/// see `build_messages_body_with_controls` and
-/// `build_chat_completions_body_with_controls` for the seam.
+/// This travels inside [`ProviderRequest::controls`], so every path that
+/// already builds a request carries it without a second argument. The
+/// `build_*_body_with_controls` functions remain as an explicit override seam
+/// for callers that want to build a body with controls other than the
+/// request's own (they ignore `request.controls` entirely).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestControls {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -761,9 +808,93 @@ pub struct RequestControls {
 }
 
 impl RequestControls {
+    /// Whether this is the zero-configuration form, i.e. wire-identical to the
+    /// behaviour that predates the field.
+    pub fn is_default(&self) -> bool {
+        *self == RequestControls::default()
+    }
+
     /// Whether explicit prompt-cache breakpoints should be emitted for a model.
+    ///
+    /// Precedence, most authoritative first:
+    ///
+    /// 1. `NATIVES_PROMPT_CACHE` — the operator kill switch. Set it to `0` and
+    ///    no request emits a breakpoint, whatever any caller asked for. This
+    ///    exists so a provider-side cache incident can be worked around without
+    ///    shipping a build.
+    /// 2. [`RequestControls::prompt_cache`] — the per-request opt-out.
+    /// 3. The per-model default (on wherever the model supports breakpoints).
     pub fn prompt_cache_enabled(&self, profile: &crate::model_profile::ModelProfile) -> bool {
+        if let Some(false) = env_prompt_cache_override() {
+            return false;
+        }
         profile.wants_explicit_cache_breakpoints() && self.prompt_cache.unwrap_or(true)
+    }
+
+    /// Reasoning controls for a coarse effort string (`"low"`/`"medium"`/`"high"`).
+    ///
+    /// Unrecognised input yields `None` so an unknown level degrades to
+    /// "provider default" rather than silently picking a depth for the user.
+    pub fn with_effort_str(mut self, effort: Option<&str>) -> Self {
+        self.reasoning = effort
+            .and_then(ReasoningEffort::parse)
+            .map(ReasoningRequest::new);
+        self
+    }
+}
+
+#[cfg(test)]
+mod request_controls_tests {
+    use super::*;
+
+    #[test]
+    fn effort_strings_map_to_levels_and_unknown_stays_unset() {
+        assert_eq!(ReasoningEffort::parse("high"), Some(ReasoningEffort::High));
+        assert_eq!(ReasoningEffort::parse(" MAX "), Some(ReasoningEffort::High));
+        assert_eq!(
+            ReasoningEffort::parse("minimal"),
+            Some(ReasoningEffort::Low)
+        );
+        assert_eq!(ReasoningEffort::parse("turbo"), None);
+        assert_eq!(ReasoningEffort::parse(""), None);
+    }
+
+    #[test]
+    fn with_effort_str_only_sets_reasoning_for_a_known_level() {
+        assert_eq!(
+            RequestControls::default()
+                .with_effort_str(Some("low"))
+                .reasoning,
+            Some(ReasoningRequest::new(ReasoningEffort::Low))
+        );
+        // An unknown or absent level leaves the request wire-identical to one
+        // that never mentioned reasoning at all.
+        assert!(RequestControls::default()
+            .with_effort_str(Some("wharrgarbl"))
+            .is_default());
+        assert!(RequestControls::default().with_effort_str(None).is_default());
+    }
+
+    #[test]
+    fn bool_flag_parsing_ignores_typos() {
+        assert_eq!(parse_bool_flag("0"), Some(false));
+        assert_eq!(parse_bool_flag(" OFF "), Some(false));
+        assert_eq!(parse_bool_flag("disabled"), Some(false));
+        assert_eq!(parse_bool_flag("1"), Some(true));
+        assert_eq!(parse_bool_flag("true"), Some(true));
+        assert_eq!(parse_bool_flag("maybe"), None);
+    }
+
+    #[test]
+    fn per_request_prompt_cache_opt_out_beats_the_model_default() {
+        let profile = crate::model_profile::resolve("claude-sonnet-4-5");
+        assert!(profile.wants_explicit_cache_breakpoints());
+        assert!(RequestControls::default().prompt_cache_enabled(&profile));
+        assert!(!RequestControls {
+            prompt_cache: Some(false),
+            ..Default::default()
+        }
+        .prompt_cache_enabled(&profile));
     }
 }
 

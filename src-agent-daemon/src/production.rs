@@ -14,7 +14,7 @@ use capability_gateway::CapabilityGateway;
 use futures_util::StreamExt;
 use provider_adapters::capabilities::{
     history_message_to_provider, HistoryMessage, HistoryToolCall, ImageSource, ProviderAdapter,
-    ProviderError, ProviderRequest, ProviderTool,
+    ProviderError, ProviderRequest, ProviderTool, RequestControls,
 };
 use provider_adapters::stream::ProviderEvent;
 use serde_json::Value;
@@ -468,11 +468,16 @@ impl ProductionRuntime {
             eprintln!("[production] persist_actor_snapshot on run start: {e}");
         }
 
+        let run_effort = crate::global_run_manager()
+            .get_run(&run_id)
+            .and_then(|run| run.effort);
+        let controls = run_request_controls(run_effort.as_deref());
         let provider = crate::routing::RoutedProvider::new(crate::routing::load_plan(
             provider_id.clone(),
             key_id.clone(),
             model_id.clone(),
-        ));
+        ))
+        .with_controls(controls);
         // Child subagent runs may have pre-registered a readonly (or custom) surface.
         // A built-in surface name (e.g. the creative session) resolves next; it has
         // no profile on disk, so this is the only place its allowlist can come from.
@@ -927,6 +932,75 @@ impl Default for ProductionRuntime {
     }
 }
 
+/// Request-side controls for one run.
+///
+/// `run.start`'s `effort` is the only control with a producer today: the client
+/// sends it, RunManager stores it on the run record, and this is where it stops
+/// being an inert string and becomes a provider parameter (`reasoning_effort`,
+/// `thinking`, or `thinkingBudget` — whichever the routed model speaks).
+///
+/// An absent or unrecognised level yields default controls, which produce a
+/// request byte-identical to one that never mentioned reasoning at all; see
+/// `provider_adapters::capabilities::ReasoningEffort::parse` for the vocabulary.
+///
+/// The other controls (`tool_choice`, `parallel_tool_calls`, `prompt_cache`)
+/// have no run-level producer yet and are deliberately left at their defaults
+/// rather than wired to an input nobody sets. The prompt cache has its own
+/// operator kill switch (`NATIVES_PROMPT_CACHE`) that does not go through here.
+pub fn run_request_controls(effort: Option<&str>) -> RequestControls {
+    RequestControls::default().with_effort_str(effort)
+}
+
+#[cfg(test)]
+mod run_controls_tests {
+    use super::*;
+    use provider_adapters::providers::anthropic::build_messages_body;
+
+    fn request(model: &str, effort: Option<&str>) -> ProviderRequest {
+        ProviderRequest {
+            model: model.into(),
+            messages: vec![history_message_to_provider(HistoryMessage {
+                role: "user".into(),
+                content: "hi".into(),
+                ..Default::default()
+            })],
+            system_prompt: None,
+            tools: None,
+            max_tokens: Some(64_000),
+            temperature: None,
+            stream: true,
+            structured_output: None,
+            controls: run_request_controls(effort),
+        }
+    }
+
+    #[test]
+    fn run_effort_reaches_the_provider_body() {
+        // The daemon builds the request exactly like `RealProvider::stream_with_controls`
+        // does; this pins the whole hop from the stored run field to the wire.
+        let body = build_messages_body(&request("claude-sonnet-4-5", Some("high")));
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["budget_tokens"], 32_768);
+
+        let low = build_messages_body(&request("claude-sonnet-4-5", Some("low")));
+        assert_eq!(low["thinking"]["budget_tokens"], 4_096);
+    }
+
+    #[test]
+    fn absent_or_unknown_effort_changes_nothing() {
+        let baseline = build_messages_body(&request("claude-sonnet-4-5", None));
+        assert!(baseline.get("thinking").is_none());
+        assert_eq!(
+            build_messages_body(&request("claude-sonnet-4-5", Some("ludicrous"))),
+            baseline
+        );
+        assert_eq!(
+            build_messages_body(&request("claude-sonnet-4-5", Some(""))),
+            baseline
+        );
+    }
+}
+
 /// Real HTTP provider adapter wrapper (never returns offline mock tool-call text).
 pub struct RealProvider {
     pub provider_id: String,
@@ -935,8 +1009,36 @@ pub struct RealProvider {
 
 #[async_trait::async_trait]
 impl EngineProvider for RealProvider {
+    /// Stream with provider-default request controls.
+    ///
+    /// `EngineProvider` has no room for per-run controls, so anything that has
+    /// them (the router, which knows the run) calls
+    /// [`RealProvider::stream_with_controls`] directly instead.
     async fn stream(
         &self,
+        model: &str,
+        messages: Vec<EngineMessage>,
+        tools: &[ToolSchema],
+        system_prompt: Option<&str>,
+        cancel: CancellationToken,
+    ) -> Result<EngineProviderEventStream, EngineError> {
+        self.stream_with_controls(
+            &RequestControls::default(),
+            model,
+            messages,
+            tools,
+            system_prompt,
+            cancel,
+        )
+        .await
+    }
+}
+
+impl RealProvider {
+    /// Stream one turn, applying caller-supplied [`RequestControls`].
+    pub async fn stream_with_controls(
+        &self,
+        controls: &RequestControls,
         model: &str,
         messages: Vec<EngineMessage>,
         tools: &[ToolSchema],
@@ -994,10 +1096,20 @@ impl EngineProvider for RealProvider {
             } else {
                 Some(provider_tools)
             },
-            max_tokens: Some(4096),
+            // `None` delegates the ceiling to the per-model profile in
+            // `provider_adapters::model_profile`, matching what `routing.rs`
+            // already does for the pooled path. Two reasons the hardcoded 4096
+            // had to go: it silently truncated every model with a larger output
+            // window, and Anthropic clamps `thinking.budget_tokens` to
+            // `max_tokens - 1` — so on this path low/medium/high reasoning
+            // effort all collapsed to 4095 and the effort wiring was inert.
+            // Models missing from the profile table still fall back to the
+            // adapter's own 4096, so nothing regresses.
+            max_tokens: None,
             temperature: None,
             stream: true,
             structured_output: None,
+            controls: controls.clone(),
         };
         crate::request_rectifier::rectify_provider_request(
             &mut request,

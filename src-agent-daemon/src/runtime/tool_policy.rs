@@ -626,10 +626,15 @@ pub fn permission_class_for_tool(tool_name: &str) -> String {
         "read_file" | "list_dir" | "search_files" | "grep" | "glob" => "project_read".into(),
         "write_file" | "apply_patch" | "edit_file" => "project_write".into(),
         "run_terminal" | "bash" => "destructive_command".into(),
-        "web_fetch" | "fetch" | "mcp_call" => "external_write".into(),
+        "web_fetch" | "fetch" | "mcp_call" | "web_search" => "external_write".into(),
         "task" | "kill_task" => "project_write".into(),
-        "task_output" | "memory_search" | "memory_get" | "skill" | "todo_write"
-        | "notification" => "always_allowed".into(),
+        // Plan Mode control tools. `enter_plan_mode` only ever *removes*
+        // capability, and `exit_plan_mode` cannot release the latch on its own —
+        // the daemon intercepts it and drives a real human approval. Neither can
+        // touch the machine, so neither belongs behind a permission class that
+        // would make the user approve a prompt about being asked.
+        "task_output" | "memory_search" | "memory_get" | "skill" | "todo_write" | "notification"
+        | "enter_plan_mode" | "exit_plan_mode" => "always_allowed".into(),
         name if name.starts_with("mcp__") => "external_write".into(),
         _ => "unknown".into(),
     }
@@ -692,6 +697,11 @@ pub fn invocation_from_verified_identity(
 /// touch `~/.natives/drafts/<draftId>/`, so a project binding would add a
 /// requirement the creator workbench cannot satisfy — it has no project to bind —
 /// while protecting nothing that the id validation does not already cover.
+///
+/// The Plan Mode control tools are here for a different reason: they address a
+/// *run*, not a filesystem. Requiring a verified project to enter Plan Mode would
+/// make the safest possible action — voluntarily giving up write access — fail on
+/// exactly the unbound runs that most need it.
 pub fn tool_allows_unbound_project(tool_name: &str) -> bool {
     matches!(
         tool_name,
@@ -702,6 +712,8 @@ pub fn tool_allows_unbound_project(tool_name: &str) -> bool {
             | "task_output"
             | "task"
             | "kill_task"
+            | "enter_plan_mode"
+            | "exit_plan_mode"
             | "write_draft_module"
             | "read_draft_module"
             | "rollback_draft_revision"
@@ -886,6 +898,21 @@ mod tests {
         assert_eq!(permission_class_for_tool("task"), "project_write");
         assert_eq!(permission_class_for_tool("task_output"), "always_allowed");
         assert_eq!(permission_class_for_tool("search_files"), "project_read");
+        assert_eq!(permission_class_for_tool("web_search"), "external_write");
+    }
+
+    /// The plan tools must be classified, not merely intercepted upstream.
+    ///
+    /// `unknown` would leak two ways: a stored grant with class `unknown` matches
+    /// any later class for the same name, and an unbound-project run would be
+    /// refused the one action that *reduces* its own reach.
+    #[test]
+    fn plan_control_tools_are_classified_not_unknown() {
+        for tool in ["enter_plan_mode", "exit_plan_mode"] {
+            assert_eq!(permission_class_for_tool(tool), "always_allowed", "{tool}");
+            assert!(tool_allows_unbound_project(tool), "{tool}");
+            assert!(!tool_requires_verified_project(tool), "{tool}");
+        }
     }
 
     #[test]

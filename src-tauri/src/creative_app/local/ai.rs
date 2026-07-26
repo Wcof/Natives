@@ -454,6 +454,7 @@ async fn provider_chat(
         temperature: Some(0.1),
         stream: false,
         structured_output: None,
+        controls: Default::default(),
     };
 
     let mut last_err = String::new();

@@ -304,6 +304,48 @@ async fn mcp_protocol_surface_is_advertised_and_dispatchable() {
     }
 }
 
+/// The Harness family is routed by **prefix** in `rpc.rs`, not by eighteen
+/// literal arms. That is a different failure mode from the rest of the file: the
+/// blanket sweep above would stay green even if the prefix arm were deleted and
+/// only a subset re-added, because it only checks what is advertised — and a
+/// prefix arm makes it easy to advertise a name the handler then rejects as
+/// "unsupported harness method" rather than dispatching.
+///
+/// So this test drives every advertised Harness method through the real
+/// `handle_rpc` and additionally refuses the handler's own unknown-method error,
+/// which the generic fail-closed check cannot see.
+#[tokio::test(flavor = "multi_thread")]
+async fn harness_surface_is_advertised_and_really_routed() {
+    isolate_env();
+
+    assert!(
+        !assistant_protocol::v2::HARNESS_METHODS.is_empty(),
+        "the harness surface must not silently shrink to nothing"
+    );
+
+    for method in assistant_protocol::v2::HARNESS_METHODS {
+        assert!(
+            IMPLEMENTED_METHODS.contains(method),
+            "{method} dropped out of IMPLEMENTED_METHODS — the daemon still \
+             dispatches it, so the advertisement is now under-honest"
+        );
+        match probe(method).await {
+            Probe::Blocked => {}
+            Probe::Responded { code, body } => {
+                assert!(
+                    !is_fail_closed_miss(code.as_deref(), &body),
+                    "{method} is advertised but has no dispatch arm: {body}"
+                );
+                assert!(
+                    !body.contains("unsupported harness method"),
+                    "{method} reaches the harness handler but the handler does not \
+                     know it — the prefix route advertises more than it serves: {body}"
+                );
+            }
+        }
+    }
+}
+
 /// `sampling/createMessage` and `elicitation/create` let an MCP **server** drive
 /// the client: spend local inference on the server's prompt, or put the server's
 /// question in front of the user. Both invert the trust direction the rest of the

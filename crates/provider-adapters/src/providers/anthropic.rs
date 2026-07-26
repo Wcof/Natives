@@ -45,12 +45,14 @@ impl Default for AnthropicAdapter {
     }
 }
 
-/// Build the Messages API body with default request controls.
+/// Build the Messages API body using the request's own
+/// [`ProviderRequest::controls`].
 pub fn build_messages_body(request: &ProviderRequest) -> serde_json::Value {
-    build_messages_body_with_controls(request, &RequestControls::default())
+    build_messages_body_with_controls(request, &request.controls)
 }
 
-/// Build the Messages API body.
+/// Build the Messages API body with caller-supplied controls, which override
+/// [`ProviderRequest::controls`] entirely.
 ///
 /// # Prompt caching
 ///
@@ -618,6 +620,7 @@ mod request_tests {
             temperature: None,
             stream: true,
             structured_output: None,
+            controls: Default::default(),
         }
     }
 
@@ -893,6 +896,7 @@ mod request_tests {
             temperature: None,
             stream: true,
             structured_output: None,
+            controls: Default::default(),
         });
 
         let messages = body["messages"].as_array().unwrap();
@@ -924,6 +928,7 @@ mod request_tests {
             temperature: None,
             stream: true,
             structured_output: None,
+            controls: Default::default(),
         }
     }
 
@@ -1005,6 +1010,7 @@ mod request_tests {
             temperature: None,
             stream: true,
             structured_output: None,
+            controls: Default::default(),
         });
         let messages = body["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 2);

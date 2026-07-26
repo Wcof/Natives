@@ -39,12 +39,14 @@ impl Default for GeminiAdapter {
     }
 }
 
-/// Build the `generateContent` body with default request controls.
+/// Build the `generateContent` body using the request's own
+/// [`ProviderRequest::controls`].
 pub fn build_generate_body(request: &ProviderRequest) -> serde_json::Value {
-    build_generate_body_with_controls(request, &RequestControls::default())
+    build_generate_body_with_controls(request, &request.controls)
 }
 
-/// Build the `generateContent` body.
+/// Build the `generateContent` body with caller-supplied controls, which
+/// override [`ProviderRequest::controls`] entirely.
 ///
 /// # Prompt caching
 ///
@@ -475,6 +477,7 @@ mod tool_message_tests {
             temperature: None,
             stream: true,
             structured_output: None,
+            controls: Default::default(),
         }
     }
 
@@ -571,6 +574,7 @@ mod tool_message_tests {
             temperature: None,
             stream: true,
             structured_output: None,
+            controls: Default::default(),
         });
 
         let contents = body["contents"].as_array().unwrap();
@@ -609,6 +613,7 @@ mod tool_message_tests {
             temperature: None,
             stream: true,
             structured_output: None,
+            controls: Default::default(),
         }
     }
 

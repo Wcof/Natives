@@ -154,7 +154,26 @@ impl PermissionGatedTools {
             && plan_mode::snapshot(&self.parent_run_id).is_none()
         {
             plan_mode::enter(&self.parent_run_id, plan_mode::PLAN_PROFILE);
+            self.emit_plan_transition(plan_mode::PlanTransition::Entered, None);
         }
+    }
+
+    /// Put a Plan Mode gear change on the run's event stream.
+    ///
+    /// Always call this **after** the mutation: the payload is built from a
+    /// fresh snapshot, so an `Approved` emitted too early would report the plan
+    /// ceiling as the profile in force and a `Rejected` would undercount the
+    /// rejections. A run whose session has already been torn down emits
+    /// nothing rather than a synthesised one — an invented gear change is worse
+    /// than a missing one.
+    fn emit_plan_transition(&self, transition: plan_mode::PlanTransition, reason: Option<&str>) {
+        let Some(session) = plan_mode::snapshot(&self.parent_run_id) else {
+            return;
+        };
+        self.events.append(
+            &self.parent_run_id,
+            plan_mode::changed_event(&session, transition, reason),
+        );
     }
 
     /// The gear this run actually runs under: the plan ceiling while planning,
@@ -1126,12 +1145,15 @@ impl PermissionGatedTools {
             };
         }
 
+        self.emit_plan_transition(plan_mode::PlanTransition::Submitted, None);
+
         let plan_json = serde_json::to_value(&plan).unwrap_or_else(|_| serde_json::json!({}));
         let started = Instant::now();
         let (approved, _scope) = self.await_plan_approval(&plan, &plan_json).await;
 
         if !approved {
             let rejections = plan_mode::reject(&self.parent_run_id).unwrap_or(0);
+            self.emit_plan_transition(plan_mode::PlanTransition::Rejected, None);
             // Not `is_error`: a rejection is a legitimate answer to a question
             // the model asked. Flagging it as a failure invites retry logic to
             // treat "the user said no" as a transient fault.
@@ -1150,7 +1172,9 @@ impl PermissionGatedTools {
         }
 
         match plan_mode::approve(&self.parent_run_id) {
-            Ok(profile) => ToolExecutionResult {
+            Ok(profile) => {
+                self.emit_plan_transition(plan_mode::PlanTransition::Approved, None);
+                ToolExecutionResult {
                 output: serde_json::json!({
                     "approved": true,
                     "plan_mode": false,
@@ -1162,7 +1186,8 @@ impl PermissionGatedTools {
                 }),
                 is_error: false,
                 duration_ms: started.elapsed().as_millis() as u64,
-            },
+                }
+            }
             Err(err) => ToolExecutionResult {
                 output: serde_json::json!({
                     "error": err.message,
@@ -1667,6 +1692,41 @@ impl PermissionGatedTools {
 
         // Standard RunManager path: create_run + start_detached (no embedded Engine).
         let project_path = self.gateway.project_root.clone();
+
+        // SubagentStart runs before the child exists, so a hook can refuse the
+        // spawn while refusing is still free. Denial is honoured rather than
+        // logged: this event is the only place a policy can stop a run from
+        // fanning out, and a hook that says no must not be overruled by the
+        // model having asked nicely.
+        let subagent_hooks = crate::production_hooks::build_production_hooks_for_project(
+            project_path.as_deref().map(std::path::Path::new),
+        );
+        let start_responses = subagent_hooks
+            .dispatch(HookRequest {
+                event: HookEvent::SubagentStart,
+                run_id: self.parent_run_id.clone(),
+                tool_name: Some("task".into()),
+                input: serde_json::json!({
+                    "prompt": prompt.clone(),
+                    "name": name.clone(),
+                    "agent_profile_id": requested_profile_id.clone(),
+                    "permission_profile": child_perm.clone(),
+                    "tool_allowlist": child_allowlist.clone(),
+                    "model_id": child_model.clone(),
+                }),
+            })
+            .await;
+        if let Err(reason) = HookRegistry::aggregate_allow(&start_responses) {
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error": format!("subagent hook denied: {reason}"),
+                    "code": "subagent_denied_by_hook",
+                }),
+                is_error: true,
+                duration_ms: 0,
+            };
+        }
+
         let created = match crate::global_run_manager().create_run(
             assistant_protocol::v2::CreateRunRequest {
                 conversation_id: child_conversation_id.clone(),
@@ -1820,6 +1880,10 @@ impl PermissionGatedTools {
         let child_timeout_ms = self.subagents.config().child_timeout_ms.max(1);
         let tree_root_for_budget = self.parent_run_id.clone();
         let subagents_for_budget = self.subagents.clone();
+        // Rebuilt inside the watcher rather than moved: `HookRegistry` holds
+        // boxed handlers and is not `Clone`, and rebuilding costs one discovery
+        // pass on a path that already waited for a whole child run.
+        let stop_hook_project = project_path.clone();
         tokio::spawn(async move {
             let deadline = tokio::time::Instant::now() + Duration::from_millis(child_timeout_ms);
             for _ in 0..3_600 {
@@ -1911,6 +1975,27 @@ impl PermissionGatedTools {
                         },
                     );
                 }
+                // SubagentStop fires for every terminal outcome, not just
+                // success — a hook watching for children that died is exactly
+                // the one worth having, and firing only on the happy path
+                // would make its absence mean two different things. The
+                // decision is ignored on purpose: the child is already over,
+                // so there is nothing left to deny.
+                let _ = crate::production_hooks::build_production_hooks_for_project(
+                    stop_hook_project.as_deref().map(std::path::Path::new),
+                )
+                .dispatch(HookRequest {
+                    event: HookEvent::SubagentStop,
+                    run_id: parent_run_id.clone(),
+                    tool_name: Some("task".into()),
+                    input: serde_json::json!({
+                        "sub_run_id": child_run_id_bg.clone(),
+                        "status": status.clone(),
+                        "output": text.clone(),
+                    }),
+                })
+                .await;
+
                 let rec = TaskRecord {
                     run_id: child_run_id_bg.clone(),
                     status,

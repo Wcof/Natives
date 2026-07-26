@@ -121,6 +121,7 @@ fn test_mock_adapter_chat() {
         temperature: Some(0.7),
         stream: false,
         structured_output: None,
+        controls: Default::default(),
     };
 
     let result = futures::executor::block_on(adapter.chat(request)).unwrap();

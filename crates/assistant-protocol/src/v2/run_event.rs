@@ -105,6 +105,38 @@ pub enum RunEventKind {
         approved: bool,
         scope: String,
     },
+    /// The run's Plan Mode latch moved.
+    ///
+    /// Without this the gear shift is only inferable from the `enter_plan_mode` /
+    /// `exit_plan_mode` tool calls around it, which puts the single most
+    /// consequential fact about a run — whether it is currently allowed to touch
+    /// anything — behind a tool-call reading exercise.
+    ///
+    /// Every field but `transition` and `effective_profile` is optional so a
+    /// producer can emit the cheap transitions without assembling a payload, and
+    /// so this variant can grow without invalidating stored events.
+    PlanModeChanged {
+        /// `entered` | `submitted` | `approved` | `rejected` | `cleared`.
+        ///
+        /// A transition, not a state: `submitted` and `rejected` both leave the
+        /// latch closed, and the difference between them is the whole story.
+        transition: String,
+        /// Permission profile in force *after* this transition — `plan` while the
+        /// latch is closed, otherwise the profile the run reverts to.
+        effective_profile: String,
+        /// The submitted plan, carried on `submitted` / `approved` / `rejected`
+        /// so the timeline can show what was actually agreed to without holding
+        /// a reference to the approval card that has since been dismissed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plan: Option<serde_json::Value>,
+        /// Running count of rejected plans. A climbing number is the visible
+        /// shape of a model stuck re-proposing the same thing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rejections: Option<u32>,
+        /// Why the transition happened — the model's stated reason on `entered`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     FileChanged {
         path: String,
         change_type: String,
@@ -257,6 +289,7 @@ impl RunEventKind {
             Self::ToolOutputDelta { .. } => "tool_output_delta",
             Self::PermissionRequested { .. } => "permission_requested",
             Self::PermissionResponded { .. } => "permission_responded",
+            Self::PlanModeChanged { .. } => "plan_mode_changed",
             Self::FileChanged { .. } => "file_changed",
             Self::TaskStarted { .. } => "task_started",
             Self::TaskUpdated { .. } => "task_updated",
@@ -456,6 +489,61 @@ mod tests {
             let back: RunEventV2 = serde_json::from_str(&json).unwrap();
             assert_eq!(back.payload.type_name(), kind.type_name());
             assert!(!json.to_lowercase().contains("authorization"));
+        }
+    }
+
+    #[test]
+    fn plan_mode_changed_round_trips_and_omits_absent_fields() {
+        let full = RunEventKind::PlanModeChanged {
+            transition: "submitted".into(),
+            effective_profile: "plan".into(),
+            plan: Some(serde_json::json!({"title": "t", "steps": []})),
+            rejections: Some(2),
+            reason: Some("touches the migration".into()),
+        };
+        let json = serde_json::to_string(&full).unwrap();
+        assert!(json.contains("\"type\":\"plan_mode_changed\""));
+        assert_eq!(
+            serde_json::from_str::<RunEventKind>(&json).unwrap(),
+            full,
+            "full payload must survive a round trip"
+        );
+
+        // The cheap transitions carry nothing extra and must not serialize nulls.
+        let bare = RunEventKind::PlanModeChanged {
+            transition: "entered".into(),
+            effective_profile: "plan".into(),
+            plan: None,
+            rejections: None,
+            reason: None,
+        };
+        let bare_json = serde_json::to_string(&bare).unwrap();
+        for absent in ["\"plan\":", "\"rejections\":", "\"reason\":", "null"] {
+            assert!(!bare_json.contains(absent), "{absent} in {bare_json}");
+        }
+    }
+
+    /// A stored event written before the optional fields existed must still
+    /// decode. This is the whole reason they are `#[serde(default)]`.
+    #[test]
+    fn plan_mode_changed_decodes_a_minimal_stored_payload() {
+        let stored = r#"{"type":"plan_mode_changed","transition":"approved","effective_profile":"ask"}"#;
+        let decoded: RunEventKind = serde_json::from_str(stored).unwrap();
+        assert_eq!(decoded.type_name(), "plan_mode_changed");
+        assert!(!decoded.is_terminal());
+        match decoded {
+            RunEventKind::PlanModeChanged {
+                transition,
+                effective_profile,
+                plan,
+                rejections,
+                reason,
+            } => {
+                assert_eq!(transition, "approved");
+                assert_eq!(effective_profile, "ask");
+                assert!(plan.is_none() && rejections.is_none() && reason.is_none());
+            }
+            other => panic!("expected plan_mode_changed, got {}", other.type_name()),
         }
     }
 

@@ -551,6 +551,82 @@ pub fn clear(run_id: &str) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Timeline events
+// ---------------------------------------------------------------------------
+
+/// A latch movement worth putting on the run timeline.
+///
+/// Transitions, not states. `Submitted` and `Rejected` both leave the latch
+/// closed, so a state-only event would render the two indistinguishably — and
+/// "the model proposed something" versus "you turned something down" is exactly
+/// the distinction a user is scrolling the timeline to find.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanTransition {
+    /// The run entered Plan Mode.
+    Entered,
+    /// A plan was submitted and the user is being asked.
+    Submitted,
+    /// The user approved; the latch is open.
+    Approved,
+    /// The user rejected; the latch stays closed.
+    Rejected,
+    /// The session was discarded (run finished or cancelled while planning).
+    Cleared,
+}
+
+impl PlanTransition {
+    /// Wire value for [`RunEventKind::PlanModeChanged::transition`].
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PlanTransition::Entered => "entered",
+            PlanTransition::Submitted => "submitted",
+            PlanTransition::Approved => "approved",
+            PlanTransition::Rejected => "rejected",
+            PlanTransition::Cleared => "cleared",
+        }
+    }
+}
+
+/// Build the timeline event for a latch movement.
+///
+/// Takes the session by reference rather than re-reading it by id so the event a
+/// caller emits describes the state it actually acted on, not whatever a
+/// concurrent transition left behind between the mutation and the publish.
+///
+/// The plan rides along on every transition that has one so the timeline stays
+/// readable after the approval card is dismissed: an `approved` entry that says
+/// only "approved" answers none of the questions someone scrolls back to ask.
+pub fn changed_event(
+    session: &PlanSession,
+    transition: PlanTransition,
+    reason: Option<&str>,
+) -> assistant_protocol::v2::RunEventKind {
+    let effective_profile = match session.state {
+        PlanState::Planning => PLAN_PROFILE.to_string(),
+        PlanState::Approved => session.fallback_profile.clone(),
+    };
+    let plan = match transition {
+        // Entering has no plan yet, and clearing is a teardown notice — attaching
+        // the plan there would replay a stale proposal as if it were live.
+        PlanTransition::Entered | PlanTransition::Cleared => None,
+        _ => session
+            .plan
+            .as_ref()
+            .and_then(|p| serde_json::to_value(p).ok()),
+    };
+    assistant_protocol::v2::RunEventKind::PlanModeChanged {
+        transition: transition.as_str().to_string(),
+        effective_profile,
+        plan,
+        rejections: (session.rejections > 0).then_some(session.rejections),
+        reason: reason
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+    }
+}
+
 fn not_planning() -> ToolError {
     ToolError {
         code: "not_in_plan_mode".into(),
@@ -850,6 +926,95 @@ mod tests {
             map.contains_key(&live),
             "an unapproved run must never lose its latch to eviction"
         );
+    }
+
+    // -- timeline events ----------------------------------------------------
+
+    fn event_fields(
+        kind: &assistant_protocol::v2::RunEventKind,
+    ) -> (&str, &str, bool, Option<u32>, Option<&str>) {
+        match kind {
+            assistant_protocol::v2::RunEventKind::PlanModeChanged {
+                transition,
+                effective_profile,
+                plan,
+                rejections,
+                reason,
+            } => (
+                transition,
+                effective_profile,
+                plan.is_some(),
+                *rejections,
+                reason.as_deref(),
+            ),
+            other => panic!("expected plan_mode_changed, got {}", other.type_name()),
+        }
+    }
+
+    #[test]
+    fn entering_reports_the_plan_gear_and_carries_no_plan() {
+        let id = run("event-enter");
+        let session = enter(&id, "autonomous");
+        let kind = changed_event(&session, PlanTransition::Entered, Some("  wide blast radius  "));
+        let (transition, profile, has_plan, rejections, reason) = event_fields(&kind);
+        assert_eq!(transition, "entered");
+        assert_eq!(profile, PLAN_PROFILE);
+        assert!(!has_plan, "there is no plan at entry");
+        assert_eq!(rejections, None);
+        assert_eq!(reason, Some("wide blast radius"), "reason must be trimmed");
+        clear(&id);
+    }
+
+    #[test]
+    fn approval_reports_the_restored_profile_not_the_plan_gear() {
+        let id = run("event-approve");
+        enter(&id, "autonomous");
+        record_submission(&id, parse_plan(&sample_plan_json()).unwrap()).unwrap();
+
+        let submitted = changed_event(&snapshot(&id).unwrap(), PlanTransition::Submitted, None);
+        let (transition, profile, has_plan, _, _) = event_fields(&submitted);
+        assert_eq!(transition, "submitted");
+        assert_eq!(
+            profile, PLAN_PROFILE,
+            "submitting must not read as having left Plan Mode"
+        );
+        assert!(has_plan, "the card content belongs on the timeline");
+
+        approve(&id).unwrap();
+        let approved = changed_event(&snapshot(&id).unwrap(), PlanTransition::Approved, None);
+        let (transition, profile, has_plan, _, _) = event_fields(&approved);
+        assert_eq!(transition, "approved");
+        assert_eq!(profile, "autonomous");
+        assert!(has_plan, "the timeline must show what was agreed to");
+        clear(&id);
+    }
+
+    #[test]
+    fn rejection_keeps_the_plan_gear_and_surfaces_the_count() {
+        let id = run("event-reject");
+        enter(&id, "ask");
+        record_submission(&id, parse_plan(&sample_plan_json()).unwrap()).unwrap();
+        reject(&id).unwrap();
+        reject(&id).unwrap();
+        let kind = changed_event(&snapshot(&id).unwrap(), PlanTransition::Rejected, None);
+        let (transition, profile, has_plan, rejections, _) = event_fields(&kind);
+        assert_eq!(transition, "rejected");
+        assert_eq!(profile, PLAN_PROFILE, "a rejected plan leaves the latch shut");
+        assert!(has_plan);
+        assert_eq!(rejections, Some(2), "a loop has to be countable");
+        clear(&id);
+    }
+
+    #[test]
+    fn clearing_does_not_replay_a_stale_plan() {
+        let id = run("event-clear");
+        enter(&id, "ask");
+        record_submission(&id, parse_plan(&sample_plan_json()).unwrap()).unwrap();
+        let kind = changed_event(&snapshot(&id).unwrap(), PlanTransition::Cleared, None);
+        let (transition, _, has_plan, _, _) = event_fields(&kind);
+        assert_eq!(transition, "cleared");
+        assert!(!has_plan);
+        clear(&id);
     }
 
     #[test]

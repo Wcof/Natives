@@ -296,6 +296,15 @@ Responsibilities:
 - startup recovery;
 - temporary compatibility adapters during migration.
 
+Phase 2 landed `mod.rs`, `repository.rs`, `control_plane.rs`, and
+`projection.rs`; `source_discovery` and `source_manifest` stay folded into the
+existing `production_hooks.rs` two-stage discovery, and `telemetry_sink` /
+`audit_projection` belong to Phase 3. The `mod` declaration currently sits in
+`rpc.rs` behind `#[path = "harness/mod.rs"]`, so the module path is
+`crate::rpc::harness` while the files are where this section puts them.
+That is a boundary artefact of parallel work on `lib.rs`, not a design
+position: promoting it is one line in `lib.rs` plus a rename at its call sites.
+
 ### 7.3 Existing authority remains
 
 | Module | Authority retained |
@@ -610,6 +619,7 @@ create a second runtime log.
 New protocol methods use a `harness.*` namespace:
 
 - `harness.overview`
+- `harness.topology`
 - `harness.profile.list`
 - `harness.profile.get`
 - `harness.profile.create`
@@ -627,11 +637,28 @@ New protocol methods use a `harness.*` namespace:
 - `harness.run.getSnapshot`
 - `harness.audit.list`
 
+`harness.topology` was added during Phase 2 implementation. The first draft
+folded the execution topology into `harness.overview`, but the two have
+different shapes and different costs: Overview is a small header the Settings
+landing page always loads, while the topology is a per-stage graph with Hook
+attachment counts that only the Blueprint workspace needs. Merging them would
+have made every Overview load pay for a graph nobody was looking at, against
+第 18 节's "only the selected Run builds a detailed topology projection".
+
 Existing `run.list`, `run.get`, and subscription methods are reused for Live
 Runs. Harness must not duplicate them.
 
 Methods are advertised only when callable. Unsupported partial deployments
 fail honestly.
+
+The Daemon routes the family by the `harness.` prefix rather than by eighteen
+literal match arms, so a method cannot be advertised and left unroutable. The
+prefix is pinned to exactly the advertised set by
+`the_harness_prefix_and_the_advertised_harness_family_agree`, and every method
+is driven through the real `handle_rpc` by
+`harness_surface_is_advertised_and_really_routed`. That second test also
+refuses the handler's own "unsupported harness method" reply, which the generic
+fail-closed sweep cannot see.
 
 Renderer data flow:
 
@@ -794,12 +821,58 @@ Scope decisions taken during implementation:
   uses `Fail`, matching today's behaviour. Making it effective is Phase 4 work,
   alongside the UI that sets it.
 
-### Phase 2: control plane and snapshots
+### Phase 2: control plane and snapshots — **done, one call site pending**
 
-- Add Daemon Harness persistence and migrations.
-- Create default published profiles.
-- Resolve and persist snapshots at Run start.
-- Keep Settings UI hidden.
+- Add Daemon Harness persistence and migrations. ✅ Migration **022** — six
+  tables (`harness_profile`, `harness_version`, `harness_draft`,
+  `harness_binding`, `harness_run_snapshot`, `harness_audit`) in the
+  Daemon-owned `assistant.db`, WAL and foreign keys unchanged. 021 belongs to
+  the capability-library workstream; Harness deliberately skips it.
+- Create default published profiles. ✅ `repository::ensure_defaults` seeds
+  `harness.global.default` at v1 with `HarnessBlueprint::default()` — no
+  overlays — plus the `global` binding. The empty document is the only one that
+  provably compiles to today's behaviour, so the seed cannot change semantics.
+- Resolve and persist snapshots at Run start. ⚠️ `control_plane::resolve_run`
+  resolves, redacts, persists, and returns a `RunHarnessPlan`; it is fully
+  tested. The **call site** in `run_manager.rs::start()` is not wired, because
+  that file was owned by another workstream in this round. Until it is,
+  `harness.run.getSnapshot` reports `resolved: false` rather than inventing
+  evidence.
+- Keep Settings UI hidden. ✅ No Renderer work beyond the `AssistantMethod`
+  union in `src/lib/assistant-protocol/types.ts`, which the `protocol:check`
+  gate requires to stay bidirectionally equal to Rust `ALL_METHODS`.
+
+`harness-core` gained `topology`, `blueprint`, `resolver`, `validation`,
+`snapshot`, and `redaction`. Scope decisions taken during implementation:
+
+- **The topology records a trigger site per Hook point, not just a stage.**
+  Writing the stage table from 第 11 节 exposed that five of the sixteen events
+  are not dispatched by the engine loop: `PermissionRequest`,
+  `PermissionDenied`, and `Notification` fire from the Daemon's
+  `production_tools`, and `SubagentStart` / `SubagentStop` are dispatched by
+  **nothing at all**. A stage table alone would present two inert points as
+  configurable. `harness_topology_truth.rs` re-derives the whole map from the
+  engine sources on every run, so the constant cannot drift into a brochure.
+- **`legacy_v1` does not reorder.** Discovery order is today's dispatch order,
+  so the resolver leaves it alone; only `sequential_v2` sorts by locked band,
+  configured order, and Hook id. Re-sorting under `legacy_v1` would have been a
+  behaviour change smuggled in under a configuration feature.
+- **The overlay schema cannot carry an executable.** `HookOverlay` has exactly
+  the five fields 第 12.2 节 permits, and `deny_unknown_fields` makes `program`,
+  `args`, `url`, and `trusted` parse errors rather than ignored keys. A test
+  asserts each one is rejected, so the property survives a future field being
+  added carelessly.
+- **Redaction happens on the way into the snapshot, not at the RPC edge.**
+  There is therefore one path into persistence rather than two, and
+  `RunHarnessPlan` keeps the redacted `snapshot` and the live `resolution`
+  visibly separate — compiling Hooks from a redacted URL would have fired a
+  different HTTP request than the user configured.
+- **Rollback publishes forward.** Restoring v1 creates v3 with v1's content and
+  hash. A Run snapshot references `version_id`, so rewinding a pointer would
+  make an old Run's evidence describe a document it never used.
+- Telemetry stayed out. `harness.overview` returns
+  `telemetry: { available: false, reason: "phase_3" }` rather than an empty
+  array a caller would read as "nothing ever ran".
 
 ### Phase 3: telemetry and source manifests
 

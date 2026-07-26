@@ -278,6 +278,7 @@ export type RunEventType =
   | 'tool_output_delta'
   | 'permission_requested'
   | 'permission_responded'
+  | 'plan_mode_changed'
   | 'file_changed'
   | 'task_started'
   | 'task_updated'
@@ -671,7 +672,28 @@ export type AssistantMethod =
   | 'capability.team.update'
   | 'capability.team.delete'
   | 'conversation.updateCapabilities'
-  | 'conversation.getCapabilities';
+  | 'conversation.getCapabilities'
+  // Harness control plane (Native execution engine). Read surface first, then
+  // the Draft → Validate → Diff → Publish → Rollback lifecycle, bindings, and
+  // the per-Run evidence lookup.
+  | 'harness.overview'
+  | 'harness.topology'
+  | 'harness.hook.catalog'
+  | 'harness.profile.list'
+  | 'harness.profile.get'
+  | 'harness.profile.create'
+  | 'harness.profile.archive'
+  | 'harness.draft.get'
+  | 'harness.draft.save'
+  | 'harness.draft.validate'
+  | 'harness.draft.diff'
+  | 'harness.draft.publish'
+  | 'harness.version.list'
+  | 'harness.version.rollback'
+  | 'harness.binding.get'
+  | 'harness.binding.set'
+  | 'harness.run.getSnapshot'
+  | 'harness.audit.list';
 
 /**
  * Capability library selection carried on run.start / conversation rows

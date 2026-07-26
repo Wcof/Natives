@@ -11,12 +11,17 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use std::time::Duration;
 
-/// Build the JSON body for OpenAI chat completions with default controls.
+/// Build the JSON body for OpenAI chat completions using the request's own
+/// [`ProviderRequest::controls`].
+///
+/// This is the entry point every streaming/non-streaming path uses, so a
+/// caller only has to populate `controls` on the request it already builds.
 pub fn build_chat_completions_body(request: &ProviderRequest) -> serde_json::Value {
-    build_chat_completions_body_with_controls(request, &RequestControls::default())
+    build_chat_completions_body_with_controls(request, &request.controls)
 }
 
-/// Build the JSON body for OpenAI chat completions.
+/// Build the JSON body for OpenAI chat completions with caller-supplied
+/// controls, which override [`ProviderRequest::controls`] entirely.
 ///
 /// # Prompt caching
 ///
@@ -510,12 +515,14 @@ pub async fn stream_responses_with_headers(
     Ok(Box::pin(stream))
 }
 
-/// Build JSON body for OpenAI Responses API with default controls.
+/// Build JSON body for OpenAI Responses API using the request's own
+/// [`ProviderRequest::controls`].
 pub fn build_responses_body(request: &ProviderRequest) -> serde_json::Value {
-    build_responses_body_with_controls(request, &RequestControls::default())
+    build_responses_body_with_controls(request, &request.controls)
 }
 
-/// Build JSON body for OpenAI Responses API.
+/// Build JSON body for OpenAI Responses API with caller-supplied controls,
+/// which override [`ProviderRequest::controls`] entirely.
 pub fn build_responses_body_with_controls(
     request: &ProviderRequest,
     controls: &RequestControls,
@@ -784,6 +791,7 @@ mod tool_message_tests {
             temperature: None,
             stream: true,
             structured_output: None,
+            controls: Default::default(),
         });
         let messages = body["messages"].as_array().expect("messages array");
         assert_eq!(messages.len(), 4);
@@ -828,6 +836,7 @@ mod tool_message_tests {
             temperature: None,
             stream: true,
             structured_output: None,
+            controls: Default::default(),
         }
     }
 
@@ -986,6 +995,7 @@ mod tool_message_tests {
             temperature: None,
             stream: true,
             structured_output: None,
+            controls: Default::default(),
         }
     }
 

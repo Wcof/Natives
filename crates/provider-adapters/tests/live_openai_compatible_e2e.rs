@@ -71,6 +71,7 @@ async fn live_text_stream_completes() {
         temperature: Some(0.0),
         stream: true,
         structured_output: None,
+        controls: Default::default(),
     };
 
     let stream = adapter
@@ -162,6 +163,7 @@ async fn live_tool_roundtrip_body_and_second_turn() {
         temperature: Some(0.0),
         stream: true,
         structured_output: None,
+        controls: Default::default(),
     };
 
     let stream = adapter
@@ -257,6 +259,7 @@ async fn live_tool_roundtrip_body_and_second_turn() {
         temperature: Some(0.0),
         stream: true,
         structured_output: None,
+        controls: Default::default(),
     });
     let messages = body["messages"].as_array().expect("messages");
     assert!(
@@ -286,6 +289,7 @@ async fn live_tool_roundtrip_body_and_second_turn() {
         temperature: Some(0.0),
         stream: true,
         structured_output: None,
+        controls: Default::default(),
     };
     let stream2 = adapter
         .stream(request2, cred)

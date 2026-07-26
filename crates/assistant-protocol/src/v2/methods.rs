@@ -94,6 +94,27 @@ pub const ALL_METHODS: &[&str] = &[
     "engine.rateLimit.update",
     "engine.rateLimit.acquire",
     "engine.rateLimit.cooldown",
+    // Harness control plane. Read surface first (topology / catalog), then the
+    // Draft → Validate → Diff → Publish → Rollback lifecycle, bindings, and the
+    // per-Run evidence lookup.
+    "harness.overview",
+    "harness.topology",
+    "harness.hook.catalog",
+    "harness.profile.list",
+    "harness.profile.get",
+    "harness.profile.create",
+    "harness.profile.archive",
+    "harness.draft.get",
+    "harness.draft.save",
+    "harness.draft.validate",
+    "harness.draft.diff",
+    "harness.draft.publish",
+    "harness.version.list",
+    "harness.version.rollback",
+    "harness.binding.get",
+    "harness.binding.set",
+    "harness.run.getSnapshot",
+    "harness.audit.list",
 ];
 
 /// Methods actually handled by the Agent Daemon RPC (must match `rpc.rs`).
@@ -192,6 +213,28 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "engine.rateLimit.update",
     "engine.rateLimit.acquire",
     "engine.rateLimit.cooldown",
+    // Harness control plane (design Phase 2). Every one of these has a real
+    // dispatch arm backed by `assistant.db` rows, the fixed topology constant,
+    // or on-disk Hook discovery — `rpc_dispatch_contract.rs` proves it by
+    // calling each through the live `handle_rpc`.
+    "harness.overview",
+    "harness.topology",
+    "harness.hook.catalog",
+    "harness.profile.list",
+    "harness.profile.get",
+    "harness.profile.create",
+    "harness.profile.archive",
+    "harness.draft.get",
+    "harness.draft.save",
+    "harness.draft.validate",
+    "harness.draft.diff",
+    "harness.draft.publish",
+    "harness.version.list",
+    "harness.version.rollback",
+    "harness.binding.get",
+    "harness.binding.set",
+    "harness.run.getSnapshot",
+    "harness.audit.list",
 ];
 
 /// Methods the Tauri host still owns after Phase 0 cutover.
@@ -310,7 +353,60 @@ pub mod names {
     pub const ENGINE_RATE_LIMIT_UPDATE: &str = "engine.rateLimit.update";
     pub const ENGINE_RATE_LIMIT_ACQUIRE: &str = "engine.rateLimit.acquire";
     pub const ENGINE_RATE_LIMIT_COOLDOWN: &str = "engine.rateLimit.cooldown";
+
+    /// Prefix shared by the whole Harness control-plane family.
+    ///
+    /// `rpc.rs` routes on this prefix rather than on eighteen literals, so a
+    /// method added to the daemon's own dispatch table cannot be left
+    /// unroutable by a forgotten match arm. The advertisement in
+    /// [`super::IMPLEMENTED_METHODS`] stays explicit, so the prefix can never
+    /// silently widen what is claimed to be callable.
+    pub const HARNESS_PREFIX: &str = "harness.";
+    pub const HARNESS_OVERVIEW: &str = "harness.overview";
+    pub const HARNESS_TOPOLOGY: &str = "harness.topology";
+    pub const HARNESS_HOOK_CATALOG: &str = "harness.hook.catalog";
+    pub const HARNESS_PROFILE_LIST: &str = "harness.profile.list";
+    pub const HARNESS_PROFILE_GET: &str = "harness.profile.get";
+    pub const HARNESS_PROFILE_CREATE: &str = "harness.profile.create";
+    pub const HARNESS_PROFILE_ARCHIVE: &str = "harness.profile.archive";
+    pub const HARNESS_DRAFT_GET: &str = "harness.draft.get";
+    pub const HARNESS_DRAFT_SAVE: &str = "harness.draft.save";
+    pub const HARNESS_DRAFT_VALIDATE: &str = "harness.draft.validate";
+    pub const HARNESS_DRAFT_DIFF: &str = "harness.draft.diff";
+    pub const HARNESS_DRAFT_PUBLISH: &str = "harness.draft.publish";
+    pub const HARNESS_VERSION_LIST: &str = "harness.version.list";
+    pub const HARNESS_VERSION_ROLLBACK: &str = "harness.version.rollback";
+    pub const HARNESS_BINDING_GET: &str = "harness.binding.get";
+    pub const HARNESS_BINDING_SET: &str = "harness.binding.set";
+    pub const HARNESS_RUN_GET_SNAPSHOT: &str = "harness.run.getSnapshot";
+    pub const HARNESS_AUDIT_LIST: &str = "harness.audit.list";
 }
+
+/// Every advertised Harness method, in the order the design lists them.
+///
+/// Named separately from [`IMPLEMENTED_METHODS`] so a test can assert that the
+/// prefix-routed family and the advertised family are the same set — the
+/// failure mode a prefix route otherwise invites.
+pub const HARNESS_METHODS: &[&str] = &[
+    names::HARNESS_OVERVIEW,
+    names::HARNESS_TOPOLOGY,
+    names::HARNESS_HOOK_CATALOG,
+    names::HARNESS_PROFILE_LIST,
+    names::HARNESS_PROFILE_GET,
+    names::HARNESS_PROFILE_CREATE,
+    names::HARNESS_PROFILE_ARCHIVE,
+    names::HARNESS_DRAFT_GET,
+    names::HARNESS_DRAFT_SAVE,
+    names::HARNESS_DRAFT_VALIDATE,
+    names::HARNESS_DRAFT_DIFF,
+    names::HARNESS_DRAFT_PUBLISH,
+    names::HARNESS_VERSION_LIST,
+    names::HARNESS_VERSION_ROLLBACK,
+    names::HARNESS_BINDING_GET,
+    names::HARNESS_BINDING_SET,
+    names::HARNESS_RUN_GET_SNAPSHOT,
+    names::HARNESS_AUDIT_LIST,
+];
 
 /// Returns true if `method` is a known v2 RPC method.
 pub fn is_known_method(method: &str) -> bool {
@@ -477,6 +573,57 @@ mod tests {
     fn advertised_methods_are_all_catalogued() {
         for method in IMPLEMENTED_METHODS.iter().chain(HOST_IMPLEMENTED_METHODS) {
             assert!(is_known_method(method), "not in ALL_METHODS: {method}");
+        }
+    }
+
+    /// `rpc.rs` routes the Harness family by prefix. That is only safe while the
+    /// prefix and the advertised list describe the same set: a name matching the
+    /// prefix but missing from `IMPLEMENTED_METHODS` would be dispatchable yet
+    /// unadvertised (the frontend gate stays shut on a working method), and one
+    /// advertised but not matching the prefix would fall through to the
+    /// fail-closed arm (the gate opens on a dead method).
+    #[test]
+    fn the_harness_prefix_and_the_advertised_harness_family_agree() {
+        for method in HARNESS_METHODS {
+            assert!(
+                method.starts_with(names::HARNESS_PREFIX),
+                "{method} is in HARNESS_METHODS but would not be prefix-routed"
+            );
+            assert!(is_known_method(method), "not catalogued: {method}");
+            assert!(is_daemon_method(method), "not advertised: {method}");
+        }
+        let advertised: Vec<&str> = IMPLEMENTED_METHODS
+            .iter()
+            .copied()
+            .filter(|m| m.starts_with(names::HARNESS_PREFIX))
+            .collect();
+        assert_eq!(
+            advertised,
+            HARNESS_METHODS.to_vec(),
+            "the advertised harness surface drifted from HARNESS_METHODS"
+        );
+        assert!(
+            !HOST_IMPLEMENTED_METHODS
+                .iter()
+                .any(|m| m.starts_with(names::HARNESS_PREFIX)),
+            "Harness is daemon-owned; the host must not advertise any of it"
+        );
+    }
+
+    /// The Harness read surface must cover both questions the control plane
+    /// exists to answer. Naming them here makes removing either a deliberate
+    /// edit rather than a quiet regression in a UI refactor.
+    #[test]
+    fn the_harness_inspection_surface_is_present() {
+        for method in [
+            // "what does the engine look like at each stage?"
+            "harness.topology",
+            // "which stage uses a hook, and which hook?"
+            "harness.hook.catalog",
+            // "what did this Run actually run with?"
+            "harness.run.getSnapshot",
+        ] {
+            assert!(is_daemon_method(method), "{method} is no longer advertised");
         }
     }
 

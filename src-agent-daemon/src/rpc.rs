@@ -27,6 +27,19 @@ use tokio::net::UnixListener;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+/// Harness control plane — the `harness.*` method family.
+///
+/// The files live at `src-agent-daemon/src/harness/`, where the design
+/// (第 7.2 节) puts them; only the `mod` declaration is here, via `#[path]`.
+/// The reason is boundary hygiene rather than architecture: declaring it in
+/// `lib.rs` alongside the other stores is the right home and is a one-line
+/// move, but `lib.rs` is owned by a parallel workstream this round. Promoting
+/// it later is: delete these two lines, add `pub mod harness;` to `lib.rs`, and
+/// rename `crate::rpc::harness` to `crate::harness` at its handful of call
+/// sites.
+#[path = "harness/mod.rs"]
+pub mod harness;
+
 /// Active session: maps session_token -> client_id.
 type SessionMap = Arc<Mutex<HashMap<String, String>>>;
 
@@ -355,6 +368,7 @@ async fn test_provider_model(
         temperature: Some(0.0),
         stream: true,
         structured_output: None,
+        controls: Default::default(),
     };
     let mut stream = adapter.stream(request, credential).await?;
     let mut text = String::new();
@@ -2606,6 +2620,35 @@ pub async fn handle_rpc(
                             false,
                             e,
                         ),
+                    )
+                    .await
+                }
+            }
+        }
+        // Harness control plane. Routed by prefix rather than by eighteen
+        // literals: the family shares one handler, and
+        // `the_harness_prefix_and_the_advertised_harness_family_agree` in the
+        // protocol crate pins the prefix to exactly the advertised set, so this
+        // arm can never quietly serve something that was never advertised.
+        method if method.starts_with(names::HARNESS_PREFIX) => {
+            match harness::request(method, request.params.clone()).await {
+                Ok(value) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        value,
+                    )
+                    .await
+                }
+                Err(e) => {
+                    // The Harness error already carries a structured code and a
+                    // category; re-deriving either from the message here would
+                    // throw that away.
+                    send_error(
+                        writer,
+                        &DaemonError::new(e.code, e.category, false, e.message),
                     )
                     .await
                 }
