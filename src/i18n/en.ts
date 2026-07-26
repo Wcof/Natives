@@ -1247,30 +1247,13 @@ export const en = {
 
   // Tools
   tools: {
-    screenshotCaptured: 'Screenshot Captured',
     sendToTerminal: 'Send to Terminal',
-    save: 'Save',
-    annotate: 'Annotate',
-    imageAnnotator: 'Image Annotator',
-    close: 'Close',
-    cancel: 'Cancel',
     releaseWizard: 'Release Wizard',
-    newVersion: 'New Version',
-    runChecks: 'Run Checks',
-    packageJson: 'package.json',
-    gitStatus: 'Git Status',
-    changelog: 'CHANGELOG.md',
-    ghCli: 'gh CLI',
-    updateAvailable: 'Update Available',
-    download: 'Download',
-    dismiss: 'Dismiss',
-    checking: 'Checking...',
-    // Tool tab labels
-    tabs: {
-      screenshot: 'Screenshot',
-      releaseWizard: 'Release Wizard',
-      updates: 'Updates',
-    },
+    screenshotDesc: 'Screenshot watching is enabled globally: when a new screenshot is detected, a floating card appears in the bottom-right corner to send it to the terminal, save it to materials, or open the annotator.',
+    releaseDesc: 'Run pre-release checks on the current project (package.json, Git status, CHANGELOG, gh CLI) and execute the release steps in order.',
+    openReleaseWizard: 'Open Release Wizard',
+    updateDesc: 'Manually check whether a new app version is available. New versions also pop up a notification in the bottom-right corner.',
+    currentVersion: 'Current version',
   },
 
   // Errors
@@ -1440,6 +1423,10 @@ export const en = {
     issuesFound: 'Issues found',
     releaseReady: 'Release Ready',
     runSteps: 'Run Steps',
+    present: 'Present',
+    missing: 'Missing',
+    stepFailed: 'Step failed — stopped',
+    done: 'Release flow completed',
   },
 
   // ── Phase 3: Update Checker ──

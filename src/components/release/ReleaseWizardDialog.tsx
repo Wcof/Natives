@@ -1,12 +1,37 @@
 'use client';
 
-import { startTransition, useState, useEffect } from 'react';
-import { Package, Upload, Check, AlertCircle } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { AlertCircle, Check, FolderOpen, GitBranch, Search, X } from 'lucide-react';
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
-import { t, type Locale } from '@/i18n';
+import { t as tr, type Locale } from '@/i18n';
 import Modal from '@/components/ui/Modal';
+import { classifyError } from '@/lib/error-classifier';
+import { readActiveProject } from '@/lib/active-project';
 
-// ── Types ──
+/**
+ * 发布向导 — 驱动真实后端链路：
+ * release.inspect（项目体检）→ release.prepare（改版本号）→
+ * release.getSequence（命令序列）→ release.execute（逐条执行，失败即停）。
+ * 此前版本为纯前端模拟（setTimeout 假进度 + 假“已发布”），已重写。
+ */
+
+interface ProjectInspection {
+  name: string;
+  version: string;
+  hasChangelog: boolean;
+  hasPackageJson: boolean;
+  hasCargoToml: boolean;
+  gitDirty: boolean;
+  gitBranch: string;
+}
+
+interface SequenceStep {
+  id: string;
+  label: string;
+  command: string;
+}
+
+type StepStatus = 'pending' | 'running' | 'ok' | 'fail';
 
 interface ReleaseWizardDialogProps {
   locale: Locale;
@@ -14,219 +39,305 @@ interface ReleaseWizardDialogProps {
   onClose: () => void;
 }
 
-type WizardStep = 'info' | 'assets' | 'publish' | 'done';
+type WizardStep = 'inspect' | 'plan' | 'run' | 'done';
 
-interface ReleaseInfo {
-  version: string;
-  releaseNotes: string;
-  platform: 'all' | 'mac' | 'win' | 'linux';
+function bumpPatch(version: string): string {
+  const m = version.match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return version;
+  return `${m[1]}.${m[2]}.${Number(m[3]) + 1}`;
 }
 
-// ── Component ──
-
 export default function ReleaseWizardDialog({ locale, isOpen, onClose }: ReleaseWizardDialogProps) {
-  const [step, setStep] = useState<WizardStep>('info');
-  const [releaseInfo, setReleaseInfo] = useState<ReleaseInfo>({
-    version: '',
-    releaseNotes: '',
-    platform: 'all',
-  });
-  const [publishing, setPublishing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [progress, setProgress] = useState(0);
+  const t = (key: string) => tr(locale, key);
 
-  // Reset state when dialog opens
+  const [step, setStep] = useState<WizardStep>('inspect');
+  const [projectPath, setProjectPath] = useState('');
+  const [inspecting, setInspecting] = useState(false);
+  const [inspection, setInspection] = useState<ProjectInspection | null>(null);
+  const [newVersion, setNewVersion] = useState('');
+  const [sequence, setSequence] = useState<SequenceStep[]>([]);
+  const [stepStatus, setStepStatus] = useState<Record<string, StepStatus>>({});
+  const [stepError, setStepError] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const cancelledRef = useRef(false);
+
+  // 打开时重置并预填活动项目路径
   useEffect(() => {
-    if (isOpen) {
-      startTransition(() => { setStep('info'); });
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-      setReleaseInfo({ version: '', releaseNotes: '', platform: 'all' });
-      setPublishing(false);
-      setError(null);
-      setProgress(0);
-    }
+    if (!isOpen) return;
+    cancelledRef.current = false;
+    setStep('inspect');
+    setInspection(null);
+    setSequence([]);
+    setStepStatus({});
+    setStepError(null);
+    setNewVersion('');
+    setError(null);
+    let stale = false;
+    readActiveProject(window.nativesAPI).then((p) => {
+      if (!stale && p) setProjectPath((prev) => prev || p);
+    }).catch(() => { /* 无活动项目时留空让用户选 */ });
+    return () => { stale = true; cancelledRef.current = true; };
   }, [isOpen]);
 
-  const handlePublish = async () => {
-    setPublishing(true);
+  const api = typeof window !== 'undefined' ? window.nativesAPI : undefined;
+
+  const handlePickDirectory = async () => {
+    const picked = await api?.dialog?.pickDirectory?.();
+    if (picked) setProjectPath(picked);
+  };
+
+  const handleInspect = async () => {
+    if (!projectPath.trim() || !api?.release?.inspect) return;
+    setInspecting(true);
     setError(null);
-    setStep('publish');
-
-    // Simulate publish progress
-    for (let i = 0; i <= 100; i += 10) {
-      await new Promise(resolve => setTimeout(resolve, 200));
-      setProgress(i);
+    try {
+      const result = (await api.release.inspect(projectPath.trim())) as ProjectInspection;
+      setInspection(result);
+      setNewVersion(bumpPatch(result.version));
+    } catch (e) {
+      setInspection(null);
+      setError(classifyError(e).userMessage);
+    } finally {
+      setInspecting(false);
     }
+  };
 
-    setStep('done');
-    setPublishing(false);
+  const handlePlan = async () => {
+    if (!newVersion.trim() || !api?.release?.getSequence) return;
+    setError(null);
+    try {
+      const result = (await api.release.getSequence(projectPath.trim(), newVersion.trim())) as { steps: SequenceStep[] };
+      setSequence(result.steps ?? []);
+      setStepStatus({});
+      setStepError(null);
+      setStep('plan');
+    } catch (e) {
+      setError(classifyError(e).userMessage);
+    }
+  };
+
+  const handleRun = async () => {
+    if (!api?.release?.prepare || !api?.release?.execute) return;
+    setRunning(true);
+    setStep('run');
+    setStepError(null);
+    try {
+      for (const s of sequence) {
+        if (cancelledRef.current) return;
+        setStepStatus((prev) => ({ ...prev, [s.id]: 'running' }));
+        if (s.command === 'update-version') {
+          // 版本号写入走 prepare（package.json / Cargo.toml）
+          await api.release.prepare(projectPath.trim(), newVersion.trim());
+          setStepStatus((prev) => ({ ...prev, [s.id]: 'ok' }));
+          continue;
+        }
+        const result = (await api.release.execute(projectPath.trim(), s.command)) as {
+          success: boolean; stderr: string; stdout: string; exitCode: number | null;
+        };
+        if (!result.success) {
+          setStepStatus((prev) => ({ ...prev, [s.id]: 'fail' }));
+          setStepError((result.stderr || result.stdout || '').trim().slice(-800) || `exit ${result.exitCode}`);
+          setRunning(false);
+          return;
+        }
+        setStepStatus((prev) => ({ ...prev, [s.id]: 'ok' }));
+      }
+      setStep('done');
+    } catch (e) {
+      setStepError(classifyError(e).userMessage);
+    } finally {
+      setRunning(false);
+    }
   };
 
   const handleClose = () => {
-    if (!publishing) {
-      onClose();
-    }
+    if (running) return;
+    onClose();
   };
+
+  const inputStyle = { width: '100%' } as const;
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={handleClose}
-      title={t(locale, 'release_wizard') || 'Release Wizard'}
-      width={480}
-      showCloseButton={!publishing}
-      closeOnBackdropClick={!publishing}
-      closeOnEscape={!publishing}
-      contentClassName="!p-0 flex flex-col min-h-0 overflow-hidden"
+      title={t('release.title')}
+      width={520}
+      showCloseButton={!running}
+      closeOnBackdropClick={!running}
+      closeOnEscape={!running}
     >
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-5">
-        {/* Step: Info */}
-        {step === 'info' && (
-          <div className="space-y-4">
+      {/* Step: inspect — 选项目并体检 */}
+      {step === 'inspect' && (
+        <div className="space-y-4">
+          <div>
+            <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
+              {t('release.projectPath')}
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={projectPath}
+                onChange={(e) => setProjectPath(e.target.value)}
+                placeholder="/path/to/project"
+                className="input w-full"
+                aria-label={t('release.projectPath')}
+              />
+              <button type="button" className="btn" onClick={handlePickDirectory} title={t('release.selectProject')}>
+                <FolderOpen size={14} />
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            disabled={!projectPath.trim() || inspecting}
+            onClick={handleInspect}
+          >
+            <Search size={13} /> {t('release.inspectProject')}
+          </button>
+
+          {inspecting && <MathCurveLoader size={24} />}
+
+          {inspection && (
+            <div className="space-y-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-sm">
+              <InspectRow label={t('release.projectPath')} value={inspection.name} />
+              <InspectRow label={t('release.version')} value={`v${inspection.version}`} mono />
+              <InspectRow
+                label={t('release.gitStatus')}
+                value={`${inspection.gitBranch} · ${inspection.gitDirty ? t('release.uncommitted') : t('release.clean')}`}
+                warn={inspection.gitDirty}
+                icon={<GitBranch size={12} />}
+              />
+              <InspectRow
+                label={t('release.changelog')}
+                value={inspection.hasChangelog ? t('release.present') : t('release.missing')}
+                warn={!inspection.hasChangelog}
+              />
+              <InspectRow
+                label={t('release.packageJson')}
+                value={[
+                  inspection.hasPackageJson ? 'package.json' : null,
+                  inspection.hasCargoToml ? 'Cargo.toml' : null,
+                ].filter(Boolean).join(' + ') || t('release.missing')}
+                warn={!inspection.hasPackageJson && !inspection.hasCargoToml}
+              />
+            </div>
+          )}
+
+          {inspection && (
             <div>
               <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
-                {t(locale, 'version') || 'Version'}
+                {t('release.newVersion')}
               </label>
               <input
                 type="text"
-                value={releaseInfo.version}
-                onChange={e => setReleaseInfo(prev => ({ ...prev, version: e.target.value }))}
-                placeholder="1.0.0"
-                className="input w-full"
+                value={newVersion}
+                onChange={(e) => setNewVersion(e.target.value)}
+                placeholder={bumpPatch(inspection.version)}
+                className="input"
+                style={inputStyle}
+                aria-label={t('release.newVersion')}
               />
             </div>
+          )}
 
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
-                {t(locale, 'release_notes') || 'Release Notes'}
-              </label>
-              <textarea
-                value={releaseInfo.releaseNotes}
-                onChange={e => setReleaseInfo(prev => ({ ...prev, releaseNotes: e.target.value }))}
-                placeholder={t(locale, 'release_notes_placeholder') || 'Describe what changed...'}
-                rows={4}
-                className="input w-full resize-none"
-              />
-            </div>
+          {error && <ErrorRow message={error} />}
+        </div>
+      )}
 
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
-                {t(locale, 'target_platform') || 'Target Platform'}
-              </label>
-              <div className="flex gap-2">
-                {(['all', 'mac', 'win', 'linux'] as const).map(p => (
-                  <button
-                    key={p}
-                    onClick={() => setReleaseInfo(prev => ({ ...prev, platform: p }))}
-                    className={`btn ${releaseInfo.platform === p ? 'btn-primary' : ''}`}
-                  >
-                    {p === 'all' ? 'All' : p === 'mac' ? 'macOS' : p === 'win' ? 'Windows' : 'Linux'}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {error && (
-              <div className="flex items-center gap-2 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-400">
-                <AlertCircle size={14} />
-                {error}
-              </div>
-            )}
+      {/* Step: plan — 展示命令序列 */}
+      {(step === 'plan' || step === 'run' || step === 'done') && (
+        <div className="space-y-3">
+          <p className="text-xs text-[var(--text-secondary)]">
+            {t('release.commandSequence')} · v{newVersion}
+          </p>
+          <div className="space-y-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2">
+            {sequence.map((s) => {
+              const status = stepStatus[s.id] ?? 'pending';
+              return (
+                <div key={s.id} className="flex items-center gap-2 px-1.5 py-1 text-sm text-[var(--text)]">
+                  <span style={{ display: 'inline-flex', width: 14, flexShrink: 0 }}>
+                    {status === 'ok' && <Check size={13} style={{ color: 'var(--diff-add)' }} />}
+                    {status === 'fail' && <X size={13} style={{ color: 'var(--danger)' }} />}
+                    {status === 'running' && <MathCurveLoader size={13} strokeWidth={1} particleCount={6} />}
+                  </span>
+                  <span className="flex-1">{s.label}</span>
+                  <code className="text-xs text-[var(--text-disabled)]" style={{ fontFamily: 'var(--font-mono)' }}>{s.command}</code>
+                </div>
+              );
+            })}
           </div>
-        )}
 
-        {/* Step: Assets */}
-        {step === 'assets' && (
-          <div className="space-y-4">
-            <div className="rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface)] p-8 text-center">
-              <Upload size={24} className="mx-auto mb-2 text-[var(--text-disabled)]" />
-              <p className="text-xs text-[var(--text-secondary)]">
-                {t(locale, 'assets_auto_detected') || 'Build assets will be auto-detected'}
-              </p>
-              <p className="mt-1 text-[10px] text-[var(--text-disabled)]">
-                {releaseInfo.platform === 'all'
-                  ? 'macOS (.dmg) · Windows (.exe) · Linux (.AppImage)'
-                  : releaseInfo.platform === 'mac'
-                    ? 'macOS (.dmg)'
-                    : releaseInfo.platform === 'win'
-                      ? 'Windows (.exe)'
-                      : 'Linux (.AppImage)'}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Step: Publish */}
-        {step === 'publish' && (
-          <div className="space-y-4 py-4 text-center">
-            <MathCurveLoader size={48} />
-            <p className="text-sm text-[var(--text)]">
-              {t(locale, 'publishing') || 'Publishing...'}
+          {stepError && <ErrorRow message={`${t('release.stepFailed')}: ${stepError}`} />}
+          {step === 'done' && (
+            <p className="flex items-center gap-2 text-sm" style={{ color: 'var(--diff-add)' }}>
+              <Check size={14} /> {t('release.done')}
             </p>
-            <div className="mx-auto h-1.5 w-48 overflow-hidden rounded-full bg-[var(--surface-hover)]">
-              <div
-                className="h-full rounded-full bg-[var(--primary)] transition-all duration-300"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
-            <p className="text-xs text-[var(--text-secondary)]">{progress}%</p>
-          </div>
-        )}
-
-        {/* Step: Done */}
-        {step === 'done' && (
-          <div className="space-y-4 py-6 text-center">
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-green-500/10">
-              <Check size={24} className="text-green-400" />
-            </div>
-            <div>
-              <p className="text-sm font-medium text-[var(--text)]">
-                {t(locale, 'release_published') || 'Release Published'}
-              </p>
-              <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                v{releaseInfo.version}
-              </p>
-            </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
       {/* Footer */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'end', gap: '8px', borderTop: '0.0625rem solid var(--border)', padding: '12px 20px', background: 'var(--surface)' }}>
-        {step === 'info' && (
-          <>
-            <button onClick={handleClose} className="btn btn-ghost">
-              {t(locale, 'cancel') || 'Cancel'}
-            </button>
-            <button
-              onClick={() => setStep('assets')}
-              disabled={!releaseInfo.version.trim()}
-              className="btn btn-primary"
-              style={{ opacity: !releaseInfo.version.trim() ? 0.4 : 1 }}
-            >
-              {t(locale, 'next') || 'Next'}
-            </button>
-          </>
+      <div className="mt-5 flex items-center justify-end gap-2 border-t border-[var(--border)] pt-3">
+        <button type="button" className="btn btn-ghost" onClick={handleClose} disabled={running}>
+          {tr(locale, step === 'done' ? 'common.close' : 'common.cancel')}
+        </button>
+        {step === 'inspect' && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={!inspection || !newVersion.trim()}
+            onClick={handlePlan}
+          >
+            {t('release.prepareRelease')}
+          </button>
         )}
-
-        {step === 'assets' && (
-          <>
-            <button onClick={() => setStep('info')} className="btn btn-ghost">
-              {t(locale, 'back') || 'Back'}
-            </button>
-            <button onClick={handlePublish} className="btn btn-primary">
-              {t(locale, 'publish') || 'Publish'}
-            </button>
-          </>
+        {step === 'plan' && (
+          <button type="button" className="btn btn-primary" disabled={running} onClick={handleRun}>
+            {t('release.runSteps')}
+          </button>
         )}
-
-        {step === 'done' && (
-          <button onClick={handleClose} className="btn btn-primary">
-            {t(locale, 'close') || 'Close'}
+        {step === 'run' && stepError && (
+          <button type="button" className="btn btn-primary" disabled={running} onClick={handleRun}>
+            {t('release.runSteps')}
           </button>
         )}
       </div>
     </Modal>
+  );
+}
+
+function InspectRow({ label, value, warn, mono, icon }: {
+  label: string; value: string; warn?: boolean; mono?: boolean; icon?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="w-28 flex-shrink-0 text-xs text-[var(--text-secondary)]">{label}</span>
+      <span
+        className="flex items-center gap-1 text-xs"
+        style={{
+          color: warn ? 'var(--warning)' : 'var(--text)',
+          fontFamily: mono ? 'var(--font-mono)' : undefined,
+        }}
+      >
+        {icon}{value}
+      </span>
+    </div>
+  );
+}
+
+function ErrorRow({ message }: { message: string }) {
+  return (
+    <div
+      className="flex items-start gap-2 rounded-lg px-3 py-2 text-xs"
+      style={{ background: 'var(--danger-soft)', color: 'var(--danger)' }}
+    >
+      <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+      <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{message}</span>
+    </div>
   );
 }

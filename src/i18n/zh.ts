@@ -1235,30 +1235,13 @@ export const zh = {
 
   // 工具
   tools: {
-    screenshotCaptured: '截图已捕获',
     sendToTerminal: '发送到终端',
-    save: '保存',
-    annotate: '标注',
-    imageAnnotator: '图片标注',
-    close: '关闭',
-    cancel: '取消',
     releaseWizard: '发布向导',
-    newVersion: '新版本',
-    runChecks: '运行检查',
-    packageJson: 'package.json',
-    gitStatus: 'Git 状态',
-    changelog: 'CHANGELOG.md',
-    ghCli: 'gh CLI',
-    updateAvailable: '有可用更新',
-    download: '下载',
-    dismiss: '忽略',
-    checking: '检查中...',
-    // Tool tab labels
-    tabs: {
-      screenshot: '截图',
-      releaseWizard: '发布向导',
-      updates: '更新通知',
-    },
+    screenshotDesc: '截图监听已全局启用：检测到新截图时，右下角会弹出浮动卡片，可一键发送到终端、存入素材或打开标注器。',
+    releaseDesc: '对当前项目做发布前体检（package.json、Git 状态、CHANGELOG、gh CLI），并按序执行发布步骤。',
+    openReleaseWizard: '打开发布向导',
+    updateDesc: '手动检查应用是否有新版本。检测到新版本时也会在右下角弹出通知。',
+    currentVersion: '当前版本',
   },
 
   errors: {
@@ -1427,6 +1410,10 @@ export const zh = {
     issuesFound: '发现以下问题',
     releaseReady: '发布就绪',
     runSteps: '运行步骤',
+    present: '存在',
+    missing: '缺失',
+    stepFailed: '步骤失败，已停止',
+    done: '发布流程完成',
   },
 
   // ── Phase 3: Update Checker ──
