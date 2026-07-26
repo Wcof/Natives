@@ -131,7 +131,8 @@ pub fn download_and_probe(
         }
         if asset.name == "natives.compose.zip" {
             let unpack = release_dir.join("compose_unpacked");
-            probe::safe_extract_zip(&dest, &unpack, MAX_TOTAL_BYTES)?;
+            // safe_extract_zip 已上移到共享模块 archive_ops（行为不变：符号链接条目报错）
+            crate::archive_ops::safe_extract_zip(&dest, &unpack, MAX_TOTAL_BYTES)?;
         }
     }
 

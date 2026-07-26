@@ -7,7 +7,7 @@ use super::model::{
 use crate::{Error, Result};
 use serde::Deserialize;
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -682,65 +682,6 @@ fn force_localhost_port_str(s: &str) -> String {
     }
 }
 
-/// Safe ZIP extract under dest; rejects traversal, absolute paths, symlinks.
-pub fn safe_extract_zip(zip_path: &Path, dest: &Path, max_total: u64) -> Result<Vec<PathBuf>> {
-    use std::io::Read;
-    let file = std::fs::File::open(zip_path).map_err(Error::Io)?;
-    let mut archive =
-        zip::ZipArchive::new(file).map_err(|e| Error::Internal(format!("zip open: {e}")))?;
-    std::fs::create_dir_all(dest).map_err(Error::Io)?;
-    let dest_canon = dest
-        .canonicalize()
-        .map_err(|e| Error::Internal(format!("dest canonicalize: {e}")))?;
-
-    let mut written = Vec::new();
-    let mut total: u64 = 0;
-    for i in 0..archive.len() {
-        let mut entry = archive
-            .by_index(i)
-            .map_err(|e| Error::Internal(format!("zip entry: {e}")))?;
-        let name = entry.name().to_string();
-        if name.contains("..") || name.starts_with('/') || name.starts_with('\\') {
-            return Err(Error::InvalidInput(format!("unsafe path in zip: {name}")));
-        }
-        // Reject symlink entries
-        #[allow(deprecated)]
-        {
-            if entry.unix_mode().map(|m| (m & 0o170000) == 0o120000).unwrap_or(false) {
-                return Err(Error::InvalidInput(format!("symlink in zip rejected: {name}")));
-            }
-        }
-        let outpath = dest.join(&name);
-        // Ensure under dest
-        if let Some(parent) = outpath.parent() {
-            std::fs::create_dir_all(parent).map_err(Error::Io)?;
-            let parent_c = parent.canonicalize().map_err(Error::Io)?;
-            if !parent_c.starts_with(&dest_canon) {
-                return Err(Error::InvalidInput(format!(
-                    "zip path escapes dest: {name}"
-                )));
-            }
-        }
-        if entry.is_dir() {
-            std::fs::create_dir_all(&outpath).map_err(Error::Io)?;
-        } else {
-            let mut outfile = std::fs::File::create(&outpath).map_err(Error::Io)?;
-            let mut buf = Vec::new();
-            entry.read_to_end(&mut buf).map_err(Error::Io)?;
-            total += buf.len() as u64;
-            if total > max_total {
-                return Err(Error::InvalidInput(format!(
-                    "zip total size exceeds limit {max_total}"
-                )));
-            }
-            use std::io::Write;
-            outfile.write_all(&buf).map_err(Error::Io)?;
-            written.push(outpath);
-        }
-    }
-    Ok(written)
-}
-
 /// Collect unique host ports claimed by a compose file (for conflict checks).
 pub fn collect_host_ports(text: &str) -> Result<BTreeSet<u16>> {
     let analysis = analyze_compose_yaml(text)?;
@@ -799,33 +740,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn zip_slip_rejected() {
-        // Build a zip with traversal in memory via zip crate
-        let dir = std::env::temp_dir().join(format!(
-            "natives-zip-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
-        ));
-        let _ = std::fs::create_dir_all(&dir);
-        let zip_path = dir.join("bad.zip");
-        {
-            let f = std::fs::File::create(&zip_path).unwrap();
-            let mut zip = zip::ZipWriter::new(f);
-            let opts = zip::write::SimpleFileOptions::default();
-            zip.start_file("../evil.txt", opts).unwrap();
-            use std::io::Write;
-            zip.write_all(b"x").unwrap();
-            zip.finish().unwrap();
-        }
-        let dest = dir.join("out");
-        let err = safe_extract_zip(&zip_path, &dest, 1024 * 1024).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("unsafe") || msg.contains("escapes"), "{msg}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
+    // 注：safe_extract_zip 已上移至 crate::archive_ops（zip-slip 等安全测试随之迁移）
 
     #[test]
     fn probe_no_signal() {

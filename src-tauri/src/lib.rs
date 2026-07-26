@@ -5,6 +5,7 @@ use tokio::sync::Mutex as TokioMutex;
 
 mod agent;
 mod archive;
+mod archive_ops;
 pub mod assistant_service;
 pub mod commands;
 pub mod context_window;
@@ -30,9 +31,11 @@ mod ghostty_vt;
 mod git;
 mod html_preview;
 mod http_server;
+mod image_convert;
 pub mod jobs;
 pub mod key_lease;
 mod lid_guard;
+mod locate;
 pub mod log_sanitizer;
 mod module_manager;
 mod permission_center;
@@ -580,10 +583,15 @@ pub fn run() {
             commands::fs::fs_clipboard_copy_image,
             // Archive
             commands::archive::archive_list,
+            commands::archive::fs_extract_archive,
+            commands::archive::fs_compress_entries,
             // Search
             commands::search::search_grep,
             commands::search::search_files,
             commands::search::search_spotlight,
+            // Locate（终端路径定位链）
+            commands::locate::fs_verify_paths,
+            commands::locate::fs_locate,
             // State
             commands::state::state_save,
             commands::state::state_load,
@@ -599,6 +607,7 @@ pub fn run() {
             commands::disk::system_metrics,
             // Thumbnail
             commands::thumbnail::thumbnail_generate,
+            commands::thumbnail::fs_convert_image_preview,
             // Agent
             commands::agent::agent_scan_projects,
             commands::agent::agent_get_sessions,

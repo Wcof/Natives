@@ -12,6 +12,9 @@
 //   src-tauri/src/fs_watch.rs     → FsWatchEvent
 //   src-tauri/src/search.rs       → SearchResult
 //   src-tauri/src/archive.rs      → ArchiveEntry / ArchiveListing
+//   src-tauri/src/archive_ops.rs  → ExtractArchiveResult / CompressEntriesResult
+//   src-tauri/src/image_convert.rs → ConvertImageResult
+//   src-tauri/src/locate.rs       → VerifyPathResult / LocateResult
 //   src-tauri/src/disk_usage.rs   → DiskUsageItem
 
 export type { FileEntry } from './FileEntry';
@@ -24,4 +27,9 @@ export type { FsWatchEvent } from './FsWatchEvent';
 export type { SearchResult } from './SearchResult';
 export type { ArchiveEntry } from './ArchiveEntry';
 export type { ArchiveListing } from './ArchiveListing';
+export type { ExtractArchiveResult } from './ExtractArchiveResult';
+export type { CompressEntriesResult } from './CompressEntriesResult';
+export type { ConvertImageResult } from './ConvertImageResult';
+export type { VerifyPathResult } from './VerifyPathResult';
+export type { LocateResult } from './LocateResult';
 export type { DiskUsageItem } from './DiskUsageItem';

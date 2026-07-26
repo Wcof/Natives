@@ -66,6 +66,22 @@ fn fuzzy_score(query: &str, target: &str) -> f64 {
 /// File name search with fuzzy scoring + path bonus + dir bonus + recency (Natives2)
 /// Ported from FanBox server.js:289-311
 pub fn search_files(query: &str, root: &str, max_results: usize) -> Result<Vec<SearchResult>> {
+    search_files_with_deadline(
+        query,
+        root,
+        max_results,
+        std::time::Instant::now() + DEADLINE_FILES,
+    )
+}
+
+/// search_files 的显式截止版本：多根搜索（locate 四级兜底）共享一个总预算，
+/// 避免逐根各吃满 4s 串成十几秒。
+pub fn search_files_with_deadline(
+    query: &str,
+    root: &str,
+    max_results: usize,
+    deadline: std::time::Instant,
+) -> Result<Vec<SearchResult>> {
     let root_path = Path::new(root);
     if !root_path.exists() {
         return Err(Error::NotFound(root.to_string()));
@@ -77,7 +93,6 @@ pub fn search_files(query: &str, root: &str, max_results: usize) -> Result<Vec<S
     }
 
     let mut results = Vec::new();
-    let start = std::time::Instant::now();
     let mut queue = std::collections::VecDeque::new();
     queue.push_back(root_path.to_path_buf());
 
@@ -100,7 +115,7 @@ pub fn search_files(query: &str, root: &str, max_results: usize) -> Result<Vec<S
     .collect();
 
     while let Some(dir) = queue.pop_front() {
-        if start.elapsed() > DEADLINE_FILES || results.len() >= max_results * 3 {
+        if std::time::Instant::now() > deadline || results.len() >= max_results * 3 {
             break;
         }
         let entries = match std::fs::read_dir(&dir) {
@@ -108,7 +123,7 @@ pub fn search_files(query: &str, root: &str, max_results: usize) -> Result<Vec<S
             Err(_) => continue,
         };
         for entry in entries.flatten() {
-            if start.elapsed() > DEADLINE_FILES {
+            if std::time::Instant::now() > deadline {
                 break;
             }
             let name = entry.file_name().to_string_lossy().to_string();

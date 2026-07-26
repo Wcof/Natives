@@ -146,7 +146,8 @@ fn default_sort_dir() -> String {
 }
 
 /// Expand ~ to home directory
-fn expand_tilde(path: &str) -> PathBuf {
+/// （archive_ops / image_convert / locate 等兄弟模块复用，保持路径语义一致）
+pub(crate) fn expand_tilde(path: &str) -> PathBuf {
     if path.starts_with("~/") || path == "~" {
         if let Some(home) = dirs::home_dir() {
             return home.join(path.strip_prefix("~/").unwrap_or(""));
@@ -1368,7 +1369,8 @@ fn rand_suffix() -> u32 {
     rand::random::<u32>()
 }
 
-fn deduplicate_path(path: &Path) -> Result<PathBuf> {
+/// 目标已存在时追加「 (1)」「 (2)」… 直到找到空闲名（防覆盖；crate 内共享）
+pub(crate) fn deduplicate_path(path: &Path) -> Result<PathBuf> {
     if !path.exists() {
         return Ok(path.to_path_buf());
     }
