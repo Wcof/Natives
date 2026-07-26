@@ -1068,6 +1068,8 @@ impl EngineProvider for RealProvider {
                                     input_tokens: u.input_tokens,
                                     output_tokens: u.output_tokens,
                                     reasoning_tokens: u.reasoning_tokens,
+                                    cache_creation_tokens: u.cache_creation_tokens,
+                                    cache_read_tokens: u.cache_read_tokens,
                                 },
                                 ProviderEvent::Completed => EngineProviderEvent::Completed,
                                 ProviderEvent::Error(e) => EngineProviderEvent::Error {

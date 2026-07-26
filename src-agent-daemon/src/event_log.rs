@@ -106,11 +106,18 @@ impl EventLog {
         if let RunEventKind::UsageUpdated {
             input_tokens,
             output_tokens,
+            cache_creation_tokens,
+            cache_read_tokens,
             ..
         } = &event.payload
         {
             let input = *input_tokens as i64;
             let output = *output_tokens as i64;
+            // A provider that does not report cache usage contributes 0 to the
+            // rollup rather than poisoning it — the per-event `None` is still
+            // preserved verbatim in the serialized payload.
+            let cache_creation = cache_creation_tokens.unwrap_or(0) as i64;
+            let cache_read = cache_read_tokens.unwrap_or(0) as i64;
             let _ = conn.execute(
                 "UPDATE run
                  SET total_input_tokens = COALESCE(total_input_tokens, 0) + ?1,
@@ -161,12 +168,15 @@ impl EventLog {
                 "INSERT INTO usage_stats
                     (date, source, source_path, model, input_tokens, output_tokens,
                      cache_creation_tokens, cache_read_tokens, request_count, cost_usd)
-                 VALUES (?1, 'natives', 'daemon:run_event', ?2, ?3, ?4, 0, 0, 1, 0.0)
+                 VALUES (?1, 'natives', 'daemon:run_event', ?2, ?3, ?4, ?5, ?6, 1, 0.0)
                  ON CONFLICT(date, source, model) DO UPDATE SET
                     input_tokens = input_tokens + excluded.input_tokens,
                     output_tokens = output_tokens + excluded.output_tokens,
+                    cache_creation_tokens =
+                        cache_creation_tokens + excluded.cache_creation_tokens,
+                    cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
                     request_count = request_count + 1",
-                params![date, model, input, output],
+                params![date, model, input, output, cache_creation, cache_read],
             );
         }
         Ok(global)
@@ -691,6 +701,8 @@ sequence: 1,
                 input_tokens: 10,
                 output_tokens: 5,
                 reasoning_tokens: None,
+                cache_creation_tokens: Some(7),
+                cache_read_tokens: Some(9),
             },
         };
         log.append_event_v2(&event).unwrap();
@@ -703,14 +715,71 @@ sequence: 1,
             )
             .unwrap();
         assert_eq!((inp, out), (10, 5));
-        let count: i64 = conn
+        let (count, creation, read): (i64, i64, i64) = conn
             .query_row(
-                "SELECT COUNT(*) FROM usage_stats WHERE source='natives' AND input_tokens=10",
+                "SELECT COUNT(*), COALESCE(SUM(cache_creation_tokens), 0),
+                        COALESCE(SUM(cache_read_tokens), 0)
+                 FROM usage_stats WHERE source='natives' AND input_tokens=10",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
-            .unwrap_or(0);
+            .unwrap_or((0, 0, 0));
         assert!(count >= 1, "usage_stats row should exist");
+        assert_eq!(
+            (creation, read),
+            (7, 9),
+            "cache tokens must reach usage_stats, not be written as literal 0"
+        );
     }
 
+    /// A provider that reports no cache activity must not be recorded as if it
+    /// had reported zero — the rollup takes 0, but the persisted event keeps
+    /// `None` so `daemon.getCapabilities` consumers can tell the two apart.
+    #[test]
+    fn absent_cache_reporting_rolls_up_as_zero_without_claiming_a_measurement() {
+        use assistant_protocol::v2::{RunEventKind, RunEventV2};
+        let (log, run_id) = setup_event_log();
+        let event = RunEventV2 {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            global_sequence: 0,
+            run_sequence: 0,
+            run_id: run_id.clone(),
+            sequence: 1,
+            timestamp: chrono::Utc::now(),
+            payload: RunEventKind::UsageUpdated {
+                input_tokens: 3,
+                output_tokens: 4,
+                reasoning_tokens: None,
+                cache_creation_tokens: None,
+                cache_read_tokens: None,
+            },
+        };
+        log.append_event_v2(&event).unwrap();
+
+        // v2 replay carries the payload verbatim; the v1 projection has no
+        // cache fields at all, which is why this asserts through v2.
+        let replayed = log.replay_after_v2(&run_id, 0).unwrap();
+        match &replayed[0].payload {
+            RunEventKind::UsageUpdated {
+                cache_creation_tokens,
+                cache_read_tokens,
+                ..
+            } => {
+                assert!(cache_creation_tokens.is_none());
+                assert!(cache_read_tokens.is_none());
+            }
+            other => panic!("expected UsageUpdated, got {other:?}"),
+        }
+
+        let conn = log.data_store.conn().unwrap();
+        let (creation, read): (i64, i64) = conn
+            .query_row(
+                "SELECT cache_creation_tokens, cache_read_tokens
+                 FROM usage_stats WHERE source='natives' AND input_tokens=3",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((creation, read), (0, 0));
+    }
 }

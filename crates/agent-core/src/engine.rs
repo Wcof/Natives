@@ -160,6 +160,15 @@ pub enum EngineProviderEvent {
         input_tokens: u64,
         output_tokens: u64,
         reasoning_tokens: Option<u64>,
+        /// Prompt-cache writes reported by the provider, when it reports them.
+        ///
+        /// `None` (not reported) is deliberately distinct from `Some(0)` (the
+        /// provider reported no cache activity) — the daemon persists the two
+        /// differently, and collapsing them would make an unsupported provider
+        /// indistinguishable from a cache miss.
+        cache_creation_tokens: Option<u64>,
+        /// Prompt-cache reads reported by the provider, when it reports them.
+        cache_read_tokens: Option<u64>,
     },
     Completed,
     Error {
@@ -562,6 +571,8 @@ impl AgentEngine {
                             input_tokens,
                             output_tokens,
                             reasoning_tokens,
+                            cache_creation_tokens,
+                            cache_read_tokens,
                         } => {
                             self.events.append(
                                 run_id,
@@ -569,6 +580,8 @@ impl AgentEngine {
                                     input_tokens,
                                     output_tokens,
                                     reasoning_tokens,
+                                    cache_creation_tokens,
+                                    cache_read_tokens,
                                 },
                             );
                         }

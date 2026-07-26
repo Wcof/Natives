@@ -167,6 +167,16 @@ pub enum RunEventKind {
         input_tokens: u64,
         output_tokens: u64,
         reasoning_tokens: Option<u64>,
+        /// Tokens written into the provider's prompt cache this turn.
+        ///
+        /// `None` means the provider did not report the figure, which is not
+        /// the same as a reported zero — replayed events persisted before
+        /// cache reporting existed decode as `None`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_creation_tokens: Option<u64>,
+        /// Tokens served from the provider's prompt cache this turn.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_read_tokens: Option<u64>,
     },
     ContextCompressed {
         before_tokens: u64,
@@ -381,6 +391,8 @@ mod tests {
                 input_tokens: 1,
                 output_tokens: 2,
                 reasoning_tokens: Some(3),
+                cache_creation_tokens: Some(4),
+                cache_read_tokens: Some(5),
             },
             RunEventKind::FileChanged {
                 path: "a.rs".into(),
