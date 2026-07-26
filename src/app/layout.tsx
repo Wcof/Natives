@@ -13,7 +13,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html
       lang="zh-CN"
-      data-theme="light"
+      data-theme="dark"
       className={`h-full ${GeistSans.variable} ${GeistMono.variable}`}
       style={{ background: 'var(--background)' }}
       suppressHydrationWarning
