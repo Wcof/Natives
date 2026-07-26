@@ -2,10 +2,14 @@
 
 mod apply_patch_parser;
 mod extra;
+pub mod plan;
 mod ssrf;
+pub mod web_search;
 
 pub use apply_patch_parser::{parse_patch_input, PatchOp};
+pub use plan::plan_mode_tools;
 pub use ssrf::validate_fetch_url;
+pub use web_search::{web_search_tool, SearchBackend, SearchProvider};
 
 use crate::{
     Tool, SideEffect, PermissionClass, PathScope, ToolHandler, ToolOutput, ToolError, ToolCallContext,
@@ -864,5 +868,11 @@ pub fn builtin_tools() -> Vec<Tool> {
     ]
     .into_iter()
     .chain(extra::extra_builtin_tools())
+    .chain(plan::plan_mode_tools())
+    // `web_search` is registered only when a real backend is configured. An
+    // unconfigured install must not advertise a search tool it cannot honour —
+    // the model would spend a turn discovering that, and the only alternative
+    // (returning something) would be fabricated data.
+    .chain(web_search::is_configured().then(web_search::web_search_tool))
     .collect()
 }
