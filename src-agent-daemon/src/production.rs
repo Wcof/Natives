@@ -443,11 +443,23 @@ impl ProductionRuntime {
         };
 
         let skill_prompt = crate::skill_store::prompt_for_project(&project_root);
-        let assembled = assemble_context(
+        let mut assembled = assemble_context(
             profile.as_ref(),
             Some(&project_root),
             (!skill_prompt.is_empty()).then_some(skill_prompt.as_str()),
         );
+        // Built-in surfaces have no profile on disk, so their working
+        // instructions are prepended here. Project/skill context still applies.
+        if let Some(surface_prompt) = agent_profile_id
+            .as_deref()
+            .and_then(builtin_surface_system_prompt)
+        {
+            assembled.system_prompt = if assembled.system_prompt.is_empty() {
+                surface_prompt.to_string()
+            } else {
+                format!("{surface_prompt}\n\n{}", assembled.system_prompt)
+            };
+        }
         // Compact history against resolved token budget (chars/4 fallback estimate).
         let raw_history =
             crate::conversation_store::engine_history(&conversation_id).unwrap_or_default();
@@ -1436,6 +1448,38 @@ pub(crate) fn builtin_surface_allowlist(agent_kind: &str) -> Option<Vec<String>>
                 .map(|name| (*name).to_string())
                 .collect(),
         ),
+        _ => None,
+    }
+}
+
+/// Working instructions for the creative surface.
+///
+/// Tool schemas alone tell the model what it *can* call, not what the session is
+/// for. Without this it treats "make me a pomodoro timer" as a chat request and
+/// answers with prose instead of writing a revision — the tools are registered
+/// but never used. The creative surface has no agent profile on disk, so this is
+/// where its behaviour is defined.
+const CREATIVE_DRAFT_SYSTEM_PROMPT: &str = r#"You are building a small, self-contained web app for the user inside the Natives creative workshop.
+
+The user's message begins with `[draft:<draftId>]`. That id identifies the draft you are editing — pass it to every draft tool. It is not part of the user's request; do not mention it back to them.
+
+How to work:
+- Write the whole app as a single HTML document with inline CSS and JS, then save it with `write_draft_module`. The user sees a live preview of whatever you save.
+- For a change request, call `read_draft_module` first and edit what is already there. Do not regenerate from scratch and do not drop features the user did not ask you to remove.
+- Save your work with `write_draft_module` before you finish. A reply without a saved revision leaves the user with nothing to look at.
+
+Hard constraints (the save is rejected if you break them):
+- No remote scripts or stylesheets. No CDN links. Everything inline.
+- No `eval` or `new Function`.
+- Persist data with `localStorage` if the app needs to remember anything.
+
+If a save is rejected, the error text says exactly what failed — fix it and save again. Keep replies short: the app itself is the deliverable, not a description of it."#;
+
+/// Working instructions for a built-in surface, or `None` for agent kinds that
+/// carry a profile on disk (whose prompt comes from that profile instead).
+pub(crate) fn builtin_surface_system_prompt(agent_kind: &str) -> Option<&'static str> {
+    match agent_kind {
+        CREATIVE_DRAFT_AGENT_KIND | "creative_draft" => Some(CREATIVE_DRAFT_SYSTEM_PROMPT),
         _ => None,
     }
 }

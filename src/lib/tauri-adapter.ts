@@ -682,6 +682,14 @@ export interface NativesAPI {
     get: (draftId: string) => Promise<CreativeDraft>;
     /** Current revision's HTML — what the preview pane and "continue" show. */
     read: (draftId: string) => Promise<{ draftId: string; html: string }>;
+    /**
+     * Link the draft to the conversation editing it. The conversation only
+     * exists after the first message, so the link is made then — not at create.
+     */
+    bindConversation: (
+      draftId: string,
+      conversationId: string,
+    ) => Promise<{ ok: boolean; draftId: string }>;
     /** Step the revision pointer back one: the user-facing "undo last change". */
     rollback: (draftId: string) => Promise<{ draftId: string; revision: number }>;
     publish: (request: {
@@ -964,14 +972,6 @@ export interface NativesAPI {
     listAvailable: () => Promise<Array<{ id: string; displayName: string; available: boolean }>>;
     detectCli: () => Promise<{ claude_cli: boolean; codex_cli: boolean }>;
     setCapabilityEnabled: (name: string, enabled: boolean) => Promise<void>;
-  };
-  /** Task Scheduler（Slice J） */
-  scheduler: {
-    listTasks: () => Promise<Array<{
-      id: string; name: string; prompt: string; scheduleType: string;
-      scheduleValue: string; enabled: boolean; lastStatus: string | null;
-      consecutiveErrors: number; nextRun: string;
-    }>>;
   };
   /** Library (fanbox clone — G4) */
   library: {
@@ -1287,6 +1287,11 @@ const nativesAPI: NativesAPI = {
     get: (draftId: string) => cmd<CreativeDraft>('get_creative_draft', { draftId }),
     read: (draftId: string) =>
       cmd<{ draftId: string; html: string }>('read_creative_draft', { draftId }),
+    bindConversation: (draftId: string, conversationId: string) =>
+      cmd<{ ok: boolean; draftId: string }>('bind_creative_draft_conversation', {
+        draftId,
+        conversationId,
+      }),
     rollback: (draftId: string) =>
       cmd<{ draftId: string; revision: number }>('rollback_creative_draft', { draftId }),
     publish: (request) =>
@@ -1720,11 +1725,6 @@ const nativesAPI: NativesAPI = {
     detectCli: () => cmd('runtime_detect_cli'),
     setCapabilityEnabled: (name: string, enabled: boolean) =>
       cmd('runtime_set_capability_enabled', { name, enabled }),
-  },
-
-  // Task Scheduler（Slice J）
-  scheduler: {
-    listTasks: () => cmd('scheduler_list_tasks'),
   },
 
   // Job module（任务）— 契约 v1：入参 JSON snake_case，与后端命令面一致

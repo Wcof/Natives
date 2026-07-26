@@ -85,6 +85,23 @@ pub fn list_drafts(conn: &Connection) -> Result<Vec<CreativeDraft>> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Bind a draft to the conversation that is editing it.
+///
+/// The conversation does not exist when the draft is created — it is created on
+/// the first message — so this link can only be made afterwards. Without it a
+/// reopened draft loses its history, and the draft tools' cross-session guard
+/// has nothing to compare against.
+pub fn bind_conversation(conn: &Connection, draft_id: &str, conversation_id: &str) -> Result<()> {
+    let changed = conn.execute(
+        "UPDATE creative_drafts SET conversation_id = ?2, updated_at = ?3 WHERE draft_id = ?1",
+        rusqlite::params![draft_id, conversation_id, now()],
+    )?;
+    if changed == 0 {
+        return Err(Error::NotFound(format!("draft not found: {draft_id}")));
+    }
+    Ok(())
+}
+
 /// Move the draft to `to`, rejecting transitions the state machine forbids.
 pub fn set_state(conn: &Connection, draft_id: &str, to: DraftState) -> Result<()> {
     let draft = get_draft(conn, draft_id)?;

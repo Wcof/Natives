@@ -145,6 +145,12 @@ export default function CreationSession({
           ? (raw as Conversation)
           : mapWireConversation((raw ?? {}) as Record<string, unknown>);
       dispatch({ type: 'conversations/upsert', conversation: created });
+      // Persist the link so reopening this draft restores its history, and so
+      // the draft tools' cross-session guard has an owner to compare against.
+      // A failure here costs history, not the turn — do not block the send.
+      await window.nativesAPI?.creativeDraft
+        ?.bindConversation(draft.draftId, created.id)
+        .catch(() => undefined);
       setConversationId(created.id);
       return created.id;
     } finally {
