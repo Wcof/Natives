@@ -2,7 +2,6 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { t, type Locale } from '@/i18n';
-import { useCreativeAppCatalog } from '@/hooks/useCreativeAppCatalog';
 import { useCreativeDrafts } from '@/hooks/useCreativeDrafts';
 import type { CreativeAppSummary, CreativeDraft } from '@/lib/tauri-adapter';
 import CreationComposer from './CreationComposer';
@@ -11,6 +10,14 @@ import DraftPreview from './DraftPreview';
 
 interface CreativeHomeProps {
   locale: Locale;
+  /**
+   * Catalog data is passed in rather than fetched here: the host page already
+   * owns `useCreativeAppCatalog` for its lifecycle actions, and a second
+   * subscription would mean two lists that can disagree mid-action.
+   */
+  apps: CreativeAppSummary[];
+  busyIds: ReadonlySet<string>;
+  onReloadApps: () => void;
   /** Hands off to the existing import flows (GitHub wizard / local project). */
   onImport: () => void;
   /** Opens a published app the way the shell already does. */
@@ -34,6 +41,9 @@ interface CreativeHomeProps {
  */
 export default function CreativeHome({
   locale,
+  apps,
+  busyIds,
+  onReloadApps,
   onImport,
   onOpenApp,
   onStartApp,
@@ -43,7 +53,6 @@ export default function CreativeHome({
   onAppLogs,
   onRunSettings,
 }: CreativeHomeProps) {
-  const { apps, busyIds, reload: reloadApps } = useCreativeAppCatalog();
   const { drafts, reload: reloadDrafts } = useCreativeDrafts();
   const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -150,7 +159,7 @@ export default function CreativeHome({
         onStop={onStopApp}
         onDelete={(app) => {
           onDeleteApp(app);
-          void reloadApps();
+          onReloadApps();
         }}
         onRestart={onRestartApp}
         onLogs={onAppLogs}

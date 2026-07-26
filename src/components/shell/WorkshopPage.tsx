@@ -34,6 +34,7 @@ import { EmptyState, LoadingState } from '@/components/ui/EmptyState';
 import Modal from '@/components/ui/Modal';
 import { classifyError } from '@/lib/error-classifier';
 import { useCreativeAppCatalog } from '@/hooks/useCreativeAppCatalog';
+import CreativeHome from '@/components/creative/CreativeHome';
 import {
   defaultDeleteOptions,
   deleteNeedsDockerOptions,
@@ -1086,248 +1087,20 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
             action={{ label: t(locale, 'common.retry'), onClick: () => { void reload(); } }}
           />
         )}
-        {!loading && !error && apps.length === 0 && (
-          <EmptyState
-            title={t(locale, 'workshop.emptyState')}
-            description={t(locale, 'workshop.emptyUnified')}
-          />
-        )}
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {apps.map((app) => {
-            const busy = busyIds.has(app.id) || isActionBusy(app.state);
-            const actions = mergeActionsWithBusy(app.actions, busy);
-            const badge = sourceBadge(app.source);
-            return (
-              <div
-                key={app.id}
-                className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-4 flex flex-col justify-between transition-all hover:border-[var(--border-hover)] hover:shadow-sm"
-              >
-                <div>
-                  <div className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] pb-2.5 mb-2.5">
-                    <div className="font-semibold text-sm text-[var(--text)] truncate" title={app.title}>
-                      {app.title}
-                    </div>
-                    <span
-                      className={`text-[10px] font-medium px-2 py-0.5 rounded-full flex items-center gap-1 border shrink-0 ${
-                        badge === 'github'
-                          ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20'
-                          : badge === 'local'
-                            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20'
-                            : 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20'
-                      }`}
-                    >
-                      {badge === 'github' ? (
-                        <Github size={10} />
-                      ) : badge === 'local' ? (
-                        <Folder size={10} />
-                      ) : (
-                        <Code2 size={10} />
-                      )}
-                      <span>
-                        {badge === 'github'
-                          ? t(locale, 'workshop.sourceGithub')
-                          : badge === 'local'
-                            ? t(locale, 'workshop.sourceLocal')
-                            : t(locale, 'workshop.sourceInternal')}
-                      </span>
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)] mb-2">
-                    <div className="flex items-center gap-1.5 font-medium">
-                      {renderStatusDot(app.state)}
-                      <span className="text-[var(--text)]">{stateLabel(locale, app.state)}</span>
-                    </div>
-                    <span className="text-[var(--border)]">•</span>
-                    <span className="truncate">{runtimeLabel(locale, app.runtime)}</span>
-                    {app.version && (
-                      <>
-                        <span className="text-[var(--border)]">•</span>
-                        <span className="font-mono text-[11px]">{app.version}</span>
-                      </>
-                    )}
-                  </div>
-
-                  {app.lastError && (
-                    <div className="text-[11px] text-rose-500 bg-rose-500/10 border border-rose-500/20 p-2 rounded-lg mb-3 flex items-start gap-1.5">
-                      <AlertTriangle size={12} className="shrink-0 mt-0.5" />
-                      <span className="line-clamp-2">
-                        {localIssueLabel(app.statusDetail?.code, locale === 'en' ? 'en' : 'zh') ||
-                          app.lastError}
-                      </span>
-                    </div>
-                  )}
-                  {app.source === 'local_project' && app.localProject && (
-                    <div className="text-[11px] text-[var(--text-secondary)] mb-2 space-y-0.5">
-                      <div className="truncate" title={app.localProject.projectRoot}>
-                        {app.localProject.projectRoot}
-                      </div>
-                      <div className="flex gap-2 flex-wrap">
-                        <span>{app.localProject.projectKind}</span>
-                        {app.localProject.packageManager && (
-                          <span>{app.localProject.packageManager}</span>
-                        )}
-                        <span className="truncate">{app.localProject.deviceName}</span>
-                      </div>
-                      <div className="flex gap-1.5 pt-1">
-                        <button
-                          type="button"
-                          className="h-7 px-2 rounded border border-[var(--border)]"
-                          onClick={() =>
-                            void window.nativesAPI?.fs?.openWith?.(
-                              app.localProject!.projectRoot,
-                              'reveal',
-                            )
-                          }
-                        >
-                          {t(locale, 'workshop.openFolder')}
-                        </button>
-                        <button
-                          type="button"
-                          className="h-7 px-2 rounded border border-[var(--border)]"
-                          onClick={() =>
-                            void window.nativesAPI?.fs?.openWith?.(
-                              app.localProject!.projectRoot,
-                              'terminal',
-                            )
-                          }
-                        >
-                          {t(locale, 'workshop.openTerminal')}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-1.5 mt-3 pt-3 border-t border-[var(--border-subtle)] flex-wrap">
-                  {actions.canOpen && (
-                    <button
-                      type="button"
-                      className="h-8 px-3 text-xs font-medium rounded-lg bg-[var(--primary)] text-white hover:opacity-90 active:scale-95 transition-all flex items-center justify-center gap-1.5 shrink-0"
-                      onClick={() => void handleOpen(app)}
-                    >
-                      <ExternalLink size={13} />
-                      <span>{t(locale, 'workshop.actionOpen')}</span>
-                    </button>
-                  )}
-                  {actions.canStart && (
-                    <button
-                      type="button"
-                      className="h-8 px-3 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all flex items-center justify-center gap-1.5 shrink-0"
-                      onClick={() => void handleStart(app)}
-                    >
-                      <Play size={13} />
-                      <span>{t(locale, 'workshop.actionStart')}</span>
-                    </button>
-                  )}
-                  {actions.canStop && (
-                    <button
-                      type="button"
-                      className="h-8 px-3 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all flex items-center justify-center gap-1.5 shrink-0"
-                      onClick={() => void handleStop(app)}
-                    >
-                      <Pause size={13} />
-                      <span>{t(locale, 'workshop.actionStop')}</span>
-                    </button>
-                  )}
-                  {(app.source === 'local_project' || app.source === 'external_github') &&
-                    (app.state === 'running' || app.state === 'start_failed') && (
-                      <button
-                        type="button"
-                        className="h-8 px-3 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all flex items-center justify-center gap-1.5 shrink-0"
-                        onClick={() => void handleRestart(app)}
-                        title={t(locale, 'workshop.actionRestart')}
-                      >
-                        <RotateCcw size={13} />
-                      </button>
-                    )}
-                  {actions.canRetry && (
-                    <button
-                      type="button"
-                      className="h-8 px-3 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all flex items-center justify-center gap-1.5 shrink-0"
-                      onClick={() => void handleStart(app)}
-                    >
-                      <RotateCcw size={13} />
-                      <span>{t(locale, 'workshop.actionRetry')}</span>
-                    </button>
-                  )}
-                  {app.statusDetail?.code === 'orphaned_process' && (
-                    <>
-                      <button
-                        type="button"
-                        className="h-8 px-2.5 text-[11px] font-medium rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
-                        onClick={() => void handleResolveOrphan(app, false)}
-                      >
-                        {t(locale, 'workshop.orphanStop')}
-                      </button>
-                      <button
-                        type="button"
-                        className="h-8 px-2.5 text-[11px] font-medium rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
-                        onClick={() => void handleResolveOrphan(app, true)}
-                      >
-                        {t(locale, 'workshop.orphanRestart')}
-                      </button>
-                    </>
-                  )}
-                  {(app.source === 'external_github' || app.source === 'local_project') && (
-                    <button
-                      type="button"
-                      className="h-8 px-2.5 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-secondary)] hover:text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all flex items-center justify-center gap-1.5 shrink-0"
-                      onClick={() => void openLogs(app)}
-                      title={t(locale, 'workshop.actionLogs')}
-                    >
-                      <ScrollText size={13} />
-                    </button>
-                  )}
-                  {app.source === 'local_project' && (
-                    <button
-                      type="button"
-                      className="h-8 px-2.5 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text-secondary)] hover:text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all flex items-center justify-center gap-1.5 shrink-0"
-                      onClick={() => void openEditLocal(app)}
-                      title={t(locale, 'workshop.actionEdit')}
-                    >
-                      <HelpCircle size={13} />
-                    </button>
-                  )}
-                  {app.source === 'local_project' &&
-                    app.statusDetail?.code === 'dependencies_missing' && (
-                      <button
-                        type="button"
-                        className="h-8 px-2.5 text-[11px] font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)]"
-                        onClick={() => {
-                          setDepInstallFor(app);
-                          setDepConfirmChecked(false);
-                          setDepCommand('');
-                          void window.nativesAPI?.creativeApp
-                            ?.previewLocalDependencyInstall?.(app.id)
-                            .then((p) => setDepCommand(p?.display || ''))
-                            .catch(() => setDepCommand(''));
-                        }}
-                      >
-                        {t(locale, 'workshop.installDeps')}
-                      </button>
-                    )}
-                  {actions.canDelete && (
-                    <button
-                      type="button"
-                      className="h-8 px-2.5 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--surface)] text-rose-500 hover:bg-rose-500/10 hover:border-rose-500/20 transition-all flex items-center justify-center gap-1.5 shrink-0 ml-auto"
-                      onClick={() => {
-                        setDeleteTarget(app);
-                        const d = defaultDeleteOptions();
-                        setDeleteVolumes(d.removeVolumes);
-                        setDeleteImages(d.removeImages);
-                      }}
-                      title={t(locale, 'workshop.actionDelete')}
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <CreativeHome
+          locale={locale}
+          apps={apps}
+          busyIds={busyIds}
+          onReloadApps={() => { void reload(); }}
+          onImport={() => setAddMenu('open')}
+          onOpenApp={(app) => { void handleOpen(app); }}
+          onStartApp={(app) => { void handleStart(app); }}
+          onStopApp={(app) => { void handleStop(app); }}
+          onDeleteApp={(app) => setDeleteTarget(app)}
+          onRestartApp={(app) => { void handleRestart(app); }}
+          onAppLogs={(app) => { void openLogs(app); }}
+          onRunSettings={(app) => { void openEditLocal(app); }}
+        />
       </div>
 
       {toast && (
