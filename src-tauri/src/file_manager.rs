@@ -1,58 +1,115 @@
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
+use ts_rs::TS;
 
 const MAX_FULL_READ: u64 = 2 * 1024 * 1024; // 2MB
 const MAX_TRUNCATED_READ: u64 = 256 * 1024; // 256KB
 
-#[derive(Debug, Serialize, Deserialize)]
+// TS 类型生成落点：`export_to` 相对默认 export 目录 `src-tauri/bindings` 解析，
+// 实际落到仓库根的 `src/types/generated/`。
+// 生成方式：`npm run types:generate`（即 cargo test export_bindings）。
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/")]
 pub struct FileEntry {
     pub name: String,
     pub path: String,
     #[serde(rename = "isDir")]
     pub is_dir: bool,
+    // kind 值域：detect_file_kind 的产出 + 目录 "dir"。改这里必须同步改 detect_file_kind。
+    #[ts(type = "\"text\" | \"image\" | \"video\" | \"audio\" | \"pdf\" | \"archive\" | \"dir\" | \"other\"")]
     pub kind: String,
     pub hidden: bool,
+    // u64 默认生成 bigint，前端契约是 number（毫秒/字节都在安全整数范围内）
+    #[ts(type = "number")]
     pub size: u64,
     pub mtime: f64,
     pub btime: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub symlink: Option<String>,
     /// Shallow project type for directories (node/web/python/rust/go/git).
     /// Mirrors fanbox `projectOf` so grid cards can show badges without N extra round-trips.
+    /// 值域由 detect_project_badge 决定，改这里必须同步改该函数。
     #[serde(rename = "projectBadge", skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "\"node\" | \"web\" | \"python\" | \"rust\" | \"go\" | \"git\"")]
     pub project_badge: Option<String>,
+    /// 文件所在目录（「最近修改」视图显示来源目录用；recent_files/stat 填充）
+    #[serde(rename = "dirHint", skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub dir_hint: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/")]
 pub struct ReadFileResult {
     pub content: String,
     pub truncated: bool,
+    #[ts(type = "number")]
     pub size: u64,
     pub mtime: f64,
     pub kind: String,
     pub encoding: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/")]
 pub struct WriteResult {
     pub mtime: f64,
     pub conflict: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/")]
 pub struct ListDirResult {
     pub path: String,
     pub parent: String,
     pub entries: Vec<FileEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub project: Option<String>,
+}
+
+/// stat 结果（fs_stat 命令返回）。`found == false` 时仅 `path` 有效，其余字段缺省。
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/")]
+#[serde(rename_all = "camelCase")]
+pub struct StatResult {
+    pub found: bool,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub is_dir: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "\"text\" | \"image\" | \"video\" | \"audio\" | \"pdf\" | \"archive\" | \"dir\" | \"other\"")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mtime: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub btime: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub symlink: Option<String>,
+    /// 所在目录（与 FileEntry.dirHint 语义一致）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub dir_hint: Option<String>,
 }
 
 /// Wire format matches the frontend (`sortBy` / `sortDir` / … camelCase).
 /// Without rename_all, camelCase options were silently dropped and list always
 /// fell back to name/asc — Header sort clicks looked like “no feedback”.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/")]
 #[serde(rename_all = "camelCase")]
 pub struct ListDirOptions {
     #[serde(default = "default_sort_by")]
@@ -328,6 +385,7 @@ pub fn list_dir_detailed(dir_path: &str, options: &ListDirOptions) -> Result<Lis
             btime: meta_btime_ms(effective_meta),
             symlink: symlink_target,
             project_badge: None,
+            dir_hint: None,
         });
     }
 
@@ -708,14 +766,22 @@ pub fn duplicate_entry(file_path: &str) -> Result<String> {
 }
 
 /// Lightweight exists/stat for path resolution (terminal locate, drop validation).
-pub fn stat_path(file_path: &str) -> Result<serde_json::Value> {
+pub fn stat_path(file_path: &str) -> Result<StatResult> {
     let path = expand_tilde(file_path);
     // Allow non-canonical paths: just check existence without allowlist on missing paths
     if !path.exists() {
-        return Ok(serde_json::json!({
-            "found": false,
-            "path": path.to_string_lossy(),
-        }));
+        return Ok(StatResult {
+            found: false,
+            path: path.to_string_lossy().to_string(),
+            name: None,
+            is_dir: None,
+            kind: None,
+            size: None,
+            mtime: None,
+            btime: None,
+            symlink: None,
+            dir_hint: None,
+        });
     }
     // Existing paths still go through allowlist
     validate_path(&path)?;
@@ -733,21 +799,29 @@ pub fn stat_path(file_path: &str) -> Result<serde_json::Value> {
         .and_then(|n| n.to_str())
         .unwrap_or("")
         .to_string();
-    Ok(serde_json::json!({
-        "found": true,
-        "path": path.to_string_lossy(),
-        "name": name,
-        "isDir": is_dir,
-        "kind": if is_dir { "dir".to_string() } else { detect_file_kind(&name) },
-        "size": if is_dir { 4096 } else { effective.len() },
-        "mtime": meta_mtime_ms(effective),
-        "btime": meta_btime_ms(effective),
-        "symlink": if is_symlink {
-            std::fs::read_link(&path).ok().map(|p| p.to_string_lossy().to_string())
+    Ok(StatResult {
+        found: true,
+        path: path.to_string_lossy().to_string(),
+        kind: Some(if is_dir {
+            "dir".to_string()
+        } else {
+            detect_file_kind(&name)
+        }),
+        name: Some(name),
+        is_dir: Some(is_dir),
+        size: Some(if is_dir { 4096 } else { effective.len() }),
+        mtime: Some(meta_mtime_ms(effective)),
+        btime: Some(meta_btime_ms(effective)),
+        symlink: if is_symlink {
+            std::fs::read_link(&path)
+                .ok()
+                .map(|p| p.to_string_lossy().to_string())
         } else {
             None
         },
-    }))
+        // 所在目录：供「最近/定位」视图显示来源目录
+        dir_hint: path.parent().map(|p| p.to_string_lossy().to_string()),
+    })
 }
 
 fn is_exdev(err: &std::io::Error) -> bool {
@@ -1201,8 +1275,10 @@ pub fn import_files(source_paths: &[String], dest_dir: &str) -> Result<Vec<Strin
     Ok(result)
 }
 
-/// Get recently modified files (BFS walk, top 60 by mtime)
-pub fn recent_files(root: &str) -> Result<Vec<serde_json::Value>> {
+/// Get recently modified files (BFS walk, top 60 by mtime).
+/// 返回完整 FileEntry 契约（name/kind/hidden/dirHint 由后端补齐，
+/// 前端「最近修改」视图不再本地计算 kind）。
+pub fn recent_files(root: &str) -> Result<Vec<FileEntry>> {
     let path = expand_tilde(root);
     let canon = std::fs::canonicalize(&path).map_err(Error::Io)?;
     // Consistent boundary with list_dir/read: reject blocklisted/out-of-scope
@@ -1225,7 +1301,7 @@ pub fn recent_files(root: &str) -> Result<Vec<serde_json::Value>> {
     .cloned()
     .collect();
 
-    let mut files: Vec<(String, f64, u64)> = Vec::new();
+    let mut files: Vec<FileEntry> = Vec::new();
     let start = std::time::Instant::now();
     let deadline = std::time::Duration::from_secs_f64(3.5);
     let max_files = 30_000;
@@ -1254,35 +1330,36 @@ pub fn recent_files(root: &str) -> Result<Vec<serde_json::Value>> {
             if meta.is_dir() {
                 queue.push_back(entry_path);
             } else {
-                let mtime = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_millis() as f64)
-                    .unwrap_or(0.0);
-                files.push((
-                    entry_path.to_string_lossy().to_string(),
-                    mtime,
-                    meta.len(),
-                ));
+                // dirHint：来源目录，供「最近修改」视图展示（前端不再自行推导）
+                let dir_hint = entry_path
+                    .parent()
+                    .map(|p| p.to_string_lossy().to_string());
+                files.push(FileEntry {
+                    kind: detect_file_kind(&name),
+                    hidden: name.starts_with('.'),
+                    name,
+                    path: entry_path.to_string_lossy().to_string(),
+                    is_dir: false,
+                    size: meta.len(),
+                    mtime: meta_mtime_ms(&meta),
+                    btime: meta_btime_ms(&meta),
+                    symlink: None,
+                    project_badge: None,
+                    dir_hint,
+                });
             }
         }
     }
 
     // Sort by mtime descending, take top 60
-    files.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    files.sort_by(|a, b| {
+        b.mtime
+            .partial_cmp(&a.mtime)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     files.truncate(60);
 
-    Ok(files
-        .into_iter()
-        .map(|(path, mtime, size)| {
-            serde_json::json!({
-                "path": path,
-                "mtime": mtime,
-                "size": size,
-            })
-        })
-        .collect())
+    Ok(files)
 }
 
 // ── Helpers ──
@@ -1640,15 +1717,52 @@ mod tests {
     #[test]
     fn stat_path_missing_and_found() {
         let missing = stat_path("/tmp/natives-definitely-missing-xyz-12345").unwrap();
-        assert_eq!(missing["found"], false);
+        assert!(!missing.found);
+        assert!(missing.name.is_none());
 
         let base = tmp_dir("stat");
         let f = base.join("x.txt");
         std::fs::write(&f, b"1").unwrap();
         let found = stat_path(f.to_str().unwrap()).unwrap();
-        assert_eq!(found["found"], true);
-        assert_eq!(found["isDir"], false);
-        assert_eq!(found["name"], "x.txt");
+        assert!(found.found);
+        assert_eq!(found.is_dir, Some(false));
+        assert_eq!(found.name.as_deref(), Some("x.txt"));
+        assert_eq!(found.kind.as_deref(), Some("text"));
+        // dirHint = 所在目录
+        assert_eq!(found.dir_hint.as_deref(), base.to_str());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// recent_files 契约：条目为完整 FileEntry（name/kind/hidden/dirHint 后端补齐），
+    /// 按 mtime 降序，隐藏文件在遍历时被跳过。
+    #[test]
+    fn recent_files_returns_full_entries_with_dir_hint() {
+        // recent_files 内部会 canonicalize（macOS 下 /var → /private/var），
+        // 先归一化 base 以便 dirHint 断言按同一路径比较
+        let base = std::fs::canonicalize(tmp_dir("recent")).unwrap();
+        std::fs::write(base.join("old.md"), b"# old").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let sub = base.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("new.png"), b"png").unwrap();
+        // 隐藏文件应被跳过
+        std::fs::write(base.join(".hidden.txt"), b"h").unwrap();
+
+        let entries = recent_files(base.to_str().unwrap()).expect("recent");
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["new.png", "old.md"], "mtime 降序且不含隐藏文件");
+
+        let newest = &entries[0];
+        assert_eq!(newest.kind, "image", "kind 由后端 detect_file_kind 计算");
+        assert!(!newest.is_dir);
+        assert!(!newest.hidden);
+        assert_eq!(newest.dir_hint.as_deref(), sub.to_str(), "dirHint 指向来源目录");
+        assert!(newest.mtime > 0.0);
+
+        let older = &entries[1];
+        assert_eq!(older.kind, "text");
+        assert_eq!(older.dir_hint.as_deref(), base.to_str());
+
         let _ = std::fs::remove_dir_all(&base);
     }
 

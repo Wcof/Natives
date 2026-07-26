@@ -27,6 +27,9 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-log = "2"
 serde = { version = "1", features = ["derive"] }
+# 类型契约单一来源：从 Rust struct 生成 TypeScript 类型（serde-compat 默认开启，
+# 自动跟随 #[serde(rename/rename_all)]）。生成通过 cargo test export_bindings 触发。
+ts-rs = "12"
 serde_json = "1"
 serde_yaml = "0.9"
 rusqlite = { version = "0.32", features = ["bundled"] }

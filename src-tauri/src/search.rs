@@ -1,8 +1,13 @@
 use crate::{Error, Result};
 use serde::Serialize;
 use std::path::Path;
+use ts_rs::TS;
 
-#[derive(Debug, Serialize)]
+/// 搜索结果条目（fuzzy 文件名 / grep 内容 / Spotlight 共用一个 wire 形状）。
+/// 注意：与前端手写 `src/types/file.ts` 的 SearchResult 形状不同（无 name/isDir/matchRanges），
+/// 以本 struct 生成的类型为契约单一来源。
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/")]
 pub struct SearchResult {
     pub path: String,
     pub line: Option<u32>,

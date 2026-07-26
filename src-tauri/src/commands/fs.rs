@@ -75,7 +75,7 @@ pub fn fs_duplicate_entry(file_path: String) -> Result<String> {
 }
 
 #[tauri::command]
-pub fn fs_stat(file_path: String) -> Result<JsonValue> {
+pub fn fs_stat(file_path: String) -> Result<file_manager::StatResult> {
     file_manager::stat_path(&file_path)
 }
 
@@ -190,7 +190,7 @@ fn sanitize_filename(name: &str) -> String {
 }
 
 #[tauri::command]
-pub fn fs_recent_files(root: String) -> Result<Vec<JsonValue>> {
+pub fn fs_recent_files(root: String) -> Result<Vec<file_manager::FileEntry>> {
     file_manager::recent_files(&root)
 }
 
