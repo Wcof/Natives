@@ -3,7 +3,7 @@
 import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 import { useLocale, t } from '@/i18n';
-import type { UsageDailyRecord, UsageActivityBucket, UsageSessionRecord, UsageMetrics, UsageSourceStatus } from '@/types/usage';
+import type { UsageDailyRecord, UsageActivityBucket, UsageSourceStatus } from '@/types/usage';
 import {
   buildDailyTrend, buildHourlyHeatmap, buildSourceDistribution, buildModelDistribution,
   buildProjectDistribution, getChartVolumeLevel,
@@ -16,13 +16,11 @@ import { BarChart3, Clock, Folder, PieChart } from 'lucide-react';
 import { fmtCount, fmtDurationCompact } from '@/lib/format';
 import styles from './UsageDashboard.module.css';
 
+// sessions/metrics/lastRefresh 三个 props 此前只被 destructure 从未使用，已删
 interface Props {
   daily: UsageDailyRecord[];
   activity: UsageActivityBucket[];
-  sessions: UsageSessionRecord[];
   sources: UsageSourceStatus[];
-  metrics: UsageMetrics | null;
-  lastRefresh: number | null;
 }
 
 /** Shared floating panel style for chart hover details (Recharts + heatmap). */
@@ -61,7 +59,7 @@ function TipRow({ label, value, color }: { label: string; value: string; color?:
   );
 }
 
-export function UsageCharts({ daily, activity, sessions, sources, metrics, lastRefresh }: Props) {
+export function UsageCharts({ daily, activity, sources }: Props) {
   const locale = useLocale();
   const numberLocale = locale.startsWith('zh') ? 'zh-CN' : 'en-US';
   const compact = (value: number) => fmtCount(value, locale);
@@ -545,11 +543,14 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
                     contentStyle={tipBaseStyle}
                   />
                   <Bar dataKey="totalTokens" radius={[0, 2, 2, 0]} name={t(locale, 'usage.totalTokens')}>
-                    {sourceDist.map((entry, index) => {
+                    {(() => {
+                      // maxVal 提到循环外——原实现每个 Cell 重算一次（O(n²)）
                       const maxVal = Math.max(...sourceDist.map((d) => d.totalTokens ?? 0));
-                      const level = getChartVolumeLevel(entry.totalTokens ?? 0, maxVal);
-                      return <Cell key={`cell-${index}`} fill={`var(--chart-volume-${level})`} />;
-                    })}
+                      return sourceDist.map((entry, index) => {
+                        const level = getChartVolumeLevel(entry.totalTokens ?? 0, maxVal);
+                        return <Cell key={`cell-${index}`} fill={`var(--chart-volume-${level})`} />;
+                      });
+                    })()}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
@@ -580,11 +581,13 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
                     contentStyle={tipBaseStyle}
                   />
                   <Bar dataKey="totalTokens" radius={[0, 2, 2, 0]} name={t(locale, 'usage.totalTokens')}>
-                    {modelDist.map((entry, index) => {
+                    {(() => {
                       const maxVal = Math.max(...modelDist.map((d) => d.totalTokens ?? 0));
-                      const level = getChartVolumeLevel(entry.totalTokens ?? 0, maxVal);
-                      return <Cell key={`cell-${index}`} fill={`var(--chart-volume-${level})`} />;
-                    })}
+                      return modelDist.map((entry, index) => {
+                        const level = getChartVolumeLevel(entry.totalTokens ?? 0, maxVal);
+                        return <Cell key={`cell-${index}`} fill={`var(--chart-volume-${level})`} />;
+                      });
+                    })()}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
@@ -615,11 +618,13 @@ export function UsageCharts({ daily, activity, sessions, sources, metrics, lastR
                     contentStyle={tipBaseStyle}
                   />
                   <Bar dataKey="totalTokens" radius={[0, 2, 2, 0]} name={t(locale, 'usage.totalTokens')}>
-                    {projectDist.map((entry, index) => {
+                    {(() => {
                       const maxVal = Math.max(...projectDist.map((d) => d.totalTokens ?? 0));
-                      const level = getChartVolumeLevel(entry.totalTokens ?? 0, maxVal);
-                      return <Cell key={`cell-${index}`} fill={`var(--chart-volume-${level})`} />;
-                    })}
+                      return projectDist.map((entry, index) => {
+                        const level = getChartVolumeLevel(entry.totalTokens ?? 0, maxVal);
+                        return <Cell key={`cell-${index}`} fill={`var(--chart-volume-${level})`} />;
+                      });
+                    })()}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>

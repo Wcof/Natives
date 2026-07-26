@@ -5,13 +5,17 @@ use std::sync::{Mutex, OnceLock};
 use sysinfo::{Disks, System};
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DiskSystemInfo {
     pub total_bytes: u64,
     pub used_bytes: u64,
     pub available_bytes: u64,
 }
 
+/// 注意：缺 rename_all 时此结构以 snake_case 出参，而 adapter 与
+/// ControlHubWidget 按 camelCase 读取 → CPU/内存恒为 NaN。
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SystemMetrics {
     pub cpu_usage: f32,
     pub memory_used_bytes: u64,

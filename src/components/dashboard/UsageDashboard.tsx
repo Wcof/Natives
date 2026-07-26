@@ -24,7 +24,6 @@ export function UsageDashboard() {
   const [sourceFilter, setSourceFilter] = useState<string[] | null>(null);
   const [modelFilter, setModelFilter] = useState<string[] | null>(null);
   const [projectFilter, setProjectFilter] = useState<string[] | null>(null);
-  const [terminalFilter, setTerminalFilter] = useState<string[] | null>(null);
   const [state, setState] = useState<DashboardState>({ kind: 'reading-cache' });
   const [isSyncing, setIsSyncing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -47,8 +46,11 @@ export function UsageDashboard() {
           setProjectFilter([dir]);
         }
       }
-    } catch { /* ignore */ }
-  }, []);
+    } catch (err) {
+      // 选择器失败不得无声（R-E12）
+      toast(classifyError(err).userMessage, 'error');
+    }
+  }, [toast]);
 
   const buildViewRequest = useCallback((timeZone: string): UsageViewRequest => ({
     preset: preset as UsageViewRequest['preset'],
@@ -61,6 +63,9 @@ export function UsageDashboard() {
 
   // Sync data is user initiated. Cache reads never start a scan by themselves.
   const handleSync = useCallback(async () => {
+    // 同步也参与请求竞态守卫：否则同步中切换预设后，旧预设的同步结果会
+    // 覆盖新预设视图；反向的 stale loadCached 也会覆盖新同步数据
+    const rid = ++requestIdRef.current;
     setIsSyncing(true);
     setErrorMsg(null);
     try {
@@ -71,10 +76,12 @@ export function UsageDashboard() {
         timeZone,
         currentView: buildViewRequest(timeZone),
       })) as { metadata: UsageCacheMetadata; response: UsageDashboardResponse };
+      if (rid !== requestIdRef.current) return;
       setState({ kind: 'ready', data: result.response, metadata: result.metadata });
       setLastSyncTime(result.metadata.generatedAtMs);
       toast(t(locale, 'usage.syncedSuccess'), 'success');
     } catch (err: any) {
+      if (rid !== requestIdRef.current) return;
       const classified = classifyError(err);
       setErrorMsg(classified.userMessage);
       toast(classified.userMessage, 'error');
@@ -126,23 +133,37 @@ export function UsageDashboard() {
     if (!showWarning) return;
     setWarningSeconds(10);
     const timer = window.setInterval(() => {
-      setWarningSeconds((seconds) => {
-        if (seconds <= 1) {
-          setDismissedWarningKey(warningKey);
-          return 0;
-        }
-        return seconds - 1;
-      });
+      // 只递减；归零后的关闭动作放在独立 effect（updater 内做副作用会被
+      // StrictMode 双调用提前触发）
+      setWarningSeconds((seconds) => Math.max(0, seconds - 1));
     }, 1000);
     return () => window.clearInterval(timer);
   }, [showWarning, warningKey]);
+
+  useEffect(() => {
+    if (showWarning && warningSeconds === 0) {
+      setDismissedWarningKey(warningKey);
+    }
+  }, [showWarning, warningSeconds, warningKey]);
+
+  // 维度变化后清掉已不存在于选项中的过滤值——否则受控 select 显示空白
+  // 而过滤仍然生效，用户面对「全为零的仪表盘」却看不到原因
+  useEffect(() => {
+    if (state.kind !== 'ready') return;
+    const models = new Set(state.data.dimensions.models.map((m) => m.id));
+    setModelFilter((prev) => (prev && prev.some((m) => !models.has(m)) ? null : prev));
+    const sources = new Set(state.data.sources.map((s) => s.id));
+    setSourceFilter((prev) => (prev && prev.some((s) => !sources.has(s)) ? null : prev));
+  }, [state]);
 
   const filtered = useMemo(() => {
     if (!data) return null;
     // Directory selection is applied while slicing the cache on the backend. Do not
     // filter it again here, otherwise child projects are incorrectly excluded.
-    return filterUsageRecords(data, sourceFilter, modelFilter, null, terminalFilter);
-  }, [data, sourceFilter, modelFilter, terminalFilter]);
+    // terminal 维度后端恒为空（usage/mod.rs dimensions.terminals: vec![]），
+    // 对应过滤管线已从 UI 移除。
+    return filterUsageRecords(data, sourceFilter, modelFilter, null, null);
+  }, [data, sourceFilter, modelFilter]);
 
   // Aggregated metrics
   const metrics: UsageMetrics | null = useMemo(() => {
@@ -168,10 +189,10 @@ export function UsageDashboard() {
       sourceFilter,
       modelFilter,
       null,
-      terminalFilter,
+      null,
     );
     return aggregateUsageMetrics(filteredComp.daily, filteredComp.sessions, data.sources);
-  }, [data?.comparison, data?.sources, sourceFilter, modelFilter, terminalFilter]);
+  }, [data?.comparison, data?.sources, sourceFilter, modelFilter]);
 
   const prevTotalSessions = useMemo(() => {
     if (!data?.comparison) return 0;
@@ -185,10 +206,10 @@ export function UsageDashboard() {
       sourceFilter,
       modelFilter,
       null,
-      terminalFilter,
+      null,
     );
     return uniqueSessionCount(filteredComp.sessions);
-  }, [data?.comparison, sourceFilter, modelFilter, terminalFilter]);
+  }, [data?.comparison, sourceFilter, modelFilter]);
 
   if (state.kind === 'reading-cache') {
     return (
@@ -204,15 +225,12 @@ export function UsageDashboard() {
             sources={[]}
             models={[]}
             projects={[]}
-            terminals={[]}
             sourceFilter={null}
             modelFilter={null}
             projectFilter={null}
-            terminalFilter={null}
             onSourceFilterChange={() => {}}
             onModelFilterChange={() => {}}
             onProjectFilterChange={() => {}}
-            onTerminalFilterChange={() => {}}
             onSelectDir={handleSelectDir}
           />
         </div>
@@ -242,15 +260,12 @@ export function UsageDashboard() {
             sources={[]}
             models={[]}
             projects={[]}
-            terminals={[]}
             sourceFilter={null}
             modelFilter={null}
             projectFilter={null}
-            terminalFilter={null}
             onSourceFilterChange={() => {}}
             onModelFilterChange={() => {}}
             onProjectFilterChange={() => {}}
-            onTerminalFilterChange={() => {}}
             onSelectDir={handleSelectDir}
           />
         </div>
@@ -286,15 +301,12 @@ export function UsageDashboard() {
         sources={buildSourceDimensions(data?.sources ?? [])}
         models={data?.dimensions.models ?? []}
         projects={data?.dimensions.projects ?? []}
-        terminals={data?.dimensions.terminals ?? []}
         sourceFilter={sourceFilter}
         modelFilter={modelFilter}
         projectFilter={projectFilter}
-        terminalFilter={terminalFilter}
         onSourceFilterChange={setSourceFilter}
         onModelFilterChange={setModelFilter}
         onProjectFilterChange={setProjectFilter}
-        onTerminalFilterChange={setTerminalFilter}
         onSelectDir={handleSelectDir}
         style={{ marginBottom: '16px' }}
       >
@@ -310,6 +322,23 @@ export function UsageDashboard() {
           </button>
         </div>
       </UsageToolbar>
+
+      {/* 已有数据时的同步失败需要常驻错误条（此前只有一闪而过的 toast） */}
+      {errorMsg && (
+        <div className={styles.partialBanner} role="alert">
+          <AlertCircle size={14} style={{ color: 'var(--danger)' }} />
+          <span>{errorMsg}</span>
+          <button
+            type="button"
+            className={styles.warningClose}
+            onClick={() => setErrorMsg(null)}
+            aria-label={t(locale, 'common.close')}
+            title={t(locale, 'common.close')}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       {data && showWarning && (
         <div className={styles.partialBanner}>
@@ -338,13 +367,10 @@ export function UsageDashboard() {
         lastSyncTime={lastSyncTime}
       />)}
 
-      {filtered && (<Suspense fallback={<div className={styles.chartPanel}>Loading charts…</div>}><UsageCharts
-        daily={filtered?.daily ?? []}
-        activity={filtered?.activity ?? []}
-        sessions={filtered?.sessions ?? []}
+      {filtered && (<Suspense fallback={<div className={styles.chartPanel}>{t(locale, 'usage.loadingCharts')}</div>}><UsageCharts
+        daily={filtered.daily}
+        activity={filtered.activity}
         sources={data?.sources ?? []}
-        metrics={metrics}
-        lastRefresh={lastSyncTime}
       /></Suspense>)}
 
       {data && (
