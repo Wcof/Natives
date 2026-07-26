@@ -1350,6 +1350,13 @@ input[type="search"]::placeholder {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* 供内联 style animation:'spin …' 使用；此前依赖 Tailwind 恰好因某处
+   animate-spin 类而发出的同名 keyframes，属脆弱耦合 */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 @keyframes dropIn {
   from { opacity: 0; transform: scale(0.96); }
   to { opacity: 1; transform: scale(1); }

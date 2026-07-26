@@ -1,12 +1,12 @@
 'use client';
 
-import { startTransition, useState, useEffect, useCallback } from 'react';
-import { type SkillInfo, type SkillsOverview } from '@/types/agent';
+import { useState, useEffect, useCallback } from 'react';
+import { type SkillInfo, type SkillsData, type SkillsOverview } from '@/types/agent';
 import { Clipboard, RefreshCw, AlertTriangle } from 'lucide-react';
-import { t, type Locale } from '@/i18n';
+import { t, useLocale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 import Modal from '@/components/ui/Modal';
 import { classifyError } from '@/lib/error-classifier';
 import { useToast } from '@/components/ui/Toast';
@@ -17,35 +17,22 @@ export default function SkillsPanel() {
   const [overview, setOverview] = useState<SkillsOverview | null>(null);
   const [filter, setFilter] = useState<'all' | 'healthy' | 'issues' | 'residue'>('all');
   const [loading, setLoading] = useState(true);
-  const [locale, setLocale] = useState<Locale>('zh');
+  const locale = useLocale();
   const [selectedSkill, setSelectedSkill] = useState<SkillInfo | null>(null);
   const [showLogs, setShowLogs] = useState(false);
   const [skillLogs, setSkillLogs] = useState<string[]>([]);
   const [uninstallTarget, setUninstallTarget] = useState<SkillInfo | null>(null);
-
-  useEffect(() => {
-    async function loadLocale() {
-      try {
-        const saved = await window.nativesAPI?.getLocale?.();
-        if (saved) setLocale(saved === 'en' ? 'en' : 'zh');
-      } catch { /* ignore */ }
-    }
-    loadLocale();
-  }, []);
 
   const loadSkills = useCallback(async () => {
     setLoading(true);
     try {
       const api = window.nativesAPI;
       if (api?.agent?.scanSkills) {
-        const result = await api.agent.scanSkills() as any;
+        // 后端固定返回 SkillsData（agent.rs），旧的数组格式兼容分支已死
+        const result = (await api.agent.scanSkills()) as SkillsData;
         if (result && Array.isArray(result.items)) {
-          setSkills(result.items as SkillInfo[]);
+          setSkills(result.items);
           setOverview(result.overview || null);
-        } else if (Array.isArray(result)) {
-          // 兼容旧格式
-          setSkills(result as SkillInfo[]);
-          setOverview(null);
         }
       }
     } catch (err) {
@@ -119,7 +106,7 @@ export default function SkillsPanel() {
           <span>{t(locale, 'aiWorkbench.skills.dust')} <b style={{ color: 'var(--text-disabled)' }}>{overview.dust}</b></span>
           <span>{t(locale, 'aiWorkbench.skills.issues')} <b style={{ color: overview.issues > 0 ? 'var(--danger)' : 'var(--text-disabled)' }}>{overview.issues}</b></span>
           {residueItems.length > 0 && (
-            <span style={{ color: 'var(--warning)' }}>⚠ {residueItems.length} residue</span>
+            <span style={{ color: 'var(--warning)' }}>⚠ {t(locale, 'aiWorkbench.skills.residueCount', { n: residueItems.length })}</span>
           )}
         </div>
       )}
@@ -158,8 +145,8 @@ export default function SkillsPanel() {
       }}>
         {(['all', 'healthy', 'issues', 'residue'] as const).map((f) => {
           const count = f === 'all' ? skills.length
-            : f === 'healthy' ? nonResidue.filter((s) => s.health.ok).length
-            : f === 'issues' ? nonResidue.filter((s) => !s.health.ok).length
+            : f === 'healthy' ? nonResidue.filter((s) => s.health?.ok !== false).length
+            : f === 'issues' ? nonResidue.filter((s) => s.health?.ok === false).length
             : residueItems.length;
           return (
             <button
@@ -175,7 +162,7 @@ export default function SkillsPanel() {
               {f === 'all' ? t(locale, 'aiWorkbench.skillsLabel')
                 : f === 'healthy' ? t(locale, 'aiWorkbench.skills.healthy')
                 : f === 'issues' ? t(locale, 'aiWorkbench.skills.issues')
-                : 'Residue'}
+                : t(locale, 'aiWorkbench.skills.residue')}
               {' '}({count})
             </button>
           );
@@ -200,7 +187,7 @@ export default function SkillsPanel() {
               padding: '8px 10px', marginBottom: SPACING.xs,
               borderRadius: BORDER_RADIUS.md,
               border: `1px solid ${skill.residue ? 'var(--warning)' : 'var(--border)'}`,
-              background: skill.residue ? 'rgba(255,180,0,0.05)' : 'var(--surface)',
+              background: skill.residue ? 'var(--warning-soft)' : 'var(--surface)',
               opacity: skill.enabled ? 1 : 0.6,
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACING.xs }}>
@@ -209,8 +196,9 @@ export default function SkillsPanel() {
                   {skill.residue && (
                     <span style={{
                       fontSize: 8, padding: '1px 4px', borderRadius: 3,
-                      background: 'var(--warning)', color: '#000', fontWeight: 600,
-                    }}>RESIDUE</span>
+                      border: '1px solid var(--warning)', color: 'var(--warning)', fontWeight: 600,
+                      textTransform: 'uppercase',
+                    }}>{t(locale, 'aiWorkbench.skills.residue')}</span>
                   )}
                   {skill.copies && skill.copies.length > 1 && (
                     <span style={{
@@ -294,7 +282,8 @@ export default function SkillsPanel() {
                   color: 'var(--text-disabled)', cursor: 'pointer',
                   display: 'inline-flex', alignItems: 'center', gap: 2,
                 }}>
-                  <Clipboard size={10} /> Logs
+                  {/* 原标签「Logs」名不副实——展示的是技能元数据而非日志 */}
+                  <Clipboard size={10} /> {t(locale, 'aiWorkbench.skills.details')}
                 </button>
                 <button onClick={() => handleUninstall(skill)} style={{
                   fontSize: 9, padding: '2px 5px', borderRadius: BORDER_RADIUS.sm,
@@ -313,7 +302,7 @@ export default function SkillsPanel() {
       <Modal
         isOpen={showLogs && !!selectedSkill}
         onClose={() => setShowLogs(false)}
-        title={selectedSkill ? `${selectedSkill.name} — Skill Logs` : 'Skill Logs'}
+        title={selectedSkill ? `${selectedSkill.name} — ${t(locale, 'aiWorkbench.skills.details')}` : t(locale, 'aiWorkbench.skills.details')}
         width={480}
       >
         <div style={{ fontSize: FONT_SIZE.sm, lineHeight: 1.6, fontFamily: 'var(--font-mono)', maxHeight: '50vh', overflowY: 'auto' }}>

@@ -5,9 +5,6 @@ import {
   type AgentSession,
   type AgentStatus,
   type SkillInfo,
-  type SkillSource,
-  type SkillHealth,
-  type RtkUsage,
   type FileChangeEvent,
   SKILL_SOURCES,
 } from './agent';
@@ -25,34 +22,27 @@ describe('AgentTypes', () => {
     assert.equal(project.engine, 'claude');
   });
 
-  it('should construct a valid AgentSession', () => {
+  it('should construct a valid AgentSession (real jsonl transcript shape)', () => {
     const session: AgentSession = {
-      id: 'session-123',
-      engine: 'codex',
-      projectPath: '/home/user/project',
+      id: 'df628f5a-b96b-4e21-8c30-e9d2bdedabb4',
+      path: '/home/user/.claude/projects/-home-user-project/df628f5a.jsonl',
+      mtimeMs: Date.now(),
+      size: 4096,
       title: 'Fix login bug',
-      startTime: Date.now(),
-      endTime: Date.now() + 3600000,
-      filesModified: ['src/login.ts', 'src/auth.ts'],
-      fileTimestamps: { 'src/login.ts': 0, 'src/auth.ts': 100 },
-      skillsUsed: ['typescript', 'debugging'],
     };
     assert.equal(session.title, 'Fix login bug');
-    assert.ok(session.filesModified.length >= 2);
+    assert.ok(session.size > 0);
   });
 
-  it('should handle Codex engine', () => {
+  it('should allow AgentSession without a title', () => {
     const session: AgentSession = {
-      id: 'codex-session-1',
-      engine: 'codex',
-      projectPath: '/project',
-      title: 'Codex task',
-      startTime: Date.now(),
-      filesModified: [],
-      fileTimestamps: {},
-      skillsUsed: [],
+      id: 'abc',
+      path: '/x/abc.jsonl',
+      mtimeMs: 0,
+      size: 0,
+      title: null,
     };
-    assert.equal(session.engine, 'codex');
+    assert.equal(session.title, null);
   });
 
   it('should construct a valid SkillInfo', () => {
@@ -89,10 +79,8 @@ describe('AgentTypes', () => {
       path: '/project/src/file.ts',
       type: 'modify',
       timestamp: Date.now(),
-      sessionId: 'term-1',
     };
     assert.equal(event.type, 'modify');
-    assert.equal(event.sessionId, 'term-1');
   });
 
   it('should have 5 skill sources', () => {

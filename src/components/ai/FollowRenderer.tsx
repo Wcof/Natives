@@ -20,6 +20,7 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
   const locale = useLocale();
   const [content, setContent] = useState<string | null>(null);
   const [lastContent, setLastContent] = useState<string | null>(null);
+  const [readError, setReadError] = useState<boolean>(false);
   const [narration, setNarration] = useState('');
   const [highlightedLines, setHighlightedLines] = useState<Set<number>>(new Set());
   const contentRef = useRef<string | null>(null);
@@ -27,18 +28,22 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
   // Fetch file content when path changes — use Tauri IPC fs.readFile
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (!filePath) { setContent(null); return; }
+    if (!filePath) { setContent(null); setReadError(false); return; }
     let cancelled = false;
     (async () => {
       try {
-        // files-api 契约：fs 不可用时抛错走 catch 静默降级（与原可选链语义等价）
-        const text = await fsApi().readFile(filePath) as string | undefined;
-        if (cancelled || text === undefined) return;
+        // fs_read_file 返回 ReadFileResult 对象，正文在 .content；
+        // 旧实现把整个对象当字符串向下游传，代码/markdown 预览必然崩溃
+        const result = await fsApi().readFile(filePath) as { content?: string } | string | undefined;
+        if (cancelled || result === undefined) return;
+        const text = typeof result === 'string' ? result : result?.content;
+        if (typeof text !== 'string') { setReadError(true); return; }
+        setReadError(false);
         setLastContent(contentRef.current);
         contentRef.current = text;
         setContent(text);
       } catch {
-        // fallback: do nothing
+        if (!cancelled) setReadError(true);
       }
     })();
     return () => { cancelled = true; };
@@ -142,6 +147,19 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
       <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
         <LiveCodePreview content={content} highlightedLines={highlightedLines} ext={ext} />
         {narration && <NarrationBar text={narration} />}
+      </div>
+    );
+  }
+
+  // 读取失败：明示错误而非停留在上一个文件的旧内容（R-E10）
+  if (readError) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        height: '100%', color: 'var(--danger)', fontSize: 'var(--fs-sm)',
+        padding: SPACING.md, textAlign: 'center',
+      }}>
+        {t(locale, 'terminal.followReadError')}
       </div>
     );
   }
@@ -275,6 +293,13 @@ function LiveHtmlPreview({ path }: { path: string }) {
     return () => clearTimeout(timer);
   }, [nextSrc, handleNextLoad]);
 
+  // 换页后回收上一个 blob URL（旧实现从不 revoke，长时间跟随 HTML 文件会缓慢泄漏）
+  useEffect(() => {
+    return () => {
+      if (currentSrc && currentSrc.startsWith('blob:')) URL.revokeObjectURL(currentSrc);
+    };
+  }, [currentSrc]);
+
   return (
     <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
       {currentSrc && (
@@ -362,9 +387,14 @@ function LiveCodePreview({ content, highlightedLines, ext }: {
 
   useEffect(() => {
     let cancelled = false;
-    highlightCode(content, extToLanguage(ext)).then(html => {
-      if (!cancelled) setHighlightedHtml(html);
-    });
+    highlightCode(content, extToLanguage(ext))
+      .then(html => {
+        if (!cancelled) setHighlightedHtml(html);
+      })
+      .catch(() => {
+        // 高亮失败降级为纯文本 <pre>（下方 fallback 分支）
+        if (!cancelled) setHighlightedHtml('');
+      });
     return () => { cancelled = true; };
   }, [content, ext]);
 

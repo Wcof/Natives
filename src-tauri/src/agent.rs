@@ -20,6 +20,7 @@ const MAX_LOG_FILES: usize = 500;
 // ── 数据结构 ──
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectInfo {
     pub path: String,
     pub name: String,
@@ -28,11 +29,18 @@ pub struct ProjectInfo {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
+    /// 会话 UUID（jsonl 文件名去扩展名，可直接用于 `claude --resume <id>`）
     pub id: String,
+    /// jsonl 转写文件的绝对路径
     pub path: String,
-    pub created_at: String,
+    /// 最后活动时间（epoch ms，文件 mtime）
+    pub mtime_ms: i64,
+    /// 转写文件大小（字节）
     pub size: u64,
+    /// 会话摘要（jsonl 内 type=summary 行；可能缺失）
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -154,50 +162,94 @@ pub fn scan_projects() -> Result<Vec<ProjectInfo>> {
 
 // ── 扫描：会话 ──
 
+/// 最多返回的会话数（按 mtime 倒序取最近）
+const MAX_SESSIONS: usize = 50;
+/// 提取标题时最多读取的行数 / 字节数
+const TITLE_SCAN_LINES: usize = 25;
+const TITLE_SCAN_BYTES: u64 = 64 * 1024;
+
+/// Claude Code 把项目路径映射为 `~/.claude/projects/` 下的目录名：
+/// 非字母数字字符全部替换为 '-'（如 `/Users/a/b.c` → `-Users-a-b-c`）。
+fn project_slug(project_path: &str) -> String {
+    project_path
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+/// 从 jsonl 转写头部提取会话摘要（type=summary 行的 summary 字段）。
+fn session_title(path: &Path) -> Option<String> {
+    use std::io::{BufRead, BufReader, Read};
+    let file = std::fs::File::open(path).ok()?;
+    let reader = BufReader::new(file.take(TITLE_SCAN_BYTES));
+    for line in reader.lines().take(TITLE_SCAN_LINES).flatten() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+        if value.get("type").and_then(|t| t.as_str()) == Some("summary") {
+            if let Some(summary) = value.get("summary").and_then(|s| s.as_str()) {
+                let trimmed = summary.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.chars().take(120).collect());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 扫描 Claude Code 的真实会话存储：`~/.claude/projects/<slug>/*.jsonl`。
+/// 旧实现读 `<project>/.claude/sessions/`——该目录从不存在，列表恒为空。
 pub fn scan_sessions(project_path: &str) -> Result<Vec<SessionInfo>> {
-    let claude_dir = Path::new(project_path).join(".claude");
-    let sessions_dir = claude_dir.join("sessions");
-    if !sessions_dir.exists() {
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let sessions_dir = home
+        .join(".claude")
+        .join("projects")
+        .join(project_slug(project_path));
+    if !sessions_dir.is_dir() {
         return Ok(Vec::new());
     }
 
-    let mut sessions = Vec::new();
     let entries = match std::fs::read_dir(&sessions_dir) {
         Ok(e) => e,
         Err(_) => return Ok(Vec::new()),
     };
 
+    let mut sessions = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_dir() {
+        if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
             continue;
         }
         let id = path
-            .file_name()
+            .file_stem()
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string();
+        if id.is_empty() {
+            continue;
+        }
         let meta = std::fs::metadata(&path).ok();
-        let created_at = meta
+        let mtime_ms = meta
             .as_ref()
-            .and_then(|m| m.created().ok())
+            .and_then(|m| m.modified().ok())
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| {
-                chrono::DateTime::from_timestamp(d.as_secs() as i64, 0)
-                    .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_default()
-            })
-            .unwrap_or_default();
-        let size = dir_size(&path);
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let size = meta.map(|m| m.len()).unwrap_or(0);
         sessions.push(SessionInfo {
             id,
             path: path.to_string_lossy().to_string(),
-            created_at,
+            mtime_ms,
             size,
+            // 标题延后到排序截断之后再读，避免为不返回的会话做 IO
+            title: None,
         });
     }
 
-    sessions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    sessions.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+    sessions.truncate(MAX_SESSIONS);
+    for session in &mut sessions {
+        session.title = session_title(Path::new(&session.path));
+    }
     Ok(sessions)
 }
 
@@ -932,24 +984,9 @@ fn detect_languages(dir: &Path) -> Vec<String> {
     languages
 }
 
-fn dir_size(dir: &Path) -> u64 {
-    let mut size = 0u64;
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                size += dir_size(&path);
-            } else if let Ok(meta) = std::fs::metadata(&path) {
-                size += meta.len();
-            }
-        }
-    }
-    size
-}
-
 #[cfg(test)]
 mod tests {
-    use super::truncate_chars;
+    use super::{project_slug, truncate_chars};
 
     #[test]
     fn truncate_chars_keeps_utf8_boundaries() {
@@ -957,5 +994,14 @@ mod tests {
         let truncated = truncate_chars(&text, 80);
 
         assert_eq!(truncated, "、".repeat(80));
+    }
+
+    #[test]
+    fn project_slug_matches_claude_code_layout() {
+        assert_eq!(
+            project_slug("/Users/ldh/Downloads/project/AiNative/Natives"),
+            "-Users-ldh-Downloads-project-AiNative-Natives"
+        );
+        assert_eq!(project_slug("/home/a/my.app_v2"), "-home-a-my-app-v2");
     }
 }

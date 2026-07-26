@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 import { getIframeManager } from '@/lib/iframe-manager';
-import { FILE_EVENTS, dispatchFileEvent, navigateToFiles } from '@/lib/file-events';
+import { navigateToFiles } from '@/lib/file-events';
 import { classifyError } from '@/lib/error-classifier';
 import { pushRecentModule } from '@/lib/recent-modules';
 import { DEFAULT_SETTINGS_VIEW } from '@/components/shell/settings-navigation';
@@ -130,22 +130,9 @@ export function useModuleEvents({
     };
   }, [setReleaseWizardOpen, setActiveView]);
 
-  // File flash animation via IPC
-  useEffect(() => {
-    const handler = (_event: unknown, channel: string, data: unknown) => {
-      if (channel === 'file:changed') {
-        const filePath = typeof data === 'string' ? data : (data as { path?: string })?.path || '';
-        if (filePath) {
-          dispatchFileEvent(FILE_EVENTS.fileFlash, filePath);
-        }
-      }
-    };
-    const api = window.nativesAPI;
-    if (api?.onDbStateChanged) {
-      const unsub = api.onDbStateChanged(handler);
-      return () => { unsub?.(); };
-    }
-  }, []);
+  // 注：此前此处有一段监听 db-state-changed `file:changed` 频道转发 fileFlash 的桥——
+  // 该频道后端从不发射（真实文件事件走 fs-watch-change 管道），属死代码，已删除。
+  // fileFlash 的真实生产者在 FileBrowser（操作反馈）。
 
   // Long task complete → system notification
   useEffect(() => {

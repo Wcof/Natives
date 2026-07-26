@@ -2,10 +2,17 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { type FileChangeEvent } from '@/types/agent';
-import { PlusCircle, XCircle, Edit3, Folder } from 'lucide-react';
+import { Eye, EyeOff, PlusCircle, XCircle, Edit3, Folder } from 'lucide-react';
 import { t, useLocale } from '@/i18n';
-import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
+import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 import { FILE_EVENTS, dispatchFileEvent } from '@/lib/file-events';
+import { fsWatchApiOrNull } from '@/lib/files-api';
+
+/**
+ * 变更收件箱 — 订阅真实 fs-watch-change 管道（fsWatch.onChange）。
+ * 旧实现监听后端从不发射的 `file:changed` 频道，恒为空。
+ * 噪声过滤在渲染层进行（旧实现在采集层丢弃，切换开关无法回显历史）。
+ */
 
 // ── Noise filter: exclude system/generated files ──
 const NOISE_PATTERNS = [
@@ -22,9 +29,16 @@ function isNoisyChange(path: string): boolean {
   return NOISE_PATTERNS.some(p => p.test(path));
 }
 
+function mapKind(kind: string): FileChangeEvent['type'] {
+  if (kind === 'create') return 'create';
+  if (kind === 'remove') return 'delete';
+  return 'modify';
+}
+
 interface ChangeItem extends FileChangeEvent {
-  project?: string;
+  project: string;
   count: number;
+  noisy: boolean;
 }
 
 export default function ChangeInbox() {
@@ -32,39 +46,37 @@ export default function ChangeInbox() {
   const [showFiltered, setShowFiltered] = useState(false);
   const locale = useLocale();
 
-  // Listen for file change events
+  // 常驻订阅；噪声事件也入库（带 noisy 标记），渲染层决定是否展示
   useEffect(() => {
-    const api = window.nativesAPI;
-    if (!api?.onDbStateChanged) return;
-    const unsub = api.onDbStateChanged((_event, channel, data: unknown) => {
-      if (channel === 'file:changed' && data && typeof data === 'object' && 'path' in data) {
-        const d = data as { path?: string; type?: string; project?: string };
-        if (!d.path) return;
+    const api = fsWatchApiOrNull();
+    if (!api) return;
+    const unsub = api.onChange((event) => {
+      const eventType = mapKind(event.kind);
+      const parts = event.path.split('/');
+      const project = parts[parts.length - 2] || '';
 
-        // Noise filter
-        if (!showFiltered && isNoisyChange(d.path)) return;
-
-        const eventType = (['create', 'modify', 'delete'].includes(d.type || '') ? d.type : 'modify') as 'create' | 'modify' | 'delete';
-        const parts = d.path.split('/');
-        const project = d.project || parts[parts.length - 2] || 'Unknown';
-
-        setItems((prev) => {
-          // Deduplicate by path: increment count if exists
-          const existing = prev.find(p => p.path === d.path);
-          if (existing) {
-            return prev.map(p =>
-              p.path === d.path ? { ...p, count: p.count + 1, timestamp: Date.now(), type: eventType } : p
-            );
-          }
-          return [
-            { path: d.path!, type: eventType, timestamp: Date.now(), project, count: 1 },
-            ...prev,
-          ].slice(0, 100);
-        });
-      }
+      setItems((prev) => {
+        const existing = prev.find(p => p.path === event.path);
+        if (existing) {
+          return prev.map(p =>
+            p.path === event.path ? { ...p, count: p.count + 1, timestamp: Date.now(), type: eventType } : p
+          );
+        }
+        return [
+          {
+            path: event.path,
+            type: eventType,
+            timestamp: Date.now(),
+            project,
+            count: 1,
+            noisy: isNoisyChange(event.path),
+          },
+          ...prev,
+        ].slice(0, 200);
+      });
     });
     return unsub;
-  }, [showFiltered]);
+  }, []);
 
   const handleClear = useCallback(() => setItems([]), []);
 
@@ -73,11 +85,12 @@ export default function ChangeInbox() {
     dispatchFileEvent(FILE_EVENTS.navigateFiles, dir);
   }, []);
 
-  // Sort by timestamp (most recent first)
-  const sorted = [...items].sort((a, b) => b.timestamp - a.timestamp);
+  const visible = showFiltered ? items : items.filter((i) => !i.noisy);
+  const sorted = [...visible].sort((a, b) => b.timestamp - a.timestamp);
 
+  const unknownLabel = t(locale, 'aiWorkbench.inbox.unknownProject');
   const groupedByProject = sorted.reduce<Record<string, ChangeItem[]>>((acc, item) => {
-    const project = item.project || 'Unknown';
+    const project = item.project || unknownLabel;
     if (!acc[project]) acc[project] = [];
     acc[project]!.push(item);
     return acc;
@@ -91,20 +104,23 @@ export default function ChangeInbox() {
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       }}>
         <div style={{ fontSize: FONT_SIZE.sm, fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-          {t(locale, 'aiWorkbench.changeInbox')} ({items.length})
+          {t(locale, 'aiWorkbench.changeInbox')} ({visible.length})
         </div>
         <div style={{ display: 'flex', gap: SPACING.xs, alignItems: 'center' }}>
           <button
+            type="button"
             className="btn-ghost"
             onClick={() => setShowFiltered(!showFiltered)}
-            style={{ fontSize: FONT_SIZE.xs, padding: '2px 6px', color: showFiltered ? 'var(--primary)' : 'var(--text-disabled)' }}
-            title={showFiltered ? 'Hide system files' : 'Show system files'}
+            style={{ fontSize: FONT_SIZE.xs, padding: '2px 6px', color: showFiltered ? 'var(--primary)' : 'var(--text-disabled)', display: 'inline-flex' }}
+            title={showFiltered ? t(locale, 'aiWorkbench.inbox.hideSystem') : t(locale, 'aiWorkbench.inbox.showSystem')}
+            aria-label={showFiltered ? t(locale, 'aiWorkbench.inbox.hideSystem') : t(locale, 'aiWorkbench.inbox.showSystem')}
+            aria-pressed={showFiltered}
           >
-            {showFiltered ? '👁' : '👁‍🗨'}
+            {showFiltered ? <Eye size={13} /> : <EyeOff size={13} />}
           </button>
           {items.length > 0 && (
-            <button className="btn-ghost" onClick={handleClear} style={{ fontSize: FONT_SIZE.xs, padding: '2px 6px', color: 'var(--text-disabled)' }}>
-              {t(locale, 'notifications.clear')}
+            <button type="button" className="btn-ghost" onClick={handleClear} style={{ fontSize: FONT_SIZE.xs, padding: '2px 6px', color: 'var(--text-disabled)' }}>
+              {t(locale, 'common.clear')}
             </button>
           )}
         </div>
@@ -112,7 +128,7 @@ export default function ChangeInbox() {
 
       {/* Changes list */}
       <div style={{ flex: 1, overflow: 'auto', padding: 6 }}>
-        {items.length === 0 ? (
+        {visible.length === 0 ? (
           <div style={{ padding: SPACING.xl, textAlign: 'center', color: 'var(--text-disabled)', fontSize: 'var(--fs-sm)' }}>
             {t(locale, 'aiWorkbench.noChanges')}
           </div>
@@ -122,9 +138,9 @@ export default function ChangeInbox() {
               <div style={{ fontSize: FONT_SIZE.xs, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: SPACING.xs, padding: '0 4px' }}>
                 <Folder size={12} style={{ marginRight: 4, color: 'var(--text-secondary)' }} /> {project}
               </div>
-              {changes.map((ch, i) => (
+              {changes.map((ch) => (
                 <div
-                  key={`${ch.path}-${i}`}
+                  key={ch.path}
                   onClick={() => handleNavigate(ch.path)}
                   style={{
                     padding: '4px 8px', fontSize: FONT_SIZE.sm, color: 'var(--text)',
@@ -132,6 +148,7 @@ export default function ChangeInbox() {
                     background: 'var(--surface)',
                     borderLeft: `3px solid ${ch.type === 'create' ? 'var(--diff-add)' : ch.type === 'delete' ? 'var(--danger)' : 'var(--warning)'}`,
                     display: 'flex', alignItems: 'center', gap: SPACING.xs,
+                    opacity: ch.noisy ? 0.6 : 1,
                   }}
                 >
                   <span style={{ flexShrink: 0, display: 'inline-flex' }}>
