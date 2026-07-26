@@ -61,16 +61,69 @@ struct ToolFunctionDelta {
 }
 
 #[derive(Debug, Deserialize)]
-struct UsageWire {
+pub(crate) struct UsageWire {
     prompt_tokens: Option<u64>,
     completion_tokens: Option<u64>,
     total_tokens: Option<u64>,
     completion_tokens_details: Option<CompletionDetails>,
+    /// OpenAI automatic prefix caching.
+    prompt_tokens_details: Option<PromptDetails>,
+    /// DeepSeek context caching reports hit/miss as siblings of
+    /// `prompt_tokens` instead of nesting them under `prompt_tokens_details`.
+    prompt_cache_hit_tokens: Option<u64>,
+    prompt_cache_miss_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
 struct CompletionDetails {
     reasoning_tokens: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PromptDetails {
+    cached_tokens: Option<u64>,
+}
+
+impl UsageWire {
+    /// Normalise an OpenAI-shaped usage object onto the [`ProviderUsage`]
+    /// contract.
+    ///
+    /// OpenAI and DeepSeek both **include** cached prompt tokens in
+    /// `prompt_tokens`, whereas `ProviderUsage::input_tokens` is defined as the
+    /// *uncached* remainder (Anthropic's convention). The cached count is
+    /// therefore subtracted here so that
+    /// `input_tokens + cache_read_tokens` reconstructs the provider's
+    /// `prompt_tokens` for every provider.
+    ///
+    /// Neither provider distinguishes cache *writes*: a cold prefix is billed
+    /// as ordinary input, so `cache_creation_tokens` stays `None` rather than
+    /// being invented.
+    pub(crate) fn to_provider(&self) -> ProviderUsage {
+        let prompt_tokens = self.prompt_tokens.unwrap_or(0);
+        let cache_read = self
+            .prompt_cache_hit_tokens
+            .or_else(|| self.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens));
+        // DeepSeek reports the uncached remainder directly; prefer its own
+        // number over arithmetic. Otherwise subtract the cached count.
+        let input_tokens = match (self.prompt_cache_miss_tokens, cache_read) {
+            (Some(miss), _) => miss,
+            (None, Some(cached)) => prompt_tokens.saturating_sub(cached),
+            (None, None) => prompt_tokens,
+        };
+        ProviderUsage {
+            input_tokens,
+            output_tokens: self
+                .completion_tokens
+                .unwrap_or(self.total_tokens.unwrap_or(0)),
+            reasoning_tokens: self
+                .completion_tokens_details
+                .as_ref()
+                .and_then(|d| d.reasoning_tokens),
+            cache_creation_tokens: None,
+            cache_read_tokens: cache_read,
+            cost_usd: None,
+        }
+    }
 }
 
 /// Stateful accumulator for one SSE stream.
@@ -143,14 +196,7 @@ impl OpenAiSseParser {
         }
 
         if let Some(usage) = chunk.usage {
-            events.push(ProviderEvent::Usage(ProviderUsage {
-                input_tokens: usage.prompt_tokens.unwrap_or(0),
-                output_tokens: usage.completion_tokens.unwrap_or(usage.total_tokens.unwrap_or(0)),
-                reasoning_tokens: usage
-                    .completion_tokens_details
-                    .and_then(|d| d.reasoning_tokens),
-                cost_usd: None,
-            }));
+            events.push(ProviderEvent::Usage(usage.to_provider()));
         }
 
         for choice in chunk.choices.unwrap_or_default() {
@@ -297,6 +343,59 @@ mod tests {
             events.as_slice(),
             [ProviderEvent::ReasoningDelta(t)] if t == "plan step"
         ));
+    }
+
+    fn usage_of(events: &[ProviderEvent]) -> ProviderUsage {
+        events
+            .iter()
+            .find_map(|e| match e {
+                ProviderEvent::Usage(u) => Some(u.clone()),
+                _ => None,
+            })
+            .expect("a Usage event")
+    }
+
+    #[test]
+    fn openai_cached_tokens_are_split_out_of_prompt_tokens() {
+        let mut parser = OpenAiSseParser::new();
+        let events = parser.push_data_line(
+            r#"{"choices":[],"usage":{"prompt_tokens":20000,"completion_tokens":150,"prompt_tokens_details":{"cached_tokens":18432}}}"#,
+        );
+        let usage = usage_of(&events);
+        // OpenAI folds cached tokens into prompt_tokens; ProviderUsage does not.
+        assert_eq!(usage.cache_read_tokens, Some(18432));
+        assert_eq!(usage.input_tokens, 20000 - 18432);
+        assert_eq!(usage.total_prompt_tokens(), 20000);
+        // OpenAI bills a cold prefix as ordinary input — there is no separate
+        // cache-write count to report.
+        assert_eq!(usage.cache_creation_tokens, None);
+        assert_eq!(usage.output_tokens, 150);
+    }
+
+    #[test]
+    fn deepseek_hit_miss_tokens_map_onto_the_same_contract() {
+        let mut parser = OpenAiSseParser::new();
+        let events = parser.push_data_line(
+            r#"{"choices":[],"usage":{"prompt_tokens":5000,"completion_tokens":80,"prompt_cache_hit_tokens":4608,"prompt_cache_miss_tokens":392}}"#,
+        );
+        let usage = usage_of(&events);
+        assert_eq!(usage.cache_read_tokens, Some(4608));
+        // DeepSeek reports the uncached remainder itself; prefer its number.
+        assert_eq!(usage.input_tokens, 392);
+        assert_eq!(usage.total_prompt_tokens(), 5000);
+    }
+
+    #[test]
+    fn usage_without_cache_fields_is_unchanged() {
+        let mut parser = OpenAiSseParser::new();
+        let events = parser.push_data_line(
+            r#"{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"completion_tokens_details":{"reasoning_tokens":7}}}"#,
+        );
+        let usage = usage_of(&events);
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(usage.reasoning_tokens, Some(7));
+        assert!(!usage.reported_cache());
     }
 
     #[test]

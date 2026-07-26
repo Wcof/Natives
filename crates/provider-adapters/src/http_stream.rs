@@ -2,16 +2,37 @@
 
 use crate::capabilities::{
     ProviderContentBlock, ProviderError, ProviderErrorCategory, ProviderMessage, ProviderRequest,
-    ProviderTool,
+    ProviderTool, RequestControls,
 };
+use crate::model_profile::{self, ReasoningControl};
 use crate::stream::{split_sse_lines, sse_data_payload, OpenAiSseParser, ProviderEvent};
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use reqwest::Client;
 use std::time::Duration;
 
-/// Build the JSON body for OpenAI chat completions.
+/// Build the JSON body for OpenAI chat completions with default controls.
 pub fn build_chat_completions_body(request: &ProviderRequest) -> serde_json::Value {
+    build_chat_completions_body_with_controls(request, &RequestControls::default())
+}
+
+/// Build the JSON body for OpenAI chat completions.
+///
+/// # Prompt caching
+///
+/// OpenAI-compatible providers that cache do so **automatically** on the
+/// longest common prefix — there is no request-side parameter to send, so
+/// nothing is emitted here. Cache usage is read back from the response
+/// (`prompt_tokens_details.cached_tokens` for OpenAI,
+/// `prompt_cache_hit_tokens` for DeepSeek); see
+/// [`crate::stream::openai_sse`]. Callers get the benefit only if they keep the
+/// prefix byte-stable, which the engine already does by appending turns rather
+/// than rewriting history.
+pub fn build_chat_completions_body_with_controls(
+    request: &ProviderRequest,
+    controls: &RequestControls,
+) -> serde_json::Value {
+    let profile = model_profile::resolve(&request.model);
     let mut messages = Vec::new();
     if let Some(system) = &request.system_prompt {
         if !system.is_empty() {
@@ -30,15 +51,31 @@ pub fn build_chat_completions_body(request: &ProviderRequest) -> serde_json::Val
         "messages": messages,
         "stream": request.stream,
     });
-    if let Some(max) = request.max_tokens {
+    if let Some(max) = model_profile::resolve_max_output(request.max_tokens, &profile) {
         body["max_tokens"] = serde_json::json!(max);
     }
     if let Some(temp) = request.temperature {
-        body["temperature"] = serde_json::json!(temp);
+        // OpenAI's reasoning models reject a non-default `temperature` with a
+        // 400. Unknown models keep `sampling_params: true`, so third-party
+        // endpoints are unaffected.
+        if profile.sampling_params {
+            body["temperature"] = serde_json::json!(temp);
+        }
     }
     if let Some(tools) = &request.tools {
         if !tools.is_empty() {
             body["tools"] = serde_json::json!(tools.iter().map(tool_to_json).collect::<Vec<_>>());
+            if let Some(choice) = &controls.tool_choice {
+                body["tool_choice"] = choice.to_openai();
+            }
+            if let Some(parallel) = controls.parallel_tool_calls {
+                body["parallel_tool_calls"] = serde_json::json!(parallel);
+            }
+        }
+    }
+    if let Some(reasoning) = &controls.reasoning {
+        if profile.reasoning == ReasoningControl::OpenAiEffort {
+            body["reasoning_effort"] = serde_json::json!(reasoning.effort.as_openai_str());
         }
     }
     if request.stream {
@@ -386,8 +423,17 @@ pub async fn stream_responses_with_headers(
     Ok(Box::pin(stream))
 }
 
-/// Build JSON body for OpenAI Responses API.
+/// Build JSON body for OpenAI Responses API with default controls.
 pub fn build_responses_body(request: &ProviderRequest) -> serde_json::Value {
+    build_responses_body_with_controls(request, &RequestControls::default())
+}
+
+/// Build JSON body for OpenAI Responses API.
+pub fn build_responses_body_with_controls(
+    request: &ProviderRequest,
+    controls: &RequestControls,
+) -> serde_json::Value {
+    let profile = model_profile::resolve(&request.model);
     let mut input = Vec::new();
     for message in &request.messages {
         // Responses API input is looser than chat completions; still forward tool structure
@@ -446,7 +492,7 @@ pub fn build_responses_body(request: &ProviderRequest) -> serde_json::Value {
             body["instructions"] = serde_json::json!(system);
         }
     }
-    if let Some(max) = request.max_tokens {
+    if let Some(max) = model_profile::resolve_max_output(request.max_tokens, &profile) {
         body["max_output_tokens"] = serde_json::json!(max);
     }
     if let Some(tools) = &request.tools {
@@ -460,6 +506,21 @@ pub fn build_responses_body(request: &ProviderRequest) -> serde_json::Value {
                     "parameters": t.input_schema,
                 }))
                 .collect::<Vec<_>>());
+            if let Some(choice) = &controls.tool_choice {
+                body["tool_choice"] = choice.to_openai();
+            }
+            if let Some(parallel) = controls.parallel_tool_calls {
+                body["parallel_tool_calls"] = serde_json::json!(parallel);
+            }
+        }
+    }
+    if let Some(reasoning) = &controls.reasoning {
+        if profile.reasoning == ReasoningControl::OpenAiEffort {
+            // Responses nests the level under `reasoning`, unlike chat
+            // completions' flat `reasoning_effort`.
+            body["reasoning"] = serde_json::json!({
+                "effort": reasoning.effort.as_openai_str(),
+            });
         }
     }
     body
@@ -537,12 +598,13 @@ pub async fn chat_completions(
             tool_calls.push((id, name, args));
         }
     }
-    let usage = crate::capabilities::ProviderUsage {
-        input_tokens: value["usage"]["prompt_tokens"].as_u64().unwrap_or(0),
-        output_tokens: value["usage"]["completion_tokens"].as_u64().unwrap_or(0),
-        reasoning_tokens: value["usage"]["completion_tokens_details"]["reasoning_tokens"].as_u64(),
-        cost_usd: None,
-    };
+    // Reuse the streaming parser's normalisation so the non-streaming path
+    // reports cache tokens with identical semantics.
+    let usage = serde_json::from_value::<crate::stream::openai_sse::UsageWire>(
+        value["usage"].clone(),
+    )
+    .map(|wire| wire.to_provider())
+    .unwrap_or_default();
     let tools = if tool_calls.is_empty() {
         None
     } else {
@@ -673,6 +735,125 @@ mod tool_message_tests {
             (Utc::now().timestamp() + 3).to_string().parse().unwrap(),
         );
         assert!(matches!(retry_after_ms(&headers), Some(ms) if (2_000..=3_000).contains(&ms)));
+    }
+
+    fn plain(model: &str) -> ProviderRequest {
+        ProviderRequest {
+            model: model.into(),
+            messages: vec![ProviderMessage {
+                role: "user".into(),
+                content: vec![ProviderContentBlock::Text { text: "hi".into() }],
+            }],
+            system_prompt: None,
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+            stream: true,
+            structured_output: None,
+        }
+    }
+
+    fn with_tool(model: &str) -> ProviderRequest {
+        let mut request = plain(model);
+        request.tools = Some(vec![crate::capabilities::ProviderTool {
+            name: "read_file".into(),
+            description: Some("read a file".into()),
+            input_schema: serde_json::json!({"type": "object"}),
+        }]);
+        request
+    }
+
+    #[test]
+    fn chat_completions_max_tokens_comes_from_the_model_profile() {
+        assert_eq!(
+            build_chat_completions_body(&plain("gpt-4o"))["max_tokens"],
+            16_384
+        );
+        // Unknown model: omit the field entirely and let the provider default
+        // stand, exactly as before.
+        assert!(build_chat_completions_body(&plain("some-local-llm"))
+            .get("max_tokens")
+            .is_none());
+        // Explicit values are clamped down, never raised.
+        let mut huge = plain("gpt-4o");
+        huge.max_tokens = Some(999_999);
+        assert_eq!(build_chat_completions_body(&huge)["max_tokens"], 16_384);
+    }
+
+    #[test]
+    fn temperature_is_dropped_for_openai_reasoning_models_only() {
+        let mut gpt4o = plain("gpt-4o");
+        gpt4o.temperature = Some(0.3);
+        assert_eq!(build_chat_completions_body(&gpt4o)["temperature"], 0.3);
+
+        let mut o3 = plain("o3-mini");
+        o3.temperature = Some(0.3);
+        assert!(build_chat_completions_body(&o3).get("temperature").is_none());
+
+        // Unknown third-party models keep sampling parameters.
+        let mut local = plain("qwen2.5-coder");
+        local.temperature = Some(0.3);
+        assert_eq!(build_chat_completions_body(&local)["temperature"], 0.3);
+    }
+
+    #[test]
+    fn tool_choice_and_parallel_flag_encode_to_the_openai_shape() {
+        let request = with_tool("gpt-4o");
+
+        let forced = build_chat_completions_body_with_controls(
+            &request,
+            &RequestControls {
+                tool_choice: Some(crate::capabilities::ToolChoice::Tool {
+                    name: "read_file".into(),
+                }),
+                parallel_tool_calls: Some(false),
+                ..Default::default()
+            },
+        );
+        assert_eq!(forced["tool_choice"]["type"], "function");
+        assert_eq!(forced["tool_choice"]["function"]["name"], "read_file");
+        assert_eq!(forced["parallel_tool_calls"], false);
+
+        // OpenAI spells "must call something" as the bare string "required".
+        let required = build_chat_completions_body_with_controls(
+            &request,
+            &RequestControls {
+                tool_choice: Some(crate::capabilities::ToolChoice::Required),
+                ..Default::default()
+            },
+        );
+        assert_eq!(required["tool_choice"], "required");
+
+        // Default controls change nothing on the wire.
+        let body = build_chat_completions_body(&request);
+        assert!(body.get("tool_choice").is_none());
+        assert!(body.get("parallel_tool_calls").is_none());
+    }
+
+    #[test]
+    fn reasoning_effort_only_reaches_models_that_accept_it() {
+        let controls = RequestControls {
+            reasoning: Some(crate::capabilities::ReasoningRequest::new(
+                crate::capabilities::ReasoningEffort::High,
+            )),
+            ..Default::default()
+        };
+        assert_eq!(
+            build_chat_completions_body_with_controls(&plain("o3-mini"), &controls)
+                ["reasoning_effort"],
+            "high"
+        );
+        // gpt-4o has no reasoning knob; sending one is a 400.
+        assert!(
+            build_chat_completions_body_with_controls(&plain("gpt-4o"), &controls)
+                .get("reasoning_effort")
+                .is_none()
+        );
+
+        // The Responses API nests it instead of using a flat field.
+        let responses = build_responses_body_with_controls(&plain("o3"), &controls);
+        assert_eq!(responses["reasoning"]["effort"], "high");
+        assert_eq!(responses["max_output_tokens"], 100_000);
     }
 
     #[test]

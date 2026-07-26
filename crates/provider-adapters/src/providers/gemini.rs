@@ -1,6 +1,7 @@
 //! Gemini GenerateContent adapter — real HTTP streaming (SSE / JSON array).
 
 use crate::capabilities::*;
+use crate::model_profile::{self, ReasoningControl};
 use crate::stream::{parse_gemini_chunk, split_sse_lines, sse_data_payload, ProviderEvent};
 use assistant_protocol::v1::provider::{ModelCapabilities, ProviderType};
 use async_trait::async_trait;
@@ -38,7 +39,26 @@ impl Default for GeminiAdapter {
     }
 }
 
-fn build_generate_body(request: &ProviderRequest) -> serde_json::Value {
+/// Build the `generateContent` body with default request controls.
+pub fn build_generate_body(request: &ProviderRequest) -> serde_json::Value {
+    build_generate_body_with_controls(request, &RequestControls::default())
+}
+
+/// Build the `generateContent` body.
+///
+/// # Prompt caching
+///
+/// Gemini has no per-request cache parameter to send. Implicit caching is
+/// applied automatically by the provider on 2.5-series models, and explicit
+/// caching requires creating a separate stateful `CachedContent` resource
+/// (`POST /cachedContents`) with its own TTL and lifecycle — out of scope for a
+/// stateless streaming adapter. Cache usage is therefore **read back only**,
+/// from `usageMetadata.cachedContentTokenCount`.
+pub fn build_generate_body_with_controls(
+    request: &ProviderRequest,
+    controls: &RequestControls,
+) -> serde_json::Value {
+    let profile = model_profile::resolve(&request.model);
     let mut contents = Vec::new();
     for message in &request.messages {
         let role = if message.role == "assistant" {
@@ -112,10 +132,36 @@ fn build_generate_body(request: &ProviderRequest) -> serde_json::Value {
                 })
                 .collect();
             body["tools"] = serde_json::json!([{ "functionDeclarations": decls }]);
+            if let Some(choice) = &controls.tool_choice {
+                body["toolConfig"] = serde_json::json!({
+                    "functionCallingConfig": choice.to_gemini(),
+                });
+            }
         }
     }
-    if let Some(max) = request.max_tokens {
-        body["generationConfig"] = serde_json::json!({ "maxOutputTokens": max });
+
+    let mut generation_config = serde_json::Map::new();
+    if let Some(max) = model_profile::resolve_max_output(request.max_tokens, &profile) {
+        generation_config.insert("maxOutputTokens".into(), serde_json::json!(max));
+    }
+    if let Some(temperature) = request.temperature {
+        if profile.sampling_params {
+            generation_config.insert("temperature".into(), serde_json::json!(temperature));
+        }
+    }
+    if let Some(reasoning) = &controls.reasoning {
+        if profile.reasoning == ReasoningControl::GeminiThinkingBudget {
+            generation_config.insert(
+                "thinkingConfig".into(),
+                serde_json::json!({
+                    "thinkingBudget": reasoning.budget(),
+                    "includeThoughts": true,
+                }),
+            );
+        }
+    }
+    if !generation_config.is_empty() {
+        body["generationConfig"] = serde_json::Value::Object(generation_config);
     }
     body
 }
@@ -135,6 +181,13 @@ impl ProviderAdapter for GeminiAdapter {
                 "image_input".into(),
                 "reasoning".into(),
                 "system_prompt".into(),
+                // Implicit caching only (2.5 series). Explicit `CachedContent`
+                // resources are not created by this adapter.
+                "prompt_cache_automatic".into(),
+                // Via `toolConfig.functionCallingConfig`.
+                "tool_choice".into(),
+                // NOTE: no `parallel_tool_calls` — Gemini has no per-request
+                // toggle for it.
             ],
             max_context_window: 1_048_576,
             streaming: true,
@@ -362,6 +415,81 @@ impl ProviderAdapter for GeminiAdapter {
 #[cfg(test)]
 mod tool_message_tests {
     use super::*;
+
+    fn plain(model: &str) -> ProviderRequest {
+        ProviderRequest {
+            model: model.into(),
+            messages: vec![ProviderMessage {
+                role: "user".into(),
+                content: vec![ProviderContentBlock::Text { text: "hi".into() }],
+            }],
+            system_prompt: None,
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+            stream: true,
+            structured_output: None,
+        }
+    }
+
+    #[test]
+    fn max_output_tokens_comes_from_the_model_profile() {
+        assert_eq!(
+            build_generate_body(&plain("gemini-2.5-pro"))["generationConfig"]["maxOutputTokens"],
+            65_536
+        );
+        // Unknown model: no generationConfig at all rather than an invented cap.
+        assert!(build_generate_body(&plain("gemma-local"))
+            .get("generationConfig")
+            .is_none());
+    }
+
+    #[test]
+    fn thinking_budget_only_for_models_that_expose_it() {
+        let controls = RequestControls {
+            reasoning: Some(ReasoningRequest::new(ReasoningEffort::Medium)),
+            ..Default::default()
+        };
+        let pro = build_generate_body_with_controls(&plain("gemini-2.5-pro"), &controls);
+        assert_eq!(
+            pro["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            16_384
+        );
+        assert_eq!(
+            pro["generationConfig"]["thinkingConfig"]["includeThoughts"],
+            true
+        );
+
+        // Gemini 2.0 has no thinkingConfig; sending one is rejected.
+        let flash = build_generate_body_with_controls(&plain("gemini-2.0-flash"), &controls);
+        assert!(flash["generationConfig"].get("thinkingConfig").is_none());
+    }
+
+    #[test]
+    fn tool_choice_encodes_to_function_calling_config() {
+        let mut request = plain("gemini-2.5-pro");
+        request.tools = Some(vec![ProviderTool {
+            name: "get_weather".into(),
+            description: Some("weather".into()),
+            input_schema: serde_json::json!({"type": "object"}),
+        }]);
+
+        let forced = build_generate_body_with_controls(
+            &request,
+            &RequestControls {
+                tool_choice: Some(ToolChoice::Tool {
+                    name: "get_weather".into(),
+                }),
+                ..Default::default()
+            },
+        );
+        let config = &forced["toolConfig"]["functionCallingConfig"];
+        assert_eq!(config["mode"], "ANY");
+        assert_eq!(config["allowedFunctionNames"][0], "get_weather");
+
+        // Nothing requested: no toolConfig, provider default applies.
+        assert!(build_generate_body(&request).get("toolConfig").is_none());
+    }
 
     #[test]
     fn gemini_body_uses_function_call_and_response() {

@@ -50,6 +50,7 @@ docs/
 │   ├── FILE_MANAGER_AUDIT.md               文件管理器审计（对照 fanbox，Hub 面）
 │   ├── NATIVE-DAEMON-CAPABILITY-MAP.md
 │   ├── NATIVE_ENGINE_FULL_REMEDIATION.md   引擎契约与进度（唯一进度源）
+│   ├── EXECUTION-ENGINE-CAPABILITY-AUDIT.md 执行引擎能力审计（进度表标签的证据源）
 │   └── NATIVE_ENGINE_ENV.md
 ├── superpowers/              ← harness 控制面设计稿
 │   └── specs/2026-07-26-native-harness-control-plane-design.md
@@ -73,6 +74,7 @@ docs/
 | 性能改动 | `standards/technical/04-performance.md` + `application-performance-remediation.md` |
 | Provider 路由 / 账号池 | `provider-routing-sub2api.md` |
 | Agent 引擎能力与整改 | `NATIVE_ENGINE_FULL_REMEDIATION.md` + `NATIVE-DAEMON-CAPABILITY-MAP.md` |
+| 引擎缺口定级 / 对标 Claude Code | `EXECUTION-ENGINE-CAPABILITY-AUDIT.md` |
 | 历史决策溯源 | `DESIGN_DISCUSSION.md`（以 ADR 修订为准） |
 
 ---

@@ -103,6 +103,7 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
 "conversation.listPage",
     "conversation.get",
     "conversation.fork",
+    "conversation.update",
 "conversation.getMessages",
 "conversation.getMessagesPage",
     "conversation.appendMessage",
@@ -119,8 +120,13 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "run.replay",
     "run.list",
     "run.getEvents",
+    "run.listChildren",
+    "run.finish",
+    "run.getActivity",
     "permission.respond",
+    "permission.listPending",
     "tool.list",
+    "agent.list",
     "mcp.list",
     "mcp.start",
     "mcp.stop",
@@ -172,22 +178,25 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
 
 /// Methods the Tauri host still owns after Phase 0 cutover.
 ///
+/// Honesty contract: this list is *unioned into the advertised capability set* by
+/// [`super::DaemonCapabilities::host_mediated`]. An entry here is a promise that the
+/// **host** intercepts the call before it reaches the daemon — it must therefore stay in
+/// sync with `src-tauri/src/assistant_service.rs::is_host_owned_method`. Anything listed
+/// here that the host does *not* intercept falls through to the daemon RPC, and if the
+/// daemon has no dispatch arm the caller gets `internal_error` instead of an honest
+/// `unsupported` (the advertisement lied). Prefer implementing on the daemon and listing
+/// in [`IMPLEMENTED_METHODS`]; keep this list to genuinely OS-bound seams.
+///
 /// Production (`NATIVES_DAEMON_MODE=uds|sidecar|remote`): conversation / promptQueue /
-/// interaction / task are daemon-owned and must NOT be re-advertised here as host-primary.
-/// Embedded/test mode may still execute host fallbacks for in-process DataStore tests,
-/// but capability ads stay honest: only OS + run preflight / projection seams.
+/// interaction / permission / run / task are daemon-owned and must NOT be re-advertised
+/// here as host-primary.
 pub const HOST_IMPLEMENTED_METHODS: &[&str] = &[
-    // Run preflight + host projection boundary
+    // Run preflight + host projection boundary (host intercepts, then delegates).
     "run.start",
     "run.subscribe",
-    "run.listChildren",
-    "run.finish",
-    // Permission UI may hit host while projecting; daemon also implements respond.
-    "permission.listPending",
-    "permission.respond",
-    "interaction.listPending",
-    "interaction.respond",
-    // OS-bound artifact actions
+    // OS-bound artifact actions: only the host can talk to the desktop shell.
+    // `artifact.reveal` is host-ONLY — the daemon deliberately has no dispatch arm,
+    // because "show in file manager" is not a daemon capability.
     "artifact.open",
     "artifact.reveal",
 ];
@@ -201,6 +210,8 @@ pub mod names {
     pub const PROVIDER_TEST: &str = "provider.test";
     pub const CONVERSATION_CREATE: &str = "conversation.create";
     pub const CONVERSATION_LIST: &str = "conversation.list";
+    pub const CONVERSATION_LIST_PAGE: &str = "conversation.listPage";
+    pub const CONVERSATION_GET_MESSAGES_PAGE: &str = "conversation.getMessagesPage";
     pub const CONVERSATION_GET: &str = "conversation.get";
     pub const CONVERSATION_FORK: &str = "conversation.fork";
     pub const CONVERSATION_UPDATE: &str = "conversation.update";
@@ -219,11 +230,15 @@ pub mod names {
     pub const RUN_REPLAY: &str = "run.replay";
     pub const RUN_LIST: &str = "run.list";
     pub const RUN_GET_EVENTS: &str = "run.getEvents";
+    pub const RUN_LIST_CHILDREN: &str = "run.listChildren";
+    pub const RUN_FINISH: &str = "run.finish";
+    pub const RUN_GET_ACTIVITY: &str = "run.getActivity";
     pub const RUN_REWIND: &str = "run.rewind";
     pub const RUN_REWIND_PREVIEW: &str = "run.rewindPreview";
     pub const WORKSPACE_RESTORE: &str = "workspace.restore";
     pub const WORKSPACE_RESTORE_PREVIEW: &str = "workspace.restorePreview";
     pub const PERMISSION_RESPOND: &str = "permission.respond";
+    pub const PERMISSION_LIST_PENDING: &str = "permission.listPending";
     pub const TOOL_LIST: &str = "tool.list";
     pub const PROMPT_QUEUE_LIST: &str = "promptQueue.list";
     pub const PROMPT_QUEUE_ENQUEUE: &str = "promptQueue.enqueue";
@@ -362,7 +377,9 @@ mod tests {
 
     #[test]
     fn known_but_unimplemented_methods_are_not_advertised() {
-        for method in ["run.getActivity", "mcp.auth.oauthStart"] {
+        // Catalogued-but-deliberately-unimplemented surface. `mcp.call` is a closed
+        // transport bypass (task-06); the oauth pair is an explicit red line.
+        for method in ["mcp.call", "mcp.auth.oauthStart", "mcp.auth.oauthCallback"] {
             assert!(is_known_method(method), "missing known: {method}");
             assert!(
                 !is_implemented_method(method),
@@ -379,5 +396,40 @@ mod tests {
         assert!(is_implemented_method("task.wait"));
         assert!(is_implemented_method("interaction.listPending"));
         assert!(is_implemented_method("interaction.respond"));
+        // Previously advertised via HOST but never intercepted by the host and never
+        // dispatched by the daemon (callers got `internal_error`). Now daemon-owned.
+        assert!(is_daemon_method("run.listChildren"));
+        assert!(is_daemon_method("run.finish"));
+        assert!(is_daemon_method("run.getActivity"));
+        assert!(is_daemon_method("permission.listPending"));
+        assert!(is_daemon_method("agent.list"));
+        assert!(is_daemon_method("conversation.update"));
+    }
+
+    /// Every advertised method must be catalogued. A capability ad for a name that is
+    /// not in `ALL_METHODS` is unreachable by definition.
+    #[test]
+    fn advertised_methods_are_all_catalogued() {
+        for method in IMPLEMENTED_METHODS.iter().chain(HOST_IMPLEMENTED_METHODS) {
+            assert!(is_known_method(method), "not in ALL_METHODS: {method}");
+        }
+    }
+
+    /// Host-only entries (not also daemon-implemented) are the ones that MUST be
+    /// intercepted by `src-tauri`'s `is_host_owned_method`. Keep the set tiny and
+    /// obviously OS-bound so the sync burden stays reviewable.
+    #[test]
+    fn host_only_surface_is_os_bound_and_minimal() {
+        let host_only: Vec<&str> = HOST_IMPLEMENTED_METHODS
+            .iter()
+            .copied()
+            .filter(|m| !IMPLEMENTED_METHODS.contains(m))
+            .collect();
+        assert_eq!(
+            host_only,
+            vec!["artifact.reveal"],
+            "host-only surface changed — update src-tauri is_host_owned_method and the \
+             daemon dispatch contract test together"
+        );
     }
 }

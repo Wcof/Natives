@@ -2,6 +2,7 @@
 
 > **唯一进度与契约源**（2026-07-23 文档清理后）：其它 `NATIVE_ENGINE_*` 快照 / task pack / linkage 状态文档已删除，请只更新本文件 + [`NATIVE-DAEMON-CAPABILITY-MAP.md`](./NATIVE-DAEMON-CAPABILITY-MAP.md) + [`NATIVE_ENGINE_ENV.md`](./NATIVE_ENGINE_ENV.md)。  
 > 冻结日期：2026-07-17（契约）；进度随代码更新  
+> **最近一次逐行核对**：2026-07-26，基线 `682453e3`，证据见 [`EXECUTION-ENGINE-CAPABILITY-AUDIT.md`](./EXECUTION-ENGINE-CAPABILITY-AUDIT.md)  
 > 基座：`agent-core` / `provider-adapters` / `capability-gateway` / `assistant-protocol` / `src-agent-daemon` / `src-tauri`  
 > 分层约束：[`standards/technical/01-layering.md`](../standards/technical/01-layering.md)  
 > 状态语义：`not_started` | `in_progress` | `partial` | `done` | `blocked`  
@@ -15,7 +16,7 @@
 | 生产闭环最小集 | P0/P1 阻断项（工具消息、detached start、UDS façade、Gateway 门、Broker、project_path、persist-first） | **partial → 接近 done** |
 | **真正全量完成** | 本文件 DoD 全部满足 | **仍未完成：真网 Anthropic 与 GUI headed E2E 待环境验收** |
 
-当前能力声明中 `mcp=false` / `extensions=false` / `scheduler=false` **不得**当作完成；必须实现后再声明。
+**2026-07-26 校正**：`mcp` / `extensions` / `scheduler` 三个布尔位现已在 `crates/assistant-protocol/src/v2/capabilities.rs:106-111` 硬编码为 `true`，对应模块（`mcp_runtime.rs` 1014 行、`extension_store.rs` 233 行、`scheduler_store.rs` 577 行）确实存在并已接 RPC。原文「不得当作完成」的告诫方向需反转：现在的风险不是低报布尔位，而是 **`methods` 广告面里有 6 个方法在 `rpc.rs` 没有 handler**（见第 3 节），违反「广告 ⊆ 可调」。布尔位为 `true` 也只代表**最小真实表面**（如 extension 仅 list/enable、无隔离模型），不代表该能力域完成。
 
 生产模式目标：
 
@@ -50,50 +51,104 @@ Native Agent Daemon
 
 ## 2. 能力矩阵（归属 / 入口 / 事件源）
 
-| 能力域 | 唯一归属模块 | 唯一入口 | 唯一事件源 | 状态 |
-|--------|-------------|----------|------------|------|
-| Run 生命周期 | `RunManager` + `agent-core` | `ExecutionAuthority::*` / `run.*` RPC | `EventSequencer` | `partial` |
-| Provider 流式/工具 | `provider-adapters` | Engine → ProviderAdapter | RunEvent provider/tool | `partial` |
-| 工具执行 | `capability-gateway` | Gateway.execute | ToolCall* events | `partial` |
-| 权限 | `agent-core` + Gateway | permission.respond + PermissionClass | PermissionRequested | `partial` |
-| Hook | `agent-core` hooks | Engine 钩子点 | Hook* events | `partial` |
-| Subagent | `agent-core` + RunManager child runs | tool `task` | 子 Run 事件流 | `partial` |
-| Credential | Tauri Broker / natives.db sidecar | credential.resolve | 无密钥事件 | `partial` |
-| 事件存储 | EventSequencer + 默认持久化 | run.replay / subscribe | sequence | `partial` |
-| MCP | `src-agent-daemon/mcp_runtime` | mcp.* RPC | MCP events | `partial`（OAuth browser/redirect 明确 unsupported） |
-| Extension | 待建 | extension.* | Extension events | `not_started` |
-| Skill | 待建 | skill discovery inject | — | `not_started` |
-| Scheduler | 待建 | scheduler.* | Scheduler events | `not_started` |
-| Memory/Compaction | 待建 | engine 内 | Compact* events | `not_started` |
-| Artifact/Attachment | 部分 conversation | artifact.* | Artifact events | `partial` |
-| Sidecar Supervisor | Tauri | 启动编排 | Daemon health | `not_started` |
-| Protocol v2 Envelope | assistant-protocol v2 | UDS wire | — | `in_progress` |
-| 旧链删除 | G6 | 物理删 / deprecated | — | `done` |
+> 状态列于 2026-07-26 逐行核对（基线 `682453e3`）。**校正方向是让标签与代码一致，不是让它好看**——本轮修正全部是「低报 → 上调」，但同时补录了每行的**已知缺口**，避免上调后被误读为完成。
+
+| 能力域 | 唯一归属模块 | 唯一入口 | 唯一事件源 | 状态 | 核对证据与已知缺口（2026-07-26） |
+|--------|-------------|----------|------------|------|------|
+| Run 生命周期 | `RunManager` + `agent-core` | `ExecutionAuthority::*` / `run.*` RPC | `EventSequencer` | `partial` | 维持。`run.subscribe` 为 long-poll（`rpc.rs:933-1020`，`mode=subscribe_push_wait`），全双工 push 未做 |
+| Provider 流式/工具 | `provider-adapters` | Engine → ProviderAdapter | RunEvent provider/tool | `partial` | 维持。7 个适配器 + 4 个 SSE 解析器共 3778 行。缺 `cache_control` / `tool_choice`（全仓库零命中）、请求侧 `thinking`；`max_tokens` 生产路径固定 4096（`production.rs:1166`、`routing.rs:376`） |
+| 工具执行 | `capability-gateway` | Gateway.execute | ToolCall* events | `partial` | 维持。有 `web_fetch`（`tools/mod.rs:639`）+ SSRF 门；**无 `web_search`** |
+| 权限 | `agent-core` + Gateway | permission.respond + PermissionClass | PermissionRequested | `partial` | 维持。`permission.listPending` 已进广告面但 daemon 无 handler（见第 3 节） |
+| Hook | `agent-core` hooks | Engine 钩子点 | Hook* events | `partial` | **上调证据**：16 个事件全部有 dispatch 调用点（`harness-core/src/hooks/definition.rs:18-40`）。缺口：`permissionDecision` 只认 `"deny"`（`hook_handlers.rs:219-222`）、`HookFailurePolicy::{Skip,Default}` 从未被读取、`rpc.rs` 对 hook 零引用（GUI 不可见） |
+| Subagent | `agent-core` + RunManager child runs | tool `task` | 子 Run 事件流 | `partial` | 维持。预算账本齐全（`subagents.rs:69-83`，单 mutex `:156`）；缺口：`agent_profile_id` 恒 `None`（`production_tools.rs:1120`）、`max_steps` 写死 15、`task` schema 无 `subagent_type`/`system_prompt`/`tools`/`model` |
+| Credential | Tauri Broker / natives.db sidecar | credential.resolve | 无密钥事件 | `partial` | 维持。子 Agent 路由只存 ID（`subagent_store.rs:53-57`） |
+| 事件存储 | EventSequencer + 默认持久化 | run.replay / subscribe | sequence | `partial` | 维持 |
+| MCP | `src-agent-daemon/mcp_runtime` | mcp.* RPC | MCP events | `partial` | 维持，但缺口需具体化：**只实现了 `initialize` / `tools/list` / `tools/call`**（`mcp_runtime.rs:213/235/533/571`）；`resources/*`、`prompts/*`、`roots/list`、`sampling/*`、`elicitation/*` 全仓库零命中。OAuth browser/redirect 仍 unsupported |
+| Extension | `src-agent-daemon/extension_store.rs` | `extension.list` / `extension.enable` | — | `not_started` → **`partial`** | 233 行真实实现，RPC 已分发（`rpc.rs:1874` / `:1885`）。缺口：**无隔离模型**——`permissions` 字段只读入不消费（`extension_store.rs:119-127`），信任来源是 manifest 自称的 `trusted`；`extension-host/`（TS，503 行）未接入任何构建或运行路径 |
+| Skill | `src-agent-daemon/skill_store.rs` | `skill.list`；注入 system prompt | — | `not_started` → **`partial`** | 276 行真实实现，RPC 已分发（`rpc.rs:1934`），注入点 `production.rs:442`（父）/ `:788`（子）。缺口：不解析 YAML frontmatter、`inject_prompt` 拼全文无渐进披露（`skill_store.rs:178-184`）、`trusted: true` 硬编码（`:125-127`）、无 per-skill `allowed-tools` |
+| Scheduler | `src-agent-daemon/scheduler_store.rs` | `scheduler.*` | 到期 tick → 走 Run 主链 | `not_started` → **`partial`** | 577 行真实实现，6 个方法全部分发（`rpc.rs:2025`–`:2185`） |
+| Memory | `src-agent-daemon/memory_store.rs` | `memory.search` / `memory.add` | — | `not_started` → **`partial`** | 193 行，RPC 已分发（`rpc.rs:1953` / `:1974`）。关键词扫描，无 embedding |
+| Compaction | `agent-core` `context.rs` / `compaction.rs` | engine 内 | PreCompact / PostCompact | `not_started` → **`partial`** | 两条独立路径均已接线：`compaction.rs:70` ←`engine.rs:1067`（工具输出截断）、`context.rs:254` ←`production.rs:455`（历史裁剪）。**核心缺口：两者都是纯机械截断，无模型摘要**；且 PostCompact 返回值被 `let _ =` 丢弃（`engine.rs:1088`），hook 无回写通道 |
+| Artifact/Attachment | `artifact_store.rs` + `conversation_store` | `artifact.*` | Artifact events | `partial` | 维持。`artifact.list/open` 已分发（`rpc.rs:1630` / `:1830`）；`artifact.reveal` 仅 Host 侧实现（`src-tauri/src/assistant_service.rs:99`），daemon 无 handler。附件在 daemon 侧降级为文本占位（`conversation_store.rs:506`） |
+| Sidecar Supervisor | `src-tauri/sidecar_supervisor.rs` | 启动编排 | Daemon health | `not_started` → **`partial`** | 1007 行，已接入 Tauri 启动/退出（`src-tauri/src/lib.rs:183/192/415`），暴露 4 个 command（`:745-748`）。含 `ensure_started` / `poll_child_health` / `ensure_healthy_or_restart` / `shutdown_with_grace` |
+| Protocol v2 Envelope | assistant-protocol v2 | UDS wire | — | `in_progress` → **`partial`** | `envelope.rs` 371 行，Host/Daemon 全链使用。缺口是广告面一致性（第 3 节），不是 Envelope 本身 |
+| 旧链删除 | G6 | 物理删 / deprecated | — | `done` | 维持 |
+| 执行图（DAG 调度） | — | — | — | **`not_started`** | 新增行。全仓库无依赖图调度：`ExecutionRegistry`（`src-agent-daemon/src/runtime/execution_registry.rs`，632 行）是**取消令牌树**不是调度器；`SubagentCreated/Completed` 事件无依赖字段（`v2/run_event.rs:176-188`） |
 
 ## 3. 方法清单与实现状态
 
 每条 v2 方法三态：`implemented` | `unsupported` | `invalid_request`。
 
-| 方法 | 目标 | 当前 | 备注 |
-|------|------|------|------|
-| daemon.getCapabilities | implemented | implemented | 诚实 surface |
-| daemon.getStatus | implemented | implemented | |
-| daemon.ping | implemented | implemented | |
-| provider.list | implemented | implemented | |
-| provider.discoverModels | implemented | unsupported | 需接适配器 |
-| provider.test | implemented | unsupported | |
-| conversation.* | implemented | partial | 多在 Tauri DB，未统一 Authority |
-| run.create/start/cancel/retry | implemented | implemented | |
-| run.subscribe | implemented | partial | poll；push 待做 |
-| run.replay / getEvents / list | implemented | implemented | |
-| run.listChildren | implemented | unsupported | |
-| permission.respond | implemented | implemented | |
-| tool.list | implemented | implemented | |
-| agent.list / subagent.list | implemented | unsupported | |
-| extension.* / mcp.* / scheduler.* | implemented | unsupported | 能力 false |
-| artifact.* | implemented | unsupported | |
+### 3.1 清单规模（2026-07-26 实测）
 
-**规则**：`ALL_METHODS` 可列目标；`IMPLEMENTED_METHODS` / capabilities 只能列 `implemented`。未实现必须返回明确 `unsupported`，不得假成功。
+| 常量 | 条数 | 位置 |
+|------|------|------|
+| `ALL_METHODS`（目标目录） | **84** | `crates/assistant-protocol/src/v2/methods.rs:5-84` |
+| `IMPLEMENTED_METHODS`（daemon 广告） | **74** | 同文件 `:94-176` |
+| `HOST_IMPLEMENTED_METHODS`（host 广告） | **10**（其中 4 条不在 `IMPLEMENTED_METHODS`） | 同文件 `:179-198` |
+| 实际广告面 = 两者并集 | **78** | `capabilities.rs:72-76`（`host_mediated`） |
+| `rpc.rs` 真实 match 分支覆盖 | **73** | `src-agent-daemon/src/rpc.rs:396-2263` |
+
+> 早期文档曾称「`ALL_METHODS` 与 `IMPLEMENTED_METHODS` 各 84 条且一致」——**该说法不成立**，两表相差 10 条。
+
+### 3.2 广告 ⊆ 可调 违规清单（6 条，MUST 级）
+
+以下方法进入了 `daemon.getCapabilities().methods`，但 **daemon `rpc.rs` 没有对应 match 分支**，落入兜底 `_ =>`（`rpc.rs:2264-2280`）。因 `method_status()` 判定其为 `Implemented`，兜底返回码是 **`internal_error`**（而非诚实的 `unsupported`）。
+
+| 方法 | 广告来源 | 实际结果 | 备注 |
+|------|----------|----------|------|
+| `conversation.listPage` | `IMPLEMENTED_METHODS` | `internal_error` | `conversation_store.rs:13` 已实现 handler，但 `rpc.rs:615-625` 的分发名单漏列 —— 一行名单遗漏。前端在用（`src/lib/assistant-workspace/controller.ts:42`，有 catch 降级） |
+| `conversation.getMessagesPage` | `IMPLEMENTED_METHODS` | `internal_error` | 同上，`conversation_store.rs:17`；前端 `src/lib/assistant-gateway/daemon-adapter.ts:307` 在用 |
+| `permission.listPending` | `HOST_IMPLEMENTED_METHODS` | `internal_error` | Host 的 `is_host_owned_method`（`src-tauri/src/assistant_service.rs:135-145`）**不含**它，`permission.` 前缀被转发到 daemon |
+| `run.finish` | `HOST_IMPLEMENTED_METHODS` | `internal_error` | 同上，`run.` 前缀转发到 daemon |
+| `run.listChildren` | `HOST_IMPLEMENTED_METHODS` | `internal_error` | 同上。前端能力门 `capability-gate.ts:51` 把它当作 `task.list` 的降级路径 —— 门被广告骗开 |
+| `artifact.reveal` | `HOST_IMPLEMENTED_METHODS` | Tauri 路径 OK / 直连 daemon 路径 `internal_error` | Host 有实现（`assistant_service.rs:99`）且被 `is_host_owned_method` 拦在本地，故 GUI 实际可用；但对任何直连 daemon 的客户端仍是空头广告 |
+
+### 3.3 目录中未广告、诚实返回 `unsupported` 的方法（5 条，合规）
+
+`agent.list`、`conversation.update`、`run.getActivity`、`mcp.auth.oauthStart`、`mcp.auth.oauthCallback` —— 仅在 `ALL_METHODS`，不在任何广告面，落兜底后 `method_status()` 判定为 `Unsupported`，返回码 `unsupported`。**这符合契约**，不属于第 3.2 节的违规。
+
+另有 `mcp.call`：有 match 分支（`rpc.rs:1430`）但故意返回 `invalid_input: direct_mcp_call_disabled`，且**未**进广告面（`methods.rs:126` 有显式注释）——诚实关闭，合规。
+
+### 3.4 逐域状态（校正后）
+
+| 方法域 | 目标 | 当前 | 备注（含 `rpc.rs` 行号） |
+|------|------|------|------|
+| daemon.getCapabilities / getStatus / ping | implemented | **implemented** | `:600` / `:401` / `:438` |
+| provider.list | implemented | **implemented** | Host 侧 `assistant_service.rs:94`；daemon `:1147` |
+| provider.discoverModels | implemented | ~~unsupported~~ → **implemented** | `:1169`，真调适配器 `discover_models`，无凭据时降级 `list_models` |
+| provider.test | implemented | ~~unsupported~~ → **implemented** | `:1236`，要求 `model_id`，走 `test_provider_model` 真请求 |
+| conversation.*（11 个） | implemented | **implemented** | `:615-625`；已是 daemon-owned（旧备注「多在 Tauri DB」已过期）。`listPage`/`getMessagesPage` 见第 3.2 节；`conversation.update` 未实现且未广告 |
+| run.create / start / cancel / retry | implemented | **implemented** | `:648` / `:688` / `:732` / `:833` |
+| run.subscribe | implemented | **partial** | `:933`，long-poll（`wait_ms` / `mode=push`）；全双工连续 push 仍未做 |
+| run.replay / getEvents / list | implemented | **implemented** | `:908` / `:1021` |
+| run.rewind / rewindPreview | implemented | **implemented** | `:2214` |
+| workspace.restore / restorePreview | implemented | **implemented** | `:2214` |
+| run.listChildren / run.finish / run.getActivity | implemented | **unsupported** | 前两者被 host 广告面误列，见第 3.2 节 |
+| permission.respond | implemented | **implemented** | `:772` |
+| permission.listPending | implemented | **unsupported** | 见第 3.2 节 |
+| interaction.listPending / respond | implemented | **implemented** | `:1070` |
+| promptQueue.*（7 个） | implemented | **implemented** | `:1036-1042` |
+| tool.list | implemented | **implemented** | `:1124` |
+| agent.list | implemented | **unsupported** | 目录内未广告，合规 |
+| subagent.list / touch / switchRoute | implemented | ~~unsupported~~ → **implemented** | `:1097` |
+| extension.list / enable | implemented | ~~unsupported~~ → **implemented** | `:1874` / `:1885` |
+| skill.list | implemented | ~~未列~~ → **implemented** | `:1934` |
+| memory.search / add | implemented | ~~未列~~ → **implemented** | `:1953` / `:1974` |
+| scheduler.*（6 个） | implemented | ~~unsupported~~ → **implemented** | `:2025` / `:2036` / `:2052` / `:2080` / `:2122` / `:2167` |
+| mcp.list / start / stop / liveness / reconnect | implemented | ~~unsupported~~ → **implemented** | `:1334` / `:1350` / `:1398` / `:1450` / `:1482` |
+| mcp.auth.set / status / clear | implemented | **implemented** | `:1514` / `:1565` / `:1598` |
+| mcp.call | — | **故意关闭** | `:1430`，返回 `direct_mcp_call_disabled`，不进广告面 |
+| mcp.auth.oauthStart / oauthCallback | implemented | **unsupported** | 明确未广告，合规 |
+| artifact.list / open | implemented | ~~unsupported~~ → **implemented** | `:1630` / `:1830` |
+| artifact.reveal | implemented | **host-only** | 见第 3.2 节 |
+| task.list / cancel / wait | implemented | ~~未列~~ → **implemented** | `:1642` / `:1714` / `:1761` |
+| conversation.getContextUsage | implemented | ~~未列~~ → **implemented** | `:2240` |
+| engine.rateLimit.*（4 个） | implemented | ~~未列~~ → **implemented** | `:448` / `:468` / `:522` / `:563` |
+
+**规则**：`ALL_METHODS` 可列目标；`IMPLEMENTED_METHODS` / capabilities 只能列 `implemented`。未实现必须返回明确 `unsupported`，不得假成功。**第 3.2 节的 6 条即为该规则的现存违反项。**
+
+> 说明：另有 agent 正在并行修复第 3.2 节的广告面缺口，本表记录的是 2026-07-26 基线 `682453e3` 的审计时点状态；修复进展见对应 task。
 
 ## 4. Run 状态机（冻结）
 
@@ -177,11 +232,11 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 |-------|------|------|
 | 0 | 契约冻结（本文档） | **done** |
 | 1 | Protocol v2 Envelope + ExecutionAuthority | **partial**（Envelope + trait + reconnect；UDS lifecycle harness 绿；subscribe long-poll；全双工 push 流待） |
-| 2 | Sidecar Supervisor + Credential Broker 硬化 | **partial**（Supervisor 骨架；**生产默认 uds**；无静默 Embedded；Lease 绑定 run_id；自动恢复待） |
+| 2 | Sidecar Supervisor + Credential Broker 硬化 | **partial**（Supervisor 已非骨架：`src-tauri/src/sidecar_supervisor.rs` 1007 行，含 `ensure_started` / `poll_child_health` / `ensure_healthy_or_restart` / `shutdown_with_grace`，接入 `lib.rs:183/192/415` 与 4 个 command；**生产默认 uds**；无静默 Embedded；Lease 绑定 run_id；崩溃后自动恢复的端到端录证待） |
 | 3 | Run 生命周期/恢复 + 默认事件持久化 | **partial**（状态机扩展；默认 JSONL 事件；Run 快照恢复为 Interrupted；start 幂等；禁 cwd project_path） |
 | 4 | Provider 全量 + Tool Gateway 安全 | **partial**（Gateway 主路径已有；Anthropic 真网门禁待凭据） |
 | 5 | Hook 全量 + Subagent 产品化 | **done（fixture 双 Provider 父子 Engine 闭环；真网凭据验收待）** |
-| 6 | MCP / Extension / Skill / Scheduler / Memory / Artifact | **partial**（MCP 主链与 SSE；OAuth browser/redirect 明确 unsupported） |
+| 6 | MCP / Extension / Skill / Scheduler / Memory / Artifact | **partial**（六域**全部**已落地最小真实表面并接 RPC，非 `not_started`：MCP 主链与 SSE、`extension_store` 233 行、`skill_store` 276 行、`scheduler_store` 577 行、`memory_store` 193 行、`artifact_store` 217 行。缺口：MCP 仅 tools 面；Extension 无隔离；Skill 无 frontmatter/渐进披露；Compaction 无模型摘要；OAuth browser/redirect 明确 unsupported） |
 | 7 | UI 全路径联调 | **partial**（project_path 强制 + subscribe push_wait；headed GUI 录证待） |
 | 8 | 旧链删除 + 发布门禁 | **done（旧执行文件物理删除；审计脚本 + strict warning + CI runner）** |
 
@@ -196,7 +251,7 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 7. Tool 可绕过 Permission Gate  
 8. Hook 仅少数事件  
 9. Child 继承父 Key/权限  
-10. mcp/extensions/scheduler 声明与实现不一致  
+10. 能力广告面与 `rpc.rs` 分发不一致（**当前有 6 条违反，见第 3.2 节**）  
 11. 旧执行链仍有生产调用方  
 12. 测试/日志出现明文 Key  
 13. 仅 Adapter 测试、无真实 Engine 工具闭环  
@@ -221,5 +276,6 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 ## 14. 与 ADR-0011 / Gap Checklist 关系
 
 - ADR-0011：阶段性生产闭环缺口（G1–G6）——多数 G 已关闭，**不**等于全量 DoD。  
-- `NATIVE_ENGINE_GAP_CHECKLIST.md`：继续追踪 G/M 项。  
+- ~~`NATIVE_ENGINE_GAP_CHECKLIST.md`~~：已于 2026-07-23 文档清理时删除，勿再引用。  
+- [`EXECUTION-ENGINE-CAPABILITY-AUDIT.md`](./EXECUTION-ENGINE-CAPABILITY-AUDIT.md)：执行引擎能力审计（2026-07-26），本文第 2/3 节标签的证据来源。  
 - **本文档**：全量整改权威进度与契约；Phase 交付后同步更新本表。  

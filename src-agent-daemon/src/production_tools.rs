@@ -6,8 +6,8 @@
 //! unchanged from the pre-split single-file version.
 
 use agent_core::{
-    cap_child_permission, default_subagent_tool_allowlist, AgentEngine, EngineToolRuntime,
-    EventSequencer, HookEvent, HookRegistry, HookRequest, PermissionManager, PermissionProfile,
+    default_subagent_tool_allowlist, AgentEngine, EngineToolRuntime, EventSequencer, HookEvent,
+    HookRegistry, HookRequest, PermissionAggregate, PermissionManager, PermissionProfile,
     SubAgentManager, SubAgentStatus, ToolExecutionResult, ToolSchema,
 };
 use assistant_protocol::v2::RunEventKind;
@@ -20,6 +20,67 @@ use tokio::sync::{oneshot, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::production::{normalize_permission_scope, ProductionRuntime, TaskRecord};
+
+/// Step budget for a subagent turn loop when neither the caller nor the
+/// selected agent profile asks for one.
+pub const DEFAULT_CHILD_MAX_STEPS: u32 = 15;
+
+/// Ceiling on a subagent step budget. A parent agent (or a prompt-injected one)
+/// must not be able to buy an unbounded child loop by asking for a huge number;
+/// the tool-call and token ledgers in `SubAgentManager` bound cost too, this
+/// bounds wall-clock turns.
+pub const MAX_CHILD_MAX_STEPS: u32 = 100;
+
+/// Ceiling on the parent-authored child system prompt, in UTF-8 bytes. Long
+/// enough for a real persona brief, short enough that it cannot crowd out the
+/// child's own context budget. Over the limit is an error, never a silent
+/// truncation — a truncated persona is worse than a rejected one.
+pub const MAX_CHILD_SYSTEM_PROMPT_BYTES: usize = 16_000;
+
+/// Scope recorded on the `PermissionResponded` event when a hook, rather than a
+/// human, answered the prompt. Deliberately not a grant scope: auto-approval is
+/// per invocation and is never remembered.
+pub const HOOK_AUTO_APPROVE_SCOPE: &str = "hook_auto_approve";
+
+/// What the permission gate should do after consulting the hooks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HookPermissionGate {
+    Deny(String),
+    Prompt,
+    AutoApprove(String),
+}
+
+/// Apply the permission-profile ceiling to a hook aggregate.
+///
+/// This is the whole of the "a hook cannot escalate" rule, in one pure function
+/// so it can be tested without a daemon and so there is exactly one place to
+/// audit. Two independent gates must both open before a prompt is skipped:
+///
+/// - `auto_approve_allowed`, the caller's policy check — the tool must be one
+///   the profile would have *asked* about, not one it refuses outright;
+/// - the profile must not be `ReadOnly`, which grants nothing that needs asking.
+///
+/// `Autonomous` is listed for completeness: it already auto-approves downstream,
+/// so a hook allow there changes nothing but the audit line.
+///
+/// Deny is never filtered — a hook may always tighten, never loosen.
+pub fn hook_permission_gate(
+    aggregate: PermissionAggregate,
+    profile: PermissionProfile,
+    auto_approve_allowed: bool,
+) -> HookPermissionGate {
+    match aggregate {
+        PermissionAggregate::Deny(reason) => HookPermissionGate::Deny(reason),
+        PermissionAggregate::Prompt => HookPermissionGate::Prompt,
+        PermissionAggregate::AutoApprove(reason) => {
+            if !auto_approve_allowed || profile == PermissionProfile::ReadOnly {
+                HookPermissionGate::Prompt
+            } else {
+                HookPermissionGate::AutoApprove(reason)
+            }
+        }
+    }
+}
 
 /// Tools with permission gate + real task orchestration.
 pub struct PermissionGatedTools {
@@ -47,16 +108,9 @@ impl PermissionGatedTools {
     fn tool_allowed(&self, name: &str) -> bool {
         match &self.tool_allowlist {
             None => true,
-            Some(list) => {
-                if list.iter().any(|t| t == name) {
-                    return true;
-                }
-                // MCP surface: allow only when explicitly listed as `mcp_call` or exact name.
-                if name.starts_with("mcp__") {
-                    return list.iter().any(|t| t == "mcp_call" || t == name);
-                }
-                false
-            }
+            // Matching semantics (including the MCP surface) live in agent-core so
+            // enforcement here and child-surface derivation cannot drift apart.
+            Some(list) => agent_core::tool_list_allows(list, name),
         }
     }
 
@@ -194,7 +248,21 @@ impl EngineToolRuntime for PermissionGatedTools {
         }
 
         if needs_ask {
-            if let Some(denied) = self.await_tool_permission(name, &input).await {
+            // The ceiling a PermissionRequest hook may not raise. A hook's
+            // `permissionDecision: "allow"` skips a *confirmation*; it can never
+            // buy a capability the profile itself withholds. So auto-approval is
+            // offered only where the policy genuinely says "ask a human":
+            //   - `Denied(_)` is a policy refusal, not a question;
+            //   - `readonly` reaches here only for read-only side effects, and
+            //     `request_permission_for_profile` refuses that profile anyway.
+            let auto_approve_allowed = matches!(
+                class_result,
+                capability_gateway::policy::PolicyResult::NeedsApproval(_)
+            ) && profile_str != "readonly";
+            if let Some(denied) = self
+                .await_tool_permission(name, &input, auto_approve_allowed)
+                .await
+            {
                 return denied;
             }
         }
@@ -635,10 +703,18 @@ impl PermissionGatedTools {
         )
     }
 
+    /// Run the permission gate for one tool call.
+    ///
+    /// `None` means "proceed"; `Some` is the denial to return to the model.
+    ///
+    /// `auto_approve_allowed` is the profile ceiling computed by the caller: it
+    /// is the *only* switch that lets a hook's `permissionDecision: "allow"`
+    /// skip the prompt. Hooks never widen it.
     async fn await_tool_permission(
         &self,
         name: &str,
         input: &Value,
+        auto_approve_allowed: bool,
     ) -> Option<ToolExecutionResult> {
         let pattern = tool_pattern(name, input);
         let inv = self.build_tool_invocation(name, input).await;
@@ -658,35 +734,74 @@ impl PermissionGatedTools {
             .map(std::path::Path::new);
         let permission_hooks =
             crate::production_hooks::build_production_hooks_for_project(project_root);
-        let hook_responses = permission_hooks
-            .dispatch(HookRequest {
+        let hook_outcomes = permission_hooks
+            .dispatch_outcomes(HookRequest {
                 event: HookEvent::PermissionRequest,
                 run_id: self.parent_run_id.clone(),
                 tool_name: Some(name.to_string()),
                 input: input.clone(),
             })
             .await;
-        if let Err(reason) = HookRegistry::aggregate_allow(&hook_responses) {
-            return Some(ToolExecutionResult {
-                output: serde_json::json!({
-                    "error": reason,
-                    "denied": true,
-                    "denied_by_hook": true,
-                }),
-                is_error: true,
-                duration_ms: 0,
-            });
+        let profile = match self.permission_profile.as_str() {
+            "readonly" | "read_only" => PermissionProfile::ReadOnly,
+            "full_access" | "autonomous" | "full" => PermissionProfile::Autonomous,
+            _ => PermissionProfile::ConfirmEach,
+        };
+        let tool_call_id = uuid::Uuid::new_v4().to_string();
+        match hook_permission_gate(
+            HookRegistry::aggregate_permission(&hook_outcomes),
+            profile,
+            auto_approve_allowed,
+        ) {
+            HookPermissionGate::Deny(reason) => {
+                return Some(ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error": reason,
+                        "denied": true,
+                        "denied_by_hook": true,
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                });
+            }
+            HookPermissionGate::AutoApprove(reason) => {
+                // Auto-approval must never be silent: a skipped confirmation
+                // that leaves no trace is worse than a prompt. Until the
+                // protocol grows a dedicated event, the request/response pair
+                // carries the audit — it is the only existing shape that
+                // records the tool, its input, and who answered.
+                let permission_id = format!("hook-auto-{}", uuid::Uuid::new_v4());
+                eprintln!(
+                    "[production] hook auto-approved tool `{name}` on run {} ({reason})",
+                    self.parent_run_id
+                );
+                self.events.append(
+                    &self.parent_run_id,
+                    RunEventKind::PermissionRequested {
+                        tool_call_id: tool_call_id.clone(),
+                        tool_name: name.to_string(),
+                        reason: format!("Approve tool `{name}`"),
+                        permission_id: permission_id.clone(),
+                        input: input.clone(),
+                    },
+                );
+                self.events.append(
+                    &self.parent_run_id,
+                    RunEventKind::PermissionResponded {
+                        permission_id,
+                        approved: true,
+                        scope: HOOK_AUTO_APPROVE_SCOPE.to_string(),
+                    },
+                );
+                return None;
+            }
+            HookPermissionGate::Prompt => {}
         }
 
-        let tool_call_id = uuid::Uuid::new_v4().to_string();
         let permission_id = self
             .permissions
             .request_permission_for_profile(
-                match self.permission_profile.as_str() {
-                    "readonly" | "read_only" => PermissionProfile::ReadOnly,
-                    "full_access" | "autonomous" | "full" => PermissionProfile::Autonomous,
-                    _ => PermissionProfile::ConfirmEach,
-                },
+                profile,
                 &self.parent_run_id,
                 &tool_call_id,
                 name,
@@ -1020,15 +1135,83 @@ impl PermissionGatedTools {
             .unwrap_or("")
             .to_string();
 
-        // Child permission inherits parent permission_profile by default when unspecified
-        let requested_perm = input
-            .get("permission_profile")
+        // ── Persona: an on-disk profile the parent picked, plus a prompt it wrote ──
+        //
+        // `subagent_type` is the Claude-Code-compatible name; the daemon's own
+        // field name is accepted too. A profile the parent names but that does
+        // not exist is an error, never a silent fallback to "no persona".
+        let requested_profile_id = input
+            .get("subagent_type")
+            .or_else(|| input.get("agent_profile_id"))
+            .or_else(|| input.get("agent_type"))
             .and_then(|v| v.as_str())
-            .unwrap_or("ask");
-        let child_perm = cap_child_permission(&self.permission_profile, requested_perm);
-        // Explicit tool_allowlist on task input, else inherit parent tool allowlist or fallback to default
-        let child_allowlist: Vec<String> = if let Some(arr) = input.get("tool_allowlist") {
-            arr.as_array()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let project_root_path = self
+            .gateway
+            .project_root
+            .as_deref()
+            .map(std::path::Path::new);
+        let profile = match &requested_profile_id {
+            Some(id) => match agent_core::load_agent_profile(id, project_root_path) {
+                Some(p) => Some(p),
+                None => {
+                    return ToolExecutionResult {
+                        output: serde_json::json!({
+                            "error": format!("agent profile `{id}` not found in the project or user profile directories"),
+                            "code": "agent_profile_not_found",
+                        }),
+                        is_error: true,
+                        duration_ms: 0,
+                    };
+                }
+            },
+            None => None,
+        };
+
+        // Parent-authored system prompt for this child. Prompt text only — it is
+        // never consulted when resolving permissions or the tool surface.
+        let child_directive = match input
+            .get("system_prompt")
+            .or_else(|| input.get("agent_prompt"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(sp) if sp.len() > MAX_CHILD_SYSTEM_PROMPT_BYTES => {
+                return ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error": format!(
+                            "system_prompt is {} bytes; the limit is {MAX_CHILD_SYSTEM_PROMPT_BYTES}. Put task detail in `prompt`, not the persona.",
+                            sp.len()
+                        ),
+                        "code": "system_prompt_too_long",
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                };
+            }
+            Some(sp) => Some(sp.to_string()),
+            None => None,
+        };
+
+        // ── Permission and tool surface ──
+        //
+        // Both resolutions live in `agent_core::subagents`: the profile can only
+        // tighten what was requested, and the parent is a hard ceiling. Neither a
+        // parent-authored prompt nor a self-selected profile can widen either one,
+        // so a prompt-injected parent gains nothing by writing a hostile persona.
+        let child_perm = agent_core::resolve_child_permission(
+            &self.permission_profile,
+            input.get("permission_profile").and_then(|v| v.as_str()),
+            profile.as_ref().and_then(|p| p.permission_mode.as_deref()),
+        );
+        // A present-but-malformed `tool_allowlist` falls back to the readonly
+        // default rather than to "inherit the parent surface".
+        let requested_allowlist: Option<Vec<String>> = input.get("tool_allowlist").map(|value| {
+            value
+                .as_array()
                 .map(|items| {
                     items
                         .iter()
@@ -1036,11 +1219,22 @@ impl PermissionGatedTools {
                         .collect()
                 })
                 .unwrap_or_else(default_subagent_tool_allowlist)
-        } else {
-            self.tool_allowlist
-                .clone()
-                .unwrap_or_else(default_subagent_tool_allowlist)
-        };
+        });
+        let child_allowlist = agent_core::resolve_child_tool_allowlist(
+            self.tool_allowlist.as_deref(),
+            requested_allowlist.as_deref(),
+            profile.as_ref().and_then(|p| p.tools.as_deref()),
+            profile.as_ref().and_then(|p| p.disallowed_tools.as_deref()),
+        );
+
+        // ── Step budget: request, else the profile's, else the daemon default ──
+        let child_max_steps = input
+            .get("max_steps")
+            .and_then(|v| v.as_u64())
+            .map(|v| v.min(u32::MAX as u64) as u32)
+            .or_else(|| profile.as_ref().and_then(|p| p.max_steps))
+            .unwrap_or(DEFAULT_CHILD_MAX_STEPS)
+            .clamp(1, MAX_CHILD_MAX_STEPS);
 
         // Prefer binding injected by execute_task_batch; else resolve (single-task path).
         let binding = if let Some(b) = input
@@ -1117,11 +1311,13 @@ impl PermissionGatedTools {
                 provider_id: child_provider.clone(),
                 model_id: child_model.clone(),
                 key_id: Some(child_key.clone()),
-                agent_profile_id: None,
+                // Persisted on the run row; `ProductionRuntime::start_run` reloads
+                // the profile from it (system prompt, tools, token budget).
+                agent_profile_id: requested_profile_id.clone(),
                 permission_profile: Some(child_perm.clone()),
                 content: Some(prompt.clone()),
                 attachments: None,
-                max_steps: Some(15),
+                max_steps: Some(child_max_steps),
                 parent_run_id: Some(self.parent_run_id.clone()),
                 project_path: project_path.clone(),
                 idempotency_key: None,
@@ -1158,7 +1354,7 @@ impl PermissionGatedTools {
                 child_model.clone(),
                 child_perm.clone(),
                 child_allowlist.clone(),
-                None,
+                requested_profile_id.clone(),
                 Some("none".into()),
                 project_path.clone(),
             )
@@ -1181,17 +1377,25 @@ impl PermissionGatedTools {
             .await;
         let _ = crate::subagent_store::update_subagent_session_status(&session_id, "running", None);
 
-        // Apply child tool surface before RunManager starts the engine.
+        // Apply child tool surface + parent-authored system prompt before
+        // RunManager starts the engine. Both are keyed by the child run id and
+        // consumed once by `ProductionRuntime::start_run`.
         crate::global_run_manager()
             .runtime
             .set_run_tool_allowlist(&child_run_id, child_allowlist.clone())
             .await;
+        if let Some(directive) = child_directive.clone() {
+            crate::global_run_manager()
+                .runtime
+                .set_run_agent_directive(&child_run_id, directive)
+                .await;
+        }
 
         self.events.append(
             &self.parent_run_id,
             RunEventKind::SubagentCreated {
                 sub_run_id: child_run_id.clone(),
-                agent_profile_id: None,
+                agent_profile_id: requested_profile_id.clone(),
                 task: prompt.clone(),
             },
         );
@@ -1217,7 +1421,7 @@ impl PermissionGatedTools {
                 attachments: None,
                 trigger_message_id: None,
                 permission_profile: Some(child_perm.clone()),
-                max_steps: Some(15),
+                max_steps: Some(child_max_steps),
                 project_path: project_path.clone(),
                 idempotency_key: None,
                 effort: None,
@@ -1225,6 +1429,11 @@ impl PermissionGatedTools {
             },
         );
         if let Err(e) = start_result {
+            // The child never started, so nothing will consume its directive.
+            let _ = crate::global_run_manager()
+                .runtime
+                .take_run_agent_directive(&child_run_id)
+                .await;
             let _ = crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&e));
             if let Some(rec) = self.task_outputs.lock().await.get_mut(&task_id) {
                 rec.status = "failed".into();
@@ -1262,6 +1471,10 @@ impl PermissionGatedTools {
                         .cancel(assistant_protocol::v2::CancelRunRequest {
                             run_id: child_run_id_bg.clone(),
                         })
+                        .await;
+                    let _ = crate::global_run_manager()
+                        .runtime
+                        .take_run_agent_directive(&child_run_id_bg)
                         .await;
                     break;
                 }
@@ -1342,6 +1555,11 @@ impl PermissionGatedTools {
                     output: if text.is_empty() { None } else { Some(text) },
                 };
                 task_outputs.lock().await.insert(task_id_bg, rec);
+                // Terminal: drop any directive a non-native start path left behind.
+                let _ = crate::global_run_manager()
+                    .runtime
+                    .take_run_agent_directive(&child_run_id_bg)
+                    .await;
                 break;
             }
         });
@@ -1357,6 +1575,10 @@ impl PermissionGatedTools {
                 "key_id": child_key,
                 "model_id": child_model,
                 "permission_profile": child_perm,
+                "agent_profile_id": requested_profile_id,
+                "tool_allowlist": child_allowlist,
+                "max_steps": child_max_steps,
+                "system_prompt_authored": child_directive.is_some(),
             }),
             is_error: false,
             duration_ms: 0,
@@ -1784,4 +2006,176 @@ fn use_fixture_flag(input: &Value) -> bool {
         || std::env::var("NATIVES_DAEMON_FIXTURE")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_core::{HookDecision, HookHandler, HookOutcome, HookResponse, PermissionVerdict};
+
+    /// A hook that returns one fixed outcome, so the permission gate can be
+    /// exercised without spawning processes.
+    struct FixedHook(fn() -> HookOutcome);
+
+    #[async_trait::async_trait]
+    impl HookHandler for FixedHook {
+        async fn handle(&self, _request: HookRequest) -> HookResponse {
+            (self.0)().into_response()
+        }
+
+        async fn handle_outcome(&self, _request: HookRequest) -> HookOutcome {
+            (self.0)()
+        }
+    }
+
+    fn allowing() -> HookOutcome {
+        HookOutcome::Permission(PermissionVerdict::Allow {
+            reason: "hook approved".into(),
+        })
+    }
+
+    fn denying() -> HookOutcome {
+        HookOutcome::Decided(HookResponse {
+            decision: HookDecision::Deny {
+                reason: "hook denied".into(),
+            },
+        })
+    }
+
+    fn failing() -> HookOutcome {
+        HookOutcome::Failed {
+            reason: "hook crashed".into(),
+        }
+    }
+
+    fn asking() -> HookOutcome {
+        HookOutcome::Permission(PermissionVerdict::Ask {
+            reason: "human please".into(),
+        })
+    }
+
+    async fn gate_through_registry(
+        outcomes: &[fn() -> HookOutcome],
+        profile: PermissionProfile,
+        auto_approve_allowed: bool,
+    ) -> HookPermissionGate {
+        let mut registry = HookRegistry::new();
+        registry.enable_security_fail_closed();
+        for outcome in outcomes {
+            registry.register(HookEvent::PermissionRequest, Box::new(FixedHook(*outcome)));
+        }
+        let dispatched = registry
+            .dispatch_outcomes(HookRequest {
+                event: HookEvent::PermissionRequest,
+                run_id: "run-1".into(),
+                tool_name: Some("write_file".into()),
+                input: serde_json::json!({ "path": "a.txt" }),
+            })
+            .await;
+        hook_permission_gate(
+            HookRegistry::aggregate_permission(&dispatched),
+            profile,
+            auto_approve_allowed,
+        )
+    }
+
+    #[tokio::test]
+    async fn hook_allow_skips_the_prompt() {
+        assert_eq!(
+            gate_through_registry(&[allowing], PermissionProfile::ConfirmEach, true).await,
+            HookPermissionGate::AutoApprove("hook approved".into())
+        );
+    }
+
+    /// The core fail-closed property, checked in both dispatch orders so the
+    /// answer cannot depend on which hook happens to run first.
+    #[tokio::test]
+    async fn deny_wins_over_allow() {
+        for order in [
+            [allowing as fn() -> HookOutcome, denying],
+            [denying, allowing],
+        ] {
+            assert_eq!(
+                gate_through_registry(&order, PermissionProfile::ConfirmEach, true).await,
+                HookPermissionGate::Deny("hook denied".into()),
+                "a deny must survive any ordering"
+            );
+        }
+    }
+
+    /// A hook that could not run is treated as a deny on this security event,
+    /// even next to a hook that approved.
+    #[tokio::test]
+    async fn hook_failure_is_fail_closed() {
+        let gate =
+            gate_through_registry(&[allowing, failing], PermissionProfile::ConfirmEach, true).await;
+        match gate {
+            HookPermissionGate::Deny(reason) => assert!(reason.contains("hook crashed")),
+            other => panic!("a failed security hook must deny, got {other:?}"),
+        }
+    }
+
+    /// The ceiling: a readonly session cannot be talked into skipping its
+    /// confirmation by a hook.
+    #[tokio::test]
+    async fn readonly_profile_ignores_hook_allow() {
+        assert_eq!(
+            gate_through_registry(&[allowing], PermissionProfile::ReadOnly, true).await,
+            HookPermissionGate::Prompt
+        );
+    }
+
+    /// The other half of the ceiling: when the policy refused rather than
+    /// asked, the caller withholds `auto_approve_allowed` and the hook's allow
+    /// buys nothing.
+    #[tokio::test]
+    async fn policy_refusal_ignores_hook_allow() {
+        assert_eq!(
+            gate_through_registry(&[allowing], PermissionProfile::ConfirmEach, false).await,
+            HookPermissionGate::Prompt
+        );
+        assert_eq!(
+            gate_through_registry(&[allowing], PermissionProfile::Autonomous, false).await,
+            HookPermissionGate::Prompt
+        );
+    }
+
+    /// A deny is never filtered by the ceiling — hooks may always tighten.
+    #[test]
+    fn deny_passes_every_ceiling() {
+        for profile in [
+            PermissionProfile::ReadOnly,
+            PermissionProfile::ConfirmEach,
+            PermissionProfile::Autonomous,
+        ] {
+            for allowed in [false, true] {
+                assert_eq!(
+                    hook_permission_gate(PermissionAggregate::Deny("no".into()), profile, allowed),
+                    HookPermissionGate::Deny("no".into())
+                );
+            }
+        }
+    }
+
+    /// Silence from the hooks leaves the pre-existing prompt behaviour intact.
+    #[test]
+    fn no_hook_opinion_still_prompts() {
+        assert_eq!(
+            hook_permission_gate(
+                PermissionAggregate::Prompt,
+                PermissionProfile::ConfirmEach,
+                true
+            ),
+            HookPermissionGate::Prompt
+        );
+    }
+
+    /// An explicit `ask` from any hook forces the prompt back on.
+    #[tokio::test]
+    async fn hook_ask_overrides_hook_allow() {
+        assert_eq!(
+            gate_through_registry(&[allowing, asking], PermissionProfile::ConfirmEach, true).await,
+            HookPermissionGate::Prompt
+        );
+    }
 }

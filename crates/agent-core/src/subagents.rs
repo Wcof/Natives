@@ -42,6 +42,84 @@ pub fn cap_child_permission(parent: &str, requested: &str) -> String {
     label(rank(parent).min(rank(requested)))
 }
 
+/// Does a tool allowlist admit `name`?
+///
+/// Sole definition of allowlist matching, so the runtime that *enforces* a
+/// surface and the resolver that *derives* a child surface can never disagree.
+/// MCP tools (`mcp__server__tool`) are admitted by their exact name or by the
+/// `mcp_call` capability entry that stands for the whole MCP surface.
+pub fn tool_list_allows(list: &[String], name: &str) -> bool {
+    if list.iter().any(|tool| tool == name) {
+        return true;
+    }
+    if name.starts_with("mcp__") {
+        return list.iter().any(|tool| tool == "mcp_call" || tool == name);
+    }
+    false
+}
+
+/// Resolve a child's permission profile from the request, the selected agent
+/// profile, and the parent's own profile.
+///
+/// Two independent one-way valves, in this order:
+///
+/// 1. The agent profile can only *tighten* the request. A profile declaring
+///    `permissionMode: full_access` never elevates a child whose caller did not
+///    explicitly ask for it — otherwise "pick a powerful persona" would be an
+///    escalation primitive for a prompt-injected parent.
+/// 2. The parent caps whatever survives, via [`cap_child_permission`].
+///
+/// An absent request floors at `ask`, matching the sub-agent default.
+pub fn resolve_child_permission(
+    parent: &str,
+    requested: Option<&str>,
+    profile_mode: Option<&str>,
+) -> String {
+    let mut requested = requested
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("ask")
+        .to_string();
+    if let Some(mode) = profile_mode.map(str::trim).filter(|value| !value.is_empty()) {
+        requested = cap_child_permission(&requested, mode);
+    }
+    cap_child_permission(parent, &requested)
+}
+
+/// Resolve a child's tool surface from the request, the selected agent profile,
+/// and the parent's own surface.
+///
+/// Precedence for the starting set: an explicit request, else the profile's
+/// `tools`, else the parent's surface, else the readonly default. The profile's
+/// `disallowedTools` are then removed, and finally the parent's surface is a
+/// hard ceiling — a child can never reach a tool the parent itself cannot call.
+///
+/// `parent = None` means "unrestricted surface" (a root run), so the ceiling is
+/// a no-op there; the permission profile still gates every call.
+pub fn resolve_child_tool_allowlist(
+    parent: Option<&[String]>,
+    requested: Option<&[String]>,
+    profile_tools: Option<&[String]>,
+    profile_disallowed: Option<&[String]>,
+) -> Vec<String> {
+    let mut out: Vec<String> = match (requested, profile_tools) {
+        (Some(requested), _) => requested.to_vec(),
+        (None, Some(tools)) => tools.to_vec(),
+        (None, None) => parent
+            .map(<[String]>::to_vec)
+            .unwrap_or_else(default_subagent_tool_allowlist),
+    };
+    if let Some(denied) = profile_disallowed {
+        out.retain(|tool| !denied.iter().any(|entry| entry == tool));
+    }
+    if let Some(parent) = parent {
+        out.retain(|tool| tool_list_allows(parent, tool));
+    }
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|tool| seen.insert(tool.clone()));
+    out
+}
+
 /// Failure propagation for child batches (task-11).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FailurePolicy {
@@ -860,6 +938,172 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.contains("DEADLOCK"), "{err}");
+    }
+
+    fn owned(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn tool_list_allows_exact_and_mcp_surface() {
+        let list = owned(&["read_file", "mcp_call"]);
+        assert!(tool_list_allows(&list, "read_file"));
+        assert!(!tool_list_allows(&list, "write_file"));
+        // `mcp_call` stands for the whole MCP surface.
+        assert!(tool_list_allows(&list, "mcp__github__create_issue"));
+        // Without it, only the exact MCP tool name is admitted.
+        let exact = owned(&["mcp__github__create_issue"]);
+        assert!(tool_list_allows(&exact, "mcp__github__create_issue"));
+        assert!(!tool_list_allows(&exact, "mcp__github__delete_repo"));
+        assert!(!tool_list_allows(&[], "read_file"));
+    }
+
+    #[test]
+    fn resolve_child_permission_profile_only_tightens() {
+        // A profile declaring full_access does not elevate an unrequested child.
+        assert_eq!(
+            resolve_child_permission("full_access", None, Some("full_access")),
+            "ask"
+        );
+        // Nor does it elevate past a readonly request.
+        assert_eq!(
+            resolve_child_permission("full_access", Some("readonly"), Some("full_access")),
+            "readonly"
+        );
+        // A restrictive profile tightens an explicit full_access request.
+        assert_eq!(
+            resolve_child_permission("full_access", Some("full_access"), Some("readonly")),
+            "readonly"
+        );
+        // No profile: the request stands, still capped by the parent.
+        assert_eq!(
+            resolve_child_permission("full_access", Some("full_access"), None),
+            "full_access"
+        );
+        assert_eq!(resolve_child_permission("full_access", None, None), "ask");
+    }
+
+    #[test]
+    fn resolve_child_permission_parent_is_the_hard_ceiling() {
+        // The headline escalation attempt: readonly parent, child asks for
+        // full_access, and the chosen profile also declares full_access.
+        assert_eq!(
+            resolve_child_permission("readonly", Some("full_access"), Some("full_access")),
+            "readonly"
+        );
+        assert_eq!(
+            resolve_child_permission("ask", Some("full_access"), Some("full_access")),
+            "ask"
+        );
+        // Unknown / blank parent floors at ask.
+        assert_eq!(
+            resolve_child_permission("", Some("full_access"), Some("full_access")),
+            "ask"
+        );
+        assert_eq!(
+            resolve_child_permission("   ", Some("full_access"), None),
+            "ask"
+        );
+        // Blank request is treated as absent, not as an elevation.
+        assert_eq!(resolve_child_permission("full_access", Some(""), None), "ask");
+    }
+
+    #[test]
+    fn resolve_child_tool_allowlist_precedence() {
+        let parent = owned(&["read_file", "grep", "write_file", "task"]);
+        // Explicit request wins over the profile.
+        assert_eq!(
+            resolve_child_tool_allowlist(
+                Some(&parent),
+                Some(&owned(&["grep"])),
+                Some(&owned(&["write_file"])),
+                None
+            ),
+            owned(&["grep"])
+        );
+        // Profile tools apply when nothing is requested.
+        assert_eq!(
+            resolve_child_tool_allowlist(
+                Some(&parent),
+                None,
+                Some(&owned(&["read_file", "grep"])),
+                None
+            ),
+            owned(&["read_file", "grep"])
+        );
+        // Neither: inherit the parent surface.
+        assert_eq!(
+            resolve_child_tool_allowlist(Some(&parent), None, None, None),
+            parent
+        );
+        // Unrestricted parent + nothing declared: readonly default floor.
+        assert_eq!(
+            resolve_child_tool_allowlist(None, None, None, None),
+            default_subagent_tool_allowlist()
+        );
+        // An explicitly empty request is fail-closed, not "fall back to default".
+        assert!(resolve_child_tool_allowlist(Some(&parent), Some(&[]), None, None).is_empty());
+        // Duplicates collapse, order preserved.
+        assert_eq!(
+            resolve_child_tool_allowlist(
+                None,
+                Some(&owned(&["grep", "read_file", "grep"])),
+                None,
+                None
+            ),
+            owned(&["grep", "read_file"])
+        );
+    }
+
+    #[test]
+    fn resolve_child_tool_allowlist_parent_is_the_hard_ceiling() {
+        let parent = owned(&["read_file", "grep", "task"]);
+        // Profile asking for a surface the parent lacks gets intersected down.
+        assert_eq!(
+            resolve_child_tool_allowlist(
+                Some(&parent),
+                None,
+                Some(&owned(&["read_file", "write_file", "run_terminal"])),
+                None
+            ),
+            owned(&["read_file"])
+        );
+        // Same for a directly requested surface.
+        assert_eq!(
+            resolve_child_tool_allowlist(
+                Some(&parent),
+                Some(&owned(&["run_terminal", "write_file", "apply_patch"])),
+                None,
+                None
+            ),
+            Vec::<String>::new()
+        );
+        // Profile disallowedTools subtract even when the parent would allow them.
+        assert_eq!(
+            resolve_child_tool_allowlist(
+                Some(&parent),
+                None,
+                Some(&owned(&["read_file", "grep"])),
+                Some(&owned(&["grep"]))
+            ),
+            owned(&["read_file"])
+        );
+        // MCP: a parent holding only `mcp_call` still admits a named MCP tool.
+        let mcp_parent = owned(&["mcp_call"]);
+        assert_eq!(
+            resolve_child_tool_allowlist(
+                Some(&mcp_parent),
+                Some(&owned(&["mcp__github__create_issue", "read_file"])),
+                None,
+                None
+            ),
+            owned(&["mcp__github__create_issue"])
+        );
+        // Unrestricted parent: no ceiling, permission profile still gates calls.
+        assert_eq!(
+            resolve_child_tool_allowlist(None, Some(&owned(&["run_terminal"])), None, None),
+            owned(&["run_terminal"])
+        );
     }
 
     #[test]

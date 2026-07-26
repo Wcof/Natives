@@ -297,12 +297,234 @@ pub enum ProviderResponseBlock {
 }
 
 /// Token usage information.
+///
+/// # Prompt-cache token contract
+///
+/// Providers disagree about whether cached prompt tokens are counted inside
+/// their prompt-token field: Anthropic **excludes** them from `input_tokens`,
+/// while OpenAI, DeepSeek and Gemini **include** them. Rather than leak that to
+/// every caller, the stream parsers normalise on the Anthropic convention:
+///
+/// - `input_tokens` — prompt tokens that were **not** served from cache.
+/// - `cache_read_tokens` — prompt tokens served from cache (billed at a
+///   discount by every provider that reports them).
+/// - `cache_creation_tokens` — prompt tokens **written** to the cache this
+///   request (billed at a premium). Only Anthropic reports this separately;
+///   automatic-prefix providers fold cache writes into `input_tokens`.
+///
+/// Total prompt size is therefore always
+/// `input_tokens + cache_read_tokens + cache_creation_tokens`
+/// (see [`ProviderUsage::total_prompt_tokens`]).
+///
+/// `None` means "the provider did not report this", which is distinct from
+/// `Some(0)` ("reported, and it was zero"). Callers that persist cache metrics
+/// must preserve that distinction.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProviderUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub reasoning_tokens: Option<u64>,
+    /// Prompt tokens written to the provider's prompt cache this request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_tokens: Option<u64>,
+    /// Prompt tokens served from the provider's prompt cache this request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
     pub cost_usd: Option<f64>,
+}
+
+impl ProviderUsage {
+    /// Full prompt size including cached and cache-written tokens.
+    pub fn total_prompt_tokens(&self) -> u64 {
+        self.input_tokens
+            .saturating_add(self.cache_creation_tokens.unwrap_or(0))
+            .saturating_add(self.cache_read_tokens.unwrap_or(0))
+    }
+
+    /// Whether the provider reported any prompt-cache activity at all.
+    pub fn reported_cache(&self) -> bool {
+        self.cache_creation_tokens.is_some() || self.cache_read_tokens.is_some()
+    }
+
+    /// Fold a later usage report into an earlier one.
+    ///
+    /// Anthropic sends the full prompt breakdown once on `message_start` and
+    /// then a terminal `message_delta` that carries only the fields it knows;
+    /// naively replacing the accumulator there loses the input and cache
+    /// counts. Non-zero / `Some` values from `next` win, everything else is
+    /// carried forward.
+    pub fn merge_from(&mut self, next: &ProviderUsage) {
+        if next.input_tokens > 0 {
+            self.input_tokens = next.input_tokens;
+        }
+        if next.output_tokens > 0 {
+            self.output_tokens = next.output_tokens;
+        }
+        if next.reasoning_tokens.is_some() {
+            self.reasoning_tokens = next.reasoning_tokens;
+        }
+        if next.cache_creation_tokens.is_some() {
+            self.cache_creation_tokens = next.cache_creation_tokens;
+        }
+        if next.cache_read_tokens.is_some() {
+            self.cache_read_tokens = next.cache_read_tokens;
+        }
+        if next.cost_usd.is_some() {
+            self.cost_usd = next.cost_usd;
+        }
+    }
+}
+
+/// Which tool (if any) the model is forced to call.
+///
+/// Wire encoding is provider-specific; see
+/// [`ToolChoice::to_anthropic`] / [`ToolChoice::to_openai`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum ToolChoice {
+    /// Model decides freely (provider default).
+    Auto,
+    /// Model must not call a tool.
+    None,
+    /// Model must call at least one tool, its choice which.
+    Required,
+    /// Model must call this exact tool.
+    Tool { name: String },
+}
+
+impl ToolChoice {
+    /// Anthropic Messages API `tool_choice` object.
+    ///
+    /// `disable_parallel_tool_use` rides on the same object for Anthropic, so
+    /// it is passed in here rather than emitted as a sibling field.
+    pub fn to_anthropic(&self, parallel_tool_calls: Option<bool>) -> serde_json::Value {
+        let mut value = match self {
+            ToolChoice::Auto => serde_json::json!({ "type": "auto" }),
+            ToolChoice::None => serde_json::json!({ "type": "none" }),
+            ToolChoice::Required => serde_json::json!({ "type": "any" }),
+            ToolChoice::Tool { name } => serde_json::json!({ "type": "tool", "name": name }),
+        };
+        if let Some(false) = parallel_tool_calls {
+            value["disable_parallel_tool_use"] = serde_json::json!(true);
+        }
+        value
+    }
+
+    /// OpenAI chat-completions / Responses `tool_choice` value.
+    pub fn to_openai(&self) -> serde_json::Value {
+        match self {
+            ToolChoice::Auto => serde_json::json!("auto"),
+            ToolChoice::None => serde_json::json!("none"),
+            ToolChoice::Required => serde_json::json!("required"),
+            ToolChoice::Tool { name } => serde_json::json!({
+                "type": "function",
+                "function": { "name": name },
+            }),
+        }
+    }
+
+    /// Gemini `toolConfig.functionCallingConfig` object.
+    pub fn to_gemini(&self) -> serde_json::Value {
+        match self {
+            ToolChoice::Auto => serde_json::json!({ "mode": "AUTO" }),
+            ToolChoice::None => serde_json::json!({ "mode": "NONE" }),
+            ToolChoice::Required => serde_json::json!({ "mode": "ANY" }),
+            ToolChoice::Tool { name } => serde_json::json!({
+                "mode": "ANY",
+                "allowedFunctionNames": [name],
+            }),
+        }
+    }
+}
+
+/// Coarse reasoning depth, mapped onto whatever knob the model exposes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningEffort {
+    /// OpenAI `reasoning_effort` string.
+    pub fn as_openai_str(self) -> &'static str {
+        match self {
+            ReasoningEffort::Low => "low",
+            ReasoningEffort::Medium => "medium",
+            ReasoningEffort::High => "high",
+        }
+    }
+
+    /// Default thinking budget in tokens for providers that take a number
+    /// instead of a level. Callers may override via
+    /// [`ReasoningRequest::budget_tokens`].
+    pub fn default_budget_tokens(self) -> u64 {
+        match self {
+            ReasoningEffort::Low => 4_096,
+            ReasoningEffort::Medium => 16_384,
+            ReasoningEffort::High => 32_768,
+        }
+    }
+}
+
+/// Caller-requested reasoning configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReasoningRequest {
+    pub effort: ReasoningEffort,
+    /// Explicit thinking budget. Ignored by models whose only knob is a level
+    /// (`ReasoningControl::OpenAiEffort`, `ReasoningControl::AnthropicAdaptive`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_tokens: Option<u64>,
+}
+
+impl ReasoningRequest {
+    pub fn new(effort: ReasoningEffort) -> Self {
+        ReasoningRequest {
+            effort,
+            budget_tokens: None,
+        }
+    }
+
+    /// Budget to send, honouring an explicit value over the effort default.
+    pub fn budget(&self) -> u64 {
+        self.budget_tokens
+            .unwrap_or_else(|| self.effort.default_budget_tokens())
+    }
+}
+
+/// Request-side controls that are orthogonal to the message payload.
+///
+/// [`Default`] is exactly today's behaviour: no forced tool, provider-default
+/// parallelism, no reasoning parameter, and prompt caching left to the
+/// per-model default (enabled wherever the model supports explicit
+/// breakpoints).
+///
+/// This rides alongside [`ProviderRequest`] rather than inside it because
+/// `ProviderRequest` is built with struct literals in crates outside this one;
+/// see `build_messages_body_with_controls` and
+/// `build_chat_completions_body_with_controls` for the seam.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestControls {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoice>,
+    /// `Some(false)` forces one tool call per assistant turn. `None` leaves the
+    /// provider default (parallel calls allowed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningRequest>,
+    /// `None` = per-model default. `Some(false)` disables prompt-cache
+    /// breakpoints for this request (incident escape hatch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache: Option<bool>,
+}
+
+impl RequestControls {
+    /// Whether explicit prompt-cache breakpoints should be emitted for a model.
+    pub fn prompt_cache_enabled(&self, profile: &crate::model_profile::ModelProfile) -> bool {
+        profile.wants_explicit_cache_breakpoints() && self.prompt_cache.unwrap_or(true)
+    }
 }
 
 /// Provider error.

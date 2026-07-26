@@ -4,7 +4,11 @@
 //! Tools and credentials are injected via seams so the daemon can supply
 //! capability-gateway + credential broker without circular deps.
 
-use crate::compaction::{compact_messages as compact_tool_history, repair_dangling_tool_calls};
+use crate::compaction::{
+    apply_model_summary, choose_summary_split, compact_messages as compact_tool_history,
+    render_transcript_for_summary, repair_dangling_tool_calls, CompactResult,
+    SUMMARY_SYSTEM_PROMPT,
+};
 use crate::doom_loop::DoomLoopDetector;
 use crate::event_seq::EventSequencer;
 use crate::hooks::{HookDecision, HookEvent, HookRegistry, HookRequest};
@@ -13,12 +17,29 @@ use futures_util::{Stream, StreamExt};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 /// Soft budget for in-engine history characters before tool-output compaction.
 const HISTORY_COMPACT_CHARS: usize = 48_000;
 const TOOL_OUTPUT_MAX_CHARS: usize = 4_000;
+
+/// Messages kept verbatim at the tail when a model summary replaces the prefix.
+const SUMMARY_KEEP_TAIL_MESSAGES: usize = 6;
+/// Below this many summarizable messages a provider round trip is not worth it.
+const SUMMARY_MIN_PREFIX_MESSAGES: usize = 4;
+/// Upper bound on the transcript handed to the summarizer (cost boundary).
+const SUMMARY_TRANSCRIPT_MAX_CHARS: usize = 60_000;
+/// Per-message truncation inside that transcript.
+const SUMMARY_MESSAGE_MAX_CHARS: usize = 2_000;
+/// Wall clock ceiling for one summarization round trip.
+const SUMMARY_TIMEOUT_MS: u64 = 60_000;
+/// Total model summarizations attempted by one engine, successful or not.
+const SUMMARY_MAX_ATTEMPTS: u32 = 8;
+/// After this many failures the engine stops paying for summarization and
+/// stays on mechanical compaction for the rest of the run.
+const SUMMARY_MAX_FAILURES: u32 = 2;
 
 /// Tool call after PreToolUse hooks, ready for (possibly parallel) execution.
 #[derive(Debug, Clone)]
@@ -213,6 +234,10 @@ pub struct AgentEngine {
     history_compact_chars: Option<usize>,
     /// Optional max chars kept per tool output after compaction.
     tool_output_max_chars: Option<usize>,
+    /// Ask the model for a structured summary when compacting (default on).
+    model_compaction: bool,
+    summary_attempts: AtomicU32,
+    summary_failures: AtomicU32,
 }
 
 impl AgentEngine {
@@ -224,7 +249,17 @@ impl AgentEngine {
             session_harness: None,
             history_compact_chars: None,
             tool_output_max_chars: None,
+            model_compaction: true,
+            summary_attempts: AtomicU32::new(0),
+            summary_failures: AtomicU32::new(0),
         }
+    }
+
+    /// Disable the summarization round trip and keep compaction mechanical.
+    /// Useful for cost-sensitive or offline runs; failure already degrades here.
+    pub fn with_model_compaction(mut self, enabled: bool) -> Self {
+        self.model_compaction = enabled;
+        self
     }
 
     /// Use a registry-owned cancel token (task-03). Prefer over the engine-local root.
@@ -814,7 +849,9 @@ impl AgentEngine {
             // Compact large tool outputs + repair dangling tool_call_ids before
             // the next provider turn (no isolated tool calls).
             // Safe point: ProviderBatchBoundary — between tool batch and next provider turn.
-            messages = self.maybe_compact_history(run_id, messages).await;
+            messages = self
+                .maybe_compact_history(run_id, &config.model, provider, messages)
+                .await;
             self.apply_safe_point(
                 &config.conversation_id,
                 crate::session_coordinator::SafePoint::ProviderBatchBoundary,
@@ -1030,9 +1067,17 @@ impl AgentEngine {
     }
 
     /// Convert engine history → JSON messages, compact, convert back.
+    ///
+    /// Over budget the engine first asks the model for a structured summary of
+    /// the old prefix (see [`crate::compaction::SUMMARY_SYSTEM_PROMPT`]) and
+    /// keeps only `[summary] + recent tail`. Every failure path — provider
+    /// error, timeout, cancellation, empty answer, budget exhausted — falls
+    /// back to mechanical compaction. Compaction never fails a Run.
     async fn maybe_compact_history(
         &self,
         run_id: &str,
+        model: &str,
+        provider: &dyn EngineProvider,
         messages: Vec<EngineMessage>,
     ) -> Vec<EngineMessage> {
         let history_limit = self
@@ -1056,7 +1101,11 @@ impl AgentEngine {
                 event: HookEvent::PreCompact,
                 run_id: run_id.to_string(),
                 tool_name: None,
-                input: json!({ "before_chars": before_chars }),
+                input: json!({
+                    "before_chars": before_chars,
+                    "messages": messages.len(),
+                    "model_compaction": self.model_compaction,
+                }),
             })
             .await;
         if HookRegistry::aggregate_allow(&pre_compact).is_err() {
@@ -1064,7 +1113,18 @@ impl AgentEngine {
         }
 
         let values = engine_messages_to_values(&messages);
-        let result = compact_tool_history(&values, tool_limit);
+        let result = match self
+            .try_model_summary(model, provider, &values, tool_limit)
+            .await
+        {
+            Some(summarized) => summarized,
+            None => compact_tool_history(&values, tool_limit),
+        };
+        let mode = if result.summarized_messages > 0 {
+            "model"
+        } else {
+            "mechanical"
+        };
         let after_chars: usize = result
             .messages
             .iter()
@@ -1085,6 +1145,9 @@ impl AgentEngine {
             },
         );
 
+        // PostCompact carries the full compaction record. The dispatch result is
+        // intentionally ignored: HookDecision has no channel for writing history
+        // back, so a hook cannot (and must not appear to) alter the outcome.
         let _ = self
             .hooks
             .dispatch(HookRequest {
@@ -1092,9 +1155,13 @@ impl AgentEngine {
                 run_id: run_id.to_string(),
                 tool_name: None,
                 input: json!({
+                    "mode": mode,
+                    "before_chars": before_chars,
                     "after_chars": after_chars,
                     "dropped_tool_outputs": result.dropped_tool_outputs,
                     "repaired_dangling": result.repaired_dangling,
+                    "summarized_messages": result.summarized_messages,
+                    "summary": result.summary,
                 }),
             })
             .await;
@@ -1102,6 +1169,105 @@ impl AgentEngine {
         values_to_engine_messages(&result.messages)
     }
 
+    /// Model-backed compaction: `Some` only when a usable summary came back.
+    ///
+    /// Returning `None` is the documented degradation path and the caller
+    /// answers it with mechanical compaction.
+    async fn try_model_summary(
+        &self,
+        model: &str,
+        provider: &dyn EngineProvider,
+        values: &[Value],
+        tool_limit: usize,
+    ) -> Option<CompactResult> {
+        if !self.model_compaction || self.cancel.is_cancelled() {
+            return None;
+        }
+        // Cost boundary: bounded attempts per engine, and a failure streak
+        // permanently drops the run back to mechanical compaction.
+        if self.summary_attempts.load(AtomicOrdering::SeqCst) >= SUMMARY_MAX_ATTEMPTS
+            || self.summary_failures.load(AtomicOrdering::SeqCst) >= SUMMARY_MAX_FAILURES
+        {
+            return None;
+        }
+        let split = choose_summary_split(values, SUMMARY_KEEP_TAIL_MESSAGES);
+        if split < SUMMARY_MIN_PREFIX_MESSAGES {
+            // Too little history to be worth a round trip.
+            return None;
+        }
+
+        self.summary_attempts.fetch_add(1, AtomicOrdering::SeqCst);
+        let transcript = render_transcript_for_summary(
+            &values[..split],
+            SUMMARY_TRANSCRIPT_MAX_CHARS,
+            SUMMARY_MESSAGE_MAX_CHARS,
+        );
+        let request = vec![EngineMessage {
+            role: "user".into(),
+            content: transcript,
+            tool_call_id: None,
+            tool_name: None,
+            tool_calls: None,
+        }];
+
+        match self.stream_summary_text(model, provider, request).await {
+            Ok(summary) if !summary.trim().is_empty() => {
+                Some(apply_model_summary(values, split, &summary, tool_limit))
+            }
+            _ => {
+                self.summary_failures.fetch_add(1, AtomicOrdering::SeqCst);
+                None
+            }
+        }
+    }
+
+    /// One isolated provider round trip that yields plain summary text.
+    ///
+    /// Isolated in three ways: no tools (so it cannot start a tool loop), a
+    /// throwaway message vector (so it never touches the run history), and no
+    /// event emission (so the summary does not surface as assistant output).
+    /// Bounded by the run cancel token and a wall-clock timeout.
+    async fn stream_summary_text(
+        &self,
+        model: &str,
+        provider: &dyn EngineProvider,
+        messages: Vec<EngineMessage>,
+    ) -> Result<String, String> {
+        let cancel = self.cancel.clone();
+        let collect = async {
+            let mut stream = provider
+                .stream(
+                    model,
+                    messages,
+                    &[],
+                    Some(SUMMARY_SYSTEM_PROMPT),
+                    cancel.clone(),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            let mut text = String::new();
+            while let Some(event) = stream.next().await {
+                if cancel.is_cancelled() {
+                    return Err("cancelled".to_string());
+                }
+                match event {
+                    EngineProviderEvent::TextDelta(delta) => text.push_str(&delta),
+                    EngineProviderEvent::Error { message, .. } => return Err(message),
+                    _ => {}
+                }
+            }
+            Ok(text)
+        };
+
+        tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => Err("cancelled".to_string()),
+            outcome = tokio::time::timeout(
+                std::time::Duration::from_millis(SUMMARY_TIMEOUT_MS),
+                collect,
+            ) => outcome.unwrap_or_else(|_| Err("summary request timed out".to_string())),
+        }
+    }
 }
 
 fn apply_prompt_hook_responses(
@@ -2027,5 +2193,467 @@ mod tests {
         assert!(!events
             .iter()
             .any(|e| matches!(e.payload, RunEventKind::Completed { .. })));
+    }
+
+    // -----------------------------------------------------------------------
+    // Model-backed compaction
+    // -----------------------------------------------------------------------
+
+    const CANNED_SUMMARY: &str = "## Goal\nfix the parser\n## Completed\npatched lexer.rs\n\
+## Current state\ntests green\n## Open questions\nnone\n## Next steps\nship";
+
+    enum SummaryBehavior {
+        /// Answer the summarization request with `CANNED_SUMMARY`.
+        Answer,
+        /// Fail the summarization request at stream open.
+        Fail,
+        /// Never answer; used to prove cancellation interrupts the request.
+        Hang,
+    }
+
+    /// Provider that tells the summarization round trip apart from normal turns
+    /// by its system prompt, and records both sides for assertions.
+    struct CompactionProvider {
+        rounds: Mutex<Vec<Vec<EngineProviderEvent>>>,
+        behavior: SummaryBehavior,
+        summary_requests: Mutex<Vec<String>>,
+        summary_tools_empty: Arc<AtomicBool>,
+        summary_started: Arc<AtomicBool>,
+        main_requests: Mutex<Vec<Vec<EngineMessage>>>,
+    }
+
+    impl CompactionProvider {
+        fn new(behavior: SummaryBehavior, rounds: Vec<Vec<EngineProviderEvent>>) -> Self {
+            Self {
+                rounds: Mutex::new(rounds),
+                behavior,
+                summary_requests: Mutex::new(Vec::new()),
+                summary_tools_empty: Arc::new(AtomicBool::new(true)),
+                summary_started: Arc::new(AtomicBool::new(false)),
+                main_requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn summary_count(&self) -> usize {
+            self.summary_requests.lock().unwrap().len()
+        }
+
+        fn last_main_history(&self) -> Vec<EngineMessage> {
+            self.main_requests.lock().unwrap().last().cloned().unwrap()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl EngineProvider for CompactionProvider {
+        async fn stream(
+            &self,
+            _model: &str,
+            messages: Vec<EngineMessage>,
+            tools: &[ToolSchema],
+            system_prompt: Option<&str>,
+            _cancel: CancellationToken,
+        ) -> Result<EngineProviderEventStream, EngineError> {
+            if system_prompt == Some(SUMMARY_SYSTEM_PROMPT) {
+                self.summary_requests
+                    .lock()
+                    .unwrap()
+                    .push(messages.first().map(|m| m.content.clone()).unwrap_or_default());
+                if !tools.is_empty() {
+                    self.summary_tools_empty.store(false, Ordering::SeqCst);
+                }
+                self.summary_started.store(true, Ordering::SeqCst);
+                return match self.behavior {
+                    SummaryBehavior::Answer => Ok(Box::pin(futures_util::stream::iter(vec![
+                        EngineProviderEvent::TextDelta(CANNED_SUMMARY.into()),
+                        EngineProviderEvent::Completed,
+                    ]))),
+                    SummaryBehavior::Fail => Err(EngineError::Provider {
+                        message: "summarizer unavailable".into(),
+                        code: "http_500".into(),
+                        retryable: false,
+                        category: "ServerError".into(),
+                        retry_after_ms: None,
+                    }),
+                    SummaryBehavior::Hang => Ok(Box::pin(futures_util::stream::pending())),
+                };
+            }
+
+            self.main_requests.lock().unwrap().push(messages);
+            let mut rounds = self.rounds.lock().unwrap();
+            let events = if rounds.is_empty() {
+                vec![
+                    EngineProviderEvent::TextDelta("done".into()),
+                    EngineProviderEvent::Completed,
+                ]
+            } else {
+                rounds.remove(0)
+            };
+            Ok(Box::pin(futures_util::stream::iter(events)))
+        }
+    }
+
+    /// Tool runtime whose output is far larger than any test tool budget.
+    struct BigOutputTools;
+
+    #[async_trait::async_trait]
+    impl EngineToolRuntime for BigOutputTools {
+        async fn list_tool_schemas(&self) -> Vec<ToolSchema> {
+            vec![ToolSchema {
+                name: "echo".into(),
+                description: "echo".into(),
+                input_schema: serde_json::json!({"type":"object"}),
+            }]
+        }
+        async fn execute_tool(
+            &self,
+            _name: &str,
+            _input: Value,
+            _cancel: &CancellationToken,
+        ) -> ToolExecutionResult {
+            ToolExecutionResult {
+                output: serde_json::json!({ "body": "y".repeat(5_000) }),
+                is_error: false,
+                duration_ms: 1,
+            }
+        }
+    }
+
+    /// Prior turns long enough to blow a small history budget.
+    fn long_history(turns: usize) -> Vec<EngineMessage> {
+        (0..turns)
+            .map(|i| EngineMessage {
+                role: if i % 2 == 0 { "user".into() } else { "assistant".into() },
+                content: format!("turn {i}: {}", "detail ".repeat(40)),
+                tool_call_id: None,
+                tool_name: None,
+                tool_calls: None,
+            })
+            .collect()
+    }
+
+    /// One provider turn that calls `echo`. `n` keeps successive rounds
+    /// distinct so the doom-loop detector stays out of these tests.
+    fn tool_round_n(n: usize) -> Vec<EngineProviderEvent> {
+        vec![
+            EngineProviderEvent::ToolCallDelta {
+                index: 0,
+                id: Some(format!("t{n}")),
+                name: Some("echo".into()),
+                arguments_delta: format!(r#"{{"x":{n}}}"#),
+            },
+            EngineProviderEvent::Completed,
+        ]
+    }
+
+    fn tool_round() -> Vec<EngineProviderEvent> {
+        tool_round_n(1)
+    }
+
+    /// Every tool result must still be preceded by the assistant call that made it.
+    fn assert_tool_pairs_intact(messages: &[EngineMessage]) {
+        let mut open: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for m in messages {
+            if let Some(calls) = &m.tool_calls {
+                for call in calls {
+                    open.insert(call.id.clone());
+                }
+            }
+            if m.role == "tool" {
+                let id = m.tool_call_id.clone().unwrap_or_default();
+                assert!(
+                    open.contains(&id),
+                    "tool result {id} has no preceding assistant tool_call"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn compaction_requests_model_summary_and_injects_it_into_history() {
+        let engine = AgentEngine::new(EventSequencer::new()).with_context_budget(1_000, 512);
+        let provider = CompactionProvider::new(
+            SummaryBehavior::Answer,
+            vec![
+                tool_round(),
+                vec![
+                    EngineProviderEvent::TextDelta("done".into()),
+                    EngineProviderEvent::Completed,
+                ],
+            ],
+        );
+        let run_id = format!("r-compact-model-{}", uuid::Uuid::new_v4());
+        let status = engine
+            .run(
+                EngineRunConfig {
+                    run_id: run_id.clone(),
+                    conversation_id: "c-compact".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    messages: long_history(10),
+                    user_content: "keep going".into(),
+                    max_steps: 5,
+                },
+                &provider,
+                &BigOutputTools,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
+
+        assert_eq!(provider.summary_count(), 1, "exactly one summarization round trip");
+        assert!(
+            provider.summary_tools_empty.load(Ordering::SeqCst),
+            "summarization must be sent without tools so it cannot start a tool loop"
+        );
+        let asked = provider.summary_requests.lock().unwrap()[0].clone();
+        assert!(asked.contains("turn 0"), "transcript must carry the oldest turn");
+
+        // The next provider turn sees the summary instead of the old prefix.
+        let after = provider.last_main_history();
+        let summary_msgs: Vec<_> = after
+            .iter()
+            .filter(|m| m.content.starts_with(crate::compaction::SUMMARY_MARKER))
+            .collect();
+        assert_eq!(summary_msgs.len(), 1, "history: {after:?}");
+        assert!(summary_msgs[0].content.contains("## Next steps"));
+        assert!(!after.iter().any(|m| m.content.contains("turn 0")), "prefix must be gone");
+        assert!(after.len() <= SUMMARY_KEEP_TAIL_MESSAGES + 1);
+        assert_tool_pairs_intact(&after);
+
+        let events = engine.events.replay_after(&run_id, 0);
+        let compressed: Vec<_> = events
+            .iter()
+            .filter_map(|e| match &e.payload {
+                RunEventKind::ContextCompressed {
+                    before_tokens,
+                    after_tokens,
+                    summary,
+                } => Some((*before_tokens, *after_tokens, summary.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(compressed.len(), 1);
+        assert!(compressed[0].2.contains("## Goal"), "event must carry the real summary");
+        assert!(compressed[0].1 < compressed[0].0, "compaction must shrink the history");
+    }
+
+    #[tokio::test]
+    async fn compaction_falls_back_to_mechanical_when_summary_fails() {
+        let engine = AgentEngine::new(EventSequencer::new()).with_context_budget(1_000, 512);
+        let provider = CompactionProvider::new(
+            SummaryBehavior::Fail,
+            vec![
+                tool_round(),
+                vec![
+                    EngineProviderEvent::TextDelta("done".into()),
+                    EngineProviderEvent::Completed,
+                ],
+            ],
+        );
+        let run_id = format!("r-compact-fallback-{}", uuid::Uuid::new_v4());
+        let status = engine
+            .run(
+                EngineRunConfig {
+                    run_id: run_id.clone(),
+                    conversation_id: "c-compact".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    messages: long_history(10),
+                    user_content: "keep going".into(),
+                    max_steps: 5,
+                },
+                &provider,
+                &BigOutputTools,
+            )
+            .await
+            .unwrap();
+        // The hard requirement: a failed summary never fails the Run.
+        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
+        assert_eq!(provider.summary_count(), 1);
+
+        let after = provider.last_main_history();
+        assert!(
+            !after
+                .iter()
+                .any(|m| m.content.starts_with(crate::compaction::SUMMARY_MARKER)),
+            "no summary may be injected when the summarizer failed"
+        );
+        assert!(
+            after.iter().any(|m| m.content.contains("turn 0")),
+            "mechanical compaction keeps the turns it cannot summarize"
+        );
+        assert!(
+            after
+                .iter()
+                .any(|m| m.role == "tool" && m.content.contains("truncated")),
+            "mechanical compaction must still trim oversized tool output"
+        );
+        assert_tool_pairs_intact(&after);
+
+        let events = engine.events.replay_after(&run_id, 0);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.payload, RunEventKind::ContextCompressed { .. })),
+            "the fallback is still an observable compaction"
+        );
+    }
+
+    #[tokio::test]
+    async fn compaction_summary_is_interrupted_by_cancel() {
+        let engine = AgentEngine::new(EventSequencer::new()).with_context_budget(1_000, 512);
+        let cancel = engine.cancel_token();
+        let provider = Arc::new(CompactionProvider::new(
+            SummaryBehavior::Hang,
+            vec![tool_round()],
+        ));
+        let summary_started = provider.summary_started.clone();
+        let provider_bg = provider.clone();
+        let handle = tokio::spawn(async move {
+            engine
+                .run(
+                    EngineRunConfig {
+                        run_id: format!("r-compact-cancel-{}", uuid::Uuid::new_v4()),
+                        conversation_id: "c-compact".into(),
+                        model: "m".into(),
+                        system_prompt: None,
+                        messages: long_history(10),
+                        user_content: "keep going".into(),
+                        max_steps: 5,
+                    },
+                    provider_bg.as_ref(),
+                    &BigOutputTools,
+                )
+                .await
+        });
+
+        let mut started = false;
+        for _ in 0..200 {
+            if summary_started.load(Ordering::SeqCst) {
+                started = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(started, "test must observe the summarization request before cancelling");
+        cancel.cancel();
+
+        let status = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .expect("a cancelled summary must not hold the run open")
+            .expect("join")
+            .expect("run");
+        assert!(matches!(status, crate::EngineOutcome::Cancelled), "{status:?}");
+    }
+
+    #[tokio::test]
+    async fn repeated_summary_failures_stop_paying_for_summarization() {
+        let engine = AgentEngine::new(EventSequencer::new()).with_context_budget(1_000, 512);
+        let provider = CompactionProvider::new(
+            SummaryBehavior::Fail,
+            vec![
+                tool_round_n(1),
+                tool_round_n(2),
+                tool_round_n(3),
+                tool_round_n(4),
+            ],
+        );
+        let status = engine
+            .run(
+                EngineRunConfig {
+                    run_id: format!("r-compact-budget-{}", uuid::Uuid::new_v4()),
+                    conversation_id: "c-compact".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    messages: long_history(10),
+                    user_content: "keep going".into(),
+                    max_steps: 8,
+                },
+                &provider,
+                &BigOutputTools,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
+        assert_eq!(
+            provider.summary_count(),
+            SUMMARY_MAX_FAILURES as usize,
+            "the engine must stop retrying a failing summarizer"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_summary_round_trip_when_history_is_within_budget() {
+        let engine = AgentEngine::new(EventSequencer::new());
+        let provider = CompactionProvider::new(
+            SummaryBehavior::Answer,
+            vec![
+                tool_round(),
+                vec![
+                    EngineProviderEvent::TextDelta("done".into()),
+                    EngineProviderEvent::Completed,
+                ],
+            ],
+        );
+        let run_id = format!("r-compact-none-{}", uuid::Uuid::new_v4());
+        engine
+            .run(
+                EngineRunConfig {
+                    run_id: run_id.clone(),
+                    conversation_id: "c-compact".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    messages: Vec::new(),
+                    user_content: "hi".into(),
+                    max_steps: 5,
+                },
+                &provider,
+                &FakeTools,
+            )
+            .await
+            .unwrap();
+        assert_eq!(provider.summary_count(), 0);
+        let events = engine.events.replay_after(&run_id, 0);
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e.payload, RunEventKind::ContextCompressed { .. })));
+    }
+
+    #[tokio::test]
+    async fn model_compaction_can_be_disabled() {
+        let engine = AgentEngine::new(EventSequencer::new())
+            .with_context_budget(1_000, 512)
+            .with_model_compaction(false);
+        let provider = CompactionProvider::new(
+            SummaryBehavior::Answer,
+            vec![
+                tool_round(),
+                vec![
+                    EngineProviderEvent::TextDelta("done".into()),
+                    EngineProviderEvent::Completed,
+                ],
+            ],
+        );
+        engine
+            .run(
+                EngineRunConfig {
+                    run_id: format!("r-compact-off-{}", uuid::Uuid::new_v4()),
+                    conversation_id: "c-compact".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    messages: long_history(10),
+                    user_content: "keep going".into(),
+                    max_steps: 5,
+                },
+                &provider,
+                &BigOutputTools,
+            )
+            .await
+            .unwrap();
+        assert_eq!(provider.summary_count(), 0);
+        assert!(!provider
+            .last_main_history()
+            .iter()
+            .any(|m| m.content.starts_with(crate::compaction::SUMMARY_MARKER)));
     }
 }

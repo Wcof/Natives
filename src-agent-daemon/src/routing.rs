@@ -373,7 +373,13 @@ async fn account_stream(
                 })
                 .collect()
         }),
-        max_tokens: Some(4096),
+        // `None` delegates the output ceiling to the per-model profile in
+        // `provider_adapters::model_profile`, which resolves it from the model
+        // id. The previous hardcoded 4096 silently truncated every model with a
+        // larger output window (Claude 4.x: 64K-128K, Gemini 2.5: 64K). Models
+        // absent from the profile table still fall back to the adapter's own
+        // 4096, so nothing regresses.
+        max_tokens: None,
         temperature: None,
         stream: true,
         structured_output: None,

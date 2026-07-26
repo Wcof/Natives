@@ -245,12 +245,21 @@ impl ContextBudget {
     }
 }
 
-/// Compact history when over budget.
+/// Compact history when over budget — **mechanically**, without a model.
+///
+/// This is the pre-run trim the daemon applies before an engine Run exists, so
+/// no provider is available to write a real summary. The model-backed
+/// compaction lives in [`crate::compaction`] and runs inside the engine loop.
+///
+/// Because the dropped content is genuinely unrecoverable here, the injected
+/// marker says so in as many words and carries the cheap signal that can be
+/// salvaged without a model: the original request, role counts, and previews of
+/// the most recent dropped messages. See [`truncation_notice`].
 ///
 /// Retention policy:
 /// 1. Always keep the last complete user/assistant dialogue turn (at least 2 msgs).
 /// 2. Prefer keeping tool-call / tool-result adjacent pairs when dropping.
-/// 3. Prepend a system summary for omitted messages.
+/// 3. Prepend a system truncation notice for omitted messages.
 pub fn compact_messages(
     messages: &[(String, String)],
     token_budget: u64,
@@ -296,13 +305,78 @@ pub fn compact_messages(
     if dropped.is_empty() {
         return (messages.to_vec(), None);
     }
-    let summary = format!(
-        "Previous conversation summary ({} messages omitted for context budget; budget={token_budget} tokens; estimate via chars/4 fallback when provider usage unavailable).",
-        dropped.len()
-    );
+    let summary = truncation_notice(dropped, token_budget);
     let mut kept = vec![("system".into(), summary.clone())];
     kept.extend(messages[keep_from..].iter().cloned());
     (kept, Some(summary))
+}
+
+/// Marker prefixed to the mechanical truncation notice.
+///
+/// Deliberately not the engine's `SUMMARY_MARKER`: a reader must be able to
+/// tell a real summary from an admission that content was lost.
+pub const TRUNCATION_MARKER: &str = "[context-truncated]";
+
+const NOTICE_GOAL_CHARS: usize = 400;
+const NOTICE_PREVIEW_CHARS: usize = 160;
+const NOTICE_PREVIEWS: usize = 3;
+
+/// Describe what mechanical truncation removed, without pretending to summarize it.
+///
+/// Everything here is derived from the dropped messages themselves — no model
+/// call, no invention. The honesty matters: an agent that believes it received
+/// a summary will not ask for the context it actually lost.
+pub fn truncation_notice(dropped: &[(String, String)], token_budget: u64) -> String {
+    let (mut users, mut assistants, mut others) = (0usize, 0usize, 0usize);
+    for (role, _) in dropped {
+        match role.to_ascii_lowercase().as_str() {
+            "user" => users += 1,
+            "assistant" => assistants += 1,
+            _ => others += 1,
+        }
+    }
+
+    let mut notice = format!(
+        "{TRUNCATION_MARKER} This is NOT a summary of the omitted content — {} earlier messages \
+were dropped verbatim to fit the context budget ({token_budget} tokens, chars/4 estimate used \
+when provider usage is unavailable), and their content is unrecoverable from this message. \
+Do not assume you remember them; ask the user to restate anything you need.\n\
+Dropped by role: user={users}, assistant={assistants}, other={others}.",
+        dropped.len()
+    );
+
+    if let Some((_, first)) = dropped
+        .iter()
+        .find(|(role, content)| role.eq_ignore_ascii_case("user") && !content.trim().is_empty())
+    {
+        notice.push_str(&format!(
+            "\nEarliest dropped user message (verbatim, truncated): {}",
+            preview(first, NOTICE_GOAL_CHARS)
+        ));
+    }
+
+    let recent: Vec<&(String, String)> = dropped
+        .iter()
+        .rev()
+        .filter(|(_, content)| !content.trim().is_empty())
+        .take(NOTICE_PREVIEWS)
+        .collect();
+    if !recent.is_empty() {
+        notice.push_str("\nLast dropped messages (verbatim, truncated):");
+        for (role, content) in recent.into_iter().rev() {
+            notice.push_str(&format!("\n- {role}: {}", preview(content, NOTICE_PREVIEW_CHARS)));
+        }
+    }
+    notice
+}
+
+fn preview(text: &str, max_chars: usize) -> String {
+    let text = text.trim();
+    if text.chars().count() <= max_chars {
+        return text.replace('\n', " ");
+    }
+    let kept: String = text.chars().take(max_chars).collect();
+    format!("{}…", kept.replace('\n', " "))
 }
 
 pub fn discover_agents_md(start: &Path) -> Option<PathBuf> {
@@ -389,5 +463,35 @@ mod tests {
         let (kept, summary) = compact_messages(&messages, 20);
         assert!(summary.is_some());
         assert!(kept.len() < messages.len());
+    }
+
+    #[test]
+    fn truncation_notice_admits_it_is_not_a_summary() {
+        let messages: Vec<(String, String)> = vec![
+            ("user".into(), "port the parser to rust".into()),
+            ("assistant".into(), "starting on lexer.rs".into()),
+            ("tool".into(), "ok".into()),
+            ("assistant".into(), "lexer done".into()),
+            ("user".into(), "now the emitter".into()),
+            ("assistant".into(), "on it".into()),
+        ];
+        let notice = truncation_notice(&messages[..4], 20);
+        assert!(notice.starts_with(TRUNCATION_MARKER));
+        assert!(notice.contains("NOT a summary"));
+        assert!(notice.contains("user=1, assistant=2, other=1"));
+        // Cheap real signal survives: the original ask and the newest context.
+        assert!(notice.contains("port the parser to rust"));
+        assert!(notice.contains("lexer done"));
+    }
+
+    #[test]
+    fn compact_prepends_the_truncation_notice_as_system() {
+        let messages: Vec<(String, String)> = (0..10)
+            .map(|i| ("user".to_string(), format!("message {i} {}", "pad ".repeat(20))))
+            .collect();
+        let (kept, summary) = compact_messages(&messages, 20);
+        assert_eq!(kept[0].0, "system");
+        assert!(kept[0].1.starts_with(TRUNCATION_MARKER));
+        assert_eq!(kept[0].1, summary.unwrap());
     }
 }
