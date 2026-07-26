@@ -1516,6 +1516,8 @@ export const zh = {
   assistant: {
     title: '助理',
     archive: '归档',
+    attachFailed: '附件添加失败',
+    attachUnavailable: '当前环境不支持文件选择',
     assistantUnavailable: '助理暂不可用',
     chooseProjectDirectory: '选择项目目录',
     chooseProjectToBegin: '选择项目目录以开始',

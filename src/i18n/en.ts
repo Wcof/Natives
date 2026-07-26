@@ -1528,6 +1528,8 @@ export const en = {
   assistant: {
     title: 'Assistant',
     archive: 'Archive',
+    attachFailed: 'Failed to attach files',
+    attachUnavailable: 'File picker is not available in this environment',
     assistantUnavailable: 'Assistant unavailable',
     chooseProjectDirectory: 'Choose project directory',
     chooseProjectToBegin: 'Choose a project directory to begin',

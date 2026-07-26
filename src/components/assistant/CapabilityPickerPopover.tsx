@@ -50,10 +50,12 @@ export default function CapabilityPickerPopover({ locale, gateway, selection, on
   const [teams, setTeams] = useState<Option[]>([]);
   const [phase, setPhase] = useState<'loading' | 'error' | 'ready'>('loading');
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
+    setPhase('loading');
     void (async () => {
       try {
         const [skillList, mcpList, expertList, teamList] = await Promise.all([
@@ -80,16 +82,37 @@ export default function CapabilityPickerPopover({ locale, gateway, selection, on
     return () => {
       cancelled = true;
     };
-  }, [gateway]);
+  }, [gateway, reloadKey]);
 
-  // Click outside → close (the popover lives inside the composer container).
+  // Click outside → close. The trigger button (data-capability-trigger) is
+  // excluded: its own onClick owns the toggle — closing here too would make the
+  // subsequent click reopen the popover, so the button could never close it.
   useEffect(() => {
     const handler = (event: MouseEvent) => {
+      const target = event.target as Element | null;
+      if (target?.closest?.('[data-capability-trigger]')) return;
       if (rootRef.current && !rootRef.current.contains(event.target as Node)) onClose();
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [onClose]);
+
+  // Escape → close and hand focus back to the trigger button.
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      onClose();
+      document.querySelector<HTMLButtonElement>('[data-capability-trigger]')?.focus();
+    };
+    document.addEventListener('keydown', handler, true);
+    return () => document.removeEventListener('keydown', handler, true);
+  }, [onClose]);
+
+  // Move focus into the dialog on open so keyboard/AT users land inside it.
+  useEffect(() => {
+    rootRef.current?.focus();
+  }, []);
 
   const current: CapabilitySelection = selection ?? {};
   const selectedSkills = current.skills ?? [];
@@ -119,11 +142,11 @@ export default function CapabilityPickerPopover({ locale, gateway, selection, on
     onChange(normalize({ ...current, expert_id: null, team_id: id }));
   };
 
-  const chip = (active: boolean, label: string, onClick: () => void, key: string) => (
+  const chip = (active: boolean, label: string, onClick: () => void, key: string, role: 'checkbox' | 'radio' = 'checkbox') => (
     <button
       key={key}
       type="button"
-      role="checkbox"
+      role={role}
       aria-checked={active}
       onClick={onClick}
       className="flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs"
@@ -142,6 +165,7 @@ export default function CapabilityPickerPopover({ locale, gateway, selection, on
     <div
       ref={rootRef}
       role="dialog"
+      tabIndex={-1}
       aria-label={t(locale, 'capabilities.picker.title')}
       className="absolute bottom-full left-0 z-50 mb-2 w-[420px] max-w-[92vw] rounded-xl border p-3 shadow-popup"
       style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}
@@ -174,10 +198,19 @@ export default function CapabilityPickerPopover({ locale, gateway, selection, on
       {phase === 'loading' ? (
         <LoadingState message={t(locale, 'capabilities.common.loading')} />
       ) : phase === 'error' ? (
-        <p className="py-2 text-sm" style={{ color: 'var(--danger)' }}>
-          {t(locale, 'capabilities.picker.loadFailed')}
-          {error ? ` — ${error}` : ''}
-        </p>
+        <div className="space-y-2 py-2">
+          <p className="text-sm" style={{ color: 'var(--danger)' }}>
+            {t(locale, 'capabilities.picker.loadFailed')}
+            {error ? ` — ${error}` : ''}
+          </p>
+          <button
+            type="button"
+            onClick={() => setReloadKey((k) => k + 1)}
+            className="btn btn-ghost px-2 py-1 text-xs"
+          >
+            {t(locale, 'capabilities.common.retry')}
+          </button>
+        </div>
       ) : (
         <div className="max-h-[320px] space-y-3 overflow-y-auto">
           <section>
@@ -215,10 +248,14 @@ export default function CapabilityPickerPopover({ locale, gateway, selection, on
             {experts.length === 0 && teams.length === 0 ? (
               <p className="text-xs" style={{ color: 'var(--text-disabled)' }}>{t(locale, 'capabilities.picker.noExperts')}</p>
             ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {chip(!current.expert_id && !current.team_id, t(locale, 'capabilities.picker.expertNone'), () => selectExpert(null), 'expert-none')}
+              <div
+                className="flex flex-wrap gap-1.5"
+                role="radiogroup"
+                aria-label={t(locale, 'capabilities.picker.expertSection')}
+              >
+                {chip(!current.expert_id && !current.team_id, t(locale, 'capabilities.picker.expertNone'), () => selectExpert(null), 'expert-none', 'radio')}
                 {experts.map((e) =>
-                  chip(current.expert_id === e.id, e.name, () => selectExpert(current.expert_id === e.id ? null : e.id), `expert-${e.id}`),
+                  chip(current.expert_id === e.id, e.name, () => selectExpert(current.expert_id === e.id ? null : e.id), `expert-${e.id}`, 'radio'),
                 )}
                 {teams.map((team) =>
                   chip(
@@ -226,6 +263,7 @@ export default function CapabilityPickerPopover({ locale, gateway, selection, on
                     `${t(locale, 'capabilities.picker.teamTag')} · ${team.name}`,
                     () => selectTeam(current.team_id === team.id ? null : team.id),
                     `team-${team.id}`,
+                    'radio',
                   ),
                 )}
               </div>

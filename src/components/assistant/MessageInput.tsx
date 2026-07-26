@@ -24,6 +24,7 @@ import {
   savePersistedQuestionHistory,
 } from '@/lib/assistant-workspace/persistence';
 import { fsApi } from '@/lib/files-api';
+import { useToast } from '@/components/ui/Toast';
 import ModelSelectorDropdown, { type ProviderWithModels } from './ModelSelectorDropdown';
 import SlashCommandPopover from './SlashCommandPopover';
 import FileMentionPopover, { type ProjectFileHit } from './FileMentionPopover';
@@ -119,6 +120,7 @@ export default function MessageInput(props: MessageInputProps) {
     onToggleCapabilities, capabilityCount = 0, capabilityPickerSlot = null,
   } = props;
   const zh = locale.startsWith('zh');
+  const { toast } = useToast();
   const [input, setInput] = useState(draftText ?? '');
   const [attachments, setAttachments] = useState<AssistantAttachment[]>([]);
   const [slashOpen, setSlashOpen] = useState(false);
@@ -331,12 +333,14 @@ export default function MessageInput(props: MessageInputProps) {
     const dialog = window.nativesAPI?.dialog;
     if (!dialog?.pickFiles) {
       // Browser / fixture shell has no native dialog — surface instead of silent no-op.
+      toast(t(locale, 'assistant.attachUnavailable'), 'error');
       return;
     }
     let paths: string[] = [];
     try {
       paths = (await dialog.pickFiles()) ?? [];
     } catch {
+      toast(t(locale, 'assistant.attachFailed'), 'error');
       return;
     }
     if (!paths.length) return;
@@ -422,6 +426,18 @@ export default function MessageInput(props: MessageInputProps) {
     }
 
     if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && questionHistory.length > 0) {
+      // Terminal-style guard: only enter history from the first line (↑) with an
+      // empty draft, or continue while already navigating from the first/last
+      // line. A caret mid-draft keeps its normal line-movement behaviour.
+      const el = event.currentTarget;
+      const caret = el.selectionStart ?? 0;
+      const onFirstLine = !input.slice(0, caret).includes('\n');
+      const onLastLine = !input.slice(el.selectionEnd ?? caret).includes('\n');
+      const navigating = questionHistoryIndexRef.current < questionHistory.length;
+      const eligible = event.key === 'ArrowUp'
+        ? onFirstLine && (navigating || input.trim() === '')
+        : onLastLine && navigating;
+      if (!eligible) return;
       event.preventDefault();
       const currentIndex = questionHistoryIndexRef.current;
       if (currentIndex === questionHistory.length) questionHistoryDraftRef.current = input;
@@ -597,10 +613,13 @@ export default function MessageInput(props: MessageInputProps) {
               <div className="relative">
                 <button
                   type="button"
+                  data-capability-trigger="1"
                   onClick={onToggleCapabilities}
                   disabled={effectiveDisabled}
                   title={t(locale, 'capabilities.picker.title')}
                   aria-label={t(locale, 'capabilities.picker.title')}
+                  aria-haspopup="dialog"
+                  aria-expanded={capabilityPickerSlot != null}
                   className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-40"
                 >
                   <Blocks size={15} />
