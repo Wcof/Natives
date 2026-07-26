@@ -36,6 +36,10 @@ interface CreativeHomeProps {
   onRestartApp?: (app: CreativeAppSummary) => void;
   onAppLogs?: (app: CreativeAppSummary) => void;
   onRunSettings?: (app: CreativeAppSummary) => void;
+  /** 孤儿进程恢复（认领 / 重启）；后端 resolve_orphan 此前无 UI 入口 */
+  onResolveOrphan?: (app: CreativeAppSummary, restart: boolean) => void;
+  /** 本地项目依赖安装入口 */
+  onInstallDeps?: (app: CreativeAppSummary) => void;
 }
 
 /** publish 的 moduleId 约束：小写字母数字与连字符（与模块目录名对齐）。 */
@@ -68,6 +72,8 @@ export default function CreativeHome({
   onRestartApp,
   onAppLogs,
   onRunSettings,
+  onResolveOrphan,
+  onInstallDeps,
 }: CreativeHomeProps) {
   const { drafts, loading: draftsLoading, error: draftsError, reload: reloadDrafts } = useCreativeDrafts();
   const { toast } = useToast();
@@ -305,6 +311,8 @@ export default function CreativeHome({
         onRestart={onRestartApp}
         onLogs={onAppLogs}
         onRunSettings={onRunSettings}
+        onResolveOrphan={onResolveOrphan}
+        onInstallDeps={onInstallDeps}
         onCreateNew={() => {
           document.getElementById('creative-intent-input')?.focus();
         }}

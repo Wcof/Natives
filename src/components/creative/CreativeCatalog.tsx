@@ -7,6 +7,7 @@ import {
   ExternalLink,
   Folder,
   Github,
+  PackagePlus,
   Pause,
   Play,
   RefreshCw,
@@ -116,6 +117,10 @@ export interface CreativeCatalogProps {
   onLogs?: (app: CreativeAppSummary) => void;
   /** 已导入应用的运行设置（端口 / 启动方式 / 自动打开）。 */
   onRunSettings?: (app: CreativeAppSummary) => void;
+  /** 孤儿进程恢复：应用重启后发现残留进程时的唯一出路（statusDetail.code=orphaned_process）。 */
+  onResolveOrphan?: (app: CreativeAppSummary, restart: boolean) => void;
+  /** 本地项目的依赖安装（npm/pnpm install）；后端两条命令此前无入口。 */
+  onInstallDeps?: (app: CreativeAppSummary) => void;
   /** 空态 CTA：回到创作入口 / 导入入口，避免空目录成为死路。 */
   onCreateNew?: () => void;
   onImport?: () => void;
@@ -124,11 +129,12 @@ export interface CreativeCatalogProps {
 interface CardShellProps {
   app: CreativeAppSummary;
   locale: Locale;
+  onResolveOrphan?: (app: CreativeAppSummary, restart: boolean) => void;
   children: ReactNode;
 }
 
 /** 卡片的信息区两组通用；差异全部落在 children（动作区），这样差异一眼可见。 */
-function CardShell({ app, locale, children }: CardShellProps) {
+function CardShell({ app, locale, onResolveOrphan, children }: CardShellProps) {
   const badge = BADGE_STYLE[sourceBadge(app.source)];
   return (
     <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-4 flex flex-col justify-between transition-all hover:border-[var(--border-hover)] hover:shadow-sm">
@@ -168,6 +174,27 @@ function CardShell({ app, locale, children }: CardShellProps) {
           <div className="text-[11px] text-rose-500 bg-rose-500/10 border border-rose-500/20 p-2 rounded-lg mb-2 flex items-start gap-1.5">
             <AlertTriangle size={12} className="shrink-0 mt-0.5" />
             <span className="line-clamp-2">{app.statusDetail?.message || app.lastError}</span>
+          </div>
+        )}
+
+        {/* 孤儿进程：后端 resolve_orphan 早已就绪但前端无任何入口，
+            用户只能眼看着应用卡在「残留进程」状态 */}
+        {app.statusDetail?.code === 'orphaned_process' && onResolveOrphan && (
+          <div className="mb-2 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => onResolveOrphan(app, false)}
+              className="rounded-md border border-[var(--border)] px-2 py-1 text-[11px] text-[var(--text-secondary)] hover:text-[var(--text)]"
+            >
+              {t(locale, 'workshop.orphanStop')}
+            </button>
+            <button
+              type="button"
+              onClick={() => onResolveOrphan(app, true)}
+              className="rounded-md border border-[var(--border)] px-2 py-1 text-[11px] text-[var(--text-secondary)] hover:text-[var(--text)]"
+            >
+              {t(locale, 'workshop.orphanRestart')}
+            </button>
           </div>
         )}
       </div>
@@ -234,7 +261,7 @@ function ImportedCard({ app, locale, busy, handlers }: Omit<CardProps, 'children
   // 重启只在进程可能存在时才有意义；其它状态下点它只会产生误导。
   const restartable = app.state === 'running' || app.state === 'start_failed';
   return (
-    <CardShell app={app} locale={locale}>
+    <CardShell app={app} locale={locale} onResolveOrphan={handlers.onResolveOrphan}>
       {actions.canStart && (
         <ActionBtn cls={BTN_PRIMARY} icon={<Play size={13} />} locale={locale}
           labelKey="workshop.actionStart" onClick={() => handlers.onStart(app)} />
@@ -262,6 +289,11 @@ function ImportedCard({ app, locale, busy, handlers }: Omit<CardProps, 'children
       {handlers.onRunSettings && (
         <ActionBtn cls={BTN_ICON} icon={<Settings2 size={13} />} locale={locale} iconOnly
           labelKey="creative.catalog.actionRunSettings" onClick={() => handlers.onRunSettings?.(app)} />
+      )}
+      {/* 依赖安装只对本地项目有意义（容器应用在镜像里已装好） */}
+      {handlers.onInstallDeps && app.source === 'local_project' && (
+        <ActionBtn cls={BTN_ICON} icon={<PackagePlus size={13} />} locale={locale} iconOnly
+          labelKey="workshop.installDeps" onClick={() => handlers.onInstallDeps?.(app)} />
       )}
       {actions.canDelete && (
         <ActionBtn cls={BTN_DANGER} icon={<Trash2 size={13} />} locale={locale} iconOnly

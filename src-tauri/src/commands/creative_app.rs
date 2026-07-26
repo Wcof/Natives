@@ -151,13 +151,20 @@ pub fn creative_app_get_open_target(
     service::CreativeAppService::get_open_target(&c, &id)
 }
 
+/// async + spawn_blocking：inspect 会做 GitHub 网络 IO，同步命令会阻塞
+/// Tauri 主线程（整窗口卡死直到探测返回）。
 #[tauri::command]
-pub fn creative_app_inspect_github(
+pub async fn creative_app_inspect_github(
     request: InspectGithubRequest,
     state: State<'_, AppState>,
 ) -> Result<InspectGithubResult> {
-    let c = conn(&state.db)?;
-    install::inspect(&c, &request)
+    let pool = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let c = conn(&pool)?;
+        install::inspect(&c, &request)
+    })
+    .await
+    .map_err(|e| Error::Internal(format!("inspect join: {e}")))?
 }
 
 #[tauri::command]
@@ -353,13 +360,19 @@ pub fn creative_app_browser_current(
 
 // ── Local project (third source) ───────────────────────────────────
 
+/// 同上：本地项目扫描要遍历目录树，同步执行会卡住整个 UI。
 #[tauri::command]
-pub fn creative_app_inspect_local(
+pub async fn creative_app_inspect_local(
     request: InspectLocalRequest,
     state: State<'_, AppState>,
 ) -> Result<LocalProjectScanResult> {
-    let c = conn(&state.db)?;
-    crate::creative_app::local::inspect_local_project(&c, &request)
+    let pool = state.db.clone();
+    tokio::task::spawn_blocking(move || {
+        let c = conn(&pool)?;
+        crate::creative_app::local::inspect_local_project(&c, &request)
+    })
+    .await
+    .map_err(|e| Error::Internal(format!("inspect join: {e}")))?
 }
 
 #[tauri::command]
