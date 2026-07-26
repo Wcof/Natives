@@ -136,7 +136,7 @@ export function UsageMetricGrid({ metrics, prevMetrics, totalSessions, prevTotal
         </div>
         {lastSyncTime && (
           <span style={{ fontSize: '11px', fontWeight: 400, color: 'var(--text-disabled)' }}>
-            {t(locale, 'usage.dataAsOf')} {new Date(lastSyncTime).toLocaleString()}
+            {t(locale, 'usage.dataAsOf')} {new Date(lastSyncTime).toLocaleString(locale.startsWith('zh') ? 'zh-CN' : 'en-US')}
           </span>
         )}
       </div>

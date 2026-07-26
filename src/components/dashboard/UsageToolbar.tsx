@@ -4,8 +4,10 @@ import React from 'react';
 import { SPACING, BORDER_RADIUS } from '@/lib/design-tokens';
 import { useLocale, t } from '@/i18n';
 import type { UsageDimension } from '@/types/usage';
-import { Terminal, Cpu, Folder, Monitor, ChevronDown } from 'lucide-react';
+import { Terminal, Cpu, Folder, ChevronDown } from 'lucide-react';
 
+// 注：原有 terminal 过滤下拉已删除——后端 dimensions.terminals 恒为空数组
+// （usage/mod.rs），该下拉永远不会渲染，属挂名不做事的死配管。
 interface Props {
   preset: string;
   onPresetChange: (preset: string) => void;
@@ -16,15 +18,12 @@ interface Props {
   sources: UsageDimension[];
   models: UsageDimension[];
   projects: UsageDimension[];
-  terminals: UsageDimension[];
   sourceFilter: string[] | null;
   modelFilter: string[] | null;
   projectFilter: string[] | null;
-  terminalFilter: string[] | null;
   onSourceFilterChange: (val: string[] | null) => void;
   onModelFilterChange: (val: string[] | null) => void;
   onProjectFilterChange: (val: string[] | null) => void;
-  onTerminalFilterChange: (val: string[] | null) => void;
   onSelectDir?: () => void;
   style?: React.CSSProperties;
   children?: React.ReactNode;
@@ -99,9 +98,9 @@ function FilterDropdown({ icon, value, onChange, options, placeholder }: FilterD
 
 export function UsageToolbar({
   preset, onPresetChange, customStart, customEnd, onCustomStartChange, onCustomEndChange,
-  sources, models, projects, terminals,
-  sourceFilter, modelFilter, projectFilter, terminalFilter,
-  onSourceFilterChange, onModelFilterChange, onProjectFilterChange, onTerminalFilterChange,
+  sources, models, projects,
+  sourceFilter, modelFilter, projectFilter,
+  onSourceFilterChange, onModelFilterChange, onProjectFilterChange,
   onSelectDir,
   style,
   children,
@@ -229,19 +228,18 @@ export function UsageToolbar({
                   title: p.label,
                 };
               }),
+              // 目录选择器选中的路径通常不在 dimensions 里；补一个动态选项，
+              // 否则受控 select 显示占位符而过滤悄悄生效
+              ...(projectFilter?.[0] && !projects.some((p) => p.id === projectFilter[0])
+                ? [{
+                    id: projectFilter[0],
+                    label: getPathBasename(projectFilter[0]),
+                    title: projectFilter[0],
+                  }]
+                : []),
               { id: '__select_dir__', label: t(locale, 'usage.selectDir'), title: t(locale, 'usage.selectDir') },
             ]}
             placeholder={t(locale, 'usage.filterProject') + ' ' + t(locale, 'usage.projectAll')}
-          />
-        )}
-
-        {terminals.length > 0 && (
-          <FilterDropdown
-            icon={<Monitor size={12} />}
-            value={terminalFilter?.[0] ?? ''}
-            onChange={(val) => onTerminalFilterChange(val ? [val] : null)}
-            options={terminals}
-            placeholder={t(locale, 'usage.filterTerminal') + ' ' + t(locale, 'usage.terminalAll')}
           />
         )}
       </div>

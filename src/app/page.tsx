@@ -1,8 +1,5 @@
 'use client';
 
-import React from 'react';
-import { SPACING, FONT_SIZE } from '@/lib/design-tokens';
-import { useLocale, t } from '@/i18n';
 import { UsageDashboard } from '@/components/dashboard/UsageDashboard';
 import '@/types';
 
