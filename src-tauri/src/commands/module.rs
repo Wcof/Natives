@@ -12,10 +12,16 @@ fn dirs_or_home() -> std::path::PathBuf {
     dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
+/// 扫描模块目录并把结果同步进 DB（module_list 读 DB，不同步则「扫描」形同虚设）。
 #[tauri::command]
-pub fn module_scan() -> Result<Vec<JsonValue>> {
+pub fn module_scan(app_handle: tauri::AppHandle, state: State<'_, AppState>) -> Result<Vec<JsonValue>> {
     let dir = modules_dir();
     let results = module_manager::scan_modules(&dir);
+    let pool_conn = state.db.get()
+        .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
+    let conn: &rusqlite::Connection = &*pool_conn;
+    module_manager::sync_modules_to_db(conn, &dir)?;
+    emit_db_state_changed(&app_handle, "module", serde_json::json!({ "action": "scan" }));
     serde_json::to_value(results)
         .map(|v| {
             if let JsonValue::Array(arr) = v {

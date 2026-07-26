@@ -107,6 +107,7 @@ export function useModuleEvents({
       }
       else if (view === 'ai') setActiveView('ai');
       else if (view === 'tools') setActiveView('tools');
+      else if (view === 'library' || view === '__library__') setActiveView('library');
       else if (typeof view === 'string' && view.startsWith('files')) {
         setActiveView('files');
         const qIndex = view.indexOf('?');

@@ -993,7 +993,8 @@ export interface NativesAPI {
     listItems: (filter: { folderId?: string; tagId?: string; keyword?: string; status?: string; itemType?: string; limit?: number; offset?: number }) => Promise<unknown>;
     getItem: (id: string) => Promise<unknown>;
     createItem: (data: { folderId?: string; title: string; description?: string; content?: string; sourceUrl?: string; itemType?: string; status?: string; tagIds?: string[] }) => Promise<unknown>;
-    updateItem: (data: { id: string; folderId?: string; title: string; description?: string; content?: string; sourceUrl?: string; status?: string; tagIds?: string[] }) => Promise<void>;
+    /** 部分更新：缺字段后端保留现值；folderId 显式 null = 移出文件夹 */
+    updateItem: (data: { id: string; folderId?: string | null; title?: string; description?: string; content?: string; sourceUrl?: string; status?: string; tagIds?: string[] }) => Promise<void>;
     deleteItem: (id: string) => Promise<void>;
     batchTag: (data: { itemIds: string[]; tagIds: string[] }) => Promise<void>;
     batchMove: (data: { itemIds: string[]; folderId?: string }) => Promise<void>;
@@ -1859,7 +1860,7 @@ const nativesAPI: NativesAPI = {
       status?: string; tagIds?: string[];
     }) => cmd('library_create_item', { input: data }),
     updateItem: (data: {
-      id: string; folderId?: string; title: string; description?: string;
+      id: string; folderId?: string | null; title?: string; description?: string;
       content?: string; sourceUrl?: string; status?: string; tagIds?: string[];
     }) => cmd('library_update_item', { input: data }),
     deleteItem: (id: string) =>

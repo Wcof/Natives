@@ -2,17 +2,25 @@
 
 import { useState } from 'react';
 import { useLocale, t as tr } from '@/i18n';
-import { TagBadge } from './TagPicker';
+import { TagBadge, TagPicker } from './TagPicker';
 import { Bookmark, Code2, ExternalLink, File, Image, Link, NotebookText, X } from 'lucide-react';
 import { useToast } from '@/components/ui/Toast';
 import { classifyError } from '@/lib/error-classifier';
+import {
+  ITEM_STATUSES,
+  libraryApiOrNull,
+  type LibraryFolder,
+  type LibraryItem,
+  type LibraryTag,
+} from '@/lib/library-api';
 
-interface Tag { id: string; name: string; color: string; createdAt: string; }
-interface Folder { id: string; name: string; parentId: string | null; sortOrder: number; createdAt: string; updatedAt: string; }
-interface LibraryItem { id: string; folderId: string | null; title: string; description: string; content: string; sourceUrl: string; itemType: string; status: string; createdAt: string; updatedAt: string; tags: Tag[]; }
-
+/**
+ * 条目详情/编辑面板。
+ * 调用方必须用 key={item.id} 挂载，切换条目时整体重建，避免编辑态残留
+ * 导致 A 条目的草稿覆盖 B 条目（数据破坏）。
+ */
 export function ItemDetail({ item, folders, tags, onClose, onDelete, onSaved }: {
-  item: LibraryItem; folders: Folder[]; tags: Tag[];
+  item: LibraryItem; folders: LibraryFolder[]; tags: LibraryTag[];
   onClose: () => void; onDelete: (id: string) => void; onSaved: () => void;
 }) {
   const locale = useLocale();
@@ -22,16 +30,32 @@ export function ItemDetail({ item, folders, tags, onClose, onDelete, onSaved }: 
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(item.title);
   const [description, setDescription] = useState(item.description);
+  const [content, setContent] = useState(item.content);
+  const [sourceUrl, setSourceUrl] = useState(item.sourceUrl);
+  const [status, setStatus] = useState(item.status);
   const [folderId, setFolderId] = useState(item.folderId);
-  const [selectedTagIds, setSelectedTagIds] = useState(item.tags.map(t => t.id));
+  const [selectedTagIds, setSelectedTagIds] = useState(item.tags.map(tag => tag.id));
   const [saving, setSaving] = useState(false);
 
-  const api = typeof window !== 'undefined' ? window.nativesAPI : undefined;
-
   const handleSave = async () => {
+    const api = libraryApiOrNull();
+    if (!api) {
+      toast(classifyError(new Error('Library API unavailable')).userMessage, 'error');
+      return;
+    }
     setSaving(true);
     try {
-      await api!.library!.updateItem({ id: item.id, title, description, folderId: folderId ?? undefined, tagIds: selectedTagIds });
+      // 全字段显式下发（folderId null = 移出文件夹），后端做部分合并
+      await api.updateItem({
+        id: item.id,
+        title: title.trim(),
+        description,
+        content,
+        sourceUrl: sourceUrl.trim(),
+        status,
+        folderId: folderId ?? null,
+        tagIds: selectedTagIds,
+      });
       setEditing(false);
       onSaved();
     } catch (err) {
@@ -39,12 +63,28 @@ export function ItemDetail({ item, folders, tags, onClose, onDelete, onSaved }: 
     } finally { setSaving(false); }
   };
 
+  const cancelEdit = () => {
+    setEditing(false);
+    setTitle(item.title);
+    setDescription(item.description);
+    setContent(item.content);
+    setSourceUrl(item.sourceUrl);
+    setStatus(item.status);
+    setFolderId(item.folderId);
+    setSelectedTagIds(item.tags.map(tag => tag.id));
+  };
+
   const formatDate = (dateStr: string) => {
     try { return new Date(dateStr).toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US'); } catch { return dateStr; }
   };
 
-  const toggleTag = (tagId: string) => {
-    setSelectedTagIds(prev => prev.includes(tagId) ? prev.filter(id => id !== tagId) : [...prev, tagId]);
+  const typeLabel = (value: string) => {
+    const label = t(`library.itemType.${value}`);
+    return label.startsWith('library.') ? value : label;
+  };
+  const statusLabel = (value: string) => {
+    const label = t(`library.statusValue.${value}`);
+    return label.startsWith('library.') ? value : label;
   };
 
   const TypeIcon = ({
@@ -56,19 +96,38 @@ export function ItemDetail({ item, folders, tags, onClose, onDelete, onSaved }: 
     bookmark: Bookmark,
   } as const)[item.itemType as 'note' | 'link' | 'file' | 'code' | 'image' | 'bookmark'] ?? File;
 
+  const inputStyle = { borderColor: 'var(--border)', background: 'var(--surface)', color: 'var(--text)' } as const;
+
   return (
     <div className="p-4">
       {/* Header */}
-      <div className="flex items-center justify-between mb-3">
-        <span style={{ color: 'var(--accent)' }}><TypeIcon size={18} /></span>
+      <div className="mb-3 flex items-center justify-between">
+        <span style={{ color: 'var(--accent)' }} title={typeLabel(item.itemType)}><TypeIcon size={18} /></span>
         <div className="flex gap-1">
-          <button onClick={() => setEditing(!editing)} className="text-xs text-blue-500 hover:text-blue-600 px-2 py-1 rounded hover:bg-blue-50 dark:hover:bg-blue-900/20">
+          <button
+            type="button"
+            onClick={() => (editing ? cancelEdit() : setEditing(true))}
+            className="rounded px-2 py-1 text-xs"
+            style={{ color: 'var(--accent)' }}
+          >
             {editing ? t('common.cancel') : t('common.edit')}
           </button>
-          <button onClick={() => onDelete(item.id)} className="text-xs text-red-500 hover:text-red-600 px-2 py-1 rounded hover:bg-red-50 dark:hover:bg-red-900/20">
+          <button
+            type="button"
+            onClick={() => onDelete(item.id)}
+            className="rounded px-2 py-1 text-xs"
+            style={{ color: 'var(--danger)' }}
+          >
             {t('common.delete')}
           </button>
-          <button onClick={onClose} className="rounded px-2 py-1 text-xs" style={{ color: 'var(--text-secondary)' }} title={t('common.close')}>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded px-2 py-1 text-xs"
+            style={{ color: 'var(--text-secondary)' }}
+            title={t('common.close')}
+            aria-label={t('common.close')}
+          >
             <X size={14} />
           </button>
         </div>
@@ -77,46 +136,81 @@ export function ItemDetail({ item, folders, tags, onClose, onDelete, onSaved }: 
       {editing ? (
         /* Edit mode */
         <div className="space-y-3">
-          <input value={title} onChange={(e) => setTitle(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-sm font-medium" />
-          <textarea value={description} onChange={(e) => setDescription(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-sm h-20 resize-none" />
-          <select value={folderId ?? ''} onChange={(e) => setFolderId(e.target.value || null)}
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-sm">
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            aria-label={t('library.title')}
+            placeholder={t('library.title')}
+            className="w-full rounded border px-3 py-2 text-sm font-medium"
+            style={inputStyle}
+          />
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            aria-label={t('library.description')}
+            placeholder={t('library.description')}
+            className="h-16 w-full resize-none rounded border px-3 py-2 text-sm"
+            style={inputStyle}
+          />
+          <textarea
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            aria-label={t('library.content')}
+            placeholder={t('library.content')}
+            className="h-28 w-full resize-none rounded border px-3 py-2 font-mono text-xs"
+            style={inputStyle}
+          />
+          <input
+            value={sourceUrl}
+            onChange={(e) => setSourceUrl(e.target.value)}
+            aria-label={t('library.sourceUrl')}
+            placeholder={t('library.sourceUrl')}
+            className="w-full rounded border px-3 py-2 text-sm"
+            style={inputStyle}
+          />
+          <select
+            value={folderId ?? ''}
+            onChange={(e) => setFolderId(e.target.value || null)}
+            aria-label={t('library.folders')}
+            className="w-full rounded border px-3 py-2 text-sm"
+            style={inputStyle}
+          >
             <option value="">{t('library.noFolder')}</option>
             {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
           </select>
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+            aria-label={t('library.status')}
+            className="w-full rounded border px-3 py-2 text-sm"
+            style={inputStyle}
+          >
+            {ITEM_STATUSES.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
+          </select>
           <div>
-            <p className="text-xs text-gray-500 mb-1">{t('library.tags')}</p>
-            <div className="flex flex-wrap gap-1">
-              {tags.map(tag => (
-                <button key={tag.id} onClick={() => toggleTag(tag.id)}
-                  className="rounded border px-2 py-0.5 text-xs"
-                  style={{
-                    borderColor: selectedTagIds.includes(tag.id) ? 'var(--accent)' : 'var(--border)',
-                    background: selectedTagIds.includes(tag.id) ? 'var(--accent-soft)' : 'var(--surface)',
-                    borderLeftColor: tag.color,
-                    borderLeftWidth: 3,
-                    color: 'var(--text)',
-                  }}>
-                  {tag.name}
-                </button>
-              ))}
-            </div>
+            <p className="mb-1 text-xs" style={{ color: 'var(--text-secondary)' }}>{t('library.tags')}</p>
+            <TagPicker tags={tags} selectedIds={selectedTagIds} onChange={setSelectedTagIds} />
           </div>
-          <button onClick={handleSave} disabled={!title.trim() || saving}
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={!title.trim() || saving}
             className="w-full rounded px-4 py-2 text-sm font-medium disabled:opacity-50"
-            style={{ background: 'var(--primary)', color: 'var(--primary-foreground, #fff)' }}>
+            style={{ background: 'var(--primary)', color: 'var(--primary-foreground, var(--accent-ink))' }}
+          >
             {saving ? t('common.saving') : t('common.save')}
           </button>
         </div>
       ) : (
         /* View mode */
         <div className="space-y-3">
-          <h3 className="text-base font-semibold">{item.title || t('common.untitled')}</h3>
-          {item.description && <p className="text-sm text-gray-600 dark:text-gray-400">{item.description}</p>}
+          <h3 className="text-base font-semibold" style={{ color: 'var(--text)' }}>{item.title || t('common.untitled')}</h3>
+          {item.description && <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>{item.description}</p>}
           {item.content && (
-            <div className="text-sm bg-gray-50 dark:bg-gray-900 p-3 rounded max-h-40 overflow-auto whitespace-pre-wrap font-mono text-xs">
+            <div
+              className="max-h-40 overflow-auto whitespace-pre-wrap rounded p-3 font-mono text-xs"
+              style={{ background: 'var(--surface)', color: 'var(--text)' }}
+            >
               {item.content}
             </div>
           )}
@@ -130,9 +224,9 @@ export function ItemDetail({ item, folders, tags, onClose, onDelete, onSaved }: 
           <div className="flex flex-wrap gap-1">
             {item.tags.map(tag => <TagBadge key={tag.id} tag={tag} />)}
           </div>
-          <div className="text-xs text-gray-400 space-y-0.5 pt-2 border-t border-gray-200 dark:border-gray-700">
-            <div>{t('library.type')}: {item.itemType}</div>
-            <div>{t('library.status')}: {item.status}</div>
+          <div className="space-y-0.5 border-t pt-2 text-xs" style={{ borderColor: 'var(--border)', color: 'var(--text-disabled)' }}>
+            <div>{t('library.type')}: {typeLabel(item.itemType)}</div>
+            <div>{t('library.status')}: {statusLabel(item.status)}</div>
             <div>{t('library.created')}: {formatDate(item.createdAt)}</div>
             <div>{t('library.updated')}: {formatDate(item.updatedAt)}</div>
           </div>

@@ -1,40 +1,48 @@
 'use client';
 
 import { useLocale, t as tr } from '@/i18n';
-
-interface Tag { id: string; name: string; color: string; createdAt: string; }
+import { BarChart3, List, Plus, Search, Tags } from 'lucide-react';
+import type { LibraryTag } from '@/lib/library-api';
 
 export function SearchFilterBar({
   keyword, onKeywordChange, viewMode, onViewModeChange,
-  tags, selectedTagId, onTagChange, onCreateItem,
+  tags, selectedTagId, onTagChange, onCreateItem, onManageTags,
 }: {
   keyword: string; onKeywordChange: (v: string) => void;
   viewMode: 'list' | 'stats'; onViewModeChange: (v: 'list' | 'stats') => void;
-  tags: Tag[]; selectedTagId: string | null; onTagChange: (id: string | null) => void;
-  onCreateItem: () => void;
+  tags: LibraryTag[]; selectedTagId: string | null; onTagChange: (id: string | null) => void;
+  onCreateItem: () => void; onManageTags: () => void;
 }) {
   const locale = useLocale();
   const t = (key: string) => tr(locale, key);
 
   return (
-    <div className="px-3 py-2 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2 flex-wrap">
+    <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2" style={{ borderColor: 'var(--border)' }}>
       {/* Search */}
-      <div className="relative flex-1 min-w-[160px]">
+      <div className="relative min-w-[160px] flex-1">
         <input
           type="text"
           value={keyword}
           onChange={(e) => onKeywordChange(e.target.value)}
           placeholder={t('library.search')}
-          className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 pl-8"
+          aria-label={t('library.search')}
+          className="w-full rounded border px-3 py-1.5 pl-8 text-sm"
+          style={{ borderColor: 'var(--border)', background: 'var(--surface)', color: 'var(--text)' }}
         />
-        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
+        <Search
+          size={14}
+          className="absolute left-2.5 top-1/2 -translate-y-1/2"
+          style={{ color: 'var(--text-disabled)' }}
+        />
       </div>
 
       {/* Tag filter */}
       <select
         value={selectedTagId ?? ''}
         onChange={(e) => onTagChange(e.target.value || null)}
-        className="px-2 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700"
+        aria-label={t('library.allTags')}
+        className="rounded border px-2 py-1.5 text-xs"
+        style={{ borderColor: 'var(--border)', background: 'var(--surface)', color: 'var(--text)' }}
       >
         <option value="">{t('library.allTags')}</option>
         {tags.map((tag) => (
@@ -42,28 +50,58 @@ export function SearchFilterBar({
         ))}
       </select>
 
+      {/* Tag management */}
+      <button
+        type="button"
+        onClick={onManageTags}
+        title={t('library.manageTags')}
+        aria-label={t('library.manageTags')}
+        className="inline-flex items-center gap-1 rounded border px-2 py-1.5 text-xs"
+        style={{ borderColor: 'var(--border)', background: 'var(--surface)', color: 'var(--text-secondary)' }}
+      >
+        <Tags size={13} />
+      </button>
+
       {/* View mode toggle */}
-      <div className="flex border border-gray-300 dark:border-gray-600 rounded overflow-hidden">
+      <div className="flex overflow-hidden rounded border" style={{ borderColor: 'var(--border)' }}>
         <button
+          type="button"
           onClick={() => onViewModeChange('list')}
-          className={`px-2 py-1 text-xs ${viewMode === 'list' ? 'bg-blue-500 text-white' : 'bg-white dark:bg-gray-700'}`}
+          title={t('library.viewList')}
+          aria-label={t('library.viewList')}
+          aria-pressed={viewMode === 'list'}
+          className="px-2 py-1 text-xs"
+          style={{
+            background: viewMode === 'list' ? 'var(--accent)' : 'var(--surface)',
+            color: viewMode === 'list' ? 'var(--accent-ink)' : 'var(--text-secondary)',
+          }}
         >
-          📋
+          <List size={13} />
         </button>
         <button
+          type="button"
           onClick={() => onViewModeChange('stats')}
-          className={`px-2 py-1 text-xs ${viewMode === 'stats' ? 'bg-blue-500 text-white' : 'bg-white dark:bg-gray-700'}`}
+          title={t('library.statistics')}
+          aria-label={t('library.statistics')}
+          aria-pressed={viewMode === 'stats'}
+          className="px-2 py-1 text-xs"
+          style={{
+            background: viewMode === 'stats' ? 'var(--accent)' : 'var(--surface)',
+            color: viewMode === 'stats' ? 'var(--accent-ink)' : 'var(--text-secondary)',
+          }}
         >
-          📊
+          <BarChart3 size={13} />
         </button>
       </div>
 
       {/* Create item button */}
       <button
+        type="button"
         onClick={onCreateItem}
-        className="px-3 py-1.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center gap-1"
+        className="inline-flex items-center gap-1 rounded px-3 py-1.5 text-xs font-medium"
+        style={{ background: 'var(--primary)', color: 'var(--primary-foreground, var(--accent-ink))' }}
       >
-        + {t('library.newItem')}
+        <Plus size={13} /> {t('library.newItem')}
       </button>
     </div>
   );

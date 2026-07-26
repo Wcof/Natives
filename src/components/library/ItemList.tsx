@@ -2,9 +2,7 @@
 
 import { useLocale, t as tr } from '@/i18n';
 import { TagBadge } from './TagPicker';
-
-interface Tag { id: string; name: string; color: string; createdAt: string; }
-interface LibraryItem { id: string; folderId: string | null; title: string; description: string; content: string; sourceUrl: string; itemType: string; status: string; createdAt: string; updatedAt: string; tags: Tag[]; }
+import type { LibraryItem } from '@/lib/library-api';
 
 export function ItemList({ items, selectedIds, onSelectionChange, onSelectItem, selectedItemId }: {
   items: LibraryItem[]; selectedIds: string[]; onSelectionChange: (ids: string[]) => void;
@@ -22,13 +20,16 @@ export function ItemList({ items, selectedIds, onSelectionChange, onSelectItem, 
     catch { return dateStr; }
   };
 
+  const allChecked = selectedIds.length === items.length && items.length > 0;
+
   return (
     <table className="w-full text-sm">
       <thead className="sticky top-0 border-b" style={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
         <tr>
           <th className="w-8 px-2 py-2">
             <input type="checkbox"
-              checked={selectedIds.length === items.length && items.length > 0}
+              checked={allChecked}
+              aria-label={t('library.selectAll')}
               onChange={(e) => onSelectionChange(e.target.checked ? items.map(i => i.id) : [])}
               className="rounded"
             />
@@ -52,15 +53,16 @@ export function ItemList({ items, selectedIds, onSelectionChange, onSelectItem, 
             <td className="px-2 py-2" onClick={(e) => e.stopPropagation()}>
               <input type="checkbox"
                 checked={selectedIds.includes(item.id)}
+                aria-label={`${t('library.selectItem')}: ${item.title || t('common.untitled')}`}
                 onChange={(e) => handleSelect(item.id, e.target.checked)}
                 className="rounded"
               />
             </td>
             <td className="px-2 py-2">
-              <div className="font-medium">{item.title || t('common.untitled')}</div>
+              <div className="font-medium" style={{ color: 'var(--text)' }}>{item.title || t('common.untitled')}</div>
               {item.description && <div className="max-w-xs truncate text-xs" style={{ color: 'var(--text-secondary)' }}>{item.description}</div>}
             </td>
-            <td className="px-2 py-2 hidden md:table-cell">
+            <td className="hidden px-2 py-2 md:table-cell">
               <div className="flex flex-wrap gap-1">
                 {item.tags.map(tag => <TagBadge key={tag.id} tag={tag} />)}
               </div>

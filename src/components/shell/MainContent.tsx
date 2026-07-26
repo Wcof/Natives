@@ -17,6 +17,7 @@ const LazyToolsPage = lazy(() => import('@/components/tools/ToolsPage'));
 const LazyAssistantWorkbench = lazy(() => import('@/components/assistant/AssistantWorkbench'));
 const LazyJobsPage = lazy(() => import('@/components/jobs/JobsPage'));
 const LazyCapabilitiesPage = lazy(() => import('@/components/capabilities/CapabilitiesPage'));
+const LazyLibraryPage = lazy(() => import('@/components/library/LibraryPage').then((m) => ({ default: m.LibraryPage })));
 const LazySettingsPage = lazy(() => import('./SettingsPage'));
 
 const BUILTIN_LAZY_MAP: Record<string, React.LazyExoticComponent<any>> = {};
@@ -125,6 +126,8 @@ export default function MainContent({
       return <Suspense fallback={<LazyFallback />}><LazyJobsPage /></Suspense>;
     case 'capabilities':
       return <Suspense fallback={<LazyFallback />}><LazyCapabilitiesPage /></Suspense>;
+    case 'library':
+      return <Suspense fallback={<LazyFallback />}><LazyLibraryPage /></Suspense>;
     case 'tools':
       return <Suspense fallback={<LazyFallback />}><LazyToolsPage /></Suspense>;
     case 'dashboard':

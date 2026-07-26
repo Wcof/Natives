@@ -47,6 +47,7 @@ const VIEW_LABELS: Record<string, string> = {
   tools: 'nav.tools',
   modules: 'nav.modules',
   store: 'nav.modules',
+  library: 'nav.library',
 };
 
 // 文件浏览器上行状态的类型契约统一由 file-events.ts 提供

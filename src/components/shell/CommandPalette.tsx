@@ -20,6 +20,7 @@ import {
   FileText,
   Globe,
   Blocks,
+  BookMarked,
   CalendarClock,
 } from 'lucide-react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
@@ -62,6 +63,7 @@ function getStaticCommands(locale: Locale): CommandItem[] {
     { id: 'tools', label: t(locale, 'nav.tools'), category: 'navigation', icon: <Sliders size={14} /> },
     { id: 'capabilities', label: t(locale, 'nav.capabilities'), category: 'navigation', icon: <Blocks size={14} /> },
     { id: 'jobs', label: t(locale, 'nav.jobs'), category: 'navigation', icon: <CalendarClock size={14} /> },
+    { id: 'library', label: t(locale, 'nav.library'), category: 'navigation', icon: <BookMarked size={14} /> },
     { id: 'terminal:toggle', label: t(locale, 'nav.terminalToggle'), category: 'action', icon: <Terminal size={14} /> },
     { id: 'theme:dark', label: t(locale, 'nav.themeTerminalVolt'), category: 'setting', icon: <Terminal size={14} /> },
     { id: 'theme:light', label: t(locale, 'nav.themeFrostedJasmine'), category: 'setting', icon: <Sun size={14} /> },

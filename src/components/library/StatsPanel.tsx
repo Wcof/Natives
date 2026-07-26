@@ -3,8 +3,7 @@
 import type { ReactNode } from 'react';
 import { useLocale, t as tr } from '@/i18n';
 import { Archive, Folder, Tags, Clock3 } from 'lucide-react';
-
-interface LibraryStats { totalItems: number; totalFolders: number; totalTags: number; itemsByFolder: { folderId: string | null; folderName: string; count: number }[]; recentItems: number; }
+import type { LibraryStats } from '@/lib/library-api';
 
 export function StatsPanel({ stats }: { stats: LibraryStats | null }) {
   const locale = useLocale();
@@ -17,7 +16,7 @@ export function StatsPanel({ stats }: { stats: LibraryStats | null }) {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-semibold">{t('library.statistics')}</h2>
+      <h2 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{t('library.statistics')}</h2>
 
       {/* Overview cards */}
       <div className="grid grid-cols-2 gap-3">
@@ -33,14 +32,17 @@ export function StatsPanel({ stats }: { stats: LibraryStats | null }) {
         <div className="space-y-1.5">
           {stats.itemsByFolder.map((f) => (
             <div key={f.folderId ?? '__unassigned'} className="flex items-center gap-2">
-              <span className="text-xs w-32 truncate text-right">{f.folderName}</span>
+              {/* 后端对无文件夹分组回传占位英文名，本地化在此兜底 */}
+              <span className="w-32 truncate text-right text-xs" style={{ color: 'var(--text)' }}>
+                {f.folderId === null ? t('library.noFolder') : f.folderName}
+              </span>
               <div className="h-4 flex-1 overflow-hidden rounded" style={{ background: 'var(--surface)' }}>
                 <div
                   className="h-full rounded transition-all"
                   style={{ width: `${(f.count / maxCount) * 100}%`, background: 'var(--accent)' }}
                 />
               </div>
-              <span className="text-xs font-mono w-8 text-left">{f.count}</span>
+              <span className="w-8 text-left font-mono text-xs" style={{ color: 'var(--text-secondary)' }}>{f.count}</span>
             </div>
           ))}
         </div>

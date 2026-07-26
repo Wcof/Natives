@@ -81,30 +81,64 @@ pub struct CreateTagInput {
     pub color: String,
 }
 
+fn default_item_type() -> String {
+    "note".to_string()
+}
+
+fn default_item_status() -> String {
+    "active".to_string()
+}
+
+/// 契约：除 title 外全部可省略（前端旧调用只传 folderId/title/description/tagIds）。
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateItemInput {
     pub folder_id: Option<String>,
     pub title: String,
+    #[serde(default)]
     pub description: String,
+    #[serde(default)]
     pub content: String,
+    #[serde(default)]
     pub source_url: String,
+    #[serde(default = "default_item_type")]
     pub item_type: String,
+    #[serde(default = "default_item_status")]
     pub status: String,
+    #[serde(default)]
     pub tag_ids: Vec<String>,
 }
 
+/// serde 对 `Option<Option<T>>` 的默认实现会把显式 null 折叠成外层 None，
+/// 丢失「缺字段」与「显式 null」的区别；此包装保证字段一旦出现就是 Some(inner)。
+fn double_option<'de, T, D>(de: D) -> std::result::Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Deserialize::deserialize(de).map(Some)
+}
+
+/// 契约：部分更新——None 字段保留现值，绝不因缺字段清空 content/source_url。
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateItemInput {
     pub id: String,
-    pub folder_id: Option<String>,
-    pub title: String,
-    pub description: String,
-    pub content: String,
-    pub source_url: String,
-    pub status: String,
-    pub tag_ids: Vec<String>,
+    /// 双层 Option：缺字段 = 保留现值；显式 null = 移出文件夹。
+    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    pub folder_id: Option<Option<String>>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub source_url: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub tag_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -290,22 +324,25 @@ pub fn library_delete_folder(
     let conn = state.db.get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
 
+    let tx = conn.unchecked_transaction()
+        .map_err(|e| Error::Internal(e.to_string()))?;
     if move_items {
         // Move items to no folder before deleting
-        conn.execute(
+        tx.execute(
             "UPDATE library_items SET folder_id = NULL WHERE folder_id = ?1",
             params![id],
         ).map_err(|e| Error::Internal(e.to_string()))?;
     }
     // Cascade for sub-folders: set parent_id to NULL
-    conn.execute(
+    tx.execute(
         "UPDATE library_folders SET parent_id = NULL WHERE parent_id = ?1",
         params![id],
     ).map_err(|e| Error::Internal(e.to_string()))?;
-    conn.execute(
+    tx.execute(
         "DELETE FROM library_folders WHERE id = ?1",
         params![id],
     ).map_err(|e| Error::Internal(e.to_string()))?;
+    tx.commit().map_err(|e| Error::Internal(e.to_string()))?;
     Ok(())
 }
 
@@ -533,7 +570,9 @@ pub fn library_create_item(
 
     let id = uuid_v4();
     let now = chrono_now();
-    conn.execute(
+    let tx = conn.unchecked_transaction()
+        .map_err(|e| Error::Internal(e.to_string()))?;
+    tx.execute(
         "INSERT INTO library_items (id, folder_id, title, description, content, source_url, item_type, status, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![id, input.folder_id, input.title, input.description, input.content,
@@ -542,11 +581,12 @@ pub fn library_create_item(
 
     // Assign tags
     for tag_id in &input.tag_ids {
-        conn.execute(
+        tx.execute(
             "INSERT OR IGNORE INTO library_item_tags (item_id, tag_id) VALUES (?1, ?2)",
             params![id, tag_id],
         ).map_err(|e| Error::Internal(e.to_string()))?;
     }
+    tx.commit().map_err(|e| Error::Internal(e.to_string()))?;
 
     let tags: Vec<Tag> = input.tag_ids.iter().filter_map(|tid| {
         conn.query_row(
@@ -580,23 +620,55 @@ pub fn library_update_item(
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
     let now = chrono_now();
 
-    conn.execute(
+    // 读现值做合并：缺字段保留，防止部分更新清空 content/source_url
+    let current = conn.query_row(
+        "SELECT folder_id, title, description, content, source_url, status
+         FROM library_items WHERE id = ?1",
+        params![input.id],
+        |row| Ok((
+            row.get::<_, Option<String>>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
+        )),
+    ).map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => Error::InvalidInput(format!("item not found: {}", input.id)),
+        other => Error::Internal(other.to_string()),
+    })?;
+
+    let folder_id = match input.folder_id {
+        Some(v) => v,          // Some(None) = 显式移出文件夹
+        None => current.0,     // 缺字段 = 保留
+    };
+    let title = input.title.unwrap_or(current.1);
+    let description = input.description.unwrap_or(current.2);
+    let content = input.content.unwrap_or(current.3);
+    let source_url = input.source_url.unwrap_or(current.4);
+    let status = input.status.unwrap_or(current.5);
+
+    let tx = conn.unchecked_transaction()
+        .map_err(|e| Error::Internal(e.to_string()))?;
+    tx.execute(
         "UPDATE library_items SET folder_id = ?1, title = ?2, description = ?3,
          content = ?4, source_url = ?5, status = ?6, updated_at = ?7
          WHERE id = ?8",
-        params![input.folder_id, input.title, input.description, input.content,
-                input.source_url, input.status, now, input.id],
+        params![folder_id, title, description, content, source_url, status, now, input.id],
     ).map_err(|e| Error::Internal(e.to_string()))?;
 
-    // Re-assign tags: delete all, then insert
-    conn.execute("DELETE FROM library_item_tags WHERE item_id = ?1", params![input.id])
-        .map_err(|e| Error::Internal(e.to_string()))?;
-    for tag_id in &input.tag_ids {
-        conn.execute(
-            "INSERT OR IGNORE INTO library_item_tags (item_id, tag_id) VALUES (?1, ?2)",
-            params![input.id, tag_id],
-        ).map_err(|e| Error::Internal(e.to_string()))?;
+    // 缺 tagIds = 不动标签；提供时全量替换
+    if let Some(tag_ids) = &input.tag_ids {
+        tx.execute("DELETE FROM library_item_tags WHERE item_id = ?1", params![input.id])
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        for tag_id in tag_ids {
+            tx.execute(
+                "INSERT OR IGNORE INTO library_item_tags (item_id, tag_id) VALUES (?1, ?2)",
+                params![input.id, tag_id],
+            ).map_err(|e| Error::Internal(e.to_string()))?;
+        }
     }
+    tx.commit().map_err(|e| Error::Internal(e.to_string()))?;
     Ok(())
 }
 
@@ -621,14 +693,17 @@ pub fn library_batch_tag(
 ) -> Result<()> {
     let conn = state.db.get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
+    let tx = conn.unchecked_transaction()
+        .map_err(|e| Error::Internal(e.to_string()))?;
     for item_id in &input.item_ids {
         for tag_id in &input.tag_ids {
-            conn.execute(
+            tx.execute(
                 "INSERT OR IGNORE INTO library_item_tags (item_id, tag_id) VALUES (?1, ?2)",
                 params![item_id, tag_id],
             ).map_err(|e| Error::Internal(e.to_string()))?;
         }
     }
+    tx.commit().map_err(|e| Error::Internal(e.to_string()))?;
     Ok(())
 }
 
@@ -639,12 +714,16 @@ pub fn library_batch_move(
 ) -> Result<()> {
     let conn = state.db.get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
+    let now = chrono_now();
+    let tx = conn.unchecked_transaction()
+        .map_err(|e| Error::Internal(e.to_string()))?;
     for item_id in &input.item_ids {
-        conn.execute(
+        tx.execute(
             "UPDATE library_items SET folder_id = ?1, updated_at = ?2 WHERE id = ?3",
-            params![input.folder_id, chrono_now(), item_id],
+            params![input.folder_id, now, item_id],
         ).map_err(|e| Error::Internal(e.to_string()))?;
     }
+    tx.commit().map_err(|e| Error::Internal(e.to_string()))?;
     Ok(())
 }
 
@@ -655,10 +734,13 @@ pub fn library_batch_delete(
 ) -> Result<()> {
     let conn = state.db.get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
+    let tx = conn.unchecked_transaction()
+        .map_err(|e| Error::Internal(e.to_string()))?;
     for item_id in &input.item_ids {
-        conn.execute("DELETE FROM library_items WHERE id = ?1", params![item_id])
+        tx.execute("DELETE FROM library_items WHERE id = ?1", params![item_id])
             .map_err(|e| Error::Internal(e.to_string()))?;
     }
+    tx.commit().map_err(|e| Error::Internal(e.to_string()))?;
     Ok(())
 }
 
@@ -684,9 +766,12 @@ pub fn library_get_stats(
         "SELECT COUNT(*) FROM library_tags", [], |row| row.get(0)
     ).unwrap_or(0);
 
-    // Items created in last 7 days
+    // Items created in last 7 days.
+    // created_at 存储为 %Y-%m-%dT%H:%M:%SZ；datetime('now') 是空格分隔格式，
+    // 字符串比较会在边界日错判，必须用同格式的 strftime。
     let recent_items: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM library_items WHERE created_at >= datetime('now', '-7 days')",
+        "SELECT COUNT(*) FROM library_items
+         WHERE created_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-7 days')",
         [], |row| row.get(0)
     ).unwrap_or(0);
 
@@ -730,4 +815,49 @@ pub fn library_get_stats(
         items_by_folder: all_by_folder,
         recent_items,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 回归：前端旧调用只传 folderId/title/description/tagIds，
+    /// 缺 content/sourceUrl/itemType/status 时必须能反序列化（此前直接 invalid args）。
+    #[test]
+    fn create_item_input_accepts_minimal_payload() {
+        let input: CreateItemInput =
+            serde_json::from_str(r#"{"title":"t","description":"d","tagIds":[]}"#).unwrap();
+        assert_eq!(input.title, "t");
+        assert_eq!(input.content, "");
+        assert_eq!(input.source_url, "");
+        assert_eq!(input.item_type, "note");
+        assert_eq!(input.status, "active");
+        assert!(input.folder_id.is_none());
+    }
+
+    /// 回归：部分更新缺字段 = None（保留现值），不得被当成清空。
+    #[test]
+    fn update_item_input_partial_fields_deserialize_as_none() {
+        let input: UpdateItemInput =
+            serde_json::from_str(r#"{"id":"x","title":"new"}"#).unwrap();
+        assert_eq!(input.title.as_deref(), Some("new"));
+        assert!(input.description.is_none());
+        assert!(input.content.is_none());
+        assert!(input.source_url.is_none());
+        assert!(input.status.is_none());
+        assert!(input.tag_ids.is_none());
+        assert!(input.folder_id.is_none(), "缺字段 = 不改动文件夹");
+    }
+
+    /// 双层 Option：显式 null = 移出文件夹；字符串 = 移入指定文件夹。
+    #[test]
+    fn update_item_input_folder_double_option() {
+        let clear: UpdateItemInput =
+            serde_json::from_str(r#"{"id":"x","folderId":null}"#).unwrap();
+        assert_eq!(clear.folder_id, Some(None));
+
+        let set: UpdateItemInput =
+            serde_json::from_str(r#"{"id":"x","folderId":"f1"}"#).unwrap();
+        assert_eq!(set.folder_id, Some(Some("f1".to_string())));
+    }
 }
