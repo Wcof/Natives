@@ -28,7 +28,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
-import { t, type Locale } from '@/i18n';
+import { t, useLocale, type Locale } from '@/i18n';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { EmptyState, LoadingState } from '@/components/ui/EmptyState';
 import Modal from '@/components/ui/Modal';
@@ -125,7 +125,8 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
   void onInstall;
   const prefersReducedMotion = useReducedMotion();
   const { apps, loading, error, reload, busyIds, withBusy } = useCreativeAppCatalog();
-  const [locale, setLocale] = useState<Locale>('zh');
+  // reactive useLocale：此前一发式 getLocale 导致切换语言后 creative 全面（经 prop 下发）停留旧语言
+  const locale = useLocale();
   const [toast, setToast] = useState<string | null>(null);
   const [addMenu, setAddMenu] = useState<AddMenu>('closed');
 
@@ -220,18 +221,6 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2400);
-  }, []);
-
-  useEffect(() => {
-    async function loadLocale() {
-      try {
-        const saved = await window.nativesAPI?.getLocale?.();
-        if (saved) setLocale(saved === 'en' ? 'en' : 'zh');
-      } catch {
-        /* browser dev */
-      }
-    }
-    loadLocale();
   }, []);
 
   useEffect(() => {

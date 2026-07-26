@@ -48,9 +48,10 @@ export function useCreativeDrafts(options: { enabled?: boolean } = {}) {
     void reload();
   }, [reload]);
 
-  // The host broadcasts on the `creative-draft` channel after every create,
-  // revision, rollback, publish and delete, so the list follows state changes
-  // instead of polling for them.
+  // The host broadcasts on the `creative-draft` channel after create, rollback,
+  // publish and delete. NOTE: revision writes happen in the daemon process and
+  // do NOT emit this event — revision freshness relies on the session's
+  // streaming-end callback (CreationSession.onDraftMayHaveChanged).
   useEffect(() => {
     if (!enabled) return;
     const api = typeof window !== 'undefined' ? window.nativesAPI : undefined;

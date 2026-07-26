@@ -71,6 +71,7 @@ export default function CreationComposer({
       </p>
 
       <textarea
+        id="creative-intent-input"
         value={intent}
         onChange={(e) => setIntent(e.target.value.slice(0, MAX_INTENT_LENGTH))}
         onKeyDown={onKeyDown}

@@ -62,11 +62,14 @@ export function draftActions(
   if (busy) {
     return { canGenerate: false, canUndo: false, canPublish: false, canDelete: false };
   }
+  // 注意：引擎从不把 state 推进到 ready（版本写入发生在 daemon 侧、state 列
+  // 恒为 drafting），活跃态下能力必须由 revision 推导，否则 Undo/发布永远不可用。
+  const active = state === 'drafting' || state === 'ready';
   return {
-    canGenerate: state === 'drafting' || state === 'ready',
+    canGenerate: active,
     // 撤销只移动指针，rev-1 已是下限。
-    canUndo: state === 'ready' && revision > 1,
-    canPublish: state === 'ready' && revision >= 1,
+    canUndo: active && revision > 1,
+    canPublish: active && revision >= 1,
     canDelete: true,
   };
 }
