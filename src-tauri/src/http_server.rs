@@ -1,3 +1,4 @@
+use crate::creative_draft::paths as draft_paths;
 use crate::token_manager::TokenManager;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -107,6 +108,10 @@ fn handle_request(
             } else if path_only.starts_with("/modules/") {
                 // Serve module static files
                 serve_module_file(request, modules_dir, csp)?;
+            } else if path_only.starts_with("/drafts/") {
+                // Draft preview — same sandbox contract as a published module,
+                // only the content root differs (ADR-0014 section 6).
+                serve_draft_file(request, modules_dir, db_path, csp)?;
             } else if path_only.starts_with("/local-projects/") {
                 let local_csp = Header::from_bytes("Content-Security-Policy", LOCAL_PROJECT_CSP)
                     .unwrap_or_else(|_| Header::from_bytes("x-placeholder", "x").unwrap());
@@ -246,6 +251,111 @@ fn serve_module_file(
             let resp = Response::from_string("Forbidden").with_status_code(403);
             request.respond(resp)?;
         }
+    }
+    Ok(())
+}
+
+/// Drafts live next to modules under the app data directory, so the data root is
+/// recoverable from what the server already holds: `lib.rs` builds `modules_dir`
+/// as `data_dir.join("modules")`. Deriving it here keeps `HttpServer::new` — and
+/// therefore every caller — untouched.
+fn data_dir_from_modules_dir(modules_dir: &Path) -> Option<&Path> {
+    modules_dir.parent()
+}
+
+/// The current revision is a *pointer*, not "the highest file on disk": a
+/// rollback moves the pointer back while keeping the newer revision files so the
+/// undo can itself be undone. Only the database knows which one is current, so
+/// the default file is resolved the same way `/local-projects/` resolves its
+/// root — one short read on the connection this server already owns.
+fn lookup_draft_current_revision(db_path: &Path, draft_id: &str) -> Option<i64> {
+    let conn = Connection::open(db_path).ok()?;
+    conn.query_row(
+        "SELECT current_revision FROM creative_drafts WHERE draft_id = ?1",
+        [draft_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .ok()
+    .filter(|revision| *revision >= 1)
+}
+
+/// Resolve `/drafts/{draftId}/{file}` to an on-disk path.
+///
+/// `path_part` is the URL with the `/drafts/` prefix already stripped. Split
+/// mirrors [`serve_module_file`]; containment is delegated to
+/// [`draft_paths::resolve_served_file`] rather than re-derived here, so drafts and
+/// modules cannot drift apart on traversal handling.
+fn resolve_draft_file(data_dir: &Path, db_path: &Path, path_part: &str) -> Option<PathBuf> {
+    let path_part = path_part.split('?').next().unwrap_or(path_part);
+    let mut parts = path_part.splitn(2, '/');
+    let draft_id = parts.next().unwrap_or("");
+    let file_path = parts.next().unwrap_or("");
+
+    if file_path.is_empty() {
+        // Bare `/drafts/{draftId}` (or a trailing slash) means "whatever the user
+        // is looking at now". Revision files are `rev-<n>.html`, so there is no
+        // `index.html` to fall back to and the pointer has to be looked up.
+        let revision = lookup_draft_current_revision(db_path, draft_id)?;
+        let path = draft_paths::revision_path(data_dir, draft_id, revision).ok()?;
+        let name = path.file_name()?.to_str()?;
+        return draft_paths::resolve_served_file(data_dir, draft_id, name);
+    }
+
+    draft_paths::resolve_served_file(data_dir, draft_id, file_path)
+}
+
+/// Serve draft preview files. Route: `/drafts/{draftId}/{file}`.
+///
+/// Deliberately a sibling of [`serve_module_file`]: same CSP header, same preview
+/// injection, same MIME handling. A draft is unreviewed model output, so its
+/// sandbox must not be weaker than a published module's. The one difference is the
+/// failure code — an unresolvable draft answers 404 for every reason (missing
+/// draft, missing file, traversal attempt) so probing cannot distinguish them.
+fn serve_draft_file(
+    request: Request,
+    modules_dir: &Path,
+    db_path: &Path,
+    csp: Header,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let url = request.url().to_string();
+    let path_part = url.split('?').next().unwrap_or(&url);
+    let path_part = path_part.strip_prefix("/drafts/").unwrap_or(path_part);
+
+    let data_dir = match data_dir_from_modules_dir(modules_dir) {
+        Some(dir) => dir.to_path_buf(),
+        None => {
+            let resp = Response::from_string("Not Found").with_status_code(404);
+            request.respond(resp)?;
+            return Ok(());
+        }
+    };
+
+    let resolved = match resolve_draft_file(&data_dir, db_path, path_part) {
+        Some(p) if p.is_file() => p,
+        _ => {
+            let resp = Response::from_string("Not Found").with_status_code(404);
+            request.respond(resp)?;
+            return Ok(());
+        }
+    };
+
+    let mime = guess_mime(&resolved);
+    if mime == "text/html" {
+        // Same width-measure injection as a module preview, keyed by draft id, so
+        // what the user sees while drafting matches what they get after publish.
+        let draft_id = path_part.split('/').next().unwrap_or("");
+        let raw = std::fs::read_to_string(&resolved)?;
+        let injected = inject_html_preview(&raw, draft_id);
+        let resp = Response::from_string(injected)
+            .with_header(csp)
+            .with_header(Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap());
+        request.respond(resp)?;
+    } else {
+        let content = std::fs::read(&resolved)?;
+        let resp = Response::from_data(content)
+            .with_header(csp)
+            .with_header(Header::from_bytes("Content-Type", mime).unwrap());
+        request.respond(resp)?;
     }
     Ok(())
 }
@@ -641,5 +751,160 @@ fn guess_mime(path: &Path) -> &'static str {
         "ttf" => "font/ttf",
         "txt" => "text/plain",
         _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::creative_draft::store;
+
+    struct DraftFixture {
+        _tmp: tempfile::TempDir,
+        data_dir: PathBuf,
+        modules_dir: PathBuf,
+        db_path: PathBuf,
+        conn: Connection,
+    }
+
+    /// Build the same layout `lib.rs` builds: `<data_dir>/modules`, `<data_dir>/drafts`
+    /// and `<data_dir>/natives.db`, so the data-dir derivation is exercised for real.
+    fn fixture() -> DraftFixture {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let data_dir = tmp.path().to_path_buf();
+        let modules_dir = data_dir.join("modules");
+        std::fs::create_dir_all(&modules_dir).expect("modules dir");
+        let db_path = data_dir.join("natives.db");
+        let conn = Connection::open(&db_path).expect("open db");
+        crate::db::create_tables(&conn).expect("base tables");
+        crate::db::apply_migrations(&conn).expect("migrations");
+        DraftFixture {
+            _tmp: tmp,
+            data_dir,
+            modules_dir,
+            db_path,
+            conn,
+        }
+    }
+
+    const PAGE: &str = "<html><head></head><body>draft</body></html>";
+
+    fn file_name_of(path: &Path) -> String {
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .expect("file name")
+            .to_string()
+    }
+
+    #[test]
+    fn derives_data_dir_from_modules_dir() {
+        let data_dir = Path::new("/home/u/.natives");
+        assert_eq!(
+            data_dir_from_modules_dir(&data_dir.join("modules")),
+            Some(data_dir)
+        );
+    }
+
+    #[test]
+    fn serves_an_explicitly_named_revision() {
+        let f = fixture();
+        store::create_draft(&f.conn, "draft-1", "App", "intent", None, None).expect("create");
+        store::append_revision(&f.conn, &f.data_dir, "draft-1", PAGE).expect("rev1");
+
+        let resolved = resolve_draft_file(&f.data_dir, &f.db_path, "draft-1/rev-1.html")
+            .expect("revision resolves");
+        assert!(resolved.is_file());
+        assert_eq!(file_name_of(&resolved), "rev-1.html");
+    }
+
+    #[test]
+    fn default_file_follows_the_database_pointer_not_the_newest_file() {
+        let f = fixture();
+        store::create_draft(&f.conn, "draft-1", "App", "intent", None, None).expect("create");
+        store::append_revision(&f.conn, &f.data_dir, "draft-1", PAGE).expect("rev1");
+        store::append_revision(&f.conn, &f.data_dir, "draft-1", PAGE).expect("rev2");
+
+        let current = resolve_draft_file(&f.data_dir, &f.db_path, "draft-1").expect("current");
+        assert_eq!(file_name_of(&current), "rev-2.html");
+
+        // After an undo the rev-2 file still exists; the pointer is what decides.
+        store::rollback(&f.conn, "draft-1").expect("rollback");
+        let after = resolve_draft_file(&f.data_dir, &f.db_path, "draft-1/").expect("current");
+        assert_eq!(file_name_of(&after), "rev-1.html");
+    }
+
+    #[test]
+    fn default_file_is_absent_before_the_first_revision() {
+        let f = fixture();
+        store::create_draft(&f.conn, "draft-1", "App", "intent", None, None).expect("create");
+        assert!(resolve_draft_file(&f.data_dir, &f.db_path, "draft-1").is_none());
+    }
+
+    #[test]
+    fn rejects_traversal_out_of_the_draft_directory() {
+        let f = fixture();
+        store::create_draft(&f.conn, "draft-1", "App", "intent", None, None).expect("create");
+        store::append_revision(&f.conn, &f.data_dir, "draft-1", PAGE).expect("rev1");
+
+        for bad in [
+            "draft-1/../../natives.db",
+            "draft-1/../draft-1/rev-1.html",
+            "draft-1/sub/../../rev-1.html",
+            "draft-1/a\0b",
+            "../drafts/draft-1/rev-1.html",
+        ] {
+            assert!(
+                resolve_draft_file(&f.data_dir, &f.db_path, bad).is_none(),
+                "expected {bad:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_draft_id_resolves_to_nothing() {
+        let f = fixture();
+        assert!(resolve_draft_file(&f.data_dir, &f.db_path, "draft-missing").is_none());
+        assert!(resolve_draft_file(&f.data_dir, &f.db_path, "draft-missing/rev-1.html").is_none());
+        // An id the validator refuses never reaches the filesystem either.
+        assert!(resolve_draft_file(&f.data_dir, &f.db_path, "Draft_1/rev-1.html").is_none());
+    }
+
+    fn http_get(port: u16, path: &str) -> String {
+        use std::io::{Read, Write};
+        let mut stream =
+            std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect to test server");
+        write!(
+            stream,
+            "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        )
+        .expect("write request");
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).expect("read response");
+        String::from_utf8_lossy(&raw).into_owned()
+    }
+
+    #[test]
+    fn draft_preview_carries_the_same_csp_as_a_module() {
+        let f = fixture();
+        store::create_draft(&f.conn, "draft-1", "App", "intent", None, None).expect("create");
+        store::append_revision(&f.conn, &f.data_dir, "draft-1", PAGE).expect("rev1");
+
+        let token_manager = Arc::new(TokenManager::new(&f.conn));
+        let mut server = HttpServer::new(f.modules_dir.clone(), token_manager, f.db_path.clone());
+        let port = server.start(0).expect("start server");
+
+        let response = http_get(port, "/drafts/draft-1");
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(
+            response.contains(&format!("Content-Security-Policy: {CSP_HEADER}")),
+            "draft preview must carry the module CSP verbatim: {response}"
+        );
+        assert!(response.contains("draft"), "body should be the revision");
+
+        // Unresolvable drafts answer 404 without saying why.
+        let missing = http_get(port, "/drafts/draft-missing/rev-1.html");
+        assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+        let traversal = http_get(port, "/drafts/draft-1/../../natives.db");
+        assert!(traversal.starts_with("HTTP/1.1 404"), "{traversal}");
     }
 }

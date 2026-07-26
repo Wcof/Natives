@@ -368,6 +368,58 @@ export const en = {
     },
   },
 
+  // Creator workbench (ADR-0014)
+  creative: {
+    composerTitle: 'Describe an idea',
+    composerSubtitle: 'Say what you want in one sentence and AI builds a working app',
+    intentPlaceholder: 'e.g. a pomodoro timer that tracks how many rounds I finish each day',
+    namePlaceholder: 'App name (optional)',
+    generateApp: 'Generate app',
+    generating: 'Generating',
+    importExisting: 'Import existing app',
+    preview: {
+      title: 'Preview',
+      empty: {
+        title: 'No draft yet',
+        hint: 'Describe what you want — the result shows up here',
+      },
+      noRevision: {
+        title: 'Nothing to preview yet',
+        hint: 'The first revision appears here once it is generated',
+      },
+      generating: 'Generating…',
+      generatingHint: 'The preview refreshes automatically when it finishes',
+      publishing: 'Publishing as a module…',
+      publishingHint: 'The preview is paused while publishing',
+      notReady: {
+        title: 'Local service not ready',
+        hint: 'The preview needs the local HTTP service. Try again in a moment.',
+      },
+      retry: 'Retry',
+      loading: 'Loading preview…',
+      softFailure: {
+        title: 'This change may be broken',
+        hint: 'The preview failed to load or reported a runtime error. Undo to the previous revision, or tell the assistant what went wrong.',
+      },
+      undo: 'Undo last change',
+      dismiss: 'Dismiss',
+    },
+    catalog: {
+      creationsTitle: 'Continue creating',
+      creationsHint: 'Internal apps you created — edit any time',
+      creationsEmptyTitle: 'No creations yet',
+      creationsEmptyDesc: 'Describe an idea in one sentence and AI will generate a runnable app',
+      creationsEmptyAction: 'Start creating',
+      importedTitle: 'Imported apps',
+      importedHint: 'Local projects and GitHub containers — run management only',
+      importedEmptyTitle: 'No imported apps yet',
+      importedEmptyDesc: 'Import an existing app from a local folder or a GitHub repository',
+      importedEmptyAction: 'Import app',
+      actionContinueCreating: 'Continue creating',
+      actionRunSettings: 'Run settings',
+    },
+  },
+
   // Settings
   settings: {
     title: 'Settings',

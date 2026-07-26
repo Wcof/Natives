@@ -4,6 +4,7 @@ members = [
     "crates/assistant-protocol",
     "crates/harness-core",
     "crates/agent-core",
+    "crates/contract-linter",
     "crates/provider-adapters",
     "crates/capability-gateway",
     "src-agent-daemon",

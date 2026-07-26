@@ -8,8 +8,12 @@ mod archive;
 pub mod assistant_service;
 pub mod commands;
 pub mod context_window;
-pub mod contract_linter;
+/// KI-3 lint rules live in the `contract-linter` crate so the Agent Daemon runs
+/// the identical ruleset on drafts (ADR-0014 section 8.1). Re-exported here to keep the
+/// existing `natives_lib::contract_linter::…` call sites intact.
+pub use contract_linter;
 pub mod creative_app;
+pub mod creative_draft;
 pub mod credential_broker;
 pub mod daemon;
 pub mod daemon_authority;
@@ -487,6 +491,13 @@ pub fn run() {
             commands::module::module_disable,
             commands::module::module_update,
             commands::module::write_generated_module,
+            commands::creative_draft::create_creative_draft,
+            commands::creative_draft::list_creative_drafts,
+            commands::creative_draft::get_creative_draft,
+            commands::creative_draft::read_creative_draft,
+            commands::creative_draft::rollback_creative_draft,
+            commands::creative_draft::publish_creative_draft,
+            commands::creative_draft::delete_creative_draft,
             // Creative App (multi-source: workshop + GitHub container + local project)
             commands::creative_app::creative_app_list,
             commands::creative_app::creative_app_start,

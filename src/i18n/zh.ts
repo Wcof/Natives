@@ -361,6 +361,58 @@ export const zh = {
     },
   },
 
+  // 个人创意创作台（ADR-0014）
+  creative: {
+    composerTitle: '描述一个想法',
+    composerSubtitle: '用一句话说清楚你想要什么，AI 会生成可运行的应用',
+    intentPlaceholder: '例如：做一个番茄钟，可以记录每天完成了几轮',
+    namePlaceholder: '应用名称（可选）',
+    generateApp: '生成应用',
+    generating: '生成中',
+    importExisting: '导入已有应用',
+    preview: {
+      title: '预览',
+      empty: {
+        title: '还没有草稿',
+        hint: '说一句你想要什么，做好的东西会显示在这里',
+      },
+      noRevision: {
+        title: '还没有可预览的版本',
+        hint: '第一版生成完成后会自动显示',
+      },
+      generating: '正在生成…',
+      generatingHint: '完成后预览会自动刷新',
+      publishing: '正在保存为模块…',
+      publishingHint: '保存期间预览暂不可操作',
+      notReady: {
+        title: '本地服务未就绪',
+        hint: '预览需要本地 HTTP 服务，请稍后重试',
+      },
+      retry: '重试',
+      loading: '正在加载预览…',
+      softFailure: {
+        title: '本次修改可能有问题',
+        hint: '预览没能正常加载，或页面报告了运行时错误。可以撤销回上一版本，或直接告诉助手哪里不对。',
+      },
+      undo: '撤销上一次修改',
+      dismiss: '忽略',
+    },
+    catalog: {
+      creationsTitle: '继续创作',
+      creationsHint: '由你创作的内部应用，可随时改',
+      creationsEmptyTitle: '还没有创作过应用',
+      creationsEmptyDesc: '用一句话描述想法，AI 会生成可运行的应用',
+      creationsEmptyAction: '开始创作',
+      importedTitle: '已导入应用',
+      importedHint: '本地项目与 GitHub 容器，仅运行管理',
+      importedEmptyTitle: '还没有导入应用',
+      importedEmptyDesc: '从本地文件夹或 GitHub 仓库导入已有应用',
+      importedEmptyAction: '导入应用',
+      actionContinueCreating: '继续创作',
+      actionRunSettings: '运行设置',
+    },
+  },
+
   settings: {
     title: '设置',
     backHome: '返回主页',

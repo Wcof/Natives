@@ -1,11 +1,23 @@
-/// Contract Linter — static code audit for AI-generated modules.
-/// Enforces KI-3 constraints before modules are written to disk.
-///
-/// Checks:
-/// 1. No remote CDN scripts (only `tauri://assets/vendor/` allowed)
-/// 2. Migration files must be declarative JSON only
-/// 3. manifest schema_version must be valid
-/// 4. permissions must be from the allowed list
+//! Contract Linter — static code audit for AI-generated modules.
+//! Enforces KI-3 constraints before modules are written to disk.
+//!
+//! Checks:
+//! 1. No remote CDN scripts (only `tauri://assets/vendor/` allowed)
+//! 2. Migration files must be declarative JSON only
+//! 3. manifest schema_version must be valid
+//! 4. permissions must be from the allowed list
+//!
+//! # Why this is a shared crate
+//!
+//! The Tauri host runs these checks in `write_generated_module` before any
+//! bytes hit `~/.natives/modules/`. The Agent Daemon runs the *same* checks in
+//! its draft tools before a revision lands in `~/.natives/drafts/`. Those are
+//! two processes, and ADR-0014 invariant #2 requires them to measure with one
+//! ruler: a draft that lints clean must never be rejected at publish time.
+//!
+//! Keeping the rules here — pure functions over `regex` + `serde_json`, with no
+//! filesystem, database or Tauri coupling — is what makes that invariant hold.
+//! Do not fork these rules into either process.
 
 use regex::Regex;
 
