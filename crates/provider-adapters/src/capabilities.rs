@@ -72,27 +72,43 @@ pub struct HistoryToolCall {
 ///
 /// Callers (daemon `RealProvider`, Tauri bridge) map their engine types into this
 /// shape so `tool_calls` / `tool_call_id` are never flattened to plain text.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct HistoryMessage {
     pub role: String,
     pub content: String,
     pub tool_call_id: Option<String>,
     pub tool_name: Option<String>,
     pub tool_calls: Option<Vec<HistoryToolCall>>,
+    /// Images attached to this message.
+    ///
+    /// Always emitted as [`ProviderContentBlock::Image`] blocks, whatever the
+    /// branch — dropping them here would be invisible to every adapter below.
+    pub images: Vec<ImageSource>,
 }
 
 /// Convert a history/engine message into provider wire blocks.
 ///
-/// - Assistant with `tool_calls` → optional text + one `ToolCall` block per call
-/// - Tool role (or `tool_call_id` set without assistant tool_calls) → `ToolResult`
-/// - Otherwise → text only
+/// - Assistant with `tool_calls` → optional text + images + one `ToolCall` block per call
+/// - Tool role (or `tool_call_id` set without assistant tool_calls) → `ToolResult` + images
+/// - Otherwise → text + images
+///
+/// Images are appended in every branch. Whether a given wire format can carry
+/// them is the adapter's call, and an adapter that cannot must say so in the
+/// message body ([`ImageSource::degraded_note`]) rather than drop them.
 pub fn history_message_to_provider(msg: HistoryMessage) -> ProviderMessage {
+    fn push_images(content: &mut Vec<ProviderContentBlock>, images: Vec<ImageSource>) {
+        for image_url in images {
+            content.push(ProviderContentBlock::Image { image_url });
+        }
+    }
+    let images = msg.images;
     if let Some(calls) = msg.tool_calls {
         if !calls.is_empty() {
             let mut content = Vec::new();
             if !msg.content.is_empty() {
                 content.push(ProviderContentBlock::Text { text: msg.content });
             }
+            push_images(&mut content, images);
             for call in calls {
                 let input = parse_tool_arguments(&call.arguments);
                 content.push(ProviderContentBlock::ToolCall {
@@ -116,19 +132,23 @@ pub fn history_message_to_provider(msg: HistoryMessage) -> ProviderMessage {
         let tool_call_id = msg
             .tool_call_id
             .unwrap_or_else(|| "unknown_tool_call".into());
+        let mut content = vec![ProviderContentBlock::ToolResult {
+            tool_call_id,
+            content: msg.content,
+            name: msg.tool_name,
+        }];
+        push_images(&mut content, images);
         return ProviderMessage {
             role: "tool".into(),
-            content: vec![ProviderContentBlock::ToolResult {
-                tool_call_id,
-                content: msg.content,
-                name: msg.tool_name,
-            }],
+            content,
         };
     }
 
+    let mut content = vec![ProviderContentBlock::Text { text: msg.content }];
+    push_images(&mut content, images);
     ProviderMessage {
         role: msg.role,
-        content: vec![ProviderContentBlock::Text { text: msg.content }],
+        content,
     }
 }
 
@@ -174,6 +194,7 @@ mod history_message_tests {
                     arguments: r#"{"x":1}"#.into(),
                 },
             ]),
+            images: Vec::new(),
         });
         assert_eq!(assistant.role, "assistant");
         assert_eq!(assistant.content.len(), 3);
@@ -198,6 +219,7 @@ mod history_message_tests {
             tool_call_id: Some("call_1".into()),
             tool_name: Some("read_file".into()),
             tool_calls: None,
+            images: Vec::new(),
         });
         assert_eq!(tool.role, "tool");
         assert!(matches!(
@@ -218,6 +240,7 @@ mod history_message_tests {
             tool_call_id: None,
             tool_name: None,
             tool_calls: None,
+            images: Vec::new(),
         });
         assert_eq!(msg.content.len(), 1);
         assert!(matches!(
@@ -225,13 +248,230 @@ mod history_message_tests {
             ProviderContentBlock::Text { text } if text == "hi"
         ));
     }
+
+    #[test]
+    fn images_reach_the_wire_in_every_branch() {
+        let image = ImageSource::new("data:image/png;base64,AAAB");
+
+        let user = history_message_to_provider(HistoryMessage {
+            role: "user".into(),
+            content: "look".into(),
+            images: vec![image.clone()],
+            ..Default::default()
+        });
+        assert_eq!(user.content.len(), 2);
+        assert!(matches!(
+            &user.content[1],
+            ProviderContentBlock::Image { image_url } if image_url == &image
+        ));
+
+        let assistant = history_message_to_provider(HistoryMessage {
+            role: "assistant".into(),
+            content: "here".into(),
+            tool_calls: Some(vec![HistoryToolCall {
+                id: "c1".into(),
+                name: "echo".into(),
+                arguments: "{}".into(),
+            }]),
+            images: vec![image.clone()],
+            ..Default::default()
+        });
+        // text, image, tool_call — the image must not be swallowed by the
+        // tool-call branch.
+        assert_eq!(assistant.content.len(), 3);
+        assert!(matches!(
+            &assistant.content[1],
+            ProviderContentBlock::Image { .. }
+        ));
+
+        let tool = history_message_to_provider(HistoryMessage {
+            role: "tool".into(),
+            content: "{}".into(),
+            tool_call_id: Some("c1".into()),
+            images: vec![image],
+            ..Default::default()
+        });
+        assert_eq!(tool.content.len(), 2);
+        assert!(matches!(
+            &tool.content[1],
+            ProviderContentBlock::Image { .. }
+        ));
+    }
 }
 
 /// Image source for provider requests.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `url` is either a `data:` URI carrying inline base64 bytes, or a reference
+/// the provider has to resolve itself (an `http(s)` URL, a `gs://` object, a
+/// Google File API URI). `media_type` only has to be filled in when the URL
+/// cannot state it — a `data:` URI already carries its own MIME type and wins
+/// over this field.
+///
+/// Every adapter is required to encode an image or say out loud that it could
+/// not; see [`ImageSource::degraded_note`]. Silently dropping an image is a bug.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ImageSource {
     pub url: String,
+    /// Provider-specific fidelity hint (`"low"` / `"high"` / `"auto"`).
+    /// Only OpenAI reads it today; other adapters ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// MIME type when the URL does not carry one. Required by Anthropic
+    /// base64 sources and by every Gemini image part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+}
+
+/// How an [`ImageSource`] can be handed to a provider.
+///
+/// This is the single place that knows how to read a `data:` URI, so no adapter
+/// has to re-parse one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImagePayload<'a> {
+    /// Inline base64 bytes taken from a `data:...;base64,` URI.
+    ///
+    /// `media_type` is `None` when neither the URI nor [`ImageSource::media_type`]
+    /// stated one — adapters that require a MIME type must degrade loudly
+    /// instead of guessing.
+    Base64 {
+        media_type: Option<&'a str>,
+        data: &'a str,
+    },
+    /// A reference the provider resolves itself. The scheme is left intact so
+    /// each adapter can decide what it accepts.
+    Remote {
+        url: &'a str,
+        media_type: Option<&'a str>,
+    },
+}
+
+impl ImageSource {
+    /// Image referenced by URL or `data:` URI, with no extra hints.
+    pub fn new(url: impl Into<String>) -> Self {
+        ImageSource {
+            url: url.into(),
+            detail: None,
+            media_type: None,
+        }
+    }
+
+    /// Attach an explicit MIME type (used when `url` cannot state one).
+    pub fn with_media_type(mut self, media_type: impl Into<String>) -> Self {
+        self.media_type = Some(media_type.into());
+        self
+    }
+
+    /// Classify the reference for adapter encoding.
+    pub fn payload(&self) -> ImagePayload<'_> {
+        let declared = self.media_type.as_deref().filter(|s| !s.is_empty());
+        if let Some(rest) = self.url.strip_prefix("data:") {
+            if let Some((meta, data)) = rest.split_once(',') {
+                // `data:[<mediatype>][;base64],<data>` — anything that is not
+                // marked base64 is not bytes we can forward.
+                if let Some(meta) = meta.strip_suffix(";base64") {
+                    let inline = meta.split(';').next().filter(|s| !s.is_empty());
+                    return ImagePayload::Base64 {
+                        media_type: inline.or(declared),
+                        data,
+                    };
+                }
+            }
+        }
+        ImagePayload::Remote {
+            url: self.url.as_str(),
+            media_type: declared,
+        }
+    }
+
+    /// Sentence an adapter emits in place of an image it cannot encode.
+    ///
+    /// The note lands in the message the model reads, so a dropped image is
+    /// visible to both the model and the user instead of vanishing.
+    pub fn degraded_note(&self, reason: &str) -> String {
+        format!(
+            "[image not sent to the model: {reason}; source={}]",
+            self.short_ref()
+        )
+    }
+
+    /// Short, log-safe rendering of the reference (never dumps base64 bytes).
+    fn short_ref(&self) -> String {
+        const MAX: usize = 120;
+        if let Some(rest) = self.url.strip_prefix("data:") {
+            if let Some((meta, data)) = rest.split_once(',') {
+                return format!("data:{meta} ({} chars)", data.len());
+            }
+        }
+        if self.url.chars().count() > MAX {
+            let head: String = self.url.chars().take(MAX).collect();
+            return format!("{head}…");
+        }
+        self.url.clone()
+    }
+}
+
+#[cfg(test)]
+mod image_source_tests {
+    use super::*;
+
+    #[test]
+    fn data_uri_is_read_as_inline_base64() {
+        let image = ImageSource::new("data:image/png;base64,AAAB");
+        assert_eq!(
+            image.payload(),
+            ImagePayload::Base64 {
+                media_type: Some("image/png"),
+                data: "AAAB",
+            }
+        );
+    }
+
+    #[test]
+    fn data_uri_without_media_type_falls_back_to_the_declared_one() {
+        let image = ImageSource::new("data:;base64,AAAB").with_media_type("image/webp");
+        assert_eq!(
+            image.payload(),
+            ImagePayload::Base64 {
+                media_type: Some("image/webp"),
+                data: "AAAB",
+            }
+        );
+        let bare = ImageSource::new("data:;base64,AAAB");
+        assert_eq!(
+            bare.payload(),
+            ImagePayload::Base64 {
+                media_type: None,
+                data: "AAAB",
+            }
+        );
+    }
+
+    #[test]
+    fn non_base64_data_uri_is_not_treated_as_bytes() {
+        let image = ImageSource::new("data:image/svg+xml,<svg/>");
+        assert!(matches!(image.payload(), ImagePayload::Remote { .. }));
+    }
+
+    #[test]
+    fn remote_url_keeps_its_scheme() {
+        let image = ImageSource::new("https://example.test/a.png");
+        assert_eq!(
+            image.payload(),
+            ImagePayload::Remote {
+                url: "https://example.test/a.png",
+                media_type: None,
+            }
+        );
+    }
+
+    #[test]
+    fn degraded_note_never_dumps_base64_bytes() {
+        let image = ImageSource::new("data:image/png;base64,QUJDREVGRw");
+        let note = image.degraded_note("provider needs a media type");
+        assert!(note.contains("provider needs a media type"), "{note}");
+        assert!(!note.contains("QUJDREVGRw"), "{note}");
+        assert!(note.contains("10 chars"), "{note}");
+    }
 }
 
 /// A tool/function definition for provider requests.

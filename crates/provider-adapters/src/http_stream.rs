@@ -87,10 +87,20 @@ pub fn build_chat_completions_body_with_controls(
 /// Serialize one provider message to OpenAI chat-completions message JSON.
 ///
 /// Preserves multi-tool assistant messages and `role: tool` results with `tool_call_id`.
+///
+/// # Images
+///
+/// A user message that carries images becomes the multi-part form
+/// (`content: [{type:"text"}, {type:"image_url"}, …]`). Messages without images
+/// keep the plain string form so the cached prefix stays byte-stable.
+///
+/// OpenAI's `tool` and `assistant` messages accept text only, so an image on
+/// one of those is replaced by a visible note instead of being dropped.
 pub fn message_to_json(message: &ProviderMessage) -> serde_json::Value {
     let mut text_parts = Vec::new();
     let mut tool_calls = Vec::new();
     let mut tool_result: Option<(&str, &str)> = None;
+    let mut images: Vec<&crate::capabilities::ImageSource> = Vec::new();
 
     for block in &message.content {
         match block {
@@ -117,23 +127,31 @@ pub fn message_to_json(message: &ProviderMessage) -> serde_json::Value {
                     }
                 }));
             }
-            ProviderContentBlock::Image { .. } => {}
+            ProviderContentBlock::Image { image_url } => images.push(image_url),
         }
     }
 
     if let Some((tool_call_id, content)) = tool_result {
+        let mut body = content.to_string();
+        append_image_notes(&mut body, &images, "OpenAI tool messages carry text only");
         return serde_json::json!({
             "role": "tool",
             "tool_call_id": tool_call_id,
-            "content": content,
+            "content": body,
         });
     }
 
     if !tool_calls.is_empty() {
-        let content = if text_parts.is_empty() {
+        let mut body = text_parts.join("\n");
+        append_image_notes(
+            &mut body,
+            &images,
+            "OpenAI assistant messages carry text only",
+        );
+        let content = if body.is_empty() {
             serde_json::Value::Null
         } else {
-            serde_json::Value::String(text_parts.join("\n"))
+            serde_json::Value::String(body)
         };
         return serde_json::json!({
             "role": "assistant",
@@ -142,10 +160,79 @@ pub fn message_to_json(message: &ProviderMessage) -> serde_json::Value {
         });
     }
 
+    if images.is_empty() {
+        return serde_json::json!({
+            "role": message.role,
+            "content": text_parts.join("\n"),
+        });
+    }
+
+    let mut parts = Vec::new();
+    let text = text_parts.join("\n");
+    if !text.is_empty() {
+        parts.push(serde_json::json!({ "type": "text", "text": text }));
+    }
+    for image in images {
+        parts.push(chat_image_part(image));
+    }
     serde_json::json!({
         "role": message.role,
-        "content": text_parts.join("\n"),
+        "content": parts,
     })
+}
+
+/// Whether OpenAI's `image_url.url` can carry this reference verbatim.
+///
+/// The API fetches `http(s)` URLs and decodes `data:` URIs; nothing else.
+fn openai_accepts_url(url: &str) -> bool {
+    url.starts_with("https://") || url.starts_with("http://") || url.starts_with("data:")
+}
+
+/// One `image_url` content part, or a visible note when the URL is unusable.
+fn chat_image_part(image: &crate::capabilities::ImageSource) -> serde_json::Value {
+    if !openai_accepts_url(&image.url) {
+        return serde_json::json!({
+            "type": "text",
+            "text": image.degraded_note("OpenAI accepts only an http(s) URL or a data: URI"),
+        });
+    }
+    let mut image_url = serde_json::json!({ "url": image.url });
+    if let Some(detail) = &image.detail {
+        image_url["detail"] = serde_json::json!(detail);
+    }
+    serde_json::json!({ "type": "image_url", "image_url": image_url })
+}
+
+/// One Responses `input_image` part, or a visible note when the URL is unusable.
+fn responses_image_part(image: &crate::capabilities::ImageSource) -> serde_json::Value {
+    if !openai_accepts_url(&image.url) {
+        return serde_json::json!({
+            "type": "input_text",
+            "text": image.degraded_note("OpenAI accepts only an http(s) URL or a data: URI"),
+        });
+    }
+    let mut part = serde_json::json!({ "type": "input_image", "image_url": image.url });
+    if let Some(detail) = &image.detail {
+        part["detail"] = serde_json::json!(detail);
+    }
+    part
+}
+
+/// Append a degradation note per image to a text-only message body.
+///
+/// Used where the wire format has no image slot at all; the alternative would be
+/// dropping the attachment without telling anyone.
+fn append_image_notes(
+    body: &mut String,
+    images: &[&crate::capabilities::ImageSource],
+    reason: &str,
+) {
+    for image in images {
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        body.push_str(&image.degraded_note(reason));
+    }
 }
 
 fn tool_to_json(tool: &ProviderTool) -> serde_json::Value {
@@ -440,6 +527,7 @@ pub fn build_responses_body_with_controls(
         // as role+content text plus function_call / function_call_output items when present.
         let mut text_parts = Vec::new();
         let mut pushed_structured = false;
+        let mut images: Vec<&crate::capabilities::ImageSource> = Vec::new();
         for block in &message.content {
             match block {
                 ProviderContentBlock::Text { text } => text_parts.push(text.as_str()),
@@ -472,10 +560,26 @@ pub fn build_responses_body_with_controls(
                         "output": content,
                     }));
                 }
-                ProviderContentBlock::Image { .. } => {}
+                ProviderContentBlock::Image { image_url } => images.push(image_url),
             }
         }
-        if !text_parts.is_empty() || !pushed_structured {
+        if !images.is_empty() {
+            // Responses input items take a typed content array; only switch to
+            // it when there is an image, so text-only turns keep the cheap
+            // string form (and its byte-stable cache prefix).
+            let mut parts = Vec::new();
+            let text = text_parts.join("\n");
+            if !text.is_empty() {
+                parts.push(serde_json::json!({ "type": "input_text", "text": text }));
+            }
+            for image in images {
+                parts.push(responses_image_part(image));
+            }
+            input.push(serde_json::json!({
+                "role": message.role,
+                "content": parts,
+            }));
+        } else if !text_parts.is_empty() || !pushed_structured {
             input.push(serde_json::json!({
                 "role": message.role,
                 "content": text_parts.join("\n"),
@@ -629,6 +733,7 @@ mod tool_message_tests {
                 tool_call_id: None,
                 tool_name: None,
                 tool_calls: None,
+                images: Vec::new(),
             }),
             history_message_to_provider(HistoryMessage {
                 role: "assistant".into(),
@@ -647,6 +752,7 @@ mod tool_message_tests {
                         arguments: r#"{"path":"b.txt"}"#.into(),
                     },
                 ]),
+                images: Vec::new(),
             }),
             history_message_to_provider(HistoryMessage {
                 role: "tool".into(),
@@ -654,6 +760,7 @@ mod tool_message_tests {
                 tool_call_id: Some("call_a".into()),
                 tool_name: Some("read_file".into()),
                 tool_calls: None,
+                images: Vec::new(),
             }),
             history_message_to_provider(HistoryMessage {
                 role: "tool".into(),
@@ -661,6 +768,7 @@ mod tool_message_tests {
                 tool_call_id: Some("call_b".into()),
                 tool_name: Some("read_file".into()),
                 tool_calls: None,
+                images: Vec::new(),
             }),
         ]
     }
@@ -696,6 +804,134 @@ mod tool_message_tests {
         // Must not flatten tool structure into a single text blob.
         let wire = body.to_string();
         assert!(!wire.contains(r#""role":"assistant","content":"call_a"#));
+    }
+
+    fn image_message(image: crate::capabilities::ImageSource) -> ProviderMessage {
+        ProviderMessage {
+            role: "user".into(),
+            content: vec![
+                ProviderContentBlock::Text {
+                    text: "what is this".into(),
+                },
+                ProviderContentBlock::Image { image_url: image },
+            ],
+        }
+    }
+
+    fn image_request(image: crate::capabilities::ImageSource) -> ProviderRequest {
+        ProviderRequest {
+            model: "gpt-4o".into(),
+            messages: vec![image_message(image)],
+            system_prompt: None,
+            tools: None,
+            max_tokens: Some(256),
+            temperature: None,
+            stream: true,
+            structured_output: None,
+        }
+    }
+
+    #[test]
+    fn chat_completions_user_image_becomes_an_image_url_part() {
+        let body = build_chat_completions_body(&image_request(
+            crate::capabilities::ImageSource {
+                url: "https://example.test/cat.png".into(),
+                detail: Some("high".into()),
+                media_type: None,
+            },
+        ));
+        let content = body["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "image_url");
+        assert_eq!(content[1]["image_url"]["url"], "https://example.test/cat.png");
+        assert_eq!(content[1]["image_url"]["detail"], "high");
+    }
+
+    #[test]
+    fn chat_completions_data_uri_is_forwarded_verbatim() {
+        let body = build_chat_completions_body(&image_request(
+            crate::capabilities::ImageSource::new("data:image/png;base64,AAAB"),
+        ));
+        assert_eq!(
+            body["messages"][0]["content"][1]["image_url"]["url"],
+            "data:image/png;base64,AAAB"
+        );
+    }
+
+    #[test]
+    fn chat_completions_keeps_the_plain_string_form_without_images() {
+        let body = build_chat_completions_body(&ProviderRequest {
+            messages: vec![ProviderMessage {
+                role: "user".into(),
+                content: vec![ProviderContentBlock::Text { text: "hi".into() }],
+            }],
+            ..image_request(crate::capabilities::ImageSource::new("data:image/png;base64,A"))
+        });
+        assert_eq!(body["messages"][0]["content"], "hi");
+    }
+
+    #[test]
+    fn chat_completions_unsupported_image_scheme_is_announced_not_dropped() {
+        let body = build_chat_completions_body(&image_request(
+            crate::capabilities::ImageSource::new("gs://bucket/cat.png"),
+        ));
+        let part = &body["messages"][0]["content"][1];
+        assert_eq!(part["type"], "text");
+        assert!(part["text"]
+            .as_str()
+            .unwrap()
+            .contains("image not sent to the model"));
+    }
+
+    #[test]
+    fn chat_completions_tool_message_announces_an_image_it_cannot_carry() {
+        // OpenAI tool messages are text-only. Silently dropping the attachment
+        // is what this note replaces.
+        let json = message_to_json(&ProviderMessage {
+            role: "tool".into(),
+            content: vec![
+                ProviderContentBlock::ToolResult {
+                    tool_call_id: "t1".into(),
+                    content: "captured".into(),
+                    name: Some("screenshot".into()),
+                },
+                ProviderContentBlock::Image {
+                    image_url: crate::capabilities::ImageSource::new("data:image/png;base64,AAAB"),
+                },
+            ],
+        });
+        assert_eq!(json["role"], "tool");
+        let content = json["content"].as_str().unwrap();
+        assert!(content.starts_with("captured"), "{content}");
+        assert!(content.contains("image not sent to the model"), "{content}");
+    }
+
+    #[test]
+    fn responses_user_image_becomes_an_input_image_part() {
+        let body = build_responses_body(&image_request(crate::capabilities::ImageSource {
+            url: "https://example.test/cat.png".into(),
+            detail: Some("low".into()),
+            media_type: None,
+        }));
+        let content = body["input"][0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "input_text");
+        assert_eq!(content[1]["type"], "input_image");
+        assert_eq!(content[1]["image_url"], "https://example.test/cat.png");
+        assert_eq!(content[1]["detail"], "low");
+    }
+
+    #[test]
+    fn responses_keeps_the_plain_string_form_without_images() {
+        let body = build_responses_body(&ProviderRequest {
+            messages: vec![ProviderMessage {
+                role: "user".into(),
+                content: vec![ProviderContentBlock::Text { text: "hi".into() }],
+            }],
+            ..image_request(crate::capabilities::ImageSource::new("data:image/png;base64,A"))
+        });
+        assert_eq!(body["input"][0]["content"], "hi");
     }
 
     #[test]

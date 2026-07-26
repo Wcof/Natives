@@ -224,6 +224,7 @@ async fn live_tool_roundtrip_body_and_second_turn() {
             tool_call_id: None,
             tool_name: None,
             tool_calls: None,
+            images: Vec::new(),
         }),
         history_message_to_provider(HistoryMessage {
             role: "assistant".into(),
@@ -235,6 +236,7 @@ async fn live_tool_roundtrip_body_and_second_turn() {
                 name: call_name.clone(),
                 arguments: call_args.clone(),
             }]),
+            images: Vec::new(),
         }),
         history_message_to_provider(HistoryMessage {
             role: "tool".into(),
@@ -242,6 +244,7 @@ async fn live_tool_roundtrip_body_and_second_turn() {
             tool_call_id: Some(call_id.clone()),
             tool_name: Some(call_name.clone()),
             tool_calls: None,
+            images: Vec::new(),
         }),
     ];
 

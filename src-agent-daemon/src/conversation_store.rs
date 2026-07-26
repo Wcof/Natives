@@ -449,26 +449,11 @@ pub fn engine_history(conversation_id: &str) -> Result<Vec<EngineMessage>, Strin
             if content.trim().is_empty() {
                 return None;
             }
-            Some(EngineMessage {
-                role,
-                content,
-                tool_call_id: None,
-                tool_name: None,
-                tool_calls: None,
-            })
+            Some(EngineMessage::text(role, content))
         })
         .collect();
     if let Some(summary) = latest_context_summary(conversation_id)? {
-        history.insert(
-            0,
-            EngineMessage {
-                role: "system".into(),
-                content: summary,
-                tool_call_id: None,
-                tool_name: None,
-                tool_calls: None,
-            },
-        );
+        history.insert(0, EngineMessage::text("system", summary));
     }
     Ok(history)
 }

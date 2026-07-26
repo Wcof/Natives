@@ -129,7 +129,22 @@ pub trait EngineProvider: Send + Sync {
 pub type EngineProviderEventStream =
     Pin<Box<dyn Stream<Item = EngineProviderEvent> + Send + 'static>>;
 
-#[derive(Debug, Clone)]
+/// One message on the wire between the engine and a provider.
+///
+/// # Why `content` stays a `String`
+///
+/// Text is what every step of the loop reads and writes — doom-loop
+/// fingerprints, compaction, transcripts, hook payloads. Turning `content` into
+/// a block list would have rewritten all of them for the sake of one extra
+/// modality. Non-text parts therefore ride in their own typed field instead:
+/// `content` remains the text fast path, and [`Self::images`] carries what text
+/// cannot. Adding a modality later means adding a field, not reshaping this one.
+///
+/// The rule that makes this honest: every layer below must either encode
+/// `images` or say out loud that it could not (see
+/// `provider_adapters::ImageSource::degraded_note`). Silently dropping them is
+/// the bug this field exists to close.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EngineMessage {
     pub role: String,
     pub content: String,
@@ -137,9 +152,55 @@ pub struct EngineMessage {
     /// Tool name for `role: tool` results (needed by Gemini functionResponse).
     pub tool_name: Option<String>,
     pub tool_calls: Option<Vec<EngineToolCall>>,
+    /// Images attached to this message. Empty for the overwhelming majority of
+    /// messages, which is why it is a plain `Vec` rather than an `Option`.
+    pub images: Vec<EngineImage>,
 }
 
-#[derive(Debug, Clone)]
+impl EngineMessage {
+    /// Text-only message — the shape almost every call site wants.
+    pub fn text(role: impl Into<String>, content: impl Into<String>) -> Self {
+        EngineMessage {
+            role: role.into(),
+            content: content.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Attach images to a message.
+    pub fn with_images(mut self, images: Vec<EngineImage>) -> Self {
+        self.images = images;
+        self
+    }
+}
+
+/// An image attached to an [`EngineMessage`].
+///
+/// Deliberately mirrors `provider_adapters::ImageSource` without depending on
+/// it — `agent-core` has no provider dependency, and the daemon owns the
+/// translation (see `production::engine_message_to_history`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EngineImage {
+    /// A `data:` URI carrying inline base64 bytes, or a reference the provider
+    /// resolves itself (`https://`, `gs://`, a Google File API URI).
+    pub url: String,
+    /// MIME type when the URL does not carry one. Required by several providers
+    /// for inline data; they degrade loudly rather than guess when it is absent.
+    pub media_type: Option<String>,
+    /// Provider-specific fidelity hint (`"low"` / `"high"` / `"auto"`).
+    pub detail: Option<String>,
+}
+
+impl EngineImage {
+    pub fn new(url: impl Into<String>) -> Self {
+        EngineImage {
+            url: url.into(),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EngineToolCall {
     pub id: String,
     pub name: String,
@@ -194,8 +255,11 @@ pub enum EngineError {
     },
     #[error("cancelled")]
     Cancelled,
-    #[error("doom loop detected")]
-    DoomLoop,
+    /// The detector's verdict travels with the error. "doom loop detected" on
+    /// its own tells a user nothing they can act on; the reason names the
+    /// signal, the cycle length and the repeating steps.
+    #[error("doom loop detected: {0}")]
+    DoomLoop(crate::doom_loop::DoomLoopReason),
     #[error("max steps exceeded")]
     MaxSteps,
 }
@@ -205,7 +269,7 @@ impl EngineError {
         match self {
             Self::Provider { code, .. } => code,
             Self::Cancelled => "cancelled",
-            Self::DoomLoop => "doom_loop",
+            Self::DoomLoop(_) => "doom_loop",
             Self::MaxSteps => "max_steps",
             Self::Message(_) => "provider",
         }
@@ -217,6 +281,18 @@ impl EngineError {
 
     pub fn is_rate_limited(&self) -> bool {
         matches!(self, Self::Provider { category, .. } if category == "RateLimit")
+    }
+
+    /// Delay the provider asked us to wait, if it named one.
+    ///
+    /// This is the value the retry loop feeds into [`provider_backoff_ms`]; it
+    /// used to be carried on the error and never read, which is how a 429 could
+    /// be retried three times inside two seconds.
+    pub fn retry_after_ms(&self) -> Option<u64> {
+        match self {
+            Self::Provider { retry_after_ms, .. } => *retry_after_ms,
+            _ => None,
+        }
     }
 }
 
@@ -324,6 +400,21 @@ impl AgentEngine {
         self.cancel.is_cancelled()
     }
 
+    /// Wait out a provider backoff before the next generation attempt.
+    ///
+    /// Returns `false` when the run was cancelled mid-wait; the caller must
+    /// unwind instead of retrying. A 60s `Retry-After` that ignored cancel
+    /// would make Stop feel broken, so the wait races the run's cancel token.
+    async fn sleep_provider_backoff(&self, attempt: u32, retry_after_ms: Option<u64>) -> bool {
+        let delay = provider_backoff_ms(attempt, retry_after_ms);
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_millis(delay)) => {
+                !self.cancel.is_cancelled()
+            }
+            _ = self.cancel.cancelled() => false,
+        }
+    }
+
     /// Apply coordinator action at a safe point: inject interjection into messages.
     fn apply_safe_point(
         &self,
@@ -342,6 +433,7 @@ impl AgentEngine {
                     tool_call_id: None,
                     tool_name: None,
                     tool_calls: None,
+                    images: Vec::new(),
                 });
             }
             _ => {}
@@ -428,6 +520,7 @@ impl AgentEngine {
                 tool_call_id: None,
                 tool_name: None,
                 tool_calls: None,
+                images: Vec::new(),
             }]
         } else {
             let mut msgs = config.messages.clone();
@@ -441,6 +534,7 @@ impl AgentEngine {
                     tool_call_id: None,
                     tool_name: None,
                     tool_calls: None,
+                    images: Vec::new(),
                 });
             }
             msgs
@@ -486,6 +580,10 @@ impl AgentEngine {
                         return Ok(EngineOutcome::Cancelled);
                     }
                     Err(e) if e.retryable() && attempt < MAX_PROVIDER_ATTEMPTS => {
+                        // Rate limits used to skip the backoff entirely and
+                        // retry immediately, which is the one case where the
+                        // provider explicitly told us not to.
+                        let delay = provider_backoff_ms(attempt, e.retry_after_ms());
                         self.events.append(
                             run_id,
                             RunEventKind::GenerationAttemptFailed {
@@ -493,10 +591,11 @@ impl AgentEngine {
                                 code: e.code().into(),
                                 retryable: true,
                                 retrying: true,
+                                retry_in_ms: Some(delay),
                             },
                         );
-                        if !e.is_rate_limited() {
-                            sleep_provider_backoff(attempt).await;
+                        if !self.sleep_provider_backoff(attempt, e.retry_after_ms()).await {
+                            return Ok(EngineOutcome::Cancelled);
                         }
                         attempt += 1;
                         continue 'attempts;
@@ -509,6 +608,7 @@ impl AgentEngine {
                                 code: e.code().into(),
                                 retryable: e.retryable(),
                                 retrying: false,
+                                retry_in_ms: None,
                             },
                         );
                         return Err(e);
@@ -593,6 +693,10 @@ impl AgentEngine {
                             retry_after_ms,
                         } => {
                             if !saw_generation_delta && retryable && attempt < MAX_PROVIDER_ATTEMPTS {
+                                // Same fix as the connect path above: honour the
+                                // provider's own delay instead of special-casing
+                                // RateLimit into a zero-wait retry.
+                                let delay = provider_backoff_ms(attempt, retry_after_ms);
                                 self.events.append(
                                     run_id,
                                     RunEventKind::GenerationAttemptFailed {
@@ -600,10 +704,11 @@ impl AgentEngine {
                                         code: code.clone(),
                                         retryable,
                                         retrying: true,
+                                        retry_in_ms: Some(delay),
                                     },
                                 );
-                                if category != "RateLimit" {
-                                    sleep_provider_backoff(attempt).await;
+                                if !self.sleep_provider_backoff(attempt, retry_after_ms).await {
+                                    return Ok(EngineOutcome::Cancelled);
                                 }
                                 attempt += 1;
                                 continue 'attempts;
@@ -624,6 +729,7 @@ impl AgentEngine {
                                     code: code.clone(),
                                     retryable,
                                     retrying: false,
+                                    retry_in_ms: None,
                                 },
                             );
                             return Err(EngineError::Provider {
@@ -650,9 +756,12 @@ impl AgentEngine {
                             code: "EMPTY_RESPONSE".into(),
                             retryable: true,
                             retrying: true,
+                            retry_in_ms: Some(provider_backoff_ms(attempt, None)),
                         },
                     );
-                    sleep_provider_backoff(attempt).await;
+                    if !self.sleep_provider_backoff(attempt, None).await {
+                        return Ok(EngineOutcome::Cancelled);
+                    }
                     attempt += 1;
                     continue 'attempts;
                 }
@@ -664,6 +773,7 @@ impl AgentEngine {
                             code: "EMPTY_RESPONSE".into(),
                             retryable: false,
                             retrying: false,
+                            retry_in_ms: None,
                         },
                     );
                     return Err(EngineError::Provider {
@@ -685,8 +795,8 @@ impl AgentEngine {
             if !text_acc.is_empty() {
                 doom.observe_text(&text_acc);
             }
-            if doom.is_doom_loop() {
-                return Err(EngineError::DoomLoop);
+            if let Some(reason) = doom.diagnose() {
+                return Err(EngineError::DoomLoop(reason));
             }
 
             if tool_acc.is_empty() {
@@ -736,9 +846,9 @@ impl AgentEngine {
                 let mut input: Value = serde_json::from_str(&args).unwrap_or(serde_json::json!({
                     "raw": args
                 }));
-                doom.observe_tool(&name, &args.chars().take(80).collect::<String>());
-                if doom.is_doom_loop() {
-                    return Err(EngineError::DoomLoop);
+                doom.observe_tool(&name, &tool_args_fingerprint(&args));
+                if let Some(reason) = doom.diagnose() {
+                    return Err(EngineError::DoomLoop(reason));
                 }
 
                 // PreToolUse hooks may deny or modify arguments (always serial).
@@ -847,6 +957,7 @@ impl AgentEngine {
                     tool_call_id: Some(item.id),
                     tool_name: Some(item.name),
                     tool_calls: None,
+                    images: Vec::new(),
                 });
             }
 
@@ -856,6 +967,7 @@ impl AgentEngine {
                 tool_call_id: None,
                 tool_name: None,
                 tool_calls: Some(assistant_tool_calls),
+                images: Vec::new(),
             });
             messages.extend(tool_results);
 
@@ -1221,6 +1333,7 @@ impl AgentEngine {
             tool_call_id: None,
             tool_name: None,
             tool_calls: None,
+            images: Vec::new(),
         }];
 
         match self.stream_summary_text(model, provider, request).await {
@@ -1304,6 +1417,7 @@ fn apply_prompt_hook_responses(
                     tool_call_id: None,
                     tool_name: None,
                     tool_calls: None,
+                    images: Vec::new(),
                 }));
             }
             HookDecision::Allow | HookDecision::Rewake => {}
@@ -1312,13 +1426,57 @@ fn apply_prompt_hook_responses(
     Ok(())
 }
 
-async fn sleep_provider_backoff(attempt: u32) {
-    let backoff_ms = match attempt {
+/// Leading characters of a tool's arguments kept verbatim in its doom-loop key.
+///
+/// Long enough to stay readable in a [`crate::doom_loop::DoomLoopReason`]
+/// pattern, short enough that the key does not carry a whole file body.
+const TOOL_FINGERPRINT_PREFIX_CHARS: usize = 80;
+
+/// Identity of one tool invocation for doom-loop purposes.
+///
+/// A bare 80-character prefix is not an identity: two `edit` calls on the same
+/// file whose argument JSON happens to agree for 80 characters and diverges at
+/// the 400th would look identical, and three of them would abort a run that was
+/// making progress. The prefix is kept for readability and a hash of the *full*
+/// arguments is appended so distinct calls stay distinct.
+fn tool_args_fingerprint(args: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut chars = args.chars();
+    let prefix: String = chars.by_ref().take(TOOL_FINGERPRINT_PREFIX_CHARS).collect();
+    if chars.next().is_none() {
+        return prefix;
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    args.hash(&mut hasher);
+    format!("{prefix}#{:016x}", hasher.finish())
+}
+
+/// Ceiling on a provider-supplied `retry_after_ms`.
+///
+/// A provider (or a routing layer, see `routing::route_unavailable` with its
+/// 60s hint) can name any delay it likes, and an absurd one would pin a run
+/// open for as long as it wants. One minute is the longest wait that is still
+/// plausibly worth doing inside a single generation attempt; past that the run
+/// is better off failing so the caller can decide. The wait is cancellable
+/// throughout, so the ceiling bounds patience, not responsiveness.
+const MAX_PROVIDER_BACKOFF_MS: u64 = 60_000;
+
+/// How long to wait before retrying a failed generation attempt.
+///
+/// The provider's own hint wins when it asks for *more* than the local
+/// schedule — that is the whole point of `Retry-After`, and ignoring it is how
+/// a 429 turns into three instant retries and a longer ban. It never shortens
+/// the wait, and it never exceeds [`MAX_PROVIDER_BACKOFF_MS`].
+fn provider_backoff_ms(attempt: u32, retry_after_ms: Option<u64>) -> u64 {
+    let local = match attempt {
         1 => 500,
         2 => 1_000,
         _ => 2_000,
     };
-    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+    retry_after_ms
+        .unwrap_or(0)
+        .min(MAX_PROVIDER_BACKOFF_MS)
+        .max(local)
 }
 
 fn engine_messages_to_values(messages: &[EngineMessage]) -> Vec<Value> {
@@ -1349,6 +1507,27 @@ fn engine_messages_to_values(messages: &[EngineMessage]) -> Vec<Value> {
                     })
                     .collect();
                 obj.insert("tool_calls".into(), Value::Array(arr));
+            }
+            // Compaction round-trips history through JSON. Images have to make
+            // the trip or they would vanish at the first compaction, which is
+            // exactly the silent-drop failure this field was added to stop.
+            if !m.images.is_empty() {
+                let arr: Vec<Value> = m
+                    .images
+                    .iter()
+                    .map(|img| {
+                        let mut obj = serde_json::Map::new();
+                        obj.insert("url".into(), json!(img.url));
+                        if let Some(media_type) = &img.media_type {
+                            obj.insert("media_type".into(), json!(media_type));
+                        }
+                        if let Some(detail) = &img.detail {
+                            obj.insert("detail".into(), json!(detail));
+                        }
+                        Value::Object(obj)
+                    })
+                    .collect();
+                obj.insert("images".into(), Value::Array(arr));
             }
             Value::Object(obj)
         })
@@ -1401,12 +1580,34 @@ fn values_to_engine_messages(values: &[Value]) -> Vec<EngineMessage> {
                     })
                     .collect()
             });
+            let images = v
+                .get("images")
+                .and_then(|x| x.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|img| {
+                            Some(EngineImage {
+                                url: img.get("url")?.as_str()?.to_string(),
+                                media_type: img
+                                    .get("media_type")
+                                    .and_then(|x| x.as_str())
+                                    .map(str::to_string),
+                                detail: img
+                                    .get("detail")
+                                    .and_then(|x| x.as_str())
+                                    .map(str::to_string),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             EngineMessage {
                 role,
                 content,
                 tool_call_id,
                 tool_name,
                 tool_calls,
+                images,
             }
         })
         .collect()
@@ -1720,6 +1921,7 @@ mod tests {
                             tool_call_id: None,
                             tool_name: None,
                             tool_calls: None,
+                            images: Vec::new(),
                         },
                         EngineMessage {
                             role: "assistant".into(),
@@ -1727,6 +1929,7 @@ mod tests {
                             tool_call_id: None,
                             tool_name: None,
                             tool_calls: None,
+                            images: Vec::new(),
                         },
                     ],
                     user_content: "fallback should not be used".into(),
@@ -2034,6 +2237,7 @@ mod tests {
                     code,
                     retryable: true,
                     retrying: true,
+                    ..
                 } if code == "http_503"
             )
         }));
@@ -2153,6 +2357,7 @@ mod tests {
                     code,
                     retryable: true,
                     retrying: true,
+                    ..
                 } if code == "http_503"
             )
         }));
@@ -2340,6 +2545,7 @@ mod tests {
                 tool_call_id: None,
                 tool_name: None,
                 tool_calls: None,
+                images: Vec::new(),
             })
             .collect()
     }
@@ -2668,5 +2874,339 @@ mod tests {
             .last_main_history()
             .iter()
             .any(|m| m.content.starts_with(crate::compaction::SUMMARY_MARKER)));
+    }
+
+    // ---- provider backoff -------------------------------------------------
+
+    #[test]
+    fn backoff_uses_the_local_schedule_without_a_provider_hint() {
+        assert_eq!(provider_backoff_ms(1, None), 500);
+        assert_eq!(provider_backoff_ms(2, None), 1_000);
+        assert_eq!(provider_backoff_ms(3, None), 2_000);
+    }
+
+    #[test]
+    fn backoff_honours_a_longer_provider_hint_and_ignores_a_shorter_one() {
+        assert_eq!(provider_backoff_ms(1, Some(7_500)), 7_500);
+        // A hint below the local schedule never shortens the wait.
+        assert_eq!(provider_backoff_ms(3, Some(100)), 2_000);
+    }
+
+    #[test]
+    fn backoff_clamps_an_absurd_provider_hint() {
+        assert_eq!(
+            provider_backoff_ms(1, Some(6 * 60 * 60 * 1_000)),
+            MAX_PROVIDER_BACKOFF_MS
+        );
+    }
+
+    /// Fails the first `fail_times` attempts with a rate limit that names a
+    /// `retry_after_ms`, then answers.
+    struct RateLimitedProvider {
+        attempts: std::sync::atomic::AtomicUsize,
+        fail_times: usize,
+        retry_after_ms: Option<u64>,
+        /// `true` reports the rate limit as a stream event instead of a
+        /// connect-time error, exercising the second retry site.
+        as_stream_event: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl EngineProvider for RateLimitedProvider {
+        async fn stream(
+            &self,
+            _model: &str,
+            _messages: Vec<EngineMessage>,
+            _tools: &[ToolSchema],
+            _system_prompt: Option<&str>,
+            _cancel: CancellationToken,
+        ) -> Result<EngineProviderEventStream, EngineError> {
+            let n = self
+                .attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n < self.fail_times {
+                if self.as_stream_event {
+                    return Ok(Box::pin(futures_util::stream::iter(vec![
+                        EngineProviderEvent::Error {
+                            message: "slow down".into(),
+                            code: "http_429".into(),
+                            retryable: true,
+                            category: "RateLimit".into(),
+                            retry_after_ms: self.retry_after_ms,
+                        },
+                    ])));
+                }
+                return Err(EngineError::Provider {
+                    message: "slow down".into(),
+                    code: "http_429".into(),
+                    retryable: true,
+                    category: "RateLimit".into(),
+                    retry_after_ms: self.retry_after_ms,
+                });
+            }
+            Ok(Box::pin(futures_util::stream::iter(vec![
+                EngineProviderEvent::TextDelta("ok".into()),
+                EngineProviderEvent::Completed,
+            ])))
+        }
+    }
+
+    fn rate_limit_config(run_id: &str) -> EngineRunConfig {
+        EngineRunConfig {
+            run_id: run_id.to_string(),
+            conversation_id: "c-429".into(),
+            model: "m".into(),
+            system_prompt: None,
+            messages: Vec::new(),
+            user_content: "hi".into(),
+            max_steps: 5,
+        }
+    }
+
+    fn announced_backoffs(engine: &AgentEngine, run_id: &str) -> Vec<u64> {
+        engine
+            .events
+            .replay_after(run_id, 0)
+            .iter()
+            .filter_map(|e| match &e.payload {
+                RunEventKind::GenerationAttemptFailed {
+                    retrying: true,
+                    retry_in_ms,
+                    ..
+                } => *retry_in_ms,
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The regression: a 429 used to skip the backoff entirely and retry inside
+    /// a millisecond, three times, ignoring the delay the provider asked for.
+    #[tokio::test]
+    async fn rate_limited_connect_error_waits_for_the_provider_hint() {
+        let engine = AgentEngine::new(EventSequencer::new());
+        let run_id = format!("r-429-connect-{}", uuid::Uuid::new_v4());
+        let provider = RateLimitedProvider {
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+            fail_times: 1,
+            // Above the 500ms local schedule for attempt 1, so only the hint
+            // can explain the wait. Kept small to keep the test fast; the
+            // clamping arithmetic is covered by the unit tests above.
+            retry_after_ms: Some(700),
+            as_stream_event: false,
+        };
+        let start = std::time::Instant::now();
+        let status = engine
+            .run(rate_limit_config(&run_id), &provider, &FakeTools)
+            .await
+            .unwrap();
+        let waited = start.elapsed();
+        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
+        assert!(
+            waited >= std::time::Duration::from_millis(700),
+            "429 must wait out Retry-After, waited {waited:?}"
+        );
+        assert_eq!(announced_backoffs(&engine, &run_id), vec![700]);
+    }
+
+    #[tokio::test]
+    async fn rate_limited_stream_event_waits_for_the_provider_hint() {
+        let engine = AgentEngine::new(EventSequencer::new());
+        let run_id = format!("r-429-stream-{}", uuid::Uuid::new_v4());
+        let provider = RateLimitedProvider {
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+            fail_times: 1,
+            retry_after_ms: Some(900),
+            as_stream_event: true,
+        };
+        let start = std::time::Instant::now();
+        let status = engine
+            .run(rate_limit_config(&run_id), &provider, &FakeTools)
+            .await
+            .unwrap();
+        let waited = start.elapsed();
+        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
+        assert!(
+            waited >= std::time::Duration::from_millis(900),
+            "a stream-side 429 must wait too, waited {waited:?}"
+        );
+        assert_eq!(announced_backoffs(&engine, &run_id), vec![900]);
+    }
+
+    #[tokio::test]
+    async fn backoff_is_cancellable() {
+        let engine = Arc::new(AgentEngine::new(EventSequencer::new()));
+        let run_id = format!("r-429-cancel-{}", uuid::Uuid::new_v4());
+        let provider = RateLimitedProvider {
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+            fail_times: 2,
+            retry_after_ms: Some(MAX_PROVIDER_BACKOFF_MS),
+            as_stream_event: false,
+        };
+        let cancel = engine.cancel_token();
+        let runner = {
+            let engine = engine.clone();
+            let run_id = run_id.clone();
+            tokio::spawn(async move {
+                engine
+                    .run(rate_limit_config(&run_id), &provider, &FakeTools)
+                    .await
+            })
+        };
+        // Long enough to be inside the 60s wait, nowhere near finishing it.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        cancel.cancel();
+        let status = tokio::time::timeout(std::time::Duration::from_secs(5), runner)
+            .await
+            .expect("a cancelled backoff must not hold the run open")
+            .expect("join")
+            .expect("run");
+        assert!(matches!(status, crate::EngineOutcome::Cancelled), "{status:?}");
+    }
+
+    // ---- doom loop diagnostics -------------------------------------------
+
+    #[tokio::test]
+    async fn doom_loop_error_names_the_repeating_pattern() {
+        struct RepeatingToolProvider;
+        #[async_trait::async_trait]
+        impl EngineProvider for RepeatingToolProvider {
+            async fn stream(
+                &self,
+                _model: &str,
+                _messages: Vec<EngineMessage>,
+                _tools: &[ToolSchema],
+                _system_prompt: Option<&str>,
+                _cancel: CancellationToken,
+            ) -> Result<EngineProviderEventStream, EngineError> {
+                Ok(Box::pin(futures_util::stream::iter(vec![
+                    EngineProviderEvent::ToolCallDelta {
+                        index: 0,
+                        id: Some(uuid::Uuid::new_v4().to_string()),
+                        name: Some("read_file".into()),
+                        arguments_delta: r#"{"path":"a.txt"}"#.into(),
+                    },
+                    EngineProviderEvent::Completed,
+                ])))
+            }
+        }
+
+        let engine = AgentEngine::new(EventSequencer::new());
+        let error = engine
+            .run(
+                EngineRunConfig {
+                    run_id: format!("r-doom-{}", uuid::Uuid::new_v4()),
+                    conversation_id: "c-doom".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    messages: Vec::new(),
+                    user_content: "go".into(),
+                    max_steps: 20,
+                },
+                &RepeatingToolProvider,
+                &FakeTools,
+            )
+            .await
+            .expect_err("a repeating tool call must abort the run");
+        assert_eq!(error.code(), "doom_loop");
+        let EngineError::DoomLoop(reason) = &error else {
+            panic!("expected a doom-loop error, got {error:?}");
+        };
+        assert_eq!(reason.signal.as_str(), "tool");
+        let rendered = error.to_string();
+        assert!(rendered.contains("read_file"), "{rendered}");
+        assert!(rendered.contains("cycle"), "{rendered}");
+    }
+
+    #[test]
+    fn long_tool_args_sharing_a_prefix_stay_distinguishable() {
+        let shared = "x".repeat(200);
+        let a = format!(r#"{{"path":"{shared}","new":"alpha"}}"#);
+        let b = format!(r#"{{"path":"{shared}","new":"beta"}}"#);
+        assert_ne!(
+            tool_args_fingerprint(&a),
+            tool_args_fingerprint(&b),
+            "a bare 80-char prefix would call these the same edit"
+        );
+        // Short arguments keep their readable, hash-free form.
+        assert_eq!(tool_args_fingerprint(r#"{"path":"a"}"#), r#"{"path":"a"}"#);
+    }
+
+    // ---- multimodal history ----------------------------------------------
+
+    #[test]
+    fn images_survive_the_compaction_value_round_trip() {
+        let original = vec![EngineMessage {
+            role: "user".into(),
+            content: "what is this".into(),
+            images: vec![EngineImage {
+                url: "data:image/png;base64,AAAB".into(),
+                media_type: Some("image/png".into()),
+                detail: Some("high".into()),
+            }],
+            ..Default::default()
+        }];
+        let values = engine_messages_to_values(&original);
+        assert_eq!(values[0]["images"][0]["url"], "data:image/png;base64,AAAB");
+        assert_eq!(values_to_engine_messages(&values), original);
+    }
+
+    #[test]
+    fn text_only_messages_do_not_grow_an_images_key() {
+        let values = engine_messages_to_values(&[EngineMessage::text("user", "hi")]);
+        assert!(values[0].get("images").is_none(), "{:?}", values[0]);
+    }
+
+    #[tokio::test]
+    async fn engine_hands_user_images_to_the_provider() {
+        let provider = CaptureProvider::default();
+        let engine = AgentEngine::new(EventSequencer::new());
+        engine
+            .run(
+                EngineRunConfig {
+                    run_id: format!("r-image-{}", uuid::Uuid::new_v4()),
+                    conversation_id: "c-image".into(),
+                    model: "m".into(),
+                    system_prompt: None,
+                    messages: vec![EngineMessage {
+                        role: "user".into(),
+                        content: "what is this".into(),
+                        images: vec![EngineImage::new("data:image/png;base64,AAAB")],
+                        ..Default::default()
+                    }],
+                    user_content: "what is this".into(),
+                    max_steps: 3,
+                },
+                &provider,
+                &FakeTools,
+            )
+            .await
+            .unwrap();
+        let seen = provider.seen.lock().unwrap();
+        let images: Vec<&EngineImage> = seen.iter().flat_map(|m| m.images.iter()).collect();
+        assert_eq!(images.len(), 1, "the image must reach the provider seam");
+        assert_eq!(images[0].url, "data:image/png;base64,AAAB");
+    }
+
+    #[derive(Default)]
+    struct CaptureProvider {
+        seen: Mutex<Vec<EngineMessage>>,
+    }
+
+    #[async_trait::async_trait]
+    impl EngineProvider for CaptureProvider {
+        async fn stream(
+            &self,
+            _model: &str,
+            messages: Vec<EngineMessage>,
+            _tools: &[ToolSchema],
+            _system_prompt: Option<&str>,
+            _cancel: CancellationToken,
+        ) -> Result<EngineProviderEventStream, EngineError> {
+            *self.seen.lock().unwrap() = messages;
+            Ok(Box::pin(futures_util::stream::iter(vec![
+                EngineProviderEvent::TextDelta("a picture".into()),
+                EngineProviderEvent::Completed,
+            ])))
+        }
     }
 }

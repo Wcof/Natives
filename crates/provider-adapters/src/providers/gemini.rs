@@ -102,7 +102,9 @@ pub fn build_generate_body_with_controls(
                         }
                     }));
                 }
-                ProviderContentBlock::Image { .. } => {}
+                ProviderContentBlock::Image { image_url } => {
+                    parts.push(image_part(image_url));
+                }
             }
         }
         if parts.is_empty() {
@@ -164,6 +166,50 @@ pub fn build_generate_body_with_controls(
         body["generationConfig"] = serde_json::Value::Object(generation_config);
     }
     body
+}
+
+/// Whether a URI is one Gemini's `fileData` part can reference.
+///
+/// `fileData.fileUri` only resolves Google-hosted objects (File API uploads and
+/// Cloud Storage). An arbitrary web URL is not fetched by the model.
+fn is_google_file_uri(url: &str) -> bool {
+    url.starts_with("gs://") || url.contains("generativelanguage.googleapis.com/")
+}
+
+/// Encode one image as a Gemini content part.
+///
+/// Gemini takes inline bytes (`inlineData`, needs a `mimeType`) or a
+/// Google-hosted reference (`fileData`, also needs a `mimeType`). A plain web
+/// URL is not fetchable, so it becomes a visible text part instead of being
+/// dropped — the model is told an image was meant to be here and was not sent.
+fn image_part(image: &ImageSource) -> serde_json::Value {
+    match image.payload() {
+        ImagePayload::Base64 {
+            media_type: Some(mime_type),
+            data,
+        } => serde_json::json!({
+            "inlineData": { "mimeType": mime_type, "data": data },
+        }),
+        ImagePayload::Base64 {
+            media_type: None, ..
+        } => serde_json::json!({
+            "text": image.degraded_note("Gemini needs an explicit mimeType for inline image data"),
+        }),
+        ImagePayload::Remote {
+            url,
+            media_type: Some(mime_type),
+        } if is_google_file_uri(url) => serde_json::json!({
+            "fileData": { "mimeType": mime_type, "fileUri": url },
+        }),
+        ImagePayload::Remote { url, .. } if is_google_file_uri(url) => serde_json::json!({
+            "text": image.degraded_note("Gemini needs an explicit mimeType for a fileData part"),
+        }),
+        ImagePayload::Remote { .. } => serde_json::json!({
+            "text": image.degraded_note(
+                "Gemini accepts inline base64 or a Google File API / gs:// URI, not a plain web URL",
+            ),
+        }),
+    }
 }
 
 #[async_trait]
@@ -543,5 +589,79 @@ mod tool_message_tests {
             contents[2]["parts"][0]["functionResponse"]["response"]["temp"],
             72
         );
+    }
+
+    fn image_request(image: ImageSource) -> ProviderRequest {
+        ProviderRequest {
+            model: "gemini-2.5-flash".into(),
+            messages: vec![ProviderMessage {
+                role: "user".into(),
+                content: vec![
+                    ProviderContentBlock::Text {
+                        text: "what is this".into(),
+                    },
+                    ProviderContentBlock::Image { image_url: image },
+                ],
+            }],
+            system_prompt: None,
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+            stream: true,
+            structured_output: None,
+        }
+    }
+
+    #[test]
+    fn data_uri_becomes_an_inline_data_part() {
+        let body = build_generate_body(&image_request(ImageSource::new(
+            "data:image/png;base64,AAAB",
+        )));
+        let part = &body["contents"][0]["parts"][1];
+        assert_eq!(part["inlineData"]["mimeType"], "image/png");
+        assert_eq!(part["inlineData"]["data"], "AAAB");
+    }
+
+    #[test]
+    fn google_file_uri_becomes_a_file_data_part() {
+        let body = build_generate_body(&image_request(
+            ImageSource::new("gs://bucket/cat.png").with_media_type("image/png"),
+        ));
+        let part = &body["contents"][0]["parts"][1];
+        assert_eq!(part["fileData"]["mimeType"], "image/png");
+        assert_eq!(part["fileData"]["fileUri"], "gs://bucket/cat.png");
+    }
+
+    #[test]
+    fn plain_web_url_is_announced_not_dropped() {
+        // Gemini does not fetch arbitrary URLs. Historically this block was an
+        // empty match arm and the image simply vanished.
+        let body = build_generate_body(&image_request(ImageSource::new(
+            "https://example.test/cat.png",
+        )));
+        let parts = body["contents"][0]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+        let note = parts[1]["text"].as_str().unwrap();
+        assert!(note.contains("image not sent to the model"), "{note}");
+        assert!(note.contains("https://example.test/cat.png"), "{note}");
+    }
+
+    #[test]
+    fn inline_data_without_a_mime_type_is_announced_not_dropped() {
+        let body = build_generate_body(&image_request(ImageSource::new("data:;base64,AAAB")));
+        let note = body["contents"][0]["parts"][1]["text"].as_str().unwrap();
+        assert!(note.contains("mimeType"), "{note}");
+    }
+
+    #[test]
+    fn capability_flag_matches_the_encoder() {
+        let caps = GeminiAdapter::new().capabilities();
+        assert!(caps.image_input);
+        let body = build_generate_body(&image_request(ImageSource::new(
+            "data:image/webp;base64,AAAB",
+        )));
+        assert!(body["contents"][0]["parts"][1]
+            .get("inlineData")
+            .is_some());
     }
 }

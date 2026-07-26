@@ -209,6 +209,12 @@ pub enum RunEventKind {
         code: String,
         retryable: bool,
         retrying: bool,
+        /// Backoff the engine will actually wait before the next attempt, in
+        /// milliseconds — already merged with any provider `Retry-After` and
+        /// clamped. `None` when there is no next attempt, and for producers
+        /// that predate the field.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_in_ms: Option<u64>,
     },
     GenerationAttemptDiscarded {
         attempt: u32,
@@ -426,6 +432,7 @@ mod tests {
                 code: "http_503".into(),
                 retryable: true,
                 retrying: true,
+                retry_in_ms: Some(1_500),
             },
             RunEventKind::GenerationAttemptDiscarded {
                 attempt: 1,

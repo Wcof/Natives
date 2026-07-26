@@ -358,6 +358,7 @@ fn protocol_messages(path: &str, body: &Value) -> Result<Vec<EngineMessage>, Str
                     tool_call_id,
                     tool_name: item.get("name").and_then(Value::as_str).map(str::to_string),
                     tool_calls,
+                    ..Default::default()
                 })
             })
             .collect(),
@@ -366,13 +367,7 @@ fn protocol_messages(path: &str, body: &Value) -> Result<Vec<EngineMessage>, Str
 }
 
 fn message(role: &str, content: String) -> EngineMessage {
-    EngineMessage {
-        role: role.to_string(),
-        content,
-        tool_call_id: None,
-        tool_name: None,
-        tool_calls: None,
-    }
+    EngineMessage::text(role, content)
 }
 fn content_text(value: &Value) -> String {
     match value {

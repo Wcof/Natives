@@ -86,15 +86,23 @@ pub fn build_messages_body_with_controls(
     let mut messages = Vec::new();
     // Anthropic requires tool_result blocks to live in a user message, possibly batched.
     let mut pending_tool_results: Vec<serde_json::Value> = Vec::new();
+    // Non-tool_result blocks (images) that arrived on a `role: tool` message.
+    // They ride out in the same synthetic user message, after the results —
+    // Anthropic only requires that tool_result blocks come first.
+    let mut pending_tool_extras: Vec<serde_json::Value> = Vec::new();
 
     let flush_tool_results = |messages: &mut Vec<serde_json::Value>,
-                              pending: &mut Vec<serde_json::Value>| {
-        if !pending.is_empty() {
-            messages.push(serde_json::json!({
-                "role": "user",
-                "content": std::mem::take(pending),
-            }));
+                              pending: &mut Vec<serde_json::Value>,
+                              extras: &mut Vec<serde_json::Value>| {
+        if pending.is_empty() && extras.is_empty() {
+            return;
         }
+        let mut content = std::mem::take(pending);
+        content.append(extras);
+        messages.push(serde_json::json!({
+            "role": "user",
+            "content": content,
+        }));
     };
 
     for message in &request.messages {
@@ -131,8 +139,9 @@ pub fn build_messages_body_with_controls(
                         "content": content,
                     }));
                 }
-                ProviderContentBlock::Image { .. } => {
+                ProviderContentBlock::Image { image_url } => {
                     is_tool_result_only = false;
+                    content_blocks.push(image_block(image_url));
                 }
             }
         }
@@ -142,11 +151,18 @@ pub fn build_messages_body_with_controls(
                 && !pending_tool_results.is_empty()
                 && content_blocks.is_empty())
         {
-            // Keep accumulating tool_result blocks; flushed before next non-tool message.
+            // Keep accumulating tool_result blocks; flushed before next non-tool
+            // message. Anything else on the same message (an image) rides along
+            // instead of being dropped on the floor.
+            pending_tool_extras.append(&mut content_blocks);
             continue;
         }
 
-        flush_tool_results(&mut messages, &mut pending_tool_results);
+        flush_tool_results(
+            &mut messages,
+            &mut pending_tool_results,
+            &mut pending_tool_extras,
+        );
 
         if content_blocks.is_empty() {
             continue;
@@ -161,7 +177,11 @@ pub fn build_messages_body_with_controls(
             "content": content_blocks,
         }));
     }
-    flush_tool_results(&mut messages, &mut pending_tool_results);
+    flush_tool_results(
+        &mut messages,
+        &mut pending_tool_results,
+        &mut pending_tool_extras,
+    );
 
     let max_tokens = model_profile::resolve_max_output(request.max_tokens, &profile)
         .unwrap_or(ANTHROPIC_FALLBACK_MAX_OUTPUT);
@@ -289,6 +309,51 @@ fn ephemeral() -> serde_json::Value {
     serde_json::json!({ "type": "ephemeral" })
 }
 
+/// Encode one image as an Anthropic `image` content block.
+///
+/// The Messages API takes two source shapes: inline `base64` (which needs an
+/// explicit `media_type`) and `url` (http/https only, fetched by Anthropic).
+/// Anything else — a `data:` URI with no MIME type, a `gs://` object — cannot
+/// be expressed, and is turned into a visible text block rather than dropped,
+/// so the model and the user both learn the image did not arrive.
+fn image_block(image: &ImageSource) -> serde_json::Value {
+    match image.payload() {
+        ImagePayload::Base64 {
+            media_type: Some(media_type),
+            data,
+        } => serde_json::json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": data,
+            },
+        }),
+        ImagePayload::Base64 {
+            media_type: None, ..
+        } => serde_json::json!({
+            "type": "text",
+            "text": image.degraded_note(
+                "Anthropic needs an explicit media_type for inline image data",
+            ),
+        }),
+        ImagePayload::Remote { url, .. }
+            if url.starts_with("https://") || url.starts_with("http://") =>
+        {
+            serde_json::json!({
+                "type": "image",
+                "source": { "type": "url", "url": url },
+            })
+        }
+        ImagePayload::Remote { .. } => serde_json::json!({
+            "type": "text",
+            "text": image.degraded_note(
+                "Anthropic accepts only inline base64 or an http(s) URL",
+            ),
+        }),
+    }
+}
+
 /// Whether `text` could possibly reach the model's minimum cacheable prefix.
 ///
 /// One token is never fewer than one character, so `chars < minimum` proves the
@@ -330,6 +395,8 @@ impl ProviderAdapter for AnthropicAdapter {
                 "tool_calls".into(),
                 "reasoning".into(),
                 "system_prompt".into(),
+                // Real `image` content blocks; see `image_block`.
+                "image_input".into(),
                 // Caller-placed `cache_control` breakpoints.
                 "prompt_cache_explicit".into(),
                 "tool_choice".into(),
@@ -837,5 +904,126 @@ mod request_tests {
         assert_eq!(messages[2]["content"][0]["type"], "tool_result");
         assert_eq!(messages[2]["content"][0]["tool_use_id"], "toolu_1");
         assert_eq!(messages[2]["content"][0]["content"], "file data");
+    }
+
+    fn image_request(image: ImageSource) -> ProviderRequest {
+        ProviderRequest {
+            model: "claude-sonnet-4-5".into(),
+            messages: vec![ProviderMessage {
+                role: "user".into(),
+                content: vec![
+                    ProviderContentBlock::Text {
+                        text: "what is this".into(),
+                    },
+                    ProviderContentBlock::Image { image_url: image },
+                ],
+            }],
+            system_prompt: None,
+            tools: None,
+            max_tokens: Some(256),
+            temperature: None,
+            stream: true,
+            structured_output: None,
+        }
+    }
+
+    #[test]
+    fn data_uri_becomes_a_base64_image_source() {
+        let body = build_messages_body(&image_request(ImageSource::new(
+            "data:image/png;base64,AAAB",
+        )));
+        let block = &body["messages"][0]["content"][1];
+        assert_eq!(block["type"], "image");
+        assert_eq!(block["source"]["type"], "base64");
+        assert_eq!(block["source"]["media_type"], "image/png");
+        assert_eq!(block["source"]["data"], "AAAB");
+    }
+
+    #[test]
+    fn https_url_becomes_a_url_image_source() {
+        let body = build_messages_body(&image_request(ImageSource::new(
+            "https://example.test/cat.png",
+        )));
+        let block = &body["messages"][0]["content"][1];
+        assert_eq!(block["type"], "image");
+        assert_eq!(block["source"]["type"], "url");
+        assert_eq!(block["source"]["url"], "https://example.test/cat.png");
+    }
+
+    #[test]
+    fn unsupported_image_reference_is_announced_not_dropped() {
+        let body = build_messages_body(&image_request(ImageSource::new("gs://bucket/cat.png")));
+        let content = body["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2, "the block must survive as something");
+        assert_eq!(content[1]["type"], "text");
+        let note = content[1]["text"].as_str().unwrap();
+        assert!(note.contains("image not sent to the model"), "{note}");
+        assert!(note.contains("gs://bucket/cat.png"), "{note}");
+    }
+
+    #[test]
+    fn inline_data_without_a_media_type_is_announced_not_dropped() {
+        let body = build_messages_body(&image_request(ImageSource::new("data:;base64,AAAB")));
+        let block = &body["messages"][0]["content"][1];
+        assert_eq!(block["type"], "text");
+        assert!(block["text"]
+            .as_str()
+            .unwrap()
+            .contains("media_type"));
+    }
+
+    #[test]
+    fn image_on_a_tool_message_rides_out_with_the_tool_results() {
+        let body = build_messages_body(&ProviderRequest {
+            model: "claude-sonnet-4-5".into(),
+            messages: vec![
+                ProviderMessage {
+                    role: "assistant".into(),
+                    content: vec![ProviderContentBlock::ToolCall {
+                        id: "toolu_1".into(),
+                        name: "screenshot".into(),
+                        input: serde_json::json!({}),
+                    }],
+                },
+                ProviderMessage {
+                    role: "tool".into(),
+                    content: vec![
+                        ProviderContentBlock::ToolResult {
+                            tool_call_id: "toolu_1".into(),
+                            content: "captured".into(),
+                            name: Some("screenshot".into()),
+                        },
+                        ProviderContentBlock::Image {
+                            image_url: ImageSource::new("data:image/png;base64,AAAB"),
+                        },
+                    ],
+                },
+            ],
+            system_prompt: None,
+            tools: None,
+            max_tokens: Some(256),
+            temperature: None,
+            stream: true,
+            structured_output: None,
+        });
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2);
+        let results = messages[1]["content"].as_array().unwrap();
+        // tool_result first (Anthropic's requirement), image after it.
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["type"], "tool_result");
+        assert_eq!(results[1]["type"], "image");
+    }
+
+    #[test]
+    fn capability_flag_matches_the_encoder() {
+        let caps = AnthropicAdapter::new().capabilities();
+        assert!(caps.image_input);
+        assert!(caps.features.iter().any(|f| f == "image_input"));
+        // The flag is only honest because an image really is encoded.
+        let body = build_messages_body(&image_request(ImageSource::new(
+            "data:image/jpeg;base64,AAAB",
+        )));
+        assert_eq!(body["messages"][0]["content"][1]["type"], "image");
     }
 }

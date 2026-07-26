@@ -13,8 +13,8 @@ use assistant_protocol::v2::RunEventKind;
 use capability_gateway::CapabilityGateway;
 use futures_util::StreamExt;
 use provider_adapters::capabilities::{
-    history_message_to_provider, HistoryMessage, HistoryToolCall, ProviderAdapter, ProviderError,
-    ProviderRequest, ProviderTool,
+    history_message_to_provider, HistoryMessage, HistoryToolCall, ImageSource, ProviderAdapter,
+    ProviderError, ProviderRequest, ProviderTool,
 };
 use provider_adapters::stream::ProviderEvent;
 use serde_json::Value;
@@ -545,13 +545,7 @@ impl ProductionRuntime {
                 {
                     orig.clone()
                 } else {
-                    EngineMessage {
-                        role,
-                        content,
-                        tool_call_id: None,
-                        tool_name: None,
-                        tool_calls: None,
-                    }
+                    EngineMessage::text(role, content)
                 }
             })
             .collect();
@@ -1109,7 +1103,11 @@ pub(crate) fn provider_error_message(
     )
 }
 
-/// Map engine history into provider history parts (preserves tool_calls / tool_call_id).
+/// Map engine history into provider history parts.
+///
+/// Preserves `tool_calls` / `tool_call_id` and image attachments. This is the
+/// only place the engine's modality-neutral `EngineImage` becomes the provider
+/// crate's `ImageSource`, so a new modality has exactly one seam to cross.
 pub(crate) fn engine_message_to_history(m: EngineMessage) -> HistoryMessage {
     HistoryMessage {
         role: m.role,
@@ -1126,6 +1124,15 @@ pub(crate) fn engine_message_to_history(m: EngineMessage) -> HistoryMessage {
                 })
                 .collect()
         }),
+        images: m
+            .images
+            .into_iter()
+            .map(|image| ImageSource {
+                url: image.url,
+                detail: image.detail,
+                media_type: image.media_type,
+            })
+            .collect(),
     }
 }
 
