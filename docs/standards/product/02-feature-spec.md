@@ -339,13 +339,13 @@ Dashboard
 │   ├── 内置浏览器视图（前进/后退/刷新/重启/复制 URL）     P1
 │   ├── 删除确认（按来源附 Docker 卷/镜像选项）            P1
 │   └── 模板创建对话框（硬编码占位 HTML；ADR-0014 判定为假创作入口，待创作台替换） P2
-├── 创作台（Creator Workbench）（设计冻结，未实施）       P0 ← ADR-0014、docs/architecture/creative-app-creator-workbench.md
-│   ├── P0 主流程：描述想法→生成草稿→沙箱预览→对话修改→确认发布→继续迭代 （设计冻结）
-│   ├── 草稿存储（creative_drafts v10 迁移 + 修订文件）    （设计冻结）
-│   ├── 受限草稿工具四件套 + 创作会话工具 allowlist        （设计冻结）
-│   ├── publish_creative_draft 唯一发布门禁（汇入 write_generated_module） （设计冻结）
-│   ├── 草稿沙箱预览路由 /drafts/{draftId}                （设计冻结）
-│   └── 「继续创作」反向路径（以已发布模块为种子开新草稿）  （设计冻结）
+├── 创作台（Creator Workbench）（后端链路已落地 2026-07-26；前端组件未接线） P0 ← ADR-0014、docs/architecture/creative-app-creator-workbench.md
+│   ├── 草稿存储（creative_drafts 迁移 + 修订文件）        P0 ← creative_draft/store.rs、db.rs
+│   ├── 草稿生命周期 Host 命令（创建/修订/发布；发布非模型工具，用户点击即授权） P0 ← commands/creative_draft.rs
+│   ├── publish 唯一发布门禁（汇入 write_generated_module，KI-3 lint；拒绝发布不丢草稿） P0 ← creative_draft/store.rs
+│   ├── 草稿沙箱预览路由 /drafts/{draftId}                 P0 ← http_server.rs
+│   ├── 「继续创作」反向路径（以已发布模块为种子开新草稿）   P0 ← commands/creative_draft.rs
+│   └── 前端组件（Composer/DraftPreview/Catalog 已建，无挂载入口——待接线） P0 ← src/components/creative/
 └── 发布向导（Release Wizard）                           P2 ← release_wizard.rs
     ├── 后端：就绪检查/版本写入/步骤序列/执行              P2 （后端就绪，前端零调用点）
     └── 前端对话框为模拟进度占位（违反 R-F2，待整改或下架） P2 ← src/components/release/ReleaseWizardDialog.tsx
