@@ -10,6 +10,7 @@ import {
   updateCapabilitySkill,
 } from '@/lib/assistant-workspace/capability-admin';
 import { classifyError } from '@/lib/error-classifier';
+import { useFocusTrap } from '@/lib/useFocusTrap';
 import { useToast } from '@/components/ui/Toast';
 import { Skeleton } from '@/components/ui/EmptyState';
 import { SKILL_CATEGORIES, type CapabilitySkill, type CapabilitySkillDetail } from '../shared/capability-types';
@@ -37,6 +38,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 /** Right-hand drawer: category / tags editing, enable + trust toggles, uninstall. */
 export default function SkillDetail({ locale, gateway, skill, onClose, onChanged, onDeleted }: SkillDetailProps) {
   const { toast } = useToast();
+  const { dialogRef, handleKeyDown } = useFocusTrap();
   const [detail, setDetail] = useState<CapabilitySkillDetail | null>(null);
   const [tagsText, setTagsText] = useState(skill.tags.join(', '));
   const [category, setCategory] = useState(skill.category ?? '');
@@ -91,6 +93,23 @@ export default function SkillDetail({ locale, gateway, skill, onClose, onChanged
     [gateway, skill.id, locale, onDeleted, toast],
   );
 
+  // 与项目其他弹层一致的模态行为：打开移焦入抽屉、Esc 关闭、关闭还原焦点
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    dialogRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('keydown', onKey, true);
+      previouslyFocused?.focus?.();
+    };
+  }, [dialogRef, onClose]);
+
   const inputStyle = {
     borderColor: 'var(--border)',
     background: 'var(--surface)',
@@ -101,6 +120,9 @@ export default function SkillDetail({ locale, gateway, skill, onClose, onChanged
     <div className="fixed inset-0 z-40" role="dialog" aria-modal="true" aria-label={t(locale, 'capabilities.skills.detail')}>
       <div className="absolute inset-0" style={{ background: 'rgba(0, 0, 0, 0.4)' }} onClick={onClose} aria-hidden />
       <aside
+        ref={dialogRef}
+        tabIndex={-1}
+        onKeyDown={handleKeyDown}
         className="absolute right-0 top-0 flex h-full w-[400px] max-w-[92vw] flex-col overflow-hidden"
         style={{ background: 'var(--surface)', borderLeft: '1px solid var(--border)' }}
       >

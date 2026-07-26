@@ -41,6 +41,7 @@ export default function ExpertsTab({ locale, gateway }: ExpertsTabProps) {
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState('');
   const [importError, setImportError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
   const [confirmDeleteExpert, setConfirmDeleteExpert] = useState<CapabilityExpert | null>(null);
   const [forceDeleteExpert, setForceDeleteExpert] = useState<CapabilityExpert | null>(null);
   const [confirmDeleteTeam, setConfirmDeleteTeam] = useState<CapabilityExpertTeam | null>(null);
@@ -75,8 +76,11 @@ export default function ExpertsTab({ locale, gateway }: ExpertsTabProps) {
         toast(t(locale, 'capabilities.experts.deleted'), 'success');
         void load();
       } catch (e) {
-        if (!force) {
-          // Referenced by a team → daemon rejects; offer force delete.
+        // Only the daemon's referential-honesty rejection warrants a force-delete
+        // offer; any other failure (network, daemon down) must not steer the
+        // user toward a destructive force=true retry.
+        const raw = e instanceof Error ? e.message : String(e);
+        if (!force && raw.includes('referenced by teams')) {
           setForceDeleteExpert(expert);
           return;
         }
@@ -100,11 +104,13 @@ export default function ExpertsTab({ locale, gateway }: ExpertsTabProps) {
   }, [confirmDeleteTeam, gateway, load, locale, toast]);
 
   const handleImportMd = useCallback(async () => {
+    if (importing) return;
     if (!importText.trim()) {
       setImportError(t(locale, 'capabilities.experts.importContentRequired'));
       return;
     }
     setImportError(null);
+    setImporting(true);
     try {
       await importCapabilityExpertMd(gateway, { content: importText });
       toast(t(locale, 'capabilities.experts.imported'), 'success');
@@ -113,8 +119,10 @@ export default function ExpertsTab({ locale, gateway }: ExpertsTabProps) {
       void load();
     } catch (e) {
       setImportError(classifyError(e).userMessage);
+    } finally {
+      setImporting(false);
     }
-  }, [gateway, importText, load, locale, toast]);
+  }, [gateway, importing, importText, load, locale, toast]);
 
   return (
     <div className="flex h-full flex-col gap-3 overflow-hidden">
@@ -236,9 +244,10 @@ export default function ExpertsTab({ locale, gateway }: ExpertsTabProps) {
             <button
               type="button"
               onClick={() => void handleImportMd()}
-              className="btn btn-primary rounded px-4 py-2 text-sm"
+              disabled={importing}
+              className="btn btn-primary rounded px-4 py-2 text-sm disabled:opacity-50"
             >
-              {t(locale, 'capabilities.common.import')}
+              {t(locale, importing ? 'capabilities.common.loading' : 'capabilities.common.import')}
             </button>
           </div>
         </div>

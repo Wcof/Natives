@@ -2,6 +2,7 @@
 
 import { type ReactNode } from 'react';
 import { Inbox, AlertTriangle, RefreshCw } from 'lucide-react';
+import { t, useLocale } from '@/i18n';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
 import { MathCurveLoader } from './MathCurveLoader';
 
@@ -39,14 +40,16 @@ interface LoadingStateProps {
   message?: string;
 }
 
-export function LoadingState({ message = 'Loading...' }: LoadingStateProps) {
+export function LoadingState({ message }: LoadingStateProps) {
+  const locale = useLocale();
+  const text = message ?? t(locale, 'common.loading');
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       padding: SPACING.xxl, gap: SPACING.md,
     }}>
       <MathCurveLoader size={60} />
-      <span style={{ fontSize: FONT_SIZE.md, color: 'var(--text-disabled)', letterSpacing: '0.03em' }}>{message}</span>
+      <span style={{ fontSize: FONT_SIZE.md, color: 'var(--text-disabled)', letterSpacing: '0.03em' }}>{text}</span>
     </div>
   );
 }
@@ -57,9 +60,12 @@ interface ErrorStateProps {
   message: string;
   onRetry?: () => void;
   icon?: ReactNode;
+  /** 覆盖重试按钮文案；默认 common.retry（随语言切换） */
+  retryLabel?: string;
 }
 
-export function ErrorState({ message, onRetry, icon }: ErrorStateProps) {
+export function ErrorState({ message, onRetry, icon, retryLabel }: ErrorStateProps) {
+  const locale = useLocale();
   const renderedIcon = icon !== undefined ? icon : <AlertTriangle size={28} style={{ color: 'var(--warning)' }} />;
   return (
     <div style={{
@@ -70,7 +76,7 @@ export function ErrorState({ message, onRetry, icon }: ErrorStateProps) {
       <div style={{ fontSize: FONT_SIZE.md, color: 'var(--text-secondary)', marginBottom: SPACING.md }}>{message}</div>
       {onRetry && (
         <button className="btn" onClick={onRetry} style={{ fontSize: FONT_SIZE.sm }}>
-          <RefreshCw size={14} style={{ marginRight: SPACING.xs }} /> Retry
+          <RefreshCw size={14} style={{ marginRight: SPACING.xs }} /> {retryLabel ?? t(locale, 'common.retry')}
         </button>
       )}
     </div>

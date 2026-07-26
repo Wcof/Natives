@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { RefreshCw, Upload, Search } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import type { AssistantGateway } from '@/lib/assistant-gateway';
@@ -25,23 +25,42 @@ export default function SkillsTab({ locale, gateway }: SkillsTabProps) {
   const [phase, setPhase] = useState<'loading' | 'error' | 'ready'>('loading');
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [searching, setSearching] = useState(false);
   const [category, setCategory] = useState<CategoryFilterValue>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [rescanning, setRescanning] = useState(false);
+  // 竞态保护：慢响应不得覆盖新请求的结果（对齐同页 McpHubBrowser 模式）
+  const requestSeq = useRef(0);
 
+  // 300ms 防抖：打字不整表重载，也不闪 loading
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSearching(true);
+      setDebouncedQuery(query);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  // 重载期间保留旧列表：仅首屏（phase 初值 loading）显示全屏 LoadingState
   const load = useCallback(async () => {
-    setPhase('loading');
-    setError(null);
+    const seq = ++requestSeq.current;
     try {
-      const list = await listCapabilitySkills(gateway, query.trim() ? { query: query.trim() } : {});
+      const q = debouncedQuery.trim();
+      const list = await listCapabilitySkills(gateway, q ? { query: q } : {});
+      if (seq !== requestSeq.current) return;
       setSkills(list);
+      setError(null);
       setPhase('ready');
     } catch (e) {
+      if (seq !== requestSeq.current) return;
       setError(classifyError(e).userMessage);
       setPhase('error');
+    } finally {
+      if (seq === requestSeq.current) setSearching(false);
     }
-  }, [gateway, query]);
+  }, [gateway, debouncedQuery]);
 
   useEffect(() => {
     void load();
@@ -88,6 +107,9 @@ export default function SkillsTab({ locale, gateway }: SkillsTabProps) {
             className="w-full bg-transparent text-sm"
             style={{ color: 'var(--text)', outline: 'none', border: 'none' }}
           />
+          {searching && phase === 'ready' ? (
+            <RefreshCw size={13} className="animate-spin" style={{ color: 'var(--text-disabled)', flexShrink: 0 }} aria-hidden />
+          ) : null}
         </div>
         <button
           type="button"
