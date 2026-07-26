@@ -32,16 +32,17 @@ export default function ConfirmDialog({
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const confirmBtnRef = useRef<HTMLButtonElement>(null);
+  const cancelBtnRef = useRef<HTMLButtonElement>(null);
 
-  // Focus trap: 打开时聚焦确认按钮，关闭后恢复
+  // Focus trap: 打开时聚焦按钮；danger 场景聚焦「取消」，防止回车误确认破坏性操作
   useEffect(() => {
     if (open) {
       // 延迟一帧确保 DOM 已渲染
       requestAnimationFrame(() => {
-        confirmBtnRef.current?.focus();
+        (danger ? cancelBtnRef.current : confirmBtnRef.current)?.focus();
       });
     }
-  }, [open]);
+  }, [open, danger]);
 
   // Escape 键关闭
   useEffect(() => {
@@ -109,14 +110,14 @@ export default function ConfirmDialog({
           {message}
         </p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: SPACING.sm }}>
-          <button className="btn-ghost" onClick={onCancel}>{cancelLabel}</button>
+          <button ref={cancelBtnRef} className="btn-ghost" onClick={onCancel}>{cancelLabel}</button>
           <button
             ref={confirmBtnRef}
             className="btn"
             onClick={onConfirm}
             style={{
               background: danger ? 'var(--danger)' : 'var(--primary)',
-              color: '#FFFFFF',
+              color: danger ? 'var(--neutral-1000)' : 'var(--accent-ink)',
               border: 'none', padding: `${SPACING.xs}px ${SPACING.md}px`, borderRadius: BORDER_RADIUS.sm, cursor: 'pointer', fontWeight: 500,
             }}
           >
