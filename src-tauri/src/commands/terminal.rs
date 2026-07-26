@@ -199,9 +199,12 @@ pub fn terminal_record_list(state: State<'_, AppState>) -> Result<Vec<terminal_r
     state.terminal_recorder.list()
 }
 
+/// 返回 String：Vec<u8> 会被 JSON 序列化成数字数组，而 adapter/前端按字符串
+/// `.split('\n')` 消费（原契约破断，一旦挂载录像 UI 即 TypeError）。
 #[tauri::command]
-pub fn terminal_record_play(id: String, state: State<'_, AppState>) -> Result<Vec<u8>> {
-    state.terminal_recorder.read_cast(&id)
+pub fn terminal_record_play(id: String, state: State<'_, AppState>) -> Result<String> {
+    let bytes = state.terminal_recorder.read_cast(&id)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Export a recording to MP4 / GIF / WebM.

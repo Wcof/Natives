@@ -22,41 +22,54 @@ const RENDER_STATE_THROTTLE_MS: u64 = 16;
 /// content or programmatic writes. Bracketed paste mode handles paste
 /// correctly, so stripping from raw writes is safe.
 fn sanitize_pty_input(data: &str) -> String {
+    // 必须按 UTF-8 字节段原样搬运：旧实现 `bytes[i] as char` 把多字节序列
+    // 逐字节当 Latin-1 码点再编码（“中” E4B8AD → C3A4C2B8C2AD），
+    // 所有中日韩/emoji 的输入与粘贴在到达 PTY 前就被打碎。
     let bytes = data.as_bytes();
-    let mut result = String::with_capacity(data.len());
+    let mut keep = vec![true; bytes.len()];
     let mut i = 0;
 
     while i < bytes.len() {
         if bytes[i] == 0x1b && i + 1 < bytes.len() {
             let next = bytes[i + 1];
-            if next == b']' {
-                // OSC sequence: skip until BEL (0x07) or ST (ESC \)
+            if next == b']' || next == b'P' {
+                // OSC（BEL 或 ESC\ 终止）/ DCS（ESC\ 终止）整段剔除
+                let allow_bel = next == b']';
+                let start = i;
                 i += 2;
-                while i < bytes.len() {
-                    if bytes[i] == 0x07 { i += 1; break; }
+                loop {
+                    if i >= bytes.len() {
+                        break;
+                    }
+                    if allow_bel && bytes[i] == 0x07 {
+                        i += 1;
+                        break;
+                    }
                     if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
-                        i += 2; break;
+                        i += 2;
+                        break;
                     }
                     i += 1;
                 }
-                continue;
-            } else if next == b'P' {
-                // DCS sequence: skip until ST (ESC \)
-                i += 2;
-                while i < bytes.len() {
-                    if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
-                        i += 2; break;
-                    }
-                    i += 1;
+                for flag in keep.iter_mut().take(i).skip(start) {
+                    *flag = false;
                 }
                 continue;
             }
         }
-        result.push(bytes[i] as char);
         i += 1;
     }
 
-    result
+    if keep.iter().all(|k| *k) {
+        return data.to_string();
+    }
+    let filtered: Vec<u8> = bytes
+        .iter()
+        .zip(keep.iter())
+        .filter_map(|(b, k)| if *k { Some(*b) } else { None })
+        .collect();
+    // 剔除的都是完整的 ESC 序列（ASCII 边界），剩余字节仍是合法 UTF-8
+    String::from_utf8(filtered).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
 /// Session 生命周期状态
@@ -820,27 +833,23 @@ fi
 
     /// 获取指定进程的直接子进程（最近创建的）
     fn get_child_process(parent_pid: u32) -> Option<String> {
-        // macOS/Linux: ps -o pid=,comm= --ppid <pid>
-        let output = std::process::Command::new("ps")
-            .arg("--ppid")
+        // `ps --ppid` 是 GNU procps 选项，macOS 的 BSD ps 不认，此前在 macOS 上
+        // 恒失败 → terminal_proc 永远返回 shell 名 → 前端 TUI 判定失效。
+        // 改用 POSIX 通用的 pgrep -P 拿子 pid，再 ps -o comm= 取进程名。
+        let pgrep = std::process::Command::new("pgrep")
+            .arg("-P")
             .arg(parent_pid.to_string())
-            .arg("-o")
-            .arg("comm=,pid=")
             .output().ok()?;
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            // 取最后一行（最新子进程）
-            let line = stdout.lines()
-                .map(|l| l.trim())
-                .filter(|l| !l.is_empty())
-                .last()?;
-            // 格式: "comm pid"
-            let name = line.split_whitespace().next()?;
-            if !name.is_empty() {
-                return Some(name.to_string());
-            }
+        if !pgrep.status.success() {
+            return None;
         }
-        None
+        let stdout = String::from_utf8_lossy(&pgrep.stdout);
+        // 取最后一个（最新创建的子进程）
+        let child_pid = stdout.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).last()?;
+        let name = Self::get_process_name(child_pid.parse().ok()?)?;
+        // 去掉路径前缀（macOS comm 可能是全路径）
+        let base = name.rsplit('/').next().unwrap_or(&name).to_string();
+        if base.is_empty() { None } else { Some(base) }
     }
 }
 
@@ -1109,5 +1118,30 @@ impl GhosttyManager {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod pty_input_tests {
+    use super::sanitize_pty_input;
+
+    #[test]
+    fn multibyte_utf8_passes_through_unchanged() {
+        // 回归：旧实现逐字节 as char 会把 CJK/emoji 打碎成 mojibake
+        for s in ["中文输入", "日本語テスト", "🚀 emoji", "mixed 中 e"] {
+            assert_eq!(sanitize_pty_input(s), s);
+        }
+    }
+
+    #[test]
+    fn osc_and_dcs_sequences_are_stripped() {
+        assert_eq!(sanitize_pty_input("a\x1b]0;title\x07b"), "ab");
+        assert_eq!(sanitize_pty_input("a\x1b]0;title\x1b\\b"), "ab");
+        assert_eq!(sanitize_pty_input("a\x1bPdcs-body\x1b\\b"), "ab");
+    }
+
+    #[test]
+    fn osc_around_multibyte_keeps_text_intact() {
+        assert_eq!(sanitize_pty_input("你\x1b]0;标题\x07好"), "你好");
     }
 }

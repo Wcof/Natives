@@ -652,19 +652,23 @@ export default function Sidebar({
         <>
           {/* 中间可滚动区域 */}
           <div className="flex-1 overflow-y-auto min-h-0">
-            {/* Search Capsule */}
+            {/* Search Capsule — 打开命令面板的入口。此前是无任何 handler 的
+                装饰 input（能打字但什么都不发生），现改为真实按钮 */}
             <div className="px-4 pb-3">
-              <div className="flex h-10 items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3">
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new CustomEvent('open-cmdk'))}
+                className="flex h-10 w-full items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 text-left hover:border-[var(--primary)]"
+                aria-label={t(locale, 'sidebar.searchPlaceholder')}
+              >
                 <Search size={14} className="text-[var(--text-disabled)] shrink-0" />
-                <input
-                  type="text"
-                  placeholder={t(locale, 'sidebar.searchPlaceholder')}
-                  className="min-w-0 flex-1 bg-transparent text-sm text-[var(--text)] outline-none focus-visible:outline-none placeholder:text-[var(--text-disabled)]"
-                />
+                <span className="min-w-0 flex-1 truncate text-sm text-[var(--text-disabled)]">
+                  {t(locale, 'sidebar.searchPlaceholder')}
+                </span>
                 <span className="shrink-0 rounded-md bg-[var(--surface)] px-1.5 py-0.5 text-[0.6875rem] font-medium text-[var(--text-disabled)]">
                   ⌘K
                 </span>
-              </div>
+              </button>
             </div>
 
             {/* Quick Access List — fixed system shortcuts */}

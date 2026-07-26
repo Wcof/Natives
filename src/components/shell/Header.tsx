@@ -2,7 +2,7 @@
 
 import { startTransition, Fragment, useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { t, type Locale } from '@/i18n';
+import { t, useLocale, type Locale } from '@/i18n';
 import {
   FILE_EVENTS,
   dispatchFileEvent,
@@ -143,14 +143,6 @@ function BreadcrumbPath({
     }
   }, [expanded, crumbs]);
 
-  // Same for a plain path change while already expanded.
-  // Must declare deps — a bare useEffect re-runs after every render.
-  useEffect(() => {
-    if (expanded && overflowRef.current) {
-      overflowRef.current.scrollLeft = overflowRef.current.scrollWidth;
-    }
-  }, [expanded, crumbs]);
-
   const total = crumbs.length;
   const showCompact = !expanded && total >= COLLAPSE_THRESHOLD;
 
@@ -256,7 +248,9 @@ export default function Header({
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
 }) {
-  const [locale, setLocale] = useState<Locale>('zh');
+  // reactive useLocale：Header 被 memo 化且不收 locale prop，一发式 getLocale
+  // 会让面包屑/提示在切换语言后永远停留旧语言
+  const locale = useLocale();
   const [tbClass, setTbClass] = useState('');
   const headerRef = useRef<HTMLElement>(null);
 
@@ -270,10 +264,6 @@ export default function Header({
   const searchRef = useRef<HTMLInputElement>(null);
   const sortRef = useRef<HTMLDivElement>(null);
   const filterRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    window.nativesAPI?.getLocale?.().then((l) => { if (l === 'en') setLocale('en'); }).catch(() => {});
-  }, []);
 
   // 监听文件浏览器状态上行广播（file-events 契约）
   useEffect(() => onFileEvent(FILE_EVENTS.headerFileState, setFileState), []);

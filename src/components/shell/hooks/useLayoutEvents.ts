@@ -153,11 +153,16 @@ export function useLayoutEvents({
         setState((prev: any) => ({ ...prev, sidebarCollapsed: !prev.sidebarCollapsed }));
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k' && !e.shiftKey) {
+        // 终端有焦点时让位给终端的 Cmd+K 清屏（否则双重触发）
+        const target = e.target as HTMLElement | null;
+        if (target?.closest?.('.terminal-panel')) return;
         e.preventDefault();
         setState((prev: any) => ({ ...prev, cmdkOpen: !prev.cmdkOpen }));
       }
       if (e.key === 'Escape') {
-        setState((prev: any) => ({ ...prev, cmdkOpen: false }));
+        // 只在面板开着时发 setState，避免每次 Esc 都发一次空更新并
+        // 与其他 Esc 消费者（模态等）抢事件
+        setState((prev: any) => (prev.cmdkOpen ? { ...prev, cmdkOpen: false } : prev));
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n' && !e.shiftKey) {
         e.preventDefault();
