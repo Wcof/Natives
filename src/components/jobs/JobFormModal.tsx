@@ -115,16 +115,42 @@ function FieldError({ msg }: { msg?: string }) {
   );
 }
 
+/** 编辑中切走视图会整体卸载 JobsPage；草稿落 sessionStorage 以便返回后恢复。 */
+function draftStorageKey(initial: JobDetail | null): string {
+  return `natives:jobform-draft:${initial?.id ?? '__new__'}`;
+}
+
+function readDraft(initial: JobDetail | null): FormState | null {
+  try {
+    const raw = window.sessionStorage.getItem(draftStorageKey(initial));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<FormState>;
+    // 以初始态为底合并，防旧草稿缺字段
+    return { ...initialFormState(initial), ...parsed };
+  } catch {
+    return null;
+  }
+}
+
 export default function JobFormModal({ open, initial, onClose, onSaved }: JobFormModalProps) {
   const locale = useLocale();
-  // 表单重置依赖父级 key 重挂载（open/编辑对象变化时换 key），不在 effect 里同步 setState
-  const [form, setForm] = useState<FormState>(() => initialFormState(initial));
+  // 表单重置依赖父级 key 重挂载（open/编辑对象变化时换 key），不在 effect 里同步 setState。
+  // 挂载时优先恢复视图切换前遗留的草稿（显式取消/保存成功才清除）。
+  const [form, setForm] = useState<FormState>(() => (open ? readDraft(initial) : null) ?? initialFormState(initial));
   const [errors, setErrors] = useState<JobFormErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  const clearDraft = () => {
+    try { window.sessionStorage.removeItem(draftStorageKey(initial)); } catch { /* ignore */ }
+  };
+
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
+    setForm((prev) => {
+      const next = { ...prev, [key]: value };
+      try { window.sessionStorage.setItem(draftStorageKey(initial), JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
     // 输入即清除该字段的校验错误，避免改正后错误滞留到下次提交
     const errorField = ERROR_FIELD_OF[key];
     if (errorField) {
@@ -193,6 +219,7 @@ export default function JobFormModal({ open, initial, onClose, onSaved }: JobFor
       const saved = initial
         ? await jobUpdate(initial.id, payload)
         : await jobCreate(payload);
+      clearDraft();
       onSaved(saved, !initial);
       onClose();
     } catch (err) {
@@ -218,7 +245,7 @@ export default function JobFormModal({ open, initial, onClose, onSaved }: JobFor
   return (
     <Modal
       isOpen={open}
-      onClose={onClose}
+      onClose={() => { clearDraft(); onClose(); }}
       title={t(locale, initial ? 'jobs.form.editTitle' : 'jobs.form.createTitle')}
       width={560}
       closeOnEscape={!submitting}
@@ -422,7 +449,7 @@ export default function JobFormModal({ open, initial, onClose, onSaved }: JobFor
         )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
-          <button type="button" className="btn-ghost" onClick={onClose} disabled={submitting}>
+          <button type="button" className="btn-ghost" onClick={() => { clearDraft(); onClose(); }} disabled={submitting}>
             {t(locale, 'common.cancel')}
           </button>
           <button
