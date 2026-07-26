@@ -58,6 +58,7 @@ import {
   canRewind,
   canSelectRunCapabilities,
   buildDiagnosticsText,
+  hasMethod,
   needsEngineRecovery,
 } from '@/lib/assistant-workspace/capability-gate';
 import { updateConversationCapabilities } from '@/lib/assistant-workspace/capability-admin';
@@ -89,6 +90,11 @@ import MessageInput from './MessageInput';
 // ADR-0016 capability picker — lazy so it stays out of the initial bundle (R-P7).
 const LazyCapabilityPickerPopover = lazy(() => import('./CapabilityPickerPopover'));
 import PermissionRequestCard from './PermissionRequestCard';
+import { parsePlanApprovalRequest, type PlanApproval } from './plan-approval';
+// R-P7: the plan checklist is a low-frequency surface. The predicate that
+// decides whether to show it is eager (plain module above); only the renderer
+// is split out.
+const PlanApprovalCard = lazy(() => import('./PlanApprovalCard'));
 import AskUserPromptCard from './AskUserPromptCard';
 import { COMPOSER_COLUMN_CLASS } from './InteractionPromptShell';
 import GoalStatusBar from './GoalStatusBar';
@@ -366,6 +372,21 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     ? state.contextUsageByConversation[rootConversationId] ?? null
     : null;
   const permission = interactions.find((i) => i.kind === 'permission');
+  /**
+   * A submitted plan reaches the GUI on the permission channel (`tool_name =
+   * exit_plan_mode`), so it is the same pending interaction as any tool prompt —
+   * only the payload tells it apart. Parsed here so the render below is a plain
+   * branch.
+   *
+   * Deliberately not hand-memoised: `permission` comes out of `Array.find`, which
+   * the React Compiler will not accept as a stable dependency, and the parse is
+   * bounded by the 40-step plan cap and short-circuits on the tool name for every
+   * ordinary tool prompt. The compiler memoises it for us.
+   */
+  const pendingPlanApproval: PlanApproval | null =
+    permission && permission.kind === 'permission'
+      ? parsePlanApprovalRequest(permission.toolName, permission.input)
+      : null;
   const askUser = interactions.find((i) => i.kind === 'ask_user');
   const planApproval = interactions.find((i) => i.kind === 'plan_approval');
   const subagentAssignment = interactions.find(
@@ -2096,22 +2117,50 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
           {composerBlockedByInteraction ? (
             <div className={`${COMPOSER_COLUMN_CLASS} pb-5 pt-2`} data-composer-interaction-overlay>
               {permission && permission.kind === 'permission' ? (
-                <PermissionRequestCard
-                  request={{
-                    id: permission.id,
-                    toolName: permission.toolName,
-                    reason: permission.reason,
-                    input: permission.input,
-                    status: 'pending',
-                    createdAt: permission.createdAt,
-                  }}
-                  locale={locale}
-                  onApprove={(id, scope) => {
-                    // Must return the Promise so the card can await + recover on failure.
-                    return handlePermission(id, true, scope);
-                  }}
-                  onReject={(id) => handlePermission(id, false)}
-                />
+                // The plan checklist is a second rendering of the same pending
+                // permission, so it is gated on the RPC it would answer with.
+                // When `permission.respond` is not advertised the generic card
+                // still renders: the composer is already hidden behind this
+                // overlay, and showing nothing would wedge the run with no way
+                // for the user to answer at all.
+                pendingPlanApproval && hasMethod(state.capabilities, 'permission.respond') ? (
+                  <Suspense
+                    fallback={
+                      <div
+                        className="rounded-[var(--radius-lg,14px)] border border-[var(--border-subtle)] bg-[var(--surface)] px-4 py-3 text-xs text-[var(--text-secondary)]"
+                        data-plan-approval-loading
+                      >
+                        {t(locale, 'assistant.permission.processing')}
+                      </div>
+                    }
+                  >
+                    <PlanApprovalCard
+                      requestId={permission.id}
+                      approval={pendingPlanApproval}
+                      locale={locale}
+                      // Must return the Promise so the card can await + recover on failure.
+                      onApprove={(id, scope) => handlePermission(id, true, scope)}
+                      onReject={(id) => handlePermission(id, false)}
+                    />
+                  </Suspense>
+                ) : (
+                  <PermissionRequestCard
+                    request={{
+                      id: permission.id,
+                      toolName: permission.toolName,
+                      reason: permission.reason,
+                      input: permission.input,
+                      status: 'pending',
+                      createdAt: permission.createdAt,
+                    }}
+                    locale={locale}
+                    onApprove={(id, scope) => {
+                      // Must return the Promise so the card can await + recover on failure.
+                      return handlePermission(id, true, scope);
+                    }}
+                    onReject={(id) => handlePermission(id, false)}
+                  />
+                )
               ) : null}
               {askUser && askUser.kind === 'ask_user' ? (
                 <AskUserPromptCard

@@ -68,11 +68,20 @@ pub fn parse_responses_event(data: &str) -> Vec<ProviderEvent> {
         }
         "response.completed" => {
             if let Some(usage) = value.pointer("/response/usage") {
+                let input_tokens = usage
+                    .get("input_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                // Automatic prefix caching. `input_tokens` includes the cached
+                // span, so subtract it to match the `ProviderUsage` contract.
+                let cache_read = usage
+                    .pointer("/input_tokens_details/cached_tokens")
+                    .and_then(|v| v.as_u64());
                 events.push(ProviderEvent::Usage(ProviderUsage {
-                    input_tokens: usage
-                        .get("input_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0),
+                    input_tokens: match cache_read {
+                        Some(cached) => input_tokens.saturating_sub(cached),
+                        None => input_tokens,
+                    },
                     output_tokens: usage
                         .get("output_tokens")
                         .and_then(|v| v.as_u64())
@@ -80,6 +89,9 @@ pub fn parse_responses_event(data: &str) -> Vec<ProviderEvent> {
                     reasoning_tokens: usage
                         .pointer("/output_tokens_details/reasoning_tokens")
                         .and_then(|v| v.as_u64()),
+                    // The Responses API does not report cache writes separately.
+                    cache_creation_tokens: None,
+                    cache_read_tokens: cache_read,
                     cost_usd: None,
                 }));
             }
@@ -137,5 +149,26 @@ mod tests {
             [ProviderEvent::ToolCallDelta { name: Some(n), id: Some(i), arguments_delta, .. }]
                 if n == "read_file" && i == "fc_1" && arguments_delta.contains("a")
         ));
+    }
+
+    #[test]
+    fn completed_event_splits_cached_input_tokens() {
+        let events = parse_responses_event(
+            r#"{"type":"response.completed","response":{"usage":{"input_tokens":9000,"output_tokens":200,"input_tokens_details":{"cached_tokens":8192},"output_tokens_details":{"reasoning_tokens":64}}}}"#,
+        );
+        let usage = events
+            .iter()
+            .find_map(|e| match e {
+                ProviderEvent::Usage(u) => Some(u.clone()),
+                _ => None,
+            })
+            .expect("a Usage event");
+        assert_eq!(usage.cache_read_tokens, Some(8192));
+        assert_eq!(usage.input_tokens, 9000 - 8192);
+        assert_eq!(usage.total_prompt_tokens(), 9000);
+        assert_eq!(usage.reasoning_tokens, Some(64));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, ProviderEvent::Completed)));
     }
 }

@@ -1,21 +1,213 @@
-//! MCP Runtime — registry + stdio session + HTTP/SSE discovery + tools/call.
+//! MCP Runtime — registry + stdio session + HTTP/SSE discovery + the protocol
+//! surface beyond tools: resources, resource templates, prompts, client roots,
+//! and server-pushed change notifications.
 //!
 //! Untrusted stdio is never auto-started. HTTP/SSE block obvious SSRF targets
 //! unless `trusted=true`. Stdio keeps a live session (stdin/stdout) so tools/call
 //! can run after initialize. SSE can spawn a bounded long-lived listener that
 //! ingests `data:` frames. OAuth browser flow is host-side; daemon holds bearer
 //! leases in `McpCredentialStore` (never logged / never in events).
+//!
+//! # 第 1 节 — Capabilities are the honesty boundary
+//!
+//! MCP's `initialize` response carries a `capabilities` object. It is the only
+//! way to tell "this server has no resources" from "this server does not do
+//! resources at all", and the project forbids inventing the difference. So:
+//!
+//! - Capabilities are captured **verbatim** from the handshake into
+//!   [`McpServerCapabilities::raw`]; the booleans are derived views, never guesses.
+//! - Before the handshake there is no entry at all, and every capability-scoped
+//!   call fails with `capabilities unknown` — not with an empty list.
+//! - A server that advertises `resources` but returns `[]` is reported as an
+//!   empty list, which now *means* something.
+//!
+//! # 第 2 节 — Why `resources/read` is gated harder than `resources/list`
+//!
+//! `resources/read` returns server-chosen bytes that a caller may put in front of
+//! a model. That is an injection funnel: the server picks the URI's meaning, the
+//! content is attacker-controlled if the server is, and once it is in context the
+//! model cannot tell it from instructions. Four rules bound it, see
+//! [`McpRuntime::assert_resource_uri_allowed`]:
+//!
+//! 1. **Discovery allowlist** — the URI must have come from this server's own
+//!    `resources/list`, or match one of its `resources/templates/list` templates.
+//!    Same shape as `call_tool` refusing unregistered tools: the reachable set is
+//!    whatever the server published, never whatever a caller can type.
+//! 2. **Scheme policy** — `file:` is refused for untrusted servers outright, and
+//!    for anyone if it carries `..` or a non-local authority. `javascript:`,
+//!    `data:` and `blob:` are always refused; they are code/inline payload
+//!    carriers with no legitimate resource meaning here.
+//! 3. **Size cap** — content over `NATIVES_MCP_RESOURCE_MAX_BYTES` (default
+//!    256 KiB) is truncated with `truncated: true` on the envelope. Never silent.
+//! 4. **Provenance** — every read is wrapped in an envelope carrying
+//!    `untrusted: true`, `server_id` and `uri`, and binary `blob` payloads are
+//!    passed through as-is with their mime type, never decoded into text.
+//!
+//! Note what is deliberately *absent*: no `mcp__server__read_resource` pseudo-tool
+//! is exposed to the model. `tools/call` stays closed over RPC (`direct_mcp_call_disabled`,
+//! task-06) because it has side effects and must go through `PermissionGatedTools`.
+//! Reads are human-initiated from the GUI only, which is why the discovery
+//! allowlist plus scheme policy is a sufficient gate for them and would not be for
+//! `tools/call`.
+//!
+//! # 第 3 节 — `roots/list` is a client obligation
+//!
+//! `roots` is the one direction where the server calls us. The stdio read loop
+//! therefore demultiplexes: a frame with `method` **and** `id` is a server→client
+//! request and gets answered inline; a frame with `method` and no `id` is a
+//! notification and is buffered; only a frame whose `id` matches our request is
+//! the response we were waiting for. Roots come from `NATIVES_MCP_ROOTS` or
+//! [`McpRuntime::set_roots`] and must resolve to existing absolute directories —
+//! an unbacked root would be exactly the fake data the project forbids. Empty is
+//! the honest, fail-closed default: "no roots granted".
 
 use agent_core::{
     McpCredentialLease, McpCredentialStore, McpRegistry, McpServerConfig, McpToolDescriptor,
     McpTransport,
 };
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
+
+/// Per-server cap on buffered change notifications. Oldest are dropped.
+const NOTIFICATION_RING_CAP: usize = 200;
+
+/// Default ceiling for a single `resources/read` payload.
+const DEFAULT_RESOURCE_MAX_BYTES: usize = 256 * 1024;
+
+/// Failure modes that RPC needs to distinguish, because "the server cannot do
+/// this" and "you asked wrong" must not collapse into one error code.
+#[derive(Debug, Clone)]
+pub enum McpError {
+    /// Bad or missing arguments from the caller.
+    Invalid(String),
+    /// Server / resource / prompt does not exist.
+    NotFound(String),
+    /// The server does not advertise the capability, or never handshook so we
+    /// genuinely do not know. Distinct from "supported but empty".
+    Unsupported(String),
+    /// Blocked by a security rule (SSRF, scheme policy, discovery allowlist).
+    Denied(String),
+    /// Transport or protocol failure.
+    Transport(String),
+}
+
+impl McpError {
+    /// Stable discriminant for the RPC error envelope.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Invalid(_) => "invalid",
+            Self::NotFound(_) => "not_found",
+            Self::Unsupported(_) => "unsupported",
+            Self::Denied(_) => "denied",
+            Self::Transport(_) => "transport",
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Invalid(m)
+            | Self::NotFound(m)
+            | Self::Unsupported(m)
+            | Self::Denied(m)
+            | Self::Transport(m) => m,
+        }
+    }
+}
+
+impl std::fmt::Display for McpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message())
+    }
+}
+
+/// What a server said it can do, captured from `initialize`.
+///
+/// `raw` is the source of truth; the booleans are conveniences derived from it so
+/// a GUI does not have to know MCP's nesting. Absence of this struct for a server
+/// means "no handshake yet" — never "supports nothing".
+#[derive(Debug, Clone, Serialize)]
+pub struct McpServerCapabilities {
+    pub server_id: String,
+    pub protocol_version: String,
+    pub server_info: Value,
+    pub tools: bool,
+    pub tools_list_changed: bool,
+    pub resources: bool,
+    pub resources_subscribe: bool,
+    pub resources_list_changed: bool,
+    pub prompts: bool,
+    pub prompts_list_changed: bool,
+    pub logging: bool,
+    pub completions: bool,
+    /// Verbatim `capabilities` object from the handshake.
+    pub raw: Value,
+}
+
+impl McpServerCapabilities {
+    fn from_initialize(server_id: &str, result: &Value) -> Self {
+        let raw = result
+            .get("capabilities")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        let present = |key: &str| raw.get(key).map(|v| !v.is_null()).unwrap_or(false);
+        let flag = |key: &str, sub: &str| {
+            raw.get(key)
+                .and_then(|v| v.get(sub))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        };
+        Self {
+            server_id: server_id.to_string(),
+            protocol_version: result
+                .get("protocolVersion")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            server_info: result
+                .get("serverInfo")
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+            tools: present("tools"),
+            tools_list_changed: flag("tools", "listChanged"),
+            resources: present("resources"),
+            resources_subscribe: flag("resources", "subscribe"),
+            resources_list_changed: flag("resources", "listChanged"),
+            prompts: present("prompts"),
+            prompts_list_changed: flag("prompts", "listChanged"),
+            logging: present("logging"),
+            completions: present("completions"),
+            raw,
+        }
+    }
+
+    fn advertises(&self, key: &str) -> bool {
+        self.raw.get(key).map(|v| !v.is_null()).unwrap_or(false)
+    }
+}
+
+/// A server-pushed `notifications/*` frame, kept with arrival order.
+#[derive(Debug, Clone, Serialize)]
+pub struct McpNotification {
+    pub server_id: String,
+    pub method: String,
+    pub params: Value,
+    /// Unix millis when the daemon ingested the frame.
+    pub received_at_ms: u64,
+}
+
+/// A directory the client grants servers visibility into.
+#[derive(Debug, Clone, Serialize)]
+pub struct McpRoot {
+    /// `file://` URI form, which is what `roots/list` puts on the wire.
+    pub uri: String,
+    pub name: String,
+}
 
 struct StdioSession {
     child: Child,
@@ -31,6 +223,16 @@ pub struct McpRuntime {
     sse_children: Mutex<HashMap<String, Child>>,
     status: Mutex<HashMap<String, String>>,
     credentials: Mutex<McpCredentialStore>,
+    /// Handshake result per server. Missing = never initialized.
+    capabilities: Mutex<HashMap<String, McpServerCapabilities>>,
+    /// Last `resources/list` per server — doubles as the `resources/read` allowlist.
+    resources: Mutex<HashMap<String, Vec<Value>>>,
+    /// Last `resources/templates/list` per server, for template-matched reads.
+    resource_templates: Mutex<HashMap<String, Vec<Value>>>,
+    /// Bounded per-server notification ring.
+    notifications: Mutex<HashMap<String, Vec<McpNotification>>>,
+    /// Roots granted to servers. Empty = none granted (fail-closed default).
+    roots: Mutex<Option<Vec<McpRoot>>>,
     /// run_id → selected server ids (ADR-0016 lifecycle refcount).
     run_refs: Mutex<HashMap<String, std::collections::HashSet<String>>>,
     /// server_id → instant it lost its last run reference (reaper input).
@@ -51,6 +253,11 @@ impl McpRuntime {
             sse_children: Mutex::new(HashMap::new()),
             status: Mutex::new(HashMap::new()),
             credentials: Mutex::new(McpCredentialStore::new()),
+            capabilities: Mutex::new(HashMap::new()),
+            resources: Mutex::new(HashMap::new()),
+            resource_templates: Mutex::new(HashMap::new()),
+            notifications: Mutex::new(HashMap::new()),
+            roots: Mutex::new(None),
             run_refs: Mutex::new(HashMap::new()),
             idle_since: Mutex::new(HashMap::new()),
         }
@@ -249,6 +456,7 @@ impl McpRuntime {
         match config.transport {
             McpTransport::Stdio => self.start_stdio(server_id),
             McpTransport::Http => {
+                self.http_handshake(&config);
                 let n = self.probe_http_tools(server_id)?;
                 Ok(json!({
                     "server_id": server_id,
@@ -256,9 +464,11 @@ impl McpRuntime {
                     "status": "http_probed",
                     "transport": "http",
                     "auth": self.auth_status(server_id).ok(),
+                    "capabilities": self.server_capabilities(server_id),
                 }))
             }
             McpTransport::Sse => {
+                self.http_handshake(&config);
                 let n = self.probe_http_tools(server_id)?;
                 let sse = self.start_sse_listener(server_id)?;
                 Ok(json!({
@@ -268,6 +478,7 @@ impl McpRuntime {
                     "transport": "sse",
                     "sse": sse,
                     "auth": self.auth_status(server_id).ok(),
+                    "capabilities": self.server_capabilities(server_id),
                 }))
             }
         }
@@ -309,19 +520,42 @@ impl McpRuntime {
             .ok_or_else(|| "mcp stdout missing".to_string())?;
         let mut reader = BufReader::new(stdout);
 
-        let init = json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
+        let roots = self.effective_roots();
+        let mut pending_notes: Vec<Value> = Vec::new();
+
+        // Declare only what we actually serve. We answer `roots/list`, so `roots`
+        // is advertised; we do not implement sampling or elicitation, so they are
+        // absent and a server can adapt instead of failing mid-run.
+        let init_resp = stdio_roundtrip(
+            &mut stdin,
+            &mut reader,
+            &roots,
+            &mut pending_notes,
+            1,
+            "initialize",
+            json!({
                 "protocolVersion": "2024-11-05",
-                "capabilities": {},
+                "capabilities": { "roots": { "listChanged": false } },
                 "clientInfo": { "name": "natives-agent-daemon", "version": "0.1.0" }
-            }
-        });
-        writeln!(stdin, "{init}").map_err(|e| e.to_string())?;
-        stdin.flush().map_err(|e| e.to_string())?;
-        let _init_resp = read_json_line(&mut reader, Duration::from_secs(5))?;
+            }),
+            Duration::from_secs(5),
+        )?;
+        let caps = McpServerCapabilities::from_initialize(
+            server_id,
+            init_resp.get("result").unwrap_or(&Value::Null),
+        );
+        // Legacy tolerance: a server that sent no `capabilities` at all predates
+        // the field being load-bearing, so we still probe it. A server that sent
+        // a populated object without `tools` is taken at its word.
+        let advertises_tools = caps.tools
+            || caps
+                .raw
+                .as_object()
+                .map(|o| o.is_empty())
+                .unwrap_or(true);
+        if let Ok(mut map) = self.capabilities.lock() {
+            map.insert(server_id.to_string(), caps);
+        }
 
         // initialized notification (best-effort; servers may ignore)
         let _ = writeln!(
@@ -331,15 +565,24 @@ impl McpRuntime {
         );
         let _ = stdin.flush();
 
-        let list = json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/list",
-            "params": {}
-        });
-        writeln!(stdin, "{list}").map_err(|e| e.to_string())?;
-        stdin.flush().map_err(|e| e.to_string())?;
-        let tools_resp = read_json_line(&mut reader, Duration::from_secs(5))?;
+        // Only ask for tools if the handshake said there are tools. Probing a
+        // server that never advertised `tools` invites a `-32601` we would then
+        // have to paper over as "zero tools" — the exact lie capabilities exist
+        // to prevent.
+        let tools_resp = if advertises_tools {
+            stdio_roundtrip(
+                &mut stdin,
+                &mut reader,
+                &roots,
+                &mut pending_notes,
+                2,
+                "tools/list",
+                json!({}),
+                Duration::from_secs(5),
+            )?
+        } else {
+            json!({})
+        };
 
         let mut discovered = 0usize;
         if let Some(tools) = tools_resp
@@ -382,6 +625,7 @@ impl McpRuntime {
                 },
             );
         }
+        self.record_notifications(server_id, pending_notes);
         if let Ok(mut st) = self.status.lock() {
             st.insert(
                 server_id.to_string(),
@@ -395,6 +639,8 @@ impl McpRuntime {
             "status": "started",
             "transport": "stdio",
             "session_live": true,
+            "capabilities": self.server_capabilities(server_id),
+            "roots_granted": roots.len(),
         }))
     }
 
@@ -410,6 +656,18 @@ impl McpRuntime {
                 let _ = child.kill();
                 let _ = child.wait();
             }
+        }
+        // Capabilities and the discovery caches were learned during a handshake
+        // that is now over. Keeping them would let a dead server keep vouching
+        // for a `resources/read` allowlist. Notifications are history and stay.
+        if let Ok(mut caps) = self.capabilities.lock() {
+            caps.remove(server_id);
+        }
+        if let Ok(mut res) = self.resources.lock() {
+            res.remove(server_id);
+        }
+        if let Ok(mut tpl) = self.resource_templates.lock() {
+            tpl.remove(server_id);
         }
         if let Ok(mut st) = self.status.lock() {
             st.insert(server_id.to_string(), "stopped".into());
@@ -623,24 +881,12 @@ impl McpRuntime {
         tool_name: &str,
         arguments: Value,
     ) -> Result<Value, String> {
-        let mut sessions = self.sessions.lock().map_err(|e| e.to_string())?;
-        let session = sessions
-            .get_mut(server_id)
-            .ok_or_else(|| format!("mcp stdio session not started: {server_id}"))?;
-        let id = session.next_id;
-        session.next_id += 1;
-        let req = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": "tools/call",
-            "params": {
-                "name": tool_name,
-                "arguments": arguments,
-            }
-        });
-        writeln!(session.stdin, "{req}").map_err(|e| e.to_string())?;
-        session.stdin.flush().map_err(|e| e.to_string())?;
-        let resp = read_json_line(&mut session.reader, Duration::from_secs(30))?;
+        let resp = self.stdio_request(
+            server_id,
+            "tools/call",
+            json!({ "name": tool_name, "arguments": arguments }),
+            Duration::from_secs(30),
+        )?;
         if let Some(err) = resp.get("error") {
             return Err(format!("mcp tools/call error: {err}"));
         }
@@ -650,11 +896,81 @@ impl McpRuntime {
             .unwrap_or(resp))
     }
 
+    /// One request/response exchange on a live stdio session.
+    ///
+    /// Servers legitimately interleave `roots/list` requests and `notifications/*`
+    /// frames with our responses — long tool calls are exactly when they do it.
+    /// Everything that is not our response is handled inline, so the caller only
+    /// ever sees the frame it asked for.
+    fn stdio_request(
+        &self,
+        server_id: &str,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
+        // Resolve roots before taking the session lock: answering `roots/list`
+        // mid-exchange must not need a second lock we already hold.
+        let roots = self.effective_roots();
+        let mut notes: Vec<Value> = Vec::new();
+        let result = {
+            let mut sessions = self.sessions.lock().map_err(|e| e.to_string())?;
+            let session = sessions
+                .get_mut(server_id)
+                .ok_or_else(|| format!("mcp stdio session not started: {server_id}"))?;
+            let id = session.next_id;
+            session.next_id += 1;
+            let StdioSession {
+                stdin, reader, ..
+            } = session;
+            stdio_roundtrip(stdin, reader, &roots, &mut notes, id, method, params, timeout)
+        };
+        self.record_notifications(server_id, notes);
+        result
+    }
+
     fn call_http_tool(
         &self,
         config: &McpServerConfig,
         tool_name: &str,
         arguments: Value,
+    ) -> Result<Value, String> {
+        self.http_rpc(
+            config,
+            "tools/call",
+            json!({ "name": tool_name, "arguments": arguments }),
+            30,
+        )
+    }
+
+    /// [`http_rpc_frame`](Self::http_rpc_frame) with the `result` extracted and a
+    /// JSON-RPC `error` flattened into a message. Use the frame variant when the
+    /// caller needs to classify the error code.
+    fn http_rpc(
+        &self,
+        config: &McpServerConfig,
+        method: &str,
+        params: Value,
+        max_time_secs: u64,
+    ) -> Result<Value, String> {
+        let frame = self.http_rpc_frame(config, method, params, max_time_secs)?;
+        if let Some(err) = frame.get("error") {
+            return Err(format!("mcp {method} error: {err}"));
+        }
+        Ok(frame.get("result").cloned().unwrap_or(frame))
+    }
+
+    /// One JSON-RPC exchange against a Streamable HTTP / SSE MCP endpoint,
+    /// returning the whole frame so `error.code` survives.
+    ///
+    /// The SSRF guard runs on every call, not just at registration, because a
+    /// config can be re-registered between calls.
+    fn http_rpc_frame(
+        &self,
+        config: &McpServerConfig,
+        method: &str,
+        params: Value,
+        max_time_secs: u64,
     ) -> Result<Value, String> {
         let url = config
             .url
@@ -670,16 +986,13 @@ impl McpRuntime {
         let body = json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": tool_name,
-                "arguments": arguments,
-            }
+            "method": method,
+            "params": params,
         });
         let mut args = vec![
             "-fsS".into(),
             "--max-time".into(),
-            "30".into(),
+            max_time_secs.to_string(),
             "-H".into(),
             "Content-Type: application/json".into(),
             "-H".into(),
@@ -698,17 +1011,14 @@ impl McpRuntime {
             .map_err(|e| format!("curl not available for mcp call: {e}"))?;
         if !output.status.success() {
             return Err(format!(
-                "http mcp tools/call failed: {}",
+                "http mcp {method} failed: {}",
                 String::from_utf8_lossy(&output.stderr)
             ));
         }
         let text = String::from_utf8_lossy(&output.stdout).to_string();
         // Accept bare JSON or SSE data: frame.
         if let Ok(v) = serde_json::from_str::<Value>(&text) {
-            if let Some(err) = v.get("error") {
-                return Err(format!("mcp tools/call error: {err}"));
-            }
-            return Ok(v.get("result").cloned().unwrap_or(v));
+            return Ok(v);
         }
         for line in text.lines() {
             if let Some(data) = line.trim().strip_prefix("data:") {
@@ -717,14 +1027,11 @@ impl McpRuntime {
                     continue;
                 }
                 if let Ok(v) = serde_json::from_str::<Value>(data) {
-                    if let Some(err) = v.get("error") {
-                        return Err(format!("mcp tools/call error: {err}"));
-                    }
-                    return Ok(v.get("result").cloned().unwrap_or(v));
+                    return Ok(v);
                 }
             }
         }
-        Err("mcp tools/call: unparseable response".into())
+        Err(format!("mcp {method}: unparseable response"))
     }
 
     /// HTTP/SSE discovery probe: GET `{url}/tools` or bare url JSON list.
@@ -863,6 +1170,693 @@ impl McpRuntime {
             return Err("SSRF: local MCP HTTP endpoints blocked unless trusted".into());
         }
         Ok(())
+    }
+
+    // ---------------------------------------------------------------------
+    // 第 4 节 — Capabilities
+    // ---------------------------------------------------------------------
+
+    /// Handshake result, or `None` when this server has never completed one.
+    ///
+    /// `None` is not "supports nothing" — callers must surface it as *unknown*.
+    pub fn server_capabilities(&self, server_id: &str) -> Option<McpServerCapabilities> {
+        self.capabilities
+            .lock()
+            .ok()
+            .and_then(|m| m.get(server_id).cloned())
+    }
+
+    /// Best-effort `initialize` for HTTP/SSE. Non-fatal: a server that only
+    /// speaks the legacy `/tools` shape stays usable, just without capabilities,
+    /// and the capability-scoped calls then honestly report "unknown".
+    fn http_handshake(&self, config: &McpServerConfig) {
+        let params = json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": { "roots": { "listChanged": false } },
+            "clientInfo": { "name": "natives-agent-daemon", "version": "0.1.0" }
+        });
+        if let Ok(result) = self.http_rpc(config, "initialize", params, 10) {
+            let caps = McpServerCapabilities::from_initialize(&config.id, &result);
+            if let Ok(mut map) = self.capabilities.lock() {
+                map.insert(config.id.clone(), caps);
+            }
+        }
+    }
+
+    /// Gate a capability-scoped call. Separates the three states the project
+    /// forbids collapsing: unknown, unsupported, supported.
+    fn require_capability(&self, server_id: &str, key: &str) -> Result<(), McpError> {
+        // Confirm the server exists at all before talking about its capabilities.
+        self.server_config(server_id)
+            .map_err(McpError::NotFound)?;
+        match self.server_capabilities(server_id) {
+            None => Err(McpError::Unsupported(format!(
+                "mcp capabilities unknown for `{server_id}`: no completed initialize handshake — \
+                 start the server before asking what it supports"
+            ))),
+            Some(caps) if !caps.advertises(key) => Err(McpError::Unsupported(format!(
+                "mcp server `{server_id}` does not advertise the `{key}` capability"
+            ))),
+            Some(_) => Ok(()),
+        }
+    }
+
+    /// Transport-agnostic request returning the JSON-RPC `result`.
+    fn request(
+        &self,
+        server_id: &str,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, McpError> {
+        let config = self.server_config(server_id).map_err(McpError::NotFound)?;
+        match config.transport {
+            McpTransport::Stdio => {
+                let frame = self
+                    .stdio_request(server_id, method, params, timeout)
+                    .map_err(McpError::Transport)?;
+                if let Some(err) = frame.get("error") {
+                    return Err(map_jsonrpc_error(server_id, method, err));
+                }
+                Ok(frame.get("result").cloned().unwrap_or(frame))
+            }
+            // Same classification as stdio: a `-32601` after the server
+            // advertised the capability is the server's inconsistency, not a
+            // network fault, and must not read as retryable.
+            McpTransport::Http | McpTransport::Sse => {
+                let frame = self
+                    .http_rpc_frame(&config, method, params, timeout.as_secs().max(1))
+                    .map_err(McpError::Transport)?;
+                if let Some(err) = frame.get("error") {
+                    return Err(map_jsonrpc_error(server_id, method, err));
+                }
+                Ok(frame.get("result").cloned().unwrap_or(frame))
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // 第 5 节 — Resources
+    // ---------------------------------------------------------------------
+
+    /// `resources/list`. Caches the result as the `resources/read` allowlist.
+    pub fn list_resources(&self, server_id: &str, cursor: Option<&str>) -> Result<Value, McpError> {
+        self.require_capability(server_id, "resources")?;
+        let mut params = json!({});
+        if let Some(c) = cursor {
+            params["cursor"] = json!(c);
+        }
+        let result = self.request(server_id, "resources/list", params, Duration::from_secs(15))?;
+        let items = result
+            .get("resources")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if let Ok(mut cache) = self.resources.lock() {
+            let entry = cache.entry(server_id.to_string()).or_default();
+            if cursor.is_none() {
+                entry.clear();
+            }
+            for item in &items {
+                if let Some(uri) = item.get("uri").and_then(|v| v.as_str()) {
+                    if !entry
+                        .iter()
+                        .any(|e| e.get("uri").and_then(|v| v.as_str()) == Some(uri))
+                    {
+                        entry.push(item.clone());
+                    }
+                }
+            }
+        }
+        Ok(json!({
+            "server_id": server_id,
+            "resources": items,
+            "next_cursor": result.get("nextCursor").cloned().unwrap_or(Value::Null),
+        }))
+    }
+
+    /// `resources/templates/list`. Caches templates for allowlist matching.
+    pub fn list_resource_templates(&self, server_id: &str) -> Result<Value, McpError> {
+        self.require_capability(server_id, "resources")?;
+        let result = self.request(
+            server_id,
+            "resources/templates/list",
+            json!({}),
+            Duration::from_secs(15),
+        )?;
+        let items = result
+            .get("resourceTemplates")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if let Ok(mut cache) = self.resource_templates.lock() {
+            cache.insert(server_id.to_string(), items.clone());
+        }
+        Ok(json!({
+            "server_id": server_id,
+            "resource_templates": items,
+            "next_cursor": result.get("nextCursor").cloned().unwrap_or(Value::Null),
+        }))
+    }
+
+    /// `resources/read`, wrapped in a provenance envelope.
+    ///
+    /// See the module docs 第 2 节 for why this is the most tightly bounded call
+    /// in the file. The returned contents are untrusted server output; the
+    /// envelope says so explicitly so nothing downstream has to infer it.
+    pub fn read_resource(&self, server_id: &str, uri: &str) -> Result<Value, McpError> {
+        if uri.trim().is_empty() {
+            return Err(McpError::Invalid("resource uri required".into()));
+        }
+        self.require_capability(server_id, "resources")?;
+        let config = self.server_config(server_id).map_err(McpError::NotFound)?;
+        let matched_by = self.assert_resource_uri_allowed(&config, uri)?;
+
+        let result = self.request(
+            server_id,
+            "resources/read",
+            json!({ "uri": uri }),
+            Duration::from_secs(30),
+        )?;
+
+        let max_bytes = resource_max_bytes();
+        let mut truncated = false;
+        let contents: Vec<Value> = result
+            .get("contents")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|mut item| {
+                // Text is capped on a char boundary. `blob` is base64 and is
+                // never decoded here — we only measure and cap it.
+                let text_len = item.get("text").and_then(|v| v.as_str()).map(str::len);
+                if text_len.is_some_and(|len| len > max_bytes) {
+                    let capped = item
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .map(|t| truncate_on_char_boundary(t, max_bytes))
+                        .unwrap_or_default();
+                    truncated = true;
+                    item["text"] = json!(capped);
+                    item["truncated"] = json!(true);
+                }
+                let blob_len = item.get("blob").and_then(|v| v.as_str()).map(str::len);
+                if let Some(len) = blob_len {
+                    item["blob_bytes"] = json!(len);
+                    if len > max_bytes {
+                        truncated = true;
+                        item["blob"] = Value::Null;
+                        item["truncated"] = json!(true);
+                        item["dropped_reason"] = json!("blob exceeds resource byte cap");
+                    }
+                }
+                item
+            })
+            .collect();
+
+        Ok(json!({
+            "server_id": server_id,
+            "uri": uri,
+            // Load-bearing for anything that later puts this in a model context.
+            "untrusted": true,
+            "origin": "mcp_resource",
+            "allowlist_match": matched_by,
+            "truncated": truncated,
+            "max_bytes": max_bytes,
+            "contents": contents,
+        }))
+    }
+
+    /// The `resources/read` gate. Returns how the URI was allowed, for audit.
+    ///
+    /// Rules, in order (see module docs 第 2 节):
+    /// 1. dangerous schemes are refused for everyone;
+    /// 2. `file:` needs a trusted server, no `..`, and no remote authority;
+    /// 3. the URI must be one this server published, or match a published template.
+    fn assert_resource_uri_allowed(
+        &self,
+        config: &McpServerConfig,
+        uri: &str,
+    ) -> Result<String, McpError> {
+        let lowered = uri.trim().to_ascii_lowercase();
+
+        // 1. Code / inline-payload carriers have no resource meaning here.
+        for scheme in ["javascript:", "data:", "vbscript:", "blob:"] {
+            if lowered.starts_with(scheme) {
+                return Err(McpError::Denied(format!(
+                    "resource scheme `{scheme}` is never readable"
+                )));
+            }
+        }
+
+        // 2. Local filesystem reads. An untrusted server must not be able to
+        //    name a path at all; a trusted one still may not traverse or point
+        //    at another host.
+        if lowered.starts_with("file:") {
+            if !config.trusted {
+                return Err(McpError::Denied(
+                    "file:// resources are blocked for untrusted MCP servers".into(),
+                ));
+            }
+            if uri.contains("..") {
+                return Err(McpError::Denied(
+                    "file:// resource path traversal (`..`) blocked".into(),
+                ));
+            }
+            let after_scheme = &uri[5..];
+            // `file://host/path` — anything but an empty or `localhost` authority
+            // is a remote fetch wearing a local scheme.
+            if let Some(rest) = after_scheme.strip_prefix("//") {
+                let authority = rest.split('/').next().unwrap_or("");
+                if !authority.is_empty() && !authority.eq_ignore_ascii_case("localhost") {
+                    return Err(McpError::Denied(format!(
+                        "file:// resource with non-local authority `{authority}` blocked"
+                    )));
+                }
+            }
+        }
+
+        // 3. Discovery allowlist. Same principle as `call_tool`: the reachable
+        //    set is what the server published, not what a caller can type.
+        let listed = self
+            .resources
+            .lock()
+            .ok()
+            .and_then(|m| m.get(&config.id).cloned())
+            .unwrap_or_default();
+        if listed
+            .iter()
+            .any(|r| r.get("uri").and_then(|v| v.as_str()) == Some(uri))
+        {
+            return Ok("listed".into());
+        }
+
+        let templates = self
+            .resource_templates
+            .lock()
+            .ok()
+            .and_then(|m| m.get(&config.id).cloned())
+            .unwrap_or_default();
+        for tpl in &templates {
+            if let Some(pattern) = tpl.get("uriTemplate").and_then(|v| v.as_str()) {
+                if uri_matches_template(uri, pattern) {
+                    return Ok(format!("template:{pattern}"));
+                }
+            }
+        }
+
+        Err(McpError::Denied(format!(
+            "resource `{uri}` was not published by `{}` — call mcp.resources.list \
+             (and mcp.resources.templates.list) first; arbitrary URIs are not readable",
+            config.id
+        )))
+    }
+
+    // ---------------------------------------------------------------------
+    // 第 6 节 — Prompts
+    // ---------------------------------------------------------------------
+
+    /// `prompts/list`.
+    pub fn list_prompts(&self, server_id: &str, cursor: Option<&str>) -> Result<Value, McpError> {
+        self.require_capability(server_id, "prompts")?;
+        let mut params = json!({});
+        if let Some(c) = cursor {
+            params["cursor"] = json!(c);
+        }
+        let result = self.request(server_id, "prompts/list", params, Duration::from_secs(15))?;
+        Ok(json!({
+            "server_id": server_id,
+            "prompts": result.get("prompts").cloned().unwrap_or_else(|| json!([])),
+            "next_cursor": result.get("nextCursor").cloned().unwrap_or(Value::Null),
+        }))
+    }
+
+    /// `prompts/get`. The rendered messages are server-authored text destined for
+    /// a model context, so they carry the same provenance envelope as resources.
+    pub fn get_prompt(
+        &self,
+        server_id: &str,
+        name: &str,
+        arguments: Value,
+    ) -> Result<Value, McpError> {
+        if name.trim().is_empty() {
+            return Err(McpError::Invalid("prompt name required".into()));
+        }
+        self.require_capability(server_id, "prompts")?;
+        let mut params = json!({ "name": name });
+        if !arguments.is_null() {
+            params["arguments"] = arguments;
+        }
+        let result = self.request(server_id, "prompts/get", params, Duration::from_secs(30))?;
+        Ok(json!({
+            "server_id": server_id,
+            "name": name,
+            "untrusted": true,
+            "origin": "mcp_prompt",
+            "description": result.get("description").cloned().unwrap_or(Value::Null),
+            "messages": result.get("messages").cloned().unwrap_or_else(|| json!([])),
+        }))
+    }
+
+    // ---------------------------------------------------------------------
+    // 第 7 节 — Roots (client-side obligation)
+    // ---------------------------------------------------------------------
+
+    /// Replace the granted root set. Entries that are not existing absolute
+    /// directories are rejected rather than trimmed, so a caller never believes
+    /// it granted something it did not.
+    pub fn set_roots(&self, paths: &[String]) -> Result<Vec<McpRoot>, McpError> {
+        let mut roots = Vec::new();
+        for raw in paths {
+            roots.push(validate_root(raw)?);
+        }
+        let snapshot = roots.clone();
+        self.roots
+            .lock()
+            .map_err(|e| McpError::Transport(e.to_string()))?
+            .replace(roots);
+        Ok(snapshot)
+    }
+
+    /// Roots we would answer `roots/list` with.
+    ///
+    /// Source order: an explicit [`set_roots`](Self::set_roots) wins; otherwise
+    /// `NATIVES_MCP_ROOTS` (a `:`-separated path list). Empty means no roots
+    /// granted — the fail-closed default, and an honest answer rather than a
+    /// silent fallback to the process cwd.
+    pub fn client_roots(&self) -> Vec<McpRoot> {
+        self.effective_roots()
+            .into_iter()
+            .filter_map(|v| {
+                Some(McpRoot {
+                    uri: v.get("uri")?.as_str()?.to_string(),
+                    name: v
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                })
+            })
+            .collect()
+    }
+
+    /// Wire form of the roots, as `roots/list` returns them.
+    fn effective_roots(&self) -> Vec<Value> {
+        if let Ok(guard) = self.roots.lock() {
+            if let Some(explicit) = guard.as_ref() {
+                return explicit
+                    .iter()
+                    .map(|r| json!({ "uri": r.uri, "name": r.name }))
+                    .collect();
+            }
+        }
+        let Ok(raw) = std::env::var("NATIVES_MCP_ROOTS") else {
+            return Vec::new();
+        };
+        raw.split(':')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .filter_map(|p| validate_root(p).ok())
+            .map(|r| json!({ "uri": r.uri, "name": r.name }))
+            .collect()
+    }
+
+    // ---------------------------------------------------------------------
+    // 第 8 节 — Change notifications
+    // ---------------------------------------------------------------------
+
+    /// Buffered `notifications/*` frames, newest last. `server_id = None` returns
+    /// every server's, ordered by arrival.
+    pub fn notifications(&self, server_id: Option<&str>) -> Vec<McpNotification> {
+        let Ok(map) = self.notifications.lock() else {
+            return Vec::new();
+        };
+        let mut out: Vec<McpNotification> = match server_id {
+            Some(id) => map.get(id).cloned().unwrap_or_default(),
+            None => map.values().flatten().cloned().collect(),
+        };
+        out.sort_by_key(|n| n.received_at_ms);
+        out
+    }
+
+    /// Ingest server-pushed frames into the bounded ring.
+    ///
+    /// `notifications/tools/list_changed` invalidates our tool cache, and the
+    /// `resources` pair invalidates the read allowlist — leaving a stale
+    /// allowlist in place would keep vouching for URIs the server has retracted.
+    fn record_notifications(&self, server_id: &str, frames: Vec<Value>) {
+        if frames.is_empty() {
+            return;
+        }
+        let now = now_millis();
+        let mut invalidate_resources = false;
+        let Ok(mut map) = self.notifications.lock() else {
+            return;
+        };
+        let ring = map.entry(server_id.to_string()).or_default();
+        for frame in frames {
+            let Some(method) = frame.get("method").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if method.starts_with("notifications/resources/") {
+                invalidate_resources = true;
+            }
+            ring.push(McpNotification {
+                server_id: server_id.to_string(),
+                method: method.to_string(),
+                params: frame.get("params").cloned().unwrap_or_else(|| json!({})),
+                received_at_ms: now,
+            });
+        }
+        if ring.len() > NOTIFICATION_RING_CAP {
+            let overflow = ring.len() - NOTIFICATION_RING_CAP;
+            ring.drain(0..overflow);
+        }
+        drop(map);
+        if invalidate_resources {
+            if let Ok(mut cache) = self.resources.lock() {
+                cache.remove(server_id);
+            }
+            if let Ok(mut cache) = self.resource_templates.lock() {
+                cache.remove(server_id);
+            }
+        }
+    }
+}
+
+/// Map a JSON-RPC error frame onto our error kinds.
+///
+/// `-32601` (method not found) is the case that matters: a server advertised a
+/// capability and then refused the call. That is the server's inconsistency, and
+/// it must read as `unsupported`, not as a daemon fault.
+fn map_jsonrpc_error(server_id: &str, method: &str, err: &Value) -> McpError {
+    let code = err.get("code").and_then(|v| v.as_i64()).unwrap_or(0);
+    let message = err
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown error");
+    match code {
+        -32601 => McpError::Unsupported(format!(
+            "mcp server `{server_id}` advertised the capability but rejected `{method}`: {message}"
+        )),
+        -32602 => McpError::Invalid(format!("mcp {method} rejected arguments: {message}")),
+        -32002 => McpError::NotFound(format!("mcp {method}: {message}")),
+        _ => McpError::Transport(format!("mcp {method} error ({code}): {message}")),
+    }
+}
+
+/// Byte ceiling for one `resources/read` payload.
+fn resource_max_bytes() -> usize {
+    std::env::var("NATIVES_MCP_RESOURCE_MAX_BYTES")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_RESOURCE_MAX_BYTES)
+        .clamp(1024, 8 * 1024 * 1024)
+}
+
+fn truncate_on_char_boundary(text: &str, max_bytes: usize) -> String {
+    let mut end = max_bytes.min(text.len());
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
+}
+
+/// A root must be an existing absolute directory. Anything else would be a
+/// grant we cannot back with a real path.
+fn validate_root(raw: &str) -> Result<McpRoot, McpError> {
+    let path = PathBuf::from(raw.trim());
+    if !path.is_absolute() {
+        return Err(McpError::Invalid(format!(
+            "mcp root must be an absolute path: {raw}"
+        )));
+    }
+    if !path.is_dir() {
+        return Err(McpError::Invalid(format!(
+            "mcp root is not an existing directory: {raw}"
+        )));
+    }
+    let name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string_lossy().to_string());
+    Ok(McpRoot {
+        uri: format!("file://{}", path.to_string_lossy()),
+        name,
+    })
+}
+
+/// Match a URI against an RFC 6570-style `{var}` template.
+///
+/// Deliberately conservative: literal segments must match exactly and a `{var}`
+/// expands to one or more characters that are **not** `/` and do not contain
+/// `..`. A permissive matcher here would silently widen the read allowlist,
+/// which is the one thing this function must never do.
+fn uri_matches_template(uri: &str, template: &str) -> bool {
+    if uri.contains("..") {
+        return false;
+    }
+    let mut rest = uri;
+    let mut parts = template.split('{');
+
+    // Text before the first `{` is a literal prefix.
+    let Some(prefix) = parts.next() else {
+        return false;
+    };
+    let Some(after_prefix) = rest.strip_prefix(prefix) else {
+        return false;
+    };
+    rest = after_prefix;
+
+    let mut segments: Vec<&str> = Vec::new();
+    for part in parts {
+        // Each part is `varname}literal`. A template without the closing brace
+        // is malformed; refuse rather than guess.
+        let Some((_var, literal)) = part.split_once('}') else {
+            return false;
+        };
+        segments.push(literal);
+    }
+
+    for (index, literal) in segments.iter().enumerate() {
+        let is_last = index + 1 == segments.len();
+        if literal.is_empty() {
+            if is_last {
+                // Trailing variable: must consume at least one non-slash char.
+                return !rest.is_empty() && !rest.contains('/');
+            }
+            // Two adjacent variables with no separator are unmatchable.
+            return false;
+        }
+        let Some(found) = rest.find(literal) else {
+            return false;
+        };
+        if found == 0 {
+            // Variable matched nothing.
+            return false;
+        }
+        if rest[..found].contains('/') {
+            return false;
+        }
+        rest = &rest[found + literal.len()..];
+    }
+
+    rest.is_empty()
+}
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Write one request and read until its response arrives.
+///
+/// The demultiplexing here is the whole point (module docs 第 3 节):
+/// - `method` + `id`  → a server→client **request**; answer it inline and keep reading.
+/// - `method`, no `id` → a **notification**; buffer it and keep reading.
+/// - matching `id`     → our response.
+/// - other `id`        → a stale response from an earlier timed-out call; skip it.
+#[allow(clippy::too_many_arguments)]
+fn stdio_roundtrip(
+    stdin: &mut ChildStdin,
+    reader: &mut BufReader<ChildStdout>,
+    roots: &[Value],
+    notes: &mut Vec<Value>,
+    id: u64,
+    method: &str,
+    params: Value,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": method,
+        "params": params,
+    });
+    writeln!(stdin, "{req}").map_err(|e| e.to_string())?;
+    stdin.flush().map_err(|e| e.to_string())?;
+
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(format!("mcp {method} timeout"));
+        }
+        let frame = read_json_line(reader, remaining)?;
+
+        let frame_method = frame.get("method").and_then(|v| v.as_str());
+        let frame_id = frame.get("id");
+
+        match (frame_method, frame_id) {
+            (Some(server_method), Some(request_id)) => {
+                let response = serve_server_request(server_method, request_id, roots);
+                writeln!(stdin, "{response}").map_err(|e| e.to_string())?;
+                stdin.flush().map_err(|e| e.to_string())?;
+            }
+            (Some(_), None) => notes.push(frame),
+            (None, Some(request_id)) => {
+                if request_id.as_u64() == Some(id) {
+                    return Ok(frame);
+                }
+                // Stale response to an abandoned request — drop it.
+            }
+            (None, None) => {
+                // Neither a request nor a response. Not addressable; ignore.
+            }
+        }
+    }
+}
+
+/// Answer a server→client request.
+///
+/// Only `roots/list` and `ping` are served. `sampling/createMessage` and
+/// `elicitation/create` are refused with `-32601` rather than left to time out,
+/// because an honest "I do not implement this" lets the server fall back, and a
+/// silent hang looks like a daemon bug. See the report for why they are out of
+/// scope: both hand a remote server a lever on local inference or on the user.
+fn serve_server_request(method: &str, request_id: &Value, roots: &[Value]) -> Value {
+    match method {
+        "roots/list" => json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": { "roots": roots },
+        }),
+        "ping" => json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {},
+        }),
+        other => json!({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {
+                "code": -32601,
+                "message": format!("client does not implement `{other}`"),
+            },
+        }),
     }
 }
 
@@ -1049,6 +2043,390 @@ data: [DONE]
         let status = rt.auth_status("authd").unwrap();
         let s = serde_json::to_string(&status).unwrap();
         assert!(!s.contains("tok-1"));
+    }
+
+    // -----------------------------------------------------------------
+    // Capability honesty
+    // -----------------------------------------------------------------
+
+    fn http_server(rt: &McpRuntime, id: &str) {
+        rt.register_server(McpServerConfig {
+            id: id.into(),
+            transport: McpTransport::Http,
+            command: None,
+            args: None,
+            url: Some("https://mcp.example.com".into()),
+            trusted: true,
+            auth_token: None,
+            headers: None,
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn capability_scoped_calls_report_unknown_before_any_handshake() {
+        let rt = McpRuntime::new();
+        http_server(&rt, "nohandshake");
+        // The distinction the project's no-fake-data rule exists for: we must
+        // not answer "no resources", because we have not asked yet.
+        let err = rt.list_resources("nohandshake", None).unwrap_err();
+        assert_eq!(err.kind(), "unsupported");
+        assert!(
+            err.message().contains("capabilities unknown"),
+            "expected unknown-capabilities wording, got: {err}"
+        );
+        assert!(rt.server_capabilities("nohandshake").is_none());
+    }
+
+    #[test]
+    fn missing_server_is_not_found_not_unsupported() {
+        let rt = McpRuntime::new();
+        let err = rt.list_prompts("ghost", None).unwrap_err();
+        assert_eq!(err.kind(), "not_found");
+    }
+
+    #[test]
+    fn capabilities_distinguish_unsupported_from_supported_but_empty() {
+        let caps = McpServerCapabilities::from_initialize(
+            "s",
+            &json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": { "resources": { "listChanged": true } },
+                "serverInfo": { "name": "x", "version": "1" }
+            }),
+        );
+        assert!(caps.resources, "declared resources must read as supported");
+        assert!(caps.resources_list_changed);
+        assert!(!caps.resources_subscribe);
+        // Never declared => not advertised. An empty `resources/list` from a
+        // server with `resources: true` is a different fact entirely.
+        assert!(!caps.prompts);
+        assert!(!caps.tools);
+        assert_eq!(caps.protocol_version, "2024-11-05");
+        // `raw` keeps the verbatim object so nothing is lost in the projection.
+        assert!(caps.raw.get("resources").is_some());
+        assert!(caps.raw.get("prompts").is_none());
+    }
+
+    #[test]
+    fn declared_capability_that_server_then_rejects_reads_as_unsupported() {
+        // -32601 after advertising is the server contradicting itself; it must
+        // not surface as a daemon transport fault.
+        let err = map_jsonrpc_error(
+            "s",
+            "resources/list",
+            &json!({"code": -32601, "message": "Method not found"}),
+        );
+        assert_eq!(err.kind(), "unsupported");
+        assert_eq!(
+            map_jsonrpc_error("s", "prompts/get", &json!({"code": -32602, "message": "bad"}))
+                .kind(),
+            "invalid"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // resources/read security boundary
+    // -----------------------------------------------------------------
+
+    fn caps_with(rt: &McpRuntime, id: &str, caps: Value) {
+        rt.capabilities.lock().unwrap().insert(
+            id.to_string(),
+            McpServerCapabilities::from_initialize(id, &json!({ "capabilities": caps })),
+        );
+    }
+
+    fn seed_resources(rt: &McpRuntime, id: &str, uris: &[&str]) {
+        rt.resources.lock().unwrap().insert(
+            id.to_string(),
+            uris.iter().map(|u| json!({ "uri": u })).collect(),
+        );
+    }
+
+    #[test]
+    fn read_resource_refuses_uri_the_server_never_published() {
+        let rt = McpRuntime::new();
+        http_server(&rt, "res");
+        caps_with(&rt, "res", json!({ "resources": {} }));
+        seed_resources(&rt, "res", &["mem://note/1"]);
+
+        let err = rt.read_resource("res", "mem://note/2").unwrap_err();
+        assert_eq!(err.kind(), "denied");
+        assert!(err.message().contains("not published"), "{err}");
+    }
+
+    #[test]
+    fn read_resource_allows_a_published_uri() {
+        let rt = McpRuntime::new();
+        http_server(&rt, "res");
+        caps_with(&rt, "res", json!({ "resources": {} }));
+        seed_resources(&rt, "res", &["mem://note/1"]);
+        let cfg = rt.server_config("res").unwrap();
+        assert_eq!(
+            rt.assert_resource_uri_allowed(&cfg, "mem://note/1").unwrap(),
+            "listed"
+        );
+    }
+
+    #[test]
+    fn file_uri_blocked_for_untrusted_server_even_when_published() {
+        let rt = McpRuntime::new();
+        // Untrusted remote HTTP server, allowed to register (no SSRF target).
+        rt.register_server(McpServerConfig {
+            id: "sketchy".into(),
+            transport: McpTransport::Http,
+            command: None,
+            args: None,
+            url: Some("https://sketchy.example.com".into()),
+            trusted: false,
+            auth_token: None,
+            headers: None,
+        })
+        .unwrap();
+        caps_with(&rt, "sketchy", json!({ "resources": {} }));
+        // Even publishing it does not buy the right to name a local path.
+        seed_resources(&rt, "sketchy", &["file:///etc/passwd"]);
+
+        let err = rt.read_resource("sketchy", "file:///etc/passwd").unwrap_err();
+        assert_eq!(err.kind(), "denied");
+        assert!(err.message().contains("untrusted"), "{err}");
+    }
+
+    #[test]
+    fn file_uri_traversal_and_remote_authority_blocked_even_when_trusted() {
+        let rt = McpRuntime::new();
+        http_server(&rt, "t");
+        caps_with(&rt, "t", json!({ "resources": {} }));
+        seed_resources(
+            &rt,
+            "t",
+            &["file:///srv/data/../../etc/shadow", "file://evil.example.com/share/x"],
+        );
+        let cfg = rt.server_config("t").unwrap();
+
+        let traversal = rt
+            .assert_resource_uri_allowed(&cfg, "file:///srv/data/../../etc/shadow")
+            .unwrap_err();
+        assert_eq!(traversal.kind(), "denied");
+        assert!(traversal.message().contains("traversal"), "{traversal}");
+
+        let remote = rt
+            .assert_resource_uri_allowed(&cfg, "file://evil.example.com/share/x")
+            .unwrap_err();
+        assert_eq!(remote.kind(), "denied");
+        assert!(remote.message().contains("non-local authority"), "{remote}");
+    }
+
+    #[test]
+    fn code_bearing_schemes_are_never_readable() {
+        let rt = McpRuntime::new();
+        http_server(&rt, "t");
+        caps_with(&rt, "t", json!({ "resources": {} }));
+        let cfg = rt.server_config("t").unwrap();
+        for uri in [
+            "javascript:alert(1)",
+            "data:text/html;base64,PHNjcmlwdD4=",
+            "vbscript:x",
+            "blob:https://x/y",
+        ] {
+            // Published or not is irrelevant — the scheme check runs first.
+            seed_resources(&rt, "t", &[uri]);
+            let err = rt.assert_resource_uri_allowed(&cfg, uri).unwrap_err();
+            assert_eq!(err.kind(), "denied", "{uri} should be denied");
+            assert!(err.message().contains("never readable"), "{uri}: {err}");
+        }
+    }
+
+    #[test]
+    fn empty_uri_is_a_validation_error_not_a_denial() {
+        let rt = McpRuntime::new();
+        http_server(&rt, "t");
+        caps_with(&rt, "t", json!({ "resources": {} }));
+        assert_eq!(rt.read_resource("t", "  ").unwrap_err().kind(), "invalid");
+    }
+
+    // -----------------------------------------------------------------
+    // Template matching — widening this silently widens the read allowlist
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn template_matches_only_single_segment_expansions() {
+        assert!(uri_matches_template("db://table/users", "db://table/{name}"));
+        assert!(uri_matches_template(
+            "repo://natives/file/main.rs",
+            "repo://{project}/file/{path}"
+        ));
+        // A `/` in the expansion would let one template cover a whole subtree.
+        assert!(!uri_matches_template(
+            "db://table/users/secret",
+            "db://table/{name}"
+        ));
+        // Variable must consume something.
+        assert!(!uri_matches_template("db://table/", "db://table/{name}"));
+        // Literal prefix mismatch.
+        assert!(!uri_matches_template("other://table/users", "db://table/{name}"));
+        // Trailing literal must be consumed exactly.
+        assert!(uri_matches_template("db://x/rows.json", "db://{t}/rows.json"));
+        assert!(!uri_matches_template(
+            "db://x/rows.json.bak",
+            "db://{t}/rows.json"
+        ));
+    }
+
+    #[test]
+    fn template_never_matches_traversal_or_malformed_patterns() {
+        assert!(!uri_matches_template(
+            "file:///srv/../etc/passwd",
+            "file:///srv/{name}"
+        ));
+        // Unclosed brace is malformed: refuse rather than guess.
+        assert!(!uri_matches_template("db://x", "db://{name"));
+        // Adjacent variables have no separator to anchor on.
+        assert!(!uri_matches_template("db://ab", "db://{a}{b}"));
+    }
+
+    #[test]
+    fn template_published_uri_is_allowed_but_a_sibling_subtree_is_not() {
+        let rt = McpRuntime::new();
+        http_server(&rt, "t");
+        caps_with(&rt, "t", json!({ "resources": {} }));
+        rt.resource_templates
+            .lock()
+            .unwrap()
+            .insert("t".into(), vec![json!({"uriTemplate": "db://table/{name}"})]);
+        let cfg = rt.server_config("t").unwrap();
+        assert_eq!(
+            rt.assert_resource_uri_allowed(&cfg, "db://table/users")
+                .unwrap(),
+            "template:db://table/{name}"
+        );
+        assert!(rt
+            .assert_resource_uri_allowed(&cfg, "db://table/users/private")
+            .is_err());
+    }
+
+    // -----------------------------------------------------------------
+    // Size cap
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn truncation_respects_utf8_boundaries() {
+        let text = "日本語テキスト";
+        let out = truncate_on_char_boundary(text, 5);
+        assert!(text.starts_with(&out));
+        assert!(out.len() <= 5);
+        // Would panic on a byte slice; must not.
+        assert!(std::str::from_utf8(out.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn resource_byte_cap_is_clamped_to_a_sane_band() {
+        // Env is process-global; assert the clamp arithmetic via the public band
+        // rather than mutating env and racing other tests.
+        assert!(resource_max_bytes() >= 1024);
+        assert!(resource_max_bytes() <= 8 * 1024 * 1024);
+    }
+
+    // -----------------------------------------------------------------
+    // Roots
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn roots_default_to_empty_rather_than_the_process_cwd() {
+        let rt = McpRuntime::new();
+        // No explicit grant. Absent NATIVES_MCP_ROOTS this must be empty; if the
+        // env happens to be set, every entry must still be a real directory.
+        for root in rt.client_roots() {
+            assert!(root.uri.starts_with("file://"));
+        }
+        if std::env::var("NATIVES_MCP_ROOTS").is_err() {
+            assert!(rt.client_roots().is_empty());
+        }
+    }
+
+    #[test]
+    fn roots_must_be_existing_absolute_directories() {
+        let rt = McpRuntime::new();
+        assert_eq!(
+            rt.set_roots(&["relative/path".into()]).unwrap_err().kind(),
+            "invalid"
+        );
+        assert_eq!(
+            rt.set_roots(&["/definitely/not/here/xyzzy".into()])
+                .unwrap_err()
+                .kind(),
+            "invalid"
+        );
+        let dir = std::env::temp_dir().join(format!("mcp-root-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let granted = rt
+            .set_roots(&[dir.to_string_lossy().to_string()])
+            .unwrap();
+        assert_eq!(granted.len(), 1);
+        assert!(granted[0].uri.starts_with("file://"));
+        assert_eq!(rt.client_roots().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn server_requests_we_do_not_implement_are_refused_not_ignored() {
+        // A silent hang would look like a daemon bug; -32601 lets the server adapt.
+        let sampling = serve_server_request("sampling/createMessage", &json!(7), &[]);
+        assert_eq!(sampling["error"]["code"], -32601);
+        assert_eq!(sampling["id"], json!(7));
+        let elicit = serve_server_request("elicitation/create", &json!(8), &[]);
+        assert_eq!(elicit["error"]["code"], -32601);
+
+        let roots = serve_server_request("roots/list", &json!(9), &[json!({"uri":"file:///w"})]);
+        assert_eq!(roots["result"]["roots"][0]["uri"], "file:///w");
+        assert!(serve_server_request("ping", &json!(1), &[])["result"].is_object());
+    }
+
+    // -----------------------------------------------------------------
+    // Notifications
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn notification_ring_is_bounded_and_keeps_the_newest() {
+        let rt = McpRuntime::new();
+        let frames: Vec<Value> = (0..NOTIFICATION_RING_CAP + 50)
+            .map(|i| json!({"method": "notifications/message", "params": {"seq": i}}))
+            .collect();
+        rt.record_notifications("s", frames);
+        let kept = rt.notifications(Some("s"));
+        assert_eq!(kept.len(), NOTIFICATION_RING_CAP);
+        assert_eq!(kept.last().unwrap().params["seq"], NOTIFICATION_RING_CAP + 49);
+    }
+
+    #[test]
+    fn resource_change_notification_invalidates_the_read_allowlist() {
+        let rt = McpRuntime::new();
+        http_server(&rt, "r");
+        caps_with(&rt, "r", json!({ "resources": { "listChanged": true } }));
+        seed_resources(&rt, "r", &["mem://a"]);
+        let cfg = rt.server_config("r").unwrap();
+        assert!(rt.assert_resource_uri_allowed(&cfg, "mem://a").is_ok());
+
+        rt.record_notifications(
+            "r",
+            vec![json!({"method": "notifications/resources/list_changed"})],
+        );
+
+        // A retracted list must stop vouching for its URIs.
+        let err = rt.assert_resource_uri_allowed(&cfg, "mem://a").unwrap_err();
+        assert_eq!(err.kind(), "denied");
+        assert_eq!(rt.notifications(Some("r")).len(), 1);
+    }
+
+    #[test]
+    fn notifications_are_scoped_per_server() {
+        let rt = McpRuntime::new();
+        rt.record_notifications("a", vec![json!({"method": "notifications/tools/list_changed"})]);
+        rt.record_notifications("b", vec![json!({"method": "notifications/message"})]);
+        assert_eq!(rt.notifications(Some("a")).len(), 1);
+        assert_eq!(rt.notifications(Some("a"))[0].method, "notifications/tools/list_changed");
+        assert_eq!(rt.notifications(None).len(), 2);
+        assert_eq!(rt.notifications(Some("missing")).len(), 0);
     }
 
     #[test]

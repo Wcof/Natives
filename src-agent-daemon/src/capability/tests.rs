@@ -326,7 +326,17 @@ fn skill_rescan_upserts_and_selection_fails_closed() {
         let updated = skills::update(&json!({ "id": demo_id, "category": "效率", "tags": ["demo"] })).unwrap();
         assert_eq!(updated["skill"]["category"], "效率");
 
-        // Selection works for enabled+trusted skill.
+        // A freshly scanned *project* skill is discovered but not trusted:
+        // a skill body carries the same authority as the system prompt, so
+        // dropping a file into a project tree must not grant it. Only the
+        // `$HOME` namespace is trusted by rule (see `skill_store`).
+        let untrusted = skills::prompt_for_selection(&[demo_id.clone()]).unwrap_err();
+        assert_eq!(untrusted, vec![demo_id.clone()]);
+
+        // Trust is an explicit act. Once granted, selection delivers the body —
+        // progressive disclosure keeps bodies out of the *catalog*, not out of
+        // a selection the user made on purpose.
+        skills::update(&json!({ "id": demo_id, "trusted": true })).unwrap();
         let prompt = skills::prompt_for_selection(&[demo_id.clone()]).unwrap();
         assert!(prompt.contains("Do the demo thing"));
 

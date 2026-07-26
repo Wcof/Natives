@@ -23,7 +23,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Where the engine may inject pending interjection or drain the prompt queue.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Serializable because the Harness topology projection names safe points on
+/// the wire; the variants are the wire contract (see `topology::safe_point_name`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SafePoint {
     /// Between provider stream batches / turns.
     ProviderBatchBoundary,

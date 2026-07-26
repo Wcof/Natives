@@ -6,11 +6,12 @@
 //! unchanged from the pre-split single-file version.
 
 use agent_core::{
-    cap_child_permission, default_subagent_tool_allowlist, AgentEngine, EngineToolRuntime,
-    EventSequencer, HookEvent, HookRegistry, HookRequest, PermissionManager, PermissionProfile,
+    default_subagent_tool_allowlist, AgentEngine, EngineToolRuntime, EventSequencer, HookEvent,
+    HookRegistry, HookRequest, PermissionAggregate, PermissionManager, PermissionProfile,
     SubAgentManager, SubAgentStatus, ToolExecutionResult, ToolSchema,
 };
 use assistant_protocol::v2::RunEventKind;
+use capability_gateway::plan_mode::{self, PlanDecision};
 use capability_gateway::{CapabilityGateway, SideEffect};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -20,6 +21,79 @@ use tokio::sync::{oneshot, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::production::{normalize_permission_scope, ProductionRuntime, TaskRecord};
+
+/// Step budget for a subagent turn loop when neither the caller nor the
+/// selected agent profile asks for one.
+pub const DEFAULT_CHILD_MAX_STEPS: u32 = 15;
+
+/// Ceiling on a subagent step budget. A parent agent (or a prompt-injected one)
+/// must not be able to buy an unbounded child loop by asking for a huge number;
+/// the tool-call and token ledgers in `SubAgentManager` bound cost too, this
+/// bounds wall-clock turns.
+pub const MAX_CHILD_MAX_STEPS: u32 = 100;
+
+/// Ceiling on the parent-authored child system prompt, in UTF-8 bytes. Long
+/// enough for a real persona brief, short enough that it cannot crowd out the
+/// child's own context budget. Over the limit is an error, never a silent
+/// truncation — a truncated persona is worse than a rejected one.
+pub const MAX_CHILD_SYSTEM_PROMPT_BYTES: usize = 16_000;
+
+/// Scope recorded on the `PermissionResponded` event when a hook, rather than a
+/// human, answered the prompt. Deliberately not a grant scope: auto-approval is
+/// per invocation and is never remembered.
+pub const HOOK_AUTO_APPROVE_SCOPE: &str = "hook_auto_approve";
+
+/// How long a submitted plan waits for a human, in seconds.
+///
+/// Longer than the 120s tool-confirmation window because reading a plan is a
+/// different act from clicking "yes" on one command, and shorter than forever
+/// because a run that nobody is watching must eventually stop occupying a slot.
+/// A timeout is a rejection: the latch stays closed.
+pub const PLAN_APPROVAL_TIMEOUT_SECS: u64 = 300;
+
+/// Scope recorded when a plan approval resolves. Plan approval is a one-shot
+/// gear change for a single run and is never a reusable grant.
+pub const PLAN_APPROVAL_SCOPE: &str = "once";
+
+/// What the permission gate should do after consulting the hooks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HookPermissionGate {
+    Deny(String),
+    Prompt,
+    AutoApprove(String),
+}
+
+/// Apply the permission-profile ceiling to a hook aggregate.
+///
+/// This is the whole of the "a hook cannot escalate" rule, in one pure function
+/// so it can be tested without a daemon and so there is exactly one place to
+/// audit. Two independent gates must both open before a prompt is skipped:
+///
+/// - `auto_approve_allowed`, the caller's policy check — the tool must be one
+///   the profile would have *asked* about, not one it refuses outright;
+/// - the profile must not be `ReadOnly`, which grants nothing that needs asking.
+///
+/// `Autonomous` is listed for completeness: it already auto-approves downstream,
+/// so a hook allow there changes nothing but the audit line.
+///
+/// Deny is never filtered — a hook may always tighten, never loosen.
+pub fn hook_permission_gate(
+    aggregate: PermissionAggregate,
+    profile: PermissionProfile,
+    auto_approve_allowed: bool,
+) -> HookPermissionGate {
+    match aggregate {
+        PermissionAggregate::Deny(reason) => HookPermissionGate::Deny(reason),
+        PermissionAggregate::Prompt => HookPermissionGate::Prompt,
+        PermissionAggregate::AutoApprove(reason) => {
+            if !auto_approve_allowed || profile == PermissionProfile::ReadOnly {
+                HookPermissionGate::Prompt
+            } else {
+                HookPermissionGate::AutoApprove(reason)
+            }
+        }
+    }
+}
 
 /// Tools with permission gate + real task orchestration.
 pub struct PermissionGatedTools {
@@ -66,16 +140,9 @@ impl PermissionGatedTools {
         }
         match &self.tool_allowlist {
             None => true,
-            Some(list) => {
-                if list.iter().any(|t| t == name) {
-                    return true;
-                }
-                // MCP surface: allow only when explicitly listed as `mcp_call` or exact name.
-                if name.starts_with("mcp__") {
-                    return list.iter().any(|t| t == "mcp_call" || t == name);
-                }
-                false
-            }
+            // Matching semantics (including the MCP surface) live in agent-core so
+            // enforcement here and child-surface derivation cannot drift apart.
+            Some(list) => agent_core::tool_list_allows(list, name),
         }
     }
 
@@ -90,6 +157,85 @@ impl PermissionGatedTools {
             duration_ms: 0,
         }
     }
+
+    /// Close the Plan Mode latch for a run the host started in Plan Mode.
+    ///
+    /// The permission profile on a run is immutable by design, so a host that
+    /// wants Plan Mode says so once by passing the `plan` profile. This turns
+    /// that declaration into a real session record the first time the run
+    /// touches the tool surface, which is what gives approval something to
+    /// release and gives the run a fallback profile to land on.
+    fn ensure_plan_latch(&self) {
+        if self
+            .permission_profile
+            .trim()
+            .eq_ignore_ascii_case(plan_mode::PLAN_PROFILE)
+            && plan_mode::snapshot(&self.parent_run_id).is_none()
+        {
+            plan_mode::enter(&self.parent_run_id, plan_mode::PLAN_PROFILE);
+            self.emit_plan_transition(plan_mode::PlanTransition::Entered, None);
+        }
+    }
+
+    /// Put a Plan Mode gear change on the run's event stream.
+    ///
+    /// Always call this **after** the mutation: the payload is built from a
+    /// fresh snapshot, so an `Approved` emitted too early would report the plan
+    /// ceiling as the profile in force and a `Rejected` would undercount the
+    /// rejections. A run whose session has already been torn down emits
+    /// nothing rather than a synthesised one — an invented gear change is worse
+    /// than a missing one.
+    fn emit_plan_transition(&self, transition: plan_mode::PlanTransition, reason: Option<&str>) {
+        let Some(session) = plan_mode::snapshot(&self.parent_run_id) else {
+            return;
+        };
+        self.events.append(
+            &self.parent_run_id,
+            plan_mode::changed_event(&session, transition, reason),
+        );
+    }
+
+    /// The gear this run actually runs under: the plan ceiling while planning,
+    /// the profile captured at entry once a plan is approved, otherwise the
+    /// declared profile untouched.
+    fn effective_permission_profile(&self) -> String {
+        plan_mode::effective_profile(&self.parent_run_id, &self.permission_profile)
+    }
+
+    /// Whether a tool should appear in the schema list right now.
+    ///
+    /// Hiding the blocked tools during planning is not decoration: a model that
+    /// can still see `write_file` will try it, spend a turn on the refusal, and
+    /// sometimes narrate the refusal as progress. Removing them makes the gear
+    /// legible from the tool list alone. The two control tools are mutually
+    /// exclusive for the same reason — `exit_plan_mode` is meaningless outside
+    /// Plan Mode and `enter_plan_mode` is meaningless inside it.
+    fn plan_mode_visible(&self, planning: bool, tool: &capability_gateway::Tool) -> bool {
+        match plan_mode::decision(tool.name, tool.side_effect, tool.permission_class) {
+            PlanDecision::Control => {
+                if tool.name == plan_mode::EXIT_PLAN_MODE_TOOL {
+                    planning
+                } else {
+                    !planning
+                }
+            }
+            PlanDecision::Deny => !planning,
+            PlanDecision::Allow => true,
+        }
+    }
+
+    /// Plan Mode verdict for a tool call, fail-closed for anything the gateway
+    /// does not know about (raw `mcp__*` names, orchestration stubs).
+    fn plan_decision_for(&self, name: &str) -> PlanDecision {
+        match self.gateway.get_tool(name) {
+            Some(tool) => plan_mode::decision(name, tool.side_effect, tool.permission_class),
+            None => plan_mode::decision(
+                name,
+                SideEffect::Destructive,
+                capability_gateway::PermissionClass::Elevation,
+            ),
+        }
+    }
 }
 /// Extract the server id from a namespaced `mcp__{server}__{tool}` name.
 fn mcp_server_of_tool(name: &str) -> Option<&str> {
@@ -101,11 +247,14 @@ fn mcp_server_of_tool(name: &str) -> Option<&str> {
 #[async_trait::async_trait]
 impl EngineToolRuntime for PermissionGatedTools {
     async fn list_tool_schemas(&self) -> Vec<ToolSchema> {
+        self.ensure_plan_latch();
+        let planning = plan_mode::is_active(&self.parent_run_id);
         let mut schemas: Vec<ToolSchema> = self
             .gateway
             .list_tools()
             .into_iter()
             .filter(|t| self.tool_allowed(t.name))
+            .filter(|t| self.plan_mode_visible(planning, t))
             .map(|t| ToolSchema {
                 name: t.name.to_string(),
                 description: t.description.to_string(),
@@ -114,7 +263,13 @@ impl EngineToolRuntime for PermissionGatedTools {
             .collect();
         // Selected MCP servers surface their namespaced tools to the model
         // (ADR-0016) — previously mcp__ tools were callable but never visible.
+        // While planning they stay hidden: `plan_decision_for` classifies an
+        // unknown `mcp__*` name fail-closed, so listing them would advertise a
+        // surface `execute_tool` is going to refuse.
         for schema in &self.mcp_tool_schemas {
+            if planning && !matches!(self.plan_decision_for(&schema.name), PlanDecision::Allow) {
+                continue;
+            }
             if self.tool_allowed(&schema.name) && !schemas.iter().any(|s| s.name == schema.name) {
                 schemas.push(schema.clone());
             }
@@ -165,6 +320,37 @@ impl EngineToolRuntime for PermissionGatedTools {
             }
         }
 
+        // Plan Mode latch, ahead of everything else.
+        //
+        // Ahead of the identity check because the exit path must stay reachable
+        // even when the project binding is unhappy — a run that cannot submit a
+        // plan and cannot write is a run with no way out. Ahead of the subagent
+        // budget because a refused call is not work and must not cost a slot.
+        self.ensure_plan_latch();
+        let planning = plan_mode::is_active(&self.parent_run_id);
+        if name == plan_mode::EXIT_PLAN_MODE_TOOL {
+            return self.handle_exit_plan_mode(input, planning).await;
+        }
+        if name == plan_mode::ENTER_PLAN_MODE_TOOL {
+            return self.handle_enter_plan_mode(input).await;
+        }
+        if planning && self.plan_decision_for(name) == PlanDecision::Deny {
+            // Deliberately not a permission prompt. Plan Mode exists so the user
+            // reviews one plan instead of a stream of approval cards; turning a
+            // blocked write into a card would rebuild the thing it replaces.
+            let err = plan_mode::blocked_error(name);
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error": err.message,
+                    "code": err.code,
+                    "denied": true,
+                    "plan_mode": true,
+                }),
+                is_error: true,
+                duration_ms: 0,
+            };
+        }
+
         // ProjectIdentity fail-closed for mutating/process/network/MCP tools.
         if let Err(err) = self.ensure_verified_project_for_tool(name).await {
             return ToolExecutionResult {
@@ -208,9 +394,15 @@ impl EngineToolRuntime for PermissionGatedTools {
 
         // Permission gate: PermissionClass + SideEffect (G5).
         // Orchestration tools always go through this gate (never early-return around it).
-        let profile_str = match self.permission_profile.as_str() {
+        // Read the gear through the Plan Mode latch, never the raw declared
+        // profile: while planning it reads `plan`, and after approval it reads
+        // the profile captured at entry (which can only be what the run already
+        // had).
+        let effective_profile = self.effective_permission_profile();
+        let profile_str = match effective_profile.as_str() {
             "full_access" | "autonomous" | "full" => "autonomous",
             "readonly" => "readonly",
+            p if p == plan_mode::PLAN_PROFILE => plan_mode::PLAN_PROFILE,
             _ => "ask",
         };
         let (perm_class, side_effect) = if let Some(tool) = tool {
@@ -253,7 +445,21 @@ impl EngineToolRuntime for PermissionGatedTools {
         }
 
         if needs_ask {
-            if let Some(denied) = self.await_tool_permission(name, &input).await {
+            // The ceiling a PermissionRequest hook may not raise. A hook's
+            // `permissionDecision: "allow"` skips a *confirmation*; it can never
+            // buy a capability the profile itself withholds. So auto-approval is
+            // offered only where the policy genuinely says "ask a human":
+            //   - `Denied(_)` is a policy refusal, not a question;
+            //   - `readonly` reaches here only for read-only side effects, and
+            //     `request_permission_for_profile` refuses that profile anyway.
+            let auto_approve_allowed = matches!(
+                class_result,
+                capability_gateway::policy::PolicyResult::NeedsApproval(_)
+            ) && profile_str != "readonly";
+            if let Some(denied) = self
+                .await_tool_permission(name, &input, auto_approve_allowed)
+                .await
+            {
                 return denied;
             }
         }
@@ -694,10 +900,18 @@ impl PermissionGatedTools {
         )
     }
 
+    /// Run the permission gate for one tool call.
+    ///
+    /// `None` means "proceed"; `Some` is the denial to return to the model.
+    ///
+    /// `auto_approve_allowed` is the profile ceiling computed by the caller: it
+    /// is the *only* switch that lets a hook's `permissionDecision: "allow"`
+    /// skip the prompt. Hooks never widen it.
     async fn await_tool_permission(
         &self,
         name: &str,
         input: &Value,
+        auto_approve_allowed: bool,
     ) -> Option<ToolExecutionResult> {
         let pattern = tool_pattern(name, input);
         let inv = self.build_tool_invocation(name, input).await;
@@ -717,35 +931,76 @@ impl PermissionGatedTools {
             .map(std::path::Path::new);
         let permission_hooks =
             crate::production_hooks::build_production_hooks_for_project(project_root);
-        let hook_responses = permission_hooks
-            .dispatch(HookRequest {
+        let hook_outcomes = permission_hooks
+            .dispatch_outcomes(HookRequest {
                 event: HookEvent::PermissionRequest,
                 run_id: self.parent_run_id.clone(),
                 tool_name: Some(name.to_string()),
                 input: input.clone(),
             })
             .await;
-        if let Err(reason) = HookRegistry::aggregate_allow(&hook_responses) {
-            return Some(ToolExecutionResult {
-                output: serde_json::json!({
-                    "error": reason,
-                    "denied": true,
-                    "denied_by_hook": true,
-                }),
-                is_error: true,
-                duration_ms: 0,
-            });
+        // Plan Mode maps to ConfirmEach here: what survives the latch is a read
+        // or a network read, and the user is still the one who says yes to it.
+        let profile = match self.effective_permission_profile().as_str() {
+            "readonly" | "read_only" => PermissionProfile::ReadOnly,
+            "full_access" | "autonomous" | "full" => PermissionProfile::Autonomous,
+            _ => PermissionProfile::ConfirmEach,
+        };
+        let tool_call_id = uuid::Uuid::new_v4().to_string();
+        match hook_permission_gate(
+            HookRegistry::aggregate_permission(&hook_outcomes),
+            profile,
+            auto_approve_allowed,
+        ) {
+            HookPermissionGate::Deny(reason) => {
+                return Some(ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error": reason,
+                        "denied": true,
+                        "denied_by_hook": true,
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                });
+            }
+            HookPermissionGate::AutoApprove(reason) => {
+                // Auto-approval must never be silent: a skipped confirmation
+                // that leaves no trace is worse than a prompt. Until the
+                // protocol grows a dedicated event, the request/response pair
+                // carries the audit — it is the only existing shape that
+                // records the tool, its input, and who answered.
+                let permission_id = format!("hook-auto-{}", uuid::Uuid::new_v4());
+                eprintln!(
+                    "[production] hook auto-approved tool `{name}` on run {} ({reason})",
+                    self.parent_run_id
+                );
+                self.events.append(
+                    &self.parent_run_id,
+                    RunEventKind::PermissionRequested {
+                        tool_call_id: tool_call_id.clone(),
+                        tool_name: name.to_string(),
+                        reason: format!("Approve tool `{name}`"),
+                        permission_id: permission_id.clone(),
+                        input: input.clone(),
+                    },
+                );
+                self.events.append(
+                    &self.parent_run_id,
+                    RunEventKind::PermissionResponded {
+                        permission_id,
+                        approved: true,
+                        scope: HOOK_AUTO_APPROVE_SCOPE.to_string(),
+                    },
+                );
+                return None;
+            }
+            HookPermissionGate::Prompt => {}
         }
 
-        let tool_call_id = uuid::Uuid::new_v4().to_string();
         let permission_id = self
             .permissions
             .request_permission_for_profile(
-                match self.permission_profile.as_str() {
-                    "readonly" | "read_only" => PermissionProfile::ReadOnly,
-                    "full_access" | "autonomous" | "full" => PermissionProfile::Autonomous,
-                    _ => PermissionProfile::ConfirmEach,
-                },
+                profile,
                 &self.parent_run_id,
                 &tool_call_id,
                 name,
@@ -872,9 +1127,261 @@ impl PermissionGatedTools {
         }
     }
 
+    /// `enter_plan_mode`: close the latch for this run.
+    ///
+    /// Handled here rather than left to the gateway loop below so it skips the
+    /// ProjectIdentity gate. Entering Plan Mode only ever removes capability, so
+    /// there is nothing for a project binding to protect — and refusing it on an
+    /// unbound run would deny the agent the one move that makes an unbound run
+    /// safer.
+    async fn handle_enter_plan_mode(&self, input: Value) -> ToolExecutionResult {
+        let cancel = if let Some(rt) = &self.runtime {
+            rt.execution
+                .token(&self.parent_run_id)
+                .await
+                .unwrap_or_else(CancellationToken::new)
+        } else {
+            CancellationToken::new()
+        };
+        let context = self
+            .build_tool_call_context(uuid::Uuid::new_v4().to_string(), cancel)
+            .await;
+        match self
+            .gateway
+            .execute(plan_mode::ENTER_PLAN_MODE_TOOL, input, &context)
+            .await
+        {
+            Ok(out) => ToolExecutionResult {
+                output: out.result,
+                is_error: false,
+                duration_ms: out.duration_ms,
+            },
+            Err(err) => ToolExecutionResult {
+                output: serde_json::json!({"error": err.message, "code": err.code}),
+                is_error: true,
+                duration_ms: 0,
+            },
+        }
+    }
+
+    /// `exit_plan_mode`: submit a plan and block on a real human answer.
+    ///
+    /// The whole safety property of Plan Mode lives in this function: the model
+    /// hands over a structured plan, the user is the one who answers, and the
+    /// latch is released *only* on an approval that came back through the
+    /// interaction hub. Nothing the model can say short-circuits it.
+    async fn handle_exit_plan_mode(&self, input: Value, planning: bool) -> ToolExecutionResult {
+        if !planning {
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error": "this run is not in Plan Mode",
+                    "code": "not_in_plan_mode",
+                    "approved": false,
+                }),
+                is_error: true,
+                duration_ms: 0,
+            };
+        }
+        let plan = match plan_mode::parse_plan(&input) {
+            Ok(plan) => plan,
+            Err(err) => {
+                // A malformed plan is the model's problem to fix, not the
+                // user's to squint at. Never show a card built from it.
+                return ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error": err.message,
+                        "code": err.code,
+                        "approved": false,
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                };
+            }
+        };
+        if let Err(err) = plan_mode::record_submission(&self.parent_run_id, plan.clone()) {
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error": err.message,
+                    "code": err.code,
+                    "approved": false,
+                }),
+                is_error: true,
+                duration_ms: 0,
+            };
+        }
+
+        self.emit_plan_transition(plan_mode::PlanTransition::Submitted, None);
+
+        let plan_json = serde_json::to_value(&plan).unwrap_or_else(|_| serde_json::json!({}));
+        let started = Instant::now();
+        let (approved, _scope) = self.await_plan_approval(&plan, &plan_json).await;
+
+        if !approved {
+            let rejections = plan_mode::reject(&self.parent_run_id).unwrap_or(0);
+            self.emit_plan_transition(plan_mode::PlanTransition::Rejected, None);
+            // Not `is_error`: a rejection is a legitimate answer to a question
+            // the model asked. Flagging it as a failure invites retry logic to
+            // treat "the user said no" as a transient fault.
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "approved": false,
+                    "plan_mode": true,
+                    "rejections": rejections,
+                    "message": "The user did not approve this plan. You are still in Plan Mode: \
+                                nothing has been executed. Ask what they want changed, revise, \
+                                and submit again. Do not claim the plan was approved.",
+                }),
+                is_error: false,
+                duration_ms: started.elapsed().as_millis() as u64,
+            };
+        }
+
+        match plan_mode::approve(&self.parent_run_id) {
+            Ok(profile) => {
+                self.emit_plan_transition(plan_mode::PlanTransition::Approved, None);
+                ToolExecutionResult {
+                output: serde_json::json!({
+                    "approved": true,
+                    "plan_mode": false,
+                    "permission_profile": profile,
+                    "plan": plan_json,
+                    "message": "The user approved this plan. Plan Mode is off and the run is back \
+                                on its original permission profile. Execute the approved steps and \
+                                nothing beyond them.",
+                }),
+                is_error: false,
+                duration_ms: started.elapsed().as_millis() as u64,
+                }
+            }
+            Err(err) => ToolExecutionResult {
+                output: serde_json::json!({
+                    "error": err.message,
+                    "code": err.code,
+                    "approved": false,
+                }),
+                is_error: true,
+                duration_ms: started.elapsed().as_millis() as u64,
+            },
+        }
+    }
+
+    /// Put a plan in front of a human and wait.
+    ///
+    /// Deliberately does **not** go through `PermissionManager`: that path
+    /// auto-approves on `autonomous` and refuses outright on `readonly`, and
+    /// both would be wrong here. Plan approval is the one interaction that must
+    /// always reach a person, whatever the profile says — an autonomous run in
+    /// Plan Mode is exactly the case the gear was built for.
+    ///
+    /// Recorded as a `tool_permission` interaction so the existing respond RPC
+    /// and the restart-recovery path resolve it unchanged; the GUI tells it
+    /// apart by `tool_name` and renders the plan from the event payload.
+    async fn await_plan_approval(
+        &self,
+        plan: &capability_gateway::Plan,
+        plan_json: &Value,
+    ) -> (bool, String) {
+        let permission_id = uuid::Uuid::new_v4().to_string();
+        let tool_call_id = uuid::Uuid::new_v4().to_string();
+        let reason = format!("Approve plan: {}", plan.title);
+        let card = serde_json::json!({
+            "kind": "plan_approval",
+            "plan": plan_json,
+            "step_count": plan.steps.len(),
+            "peak_risk": plan.peak_risk(),
+            "has_irreversible_step": plan.has_irreversible_step(),
+        });
+
+        // Install the waiter before publishing the event, same race as the tool
+        // permission path: a fast UI must not answer a question nobody is
+        // listening for.
+        let (tx, rx) = oneshot::channel::<(bool, String)>();
+        self.interactions
+            .register_permission(
+                &permission_id,
+                &self.parent_run_id,
+                plan_mode::EXIT_PLAN_MODE_TOOL,
+                tx,
+            )
+            .await;
+        let _ = crate::interaction_store::insert_pending(
+            &permission_id,
+            Some(&self.parent_run_id),
+            Some(&self.conversation_id),
+            "tool_permission",
+            serde_json::json!({
+                "tool_call_id": tool_call_id,
+                "tool_name": plan_mode::EXIT_PLAN_MODE_TOOL,
+                "reason": reason,
+                "input": card,
+            }),
+        );
+        crate::prompt_queue_store::global_harness()
+            .set_pending_interaction(&self.conversation_id, Some(permission_id.clone()));
+        let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
+        self.events.append(
+            &self.parent_run_id,
+            RunEventKind::PermissionRequested {
+                tool_call_id,
+                tool_name: plan_mode::EXIT_PLAN_MODE_TOOL.to_string(),
+                reason: reason.clone(),
+                permission_id: permission_id.clone(),
+                input: card,
+            },
+        );
+
+        let cancel = if let Some(rt) = &self.runtime {
+            rt.execution
+                .token(&self.parent_run_id)
+                .await
+                .unwrap_or_else(CancellationToken::new)
+        } else {
+            CancellationToken::new()
+        };
+        let (approved, scope) = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                let _ = self.interactions.resolve_permission(&permission_id).await;
+                (false, "cancelled".to_string())
+            }
+            res = tokio::time::timeout(
+                Duration::from_secs(PLAN_APPROVAL_TIMEOUT_SECS),
+                rx,
+            ) => {
+                // Silence is not consent. Any failure to hear a real "yes"
+                // resolves to rejection and leaves the latch closed.
+                res.ok()
+                    .and_then(|r| r.ok())
+                    .map(|(ok, _)| (ok, PLAN_APPROVAL_SCOPE.to_string()))
+                    .unwrap_or((false, "timeout".to_string()))
+            }
+        };
+
+        let _ = crate::interaction_store::mark_resolved(
+            &permission_id,
+            serde_json::json!({ "approved": approved, "scope": scope }),
+        );
+        crate::prompt_queue_store::global_harness()
+            .set_pending_interaction(&self.conversation_id, None);
+        let _ = crate::prompt_queue_store::persist_actor_snapshot(&self.conversation_id);
+        self.events.append(
+            &self.parent_run_id,
+            RunEventKind::PermissionResponded {
+                permission_id,
+                approved,
+                scope: scope.clone(),
+            },
+        );
+        (approved, scope)
+    }
+
     /// Same tree-cancel rules as ProductionRuntime::cancel_run_tree, using
     /// the shared engines/subagents/events maps held by this tool runtime.
     async fn cancel_run_tree_local(&self, run_id: &str) {
+        // A cancelled run has no plan to approve. Dropping the session here is
+        // safe in a way that eviction is not: the run is gone, so there is no
+        // latch left to reopen.
+        plan_mode::clear(run_id);
         if let Some(rt) = &self.runtime {
             rt.cancel_run_tree(run_id).await;
             return;
@@ -885,6 +1392,7 @@ impl PermissionGatedTools {
             if !run_ids.contains(&d.run_id) {
                 run_ids.push(d.run_id.clone());
             }
+            plan_mode::clear(&d.run_id);
         }
         {
             let engines = self.engines.lock().await;
@@ -1135,15 +1643,94 @@ impl PermissionGatedTools {
             .unwrap_or("")
             .to_string();
 
-        // Child permission inherits parent permission_profile by default when unspecified
-        let requested_perm = input
-            .get("permission_profile")
+        // ── Persona: an on-disk profile the parent picked, plus a prompt it wrote ──
+        //
+        // `subagent_type` is the Claude-Code-compatible name; the daemon's own
+        // field name is accepted too. A profile the parent names but that does
+        // not exist is an error, never a silent fallback to "no persona".
+        let requested_profile_id = input
+            .get("subagent_type")
+            .or_else(|| input.get("agent_profile_id"))
+            .or_else(|| input.get("agent_type"))
             .and_then(|v| v.as_str())
-            .unwrap_or("ask");
-        let child_perm = cap_child_permission(&self.permission_profile, requested_perm);
-        // Explicit tool_allowlist on task input, else inherit parent tool allowlist or fallback to default
-        let mut child_allowlist: Vec<String> = if let Some(arr) = input.get("tool_allowlist") {
-            arr.as_array()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let project_root_path = self
+            .gateway
+            .project_root
+            .as_deref()
+            .map(std::path::Path::new);
+        let profile = match &requested_profile_id {
+            Some(id) => match agent_core::load_agent_profile(id, project_root_path) {
+                Some(p) => Some(p),
+                None => {
+                    return ToolExecutionResult {
+                        output: serde_json::json!({
+                            "error": format!("agent profile `{id}` not found in the project or user profile directories"),
+                            "code": "agent_profile_not_found",
+                        }),
+                        is_error: true,
+                        duration_ms: 0,
+                    };
+                }
+            },
+            None => None,
+        };
+
+        // Parent-authored system prompt for this child. Prompt text only — it is
+        // never consulted when resolving permissions or the tool surface.
+        let child_directive = match input
+            .get("system_prompt")
+            .or_else(|| input.get("agent_prompt"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(sp) if sp.len() > MAX_CHILD_SYSTEM_PROMPT_BYTES => {
+                return ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error": format!(
+                            "system_prompt is {} bytes; the limit is {MAX_CHILD_SYSTEM_PROMPT_BYTES}. Put task detail in `prompt`, not the persona.",
+                            sp.len()
+                        ),
+                        "code": "system_prompt_too_long",
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                };
+            }
+            Some(sp) => Some(sp.to_string()),
+            None => None,
+        };
+
+        // ── Permission and tool surface ──
+        //
+        // Both resolutions live in `agent_core::subagents`: the profile can only
+        // tighten what was requested, and the parent is a hard ceiling. Neither a
+        // parent-authored prompt nor a self-selected profile can widen either one,
+        // so a prompt-injected parent gains nothing by writing a hostile persona.
+        // The profile mode fed to the valve is the persona the parent named, or
+        // — when the child is a roster member instead — the member's own profile
+        // (ADR-0016). Either way it can only tighten: `resolve_child_permission`
+        // caps the request by the profile and then by the parent.
+        let child_perm = agent_core::resolve_child_permission(
+            &self.permission_profile,
+            input.get("permission_profile").and_then(|v| v.as_str()),
+            profile
+                .as_ref()
+                .and_then(|p| p.permission_mode.as_deref())
+                .or_else(|| {
+                    member_profile
+                        .as_ref()
+                        .and_then(|(_, m)| m.permission_mode.as_deref())
+                }),
+        );
+        // A present-but-malformed `tool_allowlist` falls back to the readonly
+        // default rather than to "inherit the parent surface".
+        let requested_allowlist: Option<Vec<String>> = input.get("tool_allowlist").map(|value| {
+            value
+                .as_array()
                 .map(|items| {
                     items
                         .iter()
@@ -1151,22 +1738,45 @@ impl PermissionGatedTools {
                         .collect()
                 })
                 .unwrap_or_else(default_subagent_tool_allowlist)
-        } else {
-            self.tool_allowlist
-                .clone()
-                .unwrap_or_else(default_subagent_tool_allowlist)
-        };
-        // Member persona narrows the surface: profile.tools ∩ base allowlist
-        // (never wider than the default subagent surface), minus disallowed.
-        if let Some((_, profile)) = &member_profile {
-            if let Some(tools) = profile.tools.as_ref().filter(|t| !t.is_empty()) {
+        });
+        let mut child_allowlist = agent_core::resolve_child_tool_allowlist(
+            self.tool_allowlist.as_deref(),
+            requested_allowlist.as_deref(),
+            profile.as_ref().and_then(|p| p.tools.as_deref()),
+            profile.as_ref().and_then(|p| p.disallowed_tools.as_deref()),
+        );
+        // Member persona narrows the surface further (ADR-0016): profile.tools
+        // intersects what survived the parent ceiling, minus disallowed. Both
+        // operations are `retain`, so a member profile can only remove tools —
+        // naming a roster member never buys reach the parent lacked.
+        if let Some((_, member)) = &member_profile {
+            if let Some(tools) = member.tools.as_ref().filter(|t| !t.is_empty()) {
                 child_allowlist.retain(|tool| tools.iter().any(|t| t == tool));
             }
-            if let Some(disallowed) = profile.disallowed_tools.as_ref() {
+            if let Some(disallowed) = member.disallowed_tools.as_ref() {
                 child_allowlist.retain(|tool| !disallowed.iter().any(|d| d == tool));
             }
         }
         let child_allowlist = child_allowlist;
+
+        // ── Step budget: request, else the profile's, else the daemon default ──
+        let child_max_steps = input
+            .get("max_steps")
+            .and_then(|v| v.as_u64())
+            .map(|v| v.min(u32::MAX as u64) as u32)
+            .or_else(|| profile.as_ref().and_then(|p| p.max_steps))
+            .or_else(|| member_profile.as_ref().and_then(|(_, m)| m.max_steps))
+            .unwrap_or(DEFAULT_CHILD_MAX_STEPS)
+            .clamp(1, MAX_CHILD_MAX_STEPS);
+
+        // Persisted on the child run row and reported to every observer of this
+        // spawn. A roster member wins over a parent-named persona because child
+        // capability resolve loads the member's skills from this id (ADR-0016);
+        // without a team it is the persona `ProductionRuntime::start_run`
+        // reloads for the system prompt, tools and token budget.
+        let child_profile_id = member_profile_id
+            .clone()
+            .or_else(|| requested_profile_id.clone());
 
         // Prefer binding injected by execute_task_batch; else resolve (single-task path).
         let binding = if let Some(b) = input
@@ -1237,6 +1847,41 @@ impl PermissionGatedTools {
 
         // Standard RunManager path: create_run + start_detached (no embedded Engine).
         let project_path = self.gateway.project_root.clone();
+
+        // SubagentStart runs before the child exists, so a hook can refuse the
+        // spawn while refusing is still free. Denial is honoured rather than
+        // logged: this event is the only place a policy can stop a run from
+        // fanning out, and a hook that says no must not be overruled by the
+        // model having asked nicely.
+        let subagent_hooks = crate::production_hooks::build_production_hooks_for_project(
+            project_path.as_deref().map(std::path::Path::new),
+        );
+        let start_responses = subagent_hooks
+            .dispatch(HookRequest {
+                event: HookEvent::SubagentStart,
+                run_id: self.parent_run_id.clone(),
+                tool_name: Some("task".into()),
+                input: serde_json::json!({
+                    "prompt": prompt.clone(),
+                    "name": name.clone(),
+                    "agent_profile_id": child_profile_id.clone(),
+                    "permission_profile": child_perm.clone(),
+                    "tool_allowlist": child_allowlist.clone(),
+                    "model_id": child_model.clone(),
+                }),
+            })
+            .await;
+        if let Err(reason) = HookRegistry::aggregate_allow(&start_responses) {
+            return ToolExecutionResult {
+                output: serde_json::json!({
+                    "error": format!("subagent hook denied: {reason}"),
+                    "code": "subagent_denied_by_hook",
+                }),
+                is_error: true,
+                duration_ms: 0,
+            };
+        }
+
         let created = match crate::global_run_manager().create_run(
             assistant_protocol::v2::CreateRunRequest {
             // Child runs never inherit the parent conversation's selection;
@@ -1246,11 +1891,13 @@ impl PermissionGatedTools {
                 provider_id: child_provider.clone(),
                 model_id: child_model.clone(),
                 key_id: Some(child_key.clone()),
-                agent_profile_id: member_profile_id.clone(),
+                // Persisted on the run row; `ProductionRuntime::start_run` reloads
+                // the profile from it (system prompt, tools, token budget).
+                agent_profile_id: child_profile_id.clone(),
                 permission_profile: Some(child_perm.clone()),
                 content: Some(prompt.clone()),
                 attachments: None,
-                max_steps: Some(15),
+                max_steps: Some(child_max_steps),
                 parent_run_id: Some(self.parent_run_id.clone()),
                 project_path: project_path.clone(),
                 idempotency_key: None,
@@ -1287,7 +1934,7 @@ impl PermissionGatedTools {
                 child_model.clone(),
                 child_perm.clone(),
                 child_allowlist.clone(),
-                member_profile_id.clone(),
+                child_profile_id.clone(),
                 Some("none".into()),
                 project_path.clone(),
             )
@@ -1310,17 +1957,25 @@ impl PermissionGatedTools {
             .await;
         let _ = crate::subagent_store::update_subagent_session_status(&session_id, "running", None);
 
-        // Apply child tool surface before RunManager starts the engine.
+        // Apply child tool surface + parent-authored system prompt before
+        // RunManager starts the engine. Both are keyed by the child run id and
+        // consumed once by `ProductionRuntime::start_run`.
         crate::global_run_manager()
             .runtime
             .set_run_tool_allowlist(&child_run_id, child_allowlist.clone())
             .await;
+        if let Some(directive) = child_directive.clone() {
+            crate::global_run_manager()
+                .runtime
+                .set_run_agent_directive(&child_run_id, directive)
+                .await;
+        }
 
         self.events.append(
             &self.parent_run_id,
             RunEventKind::SubagentCreated {
                 sub_run_id: child_run_id.clone(),
-                agent_profile_id: member_profile_id.clone(),
+                agent_profile_id: child_profile_id.clone(),
                 task: prompt.clone(),
             },
         );
@@ -1348,7 +2003,7 @@ impl PermissionGatedTools {
                 attachments: None,
                 trigger_message_id: None,
                 permission_profile: Some(child_perm.clone()),
-                max_steps: Some(15),
+                max_steps: Some(child_max_steps),
                 project_path: project_path.clone(),
                 idempotency_key: None,
                 effort: None,
@@ -1356,6 +2011,11 @@ impl PermissionGatedTools {
             },
         );
         if let Err(e) = start_result {
+            // The child never started, so nothing will consume its directive.
+            let _ = crate::global_run_manager()
+                .runtime
+                .take_run_agent_directive(&child_run_id)
+                .await;
             let _ = crate::subagent_store::close_subagent_session(&session_id, "failed", Some(&e));
             if let Some(rec) = self.task_outputs.lock().await.get_mut(&task_id) {
                 rec.status = "failed".into();
@@ -1380,6 +2040,10 @@ impl PermissionGatedTools {
         let child_timeout_ms = self.subagents.config().child_timeout_ms.max(1);
         let tree_root_for_budget = self.parent_run_id.clone();
         let subagents_for_budget = self.subagents.clone();
+        // Rebuilt inside the watcher rather than moved: `HookRegistry` holds
+        // boxed handlers and is not `Clone`, and rebuilding costs one discovery
+        // pass on a path that already waited for a whole child run.
+        let stop_hook_project = project_path.clone();
         tokio::spawn(async move {
             let deadline = tokio::time::Instant::now() + Duration::from_millis(child_timeout_ms);
             for _ in 0..3_600 {
@@ -1393,6 +2057,10 @@ impl PermissionGatedTools {
                         .cancel(assistant_protocol::v2::CancelRunRequest {
                             run_id: child_run_id_bg.clone(),
                         })
+                        .await;
+                    let _ = crate::global_run_manager()
+                        .runtime
+                        .take_run_agent_directive(&child_run_id_bg)
                         .await;
                     break;
                 }
@@ -1467,12 +2135,38 @@ impl PermissionGatedTools {
                         },
                     );
                 }
+                // SubagentStop fires for every terminal outcome, not just
+                // success — a hook watching for children that died is exactly
+                // the one worth having, and firing only on the happy path
+                // would make its absence mean two different things. The
+                // decision is ignored on purpose: the child is already over,
+                // so there is nothing left to deny.
+                let _ = crate::production_hooks::build_production_hooks_for_project(
+                    stop_hook_project.as_deref().map(std::path::Path::new),
+                )
+                .dispatch(HookRequest {
+                    event: HookEvent::SubagentStop,
+                    run_id: parent_run_id.clone(),
+                    tool_name: Some("task".into()),
+                    input: serde_json::json!({
+                        "sub_run_id": child_run_id_bg.clone(),
+                        "status": status.clone(),
+                        "output": text.clone(),
+                    }),
+                })
+                .await;
+
                 let rec = TaskRecord {
                     run_id: child_run_id_bg.clone(),
                     status,
                     output: if text.is_empty() { None } else { Some(text) },
                 };
                 task_outputs.lock().await.insert(task_id_bg, rec);
+                // Terminal: drop any directive a non-native start path left behind.
+                let _ = crate::global_run_manager()
+                    .runtime
+                    .take_run_agent_directive(&child_run_id_bg)
+                    .await;
                 break;
             }
         });
@@ -1488,6 +2182,10 @@ impl PermissionGatedTools {
                 "key_id": child_key,
                 "model_id": child_model,
                 "permission_profile": child_perm,
+                "agent_profile_id": child_profile_id,
+                "tool_allowlist": child_allowlist,
+                "max_steps": child_max_steps,
+                "system_prompt_authored": child_directive.is_some(),
             }),
             is_error: false,
             duration_ms: 0,
@@ -1915,4 +2613,564 @@ fn use_fixture_flag(input: &Value) -> bool {
         || std::env::var("NATIVES_DAEMON_FIXTURE")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_core::{HookDecision, HookHandler, HookOutcome, HookResponse, PermissionVerdict};
+
+    /// A hook that returns one fixed outcome, so the permission gate can be
+    /// exercised without spawning processes.
+    struct FixedHook(fn() -> HookOutcome);
+
+    #[async_trait::async_trait]
+    impl HookHandler for FixedHook {
+        async fn handle(&self, _request: HookRequest) -> HookResponse {
+            (self.0)().into_response()
+        }
+
+        async fn handle_outcome(&self, _request: HookRequest) -> HookOutcome {
+            (self.0)()
+        }
+    }
+
+    fn allowing() -> HookOutcome {
+        HookOutcome::Permission(PermissionVerdict::Allow {
+            reason: "hook approved".into(),
+        })
+    }
+
+    fn denying() -> HookOutcome {
+        HookOutcome::Decided(HookResponse {
+            decision: HookDecision::Deny {
+                reason: "hook denied".into(),
+            },
+        })
+    }
+
+    fn failing() -> HookOutcome {
+        HookOutcome::Failed {
+            reason: "hook crashed".into(),
+        }
+    }
+
+    fn asking() -> HookOutcome {
+        HookOutcome::Permission(PermissionVerdict::Ask {
+            reason: "human please".into(),
+        })
+    }
+
+    async fn gate_through_registry(
+        outcomes: &[fn() -> HookOutcome],
+        profile: PermissionProfile,
+        auto_approve_allowed: bool,
+    ) -> HookPermissionGate {
+        let mut registry = HookRegistry::new();
+        registry.enable_security_fail_closed();
+        for outcome in outcomes {
+            registry.register(HookEvent::PermissionRequest, Box::new(FixedHook(*outcome)));
+        }
+        let dispatched = registry
+            .dispatch_outcomes(HookRequest {
+                event: HookEvent::PermissionRequest,
+                run_id: "run-1".into(),
+                tool_name: Some("write_file".into()),
+                input: serde_json::json!({ "path": "a.txt" }),
+            })
+            .await;
+        hook_permission_gate(
+            HookRegistry::aggregate_permission(&dispatched),
+            profile,
+            auto_approve_allowed,
+        )
+    }
+
+    #[tokio::test]
+    async fn hook_allow_skips_the_prompt() {
+        assert_eq!(
+            gate_through_registry(&[allowing], PermissionProfile::ConfirmEach, true).await,
+            HookPermissionGate::AutoApprove("hook approved".into())
+        );
+    }
+
+    /// The core fail-closed property, checked in both dispatch orders so the
+    /// answer cannot depend on which hook happens to run first.
+    #[tokio::test]
+    async fn deny_wins_over_allow() {
+        for order in [
+            [allowing as fn() -> HookOutcome, denying],
+            [denying, allowing],
+        ] {
+            assert_eq!(
+                gate_through_registry(&order, PermissionProfile::ConfirmEach, true).await,
+                HookPermissionGate::Deny("hook denied".into()),
+                "a deny must survive any ordering"
+            );
+        }
+    }
+
+    /// A hook that could not run is treated as a deny on this security event,
+    /// even next to a hook that approved.
+    #[tokio::test]
+    async fn hook_failure_is_fail_closed() {
+        let gate =
+            gate_through_registry(&[allowing, failing], PermissionProfile::ConfirmEach, true).await;
+        match gate {
+            HookPermissionGate::Deny(reason) => assert!(reason.contains("hook crashed")),
+            other => panic!("a failed security hook must deny, got {other:?}"),
+        }
+    }
+
+    /// The ceiling: a readonly session cannot be talked into skipping its
+    /// confirmation by a hook.
+    #[tokio::test]
+    async fn readonly_profile_ignores_hook_allow() {
+        assert_eq!(
+            gate_through_registry(&[allowing], PermissionProfile::ReadOnly, true).await,
+            HookPermissionGate::Prompt
+        );
+    }
+
+    /// The other half of the ceiling: when the policy refused rather than
+    /// asked, the caller withholds `auto_approve_allowed` and the hook's allow
+    /// buys nothing.
+    #[tokio::test]
+    async fn policy_refusal_ignores_hook_allow() {
+        assert_eq!(
+            gate_through_registry(&[allowing], PermissionProfile::ConfirmEach, false).await,
+            HookPermissionGate::Prompt
+        );
+        assert_eq!(
+            gate_through_registry(&[allowing], PermissionProfile::Autonomous, false).await,
+            HookPermissionGate::Prompt
+        );
+    }
+
+    /// A deny is never filtered by the ceiling — hooks may always tighten.
+    #[test]
+    fn deny_passes_every_ceiling() {
+        for profile in [
+            PermissionProfile::ReadOnly,
+            PermissionProfile::ConfirmEach,
+            PermissionProfile::Autonomous,
+        ] {
+            for allowed in [false, true] {
+                assert_eq!(
+                    hook_permission_gate(PermissionAggregate::Deny("no".into()), profile, allowed),
+                    HookPermissionGate::Deny("no".into())
+                );
+            }
+        }
+    }
+
+    /// Silence from the hooks leaves the pre-existing prompt behaviour intact.
+    #[test]
+    fn no_hook_opinion_still_prompts() {
+        assert_eq!(
+            hook_permission_gate(
+                PermissionAggregate::Prompt,
+                PermissionProfile::ConfirmEach,
+                true
+            ),
+            HookPermissionGate::Prompt
+        );
+    }
+
+    /// An explicit `ask` from any hook forces the prompt back on.
+    #[tokio::test]
+    async fn hook_ask_overrides_hook_allow() {
+        assert_eq!(
+            gate_through_registry(&[allowing, asking], PermissionProfile::ConfirmEach, true).await,
+            HookPermissionGate::Prompt
+        );
+    }
+}
+
+/// Plan Mode as the tool runtime actually enforces it.
+///
+/// The gateway unit tests pin the latch and the plan shape; these pin the part
+/// that can only be observed from here — which tools the model is shown, that a
+/// blocked write never becomes a permission prompt, and that the latch opens
+/// only for an approval that came back through the interaction hub.
+#[cfg(test)]
+mod plan_mode_runtime_tests {
+    use super::*;
+    use crate::production::ProductionRuntime;
+
+    fn tools_for(run_id: &str, profile: &str, root: &std::path::Path) -> PermissionGatedTools {
+        let rt = ProductionRuntime::new();
+        let mut gateway = CapabilityGateway::new();
+        gateway.set_project_root(root.to_string_lossy().to_string());
+        gateway.register_builtins();
+        PermissionGatedTools {
+            gateway: Arc::new(gateway),
+            permissions: rt.permissions.clone(),
+            events: rt.events.clone(),
+            interactions: rt.interactions.clone(),
+            subagents: rt.subagents.clone(),
+            task_outputs: rt.task_outputs.clone(),
+            engines: rt.engines.clone(),
+            runtime: None,
+            provider_id: "test".into(),
+            key_id: None,
+            parent_run_id: run_id.to_string(),
+            conversation_id: format!("conv-{run_id}"),
+            model_id: "test-model".into(),
+            permission_profile: profile.to_string(),
+            tool_allowlist: None,
+            // No capability selection: these fixtures exercise Plan Mode, not
+            // the ADR-0016 team/MCP gates, and `None` is the legacy surface.
+            team: None,
+            mcp_tool_schemas: Vec::new(),
+            selected_mcp_servers: None,
+        }
+    }
+
+    fn run_id(tag: &str) -> String {
+        format!("plan-{tag}-{}", uuid::Uuid::new_v4())
+    }
+
+    /// macOS hands out `/var/...` temp dirs that canonicalize to `/private/var`.
+    /// The gateway compares canonical paths, so the fixture must too.
+    fn project_root(dir: &tempfile::TempDir) -> std::path::PathBuf {
+        dir.path().canonicalize().unwrap()
+    }
+
+    fn sample_plan() -> Value {
+        serde_json::json!({
+            "plan": {
+                "title": "Rename the config loader",
+                "summary": "Move loader.rs into config/ and update imports.",
+                "steps": [
+                    {"title": "Find every import", "kind": "research"},
+                    {"title": "Move the file", "kind": "edit", "targets": ["src/loader.rs"]}
+                ]
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn planning_hides_writes_and_offers_only_the_exit() {
+        let id = run_id("visible");
+        let dir = tempfile::tempdir().unwrap();
+        let root = project_root(&dir);
+        let tools = tools_for(&id, plan_mode::PLAN_PROFILE, &root);
+        let names: Vec<String> = tools
+            .list_tool_schemas()
+            .await
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+
+        assert!(names.iter().any(|n| n == "read_file"));
+        assert!(names.iter().any(|n| n == "grep"));
+        assert!(names.iter().any(|n| n == plan_mode::EXIT_PLAN_MODE_TOOL));
+        for hidden in [
+            "write_file",
+            "edit_file",
+            "apply_patch",
+            "run_terminal",
+            "task",
+            "mcp_call",
+            plan_mode::ENTER_PLAN_MODE_TOOL,
+        ] {
+            assert!(
+                !names.iter().any(|n| n == hidden),
+                "`{hidden}` must not be offered while planning"
+            );
+        }
+        plan_mode::clear(&id);
+    }
+
+    #[tokio::test]
+    async fn a_normal_run_never_sees_the_exit_tool() {
+        let id = run_id("normal");
+        let dir = tempfile::tempdir().unwrap();
+        let root = project_root(&dir);
+        let tools = tools_for(&id, "ask", &root);
+        let names: Vec<String> = tools
+            .list_tool_schemas()
+            .await
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert!(names.iter().any(|n| n == "write_file"));
+        assert!(names.iter().any(|n| n == plan_mode::ENTER_PLAN_MODE_TOOL));
+        assert!(!names.iter().any(|n| n == plan_mode::EXIT_PLAN_MODE_TOOL));
+        plan_mode::clear(&id);
+    }
+
+    #[tokio::test]
+    async fn a_blocked_write_is_refused_immediately_not_prompted() {
+        let id = run_id("blocked");
+        let dir = tempfile::tempdir().unwrap();
+        let root = project_root(&dir);
+        let tools = tools_for(&id, plan_mode::PLAN_PROFILE, &root);
+        let cancel = CancellationToken::new();
+
+        let out = tools
+            .execute_tool(
+                "write_file",
+                serde_json::json!({
+                    "path": root.join("x.txt").to_string_lossy(),
+                    "content": "nope"
+                }),
+                &cancel,
+            )
+            .await;
+
+        assert!(out.is_error);
+        assert_eq!(out.output["code"], "plan_mode_blocked");
+        assert_eq!(
+            tools.interactions.permission_count().await,
+            0,
+            "Plan Mode must not turn a blocked write into an approval card"
+        );
+        assert!(!root.join("x.txt").exists());
+        plan_mode::clear(&id);
+    }
+
+    #[tokio::test]
+    async fn reads_still_work_while_planning() {
+        let id = run_id("read");
+        let dir = tempfile::tempdir().unwrap();
+        let root = project_root(&dir);
+        let file = root.join("notes.txt");
+        std::fs::write(&file, "hello plan").unwrap();
+        let tools = tools_for(&id, plan_mode::PLAN_PROFILE, &root);
+
+        let out = tools
+            .execute_tool(
+                "read_file",
+                serde_json::json!({"path": file.to_string_lossy()}),
+                &CancellationToken::new(),
+            )
+            .await;
+
+        assert!(!out.is_error, "{:?}", out.output);
+        assert_eq!(out.output["content"], "hello plan");
+        plan_mode::clear(&id);
+    }
+
+    #[tokio::test]
+    async fn model_can_enter_plan_mode_on_its_own() {
+        let id = run_id("enter");
+        let dir = tempfile::tempdir().unwrap();
+        let root = project_root(&dir);
+        let tools = tools_for(&id, "full_access", &root);
+
+        let out = tools
+            .execute_tool(
+                plan_mode::ENTER_PLAN_MODE_TOOL,
+                serde_json::json!({"reason": "wide blast radius"}),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(!out.is_error, "{:?}", out.output);
+        assert!(plan_mode::is_active(&id));
+
+        // The autonomous run is now genuinely gated, not just labelled.
+        let blocked = tools
+            .execute_tool(
+                "run_terminal",
+                serde_json::json!({"command": "true", "cwd": "."}),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert_eq!(blocked.output["code"], "plan_mode_blocked");
+        plan_mode::clear(&id);
+    }
+
+    #[tokio::test]
+    async fn a_malformed_plan_never_reaches_the_user() {
+        let id = run_id("malformed");
+        let dir = tempfile::tempdir().unwrap();
+        let root = project_root(&dir);
+        let tools = tools_for(&id, plan_mode::PLAN_PROFILE, &root);
+
+        let out = tools
+            .execute_tool(
+                plan_mode::EXIT_PLAN_MODE_TOOL,
+                serde_json::json!({"plan": {"title": "", "steps": []}}),
+                &CancellationToken::new(),
+            )
+            .await;
+
+        assert!(out.is_error);
+        assert_eq!(out.output["code"], "invalid_plan");
+        assert_eq!(tools.interactions.permission_count().await, 0);
+        assert!(plan_mode::is_active(&id));
+        plan_mode::clear(&id);
+    }
+
+    #[tokio::test]
+    async fn exit_outside_plan_mode_is_refused() {
+        let id = run_id("outside");
+        let dir = tempfile::tempdir().unwrap();
+        let root = project_root(&dir);
+        let tools = tools_for(&id, "ask", &root);
+
+        let out = tools
+            .execute_tool(
+                plan_mode::EXIT_PLAN_MODE_TOOL,
+                sample_plan(),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(out.is_error);
+        assert_eq!(out.output["code"], "not_in_plan_mode");
+        plan_mode::clear(&id);
+    }
+
+    /// Poll the run's event log for the plan approval request and answer it the
+    /// way the UI would.
+    async fn answer_plan_prompt(tools: &PermissionGatedTools, approved: bool) -> String {
+        for _ in 0..200 {
+            let pending = tools.events.replay_after(&tools.parent_run_id, 0);
+            let found = pending.iter().find_map(|event| match &event.payload {
+                RunEventKind::PermissionRequested {
+                    tool_name,
+                    permission_id,
+                    ..
+                } if tool_name == plan_mode::EXIT_PLAN_MODE_TOOL => Some(permission_id.clone()),
+                _ => None,
+            });
+            if let Some(permission_id) = found {
+                if let Some((_run, _tool, tx)) =
+                    tools.interactions.resolve_permission(&permission_id).await
+                {
+                    let _ = tx.send((approved, "once".into()));
+                    return permission_id;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("no plan approval prompt was raised");
+    }
+
+    #[tokio::test]
+    async fn approval_releases_the_latch_and_restores_the_declared_profile() {
+        let id = run_id("approve");
+        let dir = tempfile::tempdir().unwrap();
+        let root = project_root(&dir);
+        let tools = Arc::new(tools_for(&id, "full_access", &root));
+        plan_mode::enter(&id, "full_access");
+
+        let submitting = {
+            let tools = tools.clone();
+            tokio::spawn(async move {
+                tools
+                    .execute_tool(
+                        plan_mode::EXIT_PLAN_MODE_TOOL,
+                        sample_plan(),
+                        &CancellationToken::new(),
+                    )
+                    .await
+            })
+        };
+        answer_plan_prompt(&tools, true).await;
+        let out = submitting.await.unwrap();
+
+        assert!(!out.is_error, "{:?}", out.output);
+        assert_eq!(out.output["approved"], true);
+        assert_eq!(out.output["permission_profile"], "full_access");
+        assert!(!plan_mode::is_active(&id));
+        assert_eq!(tools.effective_permission_profile(), "full_access");
+
+        // And the writes it was denied a moment ago now go through.
+        let after = tools
+            .execute_tool(
+                "write_file",
+                serde_json::json!({
+                    "path": root.join("done.txt").to_string_lossy(),
+                    "content": "ok"
+                }),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(!after.is_error, "{:?}", after.output);
+        plan_mode::clear(&id);
+    }
+
+    #[tokio::test]
+    async fn rejection_keeps_the_run_planning() {
+        let id = run_id("reject");
+        let dir = tempfile::tempdir().unwrap();
+        let root = project_root(&dir);
+        let tools = Arc::new(tools_for(&id, "full_access", &root));
+        plan_mode::enter(&id, "full_access");
+
+        let submitting = {
+            let tools = tools.clone();
+            tokio::spawn(async move {
+                tools
+                    .execute_tool(
+                        plan_mode::EXIT_PLAN_MODE_TOOL,
+                        sample_plan(),
+                        &CancellationToken::new(),
+                    )
+                    .await
+            })
+        };
+        answer_plan_prompt(&tools, false).await;
+        let out = submitting.await.unwrap();
+
+        assert!(
+            !out.is_error,
+            "a rejection is an answer, not a tool failure: {:?}",
+            out.output
+        );
+        assert_eq!(out.output["approved"], false);
+        assert_eq!(out.output["rejections"], 1);
+        assert!(plan_mode::is_active(&id), "the latch must stay closed");
+
+        let blocked = tools
+            .execute_tool(
+                "write_file",
+                serde_json::json!({
+                    "path": root.join("nope.txt").to_string_lossy(),
+                    "content": "x"
+                }),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert_eq!(blocked.output["code"], "plan_mode_blocked");
+        plan_mode::clear(&id);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_run_does_not_count_as_approval() {
+        let id = run_id("cancel");
+        let dir = tempfile::tempdir().unwrap();
+        let root = project_root(&dir);
+        let tools = Arc::new(tools_for(&id, "full_access", &root));
+        plan_mode::enter(&id, "full_access");
+
+        let submitting = {
+            let tools = tools.clone();
+            tokio::spawn(async move {
+                tools
+                    .execute_tool(
+                        plan_mode::EXIT_PLAN_MODE_TOOL,
+                        sample_plan(),
+                        &CancellationToken::new(),
+                    )
+                    .await
+            })
+        };
+        // Wait for the waiter to exist, then tear it down the way run cancel does.
+        for _ in 0..200 {
+            if tools.interactions.permission_count().await > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tools.interactions.cancel_runs(&[id.clone()]).await;
+        let out = submitting.await.unwrap();
+
+        assert_eq!(out.output["approved"], false);
+        assert!(plan_mode::is_active(&id));
+        plan_mode::clear(&id);
+    }
 }

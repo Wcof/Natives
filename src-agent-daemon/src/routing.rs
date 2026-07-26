@@ -10,6 +10,7 @@ use agent_core::{
 use futures_util::StreamExt;
 use provider_adapters::capabilities::{
     history_message_to_provider, Credential, ProviderAdapter, ProviderRequest, ProviderTool,
+    RequestControls,
 };
 use provider_adapters::stream::ProviderEvent;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -164,11 +165,27 @@ pub fn load_plan(
 
 pub struct RoutedProvider {
     plan: RoutingPlan,
+    controls: RequestControls,
 }
 
 impl RoutedProvider {
+    /// Route with provider-default request controls.
     pub fn new(plan: RoutingPlan) -> Self {
-        Self { plan }
+        Self {
+            plan,
+            controls: RequestControls::default(),
+        }
+    }
+
+    /// Apply per-run request controls (reasoning effort, forced tool choice,
+    /// prompt-cache opt-out) to every target this plan falls through to.
+    ///
+    /// They ride along across a fallback on purpose: a run asked for a given
+    /// reasoning depth, and silently dropping it when the primary target fails
+    /// would make the retry answer a different question than the first attempt.
+    pub fn with_controls(mut self, controls: RequestControls) -> Self {
+        self.controls = controls;
+        self
     }
 }
 
@@ -187,6 +204,7 @@ impl EngineProvider for RoutedProvider {
         let messages = messages.to_vec();
         let tools = tools.to_vec();
         let system_prompt = system_prompt.map(str::to_string);
+        let controls = self.controls.clone();
         let output = async_stream::stream! {
             let mut last_error: Option<EngineError> = None;
             for target in targets {
@@ -199,12 +217,12 @@ impl EngineProvider for RoutedProvider {
                 let route_model = if target.model_id.trim().is_empty() { base_model.clone() } else { target.model_id.clone() };
                 let result = tokio::time::timeout(Duration::from_secs(60), async {
                     if target.credential_kind == "sub2api_pool" {
-                    Sub2ApiPoolProvider { provider_id: target.provider_id.clone() }.stream(
+                    Sub2ApiPoolProvider { provider_id: target.provider_id.clone(), controls: controls.clone() }.stream(
                         &route_model, messages.clone(), &tools, system_prompt.as_deref(), cancel.clone(),
                     ).await
                 } else if target.credential_kind == "api_key" {
-                    RealProvider { provider_id: target.provider_id.clone(), key_id: target.credential_id.clone() }.stream(
-                        &route_model, messages.clone(), &tools, system_prompt.as_deref(), cancel.clone(),
+                    RealProvider { provider_id: target.provider_id.clone(), key_id: target.credential_id.clone() }.stream_with_controls(
+                        &controls, &route_model, messages.clone(), &tools, system_prompt.as_deref(), cancel.clone(),
                     ).await
                 } else {
                     Err(EngineError::Message("unsupported routing credential kind".into()))
@@ -268,6 +286,7 @@ impl EngineProvider for RoutedProvider {
 /// account-level retry while the outer `RoutedProvider` owns cross-provider retry.
 struct Sub2ApiPoolProvider {
     provider_id: String,
+    controls: RequestControls,
 }
 
 #[async_trait::async_trait]
@@ -293,6 +312,7 @@ impl EngineProvider for Sub2ApiPoolProvider {
         let tools = tools.to_vec();
         let system_prompt = system_prompt.map(str::to_string);
         let provider_id = self.provider_id.clone();
+        let controls = self.controls.clone();
         let output = async_stream::stream! {
             let mut last_error: Option<EngineError> = None;
             let mut accounts = accounts;
@@ -313,7 +333,7 @@ impl EngineProvider for Sub2ApiPoolProvider {
                 if circuit_open(&account_target) { continue; }
                 let Some(_lease) = acquire_account(&account, &account_target) else { continue; };
                 record_selected(&account_target);
-                let result = tokio::time::timeout(Duration::from_secs(60), account_stream(&account, &model, messages.clone(), &tools, system_prompt.as_deref(), cancel.clone())).await.unwrap_or_else(|_| Err(timeout_error("provider first byte timed out")));
+                let result = tokio::time::timeout(Duration::from_secs(60), account_stream(&account, &controls, &model, messages.clone(), &tools, system_prompt.as_deref(), cancel.clone())).await.unwrap_or_else(|_| Err(timeout_error("provider first byte timed out")));
                 let mut stream = match result {
                     Ok(stream) => stream,
                     Err(error) if error.retryable() => { record_failure(&account_target); last_error = Some(error); continue; }
@@ -345,6 +365,7 @@ impl EngineProvider for Sub2ApiPoolProvider {
 
 async fn account_stream(
     account: &Sub2ApiAccountCredential,
+    controls: &RequestControls,
     model: &str,
     messages: Vec<EngineMessage>,
     tools: &[ToolSchema],
@@ -373,10 +394,17 @@ async fn account_stream(
                 })
                 .collect()
         }),
-        max_tokens: Some(4096),
+        // `None` delegates the output ceiling to the per-model profile in
+        // `provider_adapters::model_profile`, which resolves it from the model
+        // id. The previous hardcoded 4096 silently truncated every model with a
+        // larger output window (Claude 4.x: 64K-128K, Gemini 2.5: 64K). Models
+        // absent from the profile table still fall back to the adapter's own
+        // 4096, so nothing regresses.
+        max_tokens: None,
         temperature: None,
         stream: true,
         structured_output: None,
+        controls: controls.clone(),
     };
     crate::request_rectifier::rectify_provider_request(&mut request, rectifier_enabled());
     let stream = if account.platform == "openai" && account.account_type == "oauth" {
@@ -628,6 +656,8 @@ fn provider_event_to_engine(event: ProviderEvent) -> EngineProviderEvent {
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
             reasoning_tokens: usage.reasoning_tokens,
+            cache_creation_tokens: usage.cache_creation_tokens,
+            cache_read_tokens: usage.cache_read_tokens,
         },
         ProviderEvent::Completed => EngineProviderEvent::Completed,
         ProviderEvent::Error(error) => EngineProviderEvent::Error {

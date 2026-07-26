@@ -190,6 +190,8 @@ NATIVES_RUNTIME_DIR → socket、scheduler jobs、memory、artifacts
 
 来源：`IMPLEMENTED_METHODS`（须与 `rpc.rs` 一致；未实现不得进广告）。
 
+> **2026-07-26 审计发现该一致性当前被破坏**：广告面 78 条中有 6 条无 `rpc.rs` 分支，落兜底返回 `internal_error`。清单与根因见 [`NATIVE_ENGINE_FULL_REMEDIATION.md` 第 3.2 节](./NATIVE_ENGINE_FULL_REMEDIATION.md)。下表列的是**应有表面**，不代表当前全部可调。
+
 | 域 | 方法（已实现表面） |
 |----|-------------------|
 | 守护进程 | `daemon.getCapabilities` `getStatus` `ping` |
@@ -200,7 +202,7 @@ NATIVES_RUNTIME_DIR → socket、scheduler jobs、memory、artifacts
 | 提示词队列 | `promptQueue.list/enqueue/update/remove/reorder/sendNow/interject` |
 | 工具 | `tool.list` |
 | 子 Agent | `subagent.list/touch/switchRoute` |
-| MCP | `mcp.list/start/stop/call/liveness/reconnect` + `mcp.auth.*`（部分 OAuth 明确 unsupported） |
+| MCP | `mcp.list/start/stop/liveness/reconnect` + `mcp.auth.set/status/clear`。`mcp.call` **故意不进广告面**（`rpc.rs:1430` 返回 `direct_mcp_call_disabled`，task-06 关闭直连旁路）；`mcp.auth.oauthStart/oauthCallback` 明确 unsupported |
 | 调度 | `scheduler.list/create/update/delete/history/tick` |
 | 扩展/技能/记忆 | `extension.list/enable` `skill.list` `memory.search/add` |
 | 产物/任务 | `artifact.list/open` `task.list/cancel/wait` |
@@ -299,5 +301,6 @@ crates/
 | 本文 | Daemon **内部**能力划分 |
 | `NATIVE_ENGINE_FULL_REMEDIATION.md` | 全链契约与阶段进度 |
 | `NATIVE_ENGINE_ENV.md` | 环境变量与运维 |
-| `ASSISTANT-ENGINE-LINKAGE-STATUS.md` | 与前端联动验收 |
+| [`EXECUTION-ENGINE-CAPABILITY-AUDIT.md`](./EXECUTION-ENGINE-CAPABILITY-AUDIT.md) | 执行引擎能力审计与缺口定级（2026-07-26） |
+| ~~`ASSISTANT-ENGINE-LINKAGE-STATUS.md`~~ | 已于 2026-07-23 文档清理时删除，勿再引用 |
 | ADR-0011 | 生产闭环缺口决策 |

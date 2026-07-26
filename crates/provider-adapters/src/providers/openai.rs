@@ -80,6 +80,11 @@ impl ProviderAdapter for OpenAiAdapter {
                 "file_input".into(),
                 "system_prompt".into(),
                 "function_calling".into(),
+                // Automatic prefix caching; no request parameter, usage is
+                // read back from `prompt_tokens_details.cached_tokens`.
+                "prompt_cache_automatic".into(),
+                "tool_choice".into(),
+                "parallel_tool_calls".into(),
             ],
             max_context_window: 128_000,
             streaming: true,

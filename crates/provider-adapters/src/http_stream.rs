@@ -2,16 +2,42 @@
 
 use crate::capabilities::{
     ProviderContentBlock, ProviderError, ProviderErrorCategory, ProviderMessage, ProviderRequest,
-    ProviderTool,
+    ProviderTool, RequestControls,
 };
+use crate::model_profile::{self, ReasoningControl};
 use crate::stream::{split_sse_lines, sse_data_payload, OpenAiSseParser, ProviderEvent};
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use reqwest::Client;
 use std::time::Duration;
 
-/// Build the JSON body for OpenAI chat completions.
+/// Build the JSON body for OpenAI chat completions using the request's own
+/// [`ProviderRequest::controls`].
+///
+/// This is the entry point every streaming/non-streaming path uses, so a
+/// caller only has to populate `controls` on the request it already builds.
 pub fn build_chat_completions_body(request: &ProviderRequest) -> serde_json::Value {
+    build_chat_completions_body_with_controls(request, &request.controls)
+}
+
+/// Build the JSON body for OpenAI chat completions with caller-supplied
+/// controls, which override [`ProviderRequest::controls`] entirely.
+///
+/// # Prompt caching
+///
+/// OpenAI-compatible providers that cache do so **automatically** on the
+/// longest common prefix — there is no request-side parameter to send, so
+/// nothing is emitted here. Cache usage is read back from the response
+/// (`prompt_tokens_details.cached_tokens` for OpenAI,
+/// `prompt_cache_hit_tokens` for DeepSeek); see
+/// [`crate::stream::openai_sse`]. Callers get the benefit only if they keep the
+/// prefix byte-stable, which the engine already does by appending turns rather
+/// than rewriting history.
+pub fn build_chat_completions_body_with_controls(
+    request: &ProviderRequest,
+    controls: &RequestControls,
+) -> serde_json::Value {
+    let profile = model_profile::resolve(&request.model);
     let mut messages = Vec::new();
     if let Some(system) = &request.system_prompt {
         if !system.is_empty() {
@@ -30,15 +56,31 @@ pub fn build_chat_completions_body(request: &ProviderRequest) -> serde_json::Val
         "messages": messages,
         "stream": request.stream,
     });
-    if let Some(max) = request.max_tokens {
+    if let Some(max) = model_profile::resolve_max_output(request.max_tokens, &profile) {
         body["max_tokens"] = serde_json::json!(max);
     }
     if let Some(temp) = request.temperature {
-        body["temperature"] = serde_json::json!(temp);
+        // OpenAI's reasoning models reject a non-default `temperature` with a
+        // 400. Unknown models keep `sampling_params: true`, so third-party
+        // endpoints are unaffected.
+        if profile.sampling_params {
+            body["temperature"] = serde_json::json!(temp);
+        }
     }
     if let Some(tools) = &request.tools {
         if !tools.is_empty() {
             body["tools"] = serde_json::json!(tools.iter().map(tool_to_json).collect::<Vec<_>>());
+            if let Some(choice) = &controls.tool_choice {
+                body["tool_choice"] = choice.to_openai();
+            }
+            if let Some(parallel) = controls.parallel_tool_calls {
+                body["parallel_tool_calls"] = serde_json::json!(parallel);
+            }
+        }
+    }
+    if let Some(reasoning) = &controls.reasoning {
+        if profile.reasoning == ReasoningControl::OpenAiEffort {
+            body["reasoning_effort"] = serde_json::json!(reasoning.effort.as_openai_str());
         }
     }
     if request.stream {
@@ -50,10 +92,20 @@ pub fn build_chat_completions_body(request: &ProviderRequest) -> serde_json::Val
 /// Serialize one provider message to OpenAI chat-completions message JSON.
 ///
 /// Preserves multi-tool assistant messages and `role: tool` results with `tool_call_id`.
+///
+/// # Images
+///
+/// A user message that carries images becomes the multi-part form
+/// (`content: [{type:"text"}, {type:"image_url"}, …]`). Messages without images
+/// keep the plain string form so the cached prefix stays byte-stable.
+///
+/// OpenAI's `tool` and `assistant` messages accept text only, so an image on
+/// one of those is replaced by a visible note instead of being dropped.
 pub fn message_to_json(message: &ProviderMessage) -> serde_json::Value {
     let mut text_parts = Vec::new();
     let mut tool_calls = Vec::new();
     let mut tool_result: Option<(&str, &str)> = None;
+    let mut images: Vec<&crate::capabilities::ImageSource> = Vec::new();
 
     for block in &message.content {
         match block {
@@ -80,23 +132,31 @@ pub fn message_to_json(message: &ProviderMessage) -> serde_json::Value {
                     }
                 }));
             }
-            ProviderContentBlock::Image { .. } => {}
+            ProviderContentBlock::Image { image_url } => images.push(image_url),
         }
     }
 
     if let Some((tool_call_id, content)) = tool_result {
+        let mut body = content.to_string();
+        append_image_notes(&mut body, &images, "OpenAI tool messages carry text only");
         return serde_json::json!({
             "role": "tool",
             "tool_call_id": tool_call_id,
-            "content": content,
+            "content": body,
         });
     }
 
     if !tool_calls.is_empty() {
-        let content = if text_parts.is_empty() {
+        let mut body = text_parts.join("\n");
+        append_image_notes(
+            &mut body,
+            &images,
+            "OpenAI assistant messages carry text only",
+        );
+        let content = if body.is_empty() {
             serde_json::Value::Null
         } else {
-            serde_json::Value::String(text_parts.join("\n"))
+            serde_json::Value::String(body)
         };
         return serde_json::json!({
             "role": "assistant",
@@ -105,10 +165,79 @@ pub fn message_to_json(message: &ProviderMessage) -> serde_json::Value {
         });
     }
 
+    if images.is_empty() {
+        return serde_json::json!({
+            "role": message.role,
+            "content": text_parts.join("\n"),
+        });
+    }
+
+    let mut parts = Vec::new();
+    let text = text_parts.join("\n");
+    if !text.is_empty() {
+        parts.push(serde_json::json!({ "type": "text", "text": text }));
+    }
+    for image in images {
+        parts.push(chat_image_part(image));
+    }
     serde_json::json!({
         "role": message.role,
-        "content": text_parts.join("\n"),
+        "content": parts,
     })
+}
+
+/// Whether OpenAI's `image_url.url` can carry this reference verbatim.
+///
+/// The API fetches `http(s)` URLs and decodes `data:` URIs; nothing else.
+fn openai_accepts_url(url: &str) -> bool {
+    url.starts_with("https://") || url.starts_with("http://") || url.starts_with("data:")
+}
+
+/// One `image_url` content part, or a visible note when the URL is unusable.
+fn chat_image_part(image: &crate::capabilities::ImageSource) -> serde_json::Value {
+    if !openai_accepts_url(&image.url) {
+        return serde_json::json!({
+            "type": "text",
+            "text": image.degraded_note("OpenAI accepts only an http(s) URL or a data: URI"),
+        });
+    }
+    let mut image_url = serde_json::json!({ "url": image.url });
+    if let Some(detail) = &image.detail {
+        image_url["detail"] = serde_json::json!(detail);
+    }
+    serde_json::json!({ "type": "image_url", "image_url": image_url })
+}
+
+/// One Responses `input_image` part, or a visible note when the URL is unusable.
+fn responses_image_part(image: &crate::capabilities::ImageSource) -> serde_json::Value {
+    if !openai_accepts_url(&image.url) {
+        return serde_json::json!({
+            "type": "input_text",
+            "text": image.degraded_note("OpenAI accepts only an http(s) URL or a data: URI"),
+        });
+    }
+    let mut part = serde_json::json!({ "type": "input_image", "image_url": image.url });
+    if let Some(detail) = &image.detail {
+        part["detail"] = serde_json::json!(detail);
+    }
+    part
+}
+
+/// Append a degradation note per image to a text-only message body.
+///
+/// Used where the wire format has no image slot at all; the alternative would be
+/// dropping the attachment without telling anyone.
+fn append_image_notes(
+    body: &mut String,
+    images: &[&crate::capabilities::ImageSource],
+    reason: &str,
+) {
+    for image in images {
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        body.push_str(&image.degraded_note(reason));
+    }
 }
 
 fn tool_to_json(tool: &ProviderTool) -> serde_json::Value {
@@ -386,14 +515,26 @@ pub async fn stream_responses_with_headers(
     Ok(Box::pin(stream))
 }
 
-/// Build JSON body for OpenAI Responses API.
+/// Build JSON body for OpenAI Responses API using the request's own
+/// [`ProviderRequest::controls`].
 pub fn build_responses_body(request: &ProviderRequest) -> serde_json::Value {
+    build_responses_body_with_controls(request, &request.controls)
+}
+
+/// Build JSON body for OpenAI Responses API with caller-supplied controls,
+/// which override [`ProviderRequest::controls`] entirely.
+pub fn build_responses_body_with_controls(
+    request: &ProviderRequest,
+    controls: &RequestControls,
+) -> serde_json::Value {
+    let profile = model_profile::resolve(&request.model);
     let mut input = Vec::new();
     for message in &request.messages {
         // Responses API input is looser than chat completions; still forward tool structure
         // as role+content text plus function_call / function_call_output items when present.
         let mut text_parts = Vec::new();
         let mut pushed_structured = false;
+        let mut images: Vec<&crate::capabilities::ImageSource> = Vec::new();
         for block in &message.content {
             match block {
                 ProviderContentBlock::Text { text } => text_parts.push(text.as_str()),
@@ -426,10 +567,26 @@ pub fn build_responses_body(request: &ProviderRequest) -> serde_json::Value {
                         "output": content,
                     }));
                 }
-                ProviderContentBlock::Image { .. } => {}
+                ProviderContentBlock::Image { image_url } => images.push(image_url),
             }
         }
-        if !text_parts.is_empty() || !pushed_structured {
+        if !images.is_empty() {
+            // Responses input items take a typed content array; only switch to
+            // it when there is an image, so text-only turns keep the cheap
+            // string form (and its byte-stable cache prefix).
+            let mut parts = Vec::new();
+            let text = text_parts.join("\n");
+            if !text.is_empty() {
+                parts.push(serde_json::json!({ "type": "input_text", "text": text }));
+            }
+            for image in images {
+                parts.push(responses_image_part(image));
+            }
+            input.push(serde_json::json!({
+                "role": message.role,
+                "content": parts,
+            }));
+        } else if !text_parts.is_empty() || !pushed_structured {
             input.push(serde_json::json!({
                 "role": message.role,
                 "content": text_parts.join("\n"),
@@ -446,7 +603,7 @@ pub fn build_responses_body(request: &ProviderRequest) -> serde_json::Value {
             body["instructions"] = serde_json::json!(system);
         }
     }
-    if let Some(max) = request.max_tokens {
+    if let Some(max) = model_profile::resolve_max_output(request.max_tokens, &profile) {
         body["max_output_tokens"] = serde_json::json!(max);
     }
     if let Some(tools) = &request.tools {
@@ -460,6 +617,21 @@ pub fn build_responses_body(request: &ProviderRequest) -> serde_json::Value {
                     "parameters": t.input_schema,
                 }))
                 .collect::<Vec<_>>());
+            if let Some(choice) = &controls.tool_choice {
+                body["tool_choice"] = choice.to_openai();
+            }
+            if let Some(parallel) = controls.parallel_tool_calls {
+                body["parallel_tool_calls"] = serde_json::json!(parallel);
+            }
+        }
+    }
+    if let Some(reasoning) = &controls.reasoning {
+        if profile.reasoning == ReasoningControl::OpenAiEffort {
+            // Responses nests the level under `reasoning`, unlike chat
+            // completions' flat `reasoning_effort`.
+            body["reasoning"] = serde_json::json!({
+                "effort": reasoning.effort.as_openai_str(),
+            });
         }
     }
     body
@@ -537,12 +709,13 @@ pub async fn chat_completions(
             tool_calls.push((id, name, args));
         }
     }
-    let usage = crate::capabilities::ProviderUsage {
-        input_tokens: value["usage"]["prompt_tokens"].as_u64().unwrap_or(0),
-        output_tokens: value["usage"]["completion_tokens"].as_u64().unwrap_or(0),
-        reasoning_tokens: value["usage"]["completion_tokens_details"]["reasoning_tokens"].as_u64(),
-        cost_usd: None,
-    };
+    // Reuse the streaming parser's normalisation so the non-streaming path
+    // reports cache tokens with identical semantics.
+    let usage = serde_json::from_value::<crate::stream::openai_sse::UsageWire>(
+        value["usage"].clone(),
+    )
+    .map(|wire| wire.to_provider())
+    .unwrap_or_default();
     let tools = if tool_calls.is_empty() {
         None
     } else {
@@ -567,6 +740,7 @@ mod tool_message_tests {
                 tool_call_id: None,
                 tool_name: None,
                 tool_calls: None,
+                images: Vec::new(),
             }),
             history_message_to_provider(HistoryMessage {
                 role: "assistant".into(),
@@ -585,6 +759,7 @@ mod tool_message_tests {
                         arguments: r#"{"path":"b.txt"}"#.into(),
                     },
                 ]),
+                images: Vec::new(),
             }),
             history_message_to_provider(HistoryMessage {
                 role: "tool".into(),
@@ -592,6 +767,7 @@ mod tool_message_tests {
                 tool_call_id: Some("call_a".into()),
                 tool_name: Some("read_file".into()),
                 tool_calls: None,
+                images: Vec::new(),
             }),
             history_message_to_provider(HistoryMessage {
                 role: "tool".into(),
@@ -599,6 +775,7 @@ mod tool_message_tests {
                 tool_call_id: Some("call_b".into()),
                 tool_name: Some("read_file".into()),
                 tool_calls: None,
+                images: Vec::new(),
             }),
         ]
     }
@@ -614,6 +791,7 @@ mod tool_message_tests {
             temperature: None,
             stream: true,
             structured_output: None,
+            controls: Default::default(),
         });
         let messages = body["messages"].as_array().expect("messages array");
         assert_eq!(messages.len(), 4);
@@ -634,6 +812,135 @@ mod tool_message_tests {
         // Must not flatten tool structure into a single text blob.
         let wire = body.to_string();
         assert!(!wire.contains(r#""role":"assistant","content":"call_a"#));
+    }
+
+    fn image_message(image: crate::capabilities::ImageSource) -> ProviderMessage {
+        ProviderMessage {
+            role: "user".into(),
+            content: vec![
+                ProviderContentBlock::Text {
+                    text: "what is this".into(),
+                },
+                ProviderContentBlock::Image { image_url: image },
+            ],
+        }
+    }
+
+    fn image_request(image: crate::capabilities::ImageSource) -> ProviderRequest {
+        ProviderRequest {
+            model: "gpt-4o".into(),
+            messages: vec![image_message(image)],
+            system_prompt: None,
+            tools: None,
+            max_tokens: Some(256),
+            temperature: None,
+            stream: true,
+            structured_output: None,
+            controls: Default::default(),
+        }
+    }
+
+    #[test]
+    fn chat_completions_user_image_becomes_an_image_url_part() {
+        let body = build_chat_completions_body(&image_request(
+            crate::capabilities::ImageSource {
+                url: "https://example.test/cat.png".into(),
+                detail: Some("high".into()),
+                media_type: None,
+            },
+        ));
+        let content = body["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "image_url");
+        assert_eq!(content[1]["image_url"]["url"], "https://example.test/cat.png");
+        assert_eq!(content[1]["image_url"]["detail"], "high");
+    }
+
+    #[test]
+    fn chat_completions_data_uri_is_forwarded_verbatim() {
+        let body = build_chat_completions_body(&image_request(
+            crate::capabilities::ImageSource::new("data:image/png;base64,AAAB"),
+        ));
+        assert_eq!(
+            body["messages"][0]["content"][1]["image_url"]["url"],
+            "data:image/png;base64,AAAB"
+        );
+    }
+
+    #[test]
+    fn chat_completions_keeps_the_plain_string_form_without_images() {
+        let body = build_chat_completions_body(&ProviderRequest {
+            messages: vec![ProviderMessage {
+                role: "user".into(),
+                content: vec![ProviderContentBlock::Text { text: "hi".into() }],
+            }],
+            ..image_request(crate::capabilities::ImageSource::new("data:image/png;base64,A"))
+        });
+        assert_eq!(body["messages"][0]["content"], "hi");
+    }
+
+    #[test]
+    fn chat_completions_unsupported_image_scheme_is_announced_not_dropped() {
+        let body = build_chat_completions_body(&image_request(
+            crate::capabilities::ImageSource::new("gs://bucket/cat.png"),
+        ));
+        let part = &body["messages"][0]["content"][1];
+        assert_eq!(part["type"], "text");
+        assert!(part["text"]
+            .as_str()
+            .unwrap()
+            .contains("image not sent to the model"));
+    }
+
+    #[test]
+    fn chat_completions_tool_message_announces_an_image_it_cannot_carry() {
+        // OpenAI tool messages are text-only. Silently dropping the attachment
+        // is what this note replaces.
+        let json = message_to_json(&ProviderMessage {
+            role: "tool".into(),
+            content: vec![
+                ProviderContentBlock::ToolResult {
+                    tool_call_id: "t1".into(),
+                    content: "captured".into(),
+                    name: Some("screenshot".into()),
+                },
+                ProviderContentBlock::Image {
+                    image_url: crate::capabilities::ImageSource::new("data:image/png;base64,AAAB"),
+                },
+            ],
+        });
+        assert_eq!(json["role"], "tool");
+        let content = json["content"].as_str().unwrap();
+        assert!(content.starts_with("captured"), "{content}");
+        assert!(content.contains("image not sent to the model"), "{content}");
+    }
+
+    #[test]
+    fn responses_user_image_becomes_an_input_image_part() {
+        let body = build_responses_body(&image_request(crate::capabilities::ImageSource {
+            url: "https://example.test/cat.png".into(),
+            detail: Some("low".into()),
+            media_type: None,
+        }));
+        let content = body["input"][0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "input_text");
+        assert_eq!(content[1]["type"], "input_image");
+        assert_eq!(content[1]["image_url"], "https://example.test/cat.png");
+        assert_eq!(content[1]["detail"], "low");
+    }
+
+    #[test]
+    fn responses_keeps_the_plain_string_form_without_images() {
+        let body = build_responses_body(&ProviderRequest {
+            messages: vec![ProviderMessage {
+                role: "user".into(),
+                content: vec![ProviderContentBlock::Text { text: "hi".into() }],
+            }],
+            ..image_request(crate::capabilities::ImageSource::new("data:image/png;base64,A"))
+        });
+        assert_eq!(body["input"][0]["content"], "hi");
     }
 
     #[test]
@@ -673,6 +980,126 @@ mod tool_message_tests {
             (Utc::now().timestamp() + 3).to_string().parse().unwrap(),
         );
         assert!(matches!(retry_after_ms(&headers), Some(ms) if (2_000..=3_000).contains(&ms)));
+    }
+
+    fn plain(model: &str) -> ProviderRequest {
+        ProviderRequest {
+            model: model.into(),
+            messages: vec![ProviderMessage {
+                role: "user".into(),
+                content: vec![ProviderContentBlock::Text { text: "hi".into() }],
+            }],
+            system_prompt: None,
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+            stream: true,
+            structured_output: None,
+            controls: Default::default(),
+        }
+    }
+
+    fn with_tool(model: &str) -> ProviderRequest {
+        let mut request = plain(model);
+        request.tools = Some(vec![crate::capabilities::ProviderTool {
+            name: "read_file".into(),
+            description: Some("read a file".into()),
+            input_schema: serde_json::json!({"type": "object"}),
+        }]);
+        request
+    }
+
+    #[test]
+    fn chat_completions_max_tokens_comes_from_the_model_profile() {
+        assert_eq!(
+            build_chat_completions_body(&plain("gpt-4o"))["max_tokens"],
+            16_384
+        );
+        // Unknown model: omit the field entirely and let the provider default
+        // stand, exactly as before.
+        assert!(build_chat_completions_body(&plain("some-local-llm"))
+            .get("max_tokens")
+            .is_none());
+        // Explicit values are clamped down, never raised.
+        let mut huge = plain("gpt-4o");
+        huge.max_tokens = Some(999_999);
+        assert_eq!(build_chat_completions_body(&huge)["max_tokens"], 16_384);
+    }
+
+    #[test]
+    fn temperature_is_dropped_for_openai_reasoning_models_only() {
+        let mut gpt4o = plain("gpt-4o");
+        gpt4o.temperature = Some(0.3);
+        assert_eq!(build_chat_completions_body(&gpt4o)["temperature"], 0.3);
+
+        let mut o3 = plain("o3-mini");
+        o3.temperature = Some(0.3);
+        assert!(build_chat_completions_body(&o3).get("temperature").is_none());
+
+        // Unknown third-party models keep sampling parameters.
+        let mut local = plain("qwen2.5-coder");
+        local.temperature = Some(0.3);
+        assert_eq!(build_chat_completions_body(&local)["temperature"], 0.3);
+    }
+
+    #[test]
+    fn tool_choice_and_parallel_flag_encode_to_the_openai_shape() {
+        let request = with_tool("gpt-4o");
+
+        let forced = build_chat_completions_body_with_controls(
+            &request,
+            &RequestControls {
+                tool_choice: Some(crate::capabilities::ToolChoice::Tool {
+                    name: "read_file".into(),
+                }),
+                parallel_tool_calls: Some(false),
+                ..Default::default()
+            },
+        );
+        assert_eq!(forced["tool_choice"]["type"], "function");
+        assert_eq!(forced["tool_choice"]["function"]["name"], "read_file");
+        assert_eq!(forced["parallel_tool_calls"], false);
+
+        // OpenAI spells "must call something" as the bare string "required".
+        let required = build_chat_completions_body_with_controls(
+            &request,
+            &RequestControls {
+                tool_choice: Some(crate::capabilities::ToolChoice::Required),
+                ..Default::default()
+            },
+        );
+        assert_eq!(required["tool_choice"], "required");
+
+        // Default controls change nothing on the wire.
+        let body = build_chat_completions_body(&request);
+        assert!(body.get("tool_choice").is_none());
+        assert!(body.get("parallel_tool_calls").is_none());
+    }
+
+    #[test]
+    fn reasoning_effort_only_reaches_models_that_accept_it() {
+        let controls = RequestControls {
+            reasoning: Some(crate::capabilities::ReasoningRequest::new(
+                crate::capabilities::ReasoningEffort::High,
+            )),
+            ..Default::default()
+        };
+        assert_eq!(
+            build_chat_completions_body_with_controls(&plain("o3-mini"), &controls)
+                ["reasoning_effort"],
+            "high"
+        );
+        // gpt-4o has no reasoning knob; sending one is a 400.
+        assert!(
+            build_chat_completions_body_with_controls(&plain("gpt-4o"), &controls)
+                .get("reasoning_effort")
+                .is_none()
+        );
+
+        // The Responses API nests it instead of using a flat field.
+        let responses = build_responses_body_with_controls(&plain("o3"), &controls);
+        assert_eq!(responses["reasoning"]["effort"], "high");
+        assert_eq!(responses["max_output_tokens"], 100_000);
     }
 
     #[test]

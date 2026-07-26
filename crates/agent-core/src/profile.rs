@@ -146,15 +146,81 @@ pub fn default_profile_search_roots(project_root: Option<&Path>) -> Vec<PathBuf>
     roots
 }
 
+/// True when `profile_id` is a safe single-segment id (no path traversal).
+///
+/// Shared by [`load_agent_profile`] and [`list_agent_profiles`] so a file that
+/// cannot be loaded by id is never advertised as loadable.
+fn is_safe_profile_id(profile_id: &str) -> bool {
+    !profile_id.is_empty()
+        && !profile_id.contains('/')
+        && !profile_id.contains('\\')
+        && !profile_id.contains("..")
+}
+
+/// Enumerate every agent profile reachable from the standard search roots.
+///
+/// Ordering follows [`default_profile_search_roots`] (project before `$HOME`),
+/// and within a root the file name order is stabilized by sorting. The first
+/// profile seen for an id wins, so a project profile shadows a `$HOME` profile
+/// with the same id — the same precedence [`load_agent_profile`] applies.
+///
+/// The returned `id` is always the file stem, because that is the key
+/// [`load_agent_profile`] resolves by. A frontmatter `id:` that disagrees with
+/// the file name is not addressable and is therefore not reported as the id.
+/// This keeps the round trip exact: `load_agent_profile(p.id, root)` returns
+/// the same file for every `p` in this list.
+pub fn list_agent_profiles(project_root: Option<&Path>) -> Vec<AgentProfile> {
+    let mut out: Vec<AgentProfile> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for root in default_profile_search_roots(project_root) {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        let mut paths: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.is_file()
+                    && path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .is_some_and(|ext| {
+                            ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
+                        })
+            })
+            .collect();
+        paths.sort();
+        for path in paths {
+            let Ok(raw) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(mut profile) = parse_agent_profile_markdown(&raw, Some(&path)) else {
+                continue;
+            };
+            let stem = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if !is_safe_profile_id(&stem) {
+                continue;
+            }
+            if profile.name.trim().is_empty() {
+                profile.name = stem.clone();
+            }
+            profile.id = stem;
+            if seen.insert(profile.id.clone()) {
+                out.push(profile);
+            }
+        }
+    }
+    out
+}
+
 pub fn load_agent_profile(
     profile_id: &str,
     project_root: Option<&Path>,
 ) -> Option<AgentProfile> {
-    if profile_id.is_empty()
-        || profile_id.contains('/')
-        || profile_id.contains('\\')
-        || profile_id.contains("..")
-    {
+    if !is_safe_profile_id(profile_id) {
         return None;
     }
     for root in default_profile_search_roots(project_root) {
@@ -214,5 +280,61 @@ You are a careful coding agent.
         assert_eq!(profile.name, "Reviewer");
         assert_eq!(profile.token_budget, Some(4096));
         assert!(profile.system_prompt.unwrap().contains("Review carefully"));
+    }
+
+    #[test]
+    fn rejects_path_traversal_profile_id() {
+        let root = std::env::temp_dir();
+        assert!(load_agent_profile("../etc/passwd", Some(&root)).is_none());
+        assert!(load_agent_profile("a/b", Some(&root)).is_none());
+        assert!(load_agent_profile("a\\b", Some(&root)).is_none());
+        assert!(load_agent_profile("", Some(&root)).is_none());
+    }
+
+    #[test]
+    fn lists_profiles_with_project_precedence_and_loadable_ids() {
+        let root = std::env::temp_dir().join(format!("natives-list-{}", uuid::Uuid::new_v4()));
+        let high = root.join(".agents").join("agents");
+        let low = root.join(".claude").join("agents");
+        std::fs::create_dir_all(&high).unwrap();
+        std::fs::create_dir_all(&low).unwrap();
+        // Same id in two roots — highest-priority root wins.
+        std::fs::write(
+            high.join("reviewer.md"),
+            "---\nname: Reviewer HIGH\ntools: [read_file]\nmaxSteps: 7\n---\nHigh prompt.",
+        )
+        .unwrap();
+        std::fs::write(low.join("reviewer.md"), "---\nname: Reviewer LOW\n---\nLow prompt.").unwrap();
+        std::fs::write(low.join("scribe.md"), "---\nname: Scribe\n---\nWrite docs.").unwrap();
+        // Non-markdown files are ignored.
+        std::fs::write(low.join("notes.txt"), "not a profile").unwrap();
+        // Frontmatter id that disagrees with the file name is reported by file stem,
+        // because the stem is what `load_agent_profile` resolves.
+        std::fs::write(
+            low.join("auditor.md"),
+            "---\nid: totally-different\nname: Auditor\n---\nAudit.",
+        )
+        .unwrap();
+
+        let listed = list_agent_profiles(Some(&root));
+        let ids: Vec<&str> = listed.iter().map(|p| p.id.as_str()).collect();
+        assert!(ids.contains(&"reviewer"), "{ids:?}");
+        assert!(ids.contains(&"scribe"), "{ids:?}");
+        assert!(ids.contains(&"auditor"), "{ids:?}");
+        assert!(!ids.contains(&"totally-different"), "{ids:?}");
+        assert!(!ids.contains(&"notes"), "{ids:?}");
+        // One entry per id, project root wins.
+        assert_eq!(ids.iter().filter(|id| **id == "reviewer").count(), 1);
+        let reviewer = listed.iter().find(|p| p.id == "reviewer").unwrap();
+        assert_eq!(reviewer.name, "Reviewer HIGH");
+        assert_eq!(reviewer.max_steps, Some(7));
+
+        // Round trip: every listed id must load back to the same file.
+        for p in &listed {
+            let loaded = load_agent_profile(&p.id, Some(&root))
+                .unwrap_or_else(|| panic!("listed profile `{}` is not loadable", p.id));
+            assert_eq!(loaded.source_path, p.source_path);
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

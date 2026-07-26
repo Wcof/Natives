@@ -1,7 +1,8 @@
 //! Command and HTTP hook handlers with safety rails.
 
 use crate::hooks::{
-    tool_pattern_matches, HookDecision, HookHandler, HookRequest, HookResponse,
+    tool_pattern_matches, HookDecision, HookHandler, HookOutcome, HookRequest, HookResponse,
+    PermissionVerdict,
 };
 use serde_json::Value;
 use std::net::IpAddr;
@@ -30,12 +31,20 @@ impl HookHandler for CommandHook {
     }
 
     async fn handle(&self, request: HookRequest) -> HookResponse {
+        self.handle_outcome(request).await.into_response()
+    }
+
+    /// The real body. `handle` collapses it fail-closed for callers that have
+    /// no failure policy to apply.
+    async fn handle_outcome(&self, request: HookRequest) -> HookOutcome {
         if !self.trusted {
-            return HookResponse {
+            // A deliberate refusal, not a failure: no failure policy may soften
+            // it, so it stays a Deny rather than becoming `Failed`.
+            return HookOutcome::Decided(HookResponse {
                 decision: HookDecision::Deny {
                     reason: "untrusted plugin cannot run command hooks".into(),
                 },
-            };
+            });
         }
         let event_name = format!("{:?}", request.event);
         let payload = serde_json::to_vec(&serde_json::json!({
@@ -50,10 +59,8 @@ impl HookHandler for CommandHook {
         }))
         .unwrap_or_default();
         if payload.len() > MAX_IO_BYTES {
-            return HookResponse {
-                decision: HookDecision::Deny {
-                    reason: "hook input too large".into(),
-                },
+            return HookOutcome::Failed {
+                reason: "hook input too large".into(),
             };
         }
 
@@ -77,10 +84,8 @@ impl HookHandler for CommandHook {
         {
             Ok(c) => c,
             Err(e) => {
-                return HookResponse {
-                    decision: HookDecision::Deny {
-                        reason: format!("failed to spawn hook: {e}"),
-                    },
+                return HookOutcome::Failed {
+                    reason: format!("failed to spawn hook: {e}"),
                 };
             }
         };
@@ -95,20 +100,21 @@ impl HookHandler for CommandHook {
             Ok(Ok(output))
                 if output.stdout.len().saturating_add(output.stderr.len()) > MAX_IO_BYTES =>
             {
-                HookResponse {
-                    decision: HookDecision::Deny {
-                        reason: "hook output too large".into(),
-                    },
+                HookOutcome::Failed {
+                    reason: "hook output too large".into(),
                 }
             }
             Ok(Ok(output)) if output.status.success() => parse_hook_stdout(&output.stdout),
+            // A non-zero exit is the hook *deciding* to block, per the Claude
+            // contract — not an infrastructure failure. It stays a Deny that no
+            // failure policy can soften.
             Ok(Ok(output)) => {
                 let reason = String::from_utf8_lossy(&output.stderr)
                     .trim()
                     .chars()
                     .take(4_000)
                     .collect::<String>();
-                HookResponse {
+                HookOutcome::Decided(HookResponse {
                     decision: HookDecision::Deny {
                         reason: if reason.is_empty() {
                             format!("hook exited with {}", output.status)
@@ -116,17 +122,13 @@ impl HookHandler for CommandHook {
                             reason
                         },
                     },
-                }
+                })
             }
-            Ok(Err(e)) => HookResponse {
-                decision: HookDecision::Deny {
-                    reason: format!("hook wait failed: {e}"),
-                },
+            Ok(Err(e)) => HookOutcome::Failed {
+                reason: format!("hook wait failed: {e}"),
             },
-            Err(_) => HookResponse {
-                decision: HookDecision::Deny {
-                    reason: "hook timeout".into(),
-                },
+            Err(_) => HookOutcome::Failed {
+                reason: "hook timeout".into(),
             },
         }
     }
@@ -147,10 +149,16 @@ impl HookHandler for HttpHook {
     }
 
     async fn handle(&self, request: HookRequest) -> HookResponse {
+        self.handle_outcome(request).await.into_response()
+    }
+
+    async fn handle_outcome(&self, request: HookRequest) -> HookOutcome {
+        // An SSRF-rejected URL is a configuration refusal, not a transient
+        // failure: no failure policy may turn it into an allow.
         if let Err(reason) = validate_http_hook_url(&self.url, &self.allow_hosts) {
-            return HookResponse {
+            return HookOutcome::Decided(HookResponse {
                 decision: HookDecision::Deny { reason },
-            };
+            });
         }
         let client = match reqwest::Client::builder()
             .timeout(self.timeout)
@@ -159,10 +167,8 @@ impl HookHandler for HttpHook {
         {
             Ok(c) => c,
             Err(e) => {
-                return HookResponse {
-                    decision: HookDecision::Deny {
-                        reason: format!("http client error: {e}"),
-                    },
+                return HookOutcome::Failed {
+                    reason: format!("http client error: {e}"),
                 };
             }
         };
@@ -171,79 +177,88 @@ impl HookHandler for HttpHook {
             Ok(resp) if resp.status().is_success() => {
                 let bytes = resp.bytes().await.unwrap_or_default();
                 if bytes.len() > MAX_IO_BYTES {
-                    return HookResponse {
-                        decision: HookDecision::Deny {
-                            reason: "hook response too large".into(),
-                        },
+                    return HookOutcome::Failed {
+                        reason: "hook response too large".into(),
                     };
                 }
                 parse_hook_stdout(&bytes)
             }
-            Ok(resp) => HookResponse {
-                decision: HookDecision::Deny {
-                    reason: format!("http hook status {}", resp.status()),
-                },
+            Ok(resp) => HookOutcome::Failed {
+                reason: format!("http hook status {}", resp.status()),
             },
-            Err(e) => HookResponse {
-                decision: HookDecision::Deny {
-                    reason: format!("http hook failed: {e}"),
-                },
+            Err(e) => HookOutcome::Failed {
+                reason: format!("http hook failed: {e}"),
             },
         }
     }
 }
 
-fn parse_hook_stdout(stdout: &[u8]) -> HookResponse {
+fn decided(decision: HookDecision) -> HookOutcome {
+    HookOutcome::Decided(HookResponse { decision })
+}
+
+fn parse_hook_stdout(stdout: &[u8]) -> HookOutcome {
     let text = String::from_utf8_lossy(stdout);
     let trimmed = text.trim();
     if trimmed.is_empty() {
-        return HookResponse {
-            decision: HookDecision::Allow,
-        };
+        return decided(HookDecision::Allow);
     }
     match serde_json::from_str::<Value>(trimmed) {
         Ok(value) => {
             if value.get("continue").and_then(Value::as_bool) == Some(false) {
-                return HookResponse {
-                    decision: HookDecision::Deny {
-                        reason: value
-                            .get("stopReason")
-                            .or_else(|| value.get("systemMessage"))
-                            .and_then(Value::as_str)
-                            .unwrap_or("blocked by hook")
-                            .to_string(),
-                    },
-                };
+                return decided(HookDecision::Deny {
+                    reason: value
+                        .get("stopReason")
+                        .or_else(|| value.get("systemMessage"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("blocked by hook")
+                        .to_string(),
+                });
             }
             if let Some(output) = value.get("hookSpecificOutput") {
-                if output
-                    .get("permissionDecision")
-                    .and_then(Value::as_str)
-                    == Some("deny")
-                {
-                    return HookResponse {
-                        decision: HookDecision::Deny {
+                // `permissionDecision` is checked before `updatedInput` /
+                // `additionalContext` so an explicit verdict always wins over
+                // an incidental payload edit in the same object.
+                let permission_reason = || {
+                    output
+                        .get("permissionDecisionReason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("no reason given")
+                        .to_string()
+                };
+                match output.get("permissionDecision").and_then(Value::as_str) {
+                    Some("deny") => {
+                        return decided(HookDecision::Deny {
                             reason: output
                                 .get("permissionDecisionReason")
                                 .and_then(Value::as_str)
                                 .unwrap_or("denied by hook")
                                 .to_string(),
-                        },
-                    };
+                        })
+                    }
+                    Some("allow") => {
+                        return HookOutcome::Permission(PermissionVerdict::Allow {
+                            reason: permission_reason(),
+                        })
+                    }
+                    Some("ask") => {
+                        return HookOutcome::Permission(PermissionVerdict::Ask {
+                            reason: permission_reason(),
+                        })
+                    }
+                    // An unknown verdict is not an approval. Fall through to
+                    // the native `decision` field rather than guessing.
+                    _ => {}
                 }
                 if let Some(updated) = output.get("updatedInput") {
-                    return HookResponse {
-                        decision: HookDecision::Modify {
-                            payload: updated.clone(),
-                        },
-                    };
+                    return decided(HookDecision::Modify {
+                        payload: updated.clone(),
+                    });
                 }
                 if let Some(context) = output.get("additionalContext").and_then(Value::as_str) {
-                    return HookResponse {
-                        decision: HookDecision::Inject {
-                            messages: vec![context.to_string()],
-                        },
-                    };
+                    return decided(HookDecision::Inject {
+                        messages: vec![context.to_string()],
+                    });
                 }
             }
             let decision = value
@@ -251,44 +266,43 @@ fn parse_hook_stdout(stdout: &[u8]) -> HookResponse {
                 .and_then(|d| d.as_str())
                 .unwrap_or("allow");
             match decision {
-                "deny" | "block" => HookResponse {
-                    decision: HookDecision::Deny {
-                        reason: value
-                            .get("reason")
-                            .and_then(|r| r.as_str())
-                            .unwrap_or("denied by hook")
-                            .to_string(),
-                    },
-                },
-                "modify" => HookResponse {
-                    decision: HookDecision::Modify {
-                        payload: value.get("payload").cloned().unwrap_or(Value::Null),
-                    },
-                },
-                "inject" => HookResponse {
-                    decision: HookDecision::Inject {
-                        messages: value
-                            .get("messages")
-                            .and_then(|m| m.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|v| v.as_str().map(str::to_string))
-                                    .collect()
-                            })
-                            .unwrap_or_default(),
-                    },
-                },
-                "rewake" => HookResponse {
-                    decision: HookDecision::Rewake,
-                },
-                _ => HookResponse {
-                    decision: HookDecision::Allow,
-                },
+                "deny" | "block" => decided(HookDecision::Deny {
+                    reason: value
+                        .get("reason")
+                        .and_then(|r| r.as_str())
+                        .unwrap_or("denied by hook")
+                        .to_string(),
+                }),
+                "modify" => decided(HookDecision::Modify {
+                    payload: value.get("payload").cloned().unwrap_or(Value::Null),
+                }),
+                "inject" => decided(HookDecision::Inject {
+                    messages: value
+                        .get("messages")
+                        .and_then(|m| m.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                }),
+                // `rewake` used to produce `HookDecision::Rewake`, which every
+                // engine match arm ignored: the hook author was told nothing
+                // and the Run stopped anyway. Refusing out loud is the only
+                // honest answer until a real resume path exists — see the
+                // `HookDecision::Rewake` doc comment.
+                "rewake" => decided(HookDecision::Deny {
+                    reason: "hook requested 'rewake', which this engine does not implement; \
+                             the request was refused rather than silently ignored"
+                        .into(),
+                }),
+                _ => decided(HookDecision::Allow),
             }
         }
-        Err(_) => HookResponse {
-            decision: HookDecision::Allow,
-        },
+        // Non-JSON stdout is not a decision — a hook that prints a log line
+        // must not be read as an opinion either way.
+        Err(_) => decided(HookDecision::Allow),
     }
 }
 
@@ -354,13 +368,19 @@ mod tests {
         assert!(validate_http_hook_url("https://evil.example.org/h", &["hooks.example.com".into()]).is_err());
     }
 
+    /// Collapse an outcome to its decision for the tests that only care about
+    /// the engine-facing half.
+    fn decision_of(outcome: HookOutcome) -> HookDecision {
+        outcome.into_response().decision
+    }
+
     #[test]
     fn parses_claude_hook_output() {
         let denied = parse_hook_stdout(
             br#"{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"blocked"}}"#,
         );
         assert!(matches!(
-            denied.decision,
+            decision_of(denied),
             HookDecision::Deny { ref reason } if reason == "blocked"
         ));
 
@@ -368,8 +388,110 @@ mod tests {
             br#"{"hookSpecificOutput":{"updatedInput":{"path":"safe.txt"}}}"#,
         );
         assert!(matches!(
-            modified.decision,
+            decision_of(modified),
             HookDecision::Modify { ref payload } if payload["path"] == "safe.txt"
+        ));
+    }
+
+    #[test]
+    fn parses_permission_decision_allow() {
+        let allowed = parse_hook_stdout(
+            br#"{"hookSpecificOutput":{"permissionDecision":"allow","permissionDecisionReason":"trusted read"}}"#,
+        );
+        assert!(matches!(
+            allowed,
+            HookOutcome::Permission(PermissionVerdict::Allow { ref reason }) if reason == "trusted read"
+        ));
+    }
+
+    #[test]
+    fn parses_permission_decision_ask() {
+        let ask = parse_hook_stdout(
+            br#"{"hookSpecificOutput":{"permissionDecision":"ask","permissionDecisionReason":"needs a human"}}"#,
+        );
+        assert!(matches!(
+            ask,
+            HookOutcome::Permission(PermissionVerdict::Ask { ref reason }) if reason == "needs a human"
+        ));
+    }
+
+    /// An allow with no reason must still be auditable, so the reason is
+    /// synthesised rather than left empty.
+    #[test]
+    fn permission_allow_without_reason_still_carries_one() {
+        let allowed =
+            parse_hook_stdout(br#"{"hookSpecificOutput":{"permissionDecision":"allow"}}"#);
+        match allowed {
+            HookOutcome::Permission(PermissionVerdict::Allow { reason }) => {
+                assert!(!reason.trim().is_empty())
+            }
+            other => panic!("expected an allow verdict, got {other:?}"),
+        }
+    }
+
+    /// A verdict this engine does not know is not an approval.
+    #[test]
+    fn unknown_permission_decision_is_not_an_approval() {
+        let outcome = parse_hook_stdout(
+            br#"{"hookSpecificOutput":{"permissionDecision":"maybe"}}"#,
+        );
+        assert!(matches!(outcome, HookOutcome::Decided(_)));
+        assert!(matches!(decision_of(outcome), HookDecision::Allow));
+    }
+
+    /// `continue: false` is a hard stop and outranks an allow verdict in the
+    /// same object.
+    #[test]
+    fn continue_false_outranks_permission_allow() {
+        let outcome = parse_hook_stdout(
+            br#"{"continue":false,"stopReason":"halt","hookSpecificOutput":{"permissionDecision":"allow"}}"#,
+        );
+        assert!(matches!(
+            decision_of(outcome),
+            HookDecision::Deny { ref reason } if reason == "halt"
+        ));
+    }
+
+    /// An explicit verdict wins over an incidental `updatedInput` sibling, so a
+    /// hook cannot smuggle an input rewrite past its own deny.
+    #[test]
+    fn permission_decision_outranks_updated_input() {
+        let outcome = parse_hook_stdout(
+            br#"{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"no","updatedInput":{"path":"x"}}}"#,
+        );
+        assert!(matches!(decision_of(outcome), HookDecision::Deny { .. }));
+    }
+
+    /// `rewake` was a silent no-op. It must now be visibly refused.
+    #[test]
+    fn rewake_is_refused_rather_than_ignored() {
+        let outcome = parse_hook_stdout(br#"{"decision":"rewake"}"#);
+        match decision_of(outcome) {
+            HookDecision::Deny { reason } => assert!(reason.contains("rewake")),
+            other => panic!("expected a deny explaining the refusal, got {other:?}"),
+        }
+    }
+
+    /// A permission verdict has no `HookDecision` spelling; degrading it must
+    /// land on "no objection", never on something that could skip a prompt.
+    #[test]
+    fn permission_verdict_degrades_to_allow_not_to_a_bypass() {
+        let response = HookOutcome::Permission(PermissionVerdict::Allow {
+            reason: "r".into(),
+        })
+        .into_response();
+        assert!(matches!(response.decision, HookDecision::Allow));
+    }
+
+    #[test]
+    fn failed_outcome_degrades_to_deny() {
+        let response = HookOutcome::Failed {
+            reason: "boom".into(),
+        }
+        .into_response();
+        assert!(matches!(
+            response.decision,
+            HookDecision::Deny { ref reason } if reason == "boom"
         ));
     }
 
@@ -392,5 +514,90 @@ mod tests {
             })
             .await;
         assert!(matches!(resp.decision, HookDecision::Deny { .. }));
+    }
+
+    fn probe_request() -> HookRequest {
+        HookRequest {
+            event: crate::hooks::HookEvent::PostToolUse,
+            run_id: "r".into(),
+            tool_name: Some("read_file".into()),
+            input: serde_json::json!({}),
+        }
+    }
+
+    /// A timeout is an infrastructure failure, so the failure policy gets a say.
+    #[tokio::test]
+    async fn command_hook_timeout_is_a_failure_not_a_decision() {
+        let hook = CommandHook {
+            program: "sleep".into(),
+            args: vec!["5".into()],
+            timeout: Duration::from_millis(50),
+            trusted: true,
+            cwd: None,
+            tool_pattern: None,
+        };
+        let outcome = hook.handle_outcome(probe_request()).await;
+        assert!(
+            matches!(outcome, HookOutcome::Failed { ref reason } if reason == "hook timeout"),
+            "timeout must be reported as a failure so HookFailurePolicy can act"
+        );
+    }
+
+    /// A missing program is a failure, not the hook's opinion.
+    #[tokio::test]
+    async fn command_hook_spawn_error_is_a_failure() {
+        let hook = CommandHook {
+            program: "natives-no-such-hook-binary".into(),
+            args: vec![],
+            timeout: Duration::from_secs(1),
+            trusted: true,
+            cwd: None,
+            tool_pattern: None,
+        };
+        assert!(matches!(
+            hook.handle_outcome(probe_request()).await,
+            HookOutcome::Failed { .. }
+        ));
+    }
+
+    /// A non-zero exit is the documented way for a hook to block. It must stay
+    /// a decision so no failure policy can soften it into an allow.
+    #[tokio::test]
+    async fn command_hook_nonzero_exit_stays_a_deny() {
+        let hook = CommandHook {
+            program: "false".into(),
+            args: vec![],
+            timeout: Duration::from_secs(5),
+            trusted: true,
+            cwd: None,
+            tool_pattern: None,
+        };
+        let outcome = hook.handle_outcome(probe_request()).await;
+        assert!(
+            matches!(
+                outcome,
+                HookOutcome::Decided(HookResponse {
+                    decision: HookDecision::Deny { .. }
+                })
+            ),
+            "a blocking exit code must not be downgradable by a failure policy"
+        );
+    }
+
+    /// `handle` has no failure policy to consult, so it must stay fail-closed.
+    #[tokio::test]
+    async fn handle_collapses_failures_to_deny() {
+        let hook = CommandHook {
+            program: "natives-no-such-hook-binary".into(),
+            args: vec![],
+            timeout: Duration::from_secs(1),
+            trusted: true,
+            cwd: None,
+            tool_pattern: None,
+        };
+        assert!(matches!(
+            hook.handle(probe_request()).await.decision,
+            HookDecision::Deny { .. }
+        ));
     }
 }

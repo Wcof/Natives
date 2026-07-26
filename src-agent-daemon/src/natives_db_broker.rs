@@ -565,7 +565,19 @@ mod tests {
                id TEXT PRIMARY KEY, provider_id TEXT, label TEXT,
                api_key_encrypted TEXT, dek_encrypted TEXT, created_at TEXT,
                is_primary INTEGER DEFAULT 0, is_active INTEGER DEFAULT 1
-             );",
+             );
+             CREATE TABLE provider_routing_settings (
+               id INTEGER PRIMARY KEY CHECK(id=1),
+               enabled INTEGER NOT NULL DEFAULT 0,
+               local_enabled INTEGER NOT NULL DEFAULT 0,
+               local_port INTEGER NOT NULL DEFAULT 15721,
+               local_token_encrypted TEXT,
+               local_token_dek_encrypted TEXT,
+               rectifier_json TEXT NOT NULL DEFAULT '{}',
+               global_proxy_json TEXT NOT NULL DEFAULT '{}',
+               updated_at TEXT NOT NULL
+             );
+             INSERT INTO provider_routing_settings (id, updated_at) VALUES (1, 't');",
         )
         .unwrap();
 

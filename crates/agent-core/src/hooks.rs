@@ -22,7 +22,84 @@ pub enum HookDecision {
     Deny { reason: String },
     Modify { payload: Value },
     Inject { messages: Vec<String> },
+    /// Historical variant with **no engine implementation**.
+    ///
+    /// Nothing constructs this any more: `parse_hook_stdout` used to turn
+    /// `{"decision":"rewake"}` into it and the engine matched it into an empty
+    /// arm, so a hook asking to resume a finished Run was silently discarded.
+    /// A promise the runtime does not keep is worse than a missing feature, so
+    /// the producer was removed and `rewake` is now refused out loud (see
+    /// `hook_handlers::parse_hook_stdout`).
+    ///
+    /// The variant itself survives only so the engine's match arm keeps
+    /// compiling while the removal is coordinated; do not add producers.
     Rewake,
+}
+
+/// What a hook wants to happen to a permission prompt.
+///
+/// `HookDecision` cannot express either of these: its `Allow` means "no
+/// objection, carry on with the normal flow", which is *not* the same as
+/// "approve this without asking the human".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionVerdict {
+    /// Claude `permissionDecision: "allow"` — approve without prompting.
+    ///
+    /// This only ever *skips a confirmation the profile would have asked for*.
+    /// It is never a grant: the permission profile ceiling is enforced by the
+    /// consumer and a hook cannot raise it.
+    Allow { reason: String },
+    /// Claude `permissionDecision: "ask"` — force the prompt even if some other
+    /// hook would have skipped it.
+    Ask { reason: String },
+}
+
+/// What one hook produced for a dispatch.
+///
+/// Handlers may report an infrastructure `Failed` (spawn error, timeout,
+/// oversized IO) separately from a deliberate `Deny`, which is what makes
+/// [`HookFailurePolicy`] implementable: without the distinction every failure
+/// looks like a decision and `Skip` / `Default` have nothing to act on.
+///
+/// [`HookRegistry::dispatch_outcomes`] resolves `Failed` through the policy and
+/// therefore never returns it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookOutcome {
+    Decided(HookResponse),
+    Permission(PermissionVerdict),
+    Failed { reason: String },
+}
+
+impl HookOutcome {
+    /// Collapse to the engine-facing decision, fail-closed.
+    ///
+    /// A permission verdict has no `HookDecision` spelling, so it degrades to
+    /// `Allow` — "no objection", which routes back into the normal permission
+    /// flow. Degrading must never be able to skip a prompt.
+    pub fn into_response(self) -> HookResponse {
+        match self {
+            HookOutcome::Decided(response) => response,
+            HookOutcome::Permission(_) => HookResponse {
+                decision: HookDecision::Allow,
+            },
+            HookOutcome::Failed { reason } => HookResponse {
+                decision: HookDecision::Deny { reason },
+            },
+        }
+    }
+}
+
+/// Aggregated verdict for a permission prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermissionAggregate {
+    /// Block the tool call outright.
+    Deny(String),
+    /// Run the normal permission flow (profile decides: ask / auto / deny).
+    Prompt,
+    /// Skip the confirmation, subject to the caller's profile ceiling.
+    AutoApprove(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +119,15 @@ pub struct HookResponse {
 #[async_trait::async_trait]
 pub trait HookHandler: Send + Sync {
     async fn handle(&self, request: HookRequest) -> HookResponse;
+
+    /// Richer outcome: lets a handler distinguish "I failed" from "I denied",
+    /// and report a permission verdict `HookDecision` cannot carry.
+    ///
+    /// The default treats every result as a deliberate decision, which is
+    /// correct for in-process handlers — they cannot time out or fail to spawn.
+    async fn handle_outcome(&self, request: HookRequest) -> HookOutcome {
+        HookOutcome::Decided(self.handle(request).await)
+    }
 
     /// Optional tool-name matcher (glob-ish: `*` any, exact otherwise).
     fn matches_tool(&self, _tool_name: Option<&str>) -> bool {
@@ -135,7 +221,11 @@ impl HookRegistry {
             .unwrap_or_default()
     }
 
-    pub async fn dispatch(&self, request: HookRequest) -> Vec<HookResponse> {
+    /// Dispatch, resolving each hook's failure through its [`HookFailurePolicy`].
+    ///
+    /// Never returns [`HookOutcome::Failed`] — the policy has already turned it
+    /// into a decision or dropped the hook.
+    pub async fn dispatch_outcomes(&self, request: HookRequest) -> Vec<HookOutcome> {
         let mut out = Vec::new();
         if let Some(entries) = self.entries.get(&request.event) {
             for entry in entries {
@@ -154,24 +244,46 @@ impl HookRegistry {
                 if !entry.handler.matches_tool(request.tool_name.as_deref()) {
                     continue;
                 }
-                out.push(entry.handler.handle(request.clone()).await);
+                match entry.handler.handle_outcome(request.clone()).await {
+                    HookOutcome::Failed { reason } => {
+                        if let Some(resolved) = resolve_failure(
+                            request.event,
+                            entry.definition.failure_policy,
+                            &entry.definition.id.to_string(),
+                            reason,
+                        ) {
+                            out.push(resolved);
+                        }
+                    }
+                    other => out.push(other),
+                }
             }
         }
-        // Fail-closed for security events with no matching handler.
+        // Fail-closed for security events with no matching handler. A hook that
+        // was dropped by `Skip` counts as "no handler" here, so skipping cannot
+        // quietly turn a security event into an allow.
         if out.is_empty()
             && self.fail_closed_security
             && request.event.is_security_sensitive()
         {
-            out.push(HookResponse {
+            out.push(HookOutcome::Decided(HookResponse {
                 decision: HookDecision::Deny {
                     reason: format!(
                         "fail-closed: no hook handler allowed {:?} for tool {:?}",
                         request.event, request.tool_name
                     ),
                 },
-            });
+            }));
         }
         out
+    }
+
+    pub async fn dispatch(&self, request: HookRequest) -> Vec<HookResponse> {
+        self.dispatch_outcomes(request)
+            .await
+            .into_iter()
+            .map(HookOutcome::into_response)
+            .collect()
     }
 
     /// Aggregate: any Deny wins (fail-closed for PreToolUse / PermissionRequest).
@@ -184,8 +296,83 @@ impl HookRegistry {
         Ok(())
     }
 
+    /// Fold hook outcomes into a single permission verdict, fail-closed.
+    ///
+    /// Precedence, strongest first — the ordering *is* the security property:
+    ///
+    /// 1. `Deny` (including a resolved failure and the fail-closed empty case).
+    ///    One denying hook beats any number of allowing ones.
+    /// 2. `Ask` — an explicit request for the prompt beats an `Allow`.
+    /// 3. `Allow` — only when nothing denied and nothing asked.
+    /// 4. otherwise `Prompt`, i.e. the pre-existing behaviour.
+    ///
+    /// `AutoApprove` is a *request* to skip the prompt. The caller still has to
+    /// check it against the permission profile; this function deliberately
+    /// knows nothing about profiles so it cannot be the place a ceiling leaks.
+    pub fn aggregate_permission(outcomes: &[HookOutcome]) -> PermissionAggregate {
+        let mut approve: Option<String> = None;
+        let mut ask = false;
+        for outcome in outcomes {
+            match outcome {
+                HookOutcome::Decided(HookResponse {
+                    decision: HookDecision::Deny { reason },
+                }) => return PermissionAggregate::Deny(reason.clone()),
+                // A handler-level failure that reached here unresolved is still
+                // a failure: deny. `dispatch_outcomes` normally resolves these,
+                // so this arm only guards hand-built inputs.
+                HookOutcome::Failed { reason } => {
+                    return PermissionAggregate::Deny(reason.clone())
+                }
+                HookOutcome::Permission(PermissionVerdict::Ask { .. }) => ask = true,
+                HookOutcome::Permission(PermissionVerdict::Allow { reason }) => {
+                    if approve.is_none() {
+                        approve = Some(reason.clone());
+                    }
+                }
+                HookOutcome::Decided(_) => {}
+            }
+        }
+        match approve {
+            Some(reason) if !ask => PermissionAggregate::AutoApprove(reason),
+            _ => PermissionAggregate::Prompt,
+        }
+    }
+
     pub fn events_covered(&self) -> Vec<HookEvent> {
         self.entries.keys().copied().collect()
+    }
+}
+
+/// Apply a hook's [`HookFailurePolicy`] to an infrastructure failure.
+///
+/// `None` means "drop this hook from the dispatch" (`Skip`).
+///
+/// Security-sensitive events ignore the configured policy and always deny, as
+/// [`HookFailurePolicy`]'s own contract states. Otherwise a hook author could
+/// downgrade the fail-closed guarantee on `PreToolUse` / `PermissionRequest`
+/// just by writing `failure_policy: "default"` in `hooks.json`, and a hook that
+/// merely has to be *made* to time out would become a permission bypass.
+fn resolve_failure(
+    event: HookEvent,
+    policy: HookFailurePolicy,
+    hook_id: &str,
+    reason: String,
+) -> Option<HookOutcome> {
+    if event.is_security_sensitive() {
+        return Some(HookOutcome::Decided(HookResponse {
+            decision: HookDecision::Deny {
+                reason: format!("hook {hook_id} failed on a security event: {reason}"),
+            },
+        }));
+    }
+    match policy {
+        HookFailurePolicy::Fail => Some(HookOutcome::Decided(HookResponse {
+            decision: HookDecision::Deny { reason },
+        })),
+        HookFailurePolicy::Skip => None,
+        HookFailurePolicy::Default => Some(HookOutcome::Decided(HookResponse {
+            decision: HookDecision::Allow,
+        })),
     }
 }
 
@@ -225,6 +412,288 @@ impl HookHandler for MatcherDenyHook {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Always reports an infrastructure failure, so failure policies are testable
+    /// without spawning a real process.
+    struct FailingHook;
+
+    #[async_trait::async_trait]
+    impl HookHandler for FailingHook {
+        async fn handle(&self, _request: HookRequest) -> HookResponse {
+            HookResponse {
+                decision: HookDecision::Deny {
+                    reason: "failed".into(),
+                },
+            }
+        }
+
+        async fn handle_outcome(&self, _request: HookRequest) -> HookOutcome {
+            HookOutcome::Failed {
+                reason: "simulated hook failure".into(),
+            }
+        }
+    }
+
+    /// Returns a fixed permission verdict.
+    struct VerdictHook(PermissionVerdict);
+
+    #[async_trait::async_trait]
+    impl HookHandler for VerdictHook {
+        async fn handle(&self, _request: HookRequest) -> HookResponse {
+            HookResponse {
+                decision: HookDecision::Allow,
+            }
+        }
+
+        async fn handle_outcome(&self, _request: HookRequest) -> HookOutcome {
+            HookOutcome::Permission(self.0.clone())
+        }
+    }
+
+    fn defined(event: HookEvent, name: &str, policy: HookFailurePolicy) -> HookDefinition {
+        let source = HookSource::builtin(name);
+        HookDefinition {
+            id: HookId::new(&source, event),
+            event,
+            source,
+            order: 0,
+            matcher: None,
+            conditions: Vec::new(),
+            timeout_ms: 0,
+            failure_policy: policy,
+            kind: HookKind::Builtin { name: name.into() },
+        }
+    }
+
+    fn request(event: HookEvent) -> HookRequest {
+        HookRequest {
+            event,
+            run_id: "r".into(),
+            tool_name: Some("write_file".into()),
+            input: serde_json::json!({}),
+        }
+    }
+
+    fn allow_verdict() -> HookOutcome {
+        HookOutcome::Permission(PermissionVerdict::Allow {
+            reason: "hook approved".into(),
+        })
+    }
+
+    fn deny_outcome(reason: &str) -> HookOutcome {
+        HookOutcome::Decided(HookResponse {
+            decision: HookDecision::Deny {
+                reason: reason.into(),
+            },
+        })
+    }
+
+    // ---- permission aggregation -------------------------------------------
+
+    #[test]
+    fn permission_allow_alone_auto_approves() {
+        assert_eq!(
+            HookRegistry::aggregate_permission(&[allow_verdict()]),
+            PermissionAggregate::AutoApprove("hook approved".into())
+        );
+    }
+
+    /// The load-bearing security property: one deny beats any number of allows,
+    /// in either order.
+    #[test]
+    fn deny_beats_allow_in_both_orders() {
+        assert_eq!(
+            HookRegistry::aggregate_permission(&[allow_verdict(), deny_outcome("nope")]),
+            PermissionAggregate::Deny("nope".into())
+        );
+        assert_eq!(
+            HookRegistry::aggregate_permission(&[deny_outcome("nope"), allow_verdict()]),
+            PermissionAggregate::Deny("nope".into())
+        );
+    }
+
+    /// An explicit `ask` outranks an allow: a hook that wants the human in the
+    /// loop cannot be overridden by a more permissive sibling.
+    #[test]
+    fn ask_beats_allow_in_both_orders() {
+        let ask = HookOutcome::Permission(PermissionVerdict::Ask {
+            reason: "human please".into(),
+        });
+        assert_eq!(
+            HookRegistry::aggregate_permission(&[allow_verdict(), ask.clone()]),
+            PermissionAggregate::Prompt
+        );
+        assert_eq!(
+            HookRegistry::aggregate_permission(&[ask, allow_verdict()]),
+            PermissionAggregate::Prompt
+        );
+    }
+
+    #[test]
+    fn unresolved_failure_denies() {
+        assert_eq!(
+            HookRegistry::aggregate_permission(&[
+                allow_verdict(),
+                HookOutcome::Failed {
+                    reason: "boom".into()
+                }
+            ]),
+            PermissionAggregate::Deny("boom".into())
+        );
+    }
+
+    #[test]
+    fn no_opinion_prompts() {
+        let plain = HookOutcome::Decided(HookResponse {
+            decision: HookDecision::Allow,
+        });
+        assert_eq!(
+            HookRegistry::aggregate_permission(&[plain]),
+            PermissionAggregate::Prompt
+        );
+        assert_eq!(
+            HookRegistry::aggregate_permission(&[]),
+            PermissionAggregate::Prompt
+        );
+    }
+
+    /// A failing hook on `PermissionRequest` must deny, whatever an allowing
+    /// sibling says.
+    #[tokio::test]
+    async fn failing_permission_hook_denies_despite_an_allowing_sibling() {
+        let mut reg = HookRegistry::new();
+        reg.register_defined(
+            defined(HookEvent::PermissionRequest, "ok", HookFailurePolicy::Fail),
+            Box::new(VerdictHook(PermissionVerdict::Allow {
+                reason: "approved".into(),
+            })),
+        );
+        reg.register_defined(
+            // Even the most permissive policy must not apply here.
+            defined(
+                HookEvent::PermissionRequest,
+                "broken",
+                HookFailurePolicy::Default,
+            ),
+            Box::new(FailingHook),
+        );
+        let outcomes = reg
+            .dispatch_outcomes(request(HookEvent::PermissionRequest))
+            .await;
+        assert!(matches!(
+            HookRegistry::aggregate_permission(&outcomes),
+            PermissionAggregate::Deny(_)
+        ));
+    }
+
+    /// `Skip` must not be usable to empty out a security event into an allow.
+    #[tokio::test]
+    async fn skipping_the_only_security_hook_still_fails_closed() {
+        let mut reg = HookRegistry::new();
+        reg.enable_security_fail_closed();
+        reg.register_defined(
+            defined(
+                HookEvent::PermissionRequest,
+                "broken",
+                HookFailurePolicy::Skip,
+            ),
+            Box::new(FailingHook),
+        );
+        let outcomes = reg
+            .dispatch_outcomes(request(HookEvent::PermissionRequest))
+            .await;
+        assert!(matches!(
+            HookRegistry::aggregate_permission(&outcomes),
+            PermissionAggregate::Deny(_)
+        ));
+    }
+
+    // ---- failure policy ---------------------------------------------------
+
+    async fn outcomes_for(policy: HookFailurePolicy) -> Vec<HookOutcome> {
+        let mut reg = HookRegistry::new();
+        reg.register_defined(
+            defined(HookEvent::PostToolUse, "broken", policy),
+            Box::new(FailingHook),
+        );
+        reg.dispatch_outcomes(request(HookEvent::PostToolUse)).await
+    }
+
+    #[tokio::test]
+    async fn failure_policy_fail_denies() {
+        let responses: Vec<HookResponse> = outcomes_for(HookFailurePolicy::Fail)
+            .await
+            .into_iter()
+            .map(HookOutcome::into_response)
+            .collect();
+        assert_eq!(responses.len(), 1);
+        assert!(HookRegistry::aggregate_allow(&responses).is_err());
+    }
+
+    #[tokio::test]
+    async fn failure_policy_skip_drops_the_hook() {
+        assert!(
+            outcomes_for(HookFailurePolicy::Skip).await.is_empty(),
+            "Skip must remove the hook from the dispatch entirely"
+        );
+    }
+
+    #[tokio::test]
+    async fn failure_policy_default_allows() {
+        let responses: Vec<HookResponse> = outcomes_for(HookFailurePolicy::Default)
+            .await
+            .into_iter()
+            .map(HookOutcome::into_response)
+            .collect();
+        assert_eq!(responses.len(), 1);
+        assert!(matches!(responses[0].decision, HookDecision::Allow));
+        assert!(HookRegistry::aggregate_allow(&responses).is_ok());
+    }
+
+    /// The remaining hooks still decide after one is skipped.
+    #[tokio::test]
+    async fn skip_leaves_siblings_in_charge() {
+        let mut reg = HookRegistry::new();
+        reg.register_defined(
+            defined(HookEvent::PostToolUse, "broken", HookFailurePolicy::Skip),
+            Box::new(FailingHook),
+        );
+        reg.register_defined(
+            defined(HookEvent::PostToolUse, "guard", HookFailurePolicy::Fail),
+            Box::new(MatcherDenyHook {
+                tool_pattern: "*".into(),
+                reason: "sibling denied".into(),
+            }),
+        );
+        let responses = reg.dispatch(request(HookEvent::PostToolUse)).await;
+        assert_eq!(responses.len(), 1);
+        assert_eq!(
+            HookRegistry::aggregate_allow(&responses).unwrap_err(),
+            "sibling denied"
+        );
+    }
+
+    /// Security events ignore the configured policy, so a hook author cannot
+    /// downgrade fail-closed by writing `failure_policy` in `hooks.json`.
+    #[tokio::test]
+    async fn security_events_ignore_lenient_failure_policies() {
+        for policy in [
+            HookFailurePolicy::Fail,
+            HookFailurePolicy::Skip,
+            HookFailurePolicy::Default,
+        ] {
+            for event in [HookEvent::PreToolUse, HookEvent::PermissionRequest] {
+                let mut reg = HookRegistry::new();
+                reg.register_defined(defined(event, "broken", policy), Box::new(FailingHook));
+                let responses = reg.dispatch(request(event)).await;
+                assert_eq!(responses.len(), 1, "{event:?}/{policy:?}");
+                assert!(
+                    HookRegistry::aggregate_allow(&responses).is_err(),
+                    "{event:?} with policy {policy:?} must still fail closed"
+                );
+            }
+        }
+    }
 
     #[tokio::test]
     async fn allow_all_hook_fires() {

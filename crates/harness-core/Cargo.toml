@@ -12,3 +12,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"
 uuid = { version = "1", features = ["v4"] }
+# Canonical hashing for Blueprint versions and Run snapshots. Pure Rust — it
+# does not breach the "no platform implementations" rule above.
+sha2 = "0.10"

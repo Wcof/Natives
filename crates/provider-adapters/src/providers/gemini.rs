@@ -1,6 +1,7 @@
 //! Gemini GenerateContent adapter — real HTTP streaming (SSE / JSON array).
 
 use crate::capabilities::*;
+use crate::model_profile::{self, ReasoningControl};
 use crate::stream::{parse_gemini_chunk, split_sse_lines, sse_data_payload, ProviderEvent};
 use assistant_protocol::v1::provider::{ModelCapabilities, ProviderType};
 use async_trait::async_trait;
@@ -38,7 +39,28 @@ impl Default for GeminiAdapter {
     }
 }
 
-fn build_generate_body(request: &ProviderRequest) -> serde_json::Value {
+/// Build the `generateContent` body using the request's own
+/// [`ProviderRequest::controls`].
+pub fn build_generate_body(request: &ProviderRequest) -> serde_json::Value {
+    build_generate_body_with_controls(request, &request.controls)
+}
+
+/// Build the `generateContent` body with caller-supplied controls, which
+/// override [`ProviderRequest::controls`] entirely.
+///
+/// # Prompt caching
+///
+/// Gemini has no per-request cache parameter to send. Implicit caching is
+/// applied automatically by the provider on 2.5-series models, and explicit
+/// caching requires creating a separate stateful `CachedContent` resource
+/// (`POST /cachedContents`) with its own TTL and lifecycle — out of scope for a
+/// stateless streaming adapter. Cache usage is therefore **read back only**,
+/// from `usageMetadata.cachedContentTokenCount`.
+pub fn build_generate_body_with_controls(
+    request: &ProviderRequest,
+    controls: &RequestControls,
+) -> serde_json::Value {
+    let profile = model_profile::resolve(&request.model);
     let mut contents = Vec::new();
     for message in &request.messages {
         let role = if message.role == "assistant" {
@@ -82,7 +104,9 @@ fn build_generate_body(request: &ProviderRequest) -> serde_json::Value {
                         }
                     }));
                 }
-                ProviderContentBlock::Image { .. } => {}
+                ProviderContentBlock::Image { image_url } => {
+                    parts.push(image_part(image_url));
+                }
             }
         }
         if parts.is_empty() {
@@ -112,12 +136,82 @@ fn build_generate_body(request: &ProviderRequest) -> serde_json::Value {
                 })
                 .collect();
             body["tools"] = serde_json::json!([{ "functionDeclarations": decls }]);
+            if let Some(choice) = &controls.tool_choice {
+                body["toolConfig"] = serde_json::json!({
+                    "functionCallingConfig": choice.to_gemini(),
+                });
+            }
         }
     }
-    if let Some(max) = request.max_tokens {
-        body["generationConfig"] = serde_json::json!({ "maxOutputTokens": max });
+
+    let mut generation_config = serde_json::Map::new();
+    if let Some(max) = model_profile::resolve_max_output(request.max_tokens, &profile) {
+        generation_config.insert("maxOutputTokens".into(), serde_json::json!(max));
+    }
+    if let Some(temperature) = request.temperature {
+        if profile.sampling_params {
+            generation_config.insert("temperature".into(), serde_json::json!(temperature));
+        }
+    }
+    if let Some(reasoning) = &controls.reasoning {
+        if profile.reasoning == ReasoningControl::GeminiThinkingBudget {
+            generation_config.insert(
+                "thinkingConfig".into(),
+                serde_json::json!({
+                    "thinkingBudget": reasoning.budget(),
+                    "includeThoughts": true,
+                }),
+            );
+        }
+    }
+    if !generation_config.is_empty() {
+        body["generationConfig"] = serde_json::Value::Object(generation_config);
     }
     body
+}
+
+/// Whether a URI is one Gemini's `fileData` part can reference.
+///
+/// `fileData.fileUri` only resolves Google-hosted objects (File API uploads and
+/// Cloud Storage). An arbitrary web URL is not fetched by the model.
+fn is_google_file_uri(url: &str) -> bool {
+    url.starts_with("gs://") || url.contains("generativelanguage.googleapis.com/")
+}
+
+/// Encode one image as a Gemini content part.
+///
+/// Gemini takes inline bytes (`inlineData`, needs a `mimeType`) or a
+/// Google-hosted reference (`fileData`, also needs a `mimeType`). A plain web
+/// URL is not fetchable, so it becomes a visible text part instead of being
+/// dropped — the model is told an image was meant to be here and was not sent.
+fn image_part(image: &ImageSource) -> serde_json::Value {
+    match image.payload() {
+        ImagePayload::Base64 {
+            media_type: Some(mime_type),
+            data,
+        } => serde_json::json!({
+            "inlineData": { "mimeType": mime_type, "data": data },
+        }),
+        ImagePayload::Base64 {
+            media_type: None, ..
+        } => serde_json::json!({
+            "text": image.degraded_note("Gemini needs an explicit mimeType for inline image data"),
+        }),
+        ImagePayload::Remote {
+            url,
+            media_type: Some(mime_type),
+        } if is_google_file_uri(url) => serde_json::json!({
+            "fileData": { "mimeType": mime_type, "fileUri": url },
+        }),
+        ImagePayload::Remote { url, .. } if is_google_file_uri(url) => serde_json::json!({
+            "text": image.degraded_note("Gemini needs an explicit mimeType for a fileData part"),
+        }),
+        ImagePayload::Remote { .. } => serde_json::json!({
+            "text": image.degraded_note(
+                "Gemini accepts inline base64 or a Google File API / gs:// URI, not a plain web URL",
+            ),
+        }),
+    }
 }
 
 #[async_trait]
@@ -135,6 +229,13 @@ impl ProviderAdapter for GeminiAdapter {
                 "image_input".into(),
                 "reasoning".into(),
                 "system_prompt".into(),
+                // Implicit caching only (2.5 series). Explicit `CachedContent`
+                // resources are not created by this adapter.
+                "prompt_cache_automatic".into(),
+                // Via `toolConfig.functionCallingConfig`.
+                "tool_choice".into(),
+                // NOTE: no `parallel_tool_calls` — Gemini has no per-request
+                // toggle for it.
             ],
             max_context_window: 1_048_576,
             streaming: true,
@@ -363,6 +464,82 @@ impl ProviderAdapter for GeminiAdapter {
 mod tool_message_tests {
     use super::*;
 
+    fn plain(model: &str) -> ProviderRequest {
+        ProviderRequest {
+            model: model.into(),
+            messages: vec![ProviderMessage {
+                role: "user".into(),
+                content: vec![ProviderContentBlock::Text { text: "hi".into() }],
+            }],
+            system_prompt: None,
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+            stream: true,
+            structured_output: None,
+            controls: Default::default(),
+        }
+    }
+
+    #[test]
+    fn max_output_tokens_comes_from_the_model_profile() {
+        assert_eq!(
+            build_generate_body(&plain("gemini-2.5-pro"))["generationConfig"]["maxOutputTokens"],
+            65_536
+        );
+        // Unknown model: no generationConfig at all rather than an invented cap.
+        assert!(build_generate_body(&plain("gemma-local"))
+            .get("generationConfig")
+            .is_none());
+    }
+
+    #[test]
+    fn thinking_budget_only_for_models_that_expose_it() {
+        let controls = RequestControls {
+            reasoning: Some(ReasoningRequest::new(ReasoningEffort::Medium)),
+            ..Default::default()
+        };
+        let pro = build_generate_body_with_controls(&plain("gemini-2.5-pro"), &controls);
+        assert_eq!(
+            pro["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            16_384
+        );
+        assert_eq!(
+            pro["generationConfig"]["thinkingConfig"]["includeThoughts"],
+            true
+        );
+
+        // Gemini 2.0 has no thinkingConfig; sending one is rejected.
+        let flash = build_generate_body_with_controls(&plain("gemini-2.0-flash"), &controls);
+        assert!(flash["generationConfig"].get("thinkingConfig").is_none());
+    }
+
+    #[test]
+    fn tool_choice_encodes_to_function_calling_config() {
+        let mut request = plain("gemini-2.5-pro");
+        request.tools = Some(vec![ProviderTool {
+            name: "get_weather".into(),
+            description: Some("weather".into()),
+            input_schema: serde_json::json!({"type": "object"}),
+        }]);
+
+        let forced = build_generate_body_with_controls(
+            &request,
+            &RequestControls {
+                tool_choice: Some(ToolChoice::Tool {
+                    name: "get_weather".into(),
+                }),
+                ..Default::default()
+            },
+        );
+        let config = &forced["toolConfig"]["functionCallingConfig"];
+        assert_eq!(config["mode"], "ANY");
+        assert_eq!(config["allowedFunctionNames"][0], "get_weather");
+
+        // Nothing requested: no toolConfig, provider default applies.
+        assert!(build_generate_body(&request).get("toolConfig").is_none());
+    }
+
     #[test]
     fn gemini_body_uses_function_call_and_response() {
         let body = build_generate_body(&ProviderRequest {
@@ -397,6 +574,7 @@ mod tool_message_tests {
             temperature: None,
             stream: true,
             structured_output: None,
+            controls: Default::default(),
         });
 
         let contents = body["contents"].as_array().unwrap();
@@ -415,5 +593,80 @@ mod tool_message_tests {
             contents[2]["parts"][0]["functionResponse"]["response"]["temp"],
             72
         );
+    }
+
+    fn image_request(image: ImageSource) -> ProviderRequest {
+        ProviderRequest {
+            model: "gemini-2.5-flash".into(),
+            messages: vec![ProviderMessage {
+                role: "user".into(),
+                content: vec![
+                    ProviderContentBlock::Text {
+                        text: "what is this".into(),
+                    },
+                    ProviderContentBlock::Image { image_url: image },
+                ],
+            }],
+            system_prompt: None,
+            tools: None,
+            max_tokens: None,
+            temperature: None,
+            stream: true,
+            structured_output: None,
+            controls: Default::default(),
+        }
+    }
+
+    #[test]
+    fn data_uri_becomes_an_inline_data_part() {
+        let body = build_generate_body(&image_request(ImageSource::new(
+            "data:image/png;base64,AAAB",
+        )));
+        let part = &body["contents"][0]["parts"][1];
+        assert_eq!(part["inlineData"]["mimeType"], "image/png");
+        assert_eq!(part["inlineData"]["data"], "AAAB");
+    }
+
+    #[test]
+    fn google_file_uri_becomes_a_file_data_part() {
+        let body = build_generate_body(&image_request(
+            ImageSource::new("gs://bucket/cat.png").with_media_type("image/png"),
+        ));
+        let part = &body["contents"][0]["parts"][1];
+        assert_eq!(part["fileData"]["mimeType"], "image/png");
+        assert_eq!(part["fileData"]["fileUri"], "gs://bucket/cat.png");
+    }
+
+    #[test]
+    fn plain_web_url_is_announced_not_dropped() {
+        // Gemini does not fetch arbitrary URLs. Historically this block was an
+        // empty match arm and the image simply vanished.
+        let body = build_generate_body(&image_request(ImageSource::new(
+            "https://example.test/cat.png",
+        )));
+        let parts = body["contents"][0]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+        let note = parts[1]["text"].as_str().unwrap();
+        assert!(note.contains("image not sent to the model"), "{note}");
+        assert!(note.contains("https://example.test/cat.png"), "{note}");
+    }
+
+    #[test]
+    fn inline_data_without_a_mime_type_is_announced_not_dropped() {
+        let body = build_generate_body(&image_request(ImageSource::new("data:;base64,AAAB")));
+        let note = body["contents"][0]["parts"][1]["text"].as_str().unwrap();
+        assert!(note.contains("mimeType"), "{note}");
+    }
+
+    #[test]
+    fn capability_flag_matches_the_encoder() {
+        let caps = GeminiAdapter::new().capabilities();
+        assert!(caps.image_input);
+        let body = build_generate_body(&image_request(ImageSource::new(
+            "data:image/webp;base64,AAAB",
+        )));
+        assert!(body["contents"][0]["parts"][1]
+            .get("inlineData")
+            .is_some());
     }
 }

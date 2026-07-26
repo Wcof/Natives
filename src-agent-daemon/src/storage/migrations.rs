@@ -4,6 +4,14 @@
 //! Each migration is a complete SQL string that can be executed as a batch.
 
 /// All migrations: (version, SQL) tuples, ordered by version.
+///
+/// The order is load-bearing, not cosmetic. `DataStore::run_migrations` reads
+/// `MAX(version)` from `_daemon_schema_version` **once**, then walks this slice
+/// skipping every entry with `version <= current_version`. It does not test row
+/// membership. So a version that is merged in *below* a version an existing
+/// database has already recorded is skipped forever, silently — see the note on
+/// [`MIGRATION_021`]. Always append with a strictly larger number, and keep this
+/// slice sorted ascending.
 pub const ALL: &[(i64, &str)] = &[
     (1, MIGRATION_001),
     (2, MIGRATION_002),
@@ -25,7 +33,11 @@ pub const ALL: &[(i64, &str)] = &[
     (18, MIGRATION_018),
     (19, MIGRATION_019),
     (20, MIGRATION_020),
+    // 021 is the capability library (ADR-0016), 022 the Harness control plane.
+    // Two parallel workstreams; the numbers were reserved so they never collide,
+    // and both must stay present and ascending.
     (21, MIGRATION_021),
+    (22, MIGRATION_022),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -678,6 +690,18 @@ CREATE TABLE IF NOT EXISTS provider_route_health (
 /// Also drops `mcp_server_config` (created by migration 004, zero readers or
 /// writers ever shipped; its transport CHECK list no longer matches the
 /// runtime). `hook_registration` belongs to the Harness track and stays.
+///
+/// Merge hazard, recorded because the runner cannot detect it: 021 and 022 were
+/// written on two parallel branches, and the Harness branch (022) ran first on
+/// some development databases. `run_migrations` gates on `MAX(version)`, not on
+/// row membership, so any database that recorded 22 before 021 existed will skip
+/// 021 forever and never report an error — the `capability_*` tables simply are
+/// not there, and every `capability.*` RPC then fails on a missing table.
+/// Fresh databases and any database at version <= 20 are unaffected. Recovery on
+/// an affected database is manual: `DELETE FROM _daemon_schema_version WHERE
+/// version = 22;` and reopen (022 is `CREATE TABLE IF NOT EXISTS` throughout, so
+/// re-running it is safe; the two `ALTER TABLE` statements below are not, which
+/// is why 021 must never be re-run against a database that already applied it).
 const MIGRATION_021: &str = "
 CREATE TABLE IF NOT EXISTS capability_skill (
     id TEXT PRIMARY KEY,
@@ -781,3 +805,148 @@ ALTER TABLE run ADD COLUMN capability_snapshot_json TEXT;
 
 DROP TABLE IF EXISTS mcp_server_config;
 ";
+
+/// Migration 022: Harness control plane (design 第 10 节).
+///
+/// Six tables implementing the frozen configuration hierarchy — global
+/// template, project overlay, session selection — plus the immutable evidence
+/// a Run leaves behind. Nothing here stores a credential: a Blueprint carries
+/// only Hook overlays, and a snapshot carries redacted adapter configuration
+/// (`harness_core::redaction`).
+///
+/// Foreign keys and cascades, deliberately:
+///
+/// - draft / version / binding cascade from `harness_profile`: a deleted
+///   profile must not leave a draft that publishes into nothing.
+/// - `harness_run_snapshot.run_id` cascades from `run`: snapshots are Run
+///   evidence and have no meaning once the Run row is gone.
+/// - `harness_profile.current_published_version_id` is deliberately **not** a
+///   foreign key. It and `harness_version.profile_id` would form a cycle that
+///   SQLite can only resolve with deferred constraints, and an atomic publish
+///   already maintains the pointer inside one transaction.
+/// - `harness_audit` has no foreign keys at all: an audit trail that
+///   disappears when the thing it audits is deleted is not an audit trail.
+const MIGRATION_022: &str = "
+CREATE TABLE IF NOT EXISTS harness_profile (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL CHECK(kind IN (
+        'global_template', 'project_overlay', 'session_overlay'
+    )),
+    project_id TEXT,
+    current_published_version_id TEXT,
+    archived_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_harness_profile_kind
+    ON harness_profile(kind, project_id);
+
+CREATE TABLE IF NOT EXISTS harness_version (
+    id TEXT PRIMARY KEY,
+    profile_id TEXT NOT NULL REFERENCES harness_profile(id) ON DELETE CASCADE,
+    version_number INTEGER NOT NULL,
+    parent_version_id TEXT REFERENCES harness_version(id) ON DELETE SET NULL,
+    document_json TEXT NOT NULL,
+    canonical_hash TEXT NOT NULL,
+    source_manifest_json TEXT NOT NULL DEFAULT '{}',
+    validation_summary_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(profile_id, version_number)
+);
+CREATE INDEX IF NOT EXISTS idx_harness_version_profile
+    ON harness_version(profile_id, version_number DESC);
+
+CREATE TABLE IF NOT EXISTS harness_draft (
+    profile_id TEXT PRIMARY KEY REFERENCES harness_profile(id) ON DELETE CASCADE,
+    base_version_id TEXT REFERENCES harness_version(id) ON DELETE SET NULL,
+    document_json TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS harness_binding (
+    scope_type TEXT NOT NULL CHECK(scope_type IN ('global', 'project', 'session')),
+    scope_id TEXT NOT NULL,
+    profile_id TEXT NOT NULL REFERENCES harness_profile(id) ON DELETE CASCADE,
+    version_id TEXT REFERENCES harness_version(id) ON DELETE SET NULL,
+    mode TEXT NOT NULL DEFAULT 'follow_published' CHECK(mode IN (
+        'follow_published', 'pinned'
+    )),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (scope_type, scope_id)
+);
+
+CREATE TABLE IF NOT EXISTS harness_run_snapshot (
+    run_id TEXT PRIMARY KEY REFERENCES run(id) ON DELETE CASCADE,
+    global_version_id TEXT,
+    project_version_id TEXT,
+    session_version_id TEXT,
+    snapshot_json TEXT NOT NULL,
+    canonical_hash TEXT NOT NULL,
+    topology_version INTEGER NOT NULL,
+    hook_semantics_version TEXT NOT NULL,
+    resolved_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_harness_run_snapshot_hash
+    ON harness_run_snapshot(canonical_hash);
+
+CREATE TABLE IF NOT EXISTS harness_audit (
+    id TEXT PRIMARY KEY,
+    action TEXT NOT NULL CHECK(action IN (
+        'profile_create', 'profile_archive', 'publish', 'rollback',
+        'binding_change', 'source_drift_ack'
+    )),
+    profile_id TEXT,
+    version_id TEXT,
+    scope_type TEXT,
+    scope_id TEXT,
+    actor TEXT NOT NULL DEFAULT 'user',
+    summary_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_harness_audit_created
+    ON harness_audit(created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_harness_audit_profile
+    ON harness_audit(profile_id, created_at DESC);
+";
+
+#[cfg(test)]
+mod tests {
+    use super::ALL;
+
+    /// `run_migrations` skips every entry with `version <= MAX(applied)`, and it
+    /// computes that maximum once. A duplicate or out-of-order version therefore
+    /// does not fail loudly — it silently never runs. This is the guard for the
+    /// exact way two parallel branches lose a migration when they are merged.
+    #[test]
+    fn migration_versions_are_unique_and_strictly_ascending() {
+        let mut previous = 0i64;
+        for (version, _) in ALL {
+            assert!(
+                *version > previous,
+                "migration {version} is not greater than the preceding {previous} — \
+                 the runner would skip it forever without erroring"
+            );
+            previous = *version;
+        }
+    }
+
+    /// Both parallel workstreams must survive the merge. Named explicitly so
+    /// dropping either one is a deliberate edit rather than a lost hunk.
+    #[test]
+    fn the_capability_and_harness_migrations_are_both_present() {
+        let versions: Vec<i64> = ALL.iter().map(|(v, _)| *v).collect();
+        assert!(versions.contains(&21), "capability library migration 021 is missing");
+        assert!(versions.contains(&22), "harness control plane migration 022 is missing");
+        assert!(
+            ALL.iter().any(|(v, sql)| *v == 21 && sql.contains("capability_skill")),
+            "021 is no longer the capability library migration"
+        );
+        assert!(
+            ALL.iter().any(|(v, sql)| *v == 22 && sql.contains("harness_profile")),
+            "022 is no longer the harness control plane migration"
+        );
+    }
+}

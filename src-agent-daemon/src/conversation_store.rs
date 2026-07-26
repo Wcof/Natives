@@ -435,9 +435,8 @@ pub fn engine_history(conversation_id: &str) -> Result<Vec<EngineMessage>, Strin
         .iter()
         .filter_map(|message| {
             let role = message.get("role")?.as_str()?.to_string();
-            let content = message
-                .get("content_blocks")
-                .and_then(Value::as_array)
+            let blocks = message.get("content_blocks").and_then(Value::as_array);
+            let content = blocks
                 .map(|blocks| {
                     blocks
                         .iter()
@@ -446,29 +445,25 @@ pub fn engine_history(conversation_id: &str) -> Result<Vec<EngineMessage>, Strin
                         .join("\n")
                 })
                 .unwrap_or_default();
-            if content.trim().is_empty() {
+            let images: Vec<_> = blocks
+                .map(|blocks| blocks.iter().filter_map(block_image).collect())
+                .unwrap_or_default();
+            // An image-only turn carries no text, and dropping it here would
+            // silently rewrite history — the model would see the reply to a
+            // picture it was never shown.
+            if content.trim().is_empty() && images.is_empty() {
                 return None;
             }
             Some(EngineMessage {
                 role,
                 content,
-                tool_call_id: None,
-                tool_name: None,
-                tool_calls: None,
+                images,
+                ..Default::default()
             })
         })
         .collect();
     if let Some(summary) = latest_context_summary(conversation_id)? {
-        history.insert(
-            0,
-            EngineMessage {
-                role: "system".into(),
-                content: summary,
-                tool_call_id: None,
-                tool_name: None,
-                tool_calls: None,
-            },
-        );
+        history.insert(0, EngineMessage::text("system", summary));
     }
     Ok(history)
 }
@@ -490,6 +485,34 @@ fn latest_context_summary(conversation_id: &str) -> Result<Option<String>, Strin
     )
     .optional()
     .map_err(|e| e.to_string())
+}
+
+/// Recover a stored `image` content block for replay into a provider request.
+///
+/// Returns `None` for every other block type, and for an image block whose URL
+/// is absent — a placeholder [`EngineImage`] would reach the adapters and be
+/// announced to the model as a degraded image, claiming a picture existed where
+/// the record has none.
+fn block_image(block: &Value) -> Option<agent_core::EngineImage> {
+    if block.get("type").and_then(Value::as_str)? != "image" {
+        return None;
+    }
+    let content = block.get("content").unwrap_or(block);
+    let url = content
+        .get("image_url")
+        .or_else(|| content.get("imageUrl"))
+        .or_else(|| content.get("url"))
+        .and_then(Value::as_str)
+        .filter(|url| !url.trim().is_empty())?;
+    Some(agent_core::EngineImage {
+        url: url.to_string(),
+        media_type: content
+            .get("mime_type")
+            .or_else(|| content.get("mimeType"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        detail: None,
+    })
 }
 
 fn block_text(block: &Value) -> Option<String> {
@@ -1066,9 +1089,41 @@ fn required_str<'a>(params: &'a Value, key: &str) -> Result<&'a str, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     fn env_lock() -> crate::storage::EnvTestGuard {
         crate::storage::DataStore::env_test_lock()
+    }
+
+    /// Stored image blocks used to vanish on the way back out of SQLite, so a
+    /// follow-up turn re-sent the conversation without the picture the model
+    /// had already been shown.
+    #[test]
+    fn stored_image_blocks_are_recovered_for_replay() {
+        let block = serde_json::json!({
+            "type": "image",
+            "content": { "imageUrl": "data:image/webp;base64,UklGRg==", "mimeType": "image/webp" }
+        });
+        let image = block_image(&block).expect("image block should be recovered");
+        assert_eq!(image.url, "data:image/webp;base64,UklGRg==");
+        assert_eq!(image.media_type.as_deref(), Some("image/webp"));
+
+        // Flat spelling (no nested `content`) is what some writers persist.
+        let flat = serde_json::json!({ "type": "image", "image_url": "https://a.test/b.png" });
+        assert_eq!(
+            block_image(&flat).expect("flat image block").url,
+            "https://a.test/b.png"
+        );
+    }
+
+    #[test]
+    fn non_image_blocks_and_urlless_images_yield_nothing() {
+        assert!(block_image(&serde_json::json!({"type": "text"})).is_none());
+        assert!(block_image(&serde_json::json!({"type": "image"})).is_none());
+        assert!(block_image(&serde_json::json!({
+            "type": "image",
+            "content": { "imageUrl": "  " }
+        }))
+        .is_none());
     }
 
     struct ClearTestDb;

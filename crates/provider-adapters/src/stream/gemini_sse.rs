@@ -53,16 +53,30 @@ fn parse_gemini_value(value: &Value) -> Vec<ProviderEvent> {
     }
 
     if let Some(usage) = value.get("usageMetadata") {
+        let prompt_tokens = usage
+            .get("promptTokenCount")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        // Gemini reports both implicit and explicit (CachedContent) cache hits
+        // here, and `promptTokenCount` includes them — subtract to match the
+        // `ProviderUsage` contract. Gemini has no request-side parameter for
+        // implicit caching, and explicit CachedContent is a separate stateful
+        // resource this adapter does not create, so nothing is sent on the way
+        // out; this is read-back only.
+        let cache_read = usage.get("cachedContentTokenCount").and_then(|v| v.as_u64());
         events.push(ProviderEvent::Usage(ProviderUsage {
-            input_tokens: usage
-                .get("promptTokenCount")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
+            input_tokens: match cache_read {
+                Some(cached) => prompt_tokens.saturating_sub(cached),
+                None => prompt_tokens,
+            },
             output_tokens: usage
                 .get("candidatesTokenCount")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0),
             reasoning_tokens: usage.get("thoughtsTokenCount").and_then(|v| v.as_u64()),
+            // Gemini does not bill or report a distinct cache-write count.
+            cache_creation_tokens: None,
+            cache_read_tokens: cache_read,
             cost_usd: None,
         }));
     }
@@ -137,6 +151,24 @@ mod tests {
             e,
             ProviderEvent::Usage(u) if u.input_tokens == 3 && u.output_tokens == 5
         )));
+    }
+
+    #[test]
+    fn cached_content_tokens_are_split_out_of_prompt_count() {
+        let chunk = r#"{"usageMetadata":{"promptTokenCount":32000,"candidatesTokenCount":40,"cachedContentTokenCount":30720}}"#;
+        let events = parse_gemini_chunk(chunk);
+        let usage = events
+            .iter()
+            .find_map(|e| match e {
+                ProviderEvent::Usage(u) => Some(u.clone()),
+                _ => None,
+            })
+            .expect("a Usage event");
+        assert_eq!(usage.cache_read_tokens, Some(30720));
+        assert_eq!(usage.input_tokens, 32000 - 30720);
+        assert_eq!(usage.total_prompt_tokens(), 32000);
+        // Gemini never reports a distinct cache-write count.
+        assert_eq!(usage.cache_creation_tokens, None);
     }
 
     #[test]

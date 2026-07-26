@@ -29,10 +29,46 @@ if (!typesSrc.includes('GENERATED-FROM: crates/assistant-protocol')) {
   fail('types.ts must declare GENERATED-FROM: crates/assistant-protocol');
 }
 
+/**
+ * Drop `//` line comments so a quoted phrase inside one is never mistaken for
+ * a method name. A `//` only starts a comment when it sits outside a string,
+ * so count unescaped quotes ahead of it rather than cutting on first sight.
+ */
+function stripLineComments(block, quote) {
+  return block
+    .split('\n')
+    .map((line) => {
+      let inString = false;
+      for (let i = 0; i < line.length; i += 1) {
+        const ch = line[i];
+        if (ch === '\\') {
+          i += 1;
+        } else if (ch === quote) {
+          inString = !inString;
+        } else if (!inString && ch === '/' && line[i + 1] === '/') {
+          return line.slice(0, i);
+        }
+      }
+      return line;
+    })
+    .join('\n');
+}
+
+/** Slice a `&[ ... ]` literal by balancing brackets, not by first `];`. */
 function rustArray(name) {
-  const match = methodsSrc.match(new RegExp(`pub const ${name}: &\\[&str\\] = &\\[(.*?)\\];`, 's'));
-  if (!match) fail(`Rust ${name} catalogue missing`);
-  return new Set([...match[1].matchAll(/"([^\"]+)"/g)].map(([, value]) => value));
+  const header = methodsSrc.match(new RegExp(`pub const ${name}: &\\[&str\\] = &\\[`));
+  if (!header) fail(`Rust ${name} catalogue missing`);
+  let depth = 1;
+  let i = header.index + header[0].length;
+  const start = i;
+  while (depth > 0) {
+    if (i >= methodsSrc.length) fail(`Rust ${name} catalogue is unterminated`);
+    if (methodsSrc[i] === '[') depth += 1;
+    else if (methodsSrc[i] === ']') depth -= 1;
+    i += 1;
+  }
+  const body = stripLineComments(methodsSrc.slice(start, i - 1), '"');
+  return new Set([...body.matchAll(/"([^"]+)"/g)].map(([, value]) => value));
 }
 
 const rustMethods = rustArray('ALL_METHODS');
@@ -41,7 +77,9 @@ const hostMethods = rustArray('HOST_IMPLEMENTED_METHODS');
 const assistantMethodBlock = typesSrc.match(/export type AssistantMethod =([\s\S]*?);/);
 if (!assistantMethodBlock) fail('TS AssistantMethod declaration missing');
 const tsMethods = new Set(
-  [...assistantMethodBlock[1].matchAll(/'([^']+)'/g)].map(([, value]) => value),
+  [...stripLineComments(assistantMethodBlock[1], "'").matchAll(/'([^']+)'/g)].map(
+    ([, value]) => value,
+  ),
 );
 
 for (const name of rustMethods) {

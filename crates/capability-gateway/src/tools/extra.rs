@@ -520,22 +520,24 @@ impl ToolHandler for NotificationTool {
     }
 }
 
+/// Skill loading is orchestrated by Agent Daemon `PermissionGatedTools`, which
+/// owns the trust ledger and the caller's tool surface. This registration only
+/// exposes the schema; a bare execute without the orchestrator is an error
+/// rather than a `loaded: false` success, because a fabricated success would
+/// teach the model that the skill body was empty.
 pub struct SkillTool;
 #[async_trait::async_trait]
 impl ToolHandler for SkillTool {
     async fn execute(
         &self,
-        input: serde_json::Value,
+        _input: serde_json::Value,
         _context: &ToolCallContext,
     ) -> Result<ToolOutput, ToolError> {
-        Ok(ToolOutput {
-            result: serde_json::json!({
-                "skill": input.get("name"),
-                "loaded": false,
-                "note": "Agent Daemon resolves skills from .agents/.claude/.grok/.natives"
-            }),
-            truncated: false,
-            duration_ms: 0,
+        Err(ToolError {
+            code: "orchestrator_required".into(),
+            message: "skill requires Agent Daemon PermissionGatedTools (trust-gated skill store)"
+                .into(),
+            retryable: false,
         })
     }
 }
@@ -601,14 +603,18 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
         },
         Tool {
             name: "task",
-            description: "Spawn a subagent task. Credentials are assigned by the host route policy — do not pass provider/key/model ids.",
+            description: "Spawn a subagent task. You choose the subagent's persona: pick an existing profile with `subagent_type`, and/or write its `system_prompt` yourself for this specific task. Credentials are assigned by the host route policy — do not pass provider/key/model ids. Permissions and tools are capped by your own: a subagent can never exceed what you already have.",
             schema: serde_json::json!({
                 "type":"object",
                 "properties":{
-                    "prompt":{"type":"string","description":"Task prompt for the subagent"},
+                    "prompt":{"type":"string","description":"Task prompt for the subagent — the work to do, not the persona"},
                     "task":{"type":"string","description":"Alias for prompt"},
                     "name":{"type":"string","description":"Optional short label for the subagent"},
-                    "permission_profile":{"type":"string","description":"ask | full_access (capped by parent)"},
+                    "subagent_type":{"type":"string","description":"Id of an existing agent profile to use as the persona (file stem under .agents/agents, .claude/agents, ...). Its systemPrompt, tools, maxSteps and tokenBudget apply. Omit to use no preset persona."},
+                    "system_prompt":{"type":"string","description":"System prompt you write for this subagent right now: role, standards, output contract. Layered on top of `subagent_type` when both are given. Instructions here never grant permissions or tools."},
+                    "tool_allowlist":{"type":"array","items":{"type":"string"},"description":"Exact tool names the subagent may call (e.g. [\"read_file\",\"grep\"]). Intersected with your own surface. Omit to inherit yours; pass [] for a no-tool reasoning-only child."},
+                    "max_steps":{"type":"integer","minimum":1,"description":"Step budget for the subagent turn loop. Defaults to the profile's maxSteps, else 15."},
+                    "permission_profile":{"type":"string","enum":["readonly","ask","full_access"],"description":"Requested permission profile. Capped by yours and further tightened by the profile's permissionMode; it can only go down, never up."},
                     "agent":{"type":"string","description":"Expert team member id to run this task as. Only valid when an expert team is active; must be one of the roster ids from the team briefing."}
                 },
                 "required":["prompt"]
@@ -647,8 +653,14 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
         },
         Tool {
             name: "skill",
-            description: "Load a skill by name",
-            schema: serde_json::json!({"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}),
+            description: "Read the full instructions of a skill listed under \"Available skills\" in your system prompt. Only each skill's name and one-line summary are in the prompt; the procedure itself lives here. Call this before doing work a skill covers, and follow what it returns. Untrusted skills are not listed and cannot be loaded.",
+            schema: serde_json::json!({
+                "type":"object",
+                "properties":{
+                    "name":{"type":"string","description":"Exact skill name as advertised under \"Available skills\""}
+                },
+                "required":["name"]
+            }),
             side_effect: SideEffect::ReadOnly,
             permission_class: PermissionClass::AlwaysAllowed,
             path_scope: PathScope::None,

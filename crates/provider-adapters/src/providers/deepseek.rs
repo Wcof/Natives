@@ -45,6 +45,12 @@ impl ProviderAdapter for DeepSeekAdapter {
                 "tool_calls".into(),
                 "reasoning".into(),
                 "system_prompt".into(),
+                // Automatic context caching; usage read back from
+                // `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`.
+                "prompt_cache_automatic".into(),
+                "tool_choice".into(),
+                // NOTE: `parallel_tool_calls` is deliberately absent — DeepSeek
+                // does not document a per-request toggle.
             ],
             max_context_window: 64_000,
             streaming: true,

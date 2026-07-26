@@ -4,6 +4,7 @@
 //! Every tool must be registered with a schema, side effect declaration,
 //! permission class, path scope, timeout, output limit, and cancellation policy.
 
+pub mod plan_mode;
 pub mod policy;
 pub mod manifest;
 pub mod platform_sandbox;
@@ -11,6 +12,7 @@ pub mod process_supervisor;
 pub mod tools;
 
 pub use manifest::ToolManifest;
+pub use plan_mode::{Plan, PlanDecision, PlanSession, PlanState, PlanStep, PLAN_PROFILE};
 pub use platform_sandbox::{
     allow_autonomous_shell, wrap_command_macos, PlatformCapabilities, SandboxProfile,
 };

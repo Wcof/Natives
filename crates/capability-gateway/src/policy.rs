@@ -132,7 +132,23 @@ pub fn check_output_limit(output: &[u8], limit: u64) -> bool {
 }
 
 /// Check permission class for a tool.
+///
+/// Plan Mode is handled first and on purpose. The gear is a *ceiling*, so it has
+/// to be impossible for it to reach the autonomous fast path below no matter how
+/// the profile string was produced — an aliasing mistake upstream must degrade
+/// into "ask", never into "allow everything".
 pub fn check_permission(class: PermissionClass, profile: &str) -> PolicyResult {
+    if profile == crate::plan_mode::PLAN_PROFILE {
+        // Anything that can change the machine was already refused by
+        // `plan_mode::decision` before this call. What reaches here is a read,
+        // or a network read the user still gets asked about.
+        return match class {
+            PermissionClass::AlwaysAllowed | PermissionClass::ProjectRead => PolicyResult::Allowed,
+            _ => PolicyResult::NeedsApproval(format!(
+                "{class:?} requires explicit approval (Plan Mode)"
+            )),
+        };
+    }
     if profile == "autonomous" {
         return PolicyResult::Allowed;
     }
@@ -291,6 +307,42 @@ mod tests {
         ));
         let result = check_permission(PermissionClass::ExternalWrite, "confirm_each");
         assert!(matches!(result, PolicyResult::NeedsApproval(_)));
+    }
+
+    #[test]
+    fn test_plan_profile_never_reaches_the_autonomous_fast_path() {
+        for class in [
+            PermissionClass::ProjectWrite,
+            PermissionClass::ExternalWrite,
+            PermissionClass::Credentials,
+            PermissionClass::Elevation,
+            PermissionClass::DestructiveCommand,
+            PermissionClass::PrivacyResource,
+        ] {
+            assert!(
+                matches!(
+                    check_permission(class, crate::plan_mode::PLAN_PROFILE),
+                    PolicyResult::NeedsApproval(_)
+                ),
+                "{class:?} must still require approval in Plan Mode"
+            );
+        }
+    }
+
+    #[test]
+    fn test_plan_profile_keeps_reads_open() {
+        for class in [
+            PermissionClass::AlwaysAllowed,
+            PermissionClass::ProjectRead,
+        ] {
+            assert!(
+                matches!(
+                    check_permission(class, crate::plan_mode::PLAN_PROFILE),
+                    PolicyResult::Allowed
+                ),
+                "{class:?} must stay allowed so the agent can research"
+            );
+        }
     }
 
     #[test]

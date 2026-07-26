@@ -1,13 +1,29 @@
 /**
  * Capability gate — honest UI surface from daemon.getCapabilities().methods.
  *
- * Rule: never render / call an RPC that is not advertised. Known-but-unimplemented
- * methods (run.rewind, conversation.getContextUsage, task.list, …) must stay hidden
- * until IMPLEMENTED ∪ HOST advertises them.
+ * Rule: never render / call an RPC that is not advertised. `methods` is
+ * `IMPLEMENTED_METHODS ∪ HOST_IMPLEMENTED_METHODS` from
+ * `crates/assistant-protocol/src/v2/methods.rs`; anything absent from it must stay
+ * hidden. Catalogued-but-deliberately-unimplemented methods — `mcp.call` (closed
+ * transport bypass) and `mcp.auth.oauthStart` / `mcp.auth.oauthCallback` (no browser
+ * or redirect listener exists) — are never advertised, so the gate keeps them hidden
+ * on its own; do not special-case them here.
+ *
+ * The gate is only as honest as the advertisement. `IMPLEMENTED_METHODS` had drifted
+ * ahead of the daemon's real dispatch arms, which opened this gate for methods that
+ * then answered `internal_error`; that invariant is now pinned by
+ * `src-agent-daemon/tests/rpc_dispatch_contract.rs`.
  */
 import type { ConnectionState, DaemonCapabilities } from '@/lib/assistant-protocol';
 
-/** Host-side methods the GUI may call when advertised (contract spot-check). */
+/**
+ * Methods the GUI may call once advertised (contract spot-check).
+ *
+ * Historically these were all host-owned. After the daemon cutover only
+ * `artifact.reveal` is still host-only — it needs the desktop file manager — and the
+ * rest are served by the daemon. The list is kept as the UI's called-method inventory;
+ * membership here grants nothing, `hasMethod` against the live advertisement does.
+ */
 export const HOST_METHODS_UI = [
   'promptQueue.enqueue',
   'promptQueue.list',

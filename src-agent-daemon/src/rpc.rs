@@ -27,6 +27,19 @@ use tokio::net::UnixListener;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+/// Harness control plane — the `harness.*` method family.
+///
+/// The files live at `src-agent-daemon/src/harness/`, where the design
+/// (第 7.2 节) puts them; only the `mod` declaration is here, via `#[path]`.
+/// The reason is boundary hygiene rather than architecture: declaring it in
+/// `lib.rs` alongside the other stores is the right home and is a one-line
+/// move, but `lib.rs` is owned by a parallel workstream this round. Promoting
+/// it later is: delete these two lines, add `pub mod harness;` to `lib.rs`, and
+/// rename `crate::rpc::harness` to `crate::harness` at its handful of call
+/// sites.
+#[path = "harness/mod.rs"]
+pub mod harness;
+
 /// Active session: maps session_token -> client_id.
 type SessionMap = Arc<Mutex<HashMap<String, String>>>;
 
@@ -355,6 +368,7 @@ async fn test_provider_model(
         temperature: Some(0.0),
         stream: true,
         structured_output: None,
+        controls: Default::default(),
     };
     let mut stream = adapter.stream(request, credential).await?;
     let mut text = String::new();
@@ -385,8 +399,60 @@ async fn test_provider_model(
     }
 }
 
+/// Map an [`McpError`] onto the daemon error envelope.
+///
+/// The distinction that matters is `Unsupported`: "this server does not do
+/// resources" and "you sent bad arguments" are different facts, and collapsing
+/// them into `invalid_input` would make a GUI show a broken-input message for a
+/// server that is working exactly as advertised. `Denied` stays separate for the
+/// same reason — a blocked `file://` read is a policy outcome, not a bug.
+fn mcp_error_to_daemon(err: crate::mcp_runtime::McpError) -> DaemonError {
+    use crate::mcp_runtime::McpError;
+    match err {
+        McpError::Invalid(m) => {
+            DaemonError::new(error_codes::INVALID_INPUT, ErrorCategory::Validation, false, m)
+        }
+        McpError::NotFound(m) => {
+            DaemonError::new(error_codes::NOT_FOUND, ErrorCategory::NotFound, false, m)
+        }
+        // Not `unsupported`: that code is reserved for methods this daemon does
+        // not implement, and this method *is* implemented. The unsupported thing
+        // is the remote server's capability set.
+        McpError::Unsupported(m) => DaemonError::new(
+            error_codes::INVALID_INPUT,
+            ErrorCategory::Validation,
+            false,
+            m,
+        ),
+        McpError::Denied(m) => DaemonError::new(
+            error_codes::PERMISSION_DENIED,
+            ErrorCategory::PermissionDenied,
+            false,
+            m,
+        ),
+        McpError::Transport(m) => {
+            DaemonError::new(error_codes::NETWORK_ERROR, ErrorCategory::Network, true, m)
+        }
+    }
+}
+
+/// Read the MCP server id from either accepted param spelling.
+fn mcp_server_id(request: &RpcRequest) -> &str {
+    request
+        .params
+        .get("server_id")
+        .or_else(|| request.params.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+}
+
 /// Dispatch an RPC request to the appropriate handler.
-async fn handle_rpc(
+///
+/// Public so the dispatch-coverage contract test (`tests/rpc_dispatch_contract.rs`) can
+/// drive every advertised method through the *real* match instead of re-deriving the
+/// arm list from source text. Callers must supply a connected write half; use
+/// `tokio::net::UnixStream::pair()` in tests.
+pub async fn handle_rpc(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
     request: &RpcRequest,
     protocol_version: &ProtocolVersion,
@@ -619,9 +685,16 @@ async fn handle_rpc(
         }
         names::CONVERSATION_CREATE
         | names::CONVERSATION_LIST
+        // Paged variants are advertised in IMPLEMENTED_METHODS and handled by
+        // conversation_store::request — they must be routed here or they fall through
+        // to the fail-closed arm and surface as `internal_error`. The frontend calls
+        // both with a silent `.catch()` fallback to an unpaged fetch, so the failure
+        // showed up as a performance regression rather than a visible error.
+        | names::CONVERSATION_LIST_PAGE
         | names::CONVERSATION_GET
         | names::CONVERSATION_FORK
         | names::CONVERSATION_GET_MESSAGES
+        | names::CONVERSATION_GET_MESSAGES_PAGE
         | names::CONVERSATION_APPEND_MESSAGE
         | names::CONVERSATION_RENAME
         | names::CONVERSATION_UPDATE_MODEL
@@ -1044,6 +1117,165 @@ async fn handle_rpc(
             )
             .await;
         }
+        names::RUN_LIST_CHILDREN => match handle_run_list_children(&request.params) {
+            Ok(value) => {
+                send_success(
+                    writer,
+                    &request.request_id,
+                    &request.client_id,
+                    &request.session_token,
+                    value,
+                )
+                .await
+            }
+            Err(e) => {
+                send_error(
+                    writer,
+                    &DaemonError::new(
+                        error_codes::INVALID_INPUT,
+                        ErrorCategory::Validation,
+                        false,
+                        e,
+                    ),
+                )
+                .await
+            }
+        },
+        names::RUN_GET_ACTIVITY => match handle_run_get_activity(&request.params) {
+            Ok(value) => {
+                send_success(
+                    writer,
+                    &request.request_id,
+                    &request.client_id,
+                    &request.session_token,
+                    value,
+                )
+                .await
+            }
+            Err(e) => {
+                let not_found = e.contains("not found");
+                send_error(
+                    writer,
+                    &DaemonError::new(
+                        if not_found {
+                            error_codes::NOT_FOUND
+                        } else {
+                            error_codes::INVALID_INPUT
+                        },
+                        if not_found {
+                            ErrorCategory::NotFound
+                        } else {
+                            ErrorCategory::Validation
+                        },
+                        false,
+                        e,
+                    ),
+                )
+                .await
+            }
+        },
+        names::RUN_FINISH => match handle_run_finish(&request.params) {
+            Ok(value) => {
+                send_success(
+                    writer,
+                    &request.request_id,
+                    &request.client_id,
+                    &request.session_token,
+                    value,
+                )
+                .await
+            }
+            Err(e) => {
+                let not_found = e.contains("not found");
+                send_error(
+                    writer,
+                    &DaemonError::new(
+                        if not_found {
+                            error_codes::NOT_FOUND
+                        } else {
+                            error_codes::INVALID_INPUT
+                        },
+                        if not_found {
+                            ErrorCategory::NotFound
+                        } else {
+                            ErrorCategory::Validation
+                        },
+                        false,
+                        e,
+                    ),
+                )
+                .await
+            }
+        },
+        names::PERMISSION_LIST_PENDING => {
+            match crate::interaction_store::list_pending(request.params.clone()) {
+                Ok(value) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        filter_permission_interactions(value),
+                    )
+                    .await
+                }
+                Err(e) => {
+                    send_error(
+                        writer,
+                        &DaemonError::new(
+                            error_codes::INVALID_INPUT,
+                            ErrorCategory::Validation,
+                            false,
+                            e,
+                        ),
+                    )
+                    .await
+                }
+            }
+        }
+        names::AGENT_LIST => {
+            let project = request
+                .params
+                .get("project_path")
+                .or_else(|| request.params.get("projectPath"))
+                .and_then(|v| v.as_str())
+                .map(std::path::PathBuf::from);
+            let agents = discover_agent_profiles(project.as_deref());
+            send_success(
+                writer,
+                &request.request_id,
+                &request.client_id,
+                &request.session_token,
+                serde_json::json!({ "agents": agents }),
+            )
+            .await;
+        }
+        names::CONVERSATION_UPDATE => {
+            match handle_conversation_update(request.params.clone()).await {
+                Ok(value) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        value,
+                    )
+                    .await
+                }
+                Err(e) => {
+                    send_error(
+                        writer,
+                        &DaemonError::new(
+                            error_codes::INVALID_INPUT,
+                            ErrorCategory::Validation,
+                            false,
+                            e,
+                        ),
+                    )
+                    .await
+                }
+            }
+        }
         names::PROMPT_QUEUE_LIST
         | names::PROMPT_QUEUE_ENQUEUE
         | names::PROMPT_QUEUE_UPDATE
@@ -1343,8 +1575,22 @@ async fn handle_rpc(
             }
         }
         names::MCP_LIST => {
-            let servers = crate::mcp_runtime::global_mcp().list_servers();
-            let tools = crate::mcp_runtime::global_mcp().list_tools();
+            let mcp = crate::mcp_runtime::global_mcp();
+            let servers = mcp.list_servers();
+            let tools = mcp.list_tools();
+            // `capabilities` is per-server and may be null. Null means "no
+            // completed handshake, we do not know" — never "supports nothing".
+            // The GUI must render unknown differently from unsupported, which is
+            // only possible because this field is nullable rather than defaulted.
+            let capabilities: Vec<serde_json::Value> = servers
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "server_id": s.id,
+                        "capabilities": mcp.server_capabilities(&s.id),
+                    })
+                })
+                .collect();
             send_success(
                 writer,
                 &request.request_id,
@@ -1353,7 +1599,8 @@ async fn handle_rpc(
                 serde_json::json!({
                     "servers": servers,
                     "tools": tools,
-                    "namespaced": crate::mcp_runtime::global_mcp().namespaced_tools(),
+                    "namespaced": mcp.namespaced_tools(),
+                    "capabilities": capabilities,
                 }),
             )
             .await;
@@ -1637,6 +1884,147 @@ async fn handle_rpc(
                     .await;
                 }
             }
+        }
+        names::MCP_RESOURCES_LIST => {
+            let cursor = request.params.get("cursor").and_then(|v| v.as_str());
+            match crate::mcp_runtime::global_mcp().list_resources(mcp_server_id(request), cursor) {
+                Ok(v) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        v,
+                    )
+                    .await;
+                }
+                Err(e) => send_error(writer, &mcp_error_to_daemon(e)).await,
+            }
+        }
+        names::MCP_RESOURCES_TEMPLATES_LIST => {
+            match crate::mcp_runtime::global_mcp().list_resource_templates(mcp_server_id(request)) {
+                Ok(v) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        v,
+                    )
+                    .await;
+                }
+                Err(e) => send_error(writer, &mcp_error_to_daemon(e)).await,
+            }
+        }
+        names::MCP_RESOURCES_READ => {
+            // Human-initiated read only. There is deliberately no model-facing
+            // tool for this: `tools/call` stays closed over RPC because it has
+            // side effects, and a resource read is gated instead by the server's
+            // own published URI set plus the scheme policy in `mcp_runtime`.
+            let uri = request
+                .params
+                .get("uri")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            match crate::mcp_runtime::global_mcp().read_resource(mcp_server_id(request), uri) {
+                Ok(v) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        v,
+                    )
+                    .await;
+                }
+                Err(e) => send_error(writer, &mcp_error_to_daemon(e)).await,
+            }
+        }
+        names::MCP_PROMPTS_LIST => {
+            let cursor = request.params.get("cursor").and_then(|v| v.as_str());
+            match crate::mcp_runtime::global_mcp().list_prompts(mcp_server_id(request), cursor) {
+                Ok(v) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        v,
+                    )
+                    .await;
+                }
+                Err(e) => send_error(writer, &mcp_error_to_daemon(e)).await,
+            }
+        }
+        names::MCP_PROMPTS_GET => {
+            let name = request
+                .params
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let arguments = request
+                .params
+                .get("arguments")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            match crate::mcp_runtime::global_mcp().get_prompt(
+                mcp_server_id(request),
+                name,
+                arguments,
+            ) {
+                Ok(v) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        v,
+                    )
+                    .await;
+                }
+                Err(e) => send_error(writer, &mcp_error_to_daemon(e)).await,
+            }
+        }
+        names::MCP_ROOTS_LIST => {
+            // What *we* would hand a server that asks. Empty is a real answer
+            // ("no roots granted"), not a placeholder, so `source` states where
+            // the set came from instead of leaving the GUI to guess.
+            let roots = crate::mcp_runtime::global_mcp().client_roots();
+            send_success(
+                writer,
+                &request.request_id,
+                &request.client_id,
+                &request.session_token,
+                serde_json::json!({
+                    "roots": roots,
+                    "source": if std::env::var("NATIVES_MCP_ROOTS").is_ok() {
+                        "env:NATIVES_MCP_ROOTS"
+                    } else {
+                        "explicit"
+                    },
+                }),
+            )
+            .await;
+        }
+        names::MCP_NOTIFICATIONS_LIST => {
+            let server_id = request
+                .params
+                .get("server_id")
+                .or_else(|| request.params.get("id"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty());
+            let items = crate::mcp_runtime::global_mcp().notifications(server_id);
+            send_success(
+                writer,
+                &request.request_id,
+                &request.client_id,
+                &request.session_token,
+                serde_json::json!({
+                    "server_id": server_id,
+                    "notifications": items,
+                }),
+            )
+            .await;
         }
         names::ARTIFACT_LIST => {
             let run_id = request.params.get("run_id").and_then(|v| v.as_str());
@@ -2313,6 +2701,35 @@ async fn handle_rpc(
                 }
             }
         }
+        // Harness control plane. Routed by prefix rather than by eighteen
+        // literals: the family shares one handler, and
+        // `the_harness_prefix_and_the_advertised_harness_family_agree` in the
+        // protocol crate pins the prefix to exactly the advertised set, so this
+        // arm can never quietly serve something that was never advertised.
+        method if method.starts_with(names::HARNESS_PREFIX) => {
+            match harness::request(method, request.params.clone()).await {
+                Ok(value) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        value,
+                    )
+                    .await
+                }
+                Err(e) => {
+                    // The Harness error already carries a structured code and a
+                    // category; re-deriving either from the message here would
+                    // throw that away.
+                    send_error(
+                        writer,
+                        &DaemonError::new(e.code, e.category, false, e.message),
+                    )
+                    .await
+                }
+            }
+        }
         "conversation.getContextUsage" => match handle_context_usage_rpc(&request.params) {
             Ok(value) => {
                 send_success(
@@ -2356,6 +2773,272 @@ async fn handle_rpc(
             send_error(writer, &err).await;
         }
     }
+}
+
+/// Read a required non-empty string param, accepting snake_case and camelCase aliases.
+fn required_param<'a>(
+    params: &'a serde_json::Value,
+    aliases: &[&str],
+) -> Result<&'a str, String> {
+    for key in aliases {
+        if let Some(value) = params.get(*key).and_then(|v| v.as_str()) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Ok(value);
+            }
+        }
+    }
+    Err(format!("{} is required", aliases[0]))
+}
+
+/// `run.listChildren` — direct children of `parent_run_id`.
+///
+/// Source of truth is the RunManager projection (the sole owner of run identity), not
+/// the live ExecutionRegistry: children of a finished parent must still be listable.
+/// Depth-1 only; callers recurse if they want the whole tree.
+fn handle_run_list_children(params: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let parent = required_param(
+        params,
+        &["parent_run_id", "parentRunId", "run_id", "runId"],
+    )?;
+    let mut children: Vec<assistant_protocol::v2::RunV2> = run_manager()
+        .list_runs(None)
+        .into_iter()
+        .filter(|r| r.parent_run_id.as_deref() == Some(parent))
+        .collect();
+    children.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
+    Ok(serde_json::json!({
+        "parent_run_id": parent,
+        "children": children,
+    }))
+}
+
+/// `run.getActivity` — point-in-time activity snapshot for one run.
+///
+/// Every field is projected from an existing source (RunManager run record, the run's
+/// child projection, and the persisted interaction table). Nothing is synthesised.
+fn handle_run_get_activity(params: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let run_id = required_param(params, &["run_id", "runId"])?;
+    let run = run_manager()
+        .get_run(run_id)
+        .ok_or_else(|| format!("run not found: {run_id}"))?;
+    let child_run_ids: Vec<String> = run_manager()
+        .list_runs(None)
+        .into_iter()
+        .filter(|r| r.parent_run_id.as_deref() == Some(run_id))
+        .map(|r| r.id)
+        .collect();
+    // Best-effort: a missing/locked interaction table must not fail the snapshot.
+    let pending = crate::interaction_store::list_pending(serde_json::json!({ "run_id": run_id }))
+        .ok()
+        .and_then(|v| v.get("interactions").cloned())
+        .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+    let pending_count = pending.as_array().map(|a| a.len()).unwrap_or(0);
+    Ok(serde_json::json!({
+        "run_id": run.id,
+        "conversation_id": run.conversation_id,
+        "status": run.status,
+        "runtime_id": run.runtime_id,
+        "provider_id": run.provider_id,
+        "model_id": run.model_id,
+        "agent_profile_id": run.agent_profile_id,
+        "step_count": run.step_count,
+        "max_steps": run.max_steps,
+        "retry_count": run.retry_count,
+        "last_event_sequence": run.last_event_sequence,
+        "created_at": run.created_at,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+        "error_code": run.error_code,
+        "child_run_ids": child_run_ids,
+        "pending_interaction_count": pending_count,
+        "pending_interactions": pending,
+    }))
+}
+
+/// `run.finish` — externally driven terminal commit.
+///
+/// Delegates to `RunManager::commit_status`, which is the sole committer of run
+/// lifecycle transitions (see docs/architecture/NATIVE-DAEMON-CAPABILITY-MAP.md).
+/// This handler never writes run state itself, and terminal races stay idempotent
+/// because `commit_status` returns the existing run when it is already terminal.
+fn handle_run_finish(params: &serde_json::Value) -> Result<serde_json::Value, String> {
+    use assistant_protocol::v2::RunStatusV2;
+    let run_id = required_param(params, &["run_id", "runId"])?;
+    let requested = params
+        .get("status")
+        .or_else(|| params.get("outcome"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("completed")
+        .trim()
+        .to_ascii_lowercase();
+    let target = match requested.as_str() {
+        "completed" | "complete" | "success" | "succeeded" => RunStatusV2::Completed,
+        "failed" | "failure" | "error" => RunStatusV2::Failed,
+        "cancelled" | "canceled" => RunStatusV2::Cancelled,
+        "interrupted" => RunStatusV2::Interrupted,
+        other => {
+            return Err(format!(
+                "status must be a terminal state (completed|failed|cancelled|interrupted), got: {other}"
+            ))
+        }
+    };
+    let mut metadata = agent_core::TransitionMetadata::empty().with_lifecycle_hint(match target {
+        RunStatusV2::Completed => "completed",
+        RunStatusV2::Failed => "failed",
+        RunStatusV2::Cancelled => "cancelled",
+        _ => "interrupted",
+    });
+    if let Some(reason) = params.get("reason").and_then(|v| v.as_str()) {
+        if !reason.trim().is_empty() {
+            metadata = metadata.with_reason(reason.trim());
+        }
+    }
+    let run = run_manager().commit_status(run_id, target, metadata)?;
+    serde_json::to_value(run).map_err(|e| e.to_string())
+}
+
+/// Narrow `interaction.listPending` rows down to permission requests and flatten the
+/// stored payload into the shape the permission UI reads.
+///
+/// Returns a bare JSON array (not `{interactions: […]}`) — that is what the gateway
+/// adapter expects from `permission.listPending`.
+fn filter_permission_interactions(value: serde_json::Value) -> serde_json::Value {
+    let rows = value
+        .get("interactions")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let out: Vec<serde_json::Value> = rows
+        .into_iter()
+        .filter(|row| {
+            row.get("kind")
+                .and_then(|v| v.as_str())
+                .map(|k| k.contains("permission"))
+                .unwrap_or(false)
+        })
+        .map(|row| {
+            let payload = row.get("payload").cloned().unwrap_or(serde_json::Value::Null);
+            let field = |name: &str| payload.get(name).cloned().unwrap_or(serde_json::Value::Null);
+            serde_json::json!({
+                "id": row.get("id").cloned().unwrap_or(serde_json::Value::Null),
+                "run_id": row.get("run_id").cloned().unwrap_or(serde_json::Value::Null),
+                "conversation_id": row
+                    .get("conversation_id")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+                "kind": row.get("kind").cloned().unwrap_or(serde_json::Value::Null),
+                "created_at": row.get("created_at").cloned().unwrap_or(serde_json::Value::Null),
+                "tool_call_id": field("tool_call_id"),
+                "tool_name": field("tool_name"),
+                "reason": field("reason"),
+                "input": field("input"),
+            })
+        })
+        .collect();
+    serde_json::Value::Array(out)
+}
+
+/// `conversation.update` — generic partial update.
+///
+/// Composed from the existing single-field conversation_store commands so there is
+/// exactly one SQL writer per field. Unknown/absent fields are simply not applied;
+/// an update naming no known field is a validation error rather than a silent no-op.
+async fn handle_conversation_update(
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let id = required_param(&params, &["id", "conversation_id", "conversationId"])?.to_string();
+    let get = |names: &[&str]| -> Option<String> {
+        names
+            .iter()
+            .find_map(|n| params.get(*n).and_then(|v| v.as_str()))
+            .map(|s| s.to_string())
+    };
+    let mut applied: Vec<&str> = Vec::new();
+
+    if let Some(title) = get(&["title", "name"]) {
+        crate::conversation_store::request(
+            assistant_protocol::v2::methods::names::CONVERSATION_RENAME,
+            serde_json::json!({ "id": id, "title": title }),
+        )
+        .await?;
+        applied.push("title");
+    }
+
+    let provider_id = get(&["provider_id", "providerId"]);
+    let model_id = get(&["model_id", "modelId"]);
+    match (&provider_id, &model_id) {
+        (Some(provider_id), Some(model_id)) => {
+            crate::conversation_store::request(
+                assistant_protocol::v2::methods::names::CONVERSATION_UPDATE_MODEL,
+                serde_json::json!({
+                    "id": id,
+                    "provider_id": provider_id,
+                    "model_id": model_id,
+                }),
+            )
+            .await?;
+            applied.push("provider_id");
+            applied.push("model_id");
+        }
+        // Partial model routing would leave the conversation pointing at a model the
+        // provider does not serve — refuse instead of half-applying.
+        (Some(_), None) | (None, Some(_)) => {
+            return Err("provider_id and model_id must be updated together".into())
+        }
+        (None, None) => {}
+    }
+
+    if let Some(profile) = get(&[
+        "permission_profile_id",
+        "permissionProfileId",
+        "permission_profile",
+    ]) {
+        crate::conversation_store::request(
+            assistant_protocol::v2::methods::names::CONVERSATION_UPDATE_PERMISSION,
+            serde_json::json!({ "id": id, "permission_profile_id": profile }),
+        )
+        .await?;
+        applied.push("permission_profile_id");
+    }
+
+    if applied.is_empty() {
+        return Err(
+            "conversation.update requires at least one of: title, provider_id+model_id, \
+             permission_profile_id"
+                .into(),
+        );
+    }
+    // Return the fresh row so callers do not have to re-read.
+    crate::conversation_store::request(
+        assistant_protocol::v2::methods::names::CONVERSATION_GET,
+        serde_json::json!({ "id": id }),
+    )
+    .await
+    .map(|conversation| serde_json::json!({ "id": id, "updated": applied, "conversation": conversation }))
+}
+
+/// `agent.list` — discover declarative Agent Profiles on disk.
+///
+/// Discovery itself lives in `agent_core::list_agent_profiles` so that the ids reported
+/// here are exactly the ids `agent_core::load_agent_profile` can resolve. This function
+/// only projects to wire JSON and re-attaches `sourcePath`, which `AgentProfile` skips
+/// during serialization.
+fn discover_agent_profiles(project_root: Option<&std::path::Path>) -> Vec<serde_json::Value> {
+    agent_core::list_agent_profiles(project_root)
+        .into_iter()
+        .map(|profile| {
+            let source_path = profile
+                .source_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string());
+            let mut value = serde_json::to_value(&profile).unwrap_or_default();
+            if let (Some(obj), Some(path)) = (value.as_object_mut(), source_path) {
+                obj.insert("sourcePath".into(), serde_json::Value::String(path));
+            }
+            value
+        })
+        .collect()
 }
 
 fn handle_rewind_rpc(

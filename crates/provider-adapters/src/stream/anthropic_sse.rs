@@ -44,12 +44,42 @@ struct MessageStart {
 struct AnthropicUsage {
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
+    /// Prompt tokens written to the cache. Present only when the request
+    /// carried `cache_control` breakpoints.
+    cache_creation_input_tokens: Option<u64>,
+    /// Prompt tokens served from the cache.
+    cache_read_input_tokens: Option<u64>,
+}
+
+impl AnthropicUsage {
+    fn to_provider(&self) -> ProviderUsage {
+        ProviderUsage {
+            // Anthropic already excludes cached tokens from `input_tokens`,
+            // which is the convention `ProviderUsage` normalises on.
+            input_tokens: self.input_tokens.unwrap_or(0),
+            output_tokens: self.output_tokens.unwrap_or(0),
+            reasoning_tokens: None,
+            cache_creation_tokens: self.cache_creation_input_tokens,
+            cache_read_tokens: self.cache_read_input_tokens,
+            cost_usd: None,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct AnthropicSseParser {
     /// content_block index → (id, name, json_acc)
     tools: BTreeMap<usize, (String, String, String)>,
+    /// Running usage for this message.
+    ///
+    /// Anthropic reports the full prompt breakdown (input + both cache
+    /// counters) once on `message_start` and then emits a terminal
+    /// `message_delta` whose `usage` may carry only `output_tokens`. Replacing
+    /// the accumulator on that second event — which is what the consumers do,
+    /// since they keep the last `Usage` they see — silently zeroed the input and
+    /// cache counts. Folding into a running total keeps the terminal event
+    /// complete.
+    usage: ProviderUsage,
     finished: bool,
 }
 
@@ -148,12 +178,8 @@ impl AnthropicSseParser {
             }
             "message_delta" => {
                 if let Some(usage) = event.usage {
-                    out.push(ProviderEvent::Usage(ProviderUsage {
-                        input_tokens: usage.input_tokens.unwrap_or(0),
-                        output_tokens: usage.output_tokens.unwrap_or(0),
-                        reasoning_tokens: None,
-                        cost_usd: None,
-                    }));
+                    self.usage.merge_from(&usage.to_provider());
+                    out.push(ProviderEvent::Usage(self.usage.clone()));
                 }
                 if event
                     .delta
@@ -167,12 +193,8 @@ impl AnthropicSseParser {
             "message_start" => {
                 if let Some(msg) = event.message {
                     if let Some(usage) = msg.usage {
-                        out.push(ProviderEvent::Usage(ProviderUsage {
-                            input_tokens: usage.input_tokens.unwrap_or(0),
-                            output_tokens: usage.output_tokens.unwrap_or(0),
-                            reasoning_tokens: None,
-                            cost_usd: None,
-                        }));
+                        self.usage.merge_from(&usage.to_provider());
+                        out.push(ProviderEvent::Usage(self.usage.clone()));
                     }
                 }
             }
@@ -231,5 +253,65 @@ mod tests {
         ));
         let done = p.push_data_line(r#"{"type":"message_stop"}"#);
         assert!(matches!(done.as_slice(), [ProviderEvent::Completed]));
+    }
+
+    fn usage_of(events: &[ProviderEvent]) -> ProviderUsage {
+        events
+            .iter()
+            .find_map(|e| match e {
+                ProviderEvent::Usage(u) => Some(u.clone()),
+                _ => None,
+            })
+            .expect("a Usage event")
+    }
+
+    #[test]
+    fn reads_cache_creation_and_read_tokens_from_message_start() {
+        let mut p = AnthropicSseParser::new();
+        let events = p.push_data_line(
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":12,"output_tokens":0,"cache_creation_input_tokens":2048,"cache_read_input_tokens":16384}}}"#,
+        );
+        let usage = usage_of(&events);
+        assert_eq!(usage.input_tokens, 12);
+        assert_eq!(usage.cache_creation_tokens, Some(2048));
+        assert_eq!(usage.cache_read_tokens, Some(16384));
+        // Anthropic excludes cached tokens from input_tokens, so the total is
+        // the sum of all three.
+        assert_eq!(usage.total_prompt_tokens(), 12 + 2048 + 16384);
+        assert!(usage.reported_cache());
+    }
+
+    #[test]
+    fn terminal_message_delta_keeps_the_prompt_breakdown() {
+        let mut p = AnthropicSseParser::new();
+        p.push_data_line(
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":12,"output_tokens":1,"cache_creation_input_tokens":2048,"cache_read_input_tokens":16384}}}"#,
+        );
+        // Anthropic's terminal delta commonly carries output_tokens only.
+        // Before merging, this event zeroed the input and cache counts for
+        // every consumer that keeps the last Usage it sees.
+        let events = p.push_data_line(
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":312}}"#,
+        );
+        let usage = usage_of(&events);
+        assert_eq!(usage.output_tokens, 312);
+        assert_eq!(usage.input_tokens, 12);
+        assert_eq!(usage.cache_creation_tokens, Some(2048));
+        assert_eq!(usage.cache_read_tokens, Some(16384));
+    }
+
+    #[test]
+    fn absent_cache_fields_stay_none_rather_than_zero() {
+        let mut p = AnthropicSseParser::new();
+        let events = p.push_data_line(
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":5,"output_tokens":0}}}"#,
+        );
+        let usage = usage_of(&events);
+        assert_eq!(usage.cache_creation_tokens, None);
+        assert_eq!(usage.cache_read_tokens, None);
+        assert!(
+            !usage.reported_cache(),
+            "'not reported' must stay distinguishable from 'reported zero'"
+        );
     }
 }

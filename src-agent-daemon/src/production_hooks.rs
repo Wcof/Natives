@@ -23,7 +23,6 @@ use harness_core::hooks::{
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::Duration;
 
 /// Name of the built-in allow-all default, as it appears in Hook identities.
 const BUILTIN_ALLOW_ALL: &str = "allow-all";
@@ -344,6 +343,9 @@ fn push_handler_definition(
 mod tests {
     use super::*;
     use agent_core::{HookDecision, HookRequest, HookRegistry, HookResponse};
+    // Only the assertions need a concrete `Duration`; production code goes
+    // through `HookDefinition::timeout()`.
+    use std::time::Duration;
 
     /// Behaviour snapshot for the pre-`discover`/`compile` split (task T0).
     ///
