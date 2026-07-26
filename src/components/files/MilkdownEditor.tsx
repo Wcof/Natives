@@ -6,14 +6,17 @@ interface MilkdownEditorProps {
   content: string;
   filePath: string;
   onSave: (content: string) => void;
+  /** 输入即置脏、写盘后清脏；供外部变更热重载判断是否可以静默重读 */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 /**
  * Milkdown Crepe WYSIWYG Markdown editor.
- * Auto-saves after 0.8s idle. Cmd+S saves immediately.
+ * Auto-saves after 0.8s idle. Cmd+S saves immediately; unmount flushes
+ * pending edits (guardDirty — 切文件/关预览不丢内容).
  * YAML frontmatter is preserved (stripped before Crepe, prepended back on save).
  */
-export default function MilkdownEditor({ content, onSave }: MilkdownEditorProps) {
+export default function MilkdownEditor({ content, onSave, onDirtyChange }: MilkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<any>(null);
   const getValueRef = useRef<() => string>(() => content);
@@ -26,6 +29,7 @@ export default function MilkdownEditor({ content, onSave }: MilkdownEditorProps)
   const bodyContent = frontmatter ? content.slice(frontmatter.length) : content;
 
   const queueSave = useCallback(() => {
+    onDirtyChange?.(true);
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       const fullContent = frontmatter + getValueRef.current();
@@ -33,8 +37,9 @@ export default function MilkdownEditor({ content, onSave }: MilkdownEditorProps)
         baselineRef.current = fullContent;
         onSave(fullContent);
       }
+      onDirtyChange?.(false);
     }, 800);
-  }, [frontmatter, onSave]);
+  }, [frontmatter, onSave, onDirtyChange]);
 
   const flushSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -43,7 +48,8 @@ export default function MilkdownEditor({ content, onSave }: MilkdownEditorProps)
       baselineRef.current = fullContent;
       onSave(fullContent);
     }
-  }, [frontmatter, onSave]);
+    onDirtyChange?.(false);
+  }, [frontmatter, onSave, onDirtyChange]);
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -97,7 +103,8 @@ export default function MilkdownEditor({ content, onSave }: MilkdownEditorProps)
 
     return () => {
       disposed = true;
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      // guardDirty：卸载前静默 flush 未保存内容（切文件/关预览不丢字）
+      try { flushSave(); } catch { /* no-op */ }
       if (editorRef.current) {
         try { editorRef.current.destroy(); } catch { /* no-op */ }
         editorRef.current = null;

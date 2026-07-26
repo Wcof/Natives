@@ -14,6 +14,8 @@ interface MonacoEditorProps {
   content: string;
   language: string;
   onSave?: (value: string) => void;
+  /** 每次输入回调（自动保存防抖由调用方负责） */
+  onChange?: (value: string) => void;
   readOnly?: boolean;
 }
 
@@ -32,7 +34,7 @@ const EXT_TO_LANG: Record<string, string> = {
 
 const WORD_WRAP_EXTS = new Set(['md', 'markdown', 'txt', 'log', 'srt', 'vtt', 'ass']);
 
-export default function MonacoEditor({ content, language, onSave, readOnly }: MonacoEditorProps) {
+export default function MonacoEditor({ content, language, onSave, onChange, readOnly }: MonacoEditorProps) {
   const editorRef = useRef<any>(null);
 
   const lang = EXT_TO_LANG[language] || 'plaintext';
@@ -95,6 +97,7 @@ export default function MonacoEditor({ content, language, onSave, readOnly }: Mo
         fontLigatures: true,
       }}
       onMount={handleMount}
+      onChange={onChange ? (value) => onChange(value ?? '') : undefined}
     />
   );
 }

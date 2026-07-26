@@ -10,6 +10,9 @@ import { detectLanguage, highlightCode } from '@/lib/shiki-utils';
 import { IFRAME_SANDBOX } from '@/lib/iframe-manager';
 import { parseUnifiedDiff } from '@/lib/diff-utils';
 import { useFileContent } from '@/lib/useFileContent';
+import { useEditorSave } from '@/lib/use-editor-save';
+import { fsApi, fsWatchApiOrNull, hasNativeFiles } from '@/lib/files-api';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { type PreviewSubMode } from '@/components/shell/RightPanel';
 import MonacoDiffView from './MonacoDiffView';
 import ImageLightbox from './ImageLightbox';
@@ -169,10 +172,11 @@ function useFileBlobUrl(path: string, kind?: string): string | null {
   const [url, setUrl] = useState<string | null>(null);
 
   useEffect(() => {
-    const api = window.nativesAPI;
+    if (!hasNativeFiles()) return;
+    const fs = fsApi();
     if (kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'pdf') {
-      if (api?.fs?.convertFileSrc) {
-        startTransition(() => { setUrl(api.fs?.convertFileSrc?.(path) ?? ""); });
+      if (fs.convertFileSrc) {
+        startTransition(() => { setUrl(fs.convertFileSrc?.(path) ?? ""); });
         return;
       }
     }
@@ -182,8 +186,8 @@ function useFileBlobUrl(path: string, kind?: string): string | null {
     let createdUrl: string | null = null;
     (async () => {
       try {
-        if (api?.fs?.readFile) {
-          const result = await api.fs.readFile(path) as any;
+        {
+          const result = await fs.readFile(path) as any;
           if (cancelled) return;
           const content = typeof result === 'string' ? result : result?.content;
           if (!content) return;
@@ -256,9 +260,7 @@ function PreviewContent({ entry, locale, isMarkdown, isCsv, isArchive, onImageCl
               imagePath={blobUrl}
               imageName={entry.name}
               onSave={(dataUrl, ext, asNew) => {
-                // Save via fs.saveBlob
-                const api = window.nativesAPI;
-                if (api?.fs?.saveBlob && dataUrl) {
+                if (dataUrl && hasNativeFiles()) {
                   const base64 = dataUrl.split(',')[1] || '';
                   const p = entry.path || '';
                   const dir = p.substring(0, p.lastIndexOf('/')) || '/';
@@ -266,7 +268,7 @@ function PreviewContent({ entry, locale, isMarkdown, isCsv, isArchive, onImageCl
                   const name = asNew
                     ? entryName.replace(/\.[^.]+$/, '') + '-edited.' + ext
                     : entryName;
-                  api.fs.saveBlob(dir, name, base64).catch(() => {});
+                  fsApi().saveBlob(dir, name, base64).catch(() => {});
                 }
                 setImageEditing(false);
               }}
@@ -371,26 +373,65 @@ function CsvPreview({ path, locale, delimiter }: { path: string; locale: Locale;
 // ── Markdown WYSIWYG Preview ──
 
 function MdWysiwygPreview({ path, locale }: { path: string; locale: Locale }) {
-  const { content } = useFileContent(path);
+  const { content, mtime, reload } = useFileContent(path);
+  const dirtyRef = useRef(false);
+  const { save, hasConflict, overwrite, dismissConflict } = useEditorSave({
+    path,
+    initialMtime: mtime,
+    isDirty: useCallback(() => dirtyRef.current, []),
+    // 外部（agent）改了文件且本地未脏 → 静默重读；content 变化会重建 Crepe
+    onExternalChange: reload,
+  });
+
   if (content === null) {
     return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-disabled)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
   }
 
   return (
-    <Suspense fallback={
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 40, gap: 12 }}>
-        <MathCurveLoader size={40} />
-        <div style={{ color: 'var(--text-disabled)', fontSize: 12 }}>Loading editor...</div>
-      </div>
-    }>
-      <MilkdownEditor
-        content={content}
-        filePath={path}
-        onSave={async (newContent) => {
-          await window.nativesAPI?.fs?.writeFileAtomic?.(path, newContent);
-        }}
+    <>
+      <Suspense fallback={
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 40, gap: 12 }}>
+          <MathCurveLoader size={40} />
+          <div style={{ color: 'var(--text-disabled)', fontSize: 12 }}>Loading editor...</div>
+        </div>
+      }>
+        <MilkdownEditor
+          content={content}
+          filePath={path}
+          onSave={(newContent) => { void save(newContent); }}
+          onDirtyChange={(dirty) => { dirtyRef.current = dirty; }}
+        />
+      </Suspense>
+      <SaveConflictDialog
+        open={hasConflict}
+        fileName={path.split('/').pop() || path}
+        locale={locale}
+        onOverwrite={overwrite}
+        onDismiss={dismissConflict}
       />
-    </Suspense>
+    </>
+  );
+}
+
+/** 保存冲突弹窗：磁盘版本比编辑基线新（外部/agent 修改），由用户决定覆盖或暂不保存 */
+function SaveConflictDialog({ open, fileName, locale, onOverwrite, onDismiss }: {
+  open: boolean;
+  fileName: string;
+  locale: Locale;
+  onOverwrite: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <ConfirmDialog
+      open={open}
+      title={t(locale, 'filePreview.conflictTitle')}
+      message={t(locale, 'filePreview.conflictMessage').replace('{name}', fileName)}
+      confirmLabel={t(locale, 'filePreview.conflictOverwrite')}
+      cancelLabel={t(locale, 'filePreview.conflictKeep')}
+      danger
+      onConfirm={onOverwrite}
+      onCancel={onDismiss}
+    />
   );
 }
 
@@ -422,7 +463,7 @@ function CodePreview({ entry, locale, editMode, ext }: {
   ext: string;
 }) {
   const [highlightedHtml, setHighlightedHtml] = useState<string>('');
-  const { content: code, loading } = useFileContent(entry.path);
+  const { content: code, loading, mtime, reload } = useFileContent(entry.path);
 
   // shiki syntax highlighting
   useEffect(() => {
@@ -433,6 +474,17 @@ function CodePreview({ entry, locale, editMode, ext }: {
     });
     return () => { cancelled = true; };
   }, [code, ext, entry.name, editMode]);
+
+  // 只读预览也跟随外部变更（agent 改文件 → 内容自动跟新）
+  useEffect(() => {
+    if (editMode) return;
+    const api = fsWatchApiOrNull();
+    if (!api) return;
+    const off = api.onChange((event: { path: string; kind: string }) => {
+      if (event.path === entry.path && event.kind !== 'remove') reload();
+    });
+    return off;
+  }, [editMode, entry.path, reload]);
 
   if (loading || code === null) {
     return (
@@ -460,24 +512,9 @@ function CodePreview({ entry, locale, editMode, ext }: {
     } catch { /* fall through to shiki */ }
   }
 
-  // Edit mode: Monaco Editor
+  // Edit mode: Monaco Editor（自动保存 + 乐观锁 + 外部变更热重载）
   if (editMode) {
-    return (
-      <Suspense fallback={
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 40, gap: 12 }}>
-          <MathCurveLoader size={40} />
-          <div style={{ color: 'var(--text-disabled)', fontSize: 12 }}>Loading editor...</div>
-        </div>
-      }>
-        <MonacoEditor
-          content={code}
-          language={ext}
-          onSave={async (newContent) => {
-            await window.nativesAPI?.fs?.writeFileAtomic?.(entry.path, newContent);
-          }}
-        />
-      </Suspense>
-    );
+    return <CodeEditorPane entry={entry} code={code} mtime={mtime} reload={reload} locale={locale} ext={ext} />;
   }
 
   // View mode: shiki syntax highlighting
@@ -507,6 +544,129 @@ function CodePreview({ entry, locale, editMode, ext }: {
     }}>
       {code}
     </pre>
+  );
+}
+
+// ── Code Editor Pane（Monaco + fanbox 编辑三件套）──
+//
+// - 停笔 800ms 防抖自动保存，⌘S 立即 flush（保存串行化见 useEditorSave）
+// - 卸载/切文件时 flush 未保存内容（guardDirty，不丢字）
+// - 外部变更且本地未脏 → 静默重读磁盘并重建编辑器（key remount）
+// - mtime 冲突 → 弹窗「覆盖 / 暂不」，绝不静默覆盖外部修改
+
+function CodeEditorPane({ entry, code, mtime, reload, locale, ext }: {
+  entry: FileEntry;
+  code: string;
+  mtime: number | null;
+  reload: () => void;
+  locale: Locale;
+  ext: string;
+}) {
+  const dirtyRef = useRef(false);
+  const latestRef = useRef(code);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [reloadTick, setReloadTick] = useState(0);
+  const [savedTickLabel, setSavedTickLabel] = useState<string | null>(null);
+
+  const { save, hasConflict, overwrite, dismissConflict, savedAt, saveError } = useEditorSave({
+    path: entry.path,
+    initialMtime: mtime,
+    isDirty: useCallback(() => dirtyRef.current, []),
+    onExternalChange: useCallback(() => {
+      reload();
+      setReloadTick((n) => n + 1); // Monaco defaultValue 只在挂载时生效，remount 换内容
+    }, [reload]),
+  });
+
+  // 外部重读后同步 latestRef（未脏时才会走到这里）
+  useEffect(() => {
+    if (!dirtyRef.current) latestRef.current = code;
+  }, [code]);
+
+  const doSave = useCallback((value: string) => {
+    dirtyRef.current = false;
+    void save(value);
+  }, [save]);
+
+  const handleChange = useCallback((value: string) => {
+    latestRef.current = value;
+    dirtyRef.current = true;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      debounceRef.current = null;
+      doSave(latestRef.current);
+    }, 800);
+  }, [doSave]);
+
+  const handleManualSave = useCallback((value: string) => {
+    if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null; }
+    latestRef.current = value;
+    doSave(value);
+  }, [doSave]);
+
+  // guardDirty：卸载/切文件时 flush 未保存内容。save 随 path 换代，
+  // cleanup 捕获的是旧文件的保存函数，flush 落在正确的文件上。
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null; }
+      if (dirtyRef.current) {
+        dirtyRef.current = false;
+        void save(latestRef.current);
+      }
+    };
+  }, [save]);
+
+  // 「N 秒前已保存」状态条，每秒刷新
+  useEffect(() => {
+    if (savedAt === null) { setSavedTickLabel(null); return; }
+    const update = () => {
+      const secs = Math.max(0, Math.round((Date.now() - savedAt) / 1000));
+      setSavedTickLabel(
+        secs < 2
+          ? t(locale, 'filePreview.savedJustNow')
+          : t(locale, 'filePreview.savedSecondsAgo').replace('{seconds}', String(secs)),
+      );
+    };
+    update();
+    const timer = setInterval(update, 1000);
+    return () => clearInterval(timer);
+  }, [savedAt, locale]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <Suspense fallback={
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 40, gap: 12 }}>
+            <MathCurveLoader size={40} />
+            <div style={{ color: 'var(--text-disabled)', fontSize: 12 }}>Loading editor...</div>
+          </div>
+        }>
+          <MonacoEditor
+            key={`${entry.path}:${reloadTick}`}
+            content={code}
+            language={ext}
+            onChange={handleChange}
+            onSave={handleManualSave}
+          />
+        </Suspense>
+      </div>
+      {(savedTickLabel || saveError) && (
+        <div style={{
+          padding: '3px 10px', fontSize: 11, fontFamily: 'var(--font-mono)',
+          color: saveError ? 'var(--danger)' : 'var(--text-disabled)',
+          borderTop: '1px solid var(--border-subtle)',
+        }}>
+          {saveError ? t(locale, 'filePreview.saveFailed') : savedTickLabel}
+        </div>
+      )}
+      <SaveConflictDialog
+        open={hasConflict}
+        fileName={entry.name}
+        locale={locale}
+        onOverwrite={overwrite}
+        onDismiss={dismissConflict}
+      />
+    </div>
   );
 }
 

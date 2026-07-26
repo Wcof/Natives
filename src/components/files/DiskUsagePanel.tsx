@@ -6,6 +6,7 @@ import { t, type Locale } from '@/i18n';
 import { X, ExternalLink } from 'lucide-react';
 import { FbFolder, FbText } from '@/lib/file-icons';
 import { webFsClient } from '@/lib/web-fs-client';
+import { hasNativeFiles, diskApi } from '@/lib/files-api';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 import { useHydrated } from '@/hooks/useHydrated';
 
@@ -59,10 +60,9 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
     setLoading(true);
     setError(null);
     try {
-      const native = (window as any).nativesAPI?.disk?.usage;
       let data: DiskUsageItem[] | null = null;
-      if (native) {
-        data = await native(path);
+      if (hasNativeFiles()) {
+        data = await diskApi().usage(path) as DiskUsageItem[];
       } else {
         data = await webFsClient.diskUsage(path);
       }

@@ -171,7 +171,12 @@ export default function FileContextMenu({
     ];
     if (entry.kind === 'image') {
       items.push(mkItem({ label: t(locale, 'fileBrowser.editImage'), action: () => onEditImage?.(entry) }));
-      items.push(mkItem({ label: t(locale, 'fileBrowser.copyImage'), action: () => onCopyImage?.(entry) }));
+      // 后端 fs_clipboard_copy_image 仅实现了 macOS（osascript）；
+      // 其余平台隐藏菜单项，不给用户一个必然报错的入口
+      const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform || navigator.userAgent);
+      if (isMac) {
+        items.push(mkItem({ label: t(locale, 'fileBrowser.copyImage'), action: () => onCopyImage?.(entry) }));
+      }
     }
     items.push(
       mkItem({ label: t(locale, 'fileBrowser.revealInFinder'), action: () => onRevealInFinder?.(entry) }),

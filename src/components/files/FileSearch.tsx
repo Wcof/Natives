@@ -6,6 +6,7 @@ import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 import { useLocale, t as tr } from '@/i18n';
 import { useToast } from '@/components/ui/Toast';
 import { classifyError } from '@/lib/error-classifier';
+import { fsApi, searchApi, hasNativeFiles } from '@/lib/files-api';
 
 interface FileSearchProps {
   onClose: () => void;
@@ -46,8 +47,8 @@ export default function FileSearch({ onClose, onNavigate, rootPath = '/' }: File
   const resolveRoot = async (): Promise<string> => {
     if (scope === 'here' && rootPath) return rootPath;
     try {
-      const roots = await (window as any).nativesAPI?.fs?.roots?.();
-      const home = Array.isArray(roots) ? roots.find((r: any) => r.id === 'home') : null;
+      const roots = await fsApi().roots() as Array<{ id?: string; path?: string }>;
+      const home = Array.isArray(roots) ? roots.find((r) => r.id === 'home') : null;
       if (home?.path) return home.path;
     } catch { /* ignore */ }
     return rootPath || '/';
@@ -65,19 +66,18 @@ export default function FileSearch({ onClose, onNavigate, rootPath = '/' }: File
     const rid = ++requestIdRef.current;
     setSearching(true);
     try {
-      const api = window.nativesAPI;
-      const searchApi = api?.search;
-      if (!searchApi) {
+      if (!hasNativeFiles()) {
         setResults([]);
         return;
       }
+      const search = searchApi();
 
       const root = await resolveRoot();
       let data: any;
       if (nextMode === 'content') {
-        data = await searchApi.grep(q, root, { maxResults: 80 });
+        data = await search.grep(q, root, { maxResults: 80 });
       } else {
-        data = await searchApi.files(q, root, { maxResults: 80 });
+        data = await search.files(q, root, { maxResults: 80 });
       }
       if (rid !== requestIdRef.current) return;
 

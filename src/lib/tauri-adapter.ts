@@ -669,7 +669,7 @@ export interface NativesAPI {
   };
   /**
    * Draft lifecycle for the creation loop. Publishing is a host command, not a
-   * model tool: the user's click is the authorization (ADR-0014 §9).
+   * model tool: the user's click is the authorization (ADR-0014, Section 9).
    */
   creativeDraft: {
     create: (request: {
@@ -754,7 +754,8 @@ export interface NativesAPI {
     clipboardCopyImage: (filePath: string) => Promise<{ ok: boolean }>;
   };
   archive: {
-    list: (archivePath: string) => Promise<unknown[]>;
+    // 后端 ArchiveListing（archive.rs）：{ entries: [{name,size,isDir?}...], truncated }
+    list: (archivePath: string) => Promise<{ entries: Array<{ name: string; size: number; isDir?: boolean }>; truncated: boolean }>;
   };
   search: {
     grep: (query: string, root: string, options?: unknown) => Promise<unknown>;
@@ -1001,6 +1002,17 @@ export interface NativesAPI {
     run: (data: { subagentId: string; inputText: string }) => Promise<unknown>;
     listRuns: (subagentId: string) => Promise<unknown>;
     resolveBinding: (subagentId: string) => Promise<unknown>;
+  };
+  /** Job module（任务）— 契约 v1：8 个 job_* 命令，JSON snake_case；强类型见 src/lib/jobs-api.ts */
+  jobs: {
+    list: () => Promise<unknown>;
+    get: (id: string) => Promise<unknown>;
+    create: (payload: Record<string, unknown>) => Promise<unknown>;
+    update: (payload: Record<string, unknown>) => Promise<unknown>;
+    delete: (id: string) => Promise<unknown>;
+    setEnabled: (id: string, enabled: boolean) => Promise<unknown>;
+    runNow: (id: string) => Promise<unknown>;
+    listRuns: (params: { job_id?: string; limit?: number; offset?: number }) => Promise<unknown>;
   };
 }
 
@@ -1713,6 +1725,19 @@ const nativesAPI: NativesAPI = {
   // Task Scheduler（Slice J）
   scheduler: {
     listTasks: () => cmd('scheduler_list_tasks'),
+  },
+
+  // Job module（任务）— 契约 v1：入参 JSON snake_case，与后端命令面一致
+  jobs: {
+    list: () => cmd('job_list'),
+    get: (id: string) => cmd('job_get', { id }),
+    create: (payload: Record<string, unknown>) => cmd('job_create', payload),
+    update: (payload: Record<string, unknown>) => cmd('job_update', payload),
+    delete: (id: string) => cmd('job_delete', { id }),
+    setEnabled: (id: string, enabled: boolean) => cmd('job_set_enabled', { id, enabled }),
+    runNow: (id: string) => cmd('job_run_now', { id }),
+    listRuns: (params: { job_id?: string; limit?: number; offset?: number }) =>
+      cmd('job_runs_list', params as Record<string, unknown>),
   },
 
   // Window Controls

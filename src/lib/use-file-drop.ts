@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef } from 'react';
+import { fsApi } from '@/lib/files-api';
 
 interface UseFileDropOptions {
   /** Called with real filesystem paths (Electron file drops) */
@@ -143,13 +144,8 @@ async function dropUrlInto(
   const arrayBuf = await blob.arrayBuffer();
   const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuf)));
 
-  const api = (window as any).nativesAPI;
-  if (api?.fs?.saveBlob) {
-    const savedPath = await api.fs.saveBlob(dir, name, base64);
-    if (savedPath && onSaved) {
-      onSaved(savedPath);
-    }
-  } else {
-    throw new Error('[useFileDrop] saveBlob API not available (Tauri IPC required)');
+  const savedPath = await fsApi().saveBlob(dir, name, base64);
+  if (savedPath && onSaved) {
+    onSaved(savedPath);
   }
 }
