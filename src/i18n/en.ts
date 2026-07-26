@@ -379,6 +379,10 @@ export const en = {
     importExisting: 'Import existing app',
     unavailable: 'Drafts are unavailable — restart the app and try again',
     closeDraft: 'Close draft',
+    session: {
+      noModel: 'No model configured — add a provider in settings first',
+      title: 'Refine with the assistant',
+    },
     preview: {
       title: 'Preview',
       empty: {
@@ -942,6 +946,13 @@ export const en = {
     gitUntracked: 'Untracked',
     gitConflict: 'Conflict',
     gitUnchanged: 'Unchanged',
+    conflictTitle: 'File changed on disk',
+    conflictMessage: '"{name}" was modified on disk (possibly by an agent or another program). Overwriting will discard the newer version on disk.',
+    conflictOverwrite: 'Overwrite',
+    conflictKeep: 'Keep editing',
+    savedJustNow: 'Auto-saved',
+    savedSecondsAgo: 'Saved {seconds}s ago',
+    saveFailed: 'Save failed, will retry on next edit',
   },
 
   header: {
@@ -1750,6 +1761,21 @@ export const en = {
     color: 'Color',
     thickness: 'Thickness',
     undo: 'Undo ⌘Z',
+    toolPen: 'Pen',
+    toolRect: 'Rectangle',
+    toolLine: 'Line',
+    toolArrow: 'Arrow',
+    toolText: 'Text',
+    toolMosaic: 'Mosaic',
+    loading: 'Loading image…',
+    oomError: 'Image failed to load or is too large (>60MP) to edit',
+    format: 'Format',
+    width: 'Width',
+    quality: 'Quality',
+    saveAs: 'Save As',
+    save: 'Save',
+    textInputTitle: 'Enter text',
+    textInputPlaceholder: 'Type text…',
   },
 
   // ── Rate Limit ──

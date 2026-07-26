@@ -46,11 +46,19 @@ impl DraftState {
 
     /// Legal transitions (ADR-0014 section 3.3). Anything absent is rejected by
     /// [`Self::ensure_transition`] before it can reach the database.
+    ///
+    /// `Drafting -> Publishing` is allowed on purpose. A draft seeded from an
+    /// existing module already has a publishable revision the moment it is
+    /// created, and nothing forces it through a model turn first; requiring
+    /// `Generating` there would make "continue creating, change nothing,
+    /// re-publish" impossible. Publishing a draft with no revision is still
+    /// refused — by `read_current`, which is the check that can actually tell.
     pub fn can_transition_to(self, to: DraftState) -> bool {
         use DraftState::*;
         matches!(
             (self, to),
             (Drafting, Generating)
+                | (Drafting, Publishing)
                 | (Generating, Ready)
                 | (Ready, Generating)
                 | (Ready, Publishing)

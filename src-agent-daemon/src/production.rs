@@ -403,9 +403,12 @@ impl ProductionRuntime {
             model_id.clone(),
         ));
         // Child subagent runs may have pre-registered a readonly (or custom) surface.
+        // A built-in surface name (e.g. the creative session) resolves next; it has
+        // no profile on disk, so this is the only place its allowlist can come from.
         let mut tool_allowlist = self
             .take_run_tool_allowlist(&run_id)
             .await
+            .or_else(|| agent_profile_id.as_deref().and_then(builtin_surface_allowlist))
             .or_else(|| profile.as_ref().and_then(|profile| profile.tools.clone()));
         if let (Some(allowlist), Some(disallowed)) = (
             tool_allowlist.as_mut(),
@@ -1410,6 +1413,33 @@ mod provider_error_message_tests {
     }
 }
 
+/// Agent kind of the creative session (ADR-0014 section 8). Carried on a run as
+/// `agent_profile_id`, which is the only per-run surface selector that reaches
+/// `start_run`.
+pub(crate) const CREATIVE_DRAFT_AGENT_KIND: &str = "creative-draft";
+
+/// Resolve a built-in surface name to its allowlist.
+///
+/// Returns `None` for anything that is not a built-in surface, so the caller
+/// falls back to the run-scoped or agent-profile allowlist and behaviour for
+/// every existing agent kind is unchanged.
+///
+/// The creative surface is defined by omission as much as by inclusion: no
+/// `write_file`, `edit_file`, `apply_patch` or `run_terminal`. That is what keeps
+/// ADR-0014 invariant #3 ("the model cannot reach the real module directory")
+/// true without a second gate — publishing stays a host command.
+pub(crate) fn builtin_surface_allowlist(agent_kind: &str) -> Option<Vec<String>> {
+    match agent_kind {
+        CREATIVE_DRAFT_AGENT_KIND | "creative_draft" => Some(
+            capability_gateway::tools::CREATIVE_DRAFT_TOOL_NAMES
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
 /// Register gateway tools for a run. Parent (`allowlist=None`) gets full builtins.
 /// Child (`Some`) only registers the intersection so unauthorized tools are not present.
 pub(crate) fn register_tools_for_surface(
@@ -1421,7 +1451,13 @@ pub(crate) fn register_tools_for_surface(
         Some(list) => {
             let allowed: std::collections::HashSet<&str> =
                 list.iter().map(|s| s.as_str()).collect();
-            for tool in capability_gateway::tools::builtin_tools() {
+            // Draft tools are deliberately not part of `builtin_tools()`: a general
+            // session has no business writing drafts, so they can only ever appear
+            // where an allowlist names them explicitly.
+            for tool in capability_gateway::tools::builtin_tools()
+                .into_iter()
+                .chain(capability_gateway::tools::creative_draft_tools())
+            {
                 if allowed.contains(tool.name) {
                     gateway.register(tool);
                 }
@@ -1944,6 +1980,35 @@ mod tool_allowlist_tests {
         assert!(names.len() > 5);
         assert!(names.iter().any(|n| n == "write_file"));
         assert!(names.iter().any(|n| n == "task"));
+        // Draft tools are opt-in: the default surface must not carry them.
+        assert!(!names.iter().any(|n| n == "write_draft_module"));
+    }
+
+    /// ADR-0014 invariant #3: the creative surface is exactly the four draft
+    /// tools, and no general write tool rides along.
+    #[test]
+    fn creative_surface_registers_only_draft_tools() {
+        let allowlist =
+            builtin_surface_allowlist(CREATIVE_DRAFT_AGENT_KIND).expect("built-in surface");
+        let mut gateway = CapabilityGateway::new();
+        register_tools_for_surface(&mut gateway, Some(&allowlist));
+
+        let mut names: Vec<&str> = gateway.list_tools().into_iter().map(|t| t.name).collect();
+        names.sort_unstable();
+        let mut expected: Vec<&str> =
+            capability_gateway::tools::CREATIVE_DRAFT_TOOL_NAMES.to_vec();
+        expected.sort_unstable();
+        assert_eq!(names, expected);
+
+        for banned in ["write_file", "edit_file", "apply_patch", "run_terminal"] {
+            assert!(gateway.get_tool(banned).is_none(), "{banned} leaked in");
+        }
+    }
+
+    #[test]
+    fn unknown_agent_kind_keeps_the_existing_fallback() {
+        assert!(builtin_surface_allowlist("general").is_none());
+        assert!(builtin_surface_allowlist("").is_none());
     }
 
     #[tokio::test]

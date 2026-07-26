@@ -6,6 +6,13 @@ edition = "2021"
 
 [dependencies]
 assistant-protocol = { path = "../assistant-protocol" }
+# One ruler for drafts and publishes (ADR-0014 invariant #2): the draft tools and
+# the host's write_generated_module must run the *same* lint rules.
+contract-linter = { path = "../contract-linter" }
+# Draft metadata (the revision pointer in particular) is only authoritative in
+# natives.db; the daemon reads and advances it directly rather than guessing from
+# the directory listing.
+rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 async-trait = "0.1"

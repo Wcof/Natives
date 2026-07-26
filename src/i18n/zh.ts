@@ -372,6 +372,10 @@ export const zh = {
     importExisting: '导入已有应用',
     unavailable: '草稿功能不可用，请重启应用后重试',
     closeDraft: '关闭草稿',
+    session: {
+      noModel: '尚未配置可用模型，请先在设置中添加供应商',
+      title: '与助手一起修改',
+    },
     preview: {
       title: '预览',
       empty: {
@@ -929,6 +933,13 @@ export const zh = {
     gitUntracked: '未跟踪',
     gitConflict: '冲突',
     gitUnchanged: '未变更',
+    conflictTitle: '文件已被外部修改',
+    conflictMessage: '「{name}」在磁盘上已被外部修改（可能来自 Agent 或其他程序）。覆盖保存将丢弃磁盘上的新版本。',
+    conflictOverwrite: '覆盖保存',
+    conflictKeep: '暂不保存',
+    savedJustNow: '已自动保存',
+    savedSecondsAgo: '{seconds} 秒前已保存',
+    saveFailed: '保存失败，稍后重试',
   },
 
   header: {
@@ -1738,6 +1749,21 @@ export const zh = {
     color: '颜色',
     thickness: '粗细',
     undo: '撤销 ⌘Z',
+    toolPen: '自由画笔',
+    toolRect: '矩形框',
+    toolLine: '直线',
+    toolArrow: '箭头',
+    toolText: '文字',
+    toolMosaic: '打码',
+    loading: '加载图片…',
+    oomError: '图片加载失败或过大（>60MP），暂不支持编辑',
+    format: '格式',
+    width: '宽度',
+    quality: '质量',
+    saveAs: '另存为',
+    save: '保存',
+    textInputTitle: '输入文字',
+    textInputPlaceholder: '输入文字…',
   },
 
   // ── Rate Limit ──
