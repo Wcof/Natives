@@ -19,7 +19,7 @@ const MAX_INTENT_LENGTH = 500;
  * The first screen of 个人创意: describe an idea, get an app.
  *
  * P0 deliberately asks for nothing else — no module id, no port, no
- * permissions, no tech stack (ADR-0014 §2). Every field added here is a field
+ * permissions, no tech stack (ADR-0014 section 2). Every field added here is a field
  * between the user and their idea; the host generates the id, and permissions
  * are confirmed at publish time when there is something real to judge.
  */

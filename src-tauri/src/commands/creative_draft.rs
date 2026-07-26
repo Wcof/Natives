@@ -1,7 +1,7 @@
 //! Creative draft commands — the host side of the creation loop.
 //!
 //! Publishing is deliberately a host command rather than a model tool
-//! (ADR-0014 §9). The user clicking "save as personal creation" *is* the
+//! (ADR-0014 section 9). The user clicking "save as personal creation" *is* the
 //! authorization; the model never gets a path to the real module directory.
 
 use crate::creative_draft::store;

@@ -2,7 +2,7 @@
 //!
 //! The split is deliberate. Revision HTML is a file so the sandbox preview can
 //! serve it directly and the Agent Daemon can write it without any database
-//! access (ADR-0014 §8.1). SQLite holds only what needs to be queried or kept
+//! access (ADR-0014 section 8.1). SQLite holds only what needs to be queried or kept
 //! consistent — state, revision pointer, conversation link.
 
 use super::model::{CreativeDraft, DraftRevision, DraftState, WriteRevisionOutcome};
@@ -12,7 +12,7 @@ use rusqlite::{Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
-/// Keep the newest revisions plus rev-1 (ADR-0014 §10). Linear undo only ever
+/// Keep the newest revisions plus rev-1 (ADR-0014 section 10). Linear undo only ever
 /// needs adjacent revisions, and rev-1 is what "start over" falls back to.
 pub const MAX_DRAFT_REVISIONS: i64 = 50;
 

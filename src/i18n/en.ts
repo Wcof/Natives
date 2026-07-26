@@ -377,6 +377,33 @@ export const en = {
     generateApp: 'Generate app',
     generating: 'Generating',
     importExisting: 'Import existing app',
+    preview: {
+      title: 'Preview',
+      empty: {
+        title: 'No draft yet',
+        hint: 'Describe what you want — the result shows up here',
+      },
+      noRevision: {
+        title: 'Nothing to preview yet',
+        hint: 'The first revision appears here once it is generated',
+      },
+      generating: 'Generating…',
+      generatingHint: 'The preview refreshes automatically when it finishes',
+      publishing: 'Publishing as a module…',
+      publishingHint: 'The preview is paused while publishing',
+      notReady: {
+        title: 'Local service not ready',
+        hint: 'The preview needs the local HTTP service. Try again in a moment.',
+      },
+      retry: 'Retry',
+      loading: 'Loading preview…',
+      softFailure: {
+        title: 'This change may be broken',
+        hint: 'The preview failed to load or reported a runtime error. Undo to the previous revision, or tell the assistant what went wrong.',
+      },
+      undo: 'Undo last change',
+      dismiss: 'Dismiss',
+    },
   },
 
   // Settings

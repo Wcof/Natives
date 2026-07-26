@@ -370,6 +370,33 @@ export const zh = {
     generateApp: '生成应用',
     generating: '生成中',
     importExisting: '导入已有应用',
+    preview: {
+      title: '预览',
+      empty: {
+        title: '还没有草稿',
+        hint: '说一句你想要什么，做好的东西会显示在这里',
+      },
+      noRevision: {
+        title: '还没有可预览的版本',
+        hint: '第一版生成完成后会自动显示',
+      },
+      generating: '正在生成…',
+      generatingHint: '完成后预览会自动刷新',
+      publishing: '正在保存为模块…',
+      publishingHint: '保存期间预览暂不可操作',
+      notReady: {
+        title: '本地服务未就绪',
+        hint: '预览需要本地 HTTP 服务，请稍后重试',
+      },
+      retry: '重试',
+      loading: '正在加载预览…',
+      softFailure: {
+        title: '本次修改可能有问题',
+        hint: '预览没能正常加载，或页面报告了运行时错误。可以撤销回上一版本，或直接告诉助手哪里不对。',
+      },
+      undo: '撤销上一次修改',
+      dismiss: '忽略',
+    },
   },
 
   settings: {

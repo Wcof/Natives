@@ -110,7 +110,7 @@ fn handle_request(
                 serve_module_file(request, modules_dir, csp)?;
             } else if path_only.starts_with("/drafts/") {
                 // Draft preview — same sandbox contract as a published module,
-                // only the content root differs (ADR-0014 §6).
+                // only the content root differs (ADR-0014 section 6).
                 serve_draft_file(request, modules_dir, db_path, csp)?;
             } else if path_only.starts_with("/local-projects/") {
                 let local_csp = Header::from_bytes("Content-Security-Policy", LOCAL_PROJECT_CSP)

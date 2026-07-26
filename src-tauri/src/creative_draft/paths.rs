@@ -1,7 +1,7 @@
 //! Draft filesystem layout and the containment boundary around it.
 //!
 //! Every path a draft tool touches is resolved here. The creative session's
-//! tools run without a per-call permission prompt (ADR-0014 §8), which is only
+//! tools run without a per-call permission prompt (ADR-0014 section 8), which is only
 //! defensible because this module makes `~/.natives/drafts/<draft_id>/` the
 //! hard edge of what those tools can reach.
 

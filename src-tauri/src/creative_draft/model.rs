@@ -1,7 +1,7 @@
 //! Draft domain types.
 //!
 //! Mirrors `src/lib/creative-draft.ts` on the frontend; the state machine is
-//! defined once per side and asserted against the same ADR-0014 §3.3 table.
+//! defined once per side and asserted against the same ADR-0014 section 3.3 table.
 
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -44,7 +44,7 @@ impl DraftState {
         }
     }
 
-    /// Legal transitions (ADR-0014 §3.3). Anything absent is rejected by
+    /// Legal transitions (ADR-0014 section 3.3). Anything absent is rejected by
     /// [`Self::ensure_transition`] before it can reach the database.
     pub fn can_transition_to(self, to: DraftState) -> bool {
         use DraftState::*;

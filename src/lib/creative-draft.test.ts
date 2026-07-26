@@ -24,7 +24,7 @@ const ALL_STATES: CreativeDraftState[] = [
   'archived',
 ];
 
-/** §3.3 的合法迁移全集，其余组合一律非法。 */
+/** 第 3.3 节 的合法迁移全集，其余组合一律非法。 */
 const LEGAL: Array<[CreativeDraftState, CreativeDraftState]> = [
   ['drafting', 'generating'],
   ['generating', 'ready'],

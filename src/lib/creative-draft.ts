@@ -2,7 +2,7 @@
  * Pure helpers for the Creative Draft state machine / action availability.
  * Kept free of React for node:test coverage.
  *
- * Authority: docs/architecture/creative-app-creator-workbench.md §3.3 / §4.
+ * Authority: docs/architecture/creative-app-creator-workbench.md section 3.3 / section 4
  */
 
 /** Draft lifecycle, mirrors the SQLite CHECK constraint on `creative_drafts.state`. */
@@ -26,7 +26,7 @@ export interface CreativeDraftActions {
 export const MAX_DRAFT_REVISIONS = 50;
 
 /**
- * Legal transitions of §3.3.
+ * Legal transitions of section 3.3
  * `generating → ready` covers both lint ok and lint fail — 失败时回落上一可用修订，
  * 状态出口相同，差异只在 `current_revision` 是否前进。
  */
