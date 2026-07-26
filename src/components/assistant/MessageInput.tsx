@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, Check, ChevronDown, Paperclip, Plus, Send, ShieldCheck, Square, X } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { Blocks, Bot, Check, ChevronDown, Paperclip, Plus, Send, ShieldCheck, Square, X } from 'lucide-react';
 import { t, type Locale } from '@/i18n';
 import {
   canSendAssistantDraft,
@@ -75,6 +76,14 @@ interface MessageInputProps {
   activeSubagent?: ComposerSubagent | null;
   onSelectSubagent?: (id: string) => void;
   changeSummary?: { fileCount: number; additions: number; deletions: number } | null;
+  /**
+   * ADR-0016 capability picker (gated by conversation.updateCapabilities).
+   * Presence of the toggle renders the「能力」button; the popover itself is a
+   * controlled slot so the Workbench can lazy-load it off the initial bundle.
+   */
+  onToggleCapabilities?: () => void;
+  capabilityCount?: number;
+  capabilityPickerSlot?: ReactNode;
 }
 
 /** Idle ms before pushing draft text into the workspace store. */
@@ -107,6 +116,7 @@ export default function MessageInput(props: MessageInputProps) {
     permissionProfile, onPermissionChange, providers, selectedProviderId, selectedModel, onSelectModel,
     draftText, onDraftChange, draftKey = null, projectPath = null,
     subagents = [], activeSubagent = null, onSelectSubagent, changeSummary = null,
+    onToggleCapabilities, capabilityCount = 0, capabilityPickerSlot = null,
   } = props;
   const zh = locale.startsWith('zh');
   const [input, setInput] = useState(draftText ?? '');
@@ -583,6 +593,30 @@ export default function MessageInput(props: MessageInputProps) {
                 </div>
               )}
             </div>
+            {onToggleCapabilities && (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={onToggleCapabilities}
+                  disabled={effectiveDisabled}
+                  title={t(locale, 'capabilities.picker.title')}
+                  aria-label={t(locale, 'capabilities.picker.title')}
+                  className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-40"
+                >
+                  <Blocks size={15} />
+                  <span>{t(locale, 'capabilities.picker.open')}</span>
+                  {capabilityCount > 0 && (
+                    <span
+                      className="grid h-4 min-w-4 place-items-center rounded-full px-1 text-[10px] font-semibold"
+                      style={{ background: 'var(--primary)', color: '#fff' }}
+                    >
+                      {capabilityCount}
+                    </span>
+                  )}
+                </button>
+                {capabilityPickerSlot}
+              </div>
+            )}
           </div>
           <div className="flex min-w-0 items-center gap-1">
             <ModelSelectorDropdown providers={providers} selectedProviderId={selectedProviderId} selectedModel={selectedModel} onSelect={onSelectModel} locale={locale} />

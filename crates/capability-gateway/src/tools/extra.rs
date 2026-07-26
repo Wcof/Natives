@@ -614,7 +614,8 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
                     "system_prompt":{"type":"string","description":"System prompt you write for this subagent right now: role, standards, output contract. Layered on top of `subagent_type` when both are given. Instructions here never grant permissions or tools."},
                     "tool_allowlist":{"type":"array","items":{"type":"string"},"description":"Exact tool names the subagent may call (e.g. [\"read_file\",\"grep\"]). Intersected with your own surface. Omit to inherit yours; pass [] for a no-tool reasoning-only child."},
                     "max_steps":{"type":"integer","minimum":1,"description":"Step budget for the subagent turn loop. Defaults to the profile's maxSteps, else 15."},
-                    "permission_profile":{"type":"string","enum":["readonly","ask","full_access"],"description":"Requested permission profile. Capped by yours and further tightened by the profile's permissionMode; it can only go down, never up."}
+                    "permission_profile":{"type":"string","enum":["readonly","ask","full_access"],"description":"Requested permission profile. Capped by yours and further tightened by the profile's permissionMode; it can only go down, never up."},
+                    "agent":{"type":"string","description":"Expert team member id to run this task as. Only valid when an expert team is active; must be one of the roster ids from the team briefing."}
                 },
                 "required":["prompt"]
             }),

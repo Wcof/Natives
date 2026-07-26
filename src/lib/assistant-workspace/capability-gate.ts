@@ -80,6 +80,24 @@ export function canInterject(caps: DaemonCapabilities | null | undefined): boole
 }
 
 /**
+ * Capability Hub management surface (ADR-0016). Honest gate: the whole
+ * `capability.*` family ships together, so skill.list is the sentinel.
+ */
+export function canManageCapabilities(caps: DaemonCapabilities | null | undefined): boolean {
+  return hasMethod(caps, 'capability.skill.list');
+}
+
+/** Online MCP Hub browsing — may lag behind the base capability family. */
+export function canBrowseMcpHub(caps: DaemonCapabilities | null | undefined): boolean {
+  return hasMethod(caps, 'capability.mcp.hub.search');
+}
+
+/** Per-conversation capability selection (composer picker + persistence). */
+export function canSelectRunCapabilities(caps: DaemonCapabilities | null | undefined): boolean {
+  return hasMethod(caps, 'conversation.updateCapabilities');
+}
+
+/**
  * Blocking engine recovery: do not pretend chat/execution is available.
  * - fatal / incompatible always block
  * - offline without capabilities = daemon unavailable after a failed connect

@@ -148,6 +148,20 @@ async fn main() {
 
     // Interval/one-shot scheduler runner (persisted jobs under NATIVES_RUNTIME_DIR).
     let _ = natives_agent_daemon::ensure_scheduler_runner();
+    // Capability library: trusted configuration source for MCP + skill catalogue (ADR-0016).
+    natives_agent_daemon::capability::bootstrap();
+    // Idle reaper: stop stdio MCP servers with zero run references for >10min.
+    tokio::spawn(async {
+        let idle = std::time::Duration::from_secs(600);
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
+        loop {
+            tick.tick().await;
+            let stopped = natives_agent_daemon::mcp_runtime::global_mcp().reap_idle(idle);
+            if !stopped.is_empty() {
+                println!("[mcp] reaped idle stdio servers: {}", stopped.join(", "));
+            }
+        }
+    });
     // Run snapshot path is restored on RunManager::new(); ensure process-wide manager is warm.
     let _ = natives_agent_daemon::global_run_manager().list_runs(None);
     println!("Protocol: {}", config.protocol_version);

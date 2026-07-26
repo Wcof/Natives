@@ -94,7 +94,7 @@ export function useShellState(): ShellStateReturn {
     const path = window.location.pathname.replace(/\/+$/, '') || '/';
     const routingTable: Record<string, string> = {
       '/': 'dashboard', '/files': 'files', '/tools': 'tools',
-      '/ai': 'ai', '/modules': 'modules',
+      '/ai': 'ai', '/modules': 'modules', '/capabilities': 'capabilities',
     };
     return routingTable[path] || 'dashboard';
   });

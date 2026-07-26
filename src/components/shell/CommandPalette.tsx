@@ -19,6 +19,7 @@ import {
   Search,
   FileText,
   Globe,
+  Blocks,
 } from 'lucide-react';
 import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-tokens';
 import { useHydrated } from '@/hooks/useHydrated';
@@ -58,6 +59,7 @@ function getStaticCommands(locale: Locale): CommandItem[] {
     { id: 'files', label: t(locale, 'nav.fileBrowser'), category: 'navigation', icon: <Folder size={14} /> },
     { id: 'ai', label: t(locale, 'nav.aiWorkbench'), category: 'navigation', icon: <Bot size={14} /> },
     { id: 'tools', label: t(locale, 'nav.tools'), category: 'navigation', icon: <Sliders size={14} /> },
+    { id: 'capabilities', label: t(locale, 'nav.capabilities'), category: 'navigation', icon: <Blocks size={14} /> },
     { id: 'terminal:toggle', label: t(locale, 'nav.terminalToggle'), category: 'action', icon: <Terminal size={14} /> },
     { id: 'theme:dark', label: t(locale, 'nav.themeTerminalVolt'), category: 'setting', icon: <Terminal size={14} /> },
     { id: 'theme:light', label: t(locale, 'nav.themeFrostedJasmine'), category: 'setting', icon: <Sun size={14} /> },

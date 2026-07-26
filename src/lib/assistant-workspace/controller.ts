@@ -3,8 +3,9 @@
  * No React; safe for tests.
  */
 import type { AssistantGateway } from '@/lib/assistant-gateway';
-import type { AttachmentRef, Run, RunEvent } from '@/lib/assistant-protocol';
+import type { AttachmentRef, CapabilitySelection, Run, RunEvent } from '@/lib/assistant-protocol';
 import { isActiveRunStatus, mapWireRun } from '@/lib/assistant-protocol';
+import { getConversationCapabilities } from './capability-admin';
 import type { AssistantWorkspaceState, WorkspaceAction } from './state';
 
 export type Dispatch = (action: WorkspaceAction) => void;
@@ -67,6 +68,15 @@ export async function openConversation(
   // Best-effort context usage when advertised (Phase 3).
   try {
     const caps = gateway.getCapabilities ? await gateway.getCapabilities() : null;
+    // Hydrate ADR-0016 capability selection when the daemon advertises it.
+    if (caps?.methods?.includes('conversation.getCapabilities')) {
+      try {
+        const selection = await getConversationCapabilities(gateway, conversationId);
+        dispatch({ type: 'capabilitySelection/set', conversationId, selection });
+      } catch {
+        /* optional */
+      }
+    }
     if (caps?.methods?.includes('conversation.getContextUsage')) {
       const usage = await gateway.request<Record<string, unknown>>(
         'conversation.getContextUsage',
@@ -324,6 +334,12 @@ export async function sendOrQueue(
      * is how the creator workbench gets the draft tools and nothing else.
      */
     agentProfileId?: string | null;
+    /**
+     * ADR-0016 selection override (temp→real promotion happens in the same
+     * tick as send, before the store re-render lands). `undefined` = read the
+     * conversation's selection from state.
+     */
+    capabilitySelection?: CapabilitySelection | null;
   },
 ): Promise<SendResult> {
   const {
@@ -414,6 +430,19 @@ export async function sendOrQueue(
     );
   }
 
+  // ADR-0016: conversation-level capability selection rides on run.start.
+  // Absent / empty selection ⇒ omit the field entirely (None = legacy behaviour).
+  const capabilitySelection: CapabilitySelection | null =
+    params.capabilitySelection !== undefined
+      ? params.capabilitySelection
+      : state.capabilitySelectionByConversation[conversationId] ?? null;
+  const hasCapabilitySelection =
+    capabilitySelection != null &&
+    ((capabilitySelection.skills?.length ?? 0) > 0 ||
+      (capabilitySelection.mcp_servers?.length ?? 0) > 0 ||
+      Boolean(capabilitySelection.expert_id) ||
+      Boolean(capabilitySelection.team_id));
+
   const optimisticUserId = `pending-user-${Date.now()}`;
   dispatch({
     type: 'messages/appendOptimistic',
@@ -448,6 +477,7 @@ export async function sendOrQueue(
       ...(agentProfileId && agentProfileId.trim()
         ? { agent_profile_id: agentProfileId.trim() }
         : {}),
+      ...(hasCapabilitySelection ? { capability_selection: capabilitySelection } : {}),
     });
   } catch (err) {
     dispatch({ type: 'messages/remove', id: optimisticUserId, conversationId });

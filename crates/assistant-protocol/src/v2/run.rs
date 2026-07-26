@@ -158,6 +158,46 @@ pub struct RunV2 {
     /// Incremented on every successful status transition via RunManager.
     #[serde(default)]
     pub revision: u64,
+    /// Resolved capability snapshot persisted at run start (ADR-0016).
+    /// Audit-facing: ids and schema names only, never secrets or config bodies.
+    #[serde(default)]
+    pub capability_snapshot: Option<serde_json::Value>,
+}
+
+/// Capability selection for a run: which library-managed skills, MCP servers
+/// and expert (or expert team) the engine must load (ADR-0016).
+///
+/// Wire semantics: every field absent (`None`) = legacy behaviour (global skill
+/// injection, no MCP visibility change, no profile). `Some([])` = explicitly none.
+/// `expert_id` and `team_id` are mutually exclusive.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapabilitySelection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_servers: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expert_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team_id: Option<String>,
+}
+
+impl CapabilitySelection {
+    /// True when no field carries an explicit selection (legacy behaviour).
+    pub fn is_empty(&self) -> bool {
+        self.skills.is_none()
+            && self.mcp_servers.is_none()
+            && self.expert_id.is_none()
+            && self.team_id.is_none()
+    }
+
+    /// expert_id and team_id are mutually exclusive on the wire.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.expert_id.is_some() && self.team_id.is_some() {
+            return Err("capability_selection: expert_id and team_id are mutually exclusive");
+        }
+        Ok(())
+    }
 }
 
 /// Create a run without starting it.
@@ -184,6 +224,9 @@ pub struct CreateRunRequest {
     /// Runtime selector: native | claude_cli | codex_cli.
     #[serde(default)]
     pub runtime_id: Option<String>,
+    /// Capability library selection (ADR-0016). None = legacy behaviour.
+    #[serde(default)]
+    pub capability_selection: Option<CapabilitySelection>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,6 +260,14 @@ pub struct StartRunRequest {
     /// Runtime selector: native | claude_cli | codex_cli.
     #[serde(default)]
     pub runtime_id: Option<String>,
+    /// Agent profile / expert to run as (ADR-0016 seam A: previously only on
+    /// CreateRunRequest; StartRunRequest now carries it end-to-end).
+    #[serde(default)]
+    pub agent_profile_id: Option<String>,
+    /// Capability library selection override for this run (ADR-0016).
+    /// None = fall back to the conversation-level default selection.
+    #[serde(default)]
+    pub capability_selection: Option<CapabilitySelection>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

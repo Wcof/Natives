@@ -4,6 +4,14 @@
 //! Each migration is a complete SQL string that can be executed as a batch.
 
 /// All migrations: (version, SQL) tuples, ordered by version.
+///
+/// The order is load-bearing, not cosmetic. `DataStore::run_migrations` reads
+/// `MAX(version)` from `_daemon_schema_version` **once**, then walks this slice
+/// skipping every entry with `version <= current_version`. It does not test row
+/// membership. So a version that is merged in *below* a version an existing
+/// database has already recorded is skipped forever, silently — see the note on
+/// [`MIGRATION_021`]. Always append with a strictly larger number, and keep this
+/// slice sorted ascending.
 pub const ALL: &[(i64, &str)] = &[
     (1, MIGRATION_001),
     (2, MIGRATION_002),
@@ -25,8 +33,10 @@ pub const ALL: &[(i64, &str)] = &[
     (18, MIGRATION_018),
     (19, MIGRATION_019),
     (20, MIGRATION_020),
-    // 021 belongs to the capability-library workstream and lands on its own
-    // branch. Harness starts at 022 so the two never claim the same number.
+    // 021 is the capability library (ADR-0016), 022 the Harness control plane.
+    // Two parallel workstreams; the numbers were reserved so they never collide,
+    // and both must stay present and ascending.
+    (21, MIGRATION_021),
     (22, MIGRATION_022),
 ];
 
@@ -669,6 +679,133 @@ CREATE TABLE IF NOT EXISTS provider_route_health (
 );
 ";
 
+/// Migration 021: capability library (ADR-0016).
+///
+/// Authoritative storage for skills metadata, MCP connector configs, experts
+/// and expert teams. Secrets NEVER live in this database: `env_json` values may
+/// hold `secret:<id>` references resolved by the Host-side encrypted store,
+/// and header validation rejects plaintext Authorization values at the RPC
+/// boundary.
+///
+/// Also drops `mcp_server_config` (created by migration 004, zero readers or
+/// writers ever shipped; its transport CHECK list no longer matches the
+/// runtime). `hook_registration` belongs to the Harness track and stays.
+///
+/// Merge hazard, recorded because the runner cannot detect it: 021 and 022 were
+/// written on two parallel branches, and the Harness branch (022) ran first on
+/// some development databases. `run_migrations` gates on `MAX(version)`, not on
+/// row membership, so any database that recorded 22 before 021 existed will skip
+/// 021 forever and never report an error — the `capability_*` tables simply are
+/// not there, and every `capability.*` RPC then fails on a missing table.
+/// Fresh databases and any database at version <= 20 are unaffected. Recovery on
+/// an affected database is manual: `DELETE FROM _daemon_schema_version WHERE
+/// version = 22;` and reopen (022 is `CREATE TABLE IF NOT EXISTS` throughout, so
+/// re-running it is safe; the two `ALTER TABLE` statements below are not, which
+/// is why 021 must never be re-run against a database that already applied it).
+const MIGRATION_021: &str = "
+CREATE TABLE IF NOT EXISTS capability_skill (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    scope TEXT NOT NULL DEFAULT 'user' CHECK(scope IN ('user','project')),
+    project_id TEXT,
+    dir_path TEXT NOT NULL,
+    content_hash TEXT,
+    category TEXT,
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    trusted INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'scan'
+        CHECK(source IN ('scan','import_zip','import_dir','import_git')),
+    source_ref TEXT,
+    engine_targets_json TEXT NOT NULL DEFAULT '[\"native\"]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(scope, name, dir_path)
+);
+CREATE INDEX IF NOT EXISTS idx_capability_skill_category
+    ON capability_skill(category);
+
+CREATE TABLE IF NOT EXISTS capability_mcp_server (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    transport TEXT NOT NULL CHECK(transport IN ('stdio','http','sse')),
+    command TEXT,
+    args_json TEXT NOT NULL DEFAULT '[]',
+    env_json TEXT NOT NULL DEFAULT '{}',
+    url TEXT,
+    headers_json TEXT NOT NULL DEFAULT '{}',
+    auth_mode TEXT NOT NULL DEFAULT 'none' CHECK(auth_mode IN ('none','bearer','oauth')),
+    oauth_config_json TEXT NOT NULL DEFAULT '{}',
+    trusted INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    source TEXT NOT NULL DEFAULT 'manual' CHECK(source IN ('manual','import_json','hub')),
+    hub_ref TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS capability_expert (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    system_prompt TEXT NOT NULL,
+    tools_json TEXT NOT NULL DEFAULT '[]',
+    disallowed_tools_json TEXT NOT NULL DEFAULT '[]',
+    permission_mode TEXT,
+    skills_json TEXT NOT NULL DEFAULT '[]',
+    provider_id TEXT,
+    key_id TEXT,
+    model_id TEXT,
+    params_json TEXT NOT NULL DEFAULT '{}',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    source TEXT NOT NULL DEFAULT 'manual'
+        CHECK(source IN ('manual','import_md','host_migration')),
+    source_path TEXT,
+    content_hash TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS capability_expert_team (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    strategy TEXT NOT NULL DEFAULT 'parallel'
+        CHECK(strategy IN ('parallel','sequential','coordinator')),
+    failure_policy TEXT NOT NULL DEFAULT 'isolate'
+        CHECK(failure_policy IN ('isolate','fail_fast','require_all')),
+    max_concurrent INTEGER NOT NULL DEFAULT 3,
+    coordinator_expert_id TEXT REFERENCES capability_expert(id) ON DELETE SET NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS capability_expert_team_member (
+    team_id TEXT NOT NULL REFERENCES capability_expert_team(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    expert_id TEXT NOT NULL REFERENCES capability_expert(id) ON DELETE CASCADE,
+    role_hint TEXT NOT NULL DEFAULT '',
+    task_template TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(team_id, position)
+);
+CREATE INDEX IF NOT EXISTS idx_capability_team_member_expert
+    ON capability_expert_team_member(expert_id);
+
+CREATE TABLE IF NOT EXISTS capability_mcp_hub_cache (
+    registry_name TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    etag TEXT,
+    fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+ALTER TABLE conversation ADD COLUMN capability_selection_json TEXT;
+ALTER TABLE run ADD COLUMN capability_snapshot_json TEXT;
+
+DROP TABLE IF EXISTS mcp_server_config;
+";
+
 /// Migration 022: Harness control plane (design 第 10 节).
 ///
 /// Six tables implementing the frozen configuration hierarchy — global
@@ -774,3 +911,42 @@ CREATE INDEX IF NOT EXISTS idx_harness_audit_created
 CREATE INDEX IF NOT EXISTS idx_harness_audit_profile
     ON harness_audit(profile_id, created_at DESC);
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::ALL;
+
+    /// `run_migrations` skips every entry with `version <= MAX(applied)`, and it
+    /// computes that maximum once. A duplicate or out-of-order version therefore
+    /// does not fail loudly — it silently never runs. This is the guard for the
+    /// exact way two parallel branches lose a migration when they are merged.
+    #[test]
+    fn migration_versions_are_unique_and_strictly_ascending() {
+        let mut previous = 0i64;
+        for (version, _) in ALL {
+            assert!(
+                *version > previous,
+                "migration {version} is not greater than the preceding {previous} — \
+                 the runner would skip it forever without erroring"
+            );
+            previous = *version;
+        }
+    }
+
+    /// Both parallel workstreams must survive the merge. Named explicitly so
+    /// dropping either one is a deliberate edit rather than a lost hunk.
+    #[test]
+    fn the_capability_and_harness_migrations_are_both_present() {
+        let versions: Vec<i64> = ALL.iter().map(|(v, _)| *v).collect();
+        assert!(versions.contains(&21), "capability library migration 021 is missing");
+        assert!(versions.contains(&22), "harness control plane migration 022 is missing");
+        assert!(
+            ALL.iter().any(|(v, sql)| *v == 21 && sql.contains("capability_skill")),
+            "021 is no longer the capability library migration"
+        );
+        assert!(
+            ALL.iter().any(|(v, sql)| *v == 22 && sql.contains("harness_profile")),
+            "022 is no longer the harness control plane migration"
+        );
+    }
+}

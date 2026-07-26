@@ -56,10 +56,12 @@ import { loadPreferredRuntimeId } from '@/lib/assistant-workspace/persistence';
 import {
   canInterject,
   canRewind,
+  canSelectRunCapabilities,
   buildDiagnosticsText,
   hasMethod,
   needsEngineRecovery,
 } from '@/lib/assistant-workspace/capability-gate';
+import { updateConversationCapabilities } from '@/lib/assistant-workspace/capability-admin';
 import {
   cancelRun,
   connectWorkspace,
@@ -75,6 +77,7 @@ import { useAssistantRun } from '@/lib/assistant-workspace/use-assistant-run';
 import { goldenTextStream } from '@/lib/assistant-fixtures/golden';
 import { isActiveRunStatus, mapWireConversation, mapWireMessage } from '@/lib/assistant-protocol';
 import type {
+  CapabilitySelection,
   Conversation,
   RunEvent,
   SubagentAssignmentInteraction,
@@ -84,6 +87,8 @@ import { messagePlainText } from '@/lib/assistant-message-view';
 import { copyToClipboard } from '@/lib/clipboard';
 import ConversationTimeline from './ConversationTimeline';
 import MessageInput from './MessageInput';
+// ADR-0016 capability picker — lazy so it stays out of the initial bundle (R-P7).
+const LazyCapabilityPickerPopover = lazy(() => import('./CapabilityPickerPopover'));
 import PermissionRequestCard from './PermissionRequestCard';
 import { parsePlanApprovalRequest, type PlanApproval } from './plan-approval';
 // R-P7: the plan checklist is a low-frequency surface. The predicate that
@@ -222,6 +227,8 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const [subagentSessions, setSubagentSessions] = useState<SubagentSession[]>([]);
   const [switchKeySessionId, setSwitchKeySessionId] = useState<string | null>(null);
   const [assignmentKeyOptions, setAssignmentKeyOptions] = useState<AssignmentKeyOption[]>([]);
+  /** ADR-0016 composer capability picker visibility. */
+  const [capabilityPickerOpen, setCapabilityPickerOpen] = useState(false);
 
   // Keep root selection aligned with store activeConversationId (which is always the root).
   const storeActiveId = state.activeConversationId;
@@ -1027,6 +1034,8 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     async (draft: AssistantDraft, forceImmediate = false): Promise<boolean> => {
       // Sends always target the surface conversation (child when selected).
       let conversationId = activeId;
+      /** Set on temp→real promotion; store update lands after this tick. */
+      let promotedCapabilitySelection: CapabilitySelection | null = null;
       const pick = resolveModelSelection(providers, {
         providerId: activeConversation?.providerId,
         modelId: activeConversation?.modelId,
@@ -1097,6 +1106,30 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               });
               dispatch({ type: 'composer/clear', conversationId: previousTempId });
             }
+            // Carry the temp shell's capability selection to the real conversation
+            // and persist it now that a daemon-side row exists (ADR-0016).
+            const tempSelection =
+              stateRef.current.capabilitySelectionByConversation[previousTempId] ?? null;
+            promotedCapabilitySelection = tempSelection;
+            if (tempSelection) {
+              dispatch({
+                type: 'capabilitySelection/set',
+                conversationId: conversation.id,
+                selection: tempSelection,
+              });
+              dispatch({
+                type: 'capabilitySelection/set',
+                conversationId: previousTempId,
+                selection: null,
+              });
+              if (canSelectRunCapabilities(stateRef.current.capabilities)) {
+                void updateConversationCapabilities(gateway, conversation.id, tempSelection).catch(
+                  () => {
+                    /* run.start still carries the selection */
+                  },
+                );
+              }
+            }
             dispatch({ type: 'conversations/remove', id: previousTempId });
           }
           // Clear root-level temp shell so sidebar/remount do not resurrect it.
@@ -1129,6 +1162,10 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
           forceImmediate,
           // Preferred runtime from RuntimePanel (persisted); omit → daemon default native.
           runtimeId: loadPreferredRuntimeId(),
+          // Promotion happened this tick — the store lookup would still miss it.
+          ...(promotedCapabilitySelection
+            ? { capabilitySelection: promotedCapabilitySelection }
+            : {}),
         });
 
         if (!result.queued && result.runId) {
@@ -1172,6 +1209,36 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     // eslint-disable-next-line react-hooks/preserve-manual-memoization
     activeRunId, gateway, dispatch, toast, stoppingRunId,
   ]);
+
+  /**
+   * ADR-0016 conversation capability selection: store first (immediate echo),
+   * then persist to the daemon when the conversation is real and the method is
+   * advertised. Temp shells persist on promotion inside handleSend.
+   */
+  const handleCapabilitySelectionChange = useCallback(
+    async (selection: CapabilitySelection | null) => {
+      const id = activeId;
+      if (!id) return;
+      dispatch({ type: 'capabilitySelection/set', conversationId: id, selection });
+      if (isTempConversationId(id)) return;
+      if (!canSelectRunCapabilities(stateRef.current.capabilities)) return;
+      try {
+        await updateConversationCapabilities(gateway, id, selection);
+      } catch (err) {
+        toast(
+          `${t(locale, 'capabilities.picker.saveFailed')}: ${classifyError(err).userMessage}`,
+          'error',
+        );
+      }
+    },
+    // eslint-disable-next-line react-hooks/preserve-manual-memoization
+    [activeId, dispatch, gateway, toast, locale],
+  );
+
+  // Conversation switch closes the picker (selection is per conversation).
+  useEffect(() => {
+    setCapabilityPickerOpen(false);
+  }, [activeId]);
 
   const handleRetry = useCallback(async () => {
     if (!activeRunId) return;
@@ -1776,6 +1843,17 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
 
   const recoveryMode = needsEngineRecovery(state.connection, state.capabilities);
   const allowRewind = canRewind(state.capabilities);
+  // ADR-0016 composer capability picker (honest gate on conversation.updateCapabilities).
+  const capabilityPickerEnabled = canSelectRunCapabilities(state.capabilities);
+  const activeCapabilitySelection = activeId
+    ? state.capabilitySelectionByConversation[activeId] ?? null
+    : null;
+  const capabilityCount = activeCapabilitySelection
+    ? (activeCapabilitySelection.skills?.length ?? 0) +
+      (activeCapabilitySelection.mcp_servers?.length ?? 0) +
+      (activeCapabilitySelection.expert_id ? 1 : 0) +
+      (activeCapabilitySelection.team_id ? 1 : 0)
+    : 0;
 
   const handleRollbackChanges = useCallback(
     async (changes: Array<{ path: string; runId?: string }>): Promise<boolean> => {
@@ -2270,6 +2348,25 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
               additions: conversationChangeSummary.additions,
               deletions: conversationChangeSummary.deletions,
             }}
+            onToggleCapabilities={
+              capabilityPickerEnabled && activeId
+                ? () => setCapabilityPickerOpen((open) => !open)
+                : undefined
+            }
+            capabilityCount={capabilityCount}
+            capabilityPickerSlot={
+              capabilityPickerOpen && capabilityPickerEnabled && activeId ? (
+                <Suspense fallback={null}>
+                  <LazyCapabilityPickerPopover
+                    locale={locale}
+                    gateway={gateway}
+                    selection={activeCapabilitySelection}
+                    onChange={(selection) => void handleCapabilitySelectionChange(selection)}
+                    onClose={() => setCapabilityPickerOpen(false)}
+                  />
+                </Suspense>
+              ) : null
+            }
           />
           )}
         </div>

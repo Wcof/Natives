@@ -146,6 +146,23 @@ pub fn merge_agent_directive(
     }
 }
 
+/// Bundled inputs for a production engine turn (replaces the former 10
+/// positional parameters). `capability` carries the resolved ADR-0016
+/// snapshot; None = legacy behaviour (global skills, file profiles).
+pub struct RunStartContext {
+    pub run_id: String,
+    pub conversation_id: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub key_id: Option<String>,
+    pub permission_profile: String,
+    pub agent_profile_id: Option<String>,
+    pub user_content: String,
+    pub max_steps: u32,
+    pub project_path: Option<std::path::PathBuf>,
+    pub capability: Option<crate::capability_resolution::ResolvedCapabilitySnapshot>,
+}
+
 impl ProductionRuntime {
     pub fn new() -> Self {
         Self::new_with_events(EventSequencer::new())
@@ -403,19 +420,25 @@ impl ProductionRuntime {
 
     /// Execute a production engine turn. Returns `EngineOutcome` only — never commits
     /// Run lifecycle status or terminal lifecycle events. RunManager is the sole committer.
+    /// `ctx.capability` is the resolved ADR-0016 snapshot produced by
+    /// `capability_resolution::resolve` at the RunManager insertion point.
     pub async fn start_run(
         &self,
-        run_id: String,
-        conversation_id: String,
-        provider_id: String,
-        model_id: String,
-        key_id: Option<String>,
-        permission_profile: String,
-        agent_profile_id: Option<String>,
-        user_content: String,
-        max_steps: u32,
-        project_path: Option<std::path::PathBuf>,
+        ctx: RunStartContext,
     ) -> Result<agent_core::EngineOutcome, String> {
+        let RunStartContext {
+            run_id,
+            conversation_id,
+            provider_id,
+            model_id,
+            key_id,
+            permission_profile,
+            agent_profile_id,
+            user_content,
+            max_steps,
+            project_path,
+            capability,
+        } = ctx;
         let project_root = project_path.ok_or_else(|| {
             "project_path is required for daemon runs; process cwd fallback is disabled".to_string()
         })?;
@@ -423,9 +446,16 @@ impl ProductionRuntime {
         let hooks = build_production_hooks_for_project(Some(&project_root));
         // Context budget: min(Profile tokenBudget, model context_window); default 128K.
         // chars/4 is only used when Provider usage is unavailable (engine estimate path).
-        let profile = agent_profile_id
-            .as_deref()
-            .and_then(|id| agent_core::load_agent_profile(id, Some(&project_root)));
+        // Profile priority: resolved capability snapshot (DB authority) →
+        // DB/file lookup by id (legacy callers without a snapshot).
+        let profile = capability
+            .as_ref()
+            .and_then(|c| c.profile.clone())
+            .or_else(|| {
+                agent_profile_id.as_deref().and_then(|id| {
+                    crate::capability_resolution::load_profile(id, Some(&project_root))
+                })
+            });
         let model_window = lookup_model_context_window(&provider_id, &model_id);
         let budget = agent_core::ContextBudget::resolve(
             profile.as_ref().and_then(|profile| profile.token_budget),
@@ -484,7 +514,11 @@ impl ProductionRuntime {
         let mut tool_allowlist = self
             .take_run_tool_allowlist(&run_id)
             .await
-            .or_else(|| agent_profile_id.as_deref().and_then(builtin_surface_allowlist))
+            .or_else(|| {
+                agent_profile_id
+                    .as_deref()
+                    .and_then(builtin_surface_allowlist)
+            })
             .or_else(|| profile.as_ref().and_then(|profile| profile.tools.clone()));
         if let (Some(allowlist), Some(disallowed)) = (
             tool_allowlist.as_mut(),
@@ -516,13 +550,29 @@ impl ProductionRuntime {
             model_id: model_id.clone(),
             permission_profile: permission_profile.clone(),
             tool_allowlist,
+            team: capability.as_ref().and_then(|c| c.team.clone()),
+            mcp_tool_schemas: capability
+                .as_ref()
+                .map(|c| c.mcp_tool_schemas.clone())
+                .unwrap_or_default(),
+            selected_mcp_servers: capability
+                .as_ref()
+                .filter(|c| c.selection_active)
+                .map(|c| c.mcp_servers.iter().cloned().collect()),
         };
 
-        // Progressive disclosure: name + one-line summary for trusted, enabled
-        // skills only. Bodies never enter the system prompt — the model pulls one
-        // through the `skill` tool when it needs it, so the per-request prompt
-        // cost is proportional to the skill *count*, not to their total bytes.
-        let skill_prompt = crate::skill_store::prompt_for_project(&project_root);
+        // Skills (ADR-0016): a resolved snapshot carries a selection-scoped
+        // prompt (Some("") = explicitly none); without a snapshot the legacy
+        // global trusted+enabled injection applies unchanged.
+        //
+        // Either way the text is progressive disclosure: name + one-line summary
+        // only. Bodies never enter the system prompt — the model pulls one through
+        // the `skill` tool when it needs it, so the per-request prompt cost is
+        // proportional to the skill *count*, not to their total bytes.
+        let skill_prompt = capability
+            .as_ref()
+            .and_then(|c| c.skill_prompt.clone())
+            .unwrap_or_else(|| crate::skill_store::prompt_for_project(&project_root));
         // Parent-authored directive for this child run (registered by the `task`
         // tool before RunManager started us). Layered on top of the profile
         // prompt — prompt text only, so it cannot widen permissions or tools,
@@ -544,6 +594,18 @@ impl ProductionRuntime {
                 surface_prompt.to_string()
             } else {
                 format!("{surface_prompt}\n\n{}", assembled.system_prompt)
+            };
+        }
+        // Team roster / delegation instructions from the resolved snapshot.
+        if let Some(extra) = capability
+            .as_ref()
+            .and_then(|c| c.extra_system_prompt.as_deref())
+            .filter(|s| !s.is_empty())
+        {
+            assembled.system_prompt = if assembled.system_prompt.is_empty() {
+                extra.to_string()
+            } else {
+                format!("{}\n\n{extra}", assembled.system_prompt)
             };
         }
         // Compact history against resolved token budget (chars/4 fallback estimate).
@@ -718,6 +780,9 @@ impl ProductionRuntime {
         };
         Ok(reg.token)
     }
+
+    // spawn_child_task removed (ADR-0016): dead duplicate of the real task
+    // path (PermissionGatedTools::execute_task -> RunManager). Zero callers.
 
     pub async fn task_output(&self, task_id: &str) -> Option<TaskRecord> {
         self.task_outputs.lock().await.get(task_id).cloned()
@@ -1584,6 +1649,7 @@ pub async fn restart_subagent_with_binding(
     };
     let rm = crate::global_run_manager();
     let created = rm.create_run(assistant_protocol::v2::CreateRunRequest {
+        capability_selection: None,
         conversation_id: sess.child_conversation_id.clone(),
         provider_id: binding.provider_id.clone(),
         model_id: binding.model_id.clone(),
@@ -1601,6 +1667,8 @@ pub async fn restart_subagent_with_binding(
     })?;
     let run = crate::run_manager::RunManager::start_detached_global(
         assistant_protocol::v2::StartRunRequest {
+            agent_profile_id: None,
+            capability_selection: None,
             run_id: Some(created.id.clone()),
             conversation_id: Some(sess.child_conversation_id.clone()),
             provider_id: Some(binding.provider_id.clone()),
@@ -1851,9 +1919,7 @@ impl EngineProvider for FixtureProvider {
 #[cfg(test)]
 mod tool_allowlist_tests {
     use super::*;
-    use agent_core::{
-        cap_child_permission, EngineToolRuntime, SubAgentConfig, SubAgentManager,
-    };
+    use agent_core::{cap_child_permission, EngineToolRuntime, SubAgentConfig, SubAgentManager};
     use std::sync::Arc;
     use tokio_util::sync::CancellationToken;
 
@@ -1880,6 +1946,9 @@ mod tool_allowlist_tests {
             model_id: "m".into(),
             permission_profile: "full_access".into(),
             tool_allowlist: list,
+            team: None,
+            mcp_tool_schemas: Vec::new(),
+            selected_mcp_servers: None,
         }
     }
 
@@ -1984,8 +2053,7 @@ mod tool_allowlist_tests {
 
         let mut names: Vec<&str> = gateway.list_tools().into_iter().map(|t| t.name).collect();
         names.sort_unstable();
-        let mut expected: Vec<&str> =
-            capability_gateway::tools::CREATIVE_DRAFT_TOOL_NAMES.to_vec();
+        let mut expected: Vec<&str> = capability_gateway::tools::CREATIVE_DRAFT_TOOL_NAMES.to_vec();
         expected.sort_unstable();
         assert_eq!(names, expected);
 
@@ -2207,7 +2275,10 @@ mod subagent_persona_tests {
 
         fn write(&self, id: &str, contents: &str) -> &Self {
             std::fs::write(
-                self.root.join(".agents").join("agents").join(format!("{id}.md")),
+                self.root
+                    .join(".agents")
+                    .join("agents")
+                    .join(format!("{id}.md")),
                 contents,
             )
             .unwrap();
@@ -2248,6 +2319,11 @@ mod subagent_persona_tests {
             model_id: "m".into(),
             permission_profile: permission_profile.into(),
             tool_allowlist,
+            // No capability selection in these fixtures: persona layering must
+            // hold on the legacy (unselected) path too.
+            team: None,
+            mcp_tool_schemas: Vec::new(),
+            selected_mcp_servers: None,
         }
     }
 
@@ -2302,7 +2378,8 @@ mod subagent_persona_tests {
     #[tokio::test]
     async fn directive_registry_is_take_once_and_rejects_blanks() {
         let rt = ProductionRuntime::new();
-        rt.set_run_agent_directive("run-1", "Be terse.".into()).await;
+        rt.set_run_agent_directive("run-1", "Be terse.".into())
+            .await;
         assert_eq!(
             rt.take_run_agent_directive("run-1").await.as_deref(),
             Some("Be terse.")
@@ -2397,7 +2474,10 @@ mod subagent_persona_tests {
             .await;
         std::env::remove_var("NATIVES_DAEMON_FIXTURE");
         assert!(!out.is_error, "{:?}", out.output);
-        assert_eq!(out.output["system_prompt_authored"], serde_json::json!(true));
+        assert_eq!(
+            out.output["system_prompt_authored"],
+            serde_json::json!(true)
+        );
 
         // The directive is registered against the child run id, which is exactly
         // what `start_run` consumes before `assemble_context`.
@@ -2537,11 +2617,7 @@ mod subagent_persona_tests {
         let tools = gated(
             &fixture.root,
             "full_access",
-            Some(vec![
-                "read_file".into(),
-                "grep".into(),
-                "task".into(),
-            ]),
+            Some(vec!["read_file".into(), "grep".into(), "task".into()]),
         );
         let out = tools
             .execute_tool(
@@ -2569,9 +2645,10 @@ mod subagent_persona_tests {
         let task_id = out.output["task_id"].as_str().unwrap();
         let child = tools.subagents.get(task_id).await.expect("child record");
         assert_eq!(child.permission_profile, "ask");
-        assert!(!child.tool_allowlist.iter().any(|t| t == "write_file"
-            || t == "run_terminal"
-            || t == "apply_patch"));
+        assert!(!child
+            .tool_allowlist
+            .iter()
+            .any(|t| t == "write_file" || t == "run_terminal" || t == "apply_patch"));
     }
 
     #[tokio::test]
@@ -2607,7 +2684,11 @@ mod subagent_persona_tests {
         // parent's own profile: readonly parent + full_access request +
         // full_access profile → readonly.
         assert_eq!(
-            agent_core::resolve_child_permission("readonly", Some("full_access"), Some("full_access")),
+            agent_core::resolve_child_permission(
+                "readonly",
+                Some("full_access"),
+                Some("full_access")
+            ),
             "readonly"
         );
         assert_eq!(
@@ -2657,7 +2738,10 @@ mod subagent_persona_tests {
         std::env::remove_var("NATIVES_DAEMON_FIXTURE");
         assert!(!out.is_error, "{:?}", out.output);
         assert!(out.output["agent_profile_id"].is_null());
-        assert_eq!(out.output["system_prompt_authored"], serde_json::json!(false));
+        assert_eq!(
+            out.output["system_prompt_authored"],
+            serde_json::json!(false)
+        );
         assert_eq!(
             out.output["max_steps"].as_u64(),
             Some(crate::production_tools::DEFAULT_CHILD_MAX_STEPS as u64)

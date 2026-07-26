@@ -1011,6 +1011,16 @@ export interface NativesAPI {
     listRuns: (subagentId: string) => Promise<unknown>;
     resolveBinding: (subagentId: string) => Promise<unknown>;
   };
+  /** Capability secrets (ADR-0016 决策 7) — Host 侧加密存储；list 绝不返回明文 */
+  capabilitySecret: {
+    set: (data: { kind: 'mcp_env' | 'mcp_bearer' | 'mcp_oauth_refresh'; ownerRef: string; keyName?: string; plaintext: string }) => Promise<{ id: string }>;
+    delete: (id: string) => Promise<void>;
+    list: (ownerRef: string) => Promise<Array<{ id: string; kind: string; keyName: string | null; createdAt: string }>>;
+  };
+  /** MCP OAuth 浏览器流 (ADR-0016 决策 7) — Host 侧 loopback + PKCE S256 */
+  mcpOauth: {
+    start: (data: { serverId: string; authorizeUrl: string; tokenUrl: string; clientId: string; scopes?: string[]; redirectPort?: number }) => Promise<{ ok: boolean; hasRefresh: boolean }>;
+  };
   /** Job module（任务）— 契约 v1：8 个 job_* 命令，JSON snake_case；强类型见 src/lib/jobs-api.ts */
   jobs: {
     list: () => Promise<unknown>;
@@ -1883,6 +1893,21 @@ const nativesAPI: NativesAPI = {
       cmd('subagent_list_runs', { subagentId }),
     resolveBinding: (subagentId: string) =>
       cmd('subagent_resolve_binding', { subagentId }),
+  },
+
+  // ── Capability secrets (ADR-0016 决策 7) ──
+  capabilitySecret: {
+    set: (data: { kind: 'mcp_env' | 'mcp_bearer' | 'mcp_oauth_refresh'; ownerRef: string; keyName?: string; plaintext: string }) =>
+      cmd<{ id: string }>('capability_secret_set', { input: data }),
+    delete: (id: string) => cmd<void>('capability_secret_delete', { id }),
+    list: (ownerRef: string) =>
+      cmd<Array<{ id: string; kind: string; keyName: string | null; createdAt: string }>>('capability_secret_list', { ownerRef }),
+  },
+
+  // ── MCP OAuth 浏览器流 (ADR-0016 决策 7) ──
+  mcpOauth: {
+    start: (data: { serverId: string; authorizeUrl: string; tokenUrl: string; clientId: string; scopes?: string[]; redirectPort?: number }) =>
+      cmd<{ ok: boolean; hasRefresh: boolean }>('mcp_oauth_start', { input: data }),
   },
 
   // Assistant in-process RPC (no daemon sidecar)

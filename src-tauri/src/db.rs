@@ -107,35 +107,9 @@ pub fn init_assistant_db() -> Result<()> {
         .map_err(Error::Database)?;
     }
 
-    // scheduled_tasks + task_runs 表（Slice J Task Scheduler）
-    conn.execute_batch(
-        "
-        CREATE TABLE IF NOT EXISTS scheduled_tasks (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            prompt TEXT NOT NULL,
-            runtime_override TEXT,
-            schedule_type TEXT NOT NULL,
-            schedule_value TEXT NOT NULL,
-            next_run TEXT NOT NULL,
-            last_status TEXT,
-            consecutive_errors INTEGER NOT NULL DEFAULT 0,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL,
-            expires_at TEXT
-        );
-        CREATE TABLE IF NOT EXISTS task_runs (
-            id TEXT PRIMARY KEY,
-            task_id TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
-            started_at TEXT NOT NULL,
-            finished_at TEXT,
-            status TEXT,
-            result_summary TEXT,
-            error TEXT
-        );
-        ",
-    )
-    .map_err(Error::Database)?;
+    // scheduled_tasks + task_runs 表（Job 任务模块复用扩展；
+    // DDL 与条件补列的单一来源在 jobs::store::ensure_schema）
+    crate::jobs::store::ensure_schema(&conn)?;
 
     let mut guard = ASSISTANT_DB_POOL.lock().unwrap();
     *guard = Some(pool);
@@ -847,6 +821,38 @@ pub fn apply_migrations(conn: &Connection) -> Result<()> {
             CREATE INDEX IF NOT EXISTS idx_creative_drafts_conversation
                 ON creative_drafts(conversation_id);
             INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '10');
+            ",
+        )
+        .map_err(Error::Database)?;
+    }
+
+    // Migration v10→v11: capability secrets (ADR-0016 decision 7).
+    //
+    // Host-owned encrypted store for capability-library secrets: MCP env vars,
+    // bearer tokens and OAuth refresh tokens. `owner_ref` points at the
+    // capability MCP server id. Column semantics reuse the provider_api_keys
+    // KEK-DEK envelope (see provider_key_manager):
+    // - `ciphertext` = BASE64(nonce || AES-256-GCM ciphertext) under a per-row DEK
+    // - `nonce`      = BASE64(kek_nonce || DEK wrapped by the provider KEK)
+    // The daemon only reads rows via NativesDbBroker and never persists plaintext.
+    if current_version < 11 {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS capability_secrets (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL CHECK(kind IN ('mcp_env','mcp_bearer','mcp_oauth_refresh')),
+                owner_ref TEXT NOT NULL,
+                key_name TEXT,
+                ciphertext TEXT NOT NULL,
+                nonce TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_capability_secrets_owner
+                ON capability_secrets(owner_ref);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_capability_secrets_identity
+                ON capability_secrets(kind, owner_ref, COALESCE(key_name, ''));
+            INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', '11');
             ",
         )
         .map_err(Error::Database)?;

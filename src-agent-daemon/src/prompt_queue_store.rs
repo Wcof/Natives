@@ -690,6 +690,8 @@ async fn send_now(params: Value) -> Result<Value, String> {
                             conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id]);
                     }
                     let start_req = StartRunRequest {
+            agent_profile_id: None,
+            capability_selection: None,
                         run_id: None,
                         conversation_id: Some(conversation_id.clone()),
                         provider_id: Some(provider_id.clone()),
@@ -754,6 +756,8 @@ async fn send_now(params: Value) -> Result<Value, String> {
         .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
 
     let start_req = StartRunRequest {
+            agent_profile_id: None,
+            capability_selection: None,
         run_id: None,
         conversation_id: Some(conversation_id.clone()),
         provider_id: Some(provider_id),
@@ -844,6 +848,8 @@ pub async fn on_run_terminal(
             }
 
             let start_req = StartRunRequest {
+            agent_profile_id: None,
+            capability_selection: None,
                 run_id: None,
                 conversation_id: Some(conversation_id.to_string()),
                 provider_id: Some(provider_id),
@@ -1083,6 +1089,7 @@ mod tests {
                 let rm = crate::run_manager::global_run_manager();
                 let active = rm
                     .create_run(assistant_protocol::v2::CreateRunRequest {
+            capability_selection: None,
                         conversation_id: cid.clone(),
                         provider_id: "openai".into(),
                         model_id: "gpt-4o".into(),
@@ -1101,6 +1108,8 @@ mod tests {
                     .unwrap();
                 let _ = crate::run_manager::RunManager::start_detached_global(
                     assistant_protocol::v2::StartRunRequest {
+            agent_profile_id: None,
+            capability_selection: None,
                         run_id: Some(active.id.clone()),
                         conversation_id: Some(cid.clone()),
                         provider_id: Some("openai".into()),

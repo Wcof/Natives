@@ -115,6 +115,37 @@ pub const ALL_METHODS: &[&str] = &[
     "harness.binding.set",
     "harness.run.getSnapshot",
     "harness.audit.list",
+    // Capability library (ADR-0016): configuration surface, distinct from the
+    // mcp.* / skill.* runtime surfaces above.
+    "capability.skill.list",
+    "capability.skill.get",
+    "capability.skill.update",
+    "capability.skill.import",
+    "capability.skill.delete",
+    "capability.skill.rescan",
+    "capability.mcp.list",
+    "capability.mcp.get",
+    "capability.mcp.create",
+    "capability.mcp.update",
+    "capability.mcp.delete",
+    "capability.mcp.importJson",
+    "capability.mcp.hub.search",
+    "capability.mcp.hub.get",
+    "capability.mcp.hub.install",
+    "capability.expert.list",
+    "capability.expert.get",
+    "capability.expert.create",
+    "capability.expert.update",
+    "capability.expert.delete",
+    "capability.expert.importMd",
+    "capability.expert.exportMd",
+    "capability.team.list",
+    "capability.team.get",
+    "capability.team.create",
+    "capability.team.update",
+    "capability.team.delete",
+    "conversation.updateCapabilities",
+    "conversation.getCapabilities",
 ];
 
 /// Methods actually handled by the Agent Daemon RPC (must match `rpc.rs`).
@@ -235,6 +266,39 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "harness.binding.set",
     "harness.run.getSnapshot",
     "harness.audit.list",
+    // Capability library (ADR-0016) — advertisement must never outrun
+    // implementation. `rpc.rs` routes the whole family by the `capability.`
+    // prefix, guarded by `is_implemented_method`, into `capability::request`,
+    // which has a real arm for every name listed here (hub included).
+    "capability.skill.list",
+    "capability.skill.get",
+    "capability.skill.update",
+    "capability.skill.import",
+    "capability.skill.delete",
+    "capability.skill.rescan",
+    "capability.mcp.list",
+    "capability.mcp.get",
+    "capability.mcp.create",
+    "capability.mcp.update",
+    "capability.mcp.delete",
+    "capability.mcp.importJson",
+    "capability.mcp.hub.search",
+    "capability.mcp.hub.get",
+    "capability.mcp.hub.install",
+    "capability.expert.list",
+    "capability.expert.get",
+    "capability.expert.create",
+    "capability.expert.update",
+    "capability.expert.delete",
+    "capability.expert.importMd",
+    "capability.expert.exportMd",
+    "capability.team.list",
+    "capability.team.get",
+    "capability.team.create",
+    "capability.team.update",
+    "capability.team.delete",
+    "conversation.updateCapabilities",
+    "conversation.getCapabilities",
 ];
 
 /// Methods the Tauri host still owns after Phase 0 cutover.
@@ -260,6 +324,18 @@ pub const HOST_IMPLEMENTED_METHODS: &[&str] = &[
     // because "show in file manager" is not a daemon capability.
     "artifact.open",
     "artifact.reveal",
+    // Deliberately absent: `mcp.auth.oauthStart` / `mcp.auth.oauthCallback`.
+    // ADR-0016 decision 7 is correct that the *browser + loopback callback* is
+    // Host-owned, but it ships as the Tauri command `mcp_oauth_start`
+    // (`src-tauri/src/commands/mcp_oauth.rs`, registered in `lib.rs`) — invoked
+    // directly by the frontend, never routed through this RPC surface.
+    // `src-tauri`'s `is_host_owned_method` does NOT match either name, so
+    // listing them here would advertise a host interception that does not
+    // happen: the call would fall through to the daemon, which has no arm, and
+    // the caller would get `internal_error` instead of an honest `unsupported`.
+    // Both names stay catalogued in `ALL_METHODS` and unadvertised. To promote
+    // them, add them to `is_host_owned_method` + `dispatch_rpc` first, then to
+    // `HOST_INTERCEPTED` in `src-agent-daemon/tests/rpc_dispatch_contract.rs`.
 ];
 
 pub mod names {
@@ -380,6 +456,37 @@ pub mod names {
     pub const HARNESS_BINDING_SET: &str = "harness.binding.set";
     pub const HARNESS_RUN_GET_SNAPSHOT: &str = "harness.run.getSnapshot";
     pub const HARNESS_AUDIT_LIST: &str = "harness.audit.list";
+
+    // Capability library (ADR-0016).
+    pub const CAPABILITY_SKILL_LIST: &str = "capability.skill.list";
+    pub const CAPABILITY_SKILL_GET: &str = "capability.skill.get";
+    pub const CAPABILITY_SKILL_UPDATE: &str = "capability.skill.update";
+    pub const CAPABILITY_SKILL_IMPORT: &str = "capability.skill.import";
+    pub const CAPABILITY_SKILL_DELETE: &str = "capability.skill.delete";
+    pub const CAPABILITY_SKILL_RESCAN: &str = "capability.skill.rescan";
+    pub const CAPABILITY_MCP_LIST: &str = "capability.mcp.list";
+    pub const CAPABILITY_MCP_GET: &str = "capability.mcp.get";
+    pub const CAPABILITY_MCP_CREATE: &str = "capability.mcp.create";
+    pub const CAPABILITY_MCP_UPDATE: &str = "capability.mcp.update";
+    pub const CAPABILITY_MCP_DELETE: &str = "capability.mcp.delete";
+    pub const CAPABILITY_MCP_IMPORT_JSON: &str = "capability.mcp.importJson";
+    pub const CAPABILITY_MCP_HUB_SEARCH: &str = "capability.mcp.hub.search";
+    pub const CAPABILITY_MCP_HUB_GET: &str = "capability.mcp.hub.get";
+    pub const CAPABILITY_MCP_HUB_INSTALL: &str = "capability.mcp.hub.install";
+    pub const CAPABILITY_EXPERT_LIST: &str = "capability.expert.list";
+    pub const CAPABILITY_EXPERT_GET: &str = "capability.expert.get";
+    pub const CAPABILITY_EXPERT_CREATE: &str = "capability.expert.create";
+    pub const CAPABILITY_EXPERT_UPDATE: &str = "capability.expert.update";
+    pub const CAPABILITY_EXPERT_DELETE: &str = "capability.expert.delete";
+    pub const CAPABILITY_EXPERT_IMPORT_MD: &str = "capability.expert.importMd";
+    pub const CAPABILITY_EXPERT_EXPORT_MD: &str = "capability.expert.exportMd";
+    pub const CAPABILITY_TEAM_LIST: &str = "capability.team.list";
+    pub const CAPABILITY_TEAM_GET: &str = "capability.team.get";
+    pub const CAPABILITY_TEAM_CREATE: &str = "capability.team.create";
+    pub const CAPABILITY_TEAM_UPDATE: &str = "capability.team.update";
+    pub const CAPABILITY_TEAM_DELETE: &str = "capability.team.delete";
+    pub const CONVERSATION_UPDATE_CAPABILITIES: &str = "conversation.updateCapabilities";
+    pub const CONVERSATION_GET_CAPABILITIES: &str = "conversation.getCapabilities";
 }
 
 /// Every advertised Harness method, in the order the design lists them.
@@ -484,14 +591,24 @@ mod tests {
         }
     }
 
+    /// The OAuth browser flow is real, but it is a **Tauri command**
+    /// (`mcp_oauth_start`), not an RPC method: nothing in `is_host_owned_method`
+    /// matches these names, so advertising them as host-implemented would route
+    /// live calls to a daemon that has no arm. Catalogued, never advertised.
     #[test]
-    fn oauth_browser_redirect_is_explicitly_unsupported_until_handler_exists() {
+    fn oauth_browser_redirect_is_catalogued_but_not_advertised() {
         assert!(is_known_method("mcp.auth.oauthStart"));
         assert!(is_known_method("mcp.auth.oauthCallback"));
-        assert!(!is_implemented_method("mcp.auth.oauthStart"));
-        assert!(!is_implemented_method("mcp.auth.oauthCallback"));
+        assert!(!is_host_method("mcp.auth.oauthStart"));
+        assert!(!is_host_method("mcp.auth.oauthCallback"));
+        assert!(!is_daemon_method("mcp.auth.oauthStart"));
+        assert!(!is_daemon_method("mcp.auth.oauthCallback"));
         assert!(matches!(
             method_status("mcp.auth.oauthStart"),
+            super::super::envelope::MethodStatus::Unsupported
+        ));
+        assert!(matches!(
+            method_status("mcp.auth.oauthCallback"),
             super::super::envelope::MethodStatus::Unsupported
         ));
     }

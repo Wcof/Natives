@@ -18,6 +18,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { Locale } from '@/i18n';
 import { classifyError } from '@/lib/error-classifier';
+import { jobList } from '@/lib/jobs-api';
 import {
   loadPreferredRuntimeId,
   savePreferredRuntimeId,
@@ -577,9 +578,20 @@ function ScheduledTasksPanel({ locale }: { locale: Locale }) {
     let cancelled = false;
     (async () => {
       try {
-        const r = await window.nativesAPI?.scheduler?.listTasks?.() as ScheduledTask[] | undefined;
+        // scheduler_list_tasks 已删除；改接任务模块 job_list（契约 v1），映射为原展示形状
+        const r = await jobList();
         if (cancelled) return;
-        setTasks(r ?? []);
+        setTasks(r.jobs.map((job) => ({
+          id: job.id,
+          name: job.name,
+          prompt: job.description ?? '',
+          scheduleType: job.schedule_type,
+          scheduleValue: job.schedule_value,
+          enabled: job.enabled,
+          lastStatus: job.last_status ?? null,
+          consecutiveErrors: job.consecutive_errors ?? 0,
+          nextRun: job.next_run ?? '',
+        })));
         setErrorMessage(null);
       } catch (error) {
         if (cancelled) return;

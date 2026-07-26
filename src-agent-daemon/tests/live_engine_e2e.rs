@@ -65,6 +65,9 @@ async fn live_engine_text_turn() {
         model_id: model.clone(),
         permission_profile: "full_access".into(),
         tool_allowlist: None,
+        team: None,
+        mcp_tool_schemas: Vec::new(),
+        selected_mcp_servers: None,
     };
 
     let status = engine
@@ -159,6 +162,9 @@ async fn live_engine_tool_loop() {
         model_id: model.clone(),
         permission_profile: "full_access".into(),
         tool_allowlist: None,
+        team: None,
+        mcp_tool_schemas: Vec::new(),
+        selected_mcp_servers: None,
     };
 
     // list_dir is ReadOnly and registered — forces AgentEngine tool cycle.
@@ -273,6 +279,9 @@ async fn live_subagent_task_completes() {
         model_id: model.clone(),
         permission_profile: "full_access".into(),
         tool_allowlist: None,
+        team: None,
+        mcp_tool_schemas: Vec::new(),
+        selected_mcp_servers: None,
     };
 
     // Independent key identity: different key_id label than parent (same env secret is OK for smoke).
@@ -453,6 +462,9 @@ async fn live_engine_cancel_stream() {
             model_id: model_for_task.clone(),
             permission_profile: "full_access".into(),
             tool_allowlist: None,
+            team: None,
+            mcp_tool_schemas: Vec::new(),
+            selected_mcp_servers: None,
         };
         engine
             .run(
@@ -563,6 +575,9 @@ async fn live_cross_provider_subagent_openai_parent_anthropic_child() {
         model_id: parent_model.clone(),
         permission_profile: "full_access".into(),
         tool_allowlist: None,
+        team: None,
+        mcp_tool_schemas: Vec::new(),
+        selected_mcp_servers: None,
     };
     let parent_status = engine
         .run(
@@ -690,6 +705,9 @@ async fn dual_provider_engine_fixture_subagent() {
         model_id: "fixture-parent-model".into(),
         permission_profile: "full_access".into(),
         tool_allowlist: None,
+        team: None,
+        mcp_tool_schemas: Vec::new(),
+        selected_mcp_servers: None,
     };
     let parent_status = engine
         .run(
@@ -794,6 +812,9 @@ async fn fixture_engine_still_works_without_live() {
         model_id: "m".into(),
         permission_profile: "full_access".into(),
         tool_allowlist: None,
+        team: None,
+        mcp_tool_schemas: Vec::new(),
+        selected_mcp_servers: None,
     };
     let status = engine
         .run(

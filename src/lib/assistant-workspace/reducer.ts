@@ -1434,6 +1434,20 @@ export function workspaceReducer(
         },
       };
 
+    case 'capabilitySelection/set': {
+      // Idempotent: same reference (incl. null → null) keeps state identity.
+      if (state.capabilitySelectionByConversation[action.conversationId] === action.selection) {
+        return state;
+      }
+      return {
+        ...state,
+        capabilitySelectionByConversation: {
+          ...state.capabilitySelectionByConversation,
+          [action.conversationId]: action.selection,
+        },
+      };
+    }
+
     case 'view/patch': {
       // Bail out when every provided field already matches — layout effects
       // dispatch layoutBreakpoint on mount/resize and must not force a new

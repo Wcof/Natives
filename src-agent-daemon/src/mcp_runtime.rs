@@ -233,6 +233,10 @@ pub struct McpRuntime {
     notifications: Mutex<HashMap<String, Vec<McpNotification>>>,
     /// Roots granted to servers. Empty = none granted (fail-closed default).
     roots: Mutex<Option<Vec<McpRoot>>>,
+    /// run_id → selected server ids (ADR-0016 lifecycle refcount).
+    run_refs: Mutex<HashMap<String, std::collections::HashSet<String>>>,
+    /// server_id → instant it lost its last run reference (reaper input).
+    idle_since: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 impl Default for McpRuntime {
@@ -254,6 +258,8 @@ impl McpRuntime {
             resource_templates: Mutex::new(HashMap::new()),
             notifications: Mutex::new(HashMap::new()),
             roots: Mutex::new(None),
+            run_refs: Mutex::new(HashMap::new()),
+            idle_since: Mutex::new(HashMap::new()),
         }
     }
 
@@ -331,6 +337,102 @@ impl McpRuntime {
             .lock()
             .map_err(|e| e.to_string())?
             .register_server(config)
+    }
+
+    /// Remove a server from the registry (capability library delete path).
+    /// Callers must stop a running server first.
+    pub fn remove_server(&self, server_id: &str) {
+        if let Ok(mut registry) = self.registry.lock() {
+            registry.remove_server(server_id);
+        }
+        if let Ok(mut status) = self.status.lock() {
+            status.remove(server_id);
+        }
+        if let Ok(mut refs) = self.run_refs.lock() {
+            refs.retain(|_, servers| {
+                servers.remove(server_id);
+                !servers.is_empty()
+            });
+        }
+        if let Ok(mut idle) = self.idle_since.lock() {
+            idle.remove(server_id);
+        }
+    }
+
+    /// Run-scoped reference: keeps a selected server warm while the run lives
+    /// (ADR-0016 lifecycle). Concurrency-safe against sibling runs.
+    pub fn acquire(&self, server_id: &str, run_id: &str) {
+        if let Ok(mut refs) = self.run_refs.lock() {
+            refs.entry(run_id.to_string())
+                .or_default()
+                .insert(server_id.to_string());
+        }
+        if let Ok(mut idle) = self.idle_since.lock() {
+            idle.remove(server_id);
+        }
+    }
+
+    /// Release every server reference held by a run (terminal path). Servers
+    /// are NOT stopped here — the idle reaper stops cold stdio servers later,
+    /// preserving warm starts across turns of the same conversation.
+    pub fn release_run(&self, run_id: &str) {
+        let released: Vec<String> = match self.run_refs.lock() {
+            Ok(mut refs) => refs.remove(run_id).map(|s| s.into_iter().collect()).unwrap_or_default(),
+            Err(_) => return,
+        };
+        if released.is_empty() {
+            return;
+        }
+        let still_referenced: std::collections::HashSet<String> = self
+            .run_refs
+            .lock()
+            .map(|refs| refs.values().flatten().cloned().collect())
+            .unwrap_or_default();
+        if let Ok(mut idle) = self.idle_since.lock() {
+            let now = std::time::Instant::now();
+            for server in released {
+                if !still_referenced.contains(&server) {
+                    idle.insert(server, now);
+                }
+            }
+        }
+    }
+
+    /// Stop stdio servers with zero run references idle longer than `idle_for`.
+    /// Http/sse endpoints have no local process and are left alone. Returns
+    /// the ids that were stopped (for logging/tests).
+    pub fn reap_idle(&self, idle_for: std::time::Duration) -> Vec<String> {
+        let now = std::time::Instant::now();
+        let candidates: Vec<String> = match self.idle_since.lock() {
+            Ok(idle) => idle
+                .iter()
+                .filter(|(_, since)| now.duration_since(**since) >= idle_for)
+                .map(|(id, _)| id.clone())
+                .collect(),
+            Err(_) => return Vec::new(),
+        };
+        let mut stopped = Vec::new();
+        for server_id in candidates {
+            let is_stdio = self
+                .registry
+                .lock()
+                .ok()
+                .and_then(|r| {
+                    r.list_servers()
+                        .into_iter()
+                        .find(|c| c.id == server_id)
+                        .map(|c| matches!(c.transport, McpTransport::Stdio))
+                })
+                .unwrap_or(false);
+            let running = self.server_status(&server_id).as_deref() == Some("running");
+            if is_stdio && running && self.stop(&server_id).is_ok() {
+                stopped.push(server_id.clone());
+            }
+            if let Ok(mut idle) = self.idle_since.lock() {
+                idle.remove(&server_id);
+            }
+        }
+        stopped
     }
 
     pub fn upsert_tool(&self, tool: McpToolDescriptor) -> Result<(), String> {

@@ -116,9 +116,28 @@ pub struct PermissionGatedTools {
     /// `None` = parent/unrestricted surface (permission profile still applies).
     /// `Some` = hard allowlist; tools outside the list are hidden and denied.
     pub tool_allowlist: Option<Vec<String>>,
+    /// Resolved expert team for this run (ADR-0016): the task tool's `agent`
+    /// parameter must name a member; runs without a team reject it.
+    pub team: Option<crate::capability_resolution::ResolvedTeam>,
+    /// Model-visible MCP tool schemas for the selected servers (ADR-0016).
+    /// Empty = no MCP schemas surfaced (legacy runs expose none either).
+    pub mcp_tool_schemas: Vec<ToolSchema>,
+    /// `Some(set)` = server whitelist: `mcp__{server}__*` and `mcp_call` may
+    /// only target these servers. `None` = legacy behaviour.
+    pub selected_mcp_servers: Option<std::collections::HashSet<String>>,
 }
 impl PermissionGatedTools {
     fn tool_allowed(&self, name: &str) -> bool {
+        // Server whitelist gate first (ADR-0016): with an active MCP selection
+        // a namespaced tool outside the selected servers is invisible/denied,
+        // regardless of allowlist wildcards.
+        if let (Some(selected), Some(server)) =
+            (&self.selected_mcp_servers, mcp_server_of_tool(name))
+        {
+            if !selected.contains(server) {
+                return false;
+            }
+        }
         match &self.tool_allowlist {
             None => true,
             // Matching semantics (including the MCP surface) live in agent-core so
@@ -218,12 +237,20 @@ impl PermissionGatedTools {
         }
     }
 }
+/// Extract the server id from a namespaced `mcp__{server}__{tool}` name.
+fn mcp_server_of_tool(name: &str) -> Option<&str> {
+    let rest = name.strip_prefix("mcp__")?;
+    let end = rest.find("__")?;
+    Some(&rest[..end])
+}
+
 #[async_trait::async_trait]
 impl EngineToolRuntime for PermissionGatedTools {
     async fn list_tool_schemas(&self) -> Vec<ToolSchema> {
         self.ensure_plan_latch();
         let planning = plan_mode::is_active(&self.parent_run_id);
-        self.gateway
+        let mut schemas: Vec<ToolSchema> = self
+            .gateway
             .list_tools()
             .into_iter()
             .filter(|t| self.tool_allowed(t.name))
@@ -233,7 +260,21 @@ impl EngineToolRuntime for PermissionGatedTools {
                 description: t.description.to_string(),
                 input_schema: t.schema.clone(),
             })
-            .collect()
+            .collect();
+        // Selected MCP servers surface their namespaced tools to the model
+        // (ADR-0016) — previously mcp__ tools were callable but never visible.
+        // While planning they stay hidden: `plan_decision_for` classifies an
+        // unknown `mcp__*` name fail-closed, so listing them would advertise a
+        // surface `execute_tool` is going to refuse.
+        for schema in &self.mcp_tool_schemas {
+            if planning && !matches!(self.plan_decision_for(&schema.name), PlanDecision::Allow) {
+                continue;
+            }
+            if self.tool_allowed(&schema.name) && !schemas.iter().any(|s| s.name == schema.name) {
+                schemas.push(schema.clone());
+            }
+        }
+        schemas
     }
 
     async fn execute_tool(
@@ -253,6 +294,30 @@ impl EngineToolRuntime for PermissionGatedTools {
         // Hard allowlist gate before permission / orchestration (Phase 0).
         if !self.tool_allowed(name) {
             return Self::deny_not_allowlisted(name);
+        }
+        // Generic mcp_call carries the server in its input — the ADR-0016
+        // server whitelist must gate it too, not just namespaced names.
+        if name == "mcp_call" {
+            if let Some(selected) = &self.selected_mcp_servers {
+                let server = input
+                    .get("server")
+                    .or_else(|| input.get("server_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if !selected.contains(server) {
+                    return ToolExecutionResult {
+                        output: serde_json::json!({
+                            "error": format!(
+                                "mcp server '{server}' is not part of this run's capability selection"
+                            ),
+                            "denied": true,
+                            "code": "MCP_SERVER_NOT_SELECTED",
+                        }),
+                        is_error: true,
+                        duration_ms: 0,
+                    };
+                }
+            }
         }
 
         // Plan Mode latch, ahead of everything else.
@@ -1516,6 +1581,62 @@ impl PermissionGatedTools {
         let _ignored_key = input.get("key_id");
         let _ignored_model = input.get("model_id");
 
+        // Expert team delegation (ADR-0016): `agent` must name a roster member;
+        // outside the roster (or without a team) it is rejected fail-closed.
+        let agent_param = input
+            .get("agent")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let member_profile = match (&self.team, agent_param) {
+            (Some(team), Some(agent)) => {
+                if !team.members.iter().any(|m| m.expert_id == agent) {
+                    return ToolExecutionResult {
+                        output: serde_json::json!({
+                            "error": format!(
+                                "agent '{agent}' is not a member of team '{}'",
+                                team.team_id
+                            ),
+                            "code": "TEAM_MEMBER_INVALID",
+                            "members": team.members.iter().map(|m| m.expert_id.clone()).collect::<Vec<_>>(),
+                        }),
+                        is_error: true,
+                        duration_ms: 0,
+                    };
+                }
+                match crate::capability_resolution::load_profile(
+                    agent,
+                    self.gateway.project_root.as_deref().map(std::path::Path::new),
+                ) {
+                    Some(profile) => Some((agent.to_string(), profile)),
+                    None => {
+                        return ToolExecutionResult {
+                            output: serde_json::json!({
+                                "error": format!("team member profile not loadable: {agent}"),
+                                "code": "TEAM_MEMBER_INVALID",
+                            }),
+                            is_error: true,
+                            duration_ms: 0,
+                        };
+                    }
+                }
+            }
+            (None, Some(agent)) => {
+                return ToolExecutionResult {
+                    output: serde_json::json!({
+                        "error": format!(
+                            "'agent' parameter ('{agent}') requires an active expert team selection"
+                        ),
+                        "code": "TEAM_NOT_ACTIVE",
+                    }),
+                    is_error: true,
+                    duration_ms: 0,
+                };
+            }
+            (_, None) => None,
+        };
+        let member_profile_id = member_profile.as_ref().map(|(id, _)| id.clone());
+
         let name = input
             .get("name")
             .and_then(|v| v.as_str())
@@ -1589,10 +1710,21 @@ impl PermissionGatedTools {
         // tighten what was requested, and the parent is a hard ceiling. Neither a
         // parent-authored prompt nor a self-selected profile can widen either one,
         // so a prompt-injected parent gains nothing by writing a hostile persona.
+        // The profile mode fed to the valve is the persona the parent named, or
+        // — when the child is a roster member instead — the member's own profile
+        // (ADR-0016). Either way it can only tighten: `resolve_child_permission`
+        // caps the request by the profile and then by the parent.
         let child_perm = agent_core::resolve_child_permission(
             &self.permission_profile,
             input.get("permission_profile").and_then(|v| v.as_str()),
-            profile.as_ref().and_then(|p| p.permission_mode.as_deref()),
+            profile
+                .as_ref()
+                .and_then(|p| p.permission_mode.as_deref())
+                .or_else(|| {
+                    member_profile
+                        .as_ref()
+                        .and_then(|(_, m)| m.permission_mode.as_deref())
+                }),
         );
         // A present-but-malformed `tool_allowlist` falls back to the readonly
         // default rather than to "inherit the parent surface".
@@ -1607,12 +1739,25 @@ impl PermissionGatedTools {
                 })
                 .unwrap_or_else(default_subagent_tool_allowlist)
         });
-        let child_allowlist = agent_core::resolve_child_tool_allowlist(
+        let mut child_allowlist = agent_core::resolve_child_tool_allowlist(
             self.tool_allowlist.as_deref(),
             requested_allowlist.as_deref(),
             profile.as_ref().and_then(|p| p.tools.as_deref()),
             profile.as_ref().and_then(|p| p.disallowed_tools.as_deref()),
         );
+        // Member persona narrows the surface further (ADR-0016): profile.tools
+        // intersects what survived the parent ceiling, minus disallowed. Both
+        // operations are `retain`, so a member profile can only remove tools —
+        // naming a roster member never buys reach the parent lacked.
+        if let Some((_, member)) = &member_profile {
+            if let Some(tools) = member.tools.as_ref().filter(|t| !t.is_empty()) {
+                child_allowlist.retain(|tool| tools.iter().any(|t| t == tool));
+            }
+            if let Some(disallowed) = member.disallowed_tools.as_ref() {
+                child_allowlist.retain(|tool| !disallowed.iter().any(|d| d == tool));
+            }
+        }
+        let child_allowlist = child_allowlist;
 
         // ── Step budget: request, else the profile's, else the daemon default ──
         let child_max_steps = input
@@ -1620,8 +1765,18 @@ impl PermissionGatedTools {
             .and_then(|v| v.as_u64())
             .map(|v| v.min(u32::MAX as u64) as u32)
             .or_else(|| profile.as_ref().and_then(|p| p.max_steps))
+            .or_else(|| member_profile.as_ref().and_then(|(_, m)| m.max_steps))
             .unwrap_or(DEFAULT_CHILD_MAX_STEPS)
             .clamp(1, MAX_CHILD_MAX_STEPS);
+
+        // Persisted on the child run row and reported to every observer of this
+        // spawn. A roster member wins over a parent-named persona because child
+        // capability resolve loads the member's skills from this id (ADR-0016);
+        // without a team it is the persona `ProductionRuntime::start_run`
+        // reloads for the system prompt, tools and token budget.
+        let child_profile_id = member_profile_id
+            .clone()
+            .or_else(|| requested_profile_id.clone());
 
         // Prefer binding injected by execute_task_batch; else resolve (single-task path).
         let binding = if let Some(b) = input
@@ -1709,7 +1864,7 @@ impl PermissionGatedTools {
                 input: serde_json::json!({
                     "prompt": prompt.clone(),
                     "name": name.clone(),
-                    "agent_profile_id": requested_profile_id.clone(),
+                    "agent_profile_id": child_profile_id.clone(),
                     "permission_profile": child_perm.clone(),
                     "tool_allowlist": child_allowlist.clone(),
                     "model_id": child_model.clone(),
@@ -1729,13 +1884,16 @@ impl PermissionGatedTools {
 
         let created = match crate::global_run_manager().create_run(
             assistant_protocol::v2::CreateRunRequest {
+            // Child runs never inherit the parent conversation's selection;
+            // member skills come from the member profile at child resolve.
+            capability_selection: None,
                 conversation_id: child_conversation_id.clone(),
                 provider_id: child_provider.clone(),
                 model_id: child_model.clone(),
                 key_id: Some(child_key.clone()),
                 // Persisted on the run row; `ProductionRuntime::start_run` reloads
                 // the profile from it (system prompt, tools, token budget).
-                agent_profile_id: requested_profile_id.clone(),
+                agent_profile_id: child_profile_id.clone(),
                 permission_profile: Some(child_perm.clone()),
                 content: Some(prompt.clone()),
                 attachments: None,
@@ -1776,7 +1934,7 @@ impl PermissionGatedTools {
                 child_model.clone(),
                 child_perm.clone(),
                 child_allowlist.clone(),
-                requested_profile_id.clone(),
+                child_profile_id.clone(),
                 Some("none".into()),
                 project_path.clone(),
             )
@@ -1817,7 +1975,7 @@ impl PermissionGatedTools {
             &self.parent_run_id,
             RunEventKind::SubagentCreated {
                 sub_run_id: child_run_id.clone(),
-                agent_profile_id: requested_profile_id.clone(),
+                agent_profile_id: child_profile_id.clone(),
                 task: prompt.clone(),
             },
         );
@@ -1834,6 +1992,8 @@ impl PermissionGatedTools {
 
         let start_result = crate::run_manager::RunManager::start_detached_global(
             assistant_protocol::v2::StartRunRequest {
+            agent_profile_id: None,
+            capability_selection: None,
                 run_id: Some(child_run_id.clone()),
                 conversation_id: Some(child_conversation_id.clone()),
                 provider_id: Some(child_provider.clone()),
@@ -2022,7 +2182,7 @@ impl PermissionGatedTools {
                 "key_id": child_key,
                 "model_id": child_model,
                 "permission_profile": child_perm,
-                "agent_profile_id": requested_profile_id,
+                "agent_profile_id": child_profile_id,
                 "tool_allowlist": child_allowlist,
                 "max_steps": child_max_steps,
                 "system_prompt_authored": child_directive.is_some(),
@@ -2659,6 +2819,11 @@ mod plan_mode_runtime_tests {
             model_id: "test-model".into(),
             permission_profile: profile.to_string(),
             tool_allowlist: None,
+            // No capability selection: these fixtures exercise Plan Mode, not
+            // the ADR-0016 team/MCP gates, and `None` is the legacy surface.
+            team: None,
+            mcp_tool_schemas: Vec::new(),
+            selected_mcp_servers: None,
         }
     }
 

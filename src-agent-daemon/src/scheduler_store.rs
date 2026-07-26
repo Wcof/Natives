@@ -408,6 +408,7 @@ fn fire_job(job: &SchedulerJob) -> Result<String, String> {
     }
     let conv = format!("sched-{}", job.id);
     let run = global_run_manager().create_run(CreateRunRequest {
+            capability_selection: None,
         conversation_id: conv,
         provider_id: job.provider_id.clone(),
         model_id: job.model_id.clone(),
@@ -428,6 +429,8 @@ fn fire_job(job: &SchedulerJob) -> Result<String, String> {
             runtime_id: None,
         })?;
     let started = RunManager::start_detached_global(StartRunRequest {
+            agent_profile_id: None,
+            capability_selection: None,
         run_id: Some(run.id.clone()),
         conversation_id: Some(run.conversation_id.clone()),
         provider_id: Some(run.provider_id.clone()),

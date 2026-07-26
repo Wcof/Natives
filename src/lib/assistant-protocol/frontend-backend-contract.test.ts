@@ -92,14 +92,24 @@ test('UI-called methods are implemented (daemon or host)', () => {
   }
 });
 
-test('oauth browser methods stay unimplemented (honest red line)', () => {
+test('oauth browser methods are catalogued but advertised by neither surface (ADR-0016 decision 7)', () => {
   const src = readFileSync(METHODS_RS, 'utf8');
-  const implemented = new Set([
-    ...extractArrayConst(src, 'IMPLEMENTED_METHODS'),
-    ...extractArrayConst(src, 'HOST_IMPLEMENTED_METHODS'),
-  ]);
-  assert.ok(!implemented.has('mcp.auth.oauthStart'));
-  assert.ok(!implemented.has('mcp.auth.oauthCallback'));
+  const all = new Set(extractArrayConst(src, 'ALL_METHODS'));
+  const daemon = new Set(extractArrayConst(src, 'IMPLEMENTED_METHODS'));
+  const host = new Set(extractArrayConst(src, 'HOST_IMPLEMENTED_METHODS'));
+  // ADR-0016 decision 7 is right about *ownership* — the browser flow (loopback
+  // + PKCE + token exchange) lives on the Host. It does not follow that the RPC
+  // name should be advertised: the flow ships as the Tauri command
+  // `mcp_oauth_start` and is invoked directly, so it never travels this surface.
+  // `HOST_IMPLEMENTED_METHODS` is a promise that `is_host_owned_method`
+  // intercepts the call; neither oauth name is in that match, so advertising
+  // them would route live calls to a daemon with no arm and yield
+  // `internal_error` instead of an honest `unsupported`.
+  for (const name of ['mcp.auth.oauthStart', 'mcp.auth.oauthCallback']) {
+    assert.ok(all.has(name), `${name} stays in the catalogue`);
+    assert.ok(!daemon.has(name), `${name} must not be daemon-advertised`);
+    assert.ok(!host.has(name), `${name} must not be host-advertised until intercepted`);
+  }
 });
 
 test('capability-gate HOST_METHODS_UI stays subset of HOST_IMPLEMENTED when present', () => {

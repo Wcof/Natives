@@ -733,6 +733,12 @@ pub fn run() {
             commands::subagent::subagent_run,
             commands::subagent::subagent_list_runs,
             commands::subagent::subagent_resolve_binding,
+            // Capability secrets (ADR-0016 决策 7) — Host 侧加密存储
+            commands::capability_secret::capability_secret_set,
+            commands::capability_secret::capability_secret_delete,
+            commands::capability_secret::capability_secret_list,
+            // MCP OAuth 浏览器流 (ADR-0016 决策 7) — Host 侧 loopback + PKCE
+            commands::mcp_oauth::mcp_oauth_start,
             // Execution Engine settings（PRD 3.4）
             commands::executor_settings::executor_get_settings,
             commands::executor_settings::executor_save_settings,
