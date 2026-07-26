@@ -361,6 +361,17 @@ export const zh = {
     },
   },
 
+  // 个人创意创作台（ADR-0014）
+  creative: {
+    composerTitle: '描述一个想法',
+    composerSubtitle: '用一句话说清楚你想要什么，AI 会生成可运行的应用',
+    intentPlaceholder: '例如：做一个番茄钟，可以记录每天完成了几轮',
+    namePlaceholder: '应用名称（可选）',
+    generateApp: '生成应用',
+    generating: '生成中',
+    importExisting: '导入已有应用',
+  },
+
   settings: {
     title: '设置',
     backHome: '返回主页',

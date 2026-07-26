@@ -368,6 +368,17 @@ export const en = {
     },
   },
 
+  // Creator workbench (ADR-0014)
+  creative: {
+    composerTitle: 'Describe an idea',
+    composerSubtitle: 'Say what you want in one sentence and AI builds a working app',
+    intentPlaceholder: 'e.g. a pomodoro timer that tracks how many rounds I finish each day',
+    namePlaceholder: 'App name (optional)',
+    generateApp: 'Generate app',
+    generating: 'Generating',
+    importExisting: 'Import existing app',
+  },
+
   // Settings
   settings: {
     title: 'Settings',
