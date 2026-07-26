@@ -10,6 +10,7 @@ import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { unwrapAssistantRpc, type AssistantRpcEnvelope } from './assistant-rpc';
 import { classifyError } from './error-classifier';
+import { getHttpPort } from './natives-http-port';
 import type { ProviderRoutingApi } from '@/types/provider-routing';
 import type { ProviderRouteBinding, ProviderRoutingSettings } from '@/types/provider-routing';
 
@@ -120,6 +121,35 @@ export interface CreativeAppSummary {
   statusDetail?: CreativeAppStatusDetail;
   localProject?: LocalProjectSummary;
   actions: CreativeAppActions;
+}
+
+/**
+ * A draft is what an idea lives in before it becomes a module: no contract_id,
+ * no `modules` row, no sidebar entry until the user publishes it (ADR-0014).
+ * The state machine mirrors `src/lib/creative-draft.ts`.
+ */
+export interface CreativeDraft {
+  draftId: string;
+  name: string;
+  /** The user's original one-sentence request. */
+  intent: string;
+  conversationId?: string | null;
+  /** Absent for a brand-new draft; set when continuing an existing module. */
+  originModuleId?: string | null;
+  currentRevision: number;
+  state: 'drafting' | 'generating' | 'ready' | 'publishing' | 'published' | 'archived';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreativeDraftPublishResult {
+  ok: true;
+  draftId: string;
+  moduleId: string;
+  contractId: string;
+  contentHash: string;
+  /** Previous module HTML, present only when overwriting — powers one-click rollback. */
+  oldContent?: string | null;
 }
 
 export interface CreativeAppDeleteOptions {
@@ -636,6 +666,38 @@ export interface NativesAPI {
     }>;
     getLocalConfig: (id: string) => Promise<LocalCreativeConfig>;
     pollLocalExits: () => Promise<number>;
+  };
+  /**
+   * Draft lifecycle for the creation loop. Publishing is a host command, not a
+   * model tool: the user's click is the authorization (ADR-0014 §9).
+   */
+  creativeDraft: {
+    create: (request: {
+      name: string;
+      intent: string;
+      conversationId?: string | null;
+      originModuleId?: string | null;
+    }) => Promise<CreativeDraft>;
+    list: () => Promise<CreativeDraft[]>;
+    get: (draftId: string) => Promise<CreativeDraft>;
+    /** Current revision's HTML — what the preview pane and "continue" show. */
+    read: (draftId: string) => Promise<{ draftId: string; html: string }>;
+    /** Step the revision pointer back one: the user-facing "undo last change". */
+    rollback: (draftId: string) => Promise<{ draftId: string; revision: number }>;
+    publish: (request: {
+      draftId: string;
+      moduleId: string;
+      name: string;
+      permissions: string[];
+    }) => Promise<CreativeDraftPublishResult>;
+    delete: (draftId: string) => Promise<{ ok: boolean; draftId: string }>;
+    /**
+     * Sandbox preview URL, served with the same CSP as a module. Async because
+     * the local HTTP port is resolved at runtime — never hardcode it.
+     * The host resolves which revision to serve from the database pointer, so
+     * this URL stays stable across generate / undo.
+     */
+    previewUrl: (draftId: string) => Promise<string>;
   };
   env: {
     getVariables: (profileId: string) => Promise<unknown>;
@@ -1201,6 +1263,25 @@ const nativesAPI: NativesAPI = {
     getLocalConfig: (id: string) =>
       cmd<LocalCreativeConfig>('creative_app_get_local_config', { id }),
     pollLocalExits: () => cmd<number>('creative_app_poll_local_exits'),
+  },
+
+  // Creative drafts — the creation loop before a module exists
+  creativeDraft: {
+    create: (request) => cmd<CreativeDraft>('create_creative_draft', request),
+    list: () => cmd<CreativeDraft[]>('list_creative_drafts'),
+    get: (draftId: string) => cmd<CreativeDraft>('get_creative_draft', { draftId }),
+    read: (draftId: string) =>
+      cmd<{ draftId: string; html: string }>('read_creative_draft', { draftId }),
+    rollback: (draftId: string) =>
+      cmd<{ draftId: string; revision: number }>('rollback_creative_draft', { draftId }),
+    publish: (request) =>
+      cmd<CreativeDraftPublishResult>('publish_creative_draft', request),
+    delete: (draftId: string) =>
+      cmd<{ ok: boolean; draftId: string }>('delete_creative_draft', { draftId }),
+    previewUrl: async (draftId: string) => {
+      const port = await getHttpPort();
+      return `http://localhost:${port}/drafts/${draftId}/`;
+    },
   },
 
   // Environment
