@@ -1,6 +1,6 @@
 'use client';
 
-import { startTransition, useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
+import { startTransition, useState, useEffect, useCallback, useMemo, lazy, Suspense, useRef } from 'react';
 import { Eye, Edit2, Pencil } from 'lucide-react';
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
 import { type FileEntry } from '@/types/file';
@@ -12,6 +12,7 @@ import { parseUnifiedDiff } from '@/lib/diff-utils';
 import { useFileContent } from '@/lib/useFileContent';
 import { useEditorSave } from '@/lib/use-editor-save';
 import { fsApi, fsWatchApiOrNull, hasNativeFiles } from '@/lib/files-api';
+import { rewriteLocalImages, type LocalImageRewrite } from '@/lib/markdown-local-images';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { type PreviewSubMode } from '@/components/shell/RightPanel';
 import MonacoDiffView from './MonacoDiffView';
@@ -383,7 +384,23 @@ function MdWysiwygPreview({ path, locale }: { path: string; locale: Locale }) {
     onExternalChange: reload,
   });
 
-  if (content === null) {
+  // 本地图片改写：`![](./图/x.png)` → convertFileSrc URL（渲染可见），
+  // 落盘经 restore 精确还原原文；用户新拖入的资产 URL 还原为真实路径
+  const baseDir = path.substring(0, path.lastIndexOf('/')) || '/';
+  const rewriteRef = useRef<LocalImageRewrite | null>(null);
+  const displayContent = useMemo(() => {
+    if (content === null) return null;
+    const convert = hasNativeFiles() ? fsApi().convertFileSrc : undefined;
+    if (!convert) {
+      rewriteRef.current = null;
+      return content;
+    }
+    const rewrite = rewriteLocalImages(content, baseDir, (abs) => convert(abs) ?? abs);
+    rewriteRef.current = rewrite;
+    return rewrite.text;
+  }, [content, baseDir]);
+
+  if (displayContent === null) {
     return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-disabled)', fontSize: 12 }}>{t(locale, 'filePreview.failedLoad')}</div>;
   }
 
@@ -396,9 +413,13 @@ function MdWysiwygPreview({ path, locale }: { path: string; locale: Locale }) {
         </div>
       }>
         <MilkdownEditor
-          content={content}
+          content={displayContent}
           filePath={path}
-          onSave={(newContent) => { void save(newContent); }}
+          locale={locale}
+          onSave={(newContent) => {
+            const restored = rewriteRef.current ? rewriteRef.current.restore(newContent) : newContent;
+            void save(restored);
+          }}
           onDirtyChange={(dirty) => { dirtyRef.current = dirty; }}
         />
       </Suspense>

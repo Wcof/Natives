@@ -10,12 +10,14 @@ import { SPACING, FONT_SIZE, BORDER_RADIUS, TRANSITION } from '@/lib/design-toke
 import { IFRAME_SANDBOX } from '@/lib/iframe-manager';
 import { fsApi, hasNativeFiles } from '@/lib/files-api';
 import { useTheme } from '@/context/ThemeContext';
+import { t, useLocale } from '@/i18n';
 
 interface FollowRendererProps {
   filePath: string | null;
 }
 
 export default function FollowRenderer({ filePath }: FollowRendererProps) {
+  const locale = useLocale();
   const [content, setContent] = useState<string | null>(null);
   const [lastContent, setLastContent] = useState<string | null>(null);
   const [narration, setNarration] = useState('');
@@ -86,7 +88,7 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         height: '100%', color: 'var(--text-disabled)', fontSize: 'var(--fs-sm)',
       }}>
-        Follow mode active — waiting for agent edits...
+        {t(locale, 'terminal.followWaiting')}
       </div>
     );
   }
@@ -105,7 +107,7 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
           {filePath.split('/').pop()}
         </div>
         <div style={{ color: 'var(--text-disabled)', fontSize: FONT_SIZE.sm, marginTop: SPACING.xs }}>
-          Build artifact generated
+          {t(locale, 'terminal.followArtifact')}
         </div>
         {narration && <NarrationBar text={narration} />}
       </div>

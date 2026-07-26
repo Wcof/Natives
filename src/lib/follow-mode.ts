@@ -2,6 +2,8 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { FILE_EVENTS, dispatchFileEvent, onFileEvent } from '@/lib/file-events';
+import { fsWatchApiOrNull } from '@/lib/files-api';
+import { isNoisyChangePath } from '@/lib/fs-change-filter';
 
 export type FollowMode = 'off' | 'terminal-follow' | 'file-follow';
 
@@ -297,6 +299,66 @@ export function recordTerminalActivity(sessionId: string) {
   }
 }
 
+// ── Scope Watch Engine（followChange 的数据源）──
+//
+// 跟随作用域 = 绑定终端的当前 cwd（随 agent cd 移动）。
+// 引擎对作用域目录开一路 fs_watch，事件经噪声过滤后喂给 followChange。
+// 没有这一段，状态机（优先级/节流/接管）就是无源之水——
+// 这正是 fs_watch 曾经「后端完整、前端零调用」的同款断线，勿再拆开。
+
+let scopeRoot: string | null = null;
+let watchedScope: string | null = null;
+let scopeWatchOff: (() => void) | null = null;
+
+function stopScopeWatch() {
+  scopeWatchOff?.();
+  scopeWatchOff = null;
+  watchedScope = null;
+}
+
+function ensureScopeWatch() {
+  if (!followState.on || !scopeRoot) {
+    stopScopeWatch();
+    return;
+  }
+  if (watchedScope === scopeRoot) return;
+  stopScopeWatch();
+  const api = fsWatchApiOrNull();
+  if (!api) return; // 浏览器模式：跟随静默不可用
+  const dir = scopeRoot;
+  const prefix = dir.endsWith('/') ? dir : dir + '/';
+  void api.start(dir).catch(() => { /* 目录不可监听则跟随退化为无源 */ });
+  const off = api.onChange((event: { path: string; kind: string }) => {
+    if (event.kind === 'remove') return;
+    if (event.path !== dir && !event.path.startsWith(prefix)) return;
+    if (isNoisyChangePath(event.path, dir)) return;
+    const cut = event.path.lastIndexOf('/');
+    followChange(event.path.slice(0, cut) || '/', event.path.slice(cut + 1), dir);
+  });
+  watchedScope = dir;
+  scopeWatchOff = () => {
+    off();
+    void api.stop(dir).catch(() => {});
+  };
+}
+
+/**
+ * 更新跟随作用域（绑定终端 cwd 变化时调用，来源：useTerminalSessions.refreshCwd）。
+ * 未开启跟随时只记录，开启后立即切换监听目录。
+ * 传入 sessionId 时做归属过滤：已绑定终端的跟随只认绑定会话的 cwd，
+ * 防止多终端并存时别的会话 cd 把作用域拽走。
+ */
+export function followSetScope(dir: string, sessionId?: string) {
+  if (!dir) return;
+  if (sessionId && followState.boundSessionId && sessionId !== followState.boundSessionId) return;
+  scopeRoot = dir;
+  ensureScopeWatch();
+}
+
+export function getFollowScope(): string | null {
+  return scopeRoot;
+}
+
 // ── Public API ──
 
 // Manual takeover listener — any navigate-files event NOT from followSwitch pauses follow
@@ -310,6 +372,14 @@ export function setFileFollow(on: boolean, sessionId?: string) {
     followState.lastActivity = Date.now();
     followState.paused = false;
     followState.agentStatus = null;
+    // 数据源：对作用域目录开监听（作用域随 followSetScope 更新）。
+    // 终端 cwd 尚未上报时，退化到活动项目路径（FileBrowser 写入的 localStorage），
+    // 避免刚开跟随的头几秒无源。
+    if (!scopeRoot && typeof window !== 'undefined') {
+      const fallback = window.localStorage.getItem('natives:active_project_path');
+      if (fallback) scopeRoot = fallback;
+    }
+    ensureScopeWatch();
     // Install manual takeover listener
     if (!_manualNavUnsub) {
       _manualNavUnsub = onFileEvent(FILE_EVENTS.navigateFiles, () => {
@@ -337,6 +407,7 @@ export function setFileFollow(on: boolean, sessionId?: string) {
       clearTimeout(renderTimer);
       renderTimer = null;
     }
+    stopScopeWatch();
     // Remove manual takeover listener
     if (_manualNavUnsub) {
       _manualNavUnsub();
@@ -364,6 +435,8 @@ export function useFollowMode(
   currentDir?: string,
   onFollowAction?: (mode: FollowMode, path: string) => void,
   writeToTerminal?: (cmd: string) => void,
+  /** 绑定的终端会话 id 读取器（file-follow 归属消歧用；ref 形式避免重订阅） */
+  getSessionId?: () => string | null | undefined,
 ) {
   const [mode, setMode] = useState<FollowMode>('off');
   const prevModeRef = useRef<FollowMode>('off');
@@ -380,19 +453,25 @@ export function useFollowMode(
     const prevMode = prevModeRef.current;
     prevModeRef.current = mode;
     if (prevMode === mode) return;
-    if (!currentDir) return;
 
+    // 注意：currentDir 缺省不能阻断开关本身——曾因整体 early-return
+    // 导致 file-follow 档形同虚设（setFileFollow 从未被调用）。
     if (mode === 'terminal-follow') {
-      onFollowAction?.('terminal-follow', currentDir);
-      writeToTerminal?.(`cd ${JSON.stringify(currentDir)}`);
+      if (currentDir) {
+        onFollowAction?.('terminal-follow', currentDir);
+        writeToTerminal?.(`cd ${JSON.stringify(currentDir)}`);
+      }
     } else if (mode === 'file-follow') {
-      onFollowAction?.('file-follow', currentDir);
-      dispatchFileEvent(FILE_EVENTS.navigateFiles, { path: currentDir });
-      setFileFollow(true);
+      if (currentDir) {
+        onFollowAction?.('file-follow', currentDir);
+        dispatchFileEvent(FILE_EVENTS.navigateFiles, { path: currentDir });
+        followSetScope(currentDir);
+      }
+      setFileFollow(true, getSessionId?.() ?? undefined);
     } else {
       setFileFollow(false);
     }
-  }, [mode, currentDir, onFollowAction, writeToTerminal]);
+  }, [mode, currentDir, onFollowAction, writeToTerminal, getSessionId]);
 
   const terminalFollows = mode === 'terminal-follow';
   const fileBrowserFollows = mode === 'file-follow';

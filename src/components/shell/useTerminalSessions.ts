@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { onThemeChange, TERMINAL_THEMES } from '@/lib/theme-engine';
-import { recordTerminalActivity, followChange } from '@/lib/follow-mode';
+import { recordTerminalActivity, followSetScope } from '@/lib/follow-mode';
 import { recordScrollbackLine } from '@/lib/path-detector';
 import { FILE_EVENTS, dispatchFileEvent } from '@/lib/file-events';
 import { playDoneChime, playAskChime } from '@/lib/chime';
@@ -325,7 +325,9 @@ export function useTerminalSessions({
       const result = await window.nativesAPI?.terminal?.cwd?.(sessionId) as
         { cwd?: string; source?: string } | undefined;
       if (result?.cwd) {
-        followChange(result.cwd, '', result.cwd);
+        // 跟随作用域随绑定终端的 cwd 移动（followSetScope 内做归属过滤）。
+        // 旧写法 followChange(cwd, '', cwd) 把 cwd 当"变更文件"喂状态机，属误用。
+        followSetScope(result.cwd, sessionId);
       }
     } catch { /* ignore */ }
   }, []);

@@ -1,6 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
+import { semanticEqual } from '@/lib/markdown-semantic';
+import { t, type Locale } from '@/i18n';
 
 interface MilkdownEditorProps {
   content: string;
@@ -8,6 +10,8 @@ interface MilkdownEditorProps {
   onSave: (content: string) => void;
   /** 输入即置脏、写盘后清脏；供外部变更热重载判断是否可以静默重读 */
   onDirtyChange?: (dirty: boolean) => void;
+  /** 有损锁定横幅的文案语言 */
+  locale?: Locale;
 }
 
 /**
@@ -15,13 +19,18 @@ interface MilkdownEditorProps {
  * Auto-saves after 0.8s idle. Cmd+S saves immediately; unmount flushes
  * pending edits (guardDirty — 切文件/关预览不丢内容).
  * YAML frontmatter is preserved (stripped before Crepe, prepended back on save).
+ * 语义无损校验（fanbox semanticSig）：Crepe 归一化产物与原文渲染比对，
+ * 往返有损 → 锁只读并禁写盘，绝不静默丢内容（源码可用代码模式改）。
  */
-export default function MilkdownEditor({ content, onSave, onDirtyChange }: MilkdownEditorProps) {
+export default function MilkdownEditor({ content, onSave, onDirtyChange, locale = 'zh' }: MilkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<any>(null);
   const getValueRef = useRef<() => string>(() => content);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const baselineRef = useRef<string>(content);
+  /** 往返有损锁：true 时禁止一切写盘 */
+  const lossyRef = useRef(false);
+  const [lossyLocked, setLossyLocked] = useState(false);
 
   // YAML frontmatter protection
   const frontmatterMatch = content.match(/^(---\r?\n[\s\S]*?\r?\n---\r?\n)/);
@@ -29,6 +38,7 @@ export default function MilkdownEditor({ content, onSave, onDirtyChange }: Milkd
   const bodyContent = frontmatter ? content.slice(frontmatter.length) : content;
 
   const queueSave = useCallback(() => {
+    if (lossyRef.current) return; // 有损锁：禁写盘
     onDirtyChange?.(true);
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
@@ -42,6 +52,7 @@ export default function MilkdownEditor({ content, onSave, onDirtyChange }: Milkd
   }, [frontmatter, onSave, onDirtyChange]);
 
   const flushSave = useCallback(() => {
+    if (lossyRef.current) return; // 有损锁：禁写盘
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     const fullContent = frontmatter + getValueRef.current();
     if (fullContent !== baselineRef.current) {
@@ -74,6 +85,14 @@ export default function MilkdownEditor({ content, onSave, onDirtyChange }: Milkd
 
         // Set baseline after Crepe normalizes content
         baselineRef.current = frontmatter + editor.getMarkdown();
+
+        // 语义无损校验：Crepe 归一化产物 vs 原文。有损 → 锁只读 + 禁写盘
+        void semanticEqual(bodyContent, editor.getMarkdown()).then((ok) => {
+          if (disposed || ok) return;
+          lossyRef.current = true;
+          setLossyLocked(true);
+          try { (editor as { setReadonly?: (v: boolean) => void }).setReadonly?.(true); } catch { /* 老版本无此 API，靠禁写盘兜底 */ }
+        });
 
         // Listen for input
         host.addEventListener('input', queueSave, true);
@@ -113,10 +132,22 @@ export default function MilkdownEditor({ content, onSave, onDirtyChange }: Milkd
   }, [bodyContent, frontmatter, queueSave, flushSave]);
 
   return (
-    <div
-      ref={hostRef}
-      className="milkdown-host"
-      style={{ minHeight: '100%', overflow: 'auto' }}
-    />
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
+      {lossyLocked && (
+        <div style={{
+          padding: '6px 12px', fontSize: 12, lineHeight: 1.5,
+          color: 'var(--warning, #b8860b)',
+          background: 'color-mix(in srgb, var(--warning, #b8860b) 10%, transparent)',
+          borderBottom: '1px solid color-mix(in srgb, var(--warning, #b8860b) 30%, transparent)',
+        }}>
+          {t(locale, 'filePreview.lossyLocked')}
+        </div>
+      )}
+      <div
+        ref={hostRef}
+        className="milkdown-host"
+        style={{ flex: 1, overflow: 'auto' }}
+      />
+    </div>
   );
 }

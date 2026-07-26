@@ -36,6 +36,11 @@ export const zh = {
       documents: '文档',
       downloads: '下载',
     },
+    dirTree: {
+      expand: '展开子文件夹',
+      collapse: '收起子文件夹',
+      loading: '加载中…',
+    },
     ariaToggle: '切换侧边栏',
     ariaResize: '调整侧边栏大小',
     searchPlaceholder: '搜索全部文件',
@@ -654,6 +659,8 @@ export const zh = {
     newConfigActive: '新配置已生效，新开终端标签将使用新配置',
     dropPrompt: '拖拽文件至此插入路径',
     followModeOn: '跟随模式：已开启（终端跟随文件浏览器）',
+    followWaiting: '跟随模式已开启——等待 agent 写入文件…',
+    followArtifact: '构建产物已生成',
     followModeOff: '跟随模式：已关闭',
     ariaToggleFollowMode: '切换跟随模式',
     ariaMaximize: '最大化终端',
@@ -943,6 +950,7 @@ export const zh = {
     savedJustNow: '已自动保存',
     savedSecondsAgo: '{seconds} 秒前已保存',
     saveFailed: '保存失败，稍后重试',
+    lossyLocked: '此文档包含富文本无法无损表示的内容，已锁定为只读以防丢失；请切换到代码模式编辑。',
   },
 
   header: {

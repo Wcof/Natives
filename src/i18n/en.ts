@@ -39,6 +39,11 @@ export const en = {
       documents: 'Documents',
       downloads: 'Downloads',
     },
+    dirTree: {
+      expand: 'Expand subfolders',
+      collapse: 'Collapse subfolders',
+      loading: 'Loading…',
+    },
     ariaToggle: 'Toggle sidebar',
     ariaResize: 'Resize sidebar',
     searchPlaceholder: 'Search all files',
@@ -663,6 +668,8 @@ export const en = {
     newConfigActive: 'New config active. New terminal tabs will use it.',
     dropPrompt: 'Drop files to insert path',
     followModeOn: 'Follow mode: ON (terminal follows file browser)',
+    followWaiting: 'Follow mode active — waiting for agent edits…',
+    followArtifact: 'Build artifact generated',
     followModeOff: 'Follow mode: OFF',
     ariaToggleFollowMode: 'Toggle follow mode',
     ariaMaximize: 'Maximize terminal',
@@ -956,6 +963,7 @@ export const en = {
     savedJustNow: 'Auto-saved',
     savedSecondsAgo: 'Saved {seconds}s ago',
     saveFailed: 'Save failed, will retry on next edit',
+    lossyLocked: 'This document contains content the rich-text editor cannot represent losslessly. Locked read-only to prevent data loss — edit in code mode instead.',
   },
 
   header: {
