@@ -753,6 +753,11 @@ export interface NativesAPI {
     recentFiles: (root: string) => Promise<unknown[]>;
     saveBlob: (dir: string, name: string, base64Data: string) => Promise<string>;
     convertFileSrc: (filePath: string) => string;
+    // image_convert.rs：HEIC/TIFF 等 webview 不支持的格式 → 缓存 jpeg（仅 macOS）
+    convertImagePreview: (filePath: string) => Promise<{ ok: boolean; jpegPath: string; cached: boolean }>;
+    // locate.rs：终端路径定位链（直接 stat → 空格扩展 → 多根搜索 → spotlight）
+    locate: (query: string, cwd?: string, roots?: string[]) => Promise<{ found: boolean; path?: string; isDir?: boolean; method?: string }>;
+    verifyPaths: (candidates: string[]) => Promise<Array<{ path: string; exists: boolean; isDir: boolean }>>;
     trashEntries: (paths: string[]) => Promise<{ ok: boolean; trashed?: string[]; errors?: Array<{ path: string; error: string }>; count?: number }>;
     moveEntries: (paths: string[], destDir: string) => Promise<{ ok: boolean; moved?: string[]; errors?: Array<{ path: string; error: string }>; count?: number }>;
     copyEntries: (paths: string[], destDir: string) => Promise<{ ok: boolean; copied?: string[]; errors?: Array<{ path: string; error: string }>; count?: number }>;
@@ -764,6 +769,9 @@ export interface NativesAPI {
   archive: {
     // 后端 ArchiveListing（archive.rs）：{ entries: [{name,size,isDir?}...], truncated }
     list: (archivePath: string) => Promise<{ entries: Array<{ name: string; size: number; isDir?: boolean }>; truncated: boolean }>;
+    // archive_ops.rs：safe 解压（防 zip-slip/符号链接）与 zip 打包
+    extract: (archivePath: string, destDir?: string) => Promise<{ ok: boolean; destPath: string; entryCount: number }>;
+    compress: (paths: string[], destZipPath?: string) => Promise<{ ok: boolean; zipPath: string; entryCount: number }>;
   };
   search: {
     grep: (query: string, root: string, options?: unknown) => Promise<unknown>;
@@ -1410,6 +1418,9 @@ const nativesAPI: NativesAPI = {
     saveBlob: (dir: string, name: string, base64Data: string) =>
       cmd('fs_save_blob', { dir, name, base64Data }),
     convertFileSrc: (filePath: string) => convertFileSrc(filePath),
+    convertImagePreview: (filePath: string) => cmd('fs_convert_image_preview', { filePath }),
+    locate: (query: string, cwd?: string, roots?: string[]) => cmd('fs_locate', { query, cwd, roots }),
+    verifyPaths: (candidates: string[]) => cmd('fs_verify_paths', { candidates }),
     trashEntries: async (paths: string[]) => {
       try {
         return await cmd('fs_trash_entries', { paths });
@@ -1453,6 +1464,8 @@ const nativesAPI: NativesAPI = {
   // Archive
   archive: {
     list: (archivePath: string) => cmd('archive_list', { archivePath }),
+    extract: (archivePath: string, destDir?: string) => cmd('fs_extract_archive', { archivePath, destDir }),
+    compress: (paths: string[], destZipPath?: string) => cmd('fs_compress_entries', { paths, destZipPath }),
   },
 
   // Search

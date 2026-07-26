@@ -170,6 +170,60 @@ function getNativeFs(): ReturnType<typeof fsApi> | undefined {
   return hasNativeFiles() ? fsApi() : undefined;
 }
 
+/* ── 终端链接接线（W11）：划线前验真 + 点击定位 ── */
+
+/** 验真结果 LRU 缓存（fanbox 600 条），键为绝对/候选路径 */
+const verifyCache = new Map<string, boolean>();
+const VERIFY_CACHE_MAX = 600;
+
+/**
+ * 批量验真候选路径（划线前调用，防中文散文被误标成链接）。
+ * 返回存在的路径集合；fs 不可用时返回 null（调用方全部放行，点击兜底）。
+ */
+export async function verifyCandidates(paths: string[]): Promise<Set<string> | null> {
+  const fs = getNativeFs();
+  if (!fs?.verifyPaths) return null;
+  const hits = new Set<string>();
+  const misses: string[] = [];
+  for (const p of paths) {
+    const cached = verifyCache.get(p);
+    if (cached === true) hits.add(p);
+    else if (cached === undefined) misses.push(p);
+  }
+  if (misses.length > 0) {
+    try {
+      const results = await fs.verifyPaths(misses.slice(0, 32));
+      for (const r of results) {
+        verifyCache.set(r.path, r.exists);
+        if (r.exists) hits.add(r.path);
+        if (verifyCache.size > VERIFY_CACHE_MAX) {
+          const oldest = verifyCache.keys().next().value;
+          if (oldest !== undefined) verifyCache.delete(oldest);
+        }
+      }
+    } catch {
+      return null; // 验真通道故障 → 放行
+    }
+  }
+  return hits;
+}
+
+/**
+ * 点击定位统一入口：后端 fs_locate 四级兜底（直接 stat/空格扩展/多根搜索/
+ * spotlight，带时间预算）优先，未命中再走前端 locatePath——
+ * scrollback 回扫等只有前端才有的上下文在那边。
+ */
+export async function locateCandidate(candidate: string, currentDir: string): Promise<string | null> {
+  try {
+    const fs = getNativeFs();
+    if (fs?.locate) {
+      const result = await fs.locate(candidate, currentDir);
+      if (result?.found && result.path) return result.path;
+    }
+  } catch { /* fall through */ }
+  return locatePath(candidate, currentDir);
+}
+
 /** Strategy 1: Direct stat via Tauri IPC (prefers fs.stat, falls back to listDir) */
 async function statPath(candidate: string, currentDir: string): Promise<string | null> {
   const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(currentDir, candidate);

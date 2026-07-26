@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { onThemeChange, TERMINAL_THEMES } from '@/lib/theme-engine';
 import { recordTerminalActivity, followSetScope } from '@/lib/follow-mode';
-import { recordScrollbackLine } from '@/lib/path-detector';
-import { FILE_EVENTS, dispatchFileEvent } from '@/lib/file-events';
+import { recordScrollbackLine, detectFilePaths, verifyCandidates, locateCandidate, getSessionPwd, recordPwdChange } from '@/lib/path-detector';
+import { FILE_EVENTS, dispatchFileEvent, navigateToFiles } from '@/lib/file-events';
 import { playDoneChime, playAskChime } from '@/lib/chime';
 import { parseAgentAction } from '@/lib/agent-narration';
 import { FONT_SIZE } from '@/lib/design-tokens';
@@ -138,6 +138,52 @@ export function useTerminalSessions({
     }
 
     sessionContainer.setAttribute('data-terminal-session', sessionId);
+
+    // ── 终端路径链接（W11，fanbox 移植）──
+    // 逐行探测路径候选 → 划线前批量验真（截断路径「…」除外，点击时再定位）
+    // → 点击走 locateCandidate（后端四级兜底 + 前端 scrollback 回扫）。
+    // 随 term.dispose() 一起销毁，无需单独清理。
+    try {
+      (term as unknown as {
+        registerLinkProvider: (p: {
+          provideLinks: (line: number, cb: (links: unknown[] | undefined) => void) => void;
+        }) => void;
+      }).registerLinkProvider({
+        provideLinks: (lineNumber: number, callback: (links: unknown[] | undefined) => void) => {
+          const buffer = (term as unknown as {
+            buffer: { active: { getLine: (i: number) => { translateToString: (trim: boolean) => string } | undefined } };
+          }).buffer;
+          const lineText = buffer.active.getLine(lineNumber - 1)?.translateToString(true) ?? '';
+          if (!lineText.trim()) { callback(undefined); return; }
+          const cwd = getSessionPwd(sessionId) || '/';
+          const candidates = detectFilePaths(lineText, cwd);
+          if (candidates.length === 0) { callback(undefined); return; }
+          void (async () => {
+            let usable = candidates;
+            const toVerify = candidates.filter((c) => c.verified !== 'truncated').map((c) => c.path);
+            if (toVerify.length > 0) {
+              const existing = await verifyCandidates(toVerify);
+              if (existing) {
+                usable = candidates.filter((c) => c.verified === 'truncated' || existing.has(c.path));
+              }
+            }
+            if (usable.length === 0) { callback(undefined); return; }
+            callback(usable.map((c) => ({
+              range: {
+                start: { x: c.start + 1, y: lineNumber },
+                end: { x: c.end, y: lineNumber },
+              },
+              text: c.path,
+              activate: () => {
+                void locateCandidate(c.path, getSessionPwd(sessionId) || cwd).then((resolved) => {
+                  navigateToFiles(resolved ?? c.path);
+                });
+              },
+            })));
+          })();
+        },
+      });
+    } catch { /* 老版本 xterm 无 registerLinkProvider 时静默跳过 */ }
 
     const profileName = profiles.find((p) => p.id === profileId)?.name || '';
     sessionCounterRef.current += 1;
@@ -328,6 +374,9 @@ export function useTerminalSessions({
         // 跟随作用域随绑定终端的 cwd 移动（followSetScope 内做归属过滤）。
         // 旧写法 followChange(cwd, '', cwd) 把 cwd 当"变更文件"喂状态机，属误用。
         followSetScope(result.cwd, sessionId);
+        // 终端链接的相对路径解析基准（此前 recordPwdChange 无调用方，
+        // getSessionPwd 恒空——链接接线的又一处断点）
+        recordPwdChange(sessionId, result.cwd);
       }
     } catch { /* ignore */ }
   }, []);

@@ -27,7 +27,7 @@ import { fmtSize } from '@/lib/format';
 import { useFileDrop } from '@/lib/use-file-drop';
 import { useFsWatch } from '@/lib/use-fs-watch';
 import { isNoisyChangePath, topChildOf, SelfOpenedTracker } from '@/lib/fs-change-filter';
-import { fsApi, hasNativeFiles } from '@/lib/files-api';
+import { fsApi, archiveApi, hasNativeFiles } from '@/lib/files-api';
 import {
   FILE_EVENTS,
   dispatchFileEvent,
@@ -750,6 +750,42 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     }
     return [] as string[];
   }, [selectedPaths, selectedIndex, filteredEntries]);
+
+  // ── W7 解压 / 压缩（后端 archive_ops.rs：safe 解压防 zip-slip，zip 打包）──
+  const handleExtract = useCallback(async (entry: FileEntry) => {
+    showToast(t(locale, 'fileBrowser.extracting'));
+    try {
+      const result = await archiveApi().extract(entry.path);
+      if (result?.ok) {
+        showToast(t(locale, 'fileBrowser.extracted').replace('{count}', String(result.entryCount)));
+        dispatchFileEvent(FILE_EVENTS.fileFlash, result.destPath);
+        await loadEntries();
+      } else {
+        showToast(t(locale, 'fileBrowser.extractFailed'));
+      }
+    } catch {
+      showToast(t(locale, 'fileBrowser.extractFailed'));
+    }
+  }, [loadEntries, showToast, locale]);
+
+  const handleCompress = useCallback(async (entry?: FileEntry) => {
+    // 右键目标在多选集内 → 打包整个选中集（与批量删除/移动同语义）
+    const paths = resolveTargetPaths(entry ?? null);
+    if (paths.length === 0) return;
+    showToast(t(locale, 'fileBrowser.compressing'));
+    try {
+      const result = await archiveApi().compress(paths);
+      if (result?.ok) {
+        showToast(t(locale, 'fileBrowser.compressed').replace('{name}', result.zipPath.split('/').pop() || 'zip'));
+        dispatchFileEvent(FILE_EVENTS.fileFlash, result.zipPath);
+        await loadEntries();
+      } else {
+        showToast(t(locale, 'fileBrowser.compressFailed'));
+      }
+    } catch {
+      showToast(t(locale, 'fileBrowser.compressFailed'));
+    }
+  }, [resolveTargetPaths, loadEntries, showToast, locale]);
 
   const handleCopyEntry = useCallback(async (entry?: FileEntry) => {
     const paths = resolveTargetPaths(entry);
@@ -1479,6 +1515,8 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
           canPaste={!!clipBoard && clipBoard.paths.length > 0}
           onCopyPath={handleCopyPath}
           onCopyImage={handleCopyImage}
+          onExtract={(entry) => { void handleExtract(entry); }}
+          onCompress={(entry) => { void handleCompress(entry); }}
           onOpenDefault={(entry) => { void handleOpenWith(entry, 'default'); }}
           onNewFile={handleNewFile}
           onNewFolder={handleNewFolder}

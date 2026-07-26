@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { type FileEntry } from '@/types/file';
 import { t, type Locale } from '@/i18n';
 import { useHydrated } from '@/hooks/useHydrated';
+import { isArchiveFile } from '@/lib/follow-mode';
 
 type MenuMode = 'file' | 'dir' | 'blank';
 
@@ -43,6 +44,10 @@ interface FileContextMenuProps {
   onFavorite?: (entry: FileEntry) => void;
   onUnfavorite?: (entry: FileEntry) => void;
   onEditImage?: (entry: FileEntry) => void;
+  /** 解压压缩包到所在目录（W7；仅 archive kind 显示） */
+  onExtract?: (entry: FileEntry) => void;
+  /** 压缩为 zip（多选时 FileBrowser 侧按选中集打包） */
+  onCompress?: (entry: FileEntry) => void;
   isFavorite?: boolean;
 }
 
@@ -52,7 +57,7 @@ export default function FileContextMenu({
   onPreview, onDiskUsage, onRename, onTrash,
   onDuplicate, onCopy, onCut, onPaste, canPaste, onCopyPath, onCopyImage, onOpenDefault,
   onNewFile, onNewFolder, onFavorite, onUnfavorite,
-  isFavorite, onEditImage,
+  isFavorite, onEditImage, onExtract, onCompress,
 }: FileContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [locale, setLocale] = useState<Locale>('zh');
@@ -149,6 +154,7 @@ export default function FileContextMenu({
         'sep',
         mkItem({ label: t(locale, 'fileBrowser.copyPath'), action: () => { if (onCopyPath) onCopyPath(entry); else navigator.clipboard.writeText(p); } }),
         mkItem({ label: t(locale, 'fileBrowser.duplicate'), action: () => onDuplicate?.(entry), shortcut: '⌘D' }),
+        mkItem({ label: t(locale, 'fileBrowser.compressZip'), action: () => onCompress?.(entry) }),
         mkItem({ label: t(locale, 'fileBrowser.copy'), action: () => onCopy?.(entry), shortcut: '⌘C' }),
         mkItem({ label: t(locale, 'fileBrowser.cut'), action: () => onCut?.(entry), shortcut: '⌘X' }),
         ...(canPaste ? [mkItem({ label: t(locale, 'fileBrowser.paste'), action: () => onPaste?.(), shortcut: '⌘V' })] : []),
@@ -178,11 +184,15 @@ export default function FileContextMenu({
         items.push(mkItem({ label: t(locale, 'fileBrowser.copyImage'), action: () => onCopyImage?.(entry) }));
       }
     }
+    if (isArchiveFile(entry.name)) {
+      items.push(mkItem({ label: t(locale, 'fileBrowser.extractHere'), action: () => onExtract?.(entry) }));
+    }
     items.push(
       mkItem({ label: t(locale, 'fileBrowser.revealInFinder'), action: () => onRevealInFinder?.(entry) }),
       'sep',
       mkItem({ label: t(locale, 'fileBrowser.copyPath'), action: () => { if (onCopyPath) onCopyPath(entry); else navigator.clipboard.writeText(p); } }),
       mkItem({ label: t(locale, 'fileBrowser.duplicate'), action: () => onDuplicate?.(entry), shortcut: '⌘D' }),
+      mkItem({ label: t(locale, 'fileBrowser.compressZip'), action: () => onCompress?.(entry) }),
       mkItem({ label: t(locale, 'fileBrowser.copy'), action: () => onCopy?.(entry), shortcut: '⌘C' }),
       mkItem({ label: t(locale, 'fileBrowser.cut'), action: () => onCut?.(entry), shortcut: '⌘X' }),
     );

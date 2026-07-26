@@ -175,6 +175,25 @@ function useFileBlobUrl(path: string, kind?: string): string | null {
   useEffect(() => {
     if (!hasNativeFiles()) return;
     const fs = fsApi();
+
+    // HEIC/TIFF：webview 不支持直接解码，走后端 sips 转码缓存（W8）。
+    // 转码失败（非 macOS 等）回退 convertFileSrc——大概率仍裂，但不阻断其它类型。
+    const lowerExt = path.split('.').pop()?.toLowerCase() || '';
+    if (kind === 'image' && ['heic', 'heif', 'tif', 'tiff'].includes(lowerExt) && fs.convertImagePreview) {
+      let cancelled = false;
+      (async () => {
+        try {
+          const converted = await fs.convertImagePreview(path);
+          if (!cancelled && converted?.ok && converted.jpegPath) {
+            setUrl(fs.convertFileSrc?.(converted.jpegPath) ?? '');
+            return;
+          }
+        } catch { /* fall through */ }
+        if (!cancelled) setUrl(fs.convertFileSrc?.(path) ?? '');
+      })();
+      return () => { cancelled = true; };
+    }
+
     if (kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'pdf') {
       if (fs.convertFileSrc) {
         startTransition(() => { setUrl(fs.convertFileSrc?.(path) ?? ""); });
