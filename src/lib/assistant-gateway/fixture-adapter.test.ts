@@ -9,6 +9,7 @@ import {
   selectPromptQueue,
   selectArtifacts,
   selectChildRuns,
+  selectRunEvents,
 } from '@/lib/assistant-workspace';
 import {
   goldenTextStream,
@@ -74,14 +75,32 @@ test('fixture tool in-place update', async () => {
   });
   const events = await drainSubscribe(adapter, run.id, 0);
   let state = withRun(run.id);
-  state = workspaceReducer(state, { type: 'event/applyBatch', events });
-  const blocks =
-    state.messages[`live-${run.id}`]?.contentBlocks ??
-    state.liveByRun[run.id]?.blocks ??
-    [];
-  const tools = blocks.filter((b) => b.type === 'tool_call');
-  assert.equal(tools.length, 1);
-  assert.equal(tools[0]!.toolStatus, 'completed');
+  // Step through the stream: requested/started/completed must patch one card
+  // rather than append a new block per event.
+  const statuses: Array<string | undefined> = [];
+  for (const event of events) {
+    state = workspaceReducer(state, { type: 'event/apply', event });
+    const live = (state.liveByRun[run.id]?.blocks ?? []).filter((b) => b.type === 'tool_call');
+    if (live.length > 0) {
+      assert.equal(live.length, 1);
+      statuses.push(live[0]!.toolStatus);
+    }
+  }
+  assert.deepEqual([...new Set(statuses)], ['pending', 'running', 'completed']);
+
+  // Terminal promotion keeps the answer body text-only; the finished tool card
+  // is rendered from the retained run events (activity panel), not the message.
+  const body = state.messages[`live-${run.id}`]?.contentBlocks ?? [];
+  assert.equal(body.some((b) => b.type === 'tool_call'), false);
+  assert.equal(body.find((b) => b.type === 'text')?.text, 'Done');
+  const toolEvents = selectRunEvents(state, run.id).filter((e) =>
+    e.type.startsWith('tool_call_'),
+  );
+  assert.deepEqual(toolEvents.map((e) => e.type), [
+    'tool_call_requested',
+    'tool_call_started',
+    'tool_call_completed',
+  ]);
 });
 
 function withRun(runId: string) {

@@ -18,6 +18,16 @@ const host = readFileSync(
   resolve(process.cwd(), 'src-tauri/src/assistant_service.rs'),
   'utf8',
 );
+// conversation.* is Daemon authority: the host router only forwards, the delete
+// itself (and the usage_stats fold) lives in the agent daemon.
+const daemonStore = readFileSync(
+  resolve(process.cwd(), 'src-agent-daemon/src/conversation_store.rs'),
+  'utf8',
+);
+const daemonSchema = readFileSync(
+  resolve(process.cwd(), 'src-agent-daemon/src/storage/migrations.rs'),
+  'utf8',
+);
 
 test('workbench delete optimistically drops from store and navigation groups', () => {
   assert.match(workbench, /deleteConversation:\s*async \(id\)/);
@@ -36,24 +46,43 @@ test('shell fallback delete also optimistically updates navigation', () => {
   assert.match(context, /conversations:\s*g\.conversations\.filter/);
 });
 
-test('host delete always hard-deletes even when daemon cleanup is pending', () => {
-  assert.match(host, /DELETE FROM assistant_conversations WHERE id = \?1/);
-  // Must not early-return on cleanup_pending before hard delete.
-  const fn = host.slice(host.indexOf('async fn handle_conversation_delete'));
-  const hardDeleteIdx = fn.indexOf('DELETE FROM assistant_conversations');
+test('host forwards conversation.delete to daemon authority', () => {
+  const hostOwned = host.slice(host.indexOf('pub(crate) fn is_host_owned_method'));
+  assert.equal(/"conversation\./.test(hostOwned.slice(0, hostOwned.indexOf('}'))), false);
+  assert.match(host, /method\.starts_with\("conversation\."\)/);
+  assert.match(host, /daemon_authority::request\(method, params\.clone\(\)\)/);
+});
+
+test('daemon delete always hard-deletes even when cleanup is pending', () => {
+  const fn = daemonStore.slice(daemonStore.indexOf('async fn delete(params: Value)'));
+  const hardDeleteIdx = fn.indexOf('DELETE FROM conversation WHERE id = ?1');
   const earlyCleanup = fn.indexOf('if cleanup_pending');
-  // Either no early return, or hard delete appears before any such gate.
   assert.ok(hardDeleteIdx > 0);
+  // Either no early return, or hard delete appears before any such gate.
   if (earlyCleanup > 0) {
     assert.ok(hardDeleteIdx < earlyCleanup, 'hard delete must not be skipped by cleanup_pending');
   }
-  // Hard delete must preserve billing aggregates.
+  // Hard delete must preserve billing aggregates, and the fold has to happen
+  // before CASCADE removes the run/message rows it reads.
+  const foldIdx = fn.indexOf('fold_conversation_tokens_into_usage_stats(&conn');
+  assert.ok(foldIdx > 0 && foldIdx < hardDeleteIdx, 'tokens must be folded before delete');
   assert.match(fn, /usage_stats_preserved/);
   assert.match(fn, /hard_deleted/);
 });
 
-test('host delete also clears conversation-scoped tool_calls and artifacts', () => {
-  const fn = host.slice(host.indexOf('async fn handle_conversation_delete'));
-  assert.match(fn, /DELETE FROM assistant_tool_calls WHERE conversation_id/);
-  assert.match(fn, /DELETE FROM assistant_artifacts WHERE conversation_id/);
+test('daemon delete also clears conversation-scoped tool_calls and artifacts', () => {
+  // No explicit DELETE needed: both hang off the conversation via FK CASCADE
+  // (artifact directly, tool_call through run).
+  assert.match(
+    daemonSchema,
+    /CREATE TABLE IF NOT EXISTS artifact \([^;]*conversation_id TEXT NOT NULL REFERENCES conversation\(id\) ON DELETE CASCADE/,
+  );
+  assert.match(
+    daemonSchema,
+    /CREATE TABLE IF NOT EXISTS tool_call \([^;]*run_id TEXT NOT NULL REFERENCES run\(id\) ON DELETE CASCADE/,
+  );
+  assert.match(
+    daemonSchema,
+    /CREATE TABLE IF NOT EXISTS run \([^;]*conversation_id TEXT NOT NULL REFERENCES conversation\(id\) ON DELETE CASCADE/,
+  );
 });

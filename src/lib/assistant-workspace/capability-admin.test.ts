@@ -100,6 +100,14 @@ test('loadCapabilityAdminDashboard fans out Phase6 RPC methods', async () => {
       if (method === 'scheduler.list') return [] as T;
       if (method === 'extension.list') return [] as T;
       if (method === 'skill.list') return [] as T;
+      if (method === 'engine.rateLimit.get') {
+        return {
+          settings: { enabled: false, requests_per_minute: 60 },
+          effective_interval_ms: 1000,
+          queued_requests: 0,
+          cooling_routes: 0,
+        } as T;
+      }
       throw new Error(method);
     },
     async *subscribe() {},
@@ -109,6 +117,7 @@ test('loadCapabilityAdminDashboard fans out Phase6 RPC methods', async () => {
   };
   const dash = await loadCapabilityAdminDashboard(g);
   assert.deepEqual(methods.sort(), [
+    'engine.rateLimit.get',
     'extension.list',
     'mcp.list',
     'scheduler.list',
@@ -118,6 +127,21 @@ test('loadCapabilityAdminDashboard fans out Phase6 RPC methods', async () => {
   assert.ok(dash.scheduler);
   assert.ok(dash.extensions);
   assert.ok(dash.skills);
+  assert.ok(dash.rateLimit);
+});
+
+test('dashboard degrades to null rateLimit when the daemon lacks the method', async () => {
+  // engine.rateLimit.get is newer than the other admin RPCs; an older daemon
+  // must still yield a usable dashboard instead of failing the whole panel.
+  const g = mockGateway({
+    'mcp.list': { servers: [], tools: [], namespaced: [] },
+    'scheduler.list': [],
+    'extension.list': [],
+    'skill.list': [],
+  });
+  const dash = await loadCapabilityAdminDashboard(g);
+  assert.equal(dash.rateLimit, null);
+  assert.deepEqual(dash.skills.skills, []);
 });
 
 test('capability admin never calls streamChat or window.nativesAPI', async () => {
