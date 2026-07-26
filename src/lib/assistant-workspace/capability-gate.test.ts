@@ -3,11 +3,14 @@ import test from 'node:test';
 import type { DaemonCapabilities } from '@/lib/assistant-protocol';
 import {
   buildDiagnosticsText,
+  canBrowseMcpHub,
   canCancelTask,
   canInterject,
   canListTaskDepth,
   canListTasks,
+  canManageCapabilities,
   canRewind,
+  canSelectRunCapabilities,
   canShowContextUsage,
   hasMethod,
   HOST_METHODS_UI,
@@ -79,6 +82,28 @@ test('canInterject requires promptQueue.interject', () => {
   assert.equal(canInterject(null), false);
   assert.equal(canInterject(caps(['promptQueue.enqueue'])), false);
   assert.equal(canInterject(caps(['promptQueue.interject'])), true);
+});
+
+test('canManageCapabilities requires capability.skill.list', () => {
+  assert.equal(canManageCapabilities(null), false);
+  assert.equal(canManageCapabilities(undefined), false);
+  assert.equal(canManageCapabilities(caps([])), false);
+  assert.equal(canManageCapabilities(caps(['skill.list', 'mcp.list'])), false);
+  assert.equal(canManageCapabilities(caps(['capability.mcp.list'])), false);
+  assert.equal(canManageCapabilities(caps(['capability.skill.list'])), true);
+});
+
+test('canBrowseMcpHub requires capability.mcp.hub.search (may lag base family)', () => {
+  assert.equal(canBrowseMcpHub(null), false);
+  assert.equal(canBrowseMcpHub(caps(['capability.skill.list', 'capability.mcp.list'])), false);
+  assert.equal(canBrowseMcpHub(caps(['capability.mcp.hub.search'])), true);
+});
+
+test('canSelectRunCapabilities requires conversation.updateCapabilities', () => {
+  assert.equal(canSelectRunCapabilities(null), false);
+  assert.equal(canSelectRunCapabilities(caps(['capability.skill.list'])), false);
+  assert.equal(canSelectRunCapabilities(caps(['conversation.getCapabilities'])), false);
+  assert.equal(canSelectRunCapabilities(caps(['conversation.updateCapabilities'])), true);
 });
 
 test('needsEngineRecovery blocks fatal/incompatible and offline without caps', () => {

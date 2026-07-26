@@ -209,6 +209,8 @@ impl ExecutionAuthority for EmbeddedAuthority {
             })
             .map_err(AuthorityError::from)?;
         RunManager::start_detached_global(StartRunRequest {
+            agent_profile_id: None,
+            capability_selection: None,
             run_id: Some(new_run.id.clone()),
             conversation_id: Some(new_run.conversation_id.clone()),
             provider_id: Some(new_run.provider_id.clone()),
@@ -480,6 +482,7 @@ mod tests {
         let auth = EmbeddedAuthority::new();
         let run = auth
             .create_run(CreateRunRequest {
+            capability_selection: None,
                 conversation_id: "c-auth".into(),
                 provider_id: "echo".into(),
                 model_id: "echo".into(),

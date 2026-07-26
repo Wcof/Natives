@@ -1,6 +1,7 @@
 import type {
   Artifact,
   BackgroundTask,
+  CapabilitySelection,
   ChildRunSummary,
   ConnectionState,
   ContentBlock,
@@ -82,6 +83,8 @@ export interface AssistantWorkspaceState {
   contextUsageByConversation: Record<string, ContextUsage>;
 
   composerByConversation: Record<string, ComposerDraft>;
+  /** ADR-0016 conversation-level capability selection; null/absent = legacy behaviour. */
+  capabilitySelectionByConversation: Record<string, CapabilitySelection | null>;
   liveByRun: Record<string, LiveBubble>;
   view: AssistantViewState;
 }
@@ -113,6 +116,7 @@ export function createInitialWorkspaceState(): AssistantWorkspaceState {
     fileChangesByRun: {},
     contextUsageByConversation: {},
     composerByConversation: {},
+    capabilitySelectionByConversation: {},
     liveByRun: {},
     view: {
       leftCollapsed: false,
@@ -147,6 +151,7 @@ export type WorkspaceAction =
   | { type: 'promptQueue/reassociate'; conversationId: string; clientTempId: string; serverItem: PromptQueueItem }
   | { type: 'composer/set'; conversationId: string; draft: Partial<ComposerDraft> }
   | { type: 'composer/clear'; conversationId: string }
+  | { type: 'capabilitySelection/set'; conversationId: string; selection: CapabilitySelection | null }
   | { type: 'view/patch'; patch: Partial<AssistantViewState> }
   | { type: 'view/setBlockExpanded'; key: string; expanded: boolean }
   | { type: 'messages/appendOptimistic'; message: Message }

@@ -458,8 +458,100 @@ async fn wait_host_permission(
     }
 }
 
+/// Deletes the run-scoped `--mcp-config` file on every exit path (normal,
+/// cancel, spawn failure) — it may contain resolved secret references.
+struct CliMcpConfigGuard {
+    path: std::path::PathBuf,
+}
+
+impl Drop for CliMcpConfigGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Project the selected connector configs into the standard `mcpServers`
+/// format for `--mcp-config`. `secret:<id>` env references resolve through the
+/// Host broker; the file is 0600 and removed when the turn ends.
+fn write_cli_mcp_config(
+    run_id: &str,
+    server_ids: &[String],
+) -> Result<CliMcpConfigGuard, String> {
+    let configs = crate::capability::mcp::enabled_runtime_configs()?;
+    let mut servers = serde_json::Map::new();
+    for id in server_ids {
+        let Some(config) = configs.iter().find(|c| &c.id == id) else {
+            return Err(format!("mcp server config missing: {id}"));
+        };
+        let raw_env = crate::capability::mcp::env_for_server(id)?;
+        let mut env = serde_json::Map::new();
+        for (key, value) in raw_env {
+            let resolved = match value.strip_prefix("secret:") {
+                Some(secret_id) => crate::natives_db_broker::read_capability_secret(secret_id)
+                    .map_err(|_| format!("secret reference for env '{key}' of '{id}' could not be resolved"))?,
+                None => value,
+            };
+            env.insert(key, json!(resolved));
+        }
+        let entry = match config.transport {
+            agent_core::mcp::McpTransport::Stdio => {
+                let mut e = serde_json::Map::new();
+                e.insert("command".into(), json!(config.command.clone().unwrap_or_default()));
+                if let Some(args) = &config.args {
+                    e.insert("args".into(), json!(args));
+                }
+                if !env.is_empty() {
+                    e.insert("env".into(), serde_json::Value::Object(env));
+                }
+                e
+            }
+            agent_core::mcp::McpTransport::Http | agent_core::mcp::McpTransport::Sse => {
+                let mut e = serde_json::Map::new();
+                e.insert(
+                    "type".into(),
+                    json!(if matches!(config.transport, agent_core::mcp::McpTransport::Sse) {
+                        "sse"
+                    } else {
+                        "http"
+                    }),
+                );
+                e.insert("url".into(), json!(config.url.clone().unwrap_or_default()));
+                if let Some(headers) = &config.headers {
+                    if !headers.is_empty() {
+                        e.insert("headers".into(), json!(headers));
+                    }
+                }
+                e
+            }
+        };
+        servers.insert(id.clone(), serde_json::Value::Object(entry));
+    }
+    let dir = std::env::var("NATIVES_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+            std::path::PathBuf::from(home).join(".natives").join("runtime")
+        })
+        .join("cli-mcp");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{run_id}.json"));
+    let body = serde_json::to_string(&json!({ "mcpServers": servers })).map_err(|e| e.to_string())?;
+    std::fs::write(&path, body).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(CliMcpConfigGuard { path })
+}
+
 /// Run Claude CLI for one user turn; map events into `runtime.events` for `run_id`.
 /// Returns terminal status string: completed | failed | interrupted.
+///
+/// `capability` is the resolved ADR-0016 snapshot. This path is an independent
+/// execution backend: capabilities are injected through CLI flags and executed
+/// by the Claude CLI's own harness — approvals do NOT pass through the native
+/// capability gateway (run row `runtime_id` + capability matrix say so).
 pub async fn run_claude_cli_turn(
     runtime: &ProductionRuntime,
     run_id: &str,
@@ -467,6 +559,7 @@ pub async fn run_claude_cli_turn(
     model: &str,
     project_path: Option<&Path>,
     permission_profile: &str,
+    capability: &crate::capability_resolution::ResolvedCapabilitySnapshot,
     cancel: CancellationToken,
 ) -> Result<String, String> {
     let bin = find_claude_binary()
@@ -497,6 +590,75 @@ pub async fn run_claude_cli_turn(
     if !cli_control_proven() || matches!(permission_profile, "readonly" | "read_only") {
         command.arg("--allowedTools").arg("Read,Glob,Grep,LS");
     }
+
+    // Capability injection (ADR-0016): persona + skills + roster via
+    // --append-system-prompt; team members via --agents; connectors via a
+    // run-scoped --mcp-config file (never argv — headers/env may hold secrets).
+    let mut extra_system = String::new();
+    if let Some(persona) = capability
+        .profile
+        .as_ref()
+        .and_then(|p| p.system_prompt.as_deref())
+        .filter(|s| !s.trim().is_empty())
+    {
+        extra_system.push_str(persona);
+    }
+    if let Some(skills) = capability.skill_prompt.as_deref().filter(|s| !s.is_empty()) {
+        if !extra_system.is_empty() {
+            extra_system.push_str("\n\n");
+        }
+        extra_system.push_str(skills);
+    }
+    if let Some(roster) = capability
+        .extra_system_prompt
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        if !extra_system.is_empty() {
+            extra_system.push_str("\n\n");
+        }
+        extra_system.push_str(roster);
+    }
+    if !extra_system.is_empty() {
+        command.arg("--append-system-prompt").arg(&extra_system);
+    }
+    if let Some(team) = &capability.team {
+        let mut agents = serde_json::Map::new();
+        for member in &team.members {
+            let profile = crate::capability_resolution::load_profile(
+                &member.expert_id,
+                project_path,
+            )
+            .ok_or_else(|| format!("team member profile not loadable: {}", member.expert_id))?;
+            let description = if member.role_hint.is_empty() {
+                member.description.clone()
+            } else {
+                member.role_hint.clone()
+            };
+            agents.insert(
+                member.expert_id.clone(),
+                json!({
+                    "description": description,
+                    "prompt": profile.system_prompt.unwrap_or_default(),
+                }),
+            );
+        }
+        command
+            .arg("--agents")
+            .arg(serde_json::to_string(&agents).map_err(|e| e.to_string())?);
+    }
+    let _mcp_config_guard = if capability.mcp_servers.is_empty() {
+        None
+    } else {
+        let guard = write_cli_mcp_config(run_id, &capability.mcp_servers)?;
+        command
+            .arg("--mcp-config")
+            .arg(&guard.path)
+            // strict: the CLI must not additionally load project .mcp.json and
+            // escape the selection contract.
+            .arg("--strict-mcp-config");
+        Some(guard)
+    };
 
     if let Some(cwd) = project_path {
         if cwd.is_dir() {
@@ -754,5 +916,46 @@ mod tests {
         assert!(line.contains("control_response"));
         assert!(line.contains("allow"));
         assert!(line.contains("abc"));
+    }
+
+    #[test]
+    fn cli_mcp_config_file_is_private_and_cleaned_up() {
+        let _guard = crate::storage::DataStore::env_test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("cli-mcp-test.db");
+        let art = dir.path().join("artifacts");
+        crate::storage::set_test_db_override(Some(db.clone()), Some(art));
+        let _warm = crate::storage::DataStore::new(&db, &dir.path().join("artifacts")).unwrap();
+        std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
+
+        crate::capability::mcp::create(&serde_json::json!({
+            "id": "docs",
+            "name": "Docs",
+            "transport": "stdio",
+            "command": "npx",
+            "args": ["-y", "docs-mcp"],
+            "env": { "LOG_LEVEL": "info" },
+            "trusted": true,
+        }))
+        .unwrap();
+
+        let path = {
+            let guard = write_cli_mcp_config("run-1", &["docs".to_string()]).unwrap();
+            let body = std::fs::read_to_string(&guard.path).unwrap();
+            assert!(body.contains("mcpServers"));
+            assert!(body.contains("docs-mcp"));
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(&guard.path).unwrap().permissions().mode();
+                assert_eq!(mode & 0o777, 0o600, "config must be private");
+            }
+            guard.path.clone()
+        };
+        // Guard drop removes the file (cancel / failure paths share this).
+        assert!(!path.exists(), "mcp-config must be deleted on drop");
+
+        std::env::remove_var("NATIVES_RUNTIME_DIR");
+        crate::storage::set_test_db_override(None, None);
     }
 }

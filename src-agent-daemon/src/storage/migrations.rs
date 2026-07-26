@@ -25,6 +25,7 @@ pub const ALL: &[(i64, &str)] = &[
     (18, MIGRATION_018),
     (19, MIGRATION_019),
     (20, MIGRATION_020),
+    (21, MIGRATION_021),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -664,4 +665,119 @@ CREATE TABLE IF NOT EXISTS provider_route_health (
     last_error TEXT,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+";
+
+/// Migration 021: capability library (ADR-0016).
+///
+/// Authoritative storage for skills metadata, MCP connector configs, experts
+/// and expert teams. Secrets NEVER live in this database: `env_json` values may
+/// hold `secret:<id>` references resolved by the Host-side encrypted store,
+/// and header validation rejects plaintext Authorization values at the RPC
+/// boundary.
+///
+/// Also drops `mcp_server_config` (created by migration 004, zero readers or
+/// writers ever shipped; its transport CHECK list no longer matches the
+/// runtime). `hook_registration` belongs to the Harness track and stays.
+const MIGRATION_021: &str = "
+CREATE TABLE IF NOT EXISTS capability_skill (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    scope TEXT NOT NULL DEFAULT 'user' CHECK(scope IN ('user','project')),
+    project_id TEXT,
+    dir_path TEXT NOT NULL,
+    content_hash TEXT,
+    category TEXT,
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    trusted INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'scan'
+        CHECK(source IN ('scan','import_zip','import_dir','import_git')),
+    source_ref TEXT,
+    engine_targets_json TEXT NOT NULL DEFAULT '[\"native\"]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(scope, name, dir_path)
+);
+CREATE INDEX IF NOT EXISTS idx_capability_skill_category
+    ON capability_skill(category);
+
+CREATE TABLE IF NOT EXISTS capability_mcp_server (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    transport TEXT NOT NULL CHECK(transport IN ('stdio','http','sse')),
+    command TEXT,
+    args_json TEXT NOT NULL DEFAULT '[]',
+    env_json TEXT NOT NULL DEFAULT '{}',
+    url TEXT,
+    headers_json TEXT NOT NULL DEFAULT '{}',
+    auth_mode TEXT NOT NULL DEFAULT 'none' CHECK(auth_mode IN ('none','bearer','oauth')),
+    oauth_config_json TEXT NOT NULL DEFAULT '{}',
+    trusted INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    source TEXT NOT NULL DEFAULT 'manual' CHECK(source IN ('manual','import_json','hub')),
+    hub_ref TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS capability_expert (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    system_prompt TEXT NOT NULL,
+    tools_json TEXT NOT NULL DEFAULT '[]',
+    disallowed_tools_json TEXT NOT NULL DEFAULT '[]',
+    permission_mode TEXT,
+    skills_json TEXT NOT NULL DEFAULT '[]',
+    provider_id TEXT,
+    key_id TEXT,
+    model_id TEXT,
+    params_json TEXT NOT NULL DEFAULT '{}',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    source TEXT NOT NULL DEFAULT 'manual'
+        CHECK(source IN ('manual','import_md','host_migration')),
+    source_path TEXT,
+    content_hash TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS capability_expert_team (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    strategy TEXT NOT NULL DEFAULT 'parallel'
+        CHECK(strategy IN ('parallel','sequential','coordinator')),
+    failure_policy TEXT NOT NULL DEFAULT 'isolate'
+        CHECK(failure_policy IN ('isolate','fail_fast','require_all')),
+    max_concurrent INTEGER NOT NULL DEFAULT 3,
+    coordinator_expert_id TEXT REFERENCES capability_expert(id) ON DELETE SET NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS capability_expert_team_member (
+    team_id TEXT NOT NULL REFERENCES capability_expert_team(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    expert_id TEXT NOT NULL REFERENCES capability_expert(id) ON DELETE CASCADE,
+    role_hint TEXT NOT NULL DEFAULT '',
+    task_template TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(team_id, position)
+);
+CREATE INDEX IF NOT EXISTS idx_capability_team_member_expert
+    ON capability_expert_team_member(expert_id);
+
+CREATE TABLE IF NOT EXISTS capability_mcp_hub_cache (
+    registry_name TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    etag TEXT,
+    fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+ALTER TABLE conversation ADD COLUMN capability_selection_json TEXT;
+ALTER TABLE run ADD COLUMN capability_snapshot_json TEXT;
+
+DROP TABLE IF EXISTS mcp_server_config;
 ";

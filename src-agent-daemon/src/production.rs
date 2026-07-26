@@ -5,10 +5,9 @@
 
 use agent_core::assemble_context;
 use agent_core::{
-    cap_child_permission, default_subagent_tool_allowlist, AgentEngine, EngineError, EngineMessage,
-    EngineProvider, EngineProviderEvent, EngineProviderEventStream, EngineRunConfig,
-    EventSequencer, HookEvent, HookRegistry, HookRequest, PermissionManager, PermissionProfile,
-    SubAgentConfig, SubAgentManager, SubAgentStatus, ToolSchema,
+    AgentEngine, EngineError, EngineMessage, EngineProvider, EngineProviderEvent,
+    EngineProviderEventStream, EngineRunConfig, EventSequencer, PermissionManager,
+    PermissionProfile, SubAgentConfig, SubAgentManager, SubAgentStatus, ToolSchema,
 };
 use assistant_protocol::v2::RunEventKind;
 use capability_gateway::CapabilityGateway;
@@ -94,6 +93,23 @@ pub use crate::production_tools::PermissionGatedTools;
 pub use crate::runtime::TaskRecord;
 
 // Hook assembly moved to `production_hooks.rs` (task-01 structure).
+
+/// Bundled inputs for a production engine turn (replaces the former 10
+/// positional parameters). `capability` carries the resolved ADR-0016
+/// snapshot; None = legacy behaviour (global skills, file profiles).
+pub struct RunStartContext {
+    pub run_id: String,
+    pub conversation_id: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub key_id: Option<String>,
+    pub permission_profile: String,
+    pub agent_profile_id: Option<String>,
+    pub user_content: String,
+    pub max_steps: u32,
+    pub project_path: Option<std::path::PathBuf>,
+    pub capability: Option<crate::capability_resolution::ResolvedCapabilitySnapshot>,
+}
 
 impl ProductionRuntime {
     pub fn new() -> Self {
@@ -332,19 +348,25 @@ impl ProductionRuntime {
 
     /// Execute a production engine turn. Returns `EngineOutcome` only — never commits
     /// Run lifecycle status or terminal lifecycle events. RunManager is the sole committer.
+    /// `ctx.capability` is the resolved ADR-0016 snapshot produced by
+    /// `capability_resolution::resolve` at the RunManager insertion point.
     pub async fn start_run(
         &self,
-        run_id: String,
-        conversation_id: String,
-        provider_id: String,
-        model_id: String,
-        key_id: Option<String>,
-        permission_profile: String,
-        agent_profile_id: Option<String>,
-        user_content: String,
-        max_steps: u32,
-        project_path: Option<std::path::PathBuf>,
+        ctx: RunStartContext,
     ) -> Result<agent_core::EngineOutcome, String> {
+        let RunStartContext {
+            run_id,
+            conversation_id,
+            provider_id,
+            model_id,
+            key_id,
+            permission_profile,
+            agent_profile_id,
+            user_content,
+            max_steps,
+            project_path,
+            capability,
+        } = ctx;
         let project_root = project_path.ok_or_else(|| {
             "project_path is required for daemon runs; process cwd fallback is disabled".to_string()
         })?;
@@ -352,9 +374,16 @@ impl ProductionRuntime {
         let hooks = build_production_hooks_for_project(Some(&project_root));
         // Context budget: min(Profile tokenBudget, model context_window); default 128K.
         // chars/4 is only used when Provider usage is unavailable (engine estimate path).
-        let profile = agent_profile_id
-            .as_deref()
-            .and_then(|id| agent_core::load_agent_profile(id, Some(&project_root)));
+        // Profile priority: resolved capability snapshot (DB authority) →
+        // DB/file lookup by id (legacy callers without a snapshot).
+        let profile = capability
+            .as_ref()
+            .and_then(|c| c.profile.clone())
+            .or_else(|| {
+                agent_profile_id.as_deref().and_then(|id| {
+                    crate::capability_resolution::load_profile(id, Some(&project_root))
+                })
+            });
         let model_window = lookup_model_context_window(&provider_id, &model_id);
         let budget = agent_core::ContextBudget::resolve(
             profile.as_ref().and_then(|profile| profile.token_budget),
@@ -440,9 +469,24 @@ impl ProductionRuntime {
             model_id: model_id.clone(),
             permission_profile: permission_profile.clone(),
             tool_allowlist,
+            team: capability.as_ref().and_then(|c| c.team.clone()),
+            mcp_tool_schemas: capability
+                .as_ref()
+                .map(|c| c.mcp_tool_schemas.clone())
+                .unwrap_or_default(),
+            selected_mcp_servers: capability
+                .as_ref()
+                .filter(|c| c.selection_active)
+                .map(|c| c.mcp_servers.iter().cloned().collect()),
         };
 
-        let skill_prompt = crate::skill_store::prompt_for_project(&project_root);
+        // Skills (ADR-0016): a resolved snapshot carries a selection-scoped
+        // prompt (Some("") = explicitly none); without a snapshot the legacy
+        // global trusted+enabled injection applies unchanged.
+        let skill_prompt = capability
+            .as_ref()
+            .and_then(|c| c.skill_prompt.clone())
+            .unwrap_or_else(|| crate::skill_store::prompt_for_project(&project_root));
         let mut assembled = assemble_context(
             profile.as_ref(),
             Some(&project_root),
@@ -458,6 +502,18 @@ impl ProductionRuntime {
                 surface_prompt.to_string()
             } else {
                 format!("{surface_prompt}\n\n{}", assembled.system_prompt)
+            };
+        }
+        // Team roster / delegation instructions from the resolved snapshot.
+        if let Some(extra) = capability
+            .as_ref()
+            .and_then(|c| c.extra_system_prompt.as_deref())
+            .filter(|s| !s.is_empty())
+        {
+            assembled.system_prompt = if assembled.system_prompt.is_empty() {
+                extra.to_string()
+            } else {
+                format!("{}\n\n{extra}", assembled.system_prompt)
             };
         }
         // Compact history against resolved token budget (chars/4 fallback estimate).
@@ -639,264 +695,8 @@ impl ProductionRuntime {
         Ok(reg.token)
     }
 
-    pub async fn spawn_child_task(
-        &self,
-        parent_run_id: &str,
-        prompt: String,
-        provider_id: String,
-        key_id: String,
-        model_id: String,
-        permission_profile: String,
-        parent_permission_profile: &str,
-        project_root: Option<String>,
-    ) -> Result<String, String> {
-        let child_perm = cap_child_permission(parent_permission_profile, &permission_profile);
-        let child_allowlist = default_subagent_tool_allowlist();
-        let subagent_hooks =
-            build_production_hooks_for_project(project_root.as_deref().map(std::path::Path::new));
-        let start_responses = subagent_hooks
-            .dispatch(HookRequest {
-                event: HookEvent::SubagentStart,
-                run_id: parent_run_id.to_string(),
-                tool_name: Some("task".into()),
-                input: serde_json::json!({
-                    "prompt": prompt.clone(),
-                    "provider_id": provider_id.clone(),
-                    "model_id": model_id.clone(),
-                }),
-            })
-            .await;
-        HookRegistry::aggregate_allow(&start_responses)
-            .map_err(|reason| format!("subagent hook denied: {reason}"))?;
-        // Depth from parent chain — never hardcode 1 (task-11).
-        let depth = self.subagents.depth_for_child(parent_run_id).await;
-        let child = self
-            .subagents
-            .spawn(
-                parent_run_id,
-                prompt.clone(),
-                depth,
-                provider_id.clone(),
-                key_id.clone(),
-                model_id.clone(),
-                child_perm.clone(),
-                child_allowlist.clone(),
-                None,
-                Some("none".into()),
-                None,
-            )
-            .await?;
-        self.subagents
-            .update_status(&child.id, SubAgentStatus::Running)
-            .await?;
-        self.events.append(
-            parent_run_id,
-            RunEventKind::SubagentCreated {
-                sub_run_id: child.run_id.clone(),
-                agent_profile_id: child.agent_profile_id.clone(),
-                task: prompt.clone(),
-            },
-        );
-        let child_conversation_id = {
-            // Best-effort persist; fall back to UUID (never subagent-* pseudo id).
-            let binding = crate::subagent_store::RouteBinding {
-                provider_id: provider_id.clone(),
-                key_id: key_id.clone(),
-                model_id: model_id.clone(),
-            };
-            match crate::subagent_store::create_hidden_child_session(
-                // parent conversation unknown here — use synthetic parent stub from run if needed
-                "orphan-parent",
-                Some(parent_run_id),
-                None,
-                "",
-                &prompt,
-                &binding,
-                Some(&child_perm),
-                project_root.as_deref(),
-            ) {
-                Ok((_sid, cid)) => cid,
-                Err(_) => uuid::Uuid::new_v4().to_string(),
-            }
-        };
-        let child_conversation_bg = child_conversation_id.clone();
-        let task_id = child.id.clone();
-        let child_run_id = child.run_id.clone();
-        let parent_owned = parent_run_id.to_string();
-        let events = self.events.clone();
-        let subagents = self.subagents.clone();
-        let task_outputs = self.task_outputs.clone();
-        let permissions = self.permissions.clone();
-        let interactions = self.interactions.clone();
-        let engines = self.engines.clone();
-        let task_id_bg = task_id.clone();
-        let child_allowlist_bg = child_allowlist;
-        let child_perm_bg = child_perm;
-        let project_root_bg = project_root;
-
-        task_outputs.lock().await.insert(
-            task_id.clone(),
-            TaskRecord {
-                run_id: child_run_id.clone(),
-                status: "running".into(),
-                output: None,
-            },
-        );
-
-        tokio::spawn(async move {
-            let child_project_root = project_root_bg.as_deref().map(std::path::PathBuf::from);
-            let provider = RealProvider {
-                provider_id: provider_id.clone(),
-                key_id: Some(key_id.clone()),
-            };
-            let tools = PermissionGatedTools {
-                gateway: {
-                    let mut g = CapabilityGateway::new();
-                    if let Some(root) = &project_root_bg {
-                        g.set_project_root(root.clone());
-                    }
-                    register_tools_for_surface(&mut g, Some(&child_allowlist_bg));
-                    Arc::new(g)
-                },
-                permissions,
-                events: events.clone(),
-                interactions,
-                subagents: subagents.clone(),
-                task_outputs: task_outputs.clone(),
-                engines: engines.clone(),
-                runtime: None,
-                provider_id: provider_id.clone(),
-                key_id: None,
-                parent_run_id: child_run_id.clone(),
-                conversation_id: child_conversation_bg.clone(),
-                model_id: model_id.clone(),
-                permission_profile: child_perm_bg,
-                tool_allowlist: Some(child_allowlist_bg),
-            };
-            // Same production hook set as parent (M4) — not a reduced AllowAll-only registry.
-            let hooks = build_production_hooks_for_project(child_project_root.as_deref());
-            // Child cancel token is parent.child_token when registry has parent.
-            let child_cancel = if let Some(parent_tok) = engines
-                .lock()
-                .await
-                .get(&parent_owned)
-                .map(|e| e.cancel_token())
-            {
-                parent_tok.child_token()
-            } else {
-                CancellationToken::new()
-            };
-            // Best-effort register under shared runtime if available via engines map only.
-            let engine = Arc::new(
-                AgentEngine::new(events.clone())
-                    .with_cancel_token(child_cancel)
-                    .with_hooks(hooks)
-                    .with_session_harness(crate::prompt_queue_store::global_harness()),
-            );
-            engines
-                .lock()
-                .await
-                .insert(child_run_id.clone(), engine.clone());
-            let mut child_system =
-                "You are a subagent with independent credentials. Complete the task.".to_string();
-            if let Some(root) = child_project_root.as_deref() {
-                let skills = crate::skill_store::prompt_for_project(root);
-                if !skills.is_empty() {
-                    child_system.push_str("\n\n");
-                    child_system.push_str(&skills);
-                }
-            }
-            let child_context =
-                assemble_context(None, child_project_root.as_deref(), Some(&child_system));
-            let config = EngineRunConfig {
-                run_id: child_run_id.clone(),
-                conversation_id: child_conversation_bg,
-                model: model_id,
-                system_prompt: Some(child_context.system_prompt),
-                messages: Vec::new(),
-                user_content: prompt,
-                max_steps: 20,
-            };
-            let result = engine.run(config, &provider, &tools).await;
-            engines.lock().await.remove(&child_run_id);
-            let (status, output) = match &result {
-                Ok(o) => {
-                    let text = events
-                        .replay_after(&child_run_id, 0)
-                        .into_iter()
-                        .filter_map(|e| match e.payload {
-                            RunEventKind::TextDelta { text } => Some(text),
-                            _ => None,
-                        })
-                        .collect::<String>();
-                    let status = match o {
-                        agent_core::EngineOutcome::Completed { .. } => "completed".to_string(),
-                        agent_core::EngineOutcome::Failed { .. } => "failed".to_string(),
-                        agent_core::EngineOutcome::Cancelled => "cancelled".to_string(),
-                        agent_core::EngineOutcome::Interrupted { .. } => "interrupted".to_string(),
-                    };
-                    let _ =
-                        crate::run_manager::global_run_manager().commit_outcome(&child_run_id, o);
-                    (status, Some(text))
-                }
-                Err(e) => {
-                    let outcome =
-                        agent_core::EngineOutcome::failed(e.code(), e.to_string(), e.retryable());
-                    let _ = crate::run_manager::global_run_manager()
-                        .commit_outcome(&child_run_id, &outcome);
-                    ("failed".into(), Some(e.to_string()))
-                }
-            };
-            if status == "completed" {
-                let _ = subagents
-                    .update_status(&task_id_bg, SubAgentStatus::Completed)
-                    .await;
-                events.append(
-                    &parent_owned,
-                    RunEventKind::SubagentCompleted {
-                        sub_run_id: child_run_id.clone(),
-                        result: output.clone().unwrap_or_default(),
-                    },
-                );
-            } else {
-                let _ = subagents
-                    .update_status(
-                        &task_id_bg,
-                        SubAgentStatus::Failed(output.clone().unwrap_or_default()),
-                    )
-                    .await;
-                events.append(
-                    &parent_owned,
-                    RunEventKind::SubagentFailed {
-                        sub_run_id: child_run_id.clone(),
-                        error: output.clone().unwrap_or_else(|| status.clone()),
-                    },
-                );
-            }
-            let _ = subagent_hooks
-                .dispatch(HookRequest {
-                    event: HookEvent::SubagentStop,
-                    run_id: parent_owned.clone(),
-                    tool_name: Some("task".into()),
-                    input: serde_json::json!({
-                        "sub_run_id": child_run_id.clone(),
-                        "status": status.clone(),
-                        "output": output.clone(),
-                    }),
-                })
-                .await;
-            task_outputs.lock().await.insert(
-                task_id_bg,
-                TaskRecord {
-                    run_id: child_run_id,
-                    status,
-                    output,
-                },
-            );
-        });
-
-        Ok(task_id)
-    }
+    // spawn_child_task removed (ADR-0016): dead duplicate of the real task
+    // path (PermissionGatedTools::execute_task -> RunManager). Zero callers.
 
     pub async fn task_output(&self, task_id: &str) -> Option<TaskRecord> {
         self.task_outputs.lock().await.get(task_id).cloned()
@@ -1641,6 +1441,7 @@ pub async fn restart_subagent_with_binding(
     };
     let rm = crate::global_run_manager();
     let created = rm.create_run(assistant_protocol::v2::CreateRunRequest {
+            capability_selection: None,
         conversation_id: sess.child_conversation_id.clone(),
         provider_id: binding.provider_id.clone(),
         model_id: binding.model_id.clone(),
@@ -1658,6 +1459,8 @@ pub async fn restart_subagent_with_binding(
     })?;
     let run = crate::run_manager::RunManager::start_detached_global(
         assistant_protocol::v2::StartRunRequest {
+            agent_profile_id: None,
+            capability_selection: None,
             run_id: Some(created.id.clone()),
             conversation_id: Some(sess.child_conversation_id.clone()),
             provider_id: Some(binding.provider_id.clone()),
@@ -1908,7 +1711,7 @@ impl EngineProvider for FixtureProvider {
 #[cfg(test)]
 mod tool_allowlist_tests {
     use super::*;
-    use agent_core::{EngineToolRuntime, SubAgentConfig, SubAgentManager};
+    use agent_core::{cap_child_permission, EngineToolRuntime, SubAgentConfig, SubAgentManager};
     use std::sync::Arc;
     use tokio_util::sync::CancellationToken;
 
@@ -1935,6 +1738,9 @@ mod tool_allowlist_tests {
             model_id: "m".into(),
             permission_profile: "full_access".into(),
             tool_allowlist: list,
+            team: None,
+            mcp_tool_schemas: Vec::new(),
+            selected_mcp_servers: None,
         }
     }
 

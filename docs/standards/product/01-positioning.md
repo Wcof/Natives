@@ -101,6 +101,7 @@ Natives 最大的产品风险是**边界漂移**：把「本机工作台」写�
 | 外壳 | 三栏布局、侧边栏、命令面板、通知中心、设置 | Hub |
 | 工作台 | 文件浏览器与预览、终端、环境/凭证、用量（真实数据源） | Hub |
 | AI 编排 | Native Agent Daemon 会话、Provider 配置、工具/权限编排（capability 轨） | Hub |
+| 能力库 | Skills / MCP 连接器 / 专家（含专家团）统一管理与会话选用（capability 轨，ADR-0016；即 ADR-0012 之「能力中心」） | Hub |
 | 插件运行时 | iframe 容器、Bridge、Session Token、模块安装/热上架、心跳/崩溃检测 | Workshop |
 | 本地创意目录 | 内部 web-module + 外部 GitHub 容器的统一列表投影（运行时分轨，见 ADR-0013） | Workshop + Embed |
 | 工具 | 发布向导、截图、图片标注、Git 只读面板等 | Hub |

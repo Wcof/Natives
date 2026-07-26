@@ -281,8 +281,8 @@ Dashboard
 │   ├── Claude Code CLI 桥接（宿主中介权限；默认 fail-closed 只读） P1 ← cli_runtime_bridge.rs
 │   └── Codex CLI 桥接（Stub，恒不可用，选中即降级 Native） P2 ← codex_runtime_bridge.rs
 ├── 能力子系统（daemon）
-│   ├── MCP 运行时（stdio/HTTP/SSE、信任门控；mcp.call 有意禁用、OAuth 流未实现） P1 ← mcp_runtime.rs
-│   ├── Skills（项目/用户级扫描、信任 + 启用注入；前端仅只读列表） P1 ← skill_store.rs
+│   ├── MCP 运行时（stdio/HTTP/SSE、信任门控；mcp.call 有意禁用、OAuth 流未实现；管理界面见 K 域能力库） P1 ← mcp_runtime.rs
+│   ├── Skills（项目/用户级扫描、信任 + 启用注入；管理界面见 K 域能力库） P1 ← skill_store.rs
 │   ├── 定时任务（后端 CRUD + 到期真实拉起 Run；前端仅只读列表） P1 ← scheduler_store.rs
 │   ├── 记忆 Memory（关键词检索，无 embedding；暂无用户界面） P2 ← memory_store.rs
 │   ├── 扩展 Extension（发现/信任/启停；无安装更新，前端只读） P2 ← extension_store.rs
@@ -419,6 +419,43 @@ Provider 路由与账号池
 │   └── Bearer 强制鉴权 + 32MiB 请求上限 + 非流式 600s     P1
 └── 请求整流器（rectifier）                               P2 ← request_rectifier.rs
     └── max_tokens 抬升至 64000 / 回环侧 thinking 归一（无条件前置改写，弱于设计文档的错误触发重试） P2
+```
+
+### K. 能力库（Capability Hub）【Hub】— P0 〔已落地 2026-07-26 · ADR-0016〕
+
+主要依据：ADR-0016；「能力库」即 ADR-0012 之「能力中心」（同一概念，见术语表三名对齐）。权威存储 daemon `assistant.db` `capability_*` 表族（migration 021）；管理 RPC 经 `src/lib/assistant-workspace/capability-admin.ts` 门面。
+
+```
+能力库（Skills / 连接器 / 专家 三 Tab，菜单一级入口，代码命名空间 capabilities）
+├── Skills 管理（扫描合并 + zip/目录导入 + 启停/信任 + 分类标签）        P0 ← src-agent-daemon/src/capability/skills.rs、src/components/capabilities/skills/
+│   └── git 导入                                                        P1 ← 未实现（P0 支持 zip/dir）
+├── 连接器（MCP 服务 CRUD + mcpServers JSON 导入；明文 Authorization 拒） P0 ← capability/mcp.rs、src/components/capabilities/connectors/
+│   ├── 凭证引用（secret 经 Host capability_secrets 加密，daemon 零落盘） P0 ← src-tauri/src/commands/capability_secret.rs、natives_db_broker.rs
+│   ├── OAuth 浏览器流（loopback + PKCE，refresh 加密持久）              P0 ← src-tauri/src/commands/mcp_oauth.rs
+│   └── MCP Hub 在线浏览（官方 Registry；只读消费 + 显式添加 trusted=false；离线缓存降级 stale 标注） P0 ← capability/hub.rs、McpHubBrowser.tsx
+├── 专家（单专家 CRUD，绑 skills/参数/provider·model ID；.md 导入导出）   P0 ← capability/experts.rs、src/components/capabilities/experts/
+│   └── 专家团（lead + 成员白名单 + failure policy；task 工具 agent 参数派生，成员集外 fail-closed） P0 ← capability_resolution.rs、production_tools.rs execute_task
+├── 会话能力选用（输入区选择器 → conversation 默认 + run 覆盖 → resolve 快照持久 run 行） P0 ← CapabilityPickerPopover.tsx、capability_resolution.rs、run_manager.rs
+│   └── 引擎能力矩阵与诚实降级（native 全链路 / claude_cli CLI flags 独立后端标注 / codex 不支持，daemon 侧同步校验） P0 ← runtime_capability_matrix、cli_runtime_bridge.rs
+└── 旧线退役（Host commands/subagent.rs 写命令 fail-closed + 一次性迁移；/subagents 孤儿页已删除） P0 ← capability/experts.rs migrate_host_subagents
+```
+
+### L. 任务（Job Module）【Hub】— P0 〔ADR-0015〕
+
+主要依据：ADR-0015。数据权威在 Host SQLite（复用扩展 `scheduled_tasks` + `task_runs`）；调度判定归本模块（30 秒 tick），执行经 `JobDispatcher` 接缝委托助理模块走 `run.*` 单执行接口，禁止旁路。P0 派发未接线（唯一适配器 `NotWiredDispatcher`），前端三态诚实展示。
+
+```
+任务（一次性 / 周期性自动化任务，代码命名空间 jobs）
+├── 任务 CRUD（8 个 job_* 命令面）                        P0 ← src-tauri/src/commands/jobs.rs、src-tauri/src/jobs/store.rs
+│   ├── schedule 三型（once=ISO8601 / interval≥60s / cron 5 字段含 * N */N A-B A,B,C） P0 ← src-tauri/src/jobs/schedule.rs
+│   ├── 能力绑定字段只存不校验（agent_profile_id / capability_refs，派发期校验——接缝 B） P0 ← store.rs
+│   └── 校验错误码（JOB_NOT_FOUND / JOB_INVALID_SCHEDULE / JOB_INVALID_PROJECT_PATH / JOB_DISPATCHER_NOT_WIRED） P0 ← commands/jobs.rs
+├── 到期扫描 tick（30s、可注入时钟、Once 幂等、once 过期 skipped、expires_at 到期停用） P0 ← src-tauri/src/jobs/runner.rs
+├── 派发接缝（JobDispatcher trait；P0 仅 NotWiredDispatcher，不写假 run 行）   P0 ← src-tauri/src/jobs/dispatch.rs
+│   └── 助理模块适配器（映射 CreateRunRequest/StartRunRequest 走 run 主链）    P1 ← 未实现（接缝 A）
+├── 运行历史（task_runs 状态机 pending→dispatched→running→终态 + skipped/dispatch_error） P0 ← store.rs、JobRunsView.tsx
+├── 任务 UI（列表/启停/表单/历史；未接线时「立即执行」禁用并展示原因；页面隐藏暂停轮询） P0 ← src/components/jobs/、src/lib/jobs-api.ts
+└── scheduler_store 收敛（jobs.json 迁入 Host 表 / 15s loop 退役 / cron 下沉共享 crate） P1 ← ADR-0015 第 4 节
 ```
 
 ---

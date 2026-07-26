@@ -57,12 +57,12 @@ Native Agent Daemon
 | 工具执行 | `capability-gateway` | Gateway.execute | ToolCall* events | `partial` |
 | 权限 | `agent-core` + Gateway | permission.respond + PermissionClass | PermissionRequested | `partial` |
 | Hook | `agent-core` hooks | Engine 钩子点 | Hook* events | `partial` |
-| Subagent | `agent-core` + RunManager child runs | tool `task` | 子 Run 事件流 | `partial` |
+| Subagent | `agent-core` + RunManager child runs | tool `task`（`agent` 团队成员参数，ADR-0016） | 子 Run 事件流 | `partial`（专家团成员派生 + member profile 注入已落地） |
 | Credential | Tauri Broker / natives.db sidecar | credential.resolve | 无密钥事件 | `partial` |
 | 事件存储 | EventSequencer + 默认持久化 | run.replay / subscribe | sequence | `partial` |
-| MCP | `src-agent-daemon/mcp_runtime` | mcp.* RPC | MCP events | `partial`（OAuth browser/redirect 明确 unsupported） |
+| MCP | `src-agent-daemon/mcp_runtime` + 能力库 `capability_mcp_server`（可信配置源） | mcp.* RPC + capability.mcp.*（CRUD/导入/Hub） | MCP events | `partial`（注册/按选可用/schema 注入/引用计数回收已落地；OAuth browser 流 Host `mcp_oauth_start` 已实现） |
 | Extension | 待建 | extension.* | Extension events | `not_started` |
-| Skill | 待建 | skill discovery inject | — | `not_started` |
+| Skill | `skill_store` + 能力库 `capability_skill`（ADR-0016） | skill.list + capability.skill.*；按选注入 `prompt_for_selection` | — | `partial`（元数据/分类/导入/按选注入已落地；git 导入 P1） |
 | Scheduler | 待建 | scheduler.* | Scheduler events | `not_started` |
 | Memory/Compaction | 待建 | engine 内 | Compact* events | `not_started` |
 | Artifact/Attachment | 部分 conversation | artifact.* | Artifact events | `partial` |
@@ -181,7 +181,7 @@ Child Run 为完整独立 Run：独立 provider/key/model/base_url、permission�
 | 3 | Run 生命周期/恢复 + 默认事件持久化 | **partial**（状态机扩展；默认 JSONL 事件；Run 快照恢复为 Interrupted；start 幂等；禁 cwd project_path） |
 | 4 | Provider 全量 + Tool Gateway 安全 | **partial**（Gateway 主路径已有；Anthropic 真网门禁待凭据） |
 | 5 | Hook 全量 + Subagent 产品化 | **done（fixture 双 Provider 父子 Engine 闭环；真网凭据验收待）** |
-| 6 | MCP / Extension / Skill / Scheduler / Memory / Artifact | **partial**（MCP 主链与 SSE；OAuth browser/redirect 明确 unsupported） |
+| 6 | MCP / Extension / Skill / Scheduler / Memory / Artifact | **partial**（MCP 主链与 SSE + 能力库注册/按选可用 + OAuth browser 流 Host 侧已实现；Skill 元数据/导入/按选注入已落地，见 ADR-0016；Extension/Memory 未动） |
 | 7 | UI 全路径联调 | **partial**（project_path 强制 + subscribe push_wait；headed GUI 录证待） |
 | 8 | 旧链删除 + 发布门禁 | **done（旧执行文件物理删除；审计脚本 + strict warning + CI runner）** |
 

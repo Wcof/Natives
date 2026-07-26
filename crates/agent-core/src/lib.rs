@@ -6,6 +6,7 @@
 //! This crate implements the single authority for Run state transitions,
 //! ensuring that the UI and providers never duplicate transition rules.
 
+pub mod capability;
 pub mod run_state;
 pub mod permissions;
 pub mod subagents;

@@ -92,14 +92,16 @@ test('UI-called methods are implemented (daemon or host)', () => {
   }
 });
 
-test('oauth browser methods stay unimplemented (honest red line)', () => {
+test('oauth browser methods are host-implemented, never daemon-advertised (ADR-0016 decision 7)', () => {
   const src = readFileSync(METHODS_RS, 'utf8');
-  const implemented = new Set([
-    ...extractArrayConst(src, 'IMPLEMENTED_METHODS'),
-    ...extractArrayConst(src, 'HOST_IMPLEMENTED_METHODS'),
-  ]);
-  assert.ok(!implemented.has('mcp.auth.oauthStart'));
-  assert.ok(!implemented.has('mcp.auth.oauthCallback'));
+  const daemon = new Set(extractArrayConst(src, 'IMPLEMENTED_METHODS'));
+  const host = new Set(extractArrayConst(src, 'HOST_IMPLEMENTED_METHODS'));
+  // The browser flow (loopback + PKCE + token exchange) lives on the Host;
+  // the daemon must not advertise it as its own surface.
+  assert.ok(!daemon.has('mcp.auth.oauthStart'));
+  assert.ok(!daemon.has('mcp.auth.oauthCallback'));
+  assert.ok(host.has('mcp.auth.oauthStart'));
+  assert.ok(host.has('mcp.auth.oauthCallback'));
 });
 
 test('capability-gate HOST_METHODS_UI stays subset of HOST_IMPLEMENTED when present', () => {

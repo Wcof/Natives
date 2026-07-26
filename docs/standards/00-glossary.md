@@ -63,6 +63,11 @@
 - **Hub / Workshop / Embed**：产品入口与安全模型分面（ADR-0012）。  
 - **web-module / capability**：物理实现双轨；禁止单 manifest 硬揉。
 
+### 能力库 / 能力中心 / 能力子系统（三名对齐，ADR-0016）
+- **能力库（Capability Hub）**：菜单名与用户可见名称，Skills / 连接器 / 专家 三子域的统一管理面。
+- **能力中心**：ADR-0012 第 4 节为 capability 轨冻结的 UI 归属名。与「能力库」是**同一概念**。
+- **能力子系统**：daemon 侧执行实现（`NATIVE-DAEMON-CAPABILITY-MAP.md`：mcp_runtime / skill_store / subagent_store 等）。能力库是它的配置权威与管理表面。
+
 ### 决策记录（ADR, Architecture Decision Record）
 记录「**为什么**在某个时间点做了某个架构选择」。ADR 不直接是约束，但规范中的 MUST/SHOULD 常常**源自**某个 ADR。规范篇会在「关联 ADR」处双向链接。
 

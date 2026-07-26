@@ -74,13 +74,14 @@ Daemon 是**本地 sidecar 微服务**：会话 / Run / 工具 / 供应商流式
 | **工具执行** | `PermissionGatedTools` + `capability-gateway` | `tool.list`；执行仅 Engine 调 | ToolCall* | Schema→PathScope→Permission |
 | **权限 / 交互** | `production` waiters + `interaction_store` | `permission.respond` / `interaction.*` | Permission* | grant 可落 `tool_grant` |
 | **Hook** | `production::build_production_hooks*` + `agent-core` | Engine 钩子点 | Hook* | 项目 hooks 默认不信任 |
-| **子 Agent** | `production` spawn + `subagent_store` + `task_store` | 工具 `task`；`subagent.*` | 子 Run 事件流 | 独立 provider/key；不继承父 Key |
+| **子 Agent** | `production` spawn + `subagent_store` + `task_store` | 工具 `task`（含 `agent` 团队成员参数）；`subagent.*` | 子 Run 事件流 | 独立 provider/key；不继承父 Key |
+| **能力库（配置权威）** | `capability/`（skills/mcp/experts/hub 存储 + bootstrap 可信配置源）+ `capability_resolution`（run 级 resolve） | `capability.*` / `conversation.updateCapabilities` | run 行 `capability_snapshot_json`（仅 id，无密钥） | ADR-0016；专家/专家团唯一归属；MCP 注册唯一入口；resolve fail-closed |
 | **会话 / 消息** | `conversation_store` | `conversation.*` | — | 生产 UDS 下 daemon-owned |
 | **提示词队列** | `prompt_queue_store` + harness | `promptQueue.*` | — | 插话仅安全点生效 |
 | **检查点 / 回放** | `checkpoint` + `event_log` | `run.rewind*` / `run.replay` / `subscribe` | sequence | persist-first |
-| **MCP** | `mcp_runtime` | `mcp.*` | MCP 相关 | OAuth 浏览器流 host 侧 |
+| **MCP** | `mcp_runtime`（配置来自能力库 `capability_mcp_server`） | `mcp.*`（运行时面）；配置 CRUD 走 `capability.mcp.*` | MCP 相关 | OAuth 浏览器流 host 侧（`mcp_oauth_start`）；按选可用 + 引用计数/闲置回收 |
 | **调度** | `scheduler_store` | `scheduler.*` | 到期 tick → 再走 Run 主链 | 不旁路 Engine |
-| **技能** | `skill_store` | `skill.list`；注入 system prompt | — | 仅 trusted+enabled 注入 |
+| **技能** | `skill_store`（发现器）+ 能力库 `capability_skill`（元数据/开关权威） | `skill.list`（运行时面）；`capability.skill.*`（配置面）；注入 system prompt | — | 仅 trusted+enabled 注入；会话选用时按 id 集合注入（fail-closed） |
 | **扩展** | `extension_store` | `extension.list/enable` | — | 最小表面；完整隔离后续 |
 | **记忆** | `memory_store` | `memory.search/add` | — | 关键词扫描（无 embedding） |
 | **产物** | `artifact_store` | `artifact.list/open` | — | 路径隔离在 run 目录内 |
@@ -106,7 +107,7 @@ Daemon 是**本地 sidecar 微服务**：会话 / Run / 工具 / 供应商流式
 | 文件 | 职责 |
 |------|------|
 | **`run_manager.rs`** | 进程内 **Run 唯一权威**：内存 map + SQLite 恢复、幂等键、`project_paths`、挂 `ProductionRuntime`、启动/取消/重试/列表/事件订阅入口 |
-| **`production.rs`** | **生产接缝组装**：`ProductionRuntime`（事件序号、权限等待、子 Agent、Hook、引擎表、CLI 取消旗、tool grants）；`RealProvider`；`PermissionGatedTools`；`spawn_child_task`；fixture 仅测试 |
+| **`production.rs`** | **生产接缝组装**：`ProductionRuntime`（事件序号、权限等待、子 Agent、Hook、引擎表、CLI 取消旗、tool grants）；`RealProvider`；`PermissionGatedTools`；`RunStartContext`（含 ADR-0016 能力快照）；fixture 仅测试。旧 `spawn_child_task` 死代码已删（真实子任务路径 = `execute_task` → RunManager） |
 | `session_harness.rs` | 每会话 Actor：队列镜像、插话、cancel-and-send（与 `agent-core::SessionCoordinator` 对齐） |
 | `prompt_queue_store.rs` | `prompt_queue` 表 + 与 harness / RunManager 接线 |
 

@@ -87,6 +87,37 @@ pub const ALL_METHODS: &[&str] = &[
     "engine.rateLimit.update",
     "engine.rateLimit.acquire",
     "engine.rateLimit.cooldown",
+    // Capability library (ADR-0016): configuration surface, distinct from the
+    // mcp.* / skill.* runtime surfaces above.
+    "capability.skill.list",
+    "capability.skill.get",
+    "capability.skill.update",
+    "capability.skill.import",
+    "capability.skill.delete",
+    "capability.skill.rescan",
+    "capability.mcp.list",
+    "capability.mcp.get",
+    "capability.mcp.create",
+    "capability.mcp.update",
+    "capability.mcp.delete",
+    "capability.mcp.importJson",
+    "capability.mcp.hub.search",
+    "capability.mcp.hub.get",
+    "capability.mcp.hub.install",
+    "capability.expert.list",
+    "capability.expert.get",
+    "capability.expert.create",
+    "capability.expert.update",
+    "capability.expert.delete",
+    "capability.expert.importMd",
+    "capability.expert.exportMd",
+    "capability.team.list",
+    "capability.team.get",
+    "capability.team.create",
+    "capability.team.update",
+    "capability.team.delete",
+    "conversation.updateCapabilities",
+    "conversation.getCapabilities",
 ];
 
 /// Methods actually handled by the Agent Daemon RPC (must match `rpc.rs`).
@@ -168,6 +199,37 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "engine.rateLimit.update",
     "engine.rateLimit.acquire",
     "engine.rateLimit.cooldown",
+    // Capability library (ADR-0016) — advertisement must never outrun
+    // implementation; hub methods joined once capability::hub shipped.
+    "capability.skill.list",
+    "capability.skill.get",
+    "capability.skill.update",
+    "capability.skill.import",
+    "capability.skill.delete",
+    "capability.skill.rescan",
+    "capability.mcp.list",
+    "capability.mcp.get",
+    "capability.mcp.create",
+    "capability.mcp.update",
+    "capability.mcp.delete",
+    "capability.mcp.importJson",
+    "capability.mcp.hub.search",
+    "capability.mcp.hub.get",
+    "capability.mcp.hub.install",
+    "capability.expert.list",
+    "capability.expert.get",
+    "capability.expert.create",
+    "capability.expert.update",
+    "capability.expert.delete",
+    "capability.expert.importMd",
+    "capability.expert.exportMd",
+    "capability.team.list",
+    "capability.team.get",
+    "capability.team.create",
+    "capability.team.update",
+    "capability.team.delete",
+    "conversation.updateCapabilities",
+    "conversation.getCapabilities",
 ];
 
 /// Methods the Tauri host still owns after Phase 0 cutover.
@@ -190,6 +252,11 @@ pub const HOST_IMPLEMENTED_METHODS: &[&str] = &[
     // OS-bound artifact actions
     "artifact.open",
     "artifact.reveal",
+    // MCP OAuth browser flow (ADR-0016 decision 7): the Host owns the system
+    // browser + loopback callback; the daemon only receives the access token
+    // via mcp.auth.set.
+    "mcp.auth.oauthStart",
+    "mcp.auth.oauthCallback",
 ];
 
 pub mod names {
@@ -270,6 +337,35 @@ pub mod names {
     pub const ENGINE_RATE_LIMIT_UPDATE: &str = "engine.rateLimit.update";
     pub const ENGINE_RATE_LIMIT_ACQUIRE: &str = "engine.rateLimit.acquire";
     pub const ENGINE_RATE_LIMIT_COOLDOWN: &str = "engine.rateLimit.cooldown";
+    pub const CAPABILITY_SKILL_LIST: &str = "capability.skill.list";
+    pub const CAPABILITY_SKILL_GET: &str = "capability.skill.get";
+    pub const CAPABILITY_SKILL_UPDATE: &str = "capability.skill.update";
+    pub const CAPABILITY_SKILL_IMPORT: &str = "capability.skill.import";
+    pub const CAPABILITY_SKILL_DELETE: &str = "capability.skill.delete";
+    pub const CAPABILITY_SKILL_RESCAN: &str = "capability.skill.rescan";
+    pub const CAPABILITY_MCP_LIST: &str = "capability.mcp.list";
+    pub const CAPABILITY_MCP_GET: &str = "capability.mcp.get";
+    pub const CAPABILITY_MCP_CREATE: &str = "capability.mcp.create";
+    pub const CAPABILITY_MCP_UPDATE: &str = "capability.mcp.update";
+    pub const CAPABILITY_MCP_DELETE: &str = "capability.mcp.delete";
+    pub const CAPABILITY_MCP_IMPORT_JSON: &str = "capability.mcp.importJson";
+    pub const CAPABILITY_MCP_HUB_SEARCH: &str = "capability.mcp.hub.search";
+    pub const CAPABILITY_MCP_HUB_GET: &str = "capability.mcp.hub.get";
+    pub const CAPABILITY_MCP_HUB_INSTALL: &str = "capability.mcp.hub.install";
+    pub const CAPABILITY_EXPERT_LIST: &str = "capability.expert.list";
+    pub const CAPABILITY_EXPERT_GET: &str = "capability.expert.get";
+    pub const CAPABILITY_EXPERT_CREATE: &str = "capability.expert.create";
+    pub const CAPABILITY_EXPERT_UPDATE: &str = "capability.expert.update";
+    pub const CAPABILITY_EXPERT_DELETE: &str = "capability.expert.delete";
+    pub const CAPABILITY_EXPERT_IMPORT_MD: &str = "capability.expert.importMd";
+    pub const CAPABILITY_EXPERT_EXPORT_MD: &str = "capability.expert.exportMd";
+    pub const CAPABILITY_TEAM_LIST: &str = "capability.team.list";
+    pub const CAPABILITY_TEAM_GET: &str = "capability.team.get";
+    pub const CAPABILITY_TEAM_CREATE: &str = "capability.team.create";
+    pub const CAPABILITY_TEAM_UPDATE: &str = "capability.team.update";
+    pub const CAPABILITY_TEAM_DELETE: &str = "capability.team.delete";
+    pub const CONVERSATION_UPDATE_CAPABILITIES: &str = "conversation.updateCapabilities";
+    pub const CONVERSATION_GET_CAPABILITIES: &str = "conversation.getCapabilities";
 }
 
 /// Returns true if `method` is a known v2 RPC method.
@@ -349,20 +445,24 @@ mod tests {
     }
 
     #[test]
-    fn oauth_browser_redirect_is_explicitly_unsupported_until_handler_exists() {
+    fn oauth_browser_redirect_is_host_implemented() {
+        // Host-side handler exists (mcp_oauth_start command): the browser +
+        // loopback flow is owned by the Tauri host, never the daemon.
         assert!(is_known_method("mcp.auth.oauthStart"));
         assert!(is_known_method("mcp.auth.oauthCallback"));
-        assert!(!is_implemented_method("mcp.auth.oauthStart"));
-        assert!(!is_implemented_method("mcp.auth.oauthCallback"));
+        assert!(is_host_method("mcp.auth.oauthStart"));
+        assert!(is_host_method("mcp.auth.oauthCallback"));
+        assert!(!is_daemon_method("mcp.auth.oauthStart"));
+        assert!(!is_daemon_method("mcp.auth.oauthCallback"));
         assert!(matches!(
             method_status("mcp.auth.oauthStart"),
-            super::super::envelope::MethodStatus::Unsupported
+            super::super::envelope::MethodStatus::Implemented
         ));
     }
 
     #[test]
     fn known_but_unimplemented_methods_are_not_advertised() {
-        for method in ["run.getActivity", "mcp.auth.oauthStart"] {
+        for method in ["run.getActivity"] {
             assert!(is_known_method(method), "missing known: {method}");
             assert!(
                 !is_implemented_method(method),

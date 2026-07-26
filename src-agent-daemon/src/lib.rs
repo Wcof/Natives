@@ -5,6 +5,8 @@
 
 pub mod artifact_store;
 pub mod authority;
+pub mod capability;
+pub mod capability_resolution;
 pub mod checkpoint;
 pub mod cli_runtime_bridge;
 pub mod client;

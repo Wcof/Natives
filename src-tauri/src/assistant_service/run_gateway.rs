@@ -16,6 +16,10 @@ struct RunStartRequest {
     runtime_id: Option<String>,
     attachments: Vec<Value>,
     project_path: Option<String>,
+    /// Expert / agent persona for this run (ADR-0016 seam A).
+    agent_profile_id: Option<String>,
+    /// Capability library selection override (ADR-0016). None = conversation default.
+    capability_selection: Option<assistant_protocol::v2::CapabilitySelection>,
 }
 
 pub(crate) async fn handle_run_start(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
@@ -85,6 +89,29 @@ fn parse_run_start_request(params: &Value) -> Result<RunStartRequest, RpcRespons
         .map(str::to_string)
         .or_else(|| std::env::var("NATIVES_PROJECT_PATH").ok())
         .filter(|path| !path.trim().is_empty());
+    let agent_profile_id = params
+        .get("agent_profile_id")
+        .or_else(|| params.get("agentProfileId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let capability_selection = match params
+        .get("capability_selection")
+        .or_else(|| params.get("capabilitySelection"))
+    {
+        Some(raw) if !raw.is_null() => {
+            let selection: assistant_protocol::v2::CapabilitySelection =
+                serde_json::from_value(raw.clone()).map_err(|e| {
+                    error_response("INVALID_INPUT", &format!("capability_selection: {e}"))
+                })?;
+            selection
+                .validate()
+                .map_err(|e| error_response("INVALID_INPUT", e))?;
+            Some(selection)
+        }
+        _ => None,
+    };
     Ok(RunStartRequest {
         conversation_id,
         provider_id,
@@ -94,6 +121,8 @@ fn parse_run_start_request(params: &Value) -> Result<RunStartRequest, RpcRespons
         runtime_id,
         attachments,
         project_path,
+        agent_profile_id,
+        capability_selection,
     })
 }
 
@@ -241,7 +270,7 @@ async fn create_and_start_run(
         provider_id: req.provider_id.clone(),
         model_id: req.model_id.clone(),
         key_id: None,
-        agent_profile_id: None,
+        agent_profile_id: req.agent_profile_id.clone(),
         permission_profile: Some(permission_profile.clone()),
         content: Some(user_content.clone()),
         attachments: daemon_attachments_opt.clone(),
@@ -251,6 +280,7 @@ async fn create_and_start_run(
         idempotency_key: Some(idempotency_key.clone()),
         effort: req.effort.clone(),
         runtime_id: req.runtime_id.clone(),
+        capability_selection: req.capability_selection.clone(),
     })
     .await
     {
@@ -272,6 +302,8 @@ async fn create_and_start_run(
         idempotency_key: None,
         effort: req.effort.clone(),
         runtime_id: req.runtime_id.clone(),
+        agent_profile_id: req.agent_profile_id.clone(),
+        capability_selection: req.capability_selection.clone(),
     };
     let mode_label = daemon_authority::authority_mode_label();
     let started_daemon = match daemon_authority::start_run(start_req).await {

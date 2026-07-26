@@ -292,6 +292,8 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       setActiveView('assistant');
     } else if (moduleId === '__jobs__' || moduleId === 'jobs') {
       setActiveView('jobs');
+    } else if (moduleId === '__capabilities__' || moduleId === 'capabilities') {
+      setActiveView('capabilities');
     } else if (moduleId === '__notifications__') {
       toggleRightPanel('notifications');
     } else if (moduleId.startsWith('__files__:')) {

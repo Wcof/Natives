@@ -608,7 +608,8 @@ pub fn extra_builtin_tools() -> Vec<Tool> {
                     "prompt":{"type":"string","description":"Task prompt for the subagent"},
                     "task":{"type":"string","description":"Alias for prompt"},
                     "name":{"type":"string","description":"Optional short label for the subagent"},
-                    "permission_profile":{"type":"string","description":"ask | full_access (capped by parent)"}
+                    "permission_profile":{"type":"string","description":"ask | full_access (capped by parent)"},
+                    "agent":{"type":"string","description":"Expert team member id to run this task as. Only valid when an expert team is active; must be one of the roster ids from the team briefing."}
                 },
                 "required":["prompt"]
             }),

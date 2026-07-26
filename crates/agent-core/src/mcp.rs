@@ -141,6 +141,13 @@ impl McpRegistry {
         Ok(())
     }
 
+    /// Remove a server and all of its discovered tools (capability library
+    /// delete/disable path).
+    pub fn remove_server(&mut self, server_id: &str) {
+        self.servers.remove(server_id);
+        self.tools.retain(|t| t.server_id != server_id);
+    }
+
     pub fn upsert_tool(&mut self, tool: McpToolDescriptor) {
         self.tools.retain(|t| !(t.server_id == tool.server_id && t.name == tool.name));
         self.tools.push(tool);

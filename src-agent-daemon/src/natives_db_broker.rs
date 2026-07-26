@@ -471,6 +471,42 @@ pub fn try_install_natives_db_broker() -> bool {
     }
 }
 
+/// Read and decrypt one capability secret by row id (ADR-0016 decision 7).
+///
+/// Opens natives.db read-only (falling back to a normal open where WAL denies
+/// read-only access), fetches `ciphertext` + `nonce` — the same KEK-DEK
+/// envelope columns the Host writes — and returns the plaintext. The value is
+/// memory-only: the caller must use it and drop it; it is never logged and
+/// never persisted by the daemon.
+pub fn read_capability_secret(id: &str) -> Result<String, String> {
+    read_capability_secret_at(&default_natives_db_path(), id)
+}
+
+fn read_capability_secret_at(path: &Path, id: &str) -> Result<String, String> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err("capability secret id is required".into());
+    }
+    if !path.exists() {
+        return Err(format!("natives.db not found at {}", path.display()));
+    }
+    let conn = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .or_else(|_| Connection::open(path))
+    .map_err(|e| format!("open natives.db failed: {e}"))?;
+    let _ = conn.execute_batch("PRAGMA busy_timeout=3000;");
+    let (ciphertext, nonce) = conn
+        .query_row(
+            "SELECT ciphertext, nonce FROM capability_secrets WHERE id = ?1 LIMIT 1",
+            rusqlite::params![id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .map_err(|_| format!("capability secret '{id}' not found in natives.db"))?;
+    envelope_decrypt(&ciphertext, &nonce, &conn)
+}
+
 pub fn read_setting(key: &str) -> Result<Option<String>, String> {
     let path = default_natives_db_path();
     if !path.exists() {
@@ -571,6 +607,54 @@ mod tests {
         .unwrap();
         drop(conn);
         (dir, path)
+    }
+
+    #[test]
+    fn reads_and_decrypts_capability_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("natives.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
+             CREATE TABLE capability_secrets (
+               id TEXT PRIMARY KEY,
+               kind TEXT NOT NULL,
+               owner_ref TEXT NOT NULL,
+               key_name TEXT,
+               ciphertext TEXT NOT NULL,
+               nonce TEXT NOT NULL,
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+        let mut kek = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut kek);
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('provider_kek', ?1)",
+            [hex::encode(kek)],
+        )
+        .unwrap();
+
+        // Same envelope the Host writes: ciphertext = DEK payload, nonce = wrapped DEK.
+        let (ciphertext, nonce) = envelope_encrypt("refresh-token-value", &conn).unwrap();
+        conn.execute(
+            "INSERT INTO capability_secrets (id, kind, owner_ref, key_name, ciphertext, nonce, created_at, updated_at)
+             VALUES ('sec-1', 'mcp_oauth_refresh', 'server-1', NULL, ?1, ?2, 't', 't')",
+            rusqlite::params![ciphertext, nonce],
+        )
+        .unwrap();
+        drop(conn);
+
+        let plain = read_capability_secret_at(&path, "sec-1").unwrap();
+        assert_eq!(plain, "refresh-token-value");
+
+        let missing = read_capability_secret_at(&path, "sec-does-not-exist");
+        assert!(missing.is_err());
+        assert!(
+            !missing.unwrap_err().contains("refresh-token-value"),
+            "errors must never carry secret material"
+        );
     }
 
     #[test]

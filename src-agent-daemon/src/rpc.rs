@@ -599,12 +599,21 @@ async fn handle_rpc(
         }
         names::DAEMON_GET_CAPABILITIES => {
             let caps = crate::run_manager::RunManager::capabilities();
+            let mut value = serde_json::to_value(&caps).unwrap_or_default();
+            // Per-runtime capability matrix (ADR-0016): which runtimes can
+            // honour expert/team/skills/mcp selections and by what mechanism.
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert(
+                    "runtime_capabilities".into(),
+                    crate::capability_resolution::runtime_capability_matrix(),
+                );
+            }
             send_success(
                 writer,
                 &request.request_id,
                 &request.client_id,
                 &request.session_token,
-                serde_json::to_value(&caps).unwrap_or_default(),
+                value,
             )
             .await;
         }
@@ -837,6 +846,8 @@ async fn handle_rpc(
                     match run_manager().retry(req) {
                         Ok(new_run) => {
                             let start_req = StartRunRequest {
+            agent_profile_id: None,
+            capability_selection: None,
                                 run_id: Some(new_run.id.clone()),
                                 conversation_id: Some(new_run.conversation_id.clone()),
                                 provider_id: Some(new_run.provider_id.clone()),
@@ -1928,6 +1939,71 @@ async fn handle_rpc(
                         )
                         .await;
                     }
+                }
+            }
+        }
+        // Conversation-level capability selection (ADR-0016).
+        names::CONVERSATION_UPDATE_CAPABILITIES | names::CONVERSATION_GET_CAPABILITIES => {
+            match crate::capability_resolution::handle_conversation_rpc(
+                &request.method,
+                &request.params,
+            ) {
+                Ok(value) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        value,
+                    )
+                    .await
+                }
+                Err(e) => {
+                    let code = if e.contains("not found") {
+                        error_codes::NOT_FOUND
+                    } else {
+                        error_codes::INVALID_INPUT
+                    };
+                    let category = if e.contains("not found") {
+                        ErrorCategory::NotFound
+                    } else {
+                        ErrorCategory::Validation
+                    };
+                    send_error(writer, &DaemonError::new(code, category, false, e)).await
+                }
+            }
+        }
+        // Capability library configuration surface (ADR-0016). One routing arm;
+        // per-method dispatch lives in capability::request to keep rpc.rs flat.
+        // The is_implemented_method guard keeps catalogued-but-unimplemented
+        // methods (e.g. hub before it ships) on the honest unsupported path.
+        method
+            if method.starts_with("capability.")
+                && assistant_protocol::v2::is_implemented_method(method) =>
+        {
+            match crate::capability::request(method, request.params.clone()).await {
+                Ok(value) => {
+                    send_success(
+                        writer,
+                        &request.request_id,
+                        &request.client_id,
+                        &request.session_token,
+                        value,
+                    )
+                    .await
+                }
+                Err(e) => {
+                    let code = if e.contains("not found") {
+                        error_codes::NOT_FOUND
+                    } else {
+                        error_codes::INVALID_INPUT
+                    };
+                    let category = if e.contains("not found") {
+                        ErrorCategory::NotFound
+                    } else {
+                        ErrorCategory::Validation
+                    };
+                    send_error(writer, &DaemonError::new(code, category, false, e)).await
                 }
             }
         }
