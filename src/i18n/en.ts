@@ -377,6 +377,8 @@ export const en = {
     generateApp: 'Generate app',
     generating: 'Generating',
     importExisting: 'Import existing app',
+    unavailable: 'Drafts are unavailable — restart the app and try again',
+    closeDraft: 'Close draft',
     preview: {
       title: 'Preview',
       empty: {

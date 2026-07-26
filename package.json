@@ -13,7 +13,7 @@
     "perf:check": "npm run typecheck && npm run lint && npm run build && npm run perf:bundle",
     "start": "next start",
     "lint": "eslint src/ && node scripts/i18n-check.mjs",
-    "test": "tsx --test src/**/*.test.ts",
+    "test": "find src \\( -name '*.test.ts' -o -name '*.test.tsx' \\) -print0 | xargs -0 tsx --import ./scripts/test-css-stub.cjs --test",
     "typecheck": "tsc --noEmit",
     "protocol:check": "node scripts/check-protocol-sync.mjs",
     "verify:native-engine": "bash scripts/daemon/verify-native-engine.sh",

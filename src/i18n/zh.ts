@@ -370,6 +370,8 @@ export const zh = {
     generateApp: '生成应用',
     generating: '生成中',
     importExisting: '导入已有应用',
+    unavailable: '草稿功能不可用，请重启应用后重试',
+    closeDraft: '关闭草稿',
     preview: {
       title: '预览',
       empty: {
