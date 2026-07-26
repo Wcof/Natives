@@ -136,12 +136,13 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
   const [creating, setCreating] = useState(false);
   const [permDialog, setPermDialog] = useState<{
     source: string;
+    /** 授权落库用的 module_id（与展示名分离） */
+    moduleId: string;
     moduleName: string;
     permissions: string[];
   } | null>(null);
   const [selectedPerms, setSelectedPerms] = useState<Set<string>>(new Set());
   const [installing, setInstalling] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
 
   const [deleteTarget, setDeleteTarget] = useState<CreativeAppSummary | null>(null);
   const [deleteVolumes, setDeleteVolumes] = useState(false);
@@ -578,6 +579,19 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
     });
   };
 
+  /** 依赖安装入口：此前整个对话框（含后端 install/preview 两条命令）无任何调用方 */
+  const openDepInstall = async (app: CreativeAppSummary) => {
+    setDepConfirmChecked(false);
+    setDepCommand('');
+    setDepInstallFor(app);
+    try {
+      const preview = await window.nativesAPI?.creativeApp?.previewLocalDependencyInstall?.(app.id);
+      if (preview) setDepCommand([preview.program, ...preview.args].join(' '));
+    } catch (err) {
+      showToast(classifyError(err).userMessage);
+    }
+  };
+
   const handleResolveOrphan = async (app: CreativeAppSummary, restart: boolean) => {
     if (busyIds.has(app.id)) return;
     await withBusy(app.id, async () => {
@@ -662,23 +676,24 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
   const beginImport = async (source: string, fileName: string) => {
     try {
       const api = window.nativesAPI;
-      const result = (await api?.module?.readManifest?.(source)) as
-        | { manifest?: { name: string; permissions: string[] }; error?: string }
+      // module_read_manifest 直接返回 Manifest 本身（{id,name,version,permissions,…}），
+      // 旧代码读 result.manifest 恒为 undefined → 合法包也一律报「无效包」
+      const manifest = (await api?.module?.readManifest?.(source)) as
+        | { id?: string; name?: string; permissions?: string[] }
         | undefined;
-      if (result?.manifest) {
-        const perms = result.manifest.permissions || [];
+      if (manifest?.id) {
+        const perms = manifest.permissions || [];
         setPermDialog({
           source,
-          moduleName: result.manifest.name,
+          // 授权按 module_id 落库（module_grant_permission 的键），
+          // 旧实现传 name，当 id≠name 时权限写到不存在的模块上
+          moduleId: manifest.id,
+          moduleName: manifest.name || manifest.id,
           permissions: perms,
         });
         setSelectedPerms(new Set(perms));
       } else {
-        showToast(
-          result?.error
-            ? t(locale, 'errors.installFailed').replace('{reason}', result.error)
-            : t(locale, 'workshop.invalidPackage').replace('{name}', fileName),
-        );
+        showToast(t(locale, 'workshop.invalidPackage').replace('{name}', fileName));
       }
     } catch (err) {
       showToast(
@@ -690,15 +705,16 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
     }
   };
 
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    const files = Array.from(e.dataTransfer.files);
-    for (const file of files) {
-      if (file.name.endsWith('.zip') || file.type === '') {
-        const source = (file as { path?: string }).path || file.name;
-        await beginImport(source, file.name);
-      }
+  /** 经系统文件选择器导入 —— webview 的 File 对象在 Tauri v2 下没有真实路径 */
+  const pickAndImport = async () => {
+    setAddMenu('closed');
+    try {
+      const files = await window.nativesAPI?.dialog?.pickFiles?.();
+      const zip = files?.find((f) => f.toLowerCase().endsWith('.zip')) ?? files?.[0];
+      if (!zip) return;
+      await beginImport(zip, zip.split('/').pop() || zip);
+    } catch (err) {
+      showToast(classifyError(err).userMessage);
     }
   };
 
@@ -709,7 +725,7 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
       await window.nativesAPI?.module?.install?.(permDialog.source);
       for (const p of selectedPerms) {
         await window.nativesAPI?.module?.grantPermission?.(
-          permDialog.moduleName,
+          permDialog.moduleId,
           p,
         );
       }
@@ -802,7 +818,16 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
         setEnvValues(env);
       }
       if (oneClick && res.candidates.length > 0 && res.blockers.length === 0 && res.candidates[0]) {
-        await runInstall(res, res.candidates[0], true);
+        // 显式把刚探测到的值传下去：同一 tick 内 setState 尚未生效，
+        // 旧实现在 runInstall 里读 state 会发出上一个仓库的 tag / 空 env
+        await runInstall(res, res.candidates[0], true, {
+          releaseTag: tag || res.releaseTag,
+          hostPort: cand?.suggestedHostPort ? String(cand.suggestedHostPort) : '',
+          openPath: cand?.openPath || '/',
+          healthPath: cand?.healthPath || '',
+          service: cand?.service || '',
+          envValues: Object.fromEntries((cand?.envRequirements ?? []).map((e) => [e.key, ''])),
+        });
       } else {
         setWizardStep('manual');
       }
@@ -817,22 +842,32 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
     inspectResult: CreativeAppInspectResult,
     cand: CreativeAppInstallCandidate,
     oneClick: boolean,
+    /** 一键安装时由 runInspect 直接传入（绕开同 tick 未生效的 state） */
+    override?: {
+      releaseTag: string;
+      hostPort: string;
+      openPath: string;
+      healthPath: string;
+      service: string;
+      envValues: Record<string, string>;
+    },
   ) => {
+    const form = override ?? { releaseTag: selectedTag, hostPort, openPath, healthPath, service, envValues };
     setInstallError(null);
     setWizardStep('installing');
     try {
       const api = window.nativesAPI?.creativeApp;
       await api?.installGithub?.({
         repositoryUrl: inspectResult.repositoryUrl,
-        releaseTag: selectedTag || inspectResult.releaseTag,
+        releaseTag: form.releaseTag || inspectResult.releaseTag,
         releaseId: inspectResult.releaseId,
         candidateId: cand.id,
         token: tokenForRequest(),
-        hostPort: hostPort ? Number(hostPort) : cand.suggestedHostPort,
-        openPath: openPath || cand.openPath,
-        healthPath: healthPath || cand.healthPath,
-        service: service || cand.service,
-        env: Object.entries(envValues).map(([key, value]) => ({ key, value })),
+        hostPort: form.hostPort ? Number(form.hostPort) : cand.suggestedHostPort,
+        openPath: form.openPath || cand.openPath,
+        healthPath: form.healthPath || cand.healthPath,
+        service: form.service || cand.service,
+        env: Object.entries(form.envValues).map(([key, value]) => ({ key, value })),
         confirmBindMounts: confirmBinds || oneClick,
       });
       showToast(t(locale, 'workshop.githubInstallSuccess'));
@@ -840,22 +875,32 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
       resetWizard();
       await reload();
     } catch (err) {
-      setInstallError(classifyError(err).userMessage);
+      const message = classifyError(err).userMessage;
+      setInstallError(message);
       setWizardStep(oneClick ? 'url' : 'manual');
+      // 向导可能已被关闭（安装期允许 Esc/点背景）——此时 installError 无处可显示
+      showToast(t(locale, 'workshop.installFailed') + ': ' + message);
     }
   };
 
   const stageLabel = (stage: CreativeAppProgressEvent['stage']) => {
+    // 键必须与后端 ProgressStage（model.rs，serde snake_case）一致：
+    // 旧映射用的是一套不存在的阶段名，任何进度都落到不存在的
+    // workshop.githubStageInstall 键上，安装全程只显示生键名。
     const map: Record<string, string> = {
-      download: 'workshop.githubStageDownload',
-      extract: 'workshop.githubStageExtract',
-      prepare: 'workshop.githubStagePrepare',
-      compose: 'workshop.githubStageCompose',
-      build: 'workshop.githubStageBuild',
-      start: 'workshop.githubStageStart',
-      health: 'workshop.githubStageHealth',
+      inspecting_release: 'workshop.githubStageInspect',
+      downloading_assets: 'workshop.githubStageDownload',
+      pulling_image: 'workshop.githubStagePull',
+      creating: 'workshop.githubStageCreate',
+      starting: 'workshop.githubStageStart',
+      installing_dependencies: 'workshop.githubStageDeps',
+      health_check: 'workshop.githubStageHealth',
+      ready: 'workshop.githubStageReady',
+      failed: 'workshop.githubStageFailed',
+      stopped: 'workshop.githubStageStopped',
     };
-    return t(locale, map[stage] || 'workshop.githubStageInstall');
+    const key = map[stage];
+    return key ? t(locale, key) : stage;
   };
 
   if (browserApp) {
@@ -962,12 +1007,6 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
       animate={{ opacity: 1 }}
       transition={prefersReducedMotion ? undefined : { type: 'spring', stiffness: 60, damping: 16, mass: 1 }}
       className="flex flex-col h-full overflow-y-auto"
-      onDragOver={(e) => {
-        e.preventDefault();
-        setDragOver(true);
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={handleDrop}
     >
       <div className="px-6 py-4 border-b border-[var(--border)] flex items-center justify-between shrink-0 bg-[var(--surface)]">
         <div>
@@ -1015,22 +1054,17 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
                   <Layers size={14} className="text-[var(--text-secondary)]" />
                   <span>{t(locale, 'workshop.addMenuCreate')}</span>
                 </button>
-                <label className="flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all w-full cursor-pointer">
+                {/* 走系统文件选择器：webview 的 <input type=file> 在 Tauri v2
+                    下拿不到真实路径（File.path 是 Electron 遗产），后端按路径
+                    读包，因此旧实现对任何 zip 都必然失败 */}
+                <button
+                  type="button"
+                  className="flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all w-full text-left"
+                  onClick={() => void pickAndImport()}
+                >
                   <Package size={14} className="text-[var(--text-secondary)]" />
                   <span>{t(locale, 'workshop.addMenuImport')}</span>
-                  <input
-                    type="file"
-                    accept=".zip"
-                    className="hidden"
-                    onChange={async (e) => {
-                      setAddMenu('closed');
-                      const f = e.target.files?.[0];
-                      if (!f) return;
-                      const source = (f as { path?: string }).path || f.name;
-                      await beginImport(source, f.name);
-                    }}
-                  />
-                </label>
+                </button>
                 <button
                   type="button"
                   className="flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg text-[var(--text)] hover:bg-[var(--surface-hover)] transition-all w-full text-left"
@@ -1061,11 +1095,9 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
         </div>
       </div>
 
-      {dragOver && (
-        <div className="m-6 p-8 border-2 border-dashed border-[var(--primary)] rounded-xl text-center text-xs font-semibold text-[var(--primary)] bg-[var(--primary-soft)] animate-pulse">
-          {t(locale, 'workshop.releaseToInstall')}
-        </div>
-      )}
+      {/* 原「拖放安装」提示层已删除：Tauri v2 默认由原生层接管拖放，
+          HTML5 drop 事件不会到达 webview，且 File 对象没有真实路径。
+          导入统一走「添加 → 导入模块」的系统文件选择器。 */}
 
       <div className="p-6 flex-1">
         {loading && <LoadingState />}
@@ -1089,6 +1121,8 @@ export default function WorkshopPage({ onInstall }: WorkshopPageProps) {
           onRestartApp={(app) => { void handleRestart(app); }}
           onAppLogs={(app) => { void openLogs(app); }}
           onRunSettings={(app) => { void openEditLocal(app); }}
+          onResolveOrphan={(app, restart) => { void handleResolveOrphan(app, restart); }}
+          onInstallDeps={(app) => { void openDepInstall(app); }}
         />
       </div>
 
