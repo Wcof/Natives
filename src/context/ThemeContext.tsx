@@ -28,7 +28,9 @@ interface ThemeProviderProps {
 }
 
 export function ThemeProvider({ children }: ThemeProviderProps) {
-  const [themeId, setThemeId] = useState('light');
+  // 与 theme-engine 的 normalizeThemeId 兜底、后端 DEFAULT_THEME（terminal-volt→dark）
+  // 及 layout.tsx 的 SSR 初值统一为 dark，消除首帧闪变与三处漂移
+  const [themeId, setThemeId] = useState('dark');
 
   useEffect(() => {
     const root = document.documentElement;

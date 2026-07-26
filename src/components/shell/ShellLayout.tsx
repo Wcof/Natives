@@ -189,7 +189,8 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         if (savedTheme) applyTheme(savedTheme);
       } catch (err) {
         console.error('[Shell] Failed to load saved theme:', err);
-        applyTheme('light');
+        // 与主题引擎既定一致（dark）；原来落到 light 与引擎兜底反向
+        applyTheme('dark');
       }
 
       try {

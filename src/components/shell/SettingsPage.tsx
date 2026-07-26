@@ -71,18 +71,23 @@ function CreativeRuntimeSettings({ locale }: { locale: Locale }) {
       <div style={{ display: 'grid', gap: 10, fontSize: 13 }}>
         <div>
           <strong>{t(locale, 'settings.dockerEngine')}</strong>:{' '}
-          {docker?.available
-            ? `${t(locale, 'settings.dockerAvailable')}${docker.version ? ` (${docker.version})` : ''}`
-            : t(locale, 'settings.dockerUnavailable')}
+          {/* null=尚未检测完成，不得与「不可用」混同显示（假诊断） */}
+          {docker === null
+            ? t(locale, 'common.loading')
+            : docker.available
+              ? `${t(locale, 'settings.dockerAvailable')}${docker.version ? ` (${docker.version})` : ''}`
+              : t(locale, 'settings.dockerUnavailable')}
           {docker?.error ? (
             <div style={{ color: 'var(--danger)', fontSize: 12 }}>{docker.error}</div>
           ) : null}
         </div>
         <div>
           <strong>{t(locale, 'settings.dockerCompose')}</strong>:{' '}
-          {docker?.composeAvailable
-            ? `${t(locale, 'settings.dockerAvailable')}${docker.composeVersion ? ` (${docker.composeVersion})` : ''}`
-            : t(locale, 'settings.dockerUnavailable')}
+          {docker === null
+            ? t(locale, 'common.loading')
+            : docker.composeAvailable
+              ? `${t(locale, 'settings.dockerAvailable')}${docker.composeVersion ? ` (${docker.composeVersion})` : ''}`
+              : t(locale, 'settings.dockerUnavailable')}
         </div>
         <div>
           <strong>{t(locale, 'settings.githubToken')}</strong>:{' '}
@@ -114,7 +119,10 @@ function CreativeRuntimeSettings({ locale }: { locale: Locale }) {
               disabled={!tokenInput.trim() || busy}
               onClick={async () => {
                 try {
-                  const st = await window.nativesAPI?.creativeApp?.githubTokenSet?.(tokenInput.trim());
+                  const api = window.nativesAPI?.creativeApp;
+                  // API 不在时可选链返回 undefined 也会走成功 toast（假成功），必须显式拒绝
+                  if (!api?.githubTokenSet) throw new Error('creativeApp API unavailable');
+                  const st = await api.githubTokenSet(tokenInput.trim());
                   setToken(st ?? null);
                   setTokenInput('');
                   toast(t(locale, 'settings.githubTokenSaved'), 'success');
@@ -185,7 +193,9 @@ function LocalCreativeAiSettingsPanel({ locale }: { locale: Locale }) {
 
   const save = async (next: LocalCreativeAiSettings) => {
     try {
-      const saved = await window.nativesAPI?.creativeApp?.saveLocalAiSettings?.(next);
+      const api = window.nativesAPI?.creativeApp;
+      if (!api?.saveLocalAiSettings) throw new Error('creativeApp API unavailable');
+      const saved = await api.saveLocalAiSettings(next);
       setSettings(saved ?? next);
       toast(t(locale, 'settings.localAiSaved'), 'success');
     } catch (e) {
@@ -360,7 +370,8 @@ export default function SettingsPage({
   }, [externalLocale]);
 
   // ── Theme / locale state ──
-  const [currentTheme, setCurrentTheme] = useState('light');
+  // 默认值与主题引擎统一为 dark（theme-engine.ts normalizeThemeId 的兜底）
+  const [currentTheme, setCurrentTheme] = useState('dark');
   const [currentLocale, setCurrentLocale] = useState('zh');
 
   // ── Plugin state ──
@@ -378,6 +389,7 @@ export default function SettingsPage({
   const [providersLoading, setProvidersLoading] = useState(false);
   const [providersError, setProvidersError] = useState<string | null>(null);
   const [deleteProviderTarget, setDeleteProviderTarget] = useState<string | null>(null);
+  const [uninstallPluginTarget, setUninstallPluginTarget] = useState<string | null>(null);
 
   useEffect(() => {
     if (activeSection === 'providers') loadProviders();
@@ -391,7 +403,12 @@ export default function SettingsPage({
         const api = window.nativesAPI;
         if (!api) return;
         const sl = await api.getLocale().catch(() => null);
-        if (sl) setLocaleState(sl as Locale);
+        if (sl) {
+          setLocaleState(sl as Locale);
+          // read path 修复：此前 currentLocale 只在 appearance 分区被 loadTheme
+          // 顺带加载，直接打开 general 分区时语言下拉恒显示硬编码默认「简体中文」
+          setCurrentLocale(sl === 'en' ? 'en' : 'zh');
+        }
       } catch { /* noop */ }
     })();
   }, []);
@@ -400,20 +417,12 @@ export default function SettingsPage({
   async function loadTheme() {
     try {
       const api = window.nativesAPI;
-      if (api?.getTheme) {
-        const saved = await api.getTheme().catch(() => null);
-        if (saved && typeof saved === 'string') {
-          const normalized = normalizeThemeId(saved);
-          setCurrentTheme(normalized);
-        }
-      } else {
-        const saved = await api?.db?.get('theme_id').catch(() => null);
-        if (saved && typeof saved === 'string') {
-          const normalized = normalizeThemeId(saved);
-          setCurrentTheme(normalized);
-        }
+      // 单一真实源 settings:theme（get_theme）；旧 theme_id 键回退已废除
+      const saved = await api?.getTheme?.().catch(() => null);
+      if (saved && typeof saved === 'string') {
+        setCurrentTheme(normalizeThemeId(saved));
       }
-      const loc = await api?.getLocale?.().catch(() => 'zh');
+      const loc = await api?.getLocale?.().catch(() => null);
       if (loc) setCurrentLocale(loc);
     } catch { /* ignore */ }
   }
@@ -424,11 +433,12 @@ export default function SettingsPage({
     applyTheme(normalized);
     try {
       const api = window.nativesAPI;
-      if (api?.setTheme) {
-        await api.setTheme(normalized);
-      }
-      await api?.db?.set('theme_id', normalized);
-    } catch { /* persist best-effort */ }
+      if (!api?.setTheme) throw new Error('theme API unavailable');
+      await api.setTheme(normalized);
+    } catch (e) {
+      // 持久化失败必须可见：UI 已即时换肤，静默失败会在重启后「谜之回退」
+      globalToast(classifyError(e).userMessage, 'error');
+    }
   }
 
   async function handleLocaleChange(next: string) {
@@ -436,8 +446,12 @@ export default function SettingsPage({
     setCurrentLocale(nextLocale);
     setLocaleState(nextLocale as Locale);
     try {
-      await window.nativesAPI?.setLocale?.(nextLocale);
-    } catch { /* ignore */ }
+      const api = window.nativesAPI;
+      if (!api?.setLocale) throw new Error('locale API unavailable');
+      await api.setLocale(nextLocale);
+    } catch (e) {
+      globalToast(classifyError(e).userMessage, 'error');
+    }
   }
 
   // ── Plugins ──
@@ -471,18 +485,27 @@ export default function SettingsPage({
     setCcusageBusy(true);
     try {
       const api = window.nativesAPI;
+      if (!api?.usage?.setCcusageEnabled) throw new Error('usage API unavailable');
       if (next && !ccusageVersion) {
-        // Install optional binary if missing.
+        // plugin_install 是 fire-and-forget（后端 spawn 线程立即返回），
+        // 必须轮询 detect 等到安装真正落地，否则会出现「未安装·已启用」的假状态
         await api?.plugins?.install?.('ccusage');
-        const ver = await api?.usage?.detectCcusage?.();
-        setCcusageVersion(ver ?? null);
+        let ver: string | null = null;
+        const deadline = Date.now() + 120_000;
+        while (Date.now() < deadline) {
+          ver = (await api?.usage?.detectCcusage?.()) ?? null;
+          if (ver) break;
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+        setCcusageVersion(ver);
+        if (!ver) {
+          throw new Error(t(locale, 'settings.ccusageInstallTimeout'));
+        }
       }
-      const enabled = await api?.usage?.setCcusageEnabled?.(next);
+      const enabled = await api.usage.setCcusageEnabled(next);
       setCcusageEnabled(Boolean(enabled));
       globalToast(
-        next
-          ? (locale === 'zh' ? '已启用 ccusage 可选增强（下次同步生效）' : 'ccusage enrichment enabled (applies on next sync)')
-          : (locale === 'zh' ? '已关闭 ccusage，仅使用本机日志扫描' : 'ccusage disabled; native log scans only'),
+        next ? t(locale, 'settings.ccusageEnabledToast') : t(locale, 'settings.ccusageDisabledToast'),
         'success',
       );
     } catch (e) {
@@ -507,6 +530,7 @@ export default function SettingsPage({
       const api = window.nativesAPI;
       await api?.module?.uninstall?.(id);
       await loadPlugins();
+      globalToast(t(locale, 'settings.pluginUninstalled'), 'success');
     } catch (e) { globalToast(classifyError(e).userMessage, 'error'); }
   }
 
@@ -537,7 +561,18 @@ export default function SettingsPage({
     await loadProviders();
   }
 
-  async function handleDeleteProvider(id: string) { const a = window.nativesAPI; if (!a?.provider?.delete) return; await a.provider.delete(id); globalToast(t(locale, 'settings.providerDeleted'), 'success'); await loadProviders(); }
+  async function handleDeleteProvider(id: string) {
+    try {
+      const a = window.nativesAPI;
+      if (!a?.provider?.delete) throw new Error('provider API unavailable');
+      await a.provider.delete(id);
+      globalToast(t(locale, 'settings.providerDeleted'), 'success');
+      await loadProviders();
+    } catch (e) {
+      // 原实现无 catch：删除失败 = unhandled rejection + 列表残留无解释
+      globalToast(classifyError(e).userMessage, 'error');
+    }
+  }
   async function handleSaveDefaults(pid: string, m: string | null) { const a = window.nativesAPI; if (a?.provider?.updateDefaults) { await a.provider.updateDefaults({ providerId: pid, defaultModel: m ?? '' }); await loadProviders(); } else throw new Error('updateDefaults'); }
   async function handleAddKey(pid: string, l: string, k: string) { const a = window.nativesAPI; if (a?.provider?.addKey) await a.provider.addKey({ providerId: pid, label: l, apiKey: k }); else throw new Error('addKey'); await loadProviders(); }
   async function handleTestKey(pid: string, kid: string, model?: string): Promise<TestKeyResult> { const a = window.nativesAPI; if (a?.provider?.testKey) { const r = await a.provider.testKey({ providerId: pid, keyId: kid, model }); await loadProviders(); return r as unknown as TestKeyResult; } throw new Error('testKey'); }
@@ -731,7 +766,9 @@ export default function SettingsPage({
                     className={`settings-status-button${p.enabled ? ' enabled' : ''}`}>
                     {p.enabled ? t(locale, 'common.disable') : t(locale, 'common.enable')}
                   </button>
-                  <button onClick={() => handleUninstallPlugin(p.id)} className="settings-icon-button danger">
+                  {/* 破坏性操作必须确认（与 provider 删除对称） */}
+                  <button onClick={() => setUninstallPluginTarget(p.id)} className="settings-icon-button danger"
+                    title={t(locale, 'common.uninstall')} aria-label={t(locale, 'common.uninstall')}>
                     <Trash size={12} />
                   </button>
                 </div>
@@ -790,8 +827,11 @@ export default function SettingsPage({
       </div>
       {showAddProvider && <AddProviderDialog locale={locale} onClose={() => setShowAddProvider(false)} onSave={handleSaveProvider} />}
       <ConfirmDialog open={deleteProviderTarget !== null} title={t(locale, 'settings.deleteProvider')} message={t(locale, 'settings.confirmDeleteProvider')} confirmLabel={t(locale, 'common.delete')} cancelLabel={t(locale, 'common.cancel')} danger
-        onConfirm={() => { if (deleteProviderTarget) handleDeleteProvider(deleteProviderTarget); setDeleteProviderTarget(null); }}
+        onConfirm={() => { if (deleteProviderTarget) void handleDeleteProvider(deleteProviderTarget); setDeleteProviderTarget(null); }}
         onCancel={() => setDeleteProviderTarget(null)} />
+      <ConfirmDialog open={uninstallPluginTarget !== null} title={t(locale, 'common.uninstall')} message={t(locale, 'settings.confirmUninstallPlugin')} confirmLabel={t(locale, 'common.uninstall')} cancelLabel={t(locale, 'common.cancel')} danger
+        onConfirm={() => { if (uninstallPluginTarget) void handleUninstallPlugin(uninstallPluginTarget); setUninstallPluginTarget(null); }}
+        onCancel={() => setUninstallPluginTarget(null)} />
     </div>
   );
 }
