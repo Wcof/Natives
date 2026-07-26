@@ -67,6 +67,7 @@ agent-core = { path = "../crates/agent-core" }
 provider-adapters = { path = "../crates/provider-adapters" }
 capability-gateway = { path = "../crates/capability-gateway" }
 assistant-protocol = { path = "../crates/assistant-protocol" }
+contract-linter = { path = "../crates/contract-linter" }
 natives-agent-daemon = { path = "../src-agent-daemon" }
 
 [dev-dependencies]

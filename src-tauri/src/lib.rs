@@ -8,7 +8,10 @@ mod archive;
 pub mod assistant_service;
 pub mod commands;
 pub mod context_window;
-pub mod contract_linter;
+/// KI-3 lint rules live in the `contract-linter` crate so the Agent Daemon runs
+/// the identical ruleset on drafts (ADR-0014 §8.1). Re-exported here to keep the
+/// existing `natives_lib::contract_linter::…` call sites intact.
+pub use contract_linter;
 pub mod creative_app;
 pub mod credential_broker;
 pub mod daemon;
