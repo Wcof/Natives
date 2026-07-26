@@ -491,6 +491,13 @@ pub fn run() {
             commands::module::module_disable,
             commands::module::module_update,
             commands::module::write_generated_module,
+            commands::creative_draft::create_creative_draft,
+            commands::creative_draft::list_creative_drafts,
+            commands::creative_draft::get_creative_draft,
+            commands::creative_draft::read_creative_draft,
+            commands::creative_draft::rollback_creative_draft,
+            commands::creative_draft::publish_creative_draft,
+            commands::creative_draft::delete_creative_draft,
             // Creative App (multi-source: workshop + GitHub container + local project)
             commands::creative_app::creative_app_list,
             commands::creative_app::creative_app_start,

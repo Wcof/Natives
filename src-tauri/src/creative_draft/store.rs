@@ -208,6 +208,49 @@ fn prune_revisions(conn: &Connection, data_dir: &Path, draft_id: &str) -> Result
     Ok(())
 }
 
+/// Publish a draft's current revision as a real module.
+///
+/// Kept here rather than in the Tauri command so the failure path is testable:
+/// everything that makes a module safe already lives in
+/// `module_manager::write_generated_module` (KI-3 lint gate, kernel-computed
+/// KI-1 contract_id, atomic write, previous-content snapshot, hot sync). This
+/// function must never grow a second copy of those rules — it only feeds the
+/// draft into that one gate and keeps the draft's own state honest.
+pub fn publish(
+    conn: &Connection,
+    data_dir: &Path,
+    modules_dir: &Path,
+    draft_id: &str,
+    module_id: &str,
+    name: &str,
+    permissions: &[String],
+) -> Result<crate::module_manager::WriteModuleOutcome> {
+    let html = read_current(conn, data_dir, draft_id)?;
+    set_state(conn, draft_id, DraftState::Publishing)?;
+
+    match crate::module_manager::write_generated_module(
+        conn,
+        modules_dir,
+        module_id,
+        name,
+        &html,
+        permissions,
+    ) {
+        Ok(outcome) => {
+            set_state(conn, draft_id, DraftState::Published)?;
+            set_state(conn, draft_id, DraftState::Archived)?;
+            Ok(outcome)
+        }
+        Err(err) => {
+            // A rejected publish must never cost the user their work: fall back
+            // to Ready with the draft fully intact and let the error text tell
+            // them (or the model) what to fix.
+            set_state(conn, draft_id, DraftState::Ready)?;
+            Err(err)
+        }
+    }
+}
+
 /// Remove a draft's row and its directory. Used after publish and by cleanup.
 pub fn delete_draft(conn: &Connection, data_dir: &Path, draft_id: &str) -> Result<()> {
     let dir = paths::draft_dir(data_dir, draft_id)?;
@@ -315,6 +358,83 @@ mod tests {
         assert!(!paths::draft_dir(dir.path(), "draft-1")
             .expect("path")
             .exists());
+    }
+
+    /// The draft must survive a rejected publish — this is the invariant that
+    /// makes "just try publishing" safe for the user.
+    #[test]
+    fn failed_publish_keeps_draft_intact() {
+        let (conn, dir) = setup();
+        create_draft(&conn, "draft-1", "App", "intent", None, None).expect("create");
+        // eval() is a KI-3 hard failure, so the linter rejects this at the gate.
+        append_revision(
+            &conn,
+            dir.path(),
+            "draft-1",
+            r#"<html><script>eval("boom")</script></html>"#,
+        )
+        .expect("rev1");
+        set_state(&conn, "draft-1", DraftState::Generating).expect("to generating");
+        set_state(&conn, "draft-1", DraftState::Ready).expect("to ready");
+
+        let modules = dir.path().join("modules");
+        let err = publish(
+            &conn,
+            dir.path(),
+            &modules,
+            "draft-1",
+            "my-app",
+            "My App",
+            &[],
+        )
+        .expect_err("linter must reject eval");
+        assert!(format!("{err}").contains("eval"), "got: {err}");
+
+        let draft = get_draft(&conn, "draft-1").expect("draft still exists");
+        assert_eq!(draft.state, DraftState::Ready);
+        assert_eq!(draft.current_revision, 1);
+        assert!(read_current(&conn, dir.path(), "draft-1").is_ok());
+        // Nothing reached the module directory.
+        assert!(!modules.join("my-app").join("index.html").exists());
+    }
+
+    #[test]
+    fn successful_publish_archives_draft_and_writes_module() {
+        let (conn, dir) = setup();
+        create_draft(&conn, "draft-1", "App", "intent", None, None).expect("create");
+        append_revision(&conn, dir.path(), "draft-1", "<html><div>ok</div></html>")
+            .expect("rev1");
+        set_state(&conn, "draft-1", DraftState::Generating).expect("to generating");
+        set_state(&conn, "draft-1", DraftState::Ready).expect("to ready");
+
+        let modules = dir.path().join("modules");
+        let outcome = publish(
+            &conn,
+            dir.path(),
+            &modules,
+            "draft-1",
+            "my-app",
+            "My App",
+            &["db:read".to_string()],
+        )
+        .expect("publish");
+
+        assert!(!outcome.contract_id.is_empty());
+        assert!(modules.join("my-app").join("index.html").exists());
+        assert_eq!(
+            get_draft(&conn, "draft-1").expect("draft").state,
+            DraftState::Archived
+        );
+        // Archived drafts drop out of the catalog projection.
+        assert!(list_drafts(&conn).expect("list").is_empty());
+    }
+
+    #[test]
+    fn publish_refuses_a_draft_with_no_revision() {
+        let (conn, dir) = setup();
+        create_draft(&conn, "draft-1", "App", "intent", None, None).expect("create");
+        let modules = dir.path().join("modules");
+        assert!(publish(&conn, dir.path(), &modules, "draft-1", "my-app", "My App", &[]).is_err());
     }
 
     #[test]
