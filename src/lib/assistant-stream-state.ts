@@ -1,3 +1,0 @@
-export interface AssistantStreamState { runId: string; status: string; blocks: any[]; fileChanges: any[]; usage: { inputTokens: number | null; outputTokens: number | null; reasoningTokens: number | null; }; }
-export function createAssistantStreamState(runId: string): AssistantStreamState { return { runId, status: 'idle', blocks: [], fileChanges: [], usage: { inputTokens: null, outputTokens: null, reasoningTokens: null } }; }
-export function reduceAssistantStreamEvent(s: AssistantStreamState, e: any): AssistantStreamState { if (e.runId !== s.runId) return s; if (e.type === 'completed' || e.type === 'failed' || e.type === 'interrupted') return { ...s, status: e.type }; return s; }
