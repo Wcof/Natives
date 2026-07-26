@@ -41,6 +41,8 @@ const VIEW_LABELS: Record<string, string> = {
   ai: 'header.aiWorkbench',
   workshop: 'nav.modules',
   jobs: 'nav.jobs',
+  capabilities: 'nav.capabilities',
+  assistant: 'header.aiWorkbench',
   settings: 'nav.settings',
   tools: 'nav.tools',
   modules: 'nav.modules',
