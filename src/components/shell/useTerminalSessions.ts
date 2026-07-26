@@ -6,8 +6,6 @@ import { recordTerminalActivity, followSetScope } from '@/lib/follow-mode';
 import { recordScrollbackLine, detectFilePaths, verifyCandidates, locateCandidate, getSessionPwd, recordPwdChange } from '@/lib/path-detector';
 import { FILE_EVENTS, dispatchFileEvent, navigateToFiles } from '@/lib/file-events';
 import { playDoneChime, playAskChime } from '@/lib/chime';
-import { parseAgentAction } from '@/lib/agent-narration';
-import { FONT_SIZE } from '@/lib/design-tokens';
 
 export interface TerminalSession {
   id: string;
@@ -54,6 +52,28 @@ export function useTerminalSessions({
   const sessionCounterRef = useRef(0);
   const exitedSessionIds = useRef<Set<string>>(new Set());
   const [isAgentBusy, setIsAgentBusy] = useState(false);
+  // muted 经 ref 供各会话监听器读取：监听器在会话创建时捕获闭包，
+  // 直接引用 muted 会导致既有标签的提示音开关永远停在创建时的值
+  const mutedRef = useRef(muted);
+  useEffect(() => { mutedRef.current = muted; }, [muted]);
+  // agent 忙碌信号只有「出现」没有「结束」事件（agent-status-changed 全项目
+  // 无发射方，旧实现 isAgentBusy 一旦置 true 即永久脉动）——改为静默超时归位
+  const agentBusyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markAgentBusy = useCallback(() => {
+    setIsAgentBusy(true);
+    if (agentBusyTimerRef.current) clearTimeout(agentBusyTimerRef.current);
+    agentBusyTimerRef.current = setTimeout(() => {
+      setIsAgentBusy(false);
+      const parent = terminalRef.current?.parentElement;
+      if (parent) {
+        parent.classList.add('anim-termAwait');
+        setTimeout(() => parent.classList.remove('anim-termAwait'), 3000);
+      }
+    }, 8000);
+  }, []);
+  useEffect(() => () => {
+    if (agentBusyTimerRef.current) clearTimeout(agentBusyTimerRef.current);
+  }, []);
 
   // Create a new terminal session
   const createSession = useCallback(async (label?: string, profileId?: number) => {
@@ -114,9 +134,17 @@ export function useTerminalSessions({
     const realCols = term.cols;
     const realRows = term.rows;
 
+    // 创建失败时的清理：旧实现把红字写进 display:none 的容器（用户什么都
+    // 看不到），且 xterm 实例与 DOM 节点双泄漏
+    const failCreate = (message: string) => {
+      try { term.dispose(); } catch { /* ignore */ }
+      sessionContainer.remove();
+      window.dispatchEvent(new CustomEvent('terminal-create-failed', { detail: message }));
+    };
+
     const api = window.nativesAPI;
     if (!api?.terminal?.create) {
-      term.writeln('\x1b[31mTerminal API not available\x1b[0m');
+      failCreate('Terminal API not available');
       return;
     }
 
@@ -128,12 +156,12 @@ export function useTerminalSessions({
         realRows,
       )) as unknown as { sessionId?: string; error?: string };
       if (result.error || !result.sessionId) {
-        term.writeln(`\x1b[31mFailed to create terminal: ${result.error || 'unknown error'}\x1b[0m`);
+        failCreate(result.error || 'unknown error');
         return;
       }
       sessionId = result.sessionId;
     } catch (err) {
-      term.writeln(`\x1b[31mFailed to create terminal: ${err}\x1b[0m`);
+      failCreate(err instanceof Error ? err.message : String(err));
       return;
     }
 
@@ -219,7 +247,11 @@ export function useTerminalSessions({
 
     term.onData((data: string) => {
       if (isComposingRef.current && data.length <= 4) return;
-      api.terminal.write(sessionId, data);
+      // 进程已退出后 PTY 会话在后端已删除：继续写只会刷 unhandled rejection
+      if (exitedSessionIds.current.has(sessionId)) return;
+      void Promise.resolve(api.terminal.write(sessionId, data)).catch(() => {
+        // 写失败（如后端刚回收）静默丢弃；退出提示已由 onExit 打印
+      });
     });
 
     const termEl = container.querySelector('.xterm-helper-textarea') as HTMLElement | null;
@@ -245,17 +277,13 @@ export function useTerminalSessions({
         }
         if (output.length > 10) {
           if (/esc to interrupt/i.test(output)) {
-            setIsAgentBusy(true);
+            markAgentBusy();
           }
           if (/\? for.*options|Do you want|approve|Y\/n/i.test(output)) {
-            if (!muted) playAskChime();
-          }
-          const action = parseAgentAction(output.split('\n'));
-          if (action) {
-            window.dispatchEvent(new CustomEvent('agent-action', { detail: action }));
+            if (!mutedRef.current) playAskChime();
           }
           if (/done|complete|finished|success/i.test(output) && !/undo|revert/i.test(output)) {
-            if (!muted) playDoneChime();
+            if (!mutedRef.current) playDoneChime();
           }
         }
       }
@@ -283,6 +311,10 @@ export function useTerminalSessions({
     const unsubPwd = api.terminal.onPwdChanged?.((payload: { sessionId: string; pwd: string }) => {
       if (payload.sessionId !== sessionId) return;
       if (payload.pwd) {
+        // 终端路径链接的相对路径解析基准 + 跟随作用域（此前 recordPwdChange
+        // 无任何调用方，getSessionPwd 恒空，链接解析基准永远落在 '/'）
+        recordPwdChange(sessionId, payload.pwd);
+        followSetScope(payload.pwd, sessionId);
         dispatchFileEvent(FILE_EVENTS.navigateFiles, payload.pwd);
       }
     });
@@ -290,7 +322,7 @@ export function useTerminalSessions({
 
     const unsubBell = api.terminal.onBell?.((payload: { sessionId: string }) => {
       if (payload.sessionId !== sessionId) return;
-      if (!muted) playAskChime();
+      if (!mutedRef.current) playAskChime();
     });
     if (typeof unsubBell === 'function') unsubscribers.push(unsubBell);
 
@@ -301,7 +333,7 @@ export function useTerminalSessions({
     });
 
     return sessionId;
-  }, [onSessionCreated, profiles, muted]);
+  }, [onSessionCreated, profiles, markAgentBusy]);
 
   // Switch active session
   const switchSession = useCallback((sessionId: string) => {
@@ -418,28 +450,8 @@ export function useTerminalSessions({
     });
   }, []);
 
-  // Agent breathing glow
-  useEffect(() => {
-    let glowTimeout: ReturnType<typeof setTimeout> | null = null;
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail?.status === 'idle' && terminalRef.current?.parentElement) {
-        terminalRef.current.parentElement.classList.add('anim-termAwait');
-        setIsAgentBusy(false);
-        if (glowTimeout) clearTimeout(glowTimeout);
-        glowTimeout = setTimeout(() => {
-          terminalRef.current?.parentElement?.classList.remove('anim-termAwait');
-        }, 3000);
-      } else if (detail?.status === 'busy' || detail?.status === 'working') {
-        setIsAgentBusy(true);
-      }
-    };
-    window.addEventListener('agent-status-changed', handler);
-    return () => {
-      window.removeEventListener('agent-status-changed', handler);
-      if (glowTimeout) clearTimeout(glowTimeout);
-    };
-  }, []);
+  // 注：原「agent-status-changed」监听器已删除——该事件全项目零发射方，
+  // 忙碌→空闲的归位与呼吸光效改由 markAgentBusy 的静默超时驱动。
 
   return {
     sessions,

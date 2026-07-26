@@ -2,7 +2,7 @@
 
 import { ReactNode, useState, useCallback, useEffect, useRef } from 'react';
 import { FileText, Bell, Info, GitBranch } from 'lucide-react';
-import { t, type Locale } from '@/i18n';
+import { t, useLocale } from '@/i18n';
 import {
   clampResizableRightPanelWidth,
   RESIZABLE_RIGHT_PANEL_DEFAULT_WIDTH,
@@ -50,22 +50,12 @@ export default function RightPanel({
   children,
   extraHeaderContent,
 }: RightPanelProps) {
-  const [locale, setLocale] = useState<Locale>('en');
+  const locale = useLocale();
   const [isDragging, setIsDragging] = useState(false);
   const [draftWidth, setDraftWidth] = useState(width);
   const isOpen = mode !== 'closed';
   const widthRef = useRef(width);
   widthRef.current = width;
-
-  useEffect(() => {
-    async function loadLocale() {
-      try {
-        const saved = await window.nativesAPI?.getLocale?.();
-        if (saved === 'en') setLocale('en'); else setLocale('zh');
-      } catch { /* ignore */ }
-    }
-    loadLocale();
-  }, []);
 
   // Re-clamp when the window shrinks so the panel never starves the main column.
   useEffect(() => {

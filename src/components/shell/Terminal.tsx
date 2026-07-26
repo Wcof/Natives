@@ -3,14 +3,14 @@
 import '@xterm/xterm/css/xterm.css';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { t, useLocale, type Locale } from '@/i18n';
+import { t, useLocale } from '@/i18n';
 import { Terminal as TerminalIcon, Clipboard, X, Plus, Link2, VolumeX, Volume2, Crosshair, Maximize2, Minimize2, ChevronDown, ChevronUp, Check, Sparkles, Code2 } from 'lucide-react';
-import { setFileFollow } from '@/lib/follow-mode';
 import { FILE_EVENTS, dispatchFileEvent } from '@/lib/file-events';
 import { playDoneChime } from '@/lib/chime';
 import { copyToClipboard } from '@/lib/clipboard';
-import { FONT_SIZE, SPACING, BORDER_RADIUS } from '@/lib/design-tokens';
+import { FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 import { useTerminalSessions } from './useTerminalSessions';
+import { useToast } from '@/components/ui/Toast';
 
 interface TerminalPanelProps {
   isCollapsed: boolean;
@@ -39,6 +39,17 @@ export default function TerminalPanel({
   const [draftHeight, setDraftHeight] = useState(height);
   const [isDragOver, setIsDragOver] = useState(false);
   const locale = useLocale();
+  const { toast } = useToast();
+
+  // 会话创建失败此前把红字写进 display:none 的容器（完全不可见）——改走 toast
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const message = (e as CustomEvent<string>).detail || 'unknown error';
+      toast(`${t(locale, 'terminal.createFailed')}: ${message}`, 'error');
+    };
+    window.addEventListener('terminal-create-failed', handler);
+    return () => window.removeEventListener('terminal-create-failed', handler);
+  }, [toast, locale]);
 
   // Profile state (US26)
   const [profiles, setProfiles] = useState<Array<{ id: number; name: string; is_default: number }>>([]);
@@ -192,12 +203,13 @@ export default function TerminalPanel({
           if (sessions[nextIdx]) switchSession(sessions[nextIdx].id);
         }
       }
-      // Cmd+K: 清屏（发送 clear 或 form feed）
+      // Cmd+K: 清屏（发送 form feed）。只在终端拥有焦点时接管——
+      // 旧条件 `|| !isCollapsed` 导致面板展开时与命令面板的 Cmd+K 双重触发
       if (e.key === 'k' && !e.shiftKey && !e.ctrlKey && activeSessionId) {
         const termEl = terminalRef.current;
-        if (termEl && (termEl.contains(document.activeElement) || !isCollapsed)) {
+        if (termEl && termEl.contains(document.activeElement)) {
           e.preventDefault();
-          // 发送 Ctrl+L (form feed) 清屏
+          e.stopPropagation();
           window.nativesAPI?.terminal?.write?.(activeSessionId, '\x0c');
         }
       }
@@ -291,7 +303,7 @@ export default function TerminalPanel({
     <div
       className={`terminal-panel ${isCollapsed ? 'collapsed' : ''} ${isMaximized ? 'terminal-maximized' : ''}`}
       style={{ height: isMaximized ? '100%' : isCollapsed ? 0 : (isDragging ? draftHeight : height) }}
-      role="terminal"
+      role="region"
       aria-label={t(locale, 'terminal.title')}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -325,7 +337,7 @@ export default function TerminalPanel({
               <div
                 key={session.id}
                 className={`terminal-tab ${session.id === activeSessionId ? 'active' : ''}${isAgentBusy && session.id === activeSessionId ? ' anim-tabpulse' : ''}`}
-                onClick={() => switchSession(session.id)}
+                onClick={() => { switchSession(session.id); void refreshCwd(session.id); }}
               >
                 <span>{session.label}</span>
                 {sessions.length > 1 && (

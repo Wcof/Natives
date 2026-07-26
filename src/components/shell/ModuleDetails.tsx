@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { t, type Locale } from '@/i18n';
 import { SPACING, FONT_SIZE, BORDER_RADIUS } from '@/lib/design-tokens';
 import { MathCurveLoader } from '@/components/ui/MathCurveLoader';
+import { ErrorState, EmptyState } from '@/components/ui/EmptyState';
+import { classifyError } from '@/lib/error-classifier';
 import ShortcutHelp from '@/components/ui/ShortcutHelp';
 
 function InfoRow({ label, value }: { label: string; value: string }) {
@@ -23,32 +25,52 @@ interface ModuleDetailsProps {
 export default function ModuleDetails({ moduleId, locale }: ModuleDetailsProps) {
   const [mod, setMod] = useState<{ name: string; version: string; enabled: number; state: string; description?: string; author?: string } | null>(null);
   const [modulePerms, setModulePerms] = useState<Array<{ module_id: string; permission: string; granted: number }>>([]);
+  // 三态：旧实现失败/未找到时永久转圈（catch{} + !mod → loader）
+  const [status, setStatus] = useState<'loading' | 'error' | 'missing' | 'ready'>('loading');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     async function load() {
+      setStatus('loading');
       try {
         const api = window.nativesAPI;
-        if (!api?.module?.list) return;
+        if (!api?.module?.list) throw new Error('module API unavailable');
         const list = await api.module.list();
-        if (Array.isArray(list)) {
-          const found = (list as Array<{ id: string; name: string; version: string; enabled: number; state: string; description?: string; author?: string }>).find((m) => m.id === moduleId);
-          if (found) setMod(found);
-        }
+        if (cancelled) return;
+        const found = Array.isArray(list)
+          ? (list as Array<{ id: string; name: string; version: string; enabled: number; state: string; description?: string; author?: string }>).find((m) => m.id === moduleId)
+          : undefined;
+        if (!found) { setStatus('missing'); return; }
+        setMod(found);
         if (api?.module?.listPermissions) {
           const perms = await api.module.listPermissions(moduleId);
-          if (Array.isArray(perms)) setModulePerms(perms as unknown as Array<{ module_id: string; permission: string; granted: number }>);
+          if (!cancelled && Array.isArray(perms)) setModulePerms(perms as unknown as Array<{ module_id: string; permission: string; granted: number }>);
         }
-      } catch { /* ignore */ }
+        if (!cancelled) setStatus('ready');
+      } catch (e) {
+        if (!cancelled) {
+          setErrorMsg(classifyError(e).userMessage);
+          setStatus('error');
+        }
+      }
     }
-    load();
+    void load();
+    return () => { cancelled = true; };
   }, [moduleId]);
 
-  if (!mod) {
+  if (status === 'loading') {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: SPACING.xl, minHeight: 120 }}>
         <MathCurveLoader size={36} />
       </div>
     );
+  }
+  if (status === 'error') {
+    return <ErrorState message={errorMsg ?? ''} />;
+  }
+  if (status === 'missing' || !mod) {
+    return <EmptyState title={t(locale, 'errors.moduleNotFoundNamed', { id: moduleId })} />;
   }
 
   return (
@@ -64,7 +86,7 @@ export default function ModuleDetails({ moduleId, locale }: ModuleDetailsProps) 
       {modulePerms.length > 0 && (
         <div style={{ marginTop: SPACING.lg }}>
           <div style={{ fontSize: FONT_SIZE.xs, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: SPACING.xs }}>
-            Permissions
+            {t(locale, 'workshop.permissionsTitle')}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: SPACING.xs }}>
             {modulePerms.map((perm) => (
