@@ -149,7 +149,7 @@ export default function ExpertEditForm({ locale, gateway, expert, skills, onClos
         >
           {PERMISSION_MODES.map((mode) => (
             <option key={mode} value={mode}>
-              {mode === '' ? t(locale, 'capabilities.experts.permissionMode') : mode}
+              {t(locale, `capabilities.experts.permissionModes.${mode === '' ? 'none' : mode}`)}
             </option>
           ))}
         </select>

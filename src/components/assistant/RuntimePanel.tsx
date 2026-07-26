@@ -18,6 +18,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { Locale } from '@/i18n';
 import { classifyError } from '@/lib/error-classifier';
+import { jobList } from '@/lib/jobs-api';
 import {
   loadPreferredRuntimeId,
   savePreferredRuntimeId,
@@ -154,6 +155,7 @@ const ZH = {
   taskPrompt: 'Prompt',
   taskSchedule: '调度',
   taskEnabled: '启用',
+  taskDisabled: '停用',
   taskNextRun: '下次执行',
   // Detect button
   detect: '重新检测环境',
@@ -250,6 +252,7 @@ const EN: Record<string, string> = {
   taskPrompt: 'Prompt',
   taskSchedule: 'Schedule',
   taskEnabled: 'Enabled',
+  taskDisabled: 'Off',
   taskNextRun: 'Next run',
   detect: 'Redetect environment',
   detectingBtn: 'Detecting…',
@@ -577,9 +580,20 @@ function ScheduledTasksPanel({ locale }: { locale: Locale }) {
     let cancelled = false;
     (async () => {
       try {
-        const r = await window.nativesAPI?.scheduler?.listTasks?.() as ScheduledTask[] | undefined;
+        // scheduler_list_tasks 已删除；改接任务模块 job_list（契约 v1），映射为原展示形状
+        const r = await jobList();
         if (cancelled) return;
-        setTasks(r ?? []);
+        setTasks(r.jobs.map((job) => ({
+          id: job.id,
+          name: job.name,
+          prompt: job.description ?? '',
+          scheduleType: job.schedule_type,
+          scheduleValue: job.schedule_value,
+          enabled: job.enabled,
+          lastStatus: job.last_status ?? null,
+          consecutiveErrors: job.consecutive_errors ?? 0,
+          nextRun: job.next_run ?? '',
+        })));
         setErrorMessage(null);
       } catch (error) {
         if (cancelled) return;
@@ -607,7 +621,13 @@ function ScheduledTasksPanel({ locale }: { locale: Locale }) {
               <span className="text-[11px] text-[var(--text-secondary)] truncate">{t.prompt}</span>
             </div>
             <div className="flex items-center gap-3 shrink-0">
-              <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${t.enabled ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/20' : 'bg-zinc-500/10 text-[var(--text-secondary)]'}`}>{t.enabled ? tt(locale, 'taskEnabled') : 'Off'}</span>
+              <span
+                className="text-[10px] px-2 py-0.5 rounded-full font-medium border"
+                style={{
+                  color: t.enabled ? 'var(--success)' : 'var(--text-secondary)',
+                  borderColor: t.enabled ? 'var(--success)' : 'var(--border-subtle)',
+                }}
+              >{tt(locale, t.enabled ? 'taskEnabled' : 'taskDisabled')}</span>
               <span className="text-[11px] text-[var(--text-secondary)]">{t.nextRun}</span>
             </div>
           </div>
@@ -660,7 +680,7 @@ export default function RuntimePanel({ locale }: { locale: Locale }) {
     if (id === 'codex_cli') {
       toast(
         isZh
-          ? 'Codex 尚未 available，保持不可选（app-server 未实现）'
+          ? 'Codex 尚不可用（app-server 未实现），暂不可选'
           : 'Codex stays unselectable until app-server is available',
         'warning',
       );

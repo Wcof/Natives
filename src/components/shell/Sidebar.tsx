@@ -9,6 +9,7 @@ import type {
 import type { LucideIcon } from 'lucide-react';
 import {
   Bell,
+  Blocks,
   CalendarClock,
   Download,
   FileText,
@@ -172,6 +173,7 @@ function getNavigationId(activeModuleId?: string): string | null {
   }
   if (activeModuleId === 'assistant' || activeModuleId === '__assistant__') return '__assistant__';
   if (activeModuleId === 'jobs' || activeModuleId === '__jobs__') return '__jobs__';
+  if (activeModuleId === 'capabilities' || activeModuleId === '__capabilities__') return '__capabilities__';
   if (activeModuleId.startsWith('module:')) return activeModuleId;
   if (activeModuleId.startsWith('__files__:')) return activeModuleId;
   if (activeModuleId.startsWith('builtin:')) return activeModuleId;
@@ -909,6 +911,7 @@ export default function Sidebar({
             <button
               type="button"
               onClick={() => selectNavigation('__jobs__', '__jobs__')}
+              aria-current={activeNavigationId === '__jobs__' ? 'page' : undefined}
               className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
                 activeNavigationId === '__jobs__'
                   ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
@@ -920,7 +923,21 @@ export default function Sidebar({
             </button>
             <button
               type="button"
+              onClick={() => selectNavigation('__capabilities__', '__capabilities__')}
+              aria-current={activeNavigationId === '__capabilities__' ? 'page' : undefined}
+              className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
+                activeNavigationId === '__capabilities__'
+                  ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--primary)]'
+              }`}
+            >
+              <Blocks size={16} />
+              <span>{t(locale, 'nav.capabilities')}</span>
+            </button>
+            <button
+              type="button"
               onClick={() => selectNavigation('__settings__', 'settings:general')}
+              aria-current={activeNavigationId === '__settings__' ? 'page' : undefined}
               className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
                 activeNavigationId === '__settings__'
                   ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'
@@ -933,6 +950,7 @@ export default function Sidebar({
             <button
               type="button"
               onClick={() => selectNavigation('__workshop__', 'modules')}
+              aria-current={activeNavigationId === '__workshop__' ? 'page' : undefined}
               className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition-all ${
                 activeNavigationId === '__workshop__'
                   ? 'bg-[var(--accent)] text-[var(--accent-ink)] font-medium'

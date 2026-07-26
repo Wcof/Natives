@@ -57,8 +57,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={{ toast }}>
       {children}
-      {/* Toast container — bottom-right */}
-      <div style={{
+      {/* Toast container — bottom-right; aria-live 让读屏用户也能收到 CRUD 反馈 */}
+      <div role="status" aria-live="polite" style={{
         position: 'fixed', bottom: SPACING.lg, right: SPACING.lg, zIndex: 10001,
         display: 'flex', flexDirection: 'column-reverse', gap: SPACING.sm,
         pointerEvents: 'none',

@@ -129,7 +129,11 @@ export default function ExpertList({
               >
                 {team.enabled ? t(locale, 'capabilities.common.enabled') : t(locale, 'capabilities.common.disabled')}
               </span>
-              <span className="text-[10px]" style={{ color: 'var(--text-disabled)' }}>{team.strategy}</span>
+              <span className="text-[10px]" style={{ color: 'var(--text-disabled)' }}>
+                {t(locale, `capabilities.experts.strategyOptions.${team.strategy}`) === `capabilities.experts.strategyOptions.${team.strategy}`
+                  ? team.strategy
+                  : t(locale, `capabilities.experts.strategyOptions.${team.strategy}`)}
+              </span>
             </div>
             <p className="mt-0.5 truncate text-xs" style={{ color: 'var(--text-secondary)' }}>
               {team.members

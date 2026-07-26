@@ -140,7 +140,7 @@ export default function ExpertTeamEditDialog({ locale, gateway, team, experts, o
             {t(locale, 'capabilities.experts.strategy')}
             <select value={strategy} onChange={(e) => setStrategy(e.target.value)} className="rounded border px-2 py-1.5 text-sm" style={inputStyle}>
               {STRATEGIES.map((s) => (
-                <option key={s} value={s}>{s}</option>
+                <option key={s} value={s}>{t(locale, `capabilities.experts.strategyOptions.${s}`)}</option>
               ))}
             </select>
           </label>
@@ -148,7 +148,7 @@ export default function ExpertTeamEditDialog({ locale, gateway, team, experts, o
             {t(locale, 'capabilities.experts.failurePolicy')}
             <select value={failurePolicy} onChange={(e) => setFailurePolicy(e.target.value)} className="rounded border px-2 py-1.5 text-sm" style={inputStyle}>
               {FAILURE_POLICIES.map((p) => (
-                <option key={p} value={p}>{p}</option>
+                <option key={p} value={p}>{t(locale, `capabilities.experts.failurePolicyOptions.${p}`)}</option>
               ))}
             </select>
           </label>

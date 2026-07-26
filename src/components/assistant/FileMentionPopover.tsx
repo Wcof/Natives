@@ -63,11 +63,8 @@ export default function FileMentionPopover({
             .filter((e) => !q || e.name.toLowerCase().includes(q) || e.path.toLowerCase().includes(q))
             .slice(0, 30);
         } else {
-          // Browser fixture stubs
-          const stubs = ['src/main.ts', 'src/lib/assistant-gateway/gateway.ts', 'README.md', 'package.json'];
-          results = stubs
-            .filter((p) => !q || p.toLowerCase().includes(q))
-            .map((path) => ({ path, name: path.split('/').pop() || path }));
+          // 无文件能力（浏览器 dev）→ 诚实空态；禁止展示虚构文件列表（假数据红线）
+          results = [];
         }
         if (!cancelled) {
           setHits(results);
