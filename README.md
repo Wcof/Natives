@@ -20,6 +20,9 @@ Natives 是**本机个人全能 AI 工作台**：统一管理凭证与环境，�
 
 - **💻 完整 PTY 终端** — portable-pty (Rust) + xterm.js，多 Tab、环境注入、TUI
 - **🤖 AI 工作台** — Agent / Subagent 编排与用量等（Hub / capability）
+- **⚙️ 原生执行引擎** — Rust workspace（`crates/` + `src-agent-daemon/`）：Agent 守护进程、MCP 协议、provider 适配、多模态图片贯通
+- **📇 能力库** — MCP / CLI / Agent 能力注册、连接器密钥链路与权限门控（ADR-0016）
+- **⏰ 任务模块** — cron 调度、运行详情、表单草稿持久化（ADR-0015）
 - **🔌 本地模块运行时** — iframe + 本地 HTTP；Unique Origin 沙箱；Bridge API
 - **🧬 本地创意工坊** — 生成/安装 web-module，事件驱动热上架；数据按 domain 长青（Workshop）
 - **🔐 环境注入 & 凭证** — 多组环境 + AES-256-GCM 加密存储
@@ -46,7 +49,7 @@ Natives 是**本机个人全能 AI 工作台**：统一管理凭证与环境，�
 | 桌面框架 | Tauri v2 (Rust backend) |
 | 前端框架 | Next.js 15 (App Router) + 静态导出 |
 | 语言 | TypeScript + Rust |
-| 数据库 | SQLite (rusqlite, WAL 模式, 10 张表) |
+| 数据库 | SQLite (rusqlite, WAL 模式, 30 张表) |
 | 终端 | portable-pty + @xterm/xterm |
 | 验证 | Zod |
 | 凭证加密 | AES-256-GCM |
@@ -110,7 +113,7 @@ npm run tauri:build
 ## 项目结构
 
 ```
-Natives2/
+Natives/
 ├── src-tauri/              # Tauri Rust 后端
 │   ├── src/
 │   │   ├── main.rs         # Tauri 入口
@@ -121,15 +124,24 @@ Natives2/
 │   │   ├── http_server.rs  # 本地 HTTP 服务 (tiny_http)
 │   │   └── terminal.rs     # PTY 终端管理
 │   └── capabilities/       # Tauri 权限声明 (最小权限)
+├── crates/                 # Rust workspace（执行引擎）
+│   ├── agent-core/         # Agent 执行核心
+│   ├── assistant-protocol/ # 助理协议
+│   ├── capability-gateway/ # 能力网关
+│   ├── harness-core/       # 引擎 harness / 控制面 RPC
+│   └── provider-adapters/  # Provider 适配
+├── src-agent-daemon/       # Agent 守护进程
 ├── src/
 │   ├── app/                # Next.js App Router 页面
 │   │   ├── page.tsx        # 主界面（三栏布局）
-│   │   ├── ai/             # AI 仪表盘 (Token 统计、技能面板)
+│   │   ├── ai/             # AI 工作台 (Token 统计、技能面板)
+│   │   ├── capabilities/   # 能力库 (MCP/CLI/Agent, ADR-0016)
+│   │   ├── jobs/           # 任务模块 (cron 调度, ADR-0015)
+│   │   ├── library/        # 资料库
 │   │   ├── files/          # 文件管理
 │   │   ├── modules/        # 模块管理
 │   │   ├── store/          # 本地模块目录（路径历史命名，非联网商店）
-│   │   ├── tools/          # 工具页
-│   │   └── workshop/       # 插件工作区
+│   │   └── tools/          # 工具页
 │   ├── components/         # 共享组件
 │   │   ├── shell/          # 外壳布局 (Header/Sidebar/Terminal/Settings)
 │   │   ├── dashboard/      # 仪表盘组件 (TokenHero, SkillsPanel, ModelStats)
@@ -219,7 +231,7 @@ const theme = await window.natives.theme.get();
 await window.natives.notification.send('Hello from plugin!');
 ```
 
-详见 [`plugin-template/`](plugin-template/) 和 [Bridge API 文档](docs/architecture/ARCHITECTURE.md)。
+详见 [Bridge API 文档](docs/architecture/ARCHITECTURE.md)。
 
 ---
 
@@ -241,7 +253,7 @@ await window.natives.notification.send('Hello from plugin!');
 SQLite 数据库存储在 `~/.natives/` 目录下（dotfile 模式）：
 
 - WAL 模式 + 外键约束
-- 10 张表 + 增量迁移（`PRAGMA table_info`）
+- 30 张表 + 增量迁移（`PRAGMA table_info`）
 - 仅 Rust 后端 (`src-tauri/`) 读写，前端通过 tauri-adapter + IPC 同步
 
 ---
