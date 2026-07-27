@@ -711,11 +711,10 @@ pub async fn chat_completions(
     }
     // Reuse the streaming parser's normalisation so the non-streaming path
     // reports cache tokens with identical semantics.
-    let usage = serde_json::from_value::<crate::stream::openai_sse::UsageWire>(
-        value["usage"].clone(),
-    )
-    .map(|wire| wire.to_provider())
-    .unwrap_or_default();
+    let usage =
+        serde_json::from_value::<crate::stream::openai_sse::UsageWire>(value["usage"].clone())
+            .map(|wire| wire.to_provider())
+            .unwrap_or_default();
     let tools = if tool_calls.is_empty() {
         None
     } else {
@@ -842,18 +841,19 @@ mod tool_message_tests {
 
     #[test]
     fn chat_completions_user_image_becomes_an_image_url_part() {
-        let body = build_chat_completions_body(&image_request(
-            crate::capabilities::ImageSource {
-                url: "https://example.test/cat.png".into(),
-                detail: Some("high".into()),
-                media_type: None,
-            },
-        ));
+        let body = build_chat_completions_body(&image_request(crate::capabilities::ImageSource {
+            url: "https://example.test/cat.png".into(),
+            detail: Some("high".into()),
+            media_type: None,
+        }));
         let content = body["messages"][0]["content"].as_array().unwrap();
         assert_eq!(content.len(), 2);
         assert_eq!(content[0]["type"], "text");
         assert_eq!(content[1]["type"], "image_url");
-        assert_eq!(content[1]["image_url"]["url"], "https://example.test/cat.png");
+        assert_eq!(
+            content[1]["image_url"]["url"],
+            "https://example.test/cat.png"
+        );
         assert_eq!(content[1]["image_url"]["detail"], "high");
     }
 
@@ -875,7 +875,9 @@ mod tool_message_tests {
                 role: "user".into(),
                 content: vec![ProviderContentBlock::Text { text: "hi".into() }],
             }],
-            ..image_request(crate::capabilities::ImageSource::new("data:image/png;base64,A"))
+            ..image_request(crate::capabilities::ImageSource::new(
+                "data:image/png;base64,A",
+            ))
         });
         assert_eq!(body["messages"][0]["content"], "hi");
     }
@@ -938,7 +940,9 @@ mod tool_message_tests {
                 role: "user".into(),
                 content: vec![ProviderContentBlock::Text { text: "hi".into() }],
             }],
-            ..image_request(crate::capabilities::ImageSource::new("data:image/png;base64,A"))
+            ..image_request(crate::capabilities::ImageSource::new(
+                "data:image/png;base64,A",
+            ))
         });
         assert_eq!(body["input"][0]["content"], "hi");
     }
@@ -1034,7 +1038,9 @@ mod tool_message_tests {
 
         let mut o3 = plain("o3-mini");
         o3.temperature = Some(0.3);
-        assert!(build_chat_completions_body(&o3).get("temperature").is_none());
+        assert!(build_chat_completions_body(&o3)
+            .get("temperature")
+            .is_none());
 
         // Unknown third-party models keep sampling parameters.
         let mut local = plain("qwen2.5-coder");

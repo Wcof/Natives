@@ -86,7 +86,10 @@ pub fn list(params_value: &Value) -> Result<Value, String> {
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(rusqlite::params_from_iter(args.iter().map(|a| a.as_ref())), row_to_json)
+        .query_map(
+            rusqlite::params_from_iter(args.iter().map(|a| a.as_ref())),
+            row_to_json,
+        )
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
@@ -141,7 +144,9 @@ pub fn update(params_value: &Value) -> Result<Value, String> {
             .map(str::to_string)
             .collect();
         sets.push("tags_json = ?".into());
-        args.push(Box::new(serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into())));
+        args.push(Box::new(
+            serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into()),
+        ));
     }
     if let Some(enabled) = params_value.get("enabled").and_then(Value::as_bool) {
         sets.push("enabled = ?".into());
@@ -182,7 +187,10 @@ pub fn update(params_value: &Value) -> Result<Value, String> {
         sets.join(", ")
     );
     let changed = conn
-        .execute(&sql, rusqlite::params_from_iter(args.iter().map(|a| a.as_ref())))
+        .execute(
+            &sql,
+            rusqlite::params_from_iter(args.iter().map(|a| a.as_ref())),
+        )
         .map_err(|e| e.to_string())?;
     if changed == 0 {
         return Err(format!("skill not found: {id}"));
@@ -321,9 +329,7 @@ pub fn rescan(params_value: &Value) -> Result<Value, String> {
             .prepare("SELECT id, dir_path FROM capability_skill WHERE source = 'scan'")
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            })
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
             .map_err(|e| e.to_string())?;
         for row in rows.flatten() {
             let (id, dir_path) = row;
@@ -368,7 +374,10 @@ pub fn import(params_value: &Value) -> Result<Value, String> {
     }
 
     let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
-    let dest = PathBuf::from(home).join(".natives").join("skills").join(&name);
+    let dest = PathBuf::from(home)
+        .join(".natives")
+        .join("skills")
+        .join(&name);
     if dest.exists() {
         return Err(format!("skill already exists: {}", dest.display()));
     }
@@ -424,7 +433,12 @@ pub fn import(params_value: &Value) -> Result<Value, String> {
     let tags: Vec<String> = params_value
         .get("tags")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     let now = now_iso();
     let data = store()?;
@@ -556,7 +570,10 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<(), String> {
     let names = String::from_utf8_lossy(&listing.stdout);
     for name in names.lines() {
         let p = Path::new(name);
-        if p.is_absolute() || p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        if p.is_absolute()
+            || p.components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
             return Err(format!("zip-slip rejected: {name}"));
         }
     }
@@ -578,9 +595,14 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<(), String> {
         .collect();
     if entries.len() == 1 && entries[0].path().is_dir() {
         let inner = entries[0].path();
-        let has_md = ["SKILL.md", "skill.md"].iter().any(|n| inner.join(n).exists());
+        let has_md = ["SKILL.md", "skill.md"]
+            .iter()
+            .any(|n| inner.join(n).exists());
         if has_md {
-            for entry in std::fs::read_dir(&inner).map_err(|e| e.to_string())?.flatten() {
+            for entry in std::fs::read_dir(&inner)
+                .map_err(|e| e.to_string())?
+                .flatten()
+            {
                 let target = dest.join(entry.file_name());
                 std::fs::rename(entry.path(), target).map_err(|e| e.to_string())?;
             }

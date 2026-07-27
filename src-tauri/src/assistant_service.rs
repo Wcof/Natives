@@ -85,7 +85,6 @@ pub async fn assistant_status(store: State<'_, Mutex<AssistantStore>>) -> Result
     }
 }
 
-
 /// Dispatch RPC method to the appropriate handler.
 /// Host-owned methods stay local; everything else implemented goes to Daemon authority.
 async fn dispatch_rpc(data_store: &Arc<DataStore>, method: &str, params: &Value) -> RpcResponse {
@@ -96,8 +95,13 @@ async fn dispatch_rpc(data_store: &Arc<DataStore>, method: &str, params: &Value)
             "run.start" => run_gateway::handle_run_start(data_store, params).await,
             "run.subscribe" => run_gateway::handle_run_subscribe(data_store, params).await,
             "artifact.list" => artifacts::handle_artifact_list(data_store, params).await,
-            "artifact.open" | "artifact.reveal" => artifacts::handle_artifact_open(data_store, params).await,
-            _ => error_response("METHOD_NOT_FOUND", &format!("Unknown host-owned method: {method}")),
+            "artifact.open" | "artifact.reveal" => {
+                artifacts::handle_artifact_open(data_store, params).await
+            }
+            _ => error_response(
+                "METHOD_NOT_FOUND",
+                &format!("Unknown host-owned method: {method}"),
+            ),
         };
     }
 
@@ -187,9 +191,7 @@ pub(crate) fn success_response(data: Value) -> RpcResponse {
     }
 }
 
-
 /// Honest per-runtime status for settings / RuntimePanel (REQ-T03).
-
 mod artifacts;
 mod capabilities;
 mod provider_catalog;
@@ -197,5 +199,3 @@ mod run_gateway;
 
 #[cfg(test)]
 mod tests;
-
-

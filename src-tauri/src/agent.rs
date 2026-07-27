@@ -183,7 +183,9 @@ fn session_title(path: &Path) -> Option<String> {
     let file = std::fs::File::open(path).ok()?;
     let reader = BufReader::new(file.take(TITLE_SCAN_BYTES));
     for line in reader.lines().take(TITLE_SCAN_LINES).flatten() {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
         if value.get("type").and_then(|t| t.as_str()) == Some("summary") {
             if let Some(summary) = value.get("summary").and_then(|s| s.as_str()) {
                 let trimmed = summary.trim();
@@ -264,7 +266,9 @@ fn skill_frontmatter(txt: &str) -> Option<String> {
         && clean.as_bytes()[fm_start + 3] == b'\r'
         && clean.as_bytes()[fm_start + 4] == b'\n';
     let after_first = &clean[fm_start + if is_crlf { 5 } else { 4 }..];
-    let fm_end = after_first.find("\n---").or_else(|| after_first.find("\r\n---"))?;
+    let fm_end = after_first
+        .find("\n---")
+        .or_else(|| after_first.find("\r\n---"))?;
     let fm = &after_first[..fm_end];
     // Normalize line endings: strip trailing \r so .lines() doesn't carry it into values
     let fm_normalized = fm.replace("\r\n", "\n");
@@ -276,7 +280,10 @@ fn skill_frontmatter(txt: &str) -> Option<String> {
             // 处理块标量前缀（|, >, |+, >- 等）
             let val = if val.starts_with('|') || val.starts_with('>') {
                 // 块标量：取后续行的缩进内容（简化处理，取第一行非空内容）
-                let prefix_len = val.chars().take_while(|c| *c == '|' || *c == '>' || *c == '+' || *c == '-').count();
+                let prefix_len = val
+                    .chars()
+                    .take_while(|c| *c == '|' || *c == '>' || *c == '+' || *c == '-')
+                    .count();
                 val[prefix_len..].trim()
             } else {
                 val
@@ -364,10 +371,7 @@ fn scan_skill_root(
         if name_str == "_disabled" {
             if !disabled {
                 // 用 metadata（跟随符号链接）判断是否为目录
-                if std::fs::metadata(&fp)
-                    .map(|m| m.is_dir())
-                    .unwrap_or(false)
-                {
+                if std::fs::metadata(&fp).map(|m| m.is_dir()).unwrap_or(false) {
                     scan_skill_root(&fp, source, label, out, true);
                 }
             }
@@ -376,14 +380,9 @@ fn scan_skill_root(
 
         // 跟随符号链接判断是否为目录
         let is_dir = if entry.path().is_symlink() {
-            std::fs::metadata(&fp)
-                .map(|m| m.is_dir())
-                .unwrap_or(false)
+            std::fs::metadata(&fp).map(|m| m.is_dir()).unwrap_or(false)
         } else {
-            entry
-                .file_type()
-                .map(|ft| ft.is_dir())
-                .unwrap_or(false)
+            entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
         };
 
         if !is_dir {
@@ -537,15 +536,17 @@ fn parse_log_file_for_skills_incremental(
                             if b.get("type").and_then(|t| t.as_str()) == Some("tool_use")
                                 && b.get("name").and_then(|n| n.as_str()) == Some("Skill")
                             {
-                                if let Some(skill_name) =
-                                    b.get("input").and_then(|i| i.get("skill")).and_then(|s| s.as_str())
+                                if let Some(skill_name) = b
+                                    .get("input")
+                                    .and_then(|i| i.get("skill"))
+                                    .and_then(|s| s.as_str())
                                 {
-                                    let entry = stats
-                                        .entry(skill_name.to_string())
-                                        .or_insert(SkillLogStat {
+                                    let entry = stats.entry(skill_name.to_string()).or_insert(
+                                        SkillLogStat {
                                             count: 0,
                                             last_triggered: None,
-                                        });
+                                        },
+                                    );
                                     entry.count += 1;
                                     if ts > 0 {
                                         entry.last_triggered =
@@ -565,12 +566,10 @@ fn parse_log_file_for_skills_incremental(
                     let raw = rest[..end].trim();
                     let skill_name = raw.trim_start_matches('/');
                     if !skill_name.is_empty() {
-                        let entry = stats
-                            .entry(skill_name.to_string())
-                            .or_insert(SkillLogStat {
-                                count: 0,
-                                last_triggered: None,
-                            });
+                        let entry = stats.entry(skill_name.to_string()).or_insert(SkillLogStat {
+                            count: 0,
+                            last_triggered: None,
+                        });
                         entry.count += 1;
                         if ts > 0 {
                             entry.last_triggered =
@@ -633,9 +632,7 @@ fn get_skill_stats() -> std::collections::HashMap<String, SkillLogStat> {
 
 // ── Skills: Codex 触发统计 ──
 
-fn parse_codex_skill_events(
-    cutoff: i64,
-) -> std::collections::HashMap<String, SkillLogStat> {
+fn parse_codex_skill_events(cutoff: i64) -> std::collections::HashMap<String, SkillLogStat> {
     let mut stats = std::collections::HashMap::new();
     let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     let codex_sessions = home.join(".codex").join("sessions");
@@ -666,16 +663,14 @@ fn parse_codex_skill_events(
                     let skill = &content[abs_open..abs_open + close_pos];
                     // 校验 skill name 格式（字母数字点横杠下划线冒号）
                     let valid = !skill.is_empty()
-                        && skill
-                            .chars()
-                            .all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == '_' || c == ':');
+                        && skill.chars().all(|c| {
+                            c.is_alphanumeric() || c == '.' || c == '-' || c == '_' || c == ':'
+                        });
                     if valid && seen.insert(skill.to_string()) {
-                        let entry = stats
-                            .entry(skill.to_string())
-                            .or_insert(SkillLogStat {
-                                count: 0,
-                                last_triggered: None,
-                            });
+                        let entry = stats.entry(skill.to_string()).or_insert(SkillLogStat {
+                            count: 0,
+                            last_triggered: None,
+                        });
                         entry.count += 1;
                         entry.last_triggered =
                             Some(entry.last_triggered.map_or(mtime, |lt| lt.max(mtime)));
@@ -719,7 +714,10 @@ fn collect_jsonl_files(dir: &Path, depth: usize, out: &mut Vec<(std::path::PathB
 
 fn scan_plugin_skills(out: &mut Vec<SkillInfo>) {
     let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    let plugins_json = home.join(".claude").join("plugins").join("installed_plugins.json");
+    let plugins_json = home
+        .join(".claude")
+        .join("plugins")
+        .join("installed_plugins.json");
     if !plugins_json.exists() {
         return;
     }
@@ -875,10 +873,7 @@ pub fn scan_skills() -> Result<SkillsData> {
 
     let mut budget_chars = 0usize;
     for item in &items {
-        if item.enabled
-            && !item.residue
-            && (item.source == "claude" || item.source == "plugin")
-        {
+        if item.enabled && !item.residue && (item.source == "claude" || item.source == "plugin") {
             budget_chars += item.desc_len;
         }
     }

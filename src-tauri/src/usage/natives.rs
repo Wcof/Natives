@@ -119,8 +119,14 @@ pub fn scan_natives_db(start_ms: i64, end_ms: i64) -> NativesScanResult {
     }
 }
 
-fn candidate_db_openers() -> Vec<(String, Box<dyn Fn() -> Result<rusqlite::Connection, String>>)> {
-    let mut out: Vec<(String, Box<dyn Fn() -> Result<rusqlite::Connection, String>>)> = Vec::new();
+fn candidate_db_openers() -> Vec<(
+    String,
+    Box<dyn Fn() -> Result<rusqlite::Connection, String>>,
+)> {
+    let mut out: Vec<(
+        String,
+        Box<dyn Fn() -> Result<rusqlite::Connection, String>>,
+    )> = Vec::new();
 
     // Prefer main natives.db (Daemon protocol tables live here in current installs).
     out.push((
@@ -176,10 +182,7 @@ fn table_exists(conn: &rusqlite::Connection, name: &str) -> bool {
 
 fn warn(source: &str, code: UsageWarningCode, detail: impl Into<String>) -> UsageWarning {
     let mut details = HashMap::new();
-    details.insert(
-        "detail".into(),
-        serde_json::Value::String(detail.into()),
-    );
+    details.insert("detail".into(), serde_json::Value::String(detail.into()));
     UsageWarning {
         source_id: Some(source.into()),
         code,
@@ -499,7 +502,11 @@ fn scan_legacy_assistant_tables(
                         project_id: conv,
                         terminal_id: None,
                         input_tokens: if has_input { Some(input) } else { None },
-                        output_tokens: if has_input { Some(output) } else { Some(output) },
+                        output_tokens: if has_input {
+                            Some(output)
+                        } else {
+                            Some(output)
+                        },
                         cache_creation_tokens: None,
                         cache_read_tokens: None,
                         total_tokens: Some(total),
@@ -514,7 +521,11 @@ fn scan_legacy_assistant_tables(
                         project_id: None,
                         terminal_id: None,
                         total_tokens: Some(total),
-                        user_messages: if role.as_deref() == Some("user") { 1 } else { 0 },
+                        user_messages: if role.as_deref() == Some("user") {
+                            1
+                        } else {
+                            0
+                        },
                         assistant_messages: if role.as_deref() == Some("assistant") {
                             1
                         } else {
@@ -608,10 +619,8 @@ fn column_exists(conn: &rusqlite::Connection, table: &str, column: &str) -> bool
 }
 
 fn merge_daily(rows: Vec<UsageDailyRecord>) -> Vec<UsageDailyRecord> {
-    let mut map: HashMap<
-        (String, String, Option<String>, Option<String>),
-        UsageDailyRecord,
-    > = HashMap::new();
+    let mut map: HashMap<(String, String, Option<String>, Option<String>), UsageDailyRecord> =
+        HashMap::new();
     for r in rows {
         let key = (
             r.date.clone(),
@@ -621,22 +630,17 @@ fn merge_daily(rows: Vec<UsageDailyRecord>) -> Vec<UsageDailyRecord> {
         );
         map.entry(key)
             .and_modify(|acc| {
-                acc.input_tokens = Some(
-                    acc.input_tokens.unwrap_or(0) + r.input_tokens.unwrap_or(0),
-                );
-                acc.output_tokens = Some(
-                    acc.output_tokens.unwrap_or(0) + r.output_tokens.unwrap_or(0),
-                );
+                acc.input_tokens =
+                    Some(acc.input_tokens.unwrap_or(0) + r.input_tokens.unwrap_or(0));
+                acc.output_tokens =
+                    Some(acc.output_tokens.unwrap_or(0) + r.output_tokens.unwrap_or(0));
                 acc.cache_creation_tokens = Some(
-                    acc.cache_creation_tokens.unwrap_or(0)
-                        + r.cache_creation_tokens.unwrap_or(0),
+                    acc.cache_creation_tokens.unwrap_or(0) + r.cache_creation_tokens.unwrap_or(0),
                 );
-                acc.cache_read_tokens = Some(
-                    acc.cache_read_tokens.unwrap_or(0) + r.cache_read_tokens.unwrap_or(0),
-                );
-                acc.total_tokens = Some(
-                    acc.total_tokens.unwrap_or(0) + r.total_tokens.unwrap_or(0),
-                );
+                acc.cache_read_tokens =
+                    Some(acc.cache_read_tokens.unwrap_or(0) + r.cache_read_tokens.unwrap_or(0));
+                acc.total_tokens =
+                    Some(acc.total_tokens.unwrap_or(0) + r.total_tokens.unwrap_or(0));
                 if acc.cost_usd.is_none() {
                     acc.cost_usd = r.cost_usd;
                     acc.cost_quality = r.cost_quality.clone();

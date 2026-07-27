@@ -3,11 +3,12 @@
 // usage_get_cached: read-only snapshot read (no scanning)
 // usage_sync: manual sync (runs all scanners, writes snapshot)
 
-use crate::usage::snapshot::{self, UsageDashboardSnapshot, UsageCacheReadResult, UsageCacheMetadata};
+use crate::usage::snapshot::{
+    self, UsageCacheMetadata, UsageCacheReadResult, UsageDashboardSnapshot,
+};
 use crate::usage::{
-    self, build_dashboard_response,
-    UsageDashboardRequest, UsageDashboardResponse, UsagePeriodData,
-    UsageDashboardRange,
+    self, build_dashboard_response, UsageDashboardRange, UsageDashboardRequest,
+    UsageDashboardResponse, UsagePeriodData,
 };
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -67,7 +68,9 @@ pub async fn usage_get_cached(
     query: UsageViewRequest,
 ) -> Result<UsageCacheReadResult> {
     // Validate timezone
-    let _: chrono_tz::Tz = query.time_zone.parse()
+    let _: chrono_tz::Tz = query
+        .time_zone
+        .parse()
         .map_err(|_| Error::InvalidInput("Invalid IANA timeZone".into()))?;
 
     // Try memory cache first
@@ -116,13 +119,17 @@ pub async fn usage_get_cached(
             };
             Ok(UsageCacheReadResult::Ready { metadata, response })
         }
-        Ok(None) => {
-            Ok(UsageCacheReadResult::Missing { metadata: None, response: None })
-        }
+        Ok(None) => Ok(UsageCacheReadResult::Missing {
+            metadata: None,
+            response: None,
+        }),
         Err(e) => {
             // Corrupt snapshot — treat as missing
             eprintln!("Corrupt snapshot for {tz}: {e}");
-            Ok(UsageCacheReadResult::Missing { metadata: None, response: None })
+            Ok(UsageCacheReadResult::Missing {
+                metadata: None,
+                response: None,
+            })
         }
     }
 }
@@ -134,7 +141,9 @@ pub async fn usage_sync(
     request: UsageSyncRequest,
 ) -> Result<UsageSyncResult> {
     // Validate timezone
-    let _: chrono_tz::Tz = request.time_zone.parse()
+    let _: chrono_tz::Tz = request
+        .time_zone
+        .parse()
         .map_err(|_| Error::InvalidInput("Invalid IANA timeZone".into()))?;
 
     let generated_at_ms = usage::now_ms();
@@ -170,34 +179,46 @@ pub async fn usage_sync(
     let current_24h_start = generated_at_ms - 24 * 3600 * 1000;
     let comp_24h_end = current_24h_start;
 
-    let rolling_24h_daily: Vec<_> = rolling_24h_response.daily.iter()
+    let rolling_24h_daily: Vec<_> = rolling_24h_response
+        .daily
+        .iter()
         .filter(|r| {
             let date_ms = date_to_ms(&r.date);
             date_ms >= current_24h_start && date_ms < rolling_end_ms
         })
         .cloned()
         .collect();
-    let rolling_24h_activity: Vec<_> = rolling_24h_response.activity.iter()
+    let rolling_24h_activity: Vec<_> = rolling_24h_response
+        .activity
+        .iter()
         .filter(|a| a.hour_start_ms >= current_24h_start && a.hour_start_ms < rolling_end_ms)
         .cloned()
         .collect();
-    let rolling_24h_sessions: Vec<_> = rolling_24h_response.sessions.iter()
+    let rolling_24h_sessions: Vec<_> = rolling_24h_response
+        .sessions
+        .iter()
         .filter(|s| s.started_at_ms >= current_24h_start && s.started_at_ms < rolling_end_ms)
         .cloned()
         .collect();
 
-    let comp_24h_daily: Vec<_> = rolling_24h_response.daily.iter()
+    let comp_24h_daily: Vec<_> = rolling_24h_response
+        .daily
+        .iter()
         .filter(|r| {
             let date_ms = date_to_ms(&r.date);
             date_ms >= rolling_start_ms && date_ms < comp_24h_end
         })
         .cloned()
         .collect();
-    let comp_24h_activity: Vec<_> = rolling_24h_response.activity.iter()
+    let comp_24h_activity: Vec<_> = rolling_24h_response
+        .activity
+        .iter()
         .filter(|a| a.hour_start_ms >= rolling_start_ms && a.hour_start_ms < comp_24h_end)
         .cloned()
         .collect();
-    let comp_24h_sessions: Vec<_> = rolling_24h_response.sessions.iter()
+    let comp_24h_sessions: Vec<_> = rolling_24h_response
+        .sessions
+        .iter()
         .filter(|s| s.started_at_ms >= rolling_start_ms && s.started_at_ms < comp_24h_end)
         .cloned()
         .collect();
@@ -242,8 +263,7 @@ pub async fn usage_sync(
     };
 
     // ── 4. Persist to SQLite ──
-    snapshot::write_snapshot(&snapshot)
-        .map_err(|e| Error::from(e))?;
+    snapshot::write_snapshot(&snapshot).map_err(|e| Error::from(e))?;
 
     // ── 5. Update memory cache ──
     state.usage_cache.set_snapshot(tz_str, snapshot.clone());

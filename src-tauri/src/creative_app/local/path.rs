@@ -44,9 +44,7 @@ pub fn resolve_under(base: &Path, relative: &str) -> Result<PathBuf> {
         match c {
             Component::Normal(_) | Component::CurDir => {}
             Component::ParentDir => {
-                return Err(Error::InvalidInput(
-                    "path must not contain '..'".into(),
-                ));
+                return Err(Error::InvalidInput("path must not contain '..'".into()));
             }
             Component::RootDir | Component::Prefix(_) => {
                 return Err(Error::InvalidInput(
@@ -64,17 +62,13 @@ pub fn resolve_under(base: &Path, relative: &str) -> Result<PathBuf> {
                 .canonicalize()
                 .map_err(|e| Error::InvalidInput(format!("parent canonicalize: {e}")))?
         } else {
-            return Err(Error::InvalidInput(format!(
-                "path does not exist: {rel}"
-            )));
+            return Err(Error::InvalidInput(format!("path does not exist: {rel}")));
         };
         let base_c = base
             .canonicalize()
             .map_err(|e| Error::InvalidInput(format!("base canonicalize: {e}")))?;
         if !parent_c.starts_with(&base_c) {
-            return Err(Error::InvalidInput(
-                "path escapes project root".into(),
-            ));
+            return Err(Error::InvalidInput("path escapes project root".into()));
         }
         return Ok(joined);
     }

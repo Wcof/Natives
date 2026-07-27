@@ -338,9 +338,7 @@ impl RunManager {
                 run.retry_count as i64,
                 run.idempotency_key,
                 run.revision as i64,
-                run.capability_snapshot
-                    .as_ref()
-                    .map(|v| v.to_string())
+                run.capability_snapshot.as_ref().map(|v| v.to_string())
             ],
         )
         .map_err(|e| format!("PERSISTENCE_FAILED upsert run: {e}"))?;
@@ -1461,7 +1459,6 @@ impl RunManager {
                 self.persist_run_row(r)?;
             }
         }
-
         // Capability resolution (ADR-0016): merge run-level selection with the
         // conversation default, validate every referenced capability and the
         // runtime support matrix. Fail-closed BEFORE any provider call — this
@@ -1498,12 +1495,31 @@ impl RunManager {
                 self.persist_run_row(r)?;
             }
         }
+        // Harness is resolved exactly once after capability validation and before
+        // any provider lease, MCP warm-up, or engine construction.
+        let harness_plan = match crate::rpc::harness::control_plane::resolve_run(
+            &run.id,
+            Some(&run.conversation_id),
+            run.project_id.as_deref(),
+            request_project_path
+                .as_deref()
+                .or(run.project_path.as_deref())
+                .map(std::path::Path::new),
+        ) {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.fail_run_if_active(&run.id, error.to_string(), error.code);
+                return Err(error.to_string());
+            }
+        };
         // Keep selected MCP servers warm for the run's lifetime (refcounted;
         // released on every exit path below via this guard).
         for server_id in &capability_snapshot.mcp_servers {
             crate::mcp_runtime::global_mcp().acquire(server_id, &run.id);
         }
-        let _mcp_refs = McpRunRefGuard { run_id: run.id.clone() };
+        let _mcp_refs = McpRunRefGuard {
+            run_id: run.id.clone(),
+        };
 
         // REQ-T02: Codex remains fail-closed (app-server not implemented).
         if runtime_id == "codex_cli" {
@@ -1649,14 +1665,11 @@ impl RunManager {
         if use_fixture_engine {
             // Deterministic offline path for tests — real engine + permission tools,
             // never EchoProvider fake success text.
-            let mut hooks = agent_core::HookRegistry::new();
-            hooks.register(
-                agent_core::HookEvent::PreToolUse,
-                Box::new(agent_core::AllowAllHook),
-            );
-            hooks.register(
-                agent_core::HookEvent::Stop,
-                Box::new(agent_core::AllowAllHook),
+            let hooks = harness_plan.compile(
+                request_project_path
+                    .as_deref()
+                    .or(run.project_path.as_deref())
+                    .map(std::path::Path::new),
             );
             let cancel = self
                 .runtime
@@ -1750,8 +1763,10 @@ impl RunManager {
                     .or_else(|| run.agent_profile_id.clone()),
                 user_content: content,
                 max_steps,
-                project_path,
+                project_path: project_path.clone(),
                 capability: Some(capability_snapshot),
+                hooks: Some(harness_plan.compile(project_path.as_deref())),
+                prompt_blocks: harness_plan.prompt_blocks.clone(),
             })
             .await?;
         // Sole terminal commit from EngineOutcome — never scan events or default Completed.
@@ -1774,7 +1789,7 @@ impl RunManager {
                 .clone()
                 .ok_or_else(|| "conversation_id required".to_string())?;
             self.create_run(CreateRunRequest {
-            capability_selection: None,
+                capability_selection: None,
                 conversation_id,
                 provider_id: req.provider_id.clone().unwrap_or_default(),
                 model_id: req.model_id.clone().unwrap_or_default(),
@@ -2191,7 +2206,7 @@ mod tests {
             let rm = RunManager::new_with_store(store.clone());
             let run = rm
                 .create_run(CreateRunRequest {
-            capability_selection: None,
+                    capability_selection: None,
                     conversation_id: "sqlite-events-conv".into(),
                     provider_id: "openai".into(),
                     model_id: "gpt-4o".into(),
@@ -2257,7 +2272,7 @@ mod tests {
             let idempotency_key = format!("run-meta-{}", Uuid::new_v4());
             let run = rm
                 .create_run(CreateRunRequest {
-            capability_selection: None,
+                    capability_selection: None,
                     conversation_id: "run-meta-conv".into(),
                     provider_id: "openai-compatible-provider".into(),
                     model_id: "deepseek-v4-flash".into(),
@@ -2334,7 +2349,7 @@ mod tests {
 
             let idempotency_key = format!("sqlite-idem-{}", Uuid::new_v4());
             let req = CreateRunRequest {
-            capability_selection: None,
+                capability_selection: None,
                 conversation_id: "sqlite-idem-conv".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt-4o".into(),
@@ -2411,7 +2426,7 @@ mod tests {
             let run_id = format!("broken-event-{}", Uuid::new_v4());
             let err = rm
                 .create_run(CreateRunRequest {
-            capability_selection: None,
+                    capability_selection: None,
                     conversation_id: "broken-events-conv".into(),
                     provider_id: "openai".into(),
                     model_id: "gpt-4o".into(),
@@ -2480,8 +2495,8 @@ mod tests {
             let rm = RunManager::new_with_store(store.clone());
             let err = rm
                 .ensure_run_for_start(&StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+                    agent_profile_id: None,
+                    capability_selection: None,
                     run_id: None,
                     conversation_id: Some("trigger-clean-conv".into()),
                     provider_id: Some("openai".into()),
@@ -2550,8 +2565,8 @@ mod tests {
             let rm = RunManager::new();
             let run = rm
                 .ensure_run_for_start(&StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+                    agent_profile_id: None,
+                    capability_selection: None,
                     run_id: None,
                     conversation_id: Some(conversation_id.to_string()),
                     provider_id: Some("openai".into()),
@@ -2779,7 +2794,7 @@ mod tests {
         let rm = RunManager::new();
         let original = rm
             .create_run(CreateRunRequest {
-            capability_selection: None,
+                capability_selection: None,
                 conversation_id: "c1".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt-4o".into(),
@@ -2831,7 +2846,7 @@ mod tests {
         let rm = Arc::new(RunManager::new_with_store(store.clone()));
         let created = rm
             .create_run(CreateRunRequest {
-            capability_selection: None,
+                capability_selection: None,
                 conversation_id: "c-detach".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt-4o".into(),
@@ -2851,8 +2866,8 @@ mod tests {
 
         let immediate = rm
             .start_detached(StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+                agent_profile_id: None,
+                capability_selection: None,
                 run_id: Some(created.id.clone()),
                 conversation_id: None,
                 provider_id: Some("openai".into()),
@@ -2899,8 +2914,8 @@ mod tests {
         // Terminal re-start must fail closed (use retry).
         let err = rm
             .start_detached(StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+                agent_profile_id: None,
+                capability_selection: None,
                 run_id: Some(created.id.clone()),
                 conversation_id: None,
                 provider_id: None,
@@ -2953,7 +2968,7 @@ mod tests {
             };
             let run = rm
                 .create_run(CreateRunRequest {
-            capability_selection: None,
+                    capability_selection: None,
                     conversation_id: "c-restore".into(),
                     provider_id: "openai".into(),
                     model_id: "m".into(),
@@ -3107,7 +3122,7 @@ mod tests {
             let rm = Arc::new(RunManager::new_with_store(store.clone()));
             let created = rm
                 .create_run(CreateRunRequest {
-            capability_selection: None,
+                    capability_selection: None,
                     conversation_id: "c-idem-start".into(),
                     provider_id: "openai".into(),
                     model_id: "gpt-4o".into(),
@@ -3125,8 +3140,8 @@ mod tests {
                 })
                 .unwrap();
             let req = StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+                agent_profile_id: None,
+                capability_selection: None,
                 run_id: Some(created.id.clone()),
                 conversation_id: None,
                 provider_id: Some("openai".into()),
@@ -3179,8 +3194,8 @@ mod tests {
         let rm = RunManager::new_with_store(store.clone());
         let run = rm
             .start(StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+                agent_profile_id: None,
+                capability_selection: None,
                 run_id: None,
                 conversation_id: Some("c1".into()),
                 provider_id: Some("openai".into()),
@@ -3248,8 +3263,8 @@ mod tests {
         // Start the retried run
         let retried_done = rm
             .start(StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+                agent_profile_id: None,
+                capability_selection: None,
                 run_id: Some(retried.id.clone()),
                 conversation_id: None,
                 provider_id: None,
@@ -3307,7 +3322,7 @@ mod tests {
         let rm = Arc::new(RunManager::new());
         let parent = rm
             .create_run(CreateRunRequest {
-            capability_selection: None,
+                capability_selection: None,
                 conversation_id: "c-tree".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt-4o".into(),
@@ -3468,7 +3483,7 @@ mod tests {
         let rm = Arc::new(RunManager::new());
         let run = rm
             .create_run(CreateRunRequest {
-            capability_selection: None,
+                capability_selection: None,
                 conversation_id: "c-cancel".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt-4o".into(),
@@ -3593,8 +3608,8 @@ mod tests {
             rm_start
                 .start_with_seams(
                     StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+                        agent_profile_id: None,
+                        capability_selection: None,
                         run_id: Some(rid),
                         conversation_id: None,
                         provider_id: None,
@@ -3690,7 +3705,7 @@ mod tests {
         let run_key = format!("perm-{}", Uuid::new_v4());
         let run = rm
             .create_run(CreateRunRequest {
-            capability_selection: None,
+                capability_selection: None,
                 conversation_id: "c-perm".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt-4o".into(),
@@ -3763,8 +3778,8 @@ mod tests {
             std::time::Duration::from_secs(6),
             rm.start_with_seams(
                 StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+                    agent_profile_id: None,
+                    capability_selection: None,
                     run_id: Some(run.id.clone()),
                     conversation_id: None,
                     provider_id: None,
@@ -4271,7 +4286,7 @@ mod tests {
         let rm = Arc::new(RunManager::new());
         let run = rm
             .create_run(CreateRunRequest {
-            capability_selection: None,
+                capability_selection: None,
                 conversation_id: "c-codex".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt".into(),
@@ -4290,8 +4305,8 @@ mod tests {
             .unwrap();
         let err = rm
             .start_detached(StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+                agent_profile_id: None,
+                capability_selection: None,
                 run_id: Some(run.id),
                 conversation_id: Some("c-codex".into()),
                 provider_id: Some("openai".into()),
@@ -4323,7 +4338,7 @@ mod tests {
         let rm = Arc::new(RunManager::new());
         let run = rm
             .create_run(CreateRunRequest {
-            capability_selection: None,
+                capability_selection: None,
                 conversation_id: "c-rt".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt".into(),
@@ -4342,8 +4357,8 @@ mod tests {
             .unwrap();
         let err = rm
             .start_detached(StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+                agent_profile_id: None,
+                capability_selection: None,
                 run_id: Some(run.id),
                 conversation_id: Some("c-rt".into()),
                 provider_id: Some("openai".into()),
@@ -4372,7 +4387,7 @@ mod tests {
         let rm = RunManager::new();
         let run = rm
             .create_run(CreateRunRequest {
-            capability_selection: None,
+                capability_selection: None,
                 conversation_id: "c-preserve".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt".into(),
@@ -4405,7 +4420,7 @@ mod tests {
         let rm = RunManager::new();
         let run = rm
             .create_run(CreateRunRequest {
-            capability_selection: None,
+                capability_selection: None,
                 conversation_id: "c-retry-rt".into(),
                 provider_id: "openai".into(),
                 model_id: "gpt".into(),
@@ -4452,7 +4467,7 @@ mod tests {
         let rm = Arc::new(RunManager::new());
         let run = rm
             .create_run(CreateRunRequest {
-            capability_selection: None,
+                capability_selection: None,
                 conversation_id: "c-fail".into(),
                 provider_id: "missing-provider".into(),
                 model_id: "m".into(),
@@ -4529,7 +4544,7 @@ mod tests {
             let rm = RunManager::new_with_store(store.clone());
             let run = rm
                 .create_run(CreateRunRequest {
-            capability_selection: None,
+                    capability_selection: None,
                     conversation_id: "host-conv".into(),
                     provider_id: "openai".into(),
                     model_id: "gpt-4o".into(),
@@ -4549,8 +4564,8 @@ mod tests {
             // Host path: run_id present, trigger_message_id is host UUID (ignored).
             let ensured = rm
                 .ensure_run_for_start(&StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+                    agent_profile_id: None,
+                    capability_selection: None,
                     run_id: Some(run.id.clone()),
                     conversation_id: Some("host-conv".into()),
                     provider_id: Some("openai".into()),
@@ -4584,8 +4599,8 @@ mod tests {
             // Idempotent: second ensure does not double-append.
             let again = rm
                 .ensure_run_for_start(&StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+                    agent_profile_id: None,
+                    capability_selection: None,
                     run_id: Some(run.id.clone()),
                     conversation_id: Some("host-conv".into()),
                     provider_id: Some("openai".into()),
@@ -4641,7 +4656,7 @@ mod tests {
             let rm = Arc::new(RunManager::new());
             let run = rm
                 .create_run(CreateRunRequest {
-            capability_selection: None,
+                    capability_selection: None,
                     conversation_id: format!("c-race-{i}"),
                     provider_id: "openai".into(),
                     model_id: "gpt-4o".into(),
@@ -4665,8 +4680,8 @@ mod tests {
             let start_h = tokio::spawn(async move {
                 rm_start
                     .start(StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+                        agent_profile_id: None,
+                        capability_selection: None,
                         run_id: Some(rid),
                         conversation_id: None,
                         provider_id: None,

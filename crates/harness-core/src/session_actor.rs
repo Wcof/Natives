@@ -175,7 +175,11 @@ impl SessionCoordinator {
         Arc::new(Self::new())
     }
 
-    fn with_actor<R>(&self, conversation_id: &str, f: impl FnOnce(&mut ConversationActor) -> R) -> R {
+    fn with_actor<R>(
+        &self,
+        conversation_id: &str,
+        f: impl FnOnce(&mut ConversationActor) -> R,
+    ) -> R {
         let mut map = self.inner.lock().expect("session coordinator lock");
         let actor = map.entry(conversation_id.to_string()).or_default();
         f(actor)
@@ -280,7 +284,12 @@ impl SessionCoordinator {
         })
     }
 
-    pub fn update(&self, conversation_id: &str, id: &str, content: &str) -> Result<QueueItem, String> {
+    pub fn update(
+        &self,
+        conversation_id: &str,
+        id: &str,
+        content: &str,
+    ) -> Result<QueueItem, String> {
         self.with_actor(conversation_id, |actor| {
             for item in actor.prompt_queue.iter_mut() {
                 if item.id == id {
@@ -652,9 +661,7 @@ mod tests {
             Some("q-urgent".into()),
         );
 
-        let action = h
-            .cancel_and_send("c1", &item.id)
-            .expect("cancel_and_send");
+        let action = h.cancel_and_send("c1", &item.id).expect("cancel_and_send");
         match action {
             CoordinatorAction::CancelThenStart { item: i } => {
                 assert_eq!(i.content, "urgent");
@@ -739,7 +746,10 @@ mod tests {
         ] {
             h.interject("c1", format!("inj-{point:?}"));
             let action = h.on_safe_point("c1", point);
-            assert!(matches!(action, CoordinatorAction::InjectInterjection { .. }));
+            assert!(matches!(
+                action,
+                CoordinatorAction::InjectInterjection { .. }
+            ));
         }
     }
 

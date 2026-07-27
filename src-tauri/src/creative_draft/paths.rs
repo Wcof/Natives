@@ -55,7 +55,10 @@ pub fn revision_path(data_dir: &Path, draft_id: &str, revision: i64) -> Result<P
     if revision < 1 {
         return Err(Error::InvalidInput("revision must be >= 1".into()));
     }
-    Ok(draft_dir(data_dir, draft_id)?.join(format!("{REVISION_PREFIX}{revision}{REVISION_SUFFIX}")))
+    Ok(
+        draft_dir(data_dir, draft_id)?
+            .join(format!("{REVISION_PREFIX}{revision}{REVISION_SUFFIX}")),
+    )
 }
 
 /// Parse `rev-<n>.html` back into its revision number.
@@ -97,7 +100,16 @@ mod tests {
 
     #[test]
     fn rejects_traversal_shaped_draft_ids() {
-        for bad in ["..", "../etc", "a/b", "a\\b", "a\0b", "A", "under_score", ""] {
+        for bad in [
+            "..",
+            "../etc",
+            "a/b",
+            "a\\b",
+            "a\0b",
+            "A",
+            "under_score",
+            "",
+        ] {
             assert!(
                 validate_draft_id(bad).is_err(),
                 "expected {bad:?} to be rejected"

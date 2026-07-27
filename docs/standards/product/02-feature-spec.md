@@ -289,7 +289,11 @@ Dashboard
 │   └── 后台任务存储（task.list / wait / cancel）           P1 ← task_store.rs
 └── 引擎设置页
     ├── 执行引擎面板（三引擎选择/五态状态解释/偏好漂移警告/工具开关/自愈熔断；能力矩阵为静态说明文案，非实时探测） P0 ← RuntimePanel.tsx
-    └── 引擎能力面板（限流设置可写；MCP/调度/扩展/Skills 只读列表） P1 ← EngineCapabilitiesPanel.tsx
+    ├── 引擎能力面板（限流设置可写；MCP/调度/扩展/Skills 只读列表） P1 ← EngineCapabilitiesPanel.tsx
+    └── Native Harness 控制面（设计就绪；后端 Phase 2 partial，Settings UI 未实施） P0 ← native-harness-control-plane-design.md
+        ├── Overview / Blueprint / Hooks / Prompts              P0
+        ├── Live Runs / Audit                                   P1
+        └── Run 级不可变 Hook + Prompt Plan 快照                P0
 ```
 
 ### H. 个人创意工坊（Workshop，三来源）【Workshop / Embed】— P0

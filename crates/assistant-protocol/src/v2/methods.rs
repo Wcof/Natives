@@ -10,13 +10,13 @@ pub const ALL_METHODS: &[&str] = &[
     "provider.discoverModels",
     "provider.test",
     "conversation.create",
-"conversation.list",
-"conversation.listPage",
+    "conversation.list",
+    "conversation.listPage",
     "conversation.get",
     "conversation.fork",
     "conversation.update",
-"conversation.getMessages",
-"conversation.getMessagesPage",
+    "conversation.getMessages",
+    "conversation.getMessagesPage",
     "conversation.appendMessage",
     "conversation.rename",
     "conversation.update_model",
@@ -115,6 +115,12 @@ pub const ALL_METHODS: &[&str] = &[
     "harness.binding.set",
     "harness.run.getSnapshot",
     "harness.audit.list",
+    "harness.prompt.preview",
+    "harness.source.list",
+    "harness.source.acknowledgeDrift",
+    "harness.subscribe",
+    "harness.trace.list",
+    "harness.audit.export",
     // Capability library (ADR-0016): configuration surface, distinct from the
     // mcp.* / skill.* runtime surfaces above.
     "capability.skill.list",
@@ -158,13 +164,13 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "provider.discoverModels",
     "provider.test",
     "conversation.create",
-"conversation.list",
-"conversation.listPage",
+    "conversation.list",
+    "conversation.listPage",
     "conversation.get",
     "conversation.fork",
     "conversation.update",
-"conversation.getMessages",
-"conversation.getMessagesPage",
+    "conversation.getMessages",
+    "conversation.getMessagesPage",
     "conversation.appendMessage",
     "conversation.rename",
     "conversation.update_model",
@@ -266,6 +272,12 @@ pub const IMPLEMENTED_METHODS: &[&str] = &[
     "harness.binding.set",
     "harness.run.getSnapshot",
     "harness.audit.list",
+    "harness.prompt.preview",
+    "harness.source.list",
+    "harness.source.acknowledgeDrift",
+    "harness.subscribe",
+    "harness.trace.list",
+    "harness.audit.export",
     // Capability library (ADR-0016) — advertisement must never outrun
     // implementation. `rpc.rs` routes the whole family by the `capability.`
     // prefix, guarded by `is_implemented_method`, into `capability::request`,
@@ -456,6 +468,12 @@ pub mod names {
     pub const HARNESS_BINDING_SET: &str = "harness.binding.set";
     pub const HARNESS_RUN_GET_SNAPSHOT: &str = "harness.run.getSnapshot";
     pub const HARNESS_AUDIT_LIST: &str = "harness.audit.list";
+    pub const HARNESS_PROMPT_PREVIEW: &str = "harness.prompt.preview";
+    pub const HARNESS_SOURCE_LIST: &str = "harness.source.list";
+    pub const HARNESS_SOURCE_ACKNOWLEDGE_DRIFT: &str = "harness.source.acknowledgeDrift";
+    pub const HARNESS_SUBSCRIBE: &str = "harness.subscribe";
+    pub const HARNESS_TRACE_LIST: &str = "harness.trace.list";
+    pub const HARNESS_AUDIT_EXPORT: &str = "harness.audit.export";
 
     // Capability library (ADR-0016).
     pub const CAPABILITY_SKILL_LIST: &str = "capability.skill.list";
@@ -513,6 +531,12 @@ pub const HARNESS_METHODS: &[&str] = &[
     names::HARNESS_BINDING_SET,
     names::HARNESS_RUN_GET_SNAPSHOT,
     names::HARNESS_AUDIT_LIST,
+    names::HARNESS_PROMPT_PREVIEW,
+    names::HARNESS_SOURCE_LIST,
+    names::HARNESS_SOURCE_ACKNOWLEDGE_DRIFT,
+    names::HARNESS_SUBSCRIBE,
+    names::HARNESS_TRACE_LIST,
+    names::HARNESS_AUDIT_EXPORT,
 ];
 
 /// Returns true if `method` is a known v2 RPC method.
@@ -680,7 +704,10 @@ mod tests {
                 "{method} appeared in ALL_METHODS — server-driven MCP calls need a \
                  consent design before they are catalogued"
             );
-            assert!(!is_implemented_method(method), "should not advertise: {method}");
+            assert!(
+                !is_implemented_method(method),
+                "should not advertise: {method}"
+            );
         }
     }
 

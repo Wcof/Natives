@@ -33,7 +33,9 @@ pub fn skills_enable(path: String) -> Result<()> {
     let dest = grandparent.join(&skill_name);
 
     if dest.exists() {
-        return Err(Error::Internal("a directory with the same name already exists at the target location".into()));
+        return Err(Error::Internal(
+            "a directory with the same name already exists at the target location".into(),
+        ));
     }
 
     let meta = std::fs::symlink_metadata(skill_path).map_err(Error::Io)?;
@@ -75,7 +77,9 @@ pub fn skills_disable(path: String) -> Result<()> {
     std::fs::create_dir_all(&disabled_dir).map_err(Error::Io)?;
 
     if dest.exists() {
-        return Err(Error::Internal("a directory with the same name already exists at the target location".into()));
+        return Err(Error::Internal(
+            "a directory with the same name already exists at the target location".into(),
+        ));
     }
 
     let meta = std::fs::symlink_metadata(skill_path).map_err(Error::Io)?;
@@ -142,7 +146,10 @@ fn trash_or_delete(skill_path: &Path) -> Result<()> {
                     // Finder 自动化未授权，降级为永久删除
                     return force_delete(skill_path);
                 }
-                return Err(Error::Internal(format!("failed to move to trash: {}", stderr)));
+                return Err(Error::Internal(format!(
+                    "failed to move to trash: {}",
+                    stderr
+                )));
             }
             Err(_) => {
                 // osascript 不可用，降级为永久删除

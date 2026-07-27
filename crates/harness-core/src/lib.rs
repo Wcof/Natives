@@ -25,13 +25,13 @@ pub mod topology;
 pub mod validation;
 
 pub use session_actor::{
-    CoordinatorAction, PromptSource, QueueItem, QueueItemStatus, SafePoint, SessionActorSnapshot,
-    SessionCoordinator, is_parallel_safe_tool, PARALLEL_SAFE_MAX_CONCURRENCY,
+    is_parallel_safe_tool, CoordinatorAction, PromptSource, QueueItem, QueueItemStatus, SafePoint,
+    SessionActorSnapshot, SessionCoordinator, PARALLEL_SAFE_MAX_CONCURRENCY,
 };
 
 pub use hooks::{
-    Condition, ConditionOperator, HookDefinition, HookEvent, HookFailurePolicy, HookId, HookKind,
-    HookScope, HookSource, tool_pattern_matches,
+    tool_pattern_matches, Condition, ConditionOperator, HookDefinition, HookEvent,
+    HookFailurePolicy, HookId, HookKind, HookScope, HookSource,
 };
 
 pub use blueprint::{
@@ -41,9 +41,11 @@ pub use blueprint::{
 pub use resolver::{
     is_locked, resolve, FieldOverride, ProfileLayer, Resolution, ResolutionIssue, ResolvedHook,
 };
-pub use snapshot::{LayerRef, ResolvedHarnessSnapshot};
+pub use snapshot::{LayerRef, PromptPlanSummary, ResolvedHarnessSnapshot};
 pub use topology::{
     hook_point_of, safe_point_name, stage_of, HookPoint, Stage, StageId, TriggerSite, STAGES,
     TOPOLOGY_VERSION,
 };
-pub use validation::{diff, validate, BlueprintChange, Severity, ValidationFinding, ValidationReport};
+pub use validation::{
+    diff, validate, BlueprintChange, Severity, ValidationFinding, ValidationReport,
+};

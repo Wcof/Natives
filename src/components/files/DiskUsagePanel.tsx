@@ -33,7 +33,7 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
   const mounted = useHydrated();
   const [elapsed, setElapsed] = useState(0);
 
-  
+
 
   useEffect(() => {
     window.nativesAPI?.getLocale?.().then((l) => { if (l === 'en') setLocale('en'); }).catch(() => {});
@@ -80,7 +80,7 @@ export default function DiskUsagePanel({ dirPath, onClose, onNavigate }: DiskUsa
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     load(currentPath);
   }, [currentPath, load]);
 

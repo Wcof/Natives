@@ -360,7 +360,10 @@ mod tests {
         f.set_modified(newer).unwrap();
         let r = locate("shot", Some(&dir.to_string_lossy()), &[]).unwrap();
         assert!(r.found);
-        assert!(r.path.unwrap().ends_with("shot 2.png"), "同前缀取 mtime 最新");
+        assert!(
+            r.path.unwrap().ends_with("shot 2.png"),
+            "同前缀取 mtime 最新"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

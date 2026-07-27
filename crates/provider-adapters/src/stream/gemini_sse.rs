@@ -63,7 +63,9 @@ fn parse_gemini_value(value: &Value) -> Vec<ProviderEvent> {
         // implicit caching, and explicit CachedContent is a separate stateful
         // resource this adapter does not create, so nothing is sent on the way
         // out; this is read-back only.
-        let cache_read = usage.get("cachedContentTokenCount").and_then(|v| v.as_u64());
+        let cache_read = usage
+            .get("cachedContentTokenCount")
+            .and_then(|v| v.as_u64());
         events.push(ProviderEvent::Usage(ProviderUsage {
             input_tokens: match cache_read {
                 Some(cached) => prompt_tokens.saturating_sub(cached),
@@ -96,7 +98,11 @@ fn parse_gemini_value(value: &Value) -> Vec<ProviderEvent> {
             .unwrap_or_default();
         for (index, part) in parts.into_iter().enumerate() {
             if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                if part.get("thought").and_then(|t| t.as_bool()).unwrap_or(false) {
+                if part
+                    .get("thought")
+                    .and_then(|t| t.as_bool())
+                    .unwrap_or(false)
+                {
                     events.push(ProviderEvent::ReasoningDelta(text.to_string()));
                 } else if !text.is_empty() {
                     events.push(ProviderEvent::TextDelta(text.to_string()));
@@ -141,7 +147,9 @@ mod tests {
           "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 5}
         }"#;
         let events = parse_gemini_chunk(chunk);
-        assert!(events.iter().any(|e| matches!(e, ProviderEvent::TextDelta(t) if t == "Hello")));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, ProviderEvent::TextDelta(t) if t == "Hello")));
         assert!(events.iter().any(|e| matches!(
             e,
             ProviderEvent::ToolCallDelta { name: Some(n), arguments_delta, .. }

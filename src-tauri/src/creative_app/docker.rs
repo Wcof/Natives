@@ -9,7 +9,11 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
 
-async fn run_capture(program: &str, args: &[&str], env: &[(&str, &str)]) -> Result<(i32, String, String)> {
+async fn run_capture(
+    program: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Result<(i32, String, String)> {
     let mut cmd = Command::new(program);
     cmd.args(args)
         .stdout(Stdio::piped())
@@ -73,7 +77,10 @@ pub async fn engine_status() -> DockerEngineStatus {
             version: None,
             compose_available: false,
             compose_version: None,
-            error: Some(format!("docker info exit {code}: {}", truncate(&stderr, 200))),
+            error: Some(format!(
+                "docker info exit {code}: {}",
+                truncate(&stderr, 200)
+            )),
         },
         Err(e) => DockerEngineStatus {
             available: false,
@@ -100,14 +107,7 @@ pub async fn require_docker() -> Result<DockerEngineStatus> {
 
 pub async fn compose_pull(project: &str, compose_file: &Path) -> Result<()> {
     let file = compose_file.to_string_lossy();
-    let args = [
-        "compose",
-        "-p",
-        project,
-        "-f",
-        file.as_ref(),
-        "pull",
-    ];
+    let args = ["compose", "-p", project, "-f", file.as_ref(), "pull"];
     let (code, _, stderr) = run_capture("docker", &args, &[]).await?;
     if code != 0 {
         return Err(fail_cmd("docker", &args, code, &stderr));
@@ -115,7 +115,11 @@ pub async fn compose_pull(project: &str, compose_file: &Path) -> Result<()> {
     Ok(())
 }
 
-pub async fn compose_up(project: &str, compose_file: &Path, env_pairs: &[(String, String)]) -> Result<()> {
+pub async fn compose_up(
+    project: &str,
+    compose_file: &Path,
+    env_pairs: &[(String, String)],
+) -> Result<()> {
     let file = compose_file.to_string_lossy();
     // Pass env via process environment so values never appear in argv.
     let mut env_refs: Vec<(&str, &str)> = env_pairs
@@ -123,11 +127,7 @@ pub async fn compose_up(project: &str, compose_file: &Path, env_pairs: &[(String
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
     // Also set COMPOSE project label via --project-name already
-    let label = resource_label(
-        project
-            .strip_prefix("natives-")
-            .unwrap_or(project),
-    );
+    let label = resource_label(project.strip_prefix("natives-").unwrap_or(project));
     // docker compose does not take arbitrary labels on up easily for all resources;
     // we rely on container name project prefix + inspect by label when possible.
     let _ = label;
@@ -258,7 +258,10 @@ pub async fn docker_create(
 
     // Ensure secrets don't leak into logs of args
     for a in &arg_refs {
-        if env_values.values().any(|v| !v.is_empty() && a.contains(v.as_str())) {
+        if env_values
+            .values()
+            .any(|v| !v.is_empty() && a.contains(v.as_str()))
+        {
             return Err(Error::Internal(
                 "internal error: secret leaked into docker argv".into(),
             ));
@@ -304,12 +307,7 @@ pub async fn docker_rm(container_name: &str, force: bool) -> Result<()> {
 }
 
 pub async fn docker_inspect_running(container_name: &str) -> Result<bool> {
-    let args = [
-        "inspect",
-        "-f",
-        "{{.State.Running}}",
-        container_name,
-    ];
+    let args = ["inspect", "-f", "{{.State.Running}}", container_name];
     let (code, stdout, _) = run_capture("docker", &args, &[]).await?;
     if code != 0 {
         return Ok(false);

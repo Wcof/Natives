@@ -38,9 +38,18 @@ fn test_result_type_alias() {
 fn test_compare_versions() {
     // check_for_updates requires full AppState (DB), so it's tested via integration tests.
     // Unit-test the compare_versions helper instead:
-    assert_eq!(natives_lib::update_checker::compare_versions("1.0.0", "1.0.1"), -1);
-    assert_eq!(natives_lib::update_checker::compare_versions("1.0.1", "1.0.0"), 1);
-    assert_eq!(natives_lib::update_checker::compare_versions("1.0.0", "1.0.0"), 0);
+    assert_eq!(
+        natives_lib::update_checker::compare_versions("1.0.0", "1.0.1"),
+        -1
+    );
+    assert_eq!(
+        natives_lib::update_checker::compare_versions("1.0.1", "1.0.0"),
+        1
+    );
+    assert_eq!(
+        natives_lib::update_checker::compare_versions("1.0.0", "1.0.0"),
+        0
+    );
 }
 
 // ── Usage response tests ──
@@ -63,8 +72,14 @@ fn test_usage_response_camelcase_serialization() {
     let json = serde_json::to_value(&u).unwrap();
     // Must be camelCase in JSON output
     assert!(json.get("modelStats").is_some(), "model_stats → modelStats");
-    assert!(json.get("inputTokens").is_some(), "input_tokens → inputTokens");
-    assert!(json.get("sourceConfigured").is_some(), "source_configured → sourceConfigured");
+    assert!(
+        json.get("inputTokens").is_some(),
+        "input_tokens → inputTokens"
+    );
+    assert!(
+        json.get("sourceConfigured").is_some(),
+        "source_configured → sourceConfigured"
+    );
 }
 
 #[test]

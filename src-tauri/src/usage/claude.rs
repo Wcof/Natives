@@ -4,10 +4,9 @@
 
 #![allow(unused_imports, dead_code, unused_variables)]
 use crate::usage::{
-    now_ms, UsageActivityBucket, UsageDailyRecord, UsageQuality, UsageSessionRecord,
-    UsageSourceState, UsageSourceStatus, UsageWarning, UsageWarningCode, DurationMethod,
-    SourceCapabilities, UsageSourceKind, mask_home, UsageDimension,
-    UsageBreadcrumb, BreadcrumbKind,
+    mask_home, now_ms, BreadcrumbKind, DurationMethod, SourceCapabilities, UsageActivityBucket,
+    UsageBreadcrumb, UsageDailyRecord, UsageDimension, UsageQuality, UsageSessionRecord,
+    UsageSourceKind, UsageSourceState, UsageSourceStatus, UsageWarning, UsageWarningCode,
 };
 use crate::Error;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
@@ -57,7 +56,11 @@ struct ClaudeUsage {
     input_tokens: Option<i64>,
     #[serde(default, alias = "outputTokens")]
     output_tokens: Option<i64>,
-    #[serde(default, alias = "cacheCreationInputTokens", alias = "cache_creation_tokens")]
+    #[serde(
+        default,
+        alias = "cacheCreationInputTokens",
+        alias = "cache_creation_tokens"
+    )]
     cache_creation_input_tokens: Option<i64>,
     #[serde(default, alias = "cacheReadInputTokens", alias = "cache_read_tokens")]
     cache_read_input_tokens: Option<i64>,
@@ -123,11 +126,7 @@ pub struct ClaudeScanResult {
 }
 
 /// Scan Claude project directories for JSONL event files.
-pub fn scan_claude_logs(
-    start_ms: i64,
-    end_ms: i64,
-    tz: &chrono_tz::Tz,
-) -> ClaudeScanResult {
+pub fn scan_claude_logs(start_ms: i64, end_ms: i64, tz: &chrono_tz::Tz) -> ClaudeScanResult {
     let mut warnings = Vec::new();
     let mut best_by_key: HashMap<String, ParsedEvent> = HashMap::new();
 
@@ -139,7 +138,10 @@ pub fn scan_claude_logs(
                 code: UsageWarningCode::SourceUnavailable,
                 details: {
                     let mut m = HashMap::new();
-                    m.insert("reason".into(), serde_json::Value::String("no home dir".into()));
+                    m.insert(
+                        "reason".into(),
+                        serde_json::Value::String("no home dir".into()),
+                    );
                     m
                 },
             });
@@ -250,10 +252,7 @@ pub fn scan_claude_logs(
                 .unwrap_or("")
                 .to_string();
             let req_id = event.request_id.as_deref().unwrap_or("").to_string();
-            let stop_reason = event
-                .message
-                .as_ref()
-                .and_then(|m| m.stop_reason.clone());
+            let stop_reason = event.message.as_ref().and_then(|m| m.stop_reason.clone());
 
             // IMPORTANT: skip pure-zero rows BEFORE claiming a dedup key.
             // Streaming message_start snapshots often write zeros first; the old
@@ -443,10 +442,8 @@ fn build_claude_daily(events: &[ParsedEvent]) -> Vec<UsageDailyRecord> {
 
 fn build_claude_activity(events: &[ParsedEvent]) -> Vec<UsageActivityBucket> {
     // (hour, source, model, project) -> (token sum, event timestamps for gap duration)
-    let mut groups: HashMap<
-        (i64, String, Option<String>, Option<String>),
-        (i64, Vec<i64>),
-    > = HashMap::new();
+    let mut groups: HashMap<(i64, String, Option<String>, Option<String>), (i64, Vec<i64>)> =
+        HashMap::new();
     let mut assistant_msg_count: HashMap<(i64, String, Option<String>, Option<String>), i64> =
         HashMap::new();
 
@@ -799,7 +796,10 @@ mod tests {
         // Local midnight Asia/Shanghai
         let local = tz.timestamp_millis_opt(now).single().unwrap();
         let midnight = local.date_naive().and_hms_opt(0, 0, 0).unwrap();
-        let start = tz.from_local_datetime(&midnight).unwrap().timestamp_millis();
+        let start = tz
+            .from_local_datetime(&midnight)
+            .unwrap()
+            .timestamp_millis();
         let home = crate::usage::tool_home("CLAUDE_CONFIG_DIR", ".claude");
         let projects = home.as_ref().map(|h| h.join("projects"));
         let mut file_count = 0usize;
@@ -869,7 +869,10 @@ mod tests {
         let now = crate::usage::now_ms();
         let local = tz.timestamp_millis_opt(now).single().unwrap();
         let midnight = local.date_naive().and_hms_opt(0, 0, 0).unwrap();
-        let start = tz.from_local_datetime(&midnight).unwrap().timestamp_millis()
+        let start = tz
+            .from_local_datetime(&midnight)
+            .unwrap()
+            .timestamp_millis()
             - 14 * 24 * 60 * 60 * 1_000;
         for line in reader.lines() {
             let Ok(line) = line else { continue };
@@ -929,7 +932,11 @@ mod tests {
         let line = r#"{"type":"assistant","sessionId":"s","session_id":"s","timestamp":"2026-07-20T01:34:52.928Z","cwd":"/Users/ldh/Downloads/project/AiNative/Natives","message":{"id":"chatcmpl-3a8b072f17084161b60da6e9","model":"grok-4.5","stop_reason":"end_turn","usage":{"input_tokens":335978,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":291,"server_tool_use":{"web_search_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_5m_input_tokens":0},"inference_geo":"","iterations":[],"speed":"standard"}}}"#;
         let event = parse_claude_json_line(line).expect("deserialize real line");
         assert_eq!(event.event_type.as_deref(), Some("assistant"));
-        let usage = event.message.as_ref().and_then(|m| m.usage.as_ref()).expect("usage");
+        let usage = event
+            .message
+            .as_ref()
+            .and_then(|m| m.usage.as_ref())
+            .expect("usage");
         assert_eq!(usage.input_tokens, Some(335978));
         assert_eq!(usage.output_tokens, Some(291));
         let ms = parse_timestamp_to_ms(&event.timestamp);
@@ -975,11 +982,18 @@ mod tests {
         let now = crate::usage::now_ms();
         let local = tz.timestamp_millis_opt(now).single().unwrap();
         let midnight = local.date_naive().and_hms_opt(0, 0, 0).unwrap();
-        let start = tz.from_local_datetime(&midnight).unwrap().timestamp_millis()
+        let start = tz
+            .from_local_datetime(&midnight)
+            .unwrap()
+            .timestamp_millis()
             - 14 * 24 * 60 * 60 * 1_000;
         let result = scan_claude_logs(start, now, &tz);
         std::env::remove_var("CLAUDE_CONFIG_DIR");
-        let total: i64 = result.daily.iter().map(|r| r.total_tokens.unwrap_or(0)).sum();
+        let total: i64 = result
+            .daily
+            .iter()
+            .map(|r| r.total_tokens.unwrap_or(0))
+            .sum();
         eprintln!(
             "real-file scan daily_rows={} sessions={} total={total} breadcrumbs={:?}",
             result.daily.len(),
@@ -1001,10 +1015,8 @@ mod tests {
         let _env_lock = claude_env_lock();
         // Real Claude Code lines often include nested usage fields
         // (server_tool_use, cache_creation, etc). Ensure we still parse them.
-        let root = std::env::temp_dir().join(format!(
-            "natives-claude-fixture-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("natives-claude-fixture-{}", std::process::id()));
         let project = root.join("projects/demo");
         std::fs::create_dir_all(&project).unwrap();
         // Three stream snapshots for same message id: zeros, partial, final.
@@ -1027,9 +1039,16 @@ mod tests {
         std::env::remove_var("CLAUDE_CONFIG_DIR");
         let _ = std::fs::remove_dir_all(root);
 
-        let total: i64 = result.daily.iter().map(|r| r.total_tokens.unwrap_or(0)).sum();
+        let total: i64 = result
+            .daily
+            .iter()
+            .map(|r| r.total_tokens.unwrap_or(0))
+            .sum();
         // msg_1 final = 1000+50+5000 = 6050; msg_2 = 2000+20+100 = 2120; total 8170
         assert_eq!(result.sessions.len(), 2.min(result.sessions.len()).max(1));
-        assert_eq!(total, 8170, "must keep final billable rows, not zeros/partials only");
+        assert_eq!(
+            total, 8170,
+            "must keep final billable rows, not zeros/partials only"
+        );
     }
 }

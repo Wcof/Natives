@@ -137,16 +137,9 @@ pub fn wrap_command_macos(
 ) -> Result<(String, Vec<String>), String> {
     let sb = macos_seatbelt_profile(profile, project_root, runtime_dir)?;
     // Write profile to a temp file for sandbox-exec -f
-    let path = std::env::temp_dir().join(format!(
-        "natives-sb-{}.sb",
-        uuid::Uuid::new_v4()
-    ));
+    let path = std::env::temp_dir().join(format!("natives-sb-{}.sb", uuid::Uuid::new_v4()));
     std::fs::write(&path, sb).map_err(|e| format!("write seatbelt profile: {e}"))?;
-    let mut out_args = vec![
-        "-f".into(),
-        path.display().to_string(),
-        program.to_string(),
-    ];
+    let mut out_args = vec!["-f".into(), path.display().to_string(), program.to_string()];
     out_args.extend(args.iter().cloned());
     Ok(("/usr/bin/sandbox-exec".into(), out_args))
 }
@@ -208,8 +201,7 @@ mod tests {
     fn seatbelt_profile_contains_project_path() {
         let tmp = std::env::temp_dir().join(format!("sb-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).unwrap();
-        let profile =
-            macos_seatbelt_profile(SandboxProfile::ReadOnly, &tmp, &tmp).unwrap();
+        let profile = macos_seatbelt_profile(SandboxProfile::ReadOnly, &tmp, &tmp).unwrap();
         assert!(profile.contains("deny default") || profile.contains("(deny default)"));
         let _ = std::fs::remove_dir_all(&tmp);
     }

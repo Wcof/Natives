@@ -5,8 +5,8 @@
 //! - Unknown protocol major versions are rejected.
 //! - Fixture JSON files can be deserialized correctly.
 
-use assistant_protocol::v1::*;
 use assistant_protocol::error::*;
+use assistant_protocol::v1::*;
 use assistant_protocol::version::*;
 
 // ---------------------------------------------------------------------------
@@ -56,7 +56,11 @@ fn test_run_status_serialization() {
 
     for (status, expected) in cases {
         let json = serde_json::to_value(&status).unwrap();
-        assert_eq!(json, expected, "RunStatus::{:?} should serialize to '{}'", status, expected);
+        assert_eq!(
+            json, expected,
+            "RunStatus::{:?} should serialize to '{}'",
+            status, expected
+        );
     }
 }
 
@@ -95,11 +99,9 @@ fn test_message_roundtrip() {
         conversation_id: "conv-001".to_string(),
         parent_message_id: None,
         role: MessageRole::User,
-        content_blocks: vec![
-            ContentBlock::Text(TextContent {
-                text: "Hello".to_string(),
-            }),
-        ],
+        content_blocks: vec![ContentBlock::Text(TextContent {
+            text: "Hello".to_string(),
+        })],
         status: MessageStatus::Complete,
         usage: Some(MessageUsage {
             input_tokens: 10,
@@ -264,7 +266,11 @@ fn test_provider_type_serialization() {
 
     for (pt, expected) in cases {
         let json = serde_json::to_value(&pt).unwrap();
-        assert_eq!(json, expected, "ProviderType::{:?} should serialize to '{}'", pt, expected);
+        assert_eq!(
+            json, expected,
+            "ProviderType::{:?} should serialize to '{}'",
+            pt, expected
+        );
     }
 }
 

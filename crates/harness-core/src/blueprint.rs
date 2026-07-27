@@ -9,14 +9,14 @@
 //! typo silently doing nothing is impossible, and a document written by a newer
 //! Daemon fails loudly on an older one instead of being half-applied.
 
-use crate::hooks::{HookFailurePolicy, HookId};
+use crate::hooks::{HookEvent, HookFailurePolicy, HookId, HookKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 /// Bumped when the Blueprint schema itself changes shape.
-pub const BLUEPRINT_SCHEMA_VERSION: u32 = 1;
+pub const BLUEPRINT_SCHEMA_VERSION: u32 = 2;
 
 /// Which Hook dispatch semantics a published version commits to.
 ///
@@ -64,6 +64,42 @@ pub struct HookOverlay {
     pub timeout_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_policy: Option<HookFailurePolicy>,
+}
+
+/// Natives-owned executable Hook. Imported Hooks can only be overlaid; these
+/// definitions are the sole editable executable surface.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeHookSpec {
+    pub id: String,
+    pub event: HookEvent,
+    pub kind: HookKind,
+    #[serde(default)]
+    pub order: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matcher: Option<String>,
+    #[serde(default = "default_timeout")]
+    pub timeout_ms: u64,
+    #[serde(default)]
+    pub failure_policy: HookFailurePolicy,
+    #[serde(default)]
+    pub trusted: bool,
+}
+
+fn default_timeout() -> u64 {
+    10_000
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PromptBlock {
+    pub id: String,
+    pub label: String,
+    pub content: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub order: i32,
 }
 
 impl HookOverlay {
@@ -122,6 +158,12 @@ pub struct HarnessBlueprint {
     pub hook_semantics_version: HookSemanticsVersion,
     #[serde(default)]
     pub hooks: Vec<HookOverlay>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hook_overlays: Vec<HookOverlay>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub native_hooks: Vec<NativeHookSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prompt_blocks: Vec<PromptBlock>,
 }
 
 impl Default for HarnessBlueprint {
@@ -136,6 +178,9 @@ impl Default for HarnessBlueprint {
             schema_version: BLUEPRINT_SCHEMA_VERSION,
             hook_semantics_version: HookSemanticsVersion::LegacyV1,
             hooks: Vec::new(),
+            hook_overlays: Vec::new(),
+            native_hooks: Vec::new(),
+            prompt_blocks: Vec::new(),
         }
     }
 }
@@ -150,14 +195,14 @@ impl HarnessBlueprint {
     }
 
     fn check_shape(&self) -> Result<(), String> {
-        if self.schema_version != BLUEPRINT_SCHEMA_VERSION {
+        if self.schema_version != 1 && self.schema_version != BLUEPRINT_SCHEMA_VERSION {
             return Err(format!(
                 "blueprint schema_version {} is not supported (this daemon speaks {})",
                 self.schema_version, BLUEPRINT_SCHEMA_VERSION
             ));
         }
         let mut seen = std::collections::BTreeSet::new();
-        for overlay in &self.hooks {
+        for overlay in self.overlays() {
             if !seen.insert(overlay.hook_id.clone()) {
                 return Err(format!(
                     "duplicate overlay for hook {}: a document must state each \
@@ -166,11 +211,27 @@ impl HarnessBlueprint {
                 ));
             }
         }
+        let mut native_ids = std::collections::BTreeSet::new();
+        for hook in &self.native_hooks {
+            let parsed = uuid::Uuid::parse_str(&hook.id)
+                .map_err(|_| format!("native hook id must be a UUID: {}", hook.id))?;
+            if !native_ids.insert(parsed) {
+                return Err(format!("duplicate native hook id: {}", hook.id));
+            }
+        }
         Ok(())
     }
 
+    pub fn overlays(&self) -> &[HookOverlay] {
+        if self.hook_overlays.is_empty() {
+            &self.hooks
+        } else {
+            &self.hook_overlays
+        }
+    }
+
     pub fn overlay_for(&self, hook_id: &HookId) -> Option<&HookOverlay> {
-        self.hooks.iter().find(|o| &o.hook_id == hook_id)
+        self.overlays().iter().find(|o| &o.hook_id == hook_id)
     }
 
     /// Canonical JSON text: object keys sorted, no insignificant whitespace.
@@ -245,11 +306,11 @@ mod tests {
     fn default_document_hash_is_stable() {
         assert_eq!(
             HarnessBlueprint::default().canonical_json(),
-            r#"{"hook_semantics_version":"legacy_v1","hooks":[],"schema_version":1}"#
+            r#"{"hook_semantics_version":"legacy_v1","hooks":[],"schema_version":2}"#
         );
         assert_eq!(
             HarnessBlueprint::default().canonical_hash(),
-            sha256_hex(r#"{"hook_semantics_version":"legacy_v1","hooks":[],"schema_version":1}"#)
+            sha256_hex(r#"{"hook_semantics_version":"legacy_v1","hooks":[],"schema_version":2}"#)
         );
     }
 
@@ -276,8 +337,8 @@ mod tests {
 
     #[test]
     fn a_future_schema_version_fails_loudly() {
-        let err = HarnessBlueprint::parse(&json!({ "schema_version": 99, "hooks": [] }))
-            .unwrap_err();
+        let err =
+            HarnessBlueprint::parse(&json!({ "schema_version": 99, "hooks": [] })).unwrap_err();
         assert!(err.contains("99"), "got: {err}");
     }
 
@@ -317,8 +378,14 @@ mod tests {
         let a: Value = serde_json::from_str(r#"{"x":1,"y":2}"#).unwrap();
         let b: Value = serde_json::from_str(r#"{"y":2,"x":1}"#).unwrap();
         let c: Value = serde_json::from_str(r#"{"x":1,"y":3}"#).unwrap();
-        assert_eq!(sha256_hex(&canonical_json(&a)), sha256_hex(&canonical_json(&b)));
-        assert_ne!(sha256_hex(&canonical_json(&a)), sha256_hex(&canonical_json(&c)));
+        assert_eq!(
+            sha256_hex(&canonical_json(&a)),
+            sha256_hex(&canonical_json(&b))
+        );
+        assert_ne!(
+            sha256_hex(&canonical_json(&a)),
+            sha256_hex(&canonical_json(&c))
+        );
     }
 
     #[test]
@@ -337,6 +404,9 @@ mod tests {
                 timeout_ms: Some(2_500),
                 failure_policy: Some(HookFailurePolicy::Skip),
             }],
+            hook_overlays: Vec::new(),
+            native_hooks: Vec::new(),
+            prompt_blocks: Vec::new(),
         };
         let text = serde_json::to_string(&doc).unwrap();
         let back = HarnessBlueprint::parse(&serde_json::from_str(&text).unwrap()).unwrap();

@@ -463,10 +463,8 @@ impl CheckpointManager {
                             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                         }
                         // Atomic-ish write: temp + rename
-                        let tmp = abs.with_extension(format!(
-                            "natives-restore-tmp-{}",
-                            Uuid::new_v4()
-                        ));
+                        let tmp =
+                            abs.with_extension(format!("natives-restore-tmp-{}", Uuid::new_v4()));
                         std::fs::write(&tmp, content).map_err(|e| e.to_string())?;
                         std::fs::rename(&tmp, &abs).map_err(|e| {
                             let _ = std::fs::remove_file(&tmp);
@@ -663,9 +661,7 @@ mod tests {
         assert!(preview.conflicts.is_empty());
         assert_eq!(preview.checkpoint_id, cp_id);
 
-        let restored = mgr
-            .rewind("run2", &cp_id, &root, None, "fail")
-            .unwrap();
+        let restored = mgr.rewind("run2", &cp_id, &root, None, "fail").unwrap();
         assert_eq!(restored, vec!["b.txt".to_string()]);
         let content = std::fs::read_to_string(&file).unwrap();
         assert_eq!(content, "v1");
@@ -687,9 +683,7 @@ mod tests {
         std::fs::write(&file, "external").unwrap();
         let preview = mgr.rewind_preview("run3", &root, None).unwrap();
         assert!(!preview.conflicts.is_empty());
-        let err = mgr
-            .rewind("run3", &cp_id, &root, None, "fail")
-            .unwrap_err();
+        let err = mgr.rewind("run3", &cp_id, &root, None, "fail").unwrap_err();
         assert!(err.contains("conflict"));
         let _ = std::fs::remove_dir_all(&root);
     }

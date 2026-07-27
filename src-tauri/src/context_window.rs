@@ -73,10 +73,13 @@ pub fn trim_messages(
         if used + t > budget {
             // Insert summary for trimmed content
             if !summary.is_empty() {
-                result.insert(0, ChatMessage {
-                    role: "system".to_string(),
-                    content: format!("[Earlier conversation summary]: {}", summary),
-                });
+                result.insert(
+                    0,
+                    ChatMessage {
+                        role: "system".to_string(),
+                        content: format!("[Earlier conversation summary]: {}", summary),
+                    },
+                );
             }
             trimmed += 1;
             continue;
@@ -129,8 +132,14 @@ mod tests {
     #[test]
     fn test_trim_messages_within_budget() {
         let messages = vec![
-            ChatMessage { role: "user".to_string(), content: "Hello".to_string() },
-            ChatMessage { role: "assistant".to_string(), content: "Hi there!".to_string() },
+            ChatMessage {
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: "Hi there!".to_string(),
+            },
         ];
         let result = trim_messages(&messages, "System prompt", "", 32000);
         assert_eq!(result.messages.len(), 2);
@@ -139,10 +148,12 @@ mod tests {
 
     #[test]
     fn test_trim_messages_exceeds_budget() {
-        let messages: Vec<ChatMessage> = (0..100).map(|i| ChatMessage {
-            role: "user".to_string(),
-            content: format!("Message number {}", i),
-        }).collect();
+        let messages: Vec<ChatMessage> = (0..100)
+            .map(|i| ChatMessage {
+                role: "user".to_string(),
+                content: format!("Message number {}", i),
+            })
+            .collect();
         let result = trim_messages(&messages, "System", "Summary of earlier messages", 1024);
         assert!(result.messages.len() < 100);
         assert!(result.trimmed_count > 0);
@@ -150,9 +161,10 @@ mod tests {
 
     #[test]
     fn test_trim_messages_zero_budget() {
-        let messages = vec![
-            ChatMessage { role: "user".to_string(), content: "Test".to_string() },
-        ];
+        let messages = vec![ChatMessage {
+            role: "user".to_string(),
+            content: "Test".to_string(),
+        }];
         let result = trim_messages(&messages, "", "", 0);
         assert!(result.messages.is_empty());
     }
@@ -184,12 +196,26 @@ mod tests {
         // Use messages that exceed the budget (budget ≈ 902 tokens after system + reserve)
         // Each 5000 char message ≈ 1250 tokens, two exceed 902
         let messages = vec![
-            ChatMessage { role: "user".to_string(), content: "A".repeat(5000) },
-            ChatMessage { role: "user".to_string(), content: "B".repeat(5000) },
+            ChatMessage {
+                role: "user".to_string(),
+                content: "A".repeat(5000),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: "B".repeat(5000),
+            },
         ];
         let result = trim_messages(&messages, "System", "Summary of earlier messages", 5000);
-        assert!(result.messages.iter().any(|m| m.content.contains("Summary")),
-            "Summary should be injected when messages exceed budget");
-        assert!(result.trimmed_count > 0, "Expected some messages to be trimmed");
+        assert!(
+            result
+                .messages
+                .iter()
+                .any(|m| m.content.contains("Summary")),
+            "Summary should be injected when messages exceed budget"
+        );
+        assert!(
+            result.trimmed_count > 0,
+            "Expected some messages to be trimmed"
+        );
     }
 }

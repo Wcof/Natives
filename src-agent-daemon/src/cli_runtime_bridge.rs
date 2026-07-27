@@ -473,10 +473,7 @@ impl Drop for CliMcpConfigGuard {
 /// Project the selected connector configs into the standard `mcpServers`
 /// format for `--mcp-config`. `secret:<id>` env references resolve through the
 /// Host broker; the file is 0600 and removed when the turn ends.
-fn write_cli_mcp_config(
-    run_id: &str,
-    server_ids: &[String],
-) -> Result<CliMcpConfigGuard, String> {
+fn write_cli_mcp_config(run_id: &str, server_ids: &[String]) -> Result<CliMcpConfigGuard, String> {
     let configs = crate::capability::mcp::enabled_runtime_configs()?;
     let mut servers = serde_json::Map::new();
     for id in server_ids {
@@ -488,7 +485,9 @@ fn write_cli_mcp_config(
         for (key, value) in raw_env {
             let resolved = match value.strip_prefix("secret:") {
                 Some(secret_id) => crate::natives_db_broker::read_capability_secret(secret_id)
-                    .map_err(|_| format!("secret reference for env '{key}' of '{id}' could not be resolved"))?,
+                    .map_err(|_| {
+                        format!("secret reference for env '{key}' of '{id}' could not be resolved")
+                    })?,
                 None => value,
             };
             env.insert(key, json!(resolved));
@@ -496,7 +495,10 @@ fn write_cli_mcp_config(
         let entry = match config.transport {
             agent_core::mcp::McpTransport::Stdio => {
                 let mut e = serde_json::Map::new();
-                e.insert("command".into(), json!(config.command.clone().unwrap_or_default()));
+                e.insert(
+                    "command".into(),
+                    json!(config.command.clone().unwrap_or_default()),
+                );
                 if let Some(args) = &config.args {
                     e.insert("args".into(), json!(args));
                 }
@@ -509,11 +511,13 @@ fn write_cli_mcp_config(
                 let mut e = serde_json::Map::new();
                 e.insert(
                     "type".into(),
-                    json!(if matches!(config.transport, agent_core::mcp::McpTransport::Sse) {
-                        "sse"
-                    } else {
-                        "http"
-                    }),
+                    json!(
+                        if matches!(config.transport, agent_core::mcp::McpTransport::Sse) {
+                            "sse"
+                        } else {
+                            "http"
+                        }
+                    ),
                 );
                 e.insert("url".into(), json!(config.url.clone().unwrap_or_default()));
                 if let Some(headers) = &config.headers {
@@ -530,12 +534,15 @@ fn write_cli_mcp_config(
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-            std::path::PathBuf::from(home).join(".natives").join("runtime")
+            std::path::PathBuf::from(home)
+                .join(".natives")
+                .join("runtime")
         })
         .join("cli-mcp");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{run_id}.json"));
-    let body = serde_json::to_string(&json!({ "mcpServers": servers })).map_err(|e| e.to_string())?;
+    let body =
+        serde_json::to_string(&json!({ "mcpServers": servers })).map_err(|e| e.to_string())?;
     std::fs::write(&path, body).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
@@ -625,11 +632,11 @@ pub async fn run_claude_cli_turn(
     if let Some(team) = &capability.team {
         let mut agents = serde_json::Map::new();
         for member in &team.members {
-            let profile = crate::capability_resolution::load_profile(
-                &member.expert_id,
-                project_path,
-            )
-            .ok_or_else(|| format!("team member profile not loadable: {}", member.expert_id))?;
+            let profile =
+                crate::capability_resolution::load_profile(&member.expert_id, project_path)
+                    .ok_or_else(|| {
+                        format!("team member profile not loadable: {}", member.expert_id)
+                    })?;
             let description = if member.role_hint.is_empty() {
                 member.description.clone()
             } else {

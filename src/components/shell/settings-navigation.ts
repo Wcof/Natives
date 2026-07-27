@@ -3,6 +3,7 @@ export const SETTINGS_SECTIONS = [
   'appearance',
   'providers',
   'runtime',
+  'engineering',
   'engine',
   'plugins',
 ] as const;

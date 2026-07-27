@@ -78,7 +78,7 @@ export default function TerminalRecorder({ isCollapsed, onClose }: Props) {
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     loadRecordings();
   }, [loadRecordings]);
 
@@ -168,7 +168,7 @@ export default function TerminalRecorder({ isCollapsed, onClose }: Props) {
 
     if (currentIdx >= castData.length) {
       startTransition(() => { setPlaying(null); });
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
       setCurrentIdx(0);
       return;
     }

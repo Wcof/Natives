@@ -77,12 +77,17 @@ impl DataStore {
             }
 
             let has_runs: bool = conn
-                .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='assistant_runs'")
+                .prepare(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='assistant_runs'",
+                )
                 .and_then(|mut stmt| stmt.exists([]))
                 .unwrap_or(false);
             if has_runs {
                 for (column, definition) in [
-                    ("parent_run_id", "TEXT REFERENCES assistant_runs(id) ON DELETE CASCADE"),
+                    (
+                        "parent_run_id",
+                        "TEXT REFERENCES assistant_runs(id) ON DELETE CASCADE",
+                    ),
                     ("subagent_definition_id", "TEXT"),
                     ("effort", "TEXT"),
                 ] {

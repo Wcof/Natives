@@ -52,6 +52,11 @@ export function useCreativeAppCatalog(options: { enabled?: boolean } = {}) {
     fetcher,
     [],
   );
+  const dataRef = useRef<CreativeAppSummary[]>([]);
+
+  useEffect(() => {
+    dataRef.current = data ?? [];
+  }, [data]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -88,7 +93,7 @@ export function useCreativeAppCatalog(options: { enabled?: boolean } = {}) {
     if (visibleRef.current) reconcile();
     const timer = setInterval(() => {
       if (!visibleRef.current) return;
-      const runningExternal = (data ?? []).some(
+      const runningExternal = dataRef.current.some(
         (app) => app.source === 'external_github' && app.state === 'running',
       );
       if (runningExternal) reconcile();
@@ -97,7 +102,7 @@ export function useCreativeAppCatalog(options: { enabled?: boolean } = {}) {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', onVis);
     };
-  }, [data, enabled, reload]);
+  }, [enabled, reload]);
 
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
 

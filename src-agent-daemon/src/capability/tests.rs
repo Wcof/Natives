@@ -30,7 +30,10 @@ fn migration_021_tables_exist_and_dead_table_dropped() {
         ] {
             assert!(s.has_table(table), "missing table {table}");
         }
-        assert!(!s.has_table("mcp_server_config"), "dead table must be dropped");
+        assert!(
+            !s.has_table("mcp_server_config"),
+            "dead table must be dropped"
+        );
         let conn = s.conn().unwrap();
         for (table, col) in [
             ("conversation", "capability_selection_json"),
@@ -73,7 +76,8 @@ fn expert_crud_round_trip_and_auto_key_rejected() {
         .unwrap_err();
         assert!(err.contains("auto"), "auto key must be rejected: {err}");
 
-        let updated = experts::update(&json!({ "id": "coder", "description": "writes code" })).unwrap();
+        let updated =
+            experts::update(&json!({ "id": "coder", "description": "writes code" })).unwrap();
         assert_eq!(updated["expert"]["description"], "writes code");
 
         let listed = experts::list(&json!({})).unwrap();
@@ -99,8 +103,7 @@ fn expert_md_import_export_round_trip() {
         assert!(content.contains("tools: [read_file, search_files]"));
         assert!(content.contains("You review code diffs carefully."));
         // Round trip: exported content parses back to the same expert.
-        let reparsed =
-            agent_core::profile::parse_agent_profile_markdown(content, None).unwrap();
+        let reparsed = agent_core::profile::parse_agent_profile_markdown(content, None).unwrap();
         assert_eq!(reparsed.id, "reviewer");
         assert_eq!(reparsed.max_steps, Some(9));
     });
@@ -188,7 +191,10 @@ fn mcp_create_rejects_plaintext_authorization_and_secretlike_env() {
         }))
         .unwrap();
         let rendered = serde_json::to_string(&ok).unwrap();
-        assert!(!rendered.contains("secret:abc123"), "secret ref value must not leak");
+        assert!(
+            !rendered.contains("secret:abc123"),
+            "secret ref value must not leak"
+        );
         assert!(!rendered.contains("sk-"), "no secret material in response");
     });
 }
@@ -225,7 +231,10 @@ fn mcp_update_null_sentinel_keeps_stored_values() {
         }))
         .unwrap();
         let env = read_env();
-        assert_eq!(env["FIGMA_API_KEY"], "secret:abc123", "null must keep stored value");
+        assert_eq!(
+            env["FIGMA_API_KEY"], "secret:abc123",
+            "null must keep stored value"
+        );
         assert_eq!(env["LOG_LEVEL"], "debug", "explicit value must replace");
 
         // Absent key = deletion (whole-map replace semantics unchanged).
@@ -235,8 +244,8 @@ fn mcp_update_null_sentinel_keeps_stored_values() {
         assert!(env.get("LOG_LEVEL").is_none(), "absent key must be deleted");
 
         // null for a key with no stored value fails closed.
-        let err = mcp::update(&json!({ "id": "kv-keep", "env": { "NOPE_TOKEN": null } }))
-            .unwrap_err();
+        let err =
+            mcp::update(&json!({ "id": "kv-keep", "env": { "NOPE_TOKEN": null } })).unwrap_err();
         assert!(err.contains("cannot keep unknown env key"), "{err}");
 
         // create still rejects non-string values — null is update-only.
@@ -323,7 +332,9 @@ fn skill_rescan_upserts_and_selection_fails_closed() {
         let demo_id = demo["id"].as_str().unwrap().to_string();
 
         // Category tagging via update.
-        let updated = skills::update(&json!({ "id": demo_id, "category": "效率", "tags": ["demo"] })).unwrap();
+        let updated =
+            skills::update(&json!({ "id": demo_id, "category": "效率", "tags": ["demo"] }))
+                .unwrap();
         assert_eq!(updated["skill"]["category"], "效率");
 
         // A freshly scanned *project* skill is discovered but not trusted:
@@ -341,8 +352,8 @@ fn skill_rescan_upserts_and_selection_fails_closed() {
         assert!(prompt.contains("Do the demo thing"));
 
         // Unknown id fails closed with the missing list.
-        let missing = skills::prompt_for_selection(&[demo_id.clone(), "user:ghost".into()])
-            .unwrap_err();
+        let missing =
+            skills::prompt_for_selection(&[demo_id.clone(), "user:ghost".into()]).unwrap_err();
         assert_eq!(missing, vec!["user:ghost".to_string()]);
 
         // Disabled skill fails closed too.
@@ -424,6 +435,8 @@ fn host_subagent_migration_runs_once_and_maps_fields() {
 
 #[tokio::test]
 async fn dispatch_rejects_unknown_method() {
-    let err = request("capability.mcp.hub.bogus", json!({})).await.unwrap_err();
+    let err = request("capability.mcp.hub.bogus", json!({}))
+        .await
+        .unwrap_err();
     assert!(err.contains("unsupported"), "{err}");
 }

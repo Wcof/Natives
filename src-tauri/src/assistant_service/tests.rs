@@ -18,8 +18,8 @@ fn host_owned_router_table() {
     assert!(is_host_owned_method("run.subscribe"));
     assert!(!is_host_owned_method("permission.respond"));
     assert!(!is_host_owned_method("permission.listPending"));
-assert!(daemon_owned_method("permission.respond"));
-assert!(daemon_owned_method("permission.listPending"));
+    assert!(daemon_owned_method("permission.respond"));
+    assert!(daemon_owned_method("permission.listPending"));
     assert!(is_host_owned_method("artifact.open"));
     assert!(is_host_owned_method("artifact.reveal"));
     assert!(is_host_owned_method("artifact.list"));
@@ -136,10 +136,8 @@ async fn conversation_permission_and_attachments_round_trip() {
     let _env_guard = daemon_env_lock();
     let previous_daemon_mode = std::env::var("NATIVES_DAEMON_MODE").ok();
     let previous_db = std::env::var("NATIVES_ASSISTANT_DB_PATH").ok();
-    let tmp_db = std::env::temp_dir().join(format!(
-        "natives-asst-test-{}.db",
-        uuid::Uuid::new_v4()
-    ));
+    let tmp_db =
+        std::env::temp_dir().join(format!("natives-asst-test-{}.db", uuid::Uuid::new_v4()));
     std::env::set_var("NATIVES_DAEMON_MODE", "embedded");
     std::env::set_var(
         "NATIVES_ASSISTANT_DB_PATH",
@@ -160,6 +158,7 @@ async fn conversation_permission_and_attachments_round_trip() {
             "title": "Attachment test",
             "provider_id": "provider",
             "model_id": "model",
+            "project_id": "/project/test",
             "permission_profile_id": "readonly"
         }),
     )
@@ -176,7 +175,10 @@ async fn conversation_permission_and_attachments_round_trip() {
     )
     .await;
     assert!(got.success, "conversation.get failed: {:?}", got.error);
-    assert_eq!(got.data.as_ref().unwrap()["permission_profile_id"], "readonly");
+    assert_eq!(
+        got.data.as_ref().unwrap()["permission_profile_id"],
+        "readonly"
+    );
 
     store.conn().execute("INSERT INTO assistant_provider_configs (id, provider_type, display_name, api_base_url, created_at, updated_at) VALUES ('provider', 'openai', 'Provider', 'https://example.com', datetime('now'), datetime('now'))", []).unwrap();
     store.conn().execute("INSERT INTO assistant_provider_keys (id, provider_id, encrypted_key, masked_key, created_at) VALUES ('key', 'provider', 'encrypted', '***', datetime('now'))", []).unwrap();
@@ -202,26 +204,20 @@ async fn conversation_permission_and_attachments_round_trip() {
     .await;
     assert!(started.success, "run.start failed: {:?}", started.error);
     let run = started.data.as_ref().unwrap();
-    assert_eq!(
-        run["permission_profile"], "readonly",
-        "run payload: {run}"
-    );
+    assert_eq!(run["permission_profile"], "readonly", "run payload: {run}");
     let run_id = run["id"].as_str().unwrap();
 
     let conversations = dispatch_rpc(&store, "conversation.list", &Value::Null)
         .await
         .data
         .unwrap();
-    let listed = conversations
-        .as_array()
-        .cloned()
-        .unwrap_or_else(|| {
-            conversations
-                .get("conversations")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default()
-        });
+    let listed = conversations.as_array().cloned().unwrap_or_else(|| {
+        conversations
+            .get("conversations")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+    });
     let found = listed.iter().find(|c| c["id"] == conversation_id);
     assert!(found.is_some(), "conversation list missing id: {listed:?}");
     assert_eq!(found.unwrap()["permission_profile_id"], "readonly");
@@ -251,16 +247,13 @@ async fn conversation_permission_and_attachments_round_trip() {
     .await
     .data
     .unwrap();
-    let msg_list = messages
-        .as_array()
-        .cloned()
-        .unwrap_or_else(|| {
-            messages
-                .get("messages")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default()
-        });
+    let msg_list = messages.as_array().cloned().unwrap_or_else(|| {
+        messages
+            .get("messages")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+    });
     assert!(!msg_list.is_empty(), "expected user message: {messages}");
 
     let _ = std::fs::remove_file(&attachment_path);
@@ -283,10 +276,8 @@ async fn structured_assistant_blocks_round_trip() {
     let _env_guard = daemon_env_lock();
     let previous_daemon_mode = std::env::var("NATIVES_DAEMON_MODE").ok();
     let previous_db = std::env::var("NATIVES_ASSISTANT_DB_PATH").ok();
-    let tmp_db = std::env::temp_dir().join(format!(
-        "natives-blocks-test-{}.db",
-        uuid::Uuid::new_v4()
-    ));
+    let tmp_db =
+        std::env::temp_dir().join(format!("natives-blocks-test-{}.db", uuid::Uuid::new_v4()));
     std::env::set_var("NATIVES_DAEMON_MODE", "embedded");
     std::env::set_var(
         "NATIVES_ASSISTANT_DB_PATH",
@@ -298,7 +289,7 @@ async fn structured_assistant_blocks_round_trip() {
         &store,
         "conversation.create",
         &serde_json::json!({
-            "mode": "agent", "title": "Blocks", "provider_id": "p", "model_id": "m"
+            "mode": "agent", "title": "Blocks", "provider_id": "p", "model_id": "m", "project_id": "/project/test"
         }),
     )
     .await;
@@ -318,16 +309,13 @@ async fn structured_assistant_blocks_round_trip() {
     .await
     .data
     .unwrap();
-    let msg_list = messages
-        .as_array()
-        .cloned()
-        .unwrap_or_else(|| {
-            messages
-                .get("messages")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default()
-        });
+    let msg_list = messages.as_array().cloned().unwrap_or_else(|| {
+        messages
+            .get("messages")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+    });
     assert!(!msg_list.is_empty(), "messages: {messages}");
     assert_eq!(
         msg_list[0]["content_blocks"][0]["content"]["reasoning"],

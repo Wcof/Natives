@@ -14,11 +14,13 @@ test('settings sections include engine capability admin page', () => {
     'appearance',
     'providers',
     'runtime',
+    'engineering',
     'engine',
     'plugins',
   ]);
   assert.equal(SETTINGS_SECTIONS.includes('env' as never), false);
   assert.equal(getSettingsSection('settings:engine'), 'engine');
+  assert.equal(getSettingsSection('settings:engineering'), 'engineering');
 });
 
 test('settings entry points normalize to general', () => {

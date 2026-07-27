@@ -11,9 +11,9 @@
 
 #![allow(unused_imports, dead_code, unused_variables)]
 use crate::usage::{
-    now_ms, UsageDailyRecord, UsageQuality, UsageSourceState, UsageSourceStatus, UsageWarning,
-    UsageWarningCode, SourceCapabilities, DurationMethod, UsageSourceKind, UsageDimension,
-    UsageBreadcrumb, BreadcrumbKind,
+    now_ms, BreadcrumbKind, DurationMethod, SourceCapabilities, UsageBreadcrumb, UsageDailyRecord,
+    UsageDimension, UsageQuality, UsageSourceKind, UsageSourceState, UsageSourceStatus,
+    UsageWarning, UsageWarningCode,
 };
 use crate::Error;
 use serde::Deserialize;
@@ -47,22 +47,53 @@ pub struct CcusageDailyEntry {
     #[serde(default, alias = "period", alias = "date")]
     pub date: String,
 
-    #[serde(default, alias = "agent", alias = "source", alias = "sourceId", alias = "source_id")]
+    #[serde(
+        default,
+        alias = "agent",
+        alias = "source",
+        alias = "sourceId",
+        alias = "source_id"
+    )]
     pub agent: Option<String>,
 
-    #[serde(default, alias = "input_tokens", alias = "inputTokens", alias = "input")]
+    #[serde(
+        default,
+        alias = "input_tokens",
+        alias = "inputTokens",
+        alias = "input"
+    )]
     pub input_tokens: i64,
 
-    #[serde(default, alias = "output_tokens", alias = "outputTokens", alias = "output")]
+    #[serde(
+        default,
+        alias = "output_tokens",
+        alias = "outputTokens",
+        alias = "output"
+    )]
     pub output_tokens: i64,
 
-    #[serde(default, alias = "cache_creation_tokens", alias = "cacheCreationTokens", alias = "cacheCreation")]
+    #[serde(
+        default,
+        alias = "cache_creation_tokens",
+        alias = "cacheCreationTokens",
+        alias = "cacheCreation"
+    )]
     pub cache_creation_tokens: i64,
 
-    #[serde(default, alias = "cache_read_tokens", alias = "cacheReadTokens", alias = "cacheRead")]
+    #[serde(
+        default,
+        alias = "cache_read_tokens",
+        alias = "cacheReadTokens",
+        alias = "cacheRead"
+    )]
     pub cache_read_tokens: i64,
 
-    #[serde(default, alias = "total_tokens", alias = "totalTokens", alias = "total")]
+    #[serde(
+        default,
+        alias = "total_tokens",
+        alias = "totalTokens",
+        alias = "total"
+    )]
     pub total_tokens: i64,
 
     #[serde(
@@ -130,10 +161,7 @@ impl CcusageDailyEntry {
         if self.total_tokens > 0 {
             return self.total_tokens;
         }
-        self.input_tokens
-            + self.output_tokens
-            + self.cache_creation_tokens
-            + self.cache_read_tokens
+        self.input_tokens + self.output_tokens + self.cache_creation_tokens + self.cache_read_tokens
     }
 }
 
@@ -142,10 +170,20 @@ pub struct CcusageModelBreakdown {
     #[serde(default, alias = "model", alias = "modelName", alias = "model_name")]
     pub model: String,
 
-    #[serde(default, alias = "input_tokens", alias = "inputTokens", alias = "input")]
+    #[serde(
+        default,
+        alias = "input_tokens",
+        alias = "inputTokens",
+        alias = "input"
+    )]
     pub input_tokens: i64,
 
-    #[serde(default, alias = "output_tokens", alias = "outputTokens", alias = "output")]
+    #[serde(
+        default,
+        alias = "output_tokens",
+        alias = "outputTokens",
+        alias = "output"
+    )]
     pub output_tokens: i64,
 
     #[serde(
@@ -164,7 +202,12 @@ pub struct CcusageModelBreakdown {
     )]
     pub cache_read_tokens: i64,
 
-    #[serde(default, alias = "total_tokens", alias = "totalTokens", alias = "total")]
+    #[serde(
+        default,
+        alias = "total_tokens",
+        alias = "totalTokens",
+        alias = "total"
+    )]
     pub total_tokens: i64,
 
     #[serde(
@@ -180,15 +223,40 @@ pub struct CcusageModelBreakdown {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct CcusageTotals {
-    #[serde(default, alias = "input_tokens", alias = "inputTokens", alias = "input")]
+    #[serde(
+        default,
+        alias = "input_tokens",
+        alias = "inputTokens",
+        alias = "input"
+    )]
     pub input_tokens: i64,
-    #[serde(default, alias = "output_tokens", alias = "outputTokens", alias = "output")]
+    #[serde(
+        default,
+        alias = "output_tokens",
+        alias = "outputTokens",
+        alias = "output"
+    )]
     pub output_tokens: i64,
-    #[serde(default, alias = "cache_creation_tokens", alias = "cacheCreationTokens", alias = "cacheCreation")]
+    #[serde(
+        default,
+        alias = "cache_creation_tokens",
+        alias = "cacheCreationTokens",
+        alias = "cacheCreation"
+    )]
     pub cache_creation_tokens: i64,
-    #[serde(default, alias = "cache_read_tokens", alias = "cacheReadTokens", alias = "cacheRead")]
+    #[serde(
+        default,
+        alias = "cache_read_tokens",
+        alias = "cacheReadTokens",
+        alias = "cacheRead"
+    )]
     pub cache_read_tokens: i64,
-    #[serde(default, alias = "total_tokens", alias = "totalTokens", alias = "total")]
+    #[serde(
+        default,
+        alias = "total_tokens",
+        alias = "totalTokens",
+        alias = "total"
+    )]
     pub total_tokens: i64,
     #[serde(
         default,
@@ -522,10 +590,7 @@ pub async fn scan_ccusage_all(since: &str, until: &str, timezone: &str) -> Ccusa
                 }
 
                 let records = entry_to_records(&agent_name, &entry);
-                agent_daily
-                    .entry(agent_name)
-                    .or_default()
-                    .extend(records);
+                agent_daily.entry(agent_name).or_default().extend(records);
             }
 
             for (agent_name, daily_records) in agent_daily {

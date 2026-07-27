@@ -270,11 +270,7 @@ mod tests {
             let cancel = blocked_cancel.clone();
             tokio::spawn(async move { governor.acquire("provider", "key", cancel).await })
         };
-        let blocked = timeout(
-            Duration::from_millis(20),
-            blocked_task,
-        )
-        .await;
+        let blocked = timeout(Duration::from_millis(20), blocked_task).await;
         assert!(blocked.is_err());
         // A timed-out waiter must explicitly cancel so its FIFO ticket is removed.
         blocked_cancel.cancel();

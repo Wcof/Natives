@@ -89,7 +89,9 @@ pub fn inspect_local_project(
                 .and_then(|s| s.to_str())
                 .unwrap_or("")
                 .to_ascii_lowercase();
-            if name == "index.html" && rel == "index.html" || name == "index.html" && !rel.contains('/') {
+            if name == "index.html" && rel == "index.html"
+                || name == "index.html" && !rel.contains('/')
+            {
                 has_index_html = true;
             }
             if name == "index.html" {
@@ -168,7 +170,10 @@ pub fn inspect_local_project(
                 if deps.iter().any(|d| d == "vue" || d.starts_with("@vue/")) {
                     has_vue_file = true; // treat as vue project signal
                 }
-                if deps.iter().any(|d| d == "vite" || d.starts_with("@vitejs/")) {
+                if deps
+                    .iter()
+                    .any(|d| d == "vite" || d.starts_with("@vitejs/"))
+                {
                     vite_config = vite_config || true;
                 }
             }
@@ -251,10 +256,7 @@ pub fn inspect_local_project(
                 PackageManager::Yarn => tool_versions.yarn.is_none(),
             };
             if missing {
-                blockers.push(format!(
-                    "{} is not available on PATH",
-                    pm.as_str()
-                ));
+                blockers.push(format!("{} is not available on PATH", pm.as_str()));
             }
         }
     }
@@ -471,8 +473,7 @@ fn walk(
         if is_secret_name(&name_s) || is_secret_name(&rel) {
             continue;
         }
-        let is_dir = meta.is_dir()
-            || (meta.file_type().is_symlink() && path.is_dir());
+        let is_dir = meta.is_dir() || (meta.file_type().is_symlink() && path.is_dir());
         if is_dir {
             if IGNORE_DIRS.iter().any(|d| name_s.eq_ignore_ascii_case(d)) {
                 continue;

@@ -53,9 +53,7 @@ impl ArtifactStore {
 
     fn resolve_under_run(&self, run_id: &str, name: &str) -> Result<PathBuf, String> {
         let base = self.run_dir(run_id)?;
-        let base_canon = base
-            .canonicalize()
-            .unwrap_or_else(|_| base.clone());
+        let base_canon = base.canonicalize().unwrap_or_else(|_| base.clone());
         let candidate = base.join(name);
         // Prevent path escape before create.
         let candidate_norm = candidate.components().collect::<PathBuf>();
@@ -114,11 +112,7 @@ impl ArtifactStore {
 
     pub fn list(&self, run_id: Option<&str>) -> Vec<ArtifactMeta> {
         // Merge index + scan disk for run
-        let mut out = self
-            .index
-            .lock()
-            .map(|g| g.clone())
-            .unwrap_or_default();
+        let mut out = self.index.lock().map(|g| g.clone()).unwrap_or_default();
         if let Some(rid) = run_id {
             if let Ok(dir) = self.run_dir(rid) {
                 if let Ok(rd) = std::fs::read_dir(dir) {
@@ -163,7 +157,10 @@ impl ArtifactStore {
         let path = self.resolve_under_run(run_id, name)?;
         let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
         // Re-check path after read using canonicalize
-        let base = self.run_dir(run_id)?.canonicalize().map_err(|e| e.to_string())?;
+        let base = self
+            .run_dir(run_id)?
+            .canonicalize()
+            .map_err(|e| e.to_string())?;
         let canon = path.canonicalize().map_err(|e| e.to_string())?;
         if !canon.starts_with(&base) {
             return Err("artifact path outside run dir".into());
@@ -202,7 +199,12 @@ mod tests {
             index: Mutex::new(Vec::new()),
         };
         let meta = store
-            .put("run1", "out.txt", b"hello artifact", Some("text/plain".into()))
+            .put(
+                "run1",
+                "out.txt",
+                b"hello artifact",
+                Some("text/plain".into()),
+            )
             .unwrap();
         assert_eq!(meta.size, 14);
         let list = store.list(Some("run1"));

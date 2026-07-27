@@ -1,5 +1,5 @@
-use crate::{env_manager, Error, Result};
 use crate::terminal_recorder;
+use crate::{env_manager, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tauri::State;
@@ -45,9 +45,13 @@ pub fn terminal_create(
 ) -> Result<String> {
     // Resolve environment overrides from profile
     let env_overrides = resolve_env_overrides(profile_id.clone(), &state)?;
-    let (session_id, _pid) = state
-        .terminal_manager
-        .create_session(app, profile_id.as_deref(), env_overrides, cols, rows)?;
+    let (session_id, _pid) = state.terminal_manager.create_session(
+        app,
+        profile_id.as_deref(),
+        env_overrides,
+        cols,
+        rows,
+    )?;
     Ok(session_id)
 }
 
@@ -57,7 +61,9 @@ fn resolve_env_overrides(
     profile_id: Option<String>,
     state: &State<'_, AppState>,
 ) -> Result<Option<HashMap<String, String>>> {
-    let pool_conn = state.db.get()
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
 
@@ -66,8 +72,7 @@ fn resolve_env_overrides(
         pid.parse().ok()
     } else {
         // Use default profile
-        env_manager::get_default_profile(conn)?
-            .map(|p| p.id)
+        env_manager::get_default_profile(conn)?.map(|p| p.id)
     };
 
     let pid = match target_id {
@@ -121,13 +126,18 @@ pub fn terminal_proc(session_id: String, state: State<'_, AppState>) -> Result<P
 
 /// 获取 session 状态快照
 #[tauri::command]
-pub fn terminal_session_state(session_id: String, state: State<'_, AppState>) -> Result<crate::terminal::SessionStateSnapshot> {
+pub fn terminal_session_state(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<crate::terminal::SessionStateSnapshot> {
     state.terminal_manager.get_session_state(&session_id)
 }
 
 /// 获取所有 session 列表
 #[tauri::command]
-pub fn terminal_list_sessions(state: State<'_, AppState>) -> Result<Vec<crate::terminal::SessionStateSnapshot>> {
+pub fn terminal_list_sessions(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::terminal::SessionStateSnapshot>> {
     state.terminal_manager.list_sessions()
 }
 
@@ -150,10 +160,11 @@ pub struct RenderState {
 /// Returns the latest cursor position, title, and working directory.
 #[cfg(feature = "ghostty-vt")]
 #[tauri::command]
-pub fn terminal_render_state(session_id: String, state: State<'_, AppState>) -> Result<RenderState> {
-    let sessions = state
-        .terminal_manager
-        .get_session(&session_id)?;
+pub fn terminal_render_state(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<RenderState> {
+    let sessions = state.terminal_manager.get_session(&session_id)?;
 
     let session = sessions
         .get(&session_id)
@@ -173,7 +184,9 @@ pub fn terminal_render_state(session_id: String, state: State<'_, AppState>) -> 
             rows: guard.rows(),
         })
     } else {
-        Err(Error::Internal("ghostty-vt not available for this session".into()))
+        Err(Error::Internal(
+            "ghostty-vt not available for this session".into(),
+        ))
     }
 }
 
@@ -195,7 +208,9 @@ pub fn terminal_record_stop(session_id: String, state: State<'_, AppState>) -> R
 }
 
 #[tauri::command]
-pub fn terminal_record_list(state: State<'_, AppState>) -> Result<Vec<terminal_recorder::RecordingMeta>> {
+pub fn terminal_record_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<terminal_recorder::RecordingMeta>> {
     state.terminal_recorder.list()
 }
 
@@ -272,7 +287,9 @@ pub fn builtin_tool_launch(driver: String, state: State<'_, AppState>) -> Result
 /// List all builtin tools and their enabled/driver state from DB.
 #[tauri::command]
 pub fn builtin_tool_list(state: State<'_, AppState>) -> Result<Vec<serde_json::Value>> {
-    let pool_conn = state.db.get()
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     crate::db::list_builtin_tools(conn)
@@ -287,7 +304,9 @@ pub fn builtin_tool_update(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<()> {
-    let pool_conn = state.db.get()
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     crate::db::update_builtin_tool(conn, &id, enabled, &driver)?;
@@ -302,12 +321,10 @@ pub fn builtin_tool_update(
 
 /// Seed a builtin tool row (called from frontend when registry has new tools).
 #[tauri::command]
-pub fn builtin_tool_seed(
-    id: String,
-    driver: String,
-    state: State<'_, AppState>,
-) -> Result<()> {
-    let pool_conn = state.db.get()
+pub fn builtin_tool_seed(id: String, driver: String, state: State<'_, AppState>) -> Result<()> {
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     crate::db::seed_builtin_tool(conn, &id, &driver)
@@ -319,9 +336,13 @@ pub fn builtin_tool_seed(
 #[tauri::command]
 pub fn ghostty_vt_available() -> Result<bool> {
     #[cfg(feature = "ghostty-vt")]
-    { Ok(true) }
+    {
+        Ok(true)
+    }
     #[cfg(not(feature = "ghostty-vt"))]
-    { Ok(false) }
+    {
+        Ok(false)
+    }
 }
 
 #[tauri::command]

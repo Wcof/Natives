@@ -189,7 +189,7 @@ export default function SidebarDirTree({
   //（与 Sidebar 的 usesNativeTrafficLights 同一模式）。
   const [nativeReady, setNativeReady] = useState(false);
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- 能力探测只在挂载后可知
+
     setNativeReady(hasNativeFiles());
   }, []);
 

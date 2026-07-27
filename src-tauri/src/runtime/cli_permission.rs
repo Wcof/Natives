@@ -6,7 +6,10 @@
 #![allow(dead_code, unused_imports, unused_variables)]
 use std::path::Path;
 
-pub enum WriteKind { ModulePath, GeneralPath }
+pub enum WriteKind {
+    ModulePath,
+    GeneralPath,
+}
 
 pub fn classify_write(path: &Path) -> WriteKind {
     let modules_root = dirs::home_dir()

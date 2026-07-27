@@ -87,7 +87,10 @@ pub fn create_creative_draft(
         "creative-draft",
         serde_json::json!({ "action": "created", "draftId": draft_id }),
     );
-    Ok(serde_json::to_value(store::get_draft(conn, &draft.draft_id)?)?)
+    Ok(serde_json::to_value(store::get_draft(
+        conn,
+        &draft.draft_id,
+    )?)?)
 }
 
 #[tauri::command]
@@ -105,7 +108,9 @@ pub fn get_creative_draft(draft_id: String, state: State<'_, AppState>) -> Resul
         .db
         .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
-    Ok(serde_json::to_value(store::get_draft(&pool_conn, &draft_id)?)?)
+    Ok(serde_json::to_value(store::get_draft(
+        &pool_conn, &draft_id,
+    )?)?)
 }
 
 /// Link a draft to the conversation editing it, once that conversation exists.

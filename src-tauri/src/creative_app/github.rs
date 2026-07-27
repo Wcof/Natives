@@ -88,7 +88,9 @@ fn validate_owner_repo(owner: &str, repo: &str) -> Result<()> {
             return Err(Error::InvalidInput(format!("invalid {label}: {v}")));
         }
         if v.contains("..") {
-            return Err(Error::InvalidInput(format!("invalid {label}: path injection")));
+            return Err(Error::InvalidInput(format!(
+                "invalid {label}: path injection"
+            )));
         }
     }
     Ok(())
@@ -141,7 +143,9 @@ fn auth_header(token: Option<&str>) -> Option<String> {
 pub fn list_releases(owner: &str, repo: &str, token: Option<&str>) -> Result<Vec<GhRelease>> {
     let client = build_client()?;
     let url = format!("{GITHUB_API}/repos/{owner}/{repo}/releases?per_page=30");
-    let mut req = client.get(&url).header("Accept", "application/vnd.github+json");
+    let mut req = client
+        .get(&url)
+        .header("Accept", "application/vnd.github+json");
     if let Some(a) = auth_header(token) {
         req = req.header("Authorization", a);
     }
@@ -165,7 +169,9 @@ pub fn list_releases(owner: &str, repo: &str, token: Option<&str>) -> Result<Vec
 pub fn latest_stable_release(owner: &str, repo: &str, token: Option<&str>) -> Result<GhRelease> {
     let client = build_client()?;
     let url = format!("{GITHUB_API}/repos/{owner}/{repo}/releases/latest");
-    let mut req = client.get(&url).header("Accept", "application/vnd.github+json");
+    let mut req = client
+        .get(&url)
+        .header("Accept", "application/vnd.github+json");
     if let Some(a) = auth_header(token) {
         req = req.header("Authorization", a);
     }
@@ -204,7 +210,9 @@ pub fn get_release_by_tag(
 ) -> Result<GhRelease> {
     let client = build_client()?;
     let url = format!("{GITHUB_API}/repos/{owner}/{repo}/releases/tags/{tag}");
-    let mut req = client.get(&url).header("Accept", "application/vnd.github+json");
+    let mut req = client
+        .get(&url)
+        .header("Accept", "application/vnd.github+json");
     if let Some(a) = auth_header(token) {
         req = req.header("Authorization", a);
     }
@@ -225,7 +233,9 @@ pub fn get_release_by_tag(
         .json()
         .map_err(|e| Error::Internal(format!("parse release: {e}")))?;
     if release.draft {
-        return Err(Error::InvalidInput("draft releases cannot be installed".into()));
+        return Err(Error::InvalidInput(
+            "draft releases cannot be installed".into(),
+        ));
     }
     Ok(release)
 }

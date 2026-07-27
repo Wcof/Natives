@@ -39,8 +39,13 @@ impl HttpServer {
     /// Returns the actual port.
     pub fn start(&mut self, port: u16) -> Result<u16, String> {
         let addr = format!("127.0.0.1:{port}");
-        let server = Server::http(&addr).map_err(|e| format!("failed to start HTTP server: {e}"))?;
-        let actual_port = server.server_addr().to_ip().map(|a| a.port()).unwrap_or(port);
+        let server =
+            Server::http(&addr).map_err(|e| format!("failed to start HTTP server: {e}"))?;
+        let actual_port = server
+            .server_addr()
+            .to_ip()
+            .map(|a| a.port())
+            .unwrap_or(port);
         self.port = actual_port;
 
         let modules_dir = self.modules_dir.clone();
@@ -53,7 +58,8 @@ impl HttpServer {
                 let token_manager = token_manager.clone();
                 let db_path = db_path.clone();
                 std::thread::spawn(move || {
-                    if let Err(e) = handle_request(request, &modules_dir, &token_manager, &db_path) {
+                    if let Err(e) = handle_request(request, &modules_dir, &token_manager, &db_path)
+                    {
                         eprintln!("request error: {e}");
                     }
                 });
@@ -99,11 +105,9 @@ fn handle_request(
             if path_only == "/natives-sdk.js" {
                 // Serve the bridge SDK
                 let script = include_str!("bridge_sdk.js");
-                let resp = Response::from_string(script)
-                    .with_header(csp)
-                    .with_header(
-                        Header::from_bytes("Content-Type", "application/javascript").unwrap(),
-                    );
+                let resp = Response::from_string(script).with_header(csp).with_header(
+                    Header::from_bytes("Content-Type", "application/javascript").unwrap(),
+                );
                 request.respond(resp)?;
             } else if path_only.starts_with("/modules/") {
                 // Serve module static files
@@ -115,7 +119,12 @@ fn handle_request(
             } else if path_only.starts_with("/local-projects/") {
                 let local_csp = Header::from_bytes("Content-Security-Policy", LOCAL_PROJECT_CSP)
                     .unwrap_or_else(|_| Header::from_bytes("x-placeholder", "x").unwrap());
-                serve_local_project_file(request, db_path, local_csp, matches!(method, Method::Head))?;
+                serve_local_project_file(
+                    request,
+                    db_path,
+                    local_csp,
+                    matches!(method, Method::Head),
+                )?;
             } else {
                 let resp = Response::from_string("Not Found").with_status_code(404);
                 request.respond(resp)?;
@@ -233,7 +242,9 @@ fn serve_module_file(
                     let injected = inject_html_preview(&raw, module_id);
                     let resp = Response::from_string(injected)
                         .with_header(csp)
-                        .with_header(Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap());
+                        .with_header(
+                            Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap(),
+                        );
                     request.respond(resp)?;
                 } else {
                     let content = std::fs::read(&resolved)?;
@@ -464,9 +475,8 @@ fn serve_local_project_file(
             .with_header(csp)
             .with_header(Header::from_bytes("Content-Type", mime).unwrap())
             .with_header(
-                Header::from_bytes("Content-Length", len.to_string().into_bytes()).unwrap_or_else(
-                    |_| Header::from_bytes("x-placeholder", "x").unwrap(),
-                ),
+                Header::from_bytes("Content-Length", len.to_string().into_bytes())
+                    .unwrap_or_else(|_| Header::from_bytes("x-placeholder", "x").unwrap()),
             );
         request.respond(resp)?;
         return Ok(());
@@ -608,7 +618,13 @@ fn handle_bridge_request(
     Ok(())
 }
 
-fn route_bridge(namespace: &str, method: &str, module_id: &str, _body: &str, db_path: &Path) -> String {
+fn route_bridge(
+    namespace: &str,
+    method: &str,
+    module_id: &str,
+    _body: &str,
+    db_path: &Path,
+) -> String {
     // Bridge API routing — mirrors Natives bridge-host.ts
     // Open a read-only connection to read real settings
     let conn = Connection::open(db_path).ok();
@@ -616,18 +632,28 @@ fn route_bridge(namespace: &str, method: &str, module_id: &str, _body: &str, db_
     match (namespace, method) {
         ("settings", "getTheme") => {
             // Read theme from SQLite settings, fallback to neutral default
-            let theme = conn.as_ref().and_then(|c| {
-                let mut stmt = c.prepare("SELECT value FROM settings WHERE key = 'settings:theme'").ok()?;
-                stmt.query_row([], |row| row.get::<_, String>(0)).ok()
-            }).unwrap_or_else(|| "default".to_string());
+            let theme = conn
+                .as_ref()
+                .and_then(|c| {
+                    let mut stmt = c
+                        .prepare("SELECT value FROM settings WHERE key = 'settings:theme'")
+                        .ok()?;
+                    stmt.query_row([], |row| row.get::<_, String>(0)).ok()
+                })
+                .unwrap_or_else(|| "default".to_string());
             serde_json::json!({ "result": theme }).to_string()
         }
         ("settings", "getLocale") => {
             // Read locale from SQLite settings, fallback to empty (let renderer decide default)
-            let locale = conn.as_ref().and_then(|c| {
-                let mut stmt = c.prepare("SELECT value FROM settings WHERE key = 'settings:locale'").ok()?;
-                stmt.query_row([], |row| row.get::<_, String>(0)).ok()
-            }).unwrap_or_else(|| "".to_string());
+            let locale = conn
+                .as_ref()
+                .and_then(|c| {
+                    let mut stmt = c
+                        .prepare("SELECT value FROM settings WHERE key = 'settings:locale'")
+                        .ok()?;
+                    stmt.query_row([], |row| row.get::<_, String>(0)).ok()
+                })
+                .unwrap_or_else(|| "".to_string());
             serde_json::json!({ "result": locale }).to_string()
         }
         ("lifecycle", "ready") => {
@@ -666,19 +692,29 @@ fn route_bridge(namespace: &str, method: &str, module_id: &str, _body: &str, db_
         }
         ("meta", "info") => {
             // Read real module version from DB, fallback to empty string (not a placeholder)
-            let version = conn.as_ref().and_then(|c| {
-                let mut stmt = c.prepare("SELECT version FROM modules WHERE id = ?1").ok()?;
-                stmt.query_row(rusqlite::params![module_id], |row| row.get::<_, String>(0)).ok()
-            }).unwrap_or_else(|| "".to_string());
-            let natives_version = conn.as_ref().and_then(|c| {
-                let mut stmt = c.prepare("SELECT value FROM settings WHERE key = '_app_version'").ok()?;
-                stmt.query_row([], |row| row.get::<_, String>(0)).ok()
-            }).unwrap_or_else(|| "".to_string());
+            let version = conn
+                .as_ref()
+                .and_then(|c| {
+                    let mut stmt = c
+                        .prepare("SELECT version FROM modules WHERE id = ?1")
+                        .ok()?;
+                    stmt.query_row(rusqlite::params![module_id], |row| row.get::<_, String>(0))
+                        .ok()
+                })
+                .unwrap_or_else(|| "".to_string());
+            let natives_version = conn
+                .as_ref()
+                .and_then(|c| {
+                    let mut stmt = c
+                        .prepare("SELECT value FROM settings WHERE key = '_app_version'")
+                        .ok()?;
+                    stmt.query_row([], |row| row.get::<_, String>(0)).ok()
+                })
+                .unwrap_or_else(|| "".to_string());
             serde_json::json!({ "moduleId": module_id, "version": version, "nativesVersion": natives_version }).to_string()
         }
-        _ => {
-            serde_json::json!({ "error": format!("Unknown bridge method: {namespace}.{method}") }).to_string()
-        }
+        _ => serde_json::json!({ "error": format!("Unknown bridge method: {namespace}.{method}") })
+            .to_string(),
     }
 }
 
@@ -701,7 +737,8 @@ fn inject_html_preview(html: &str, module_id: &str) -> String {
         .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
         .collect();
 
-    let inject = format!(r#"
+    let inject = format!(
+        r#"
 <script>
 // Width-measure: tell parent the page's natural width for auto-scaling (Natives2)
 (function() {{
@@ -719,7 +756,9 @@ fn inject_html_preview(html: &str, module_id: &str) -> String {
 html, body {{ overflow: auto; max-width: 100vw; }}
 img, video, iframe {{ max-width: 100%; height: auto; }}
 </style>
-"#, safe_id);
+"#,
+        safe_id
+    );
 
     // Splice injection before </head> (preserving original case)
     let mut result = String::with_capacity(html.len() + inject.len());

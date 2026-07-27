@@ -25,7 +25,6 @@ use crate::hooks::HookEvent;
 use crate::session_actor::SafePoint;
 use serde::{Deserialize, Serialize};
 
-
 /// Bumped whenever stages, their order, or their point assignments change.
 ///
 /// Persisted into every `ResolvedHarnessSnapshot` so an old Run's evidence
@@ -295,7 +294,10 @@ mod tests {
         }
         let placed: BTreeSet<&str> = seen.iter().map(|e| e.as_str()).collect();
         let all: BTreeSet<&str> = HookEvent::ALL.iter().map(|e| e.as_str()).collect();
-        assert_eq!(placed, all, "topology must cover every HookEvent exactly once");
+        assert_eq!(
+            placed, all,
+            "topology must cover every HookEvent exactly once"
+        );
     }
 
     #[test]

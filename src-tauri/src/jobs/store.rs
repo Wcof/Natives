@@ -472,7 +472,15 @@ pub fn update_run_result(
     conn.execute(
         "UPDATE task_runs SET status=?2, run_id=?3, conversation_id=?4, error_code=?5, \
          detail=?6, finished_at=?7 WHERE id=?1",
-        params![row_id, status, run_id, conversation_id, error_code, detail, finished_at],
+        params![
+            row_id,
+            status,
+            run_id,
+            conversation_id,
+            error_code,
+            detail,
+            finished_at
+        ],
     )
     .map_err(Error::Database)?;
     Ok(())

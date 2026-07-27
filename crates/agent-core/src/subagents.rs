@@ -9,11 +9,7 @@ use tokio::sync::Mutex;
 
 /// Default readonly tool surface for sub-agents (Phase 0 security floor).
 pub fn default_subagent_tool_allowlist() -> Vec<String> {
-    vec![
-        "read_file".into(),
-        "list_dir".into(),
-        "grep".into(),
-    ]
+    vec!["read_file".into(), "list_dir".into(), "grep".into()]
 }
 
 /// Cap a child's permission profile so it never exceeds the parent.
@@ -80,7 +76,10 @@ pub fn resolve_child_permission(
         .filter(|value| !value.is_empty())
         .unwrap_or("ask")
         .to_string();
-    if let Some(mode) = profile_mode.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(mode) = profile_mode
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         requested = cap_child_permission(&requested, mode);
     }
     cap_child_permission(parent, &requested)
@@ -279,7 +278,10 @@ impl SubAgentManager {
             return Ok(());
         }
         let mut ledger = self.ledger.lock().await;
-        let global_cap = self.config.max_concurrent_global.max(self.config.max_concurrent);
+        let global_cap = self
+            .config
+            .max_concurrent_global
+            .max(self.config.max_concurrent);
         if ledger.concurrent_global.saturating_add(n) > global_cap {
             return Err(format!(
                 "Max concurrent sub-agents ({global_cap}) would be exceeded by batch of {n}"
@@ -504,9 +506,7 @@ impl SubAgentManager {
         working_directory: Option<String>,
     ) -> Result<SubAgent, String> {
         if provider_id.trim().is_empty() || key_id.trim().is_empty() || model_id.trim().is_empty() {
-            return Err(
-                "Subagent requires independent provider_id + key_id + model_id".into(),
-            );
+            return Err("Subagent requires independent provider_id + key_id + model_id".into());
         }
         if id.trim().is_empty() || run_id.trim().is_empty() {
             return Err("Subagent register requires non-empty id and run_id".into());
@@ -636,15 +636,10 @@ impl SubAgentManager {
         if let Some(agent) = agents.get_mut(id) {
             let prev = agent.status.clone();
             let parent = agent.parent_run_id.clone();
-            let was_active = matches!(
-                prev,
-                SubAgentStatus::Queued | SubAgentStatus::Running
-            );
+            let was_active = matches!(prev, SubAgentStatus::Queued | SubAgentStatus::Running);
             let now_terminal = matches!(
                 status,
-                SubAgentStatus::Completed
-                    | SubAgentStatus::Failed(_)
-                    | SubAgentStatus::Cancelled
+                SubAgentStatus::Completed | SubAgentStatus::Failed(_) | SubAgentStatus::Cancelled
             );
             agent.status = status;
             drop(agents);
@@ -686,7 +681,10 @@ impl SubAgentManager {
     /// Get the number of running sub-agents.
     pub async fn running_count(&self) -> usize {
         let agents = self.agents.lock().await;
-        agents.values().filter(|a| a.status == SubAgentStatus::Running).count()
+        agents
+            .values()
+            .filter(|a| a.status == SubAgentStatus::Running)
+            .count()
     }
 
     /// Queued + Running count (matches reservation ledger when consistent).
@@ -694,12 +692,7 @@ impl SubAgentManager {
         let agents = self.agents.lock().await;
         agents
             .values()
-            .filter(|a| {
-                matches!(
-                    a.status,
-                    SubAgentStatus::Queued | SubAgentStatus::Running
-                )
-            })
+            .filter(|a| matches!(a.status, SubAgentStatus::Queued | SubAgentStatus::Running))
             .count()
     }
 }
@@ -734,7 +727,9 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_sub_agent() {
         let manager = SubAgentManager::new(SubAgentConfig::default());
-        let sub = spawn_default(&manager, "parent-1", "Test task", 1).await.unwrap();
+        let sub = spawn_default(&manager, "parent-1", "Test task", 1)
+            .await
+            .unwrap();
         assert_eq!(sub.parent_run_id, "parent-1");
         assert_eq!(sub.status, SubAgentStatus::Queued);
         assert!(!sub.run_id.is_empty());
@@ -781,8 +776,13 @@ mod tests {
         let manager = SubAgentManager::new(config);
 
         // Spawn first sub-agent
-        let sub1 = spawn_default(&manager, "parent-1", "Task 1", 1).await.unwrap();
-        manager.update_status(&sub1.id, SubAgentStatus::Running).await.unwrap();
+        let sub1 = spawn_default(&manager, "parent-1", "Task 1", 1)
+            .await
+            .unwrap();
+        manager
+            .update_status(&sub1.id, SubAgentStatus::Running)
+            .await
+            .unwrap();
 
         // Second spawn should fail due to concurrency limit
         let result = spawn_default(&manager, "parent-1", "Task 2", 1).await;
@@ -794,8 +794,14 @@ mod tests {
         let manager = SubAgentManager::new(SubAgentConfig::default());
         let a = spawn_default(&manager, "parent-1", "A", 1).await.unwrap();
         let b = spawn_default(&manager, "parent-1", "B", 1).await.unwrap();
-        manager.update_status(&a.id, SubAgentStatus::Running).await.unwrap();
-        manager.update_status(&b.id, SubAgentStatus::Running).await.unwrap();
+        manager
+            .update_status(&a.id, SubAgentStatus::Running)
+            .await
+            .unwrap();
+        manager
+            .update_status(&b.id, SubAgentStatus::Running)
+            .await
+            .unwrap();
         let n = manager.cascade_cancel("parent-1").await;
         assert_eq!(n, 2);
         assert_eq!(
@@ -807,8 +813,12 @@ mod tests {
     #[tokio::test]
     async fn test_get_children() {
         let manager = SubAgentManager::new(SubAgentConfig::default());
-        spawn_default(&manager, "parent-1", "Child 1", 1).await.unwrap();
-        spawn_default(&manager, "parent-1", "Child 2", 1).await.unwrap();
+        spawn_default(&manager, "parent-1", "Child 1", 1)
+            .await
+            .unwrap();
+        spawn_default(&manager, "parent-1", "Child 2", 1)
+            .await
+            .unwrap();
 
         let children = manager.get_children("parent-1").await;
         assert_eq!(children.len(), 2);
@@ -817,10 +827,15 @@ mod tests {
     #[tokio::test]
     async fn test_parent_recovery_after_child_failure() {
         let manager = SubAgentManager::new(SubAgentConfig::default());
-        let sub = spawn_default(&manager, "parent-1", "Failing task", 1).await.unwrap();
+        let sub = spawn_default(&manager, "parent-1", "Failing task", 1)
+            .await
+            .unwrap();
 
         // Simulate child failure
-        manager.update_status(&sub.id, SubAgentStatus::Failed("Error".to_string())).await.unwrap();
+        manager
+            .update_status(&sub.id, SubAgentStatus::Failed("Error".to_string()))
+            .await
+            .unwrap();
 
         // Parent can still spawn new children
         let new_sub = spawn_default(&manager, "parent-1", "Recovery task", 1).await;
@@ -830,8 +845,12 @@ mod tests {
     #[tokio::test]
     async fn test_list_sub_agents() {
         let manager = SubAgentManager::new(SubAgentConfig::default());
-        spawn_default(&manager, "parent-1", "Task 1", 1).await.unwrap();
-        spawn_default(&manager, "parent-1", "Task 2", 1).await.unwrap();
+        spawn_default(&manager, "parent-1", "Task 1", 1)
+            .await
+            .unwrap();
+        spawn_default(&manager, "parent-1", "Task 2", 1)
+            .await
+            .unwrap();
         assert_eq!(manager.list().await.len(), 2);
     }
 
@@ -842,7 +861,10 @@ mod tests {
         assert_eq!(cap_child_permission("readonly", "ask"), "readonly");
         assert_eq!(cap_child_permission("readonly", "full_access"), "readonly");
         // Parent full_access: explicit full_access request allowed; default ask stays ask.
-        assert_eq!(cap_child_permission("full_access", "full_access"), "full_access");
+        assert_eq!(
+            cap_child_permission("full_access", "full_access"),
+            "full_access"
+        );
         assert_eq!(cap_child_permission("full_access", "ask"), "ask");
         assert_eq!(cap_child_permission("full_access", "readonly"), "readonly");
         assert_eq!(cap_child_permission("autonomous", "full"), "full_access");
@@ -857,7 +879,9 @@ mod tests {
         assert!(list.contains(&"read_file".into()));
         assert!(list.contains(&"list_dir".into()));
         assert!(list.contains(&"grep".into()));
-        assert!(!list.iter().any(|t| t == "write_file" || t == "task" || t == "run_terminal"));
+        assert!(!list
+            .iter()
+            .any(|t| t == "write_file" || t == "task" || t == "run_terminal"));
     }
 
     #[tokio::test]
@@ -1005,7 +1029,10 @@ mod tests {
             "ask"
         );
         // Blank request is treated as absent, not as an elevation.
-        assert_eq!(resolve_child_permission("full_access", Some(""), None), "ask");
+        assert_eq!(
+            resolve_child_permission("full_access", Some(""), None),
+            "ask"
+        );
     }
 
     #[test]
@@ -1110,6 +1137,9 @@ mod tests {
     fn failure_policy_parse() {
         assert_eq!(FailurePolicy::parse("isolate"), FailurePolicy::Isolate);
         assert_eq!(FailurePolicy::parse("fail_fast"), FailurePolicy::FailFast);
-        assert_eq!(FailurePolicy::parse("require_all"), FailurePolicy::RequireAll);
+        assert_eq!(
+            FailurePolicy::parse("require_all"),
+            FailurePolicy::RequireAll
+        );
     }
 }

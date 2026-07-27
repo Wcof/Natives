@@ -106,7 +106,9 @@ mod tests {
             .expect("search_grep");
         assert!(!r.is_empty(), "must find match");
         // Should have at least one result with a line number
-        assert!(r.iter().any(|v| v.get("line").and_then(|n| n.as_u64()).is_some()));
+        assert!(r
+            .iter()
+            .any(|v| v.get("line").and_then(|n| n.as_u64()).is_some()));
     }
 
     #[test]
@@ -132,7 +134,7 @@ mod tests {
         let r = search_grep("test".into(), dir.to_string_lossy().into(), None);
         match r {
             Ok(results) => assert!(results.is_empty(), "binary file should match nothing"),
-            Err(_) => {}  // binary grep error is acceptable
+            Err(_) => {} // binary grep error is acceptable
         }
     }
 }

@@ -71,6 +71,4 @@ pub(crate) async fn handle_host_get_capabilities() -> RpcResponse {
     success_response(serde_json::to_value(caps).unwrap_or_default())
 }
 
-
 // ─── Provider catalog (host-owned) ───
-

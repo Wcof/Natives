@@ -152,17 +152,18 @@ pub fn fs_save_blob(dir: String, name: String, base64_data: String) -> Result<St
     }
 
     // 4. Decode base64 data
-    let bytes = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        &base64_data,
-    )
-    .map_err(|e| Error::Internal(format!("base64 decode failed: {e}")))?;
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &base64_data)
+        .map_err(|e| Error::Internal(format!("base64 decode failed: {e}")))?;
 
     // 5. Atomic write: write to temp file then rename
-    let tmp_name = format!(".tmp-{}-{}", clean_name, std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis());
+    let tmp_name = format!(
+        ".tmp-{}-{}",
+        clean_name,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    );
     let tmp_path = base_dir.join(&tmp_name);
 
     std::fs::write(&tmp_path, &bytes)?;
@@ -235,27 +236,50 @@ mod tests {
     fn test_fs_save_blob_rejects_empty_filename() {
         let tmp = std::env::temp_dir().join(format!("natives-test-fs-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&tmp);
-        let result = fs_save_blob(tmp.to_string_lossy().to_string(), "".to_string(), "dGVzdA==".to_string());
+        let result = fs_save_blob(
+            tmp.to_string_lossy().to_string(),
+            "".to_string(),
+            "dGVzdA==".to_string(),
+        );
         let _ = std::fs::remove_dir_all(&tmp);
-        assert!(result.is_err(), "Expected error for empty filename, got {:?}", result);
+        assert!(
+            result.is_err(),
+            "Expected error for empty filename, got {:?}",
+            result
+        );
         assert!(result.unwrap_err().to_string().contains("empty or invalid"));
     }
 
     #[test]
     fn test_fs_save_blob_valid_base64() {
-        let tmp = std::env::temp_dir().join(format!("natives-test-fs-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let tmp = std::env::temp_dir().join(format!(
+            "natives-test-fs-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         std::fs::create_dir_all(&tmp).expect("failed to create temp dir");
         // Use canonical path to avoid symlink issues
         let canonical_tmp = std::fs::canonicalize(&tmp).expect("failed to canonicalize");
         let dir_str = canonical_tmp.to_string_lossy().to_string();
-        let result = fs_save_blob(dir_str.clone(), "test.png".to_string(), "dGVzdA==".to_string());
+        let result = fs_save_blob(
+            dir_str.clone(),
+            "test.png".to_string(),
+            "dGVzdA==".to_string(),
+        );
         if result.is_err() {
             eprintln!("fs_save_blob failed: {:?}", result);
             eprintln!("dir: {}, name: test.png", dir_str);
         }
         assert!(result.is_ok(), "Expected Ok, got {:?}", result);
         let saved_path = result.unwrap();
-        assert!(std::path::Path::new(&saved_path).exists(), "Saved file should exist: {}", saved_path);
+        assert!(
+            std::path::Path::new(&saved_path).exists(),
+            "Saved file should exist: {}",
+            saved_path
+        );
         let content = std::fs::read(&saved_path).unwrap();
         assert_eq!(content, b"test");
         let _ = std::fs::remove_dir_all(&tmp);

@@ -1,14 +1,15 @@
 use crate::{Error, Result};
-use std::process::Stdio;
 use std::io::{BufRead, BufReader};
+use std::process::Stdio;
 use tauri::Emitter;
 
 /// Detect if a plugin is installed and return its version.
 /// Returns Ok(None) if not installed.
 #[tauri::command]
 pub fn plugin_detect(name: String) -> Result<Option<String>> {
-    let home = dirs::home_dir().ok_or_else(|| Error::Internal("Could not find home directory".to_string()))?;
-    
+    let home = dirs::home_dir()
+        .ok_or_else(|| Error::Internal("Could not find home directory".to_string()))?;
+
     match name.as_str() {
         "rtk" => {
             let local_bin = home.join(".local").join("bin").join("rtk");
@@ -76,7 +77,13 @@ fn parse_version_str(text: &str) -> String {
     // Try to find the token containing digits/dots
     for part in parts {
         let clean = part.trim_start_matches('v');
-        if !clean.is_empty() && clean.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        if !clean.is_empty()
+            && clean
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_digit())
+                .unwrap_or(false)
+        {
             return clean.to_string();
         }
     }
@@ -96,7 +103,7 @@ pub fn plugin_install(name: String, app_handle: tauri::AppHandle) -> Result<()> 
 
     let name_clone = name.clone();
     let app_clone = app_handle.clone();
-    
+
     std::thread::spawn(move || {
         let _ = app_clone.emit(
             "plugin:install-log",
@@ -130,7 +137,7 @@ pub fn plugin_install(name: String, app_handle: tauri::AppHandle) -> Result<()> 
                 if let Ok(l) = line {
                     let _ = app_stdout.emit(
                         "plugin:install-log",
-                        serde_json::json!({ "name": name_stdout, "log": format!("{}\n", l) })
+                        serde_json::json!({ "name": name_stdout, "log": format!("{}\n", l) }),
                     );
                 }
             }
@@ -146,7 +153,7 @@ pub fn plugin_install(name: String, app_handle: tauri::AppHandle) -> Result<()> 
                 if let Ok(l) = line {
                     let _ = app_stderr.emit(
                         "plugin:install-log",
-                        serde_json::json!({ "name": name_stderr, "log": format!("{}\n", l) })
+                        serde_json::json!({ "name": name_stderr, "log": format!("{}\n", l) }),
                     );
                 }
             }
@@ -162,10 +169,13 @@ pub fn plugin_install(name: String, app_handle: tauri::AppHandle) -> Result<()> 
                     );
                     let _ = app_clone.emit(
                         "plugin:install-complete",
-                        serde_json::json!({ "name": name_clone, "success": true })
+                        serde_json::json!({ "name": name_clone, "success": true }),
                     );
                 } else {
-                    let err_msg = format!("Process exited with status code: {}", status.code().unwrap_or(-1));
+                    let err_msg = format!(
+                        "Process exited with status code: {}",
+                        status.code().unwrap_or(-1)
+                    );
                     let _ = app_clone.emit(
                         "plugin:install-log",
                         serde_json::json!({ "name": name_clone, "log": format!("\nError: {}\n", err_msg) })
@@ -261,10 +271,13 @@ pub fn plugin_uninstall(name: String, app_handle: tauri::AppHandle) -> Result<()
                             );
                             let _ = app_clone.emit(
                                 "plugin:uninstall-complete",
-                                serde_json::json!({ "name": name_clone, "success": true })
+                                serde_json::json!({ "name": name_clone, "success": true }),
                             );
                         } else {
-                            let err_msg = format!("Process exited with status code: {}", status.code().unwrap_or(-1));
+                            let err_msg = format!(
+                                "Process exited with status code: {}",
+                                status.code().unwrap_or(-1)
+                            );
                             let _ = app_clone.emit(
                                 "plugin:install-log",
                                 serde_json::json!({ "name": name_clone, "log": format!("\nError: {}\n", err_msg) })
@@ -311,7 +324,7 @@ pub fn plugin_uninstall(name: String, app_handle: tauri::AppHandle) -> Result<()
                             );
                             let _ = app_clone.emit(
                                 "plugin:uninstall-complete",
-                                serde_json::json!({ "name": name_clone, "success": true })
+                                serde_json::json!({ "name": name_clone, "success": true }),
                             );
                         }
                         Err(e) => {
@@ -328,7 +341,7 @@ pub fn plugin_uninstall(name: String, app_handle: tauri::AppHandle) -> Result<()
                     );
                     let _ = app_clone.emit(
                         "plugin:uninstall-complete",
-                        serde_json::json!({ "name": name_clone, "success": true })
+                        serde_json::json!({ "name": name_clone, "success": true }),
                     );
                 }
             });

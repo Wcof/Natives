@@ -1,7 +1,7 @@
 //! Whitelist dependency install for local creative projects.
 //! User must confirm in UI; only fixed package-manager install commands are allowed.
 
-use super::logs::{LogStream, LogRegistry};
+use super::logs::{LogRegistry, LogStream};
 use super::store;
 use crate::creative_app::model::*;
 use crate::{Error, Result};
@@ -13,10 +13,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 /// Build the exact install argv for a project. Never accepts free-form user commands.
-pub fn resolve_install_command(
-    root: &Path,
-    pm: PackageManager,
-) -> Result<(String, Vec<String>)> {
+pub fn resolve_install_command(root: &Path, pm: PackageManager) -> Result<(String, Vec<String>)> {
     match pm {
         PackageManager::Npm => {
             if root.join("package-lock.json").is_file() {

@@ -651,7 +651,10 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].content, "what is this");
         assert_eq!(messages[0].images.len(), 1);
-        assert_eq!(messages[0].images[0].url, "data:image/png;base64,iVBORw0KGgo=");
+        assert_eq!(
+            messages[0].images[0].url,
+            "data:image/png;base64,iVBORw0KGgo="
+        );
         assert_eq!(messages[0].images[0].detail.as_deref(), Some("high"));
     }
 

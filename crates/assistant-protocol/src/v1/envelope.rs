@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 use crate::v1::daemon::RpcRequest;
 use crate::v1::daemon::RpcResponse;
+use serde::{Deserialize, Serialize};
 
 /// ProtocolEnvelope wraps every RPC message with version and routing metadata.
 ///

@@ -86,7 +86,9 @@ pub fn list(params_value: &Value) -> Result<Value, String> {
     let runtime = crate::mcp_runtime::global_mcp();
     for row in &mut rows {
         let id = row.get("id").and_then(Value::as_str).unwrap_or_default();
-        row["runtimeStatus"] = json!(runtime.server_status(id).unwrap_or_else(|| "stopped".into()));
+        row["runtimeStatus"] = json!(runtime
+            .server_status(id)
+            .unwrap_or_else(|| "stopped".into()));
     }
     Ok(json!({ "servers": rows }))
 }
@@ -293,7 +295,10 @@ pub fn delete(params_value: &Value) -> Result<Value, String> {
     let data = store()?;
     let conn = data.conn()?;
     let changed = conn
-        .execute("DELETE FROM capability_mcp_server WHERE id = ?1", params![id])
+        .execute(
+            "DELETE FROM capability_mcp_server WHERE id = ?1",
+            params![id],
+        )
         .map_err(|e| e.to_string())?;
     if changed == 0 {
         return Err(format!("mcp server not found: {id}"));
@@ -306,8 +311,7 @@ pub fn delete(params_value: &Value) -> Result<Value, String> {
 /// / Cursor compatible). Imported servers default to untrusted + enabled.
 pub fn import_json(params_value: &Value) -> Result<Value, String> {
     let raw = required_str(params_value, "json")?;
-    let parsed: Value =
-        serde_json::from_str(raw).map_err(|e| format!("invalid JSON: {e}"))?;
+    let parsed: Value = serde_json::from_str(raw).map_err(|e| format!("invalid JSON: {e}"))?;
     let servers = parsed
         .get("mcpServers")
         .and_then(Value::as_object)
@@ -400,7 +404,11 @@ pub fn enabled_runtime_configs() -> Result<Vec<McpServerConfig>, String> {
             url,
             trusted: trusted != 0,
             auth_token: None,
-            headers: if headers.is_empty() { None } else { Some(headers) },
+            headers: if headers.is_empty() {
+                None
+            } else {
+                Some(headers)
+            },
         });
     }
     Ok(configs)
@@ -467,9 +475,15 @@ fn validate_draft(params: &Value, existing_id: Option<&str>) -> Result<Validated
             .get("id")
             .and_then(Value::as_str)
             .map(str::to_string)
-            .unwrap_or_else(|| sanitize_id(params.get("name").and_then(Value::as_str).unwrap_or(""))),
+            .unwrap_or_else(|| {
+                sanitize_id(params.get("name").and_then(Value::as_str).unwrap_or(""))
+            }),
     };
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         return Err("id must be non-empty [a-zA-Z0-9_-]".into());
     }
     let name = required_str(params, "name")?.to_string();
@@ -506,7 +520,12 @@ fn validate_draft(params: &Value, existing_id: Option<&str>) -> Result<Validated
     let args: Vec<String> = params
         .get("args")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
 
     let env: HashMap<String, String> = match params.get("env") {
@@ -591,8 +610,14 @@ fn validate_draft(params: &Value, existing_id: Option<&str>) -> Result<Validated
         headers_json: serde_json::to_string(&headers).unwrap_or_else(|_| "{}".into()),
         auth_mode: auth_mode.to_string(),
         oauth_config_json: serde_json::to_string(&oauth_config).unwrap_or_else(|_| "{}".into()),
-        trusted: params.get("trusted").and_then(Value::as_bool).unwrap_or(false),
-        enabled: params.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+        trusted: params
+            .get("trusted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        enabled: params
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
         source: source.to_string(),
         hub_ref: params
             .get("hubRef")
@@ -604,7 +629,13 @@ fn validate_draft(params: &Value, existing_id: Option<&str>) -> Result<Validated
 
 pub(super) fn sanitize_id(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .trim_matches('-')
         .to_string()

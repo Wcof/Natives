@@ -422,7 +422,8 @@ pub fn parse_tavily(body: &serde_json::Value) -> Vec<SearchHit> {
 pub fn web_search_tool() -> Tool {
     Tool {
         name: "web_search",
-        description: "Search the public web and get back titles, URLs and snippets. Use it to find \
+        description:
+            "Search the public web and get back titles, URLs and snippets. Use it to find \
                       sources you do not already have a URL for, then read the promising ones with \
                       web_fetch. Results come from a real search API; there is no offline fallback.",
         schema: serde_json::json!({
@@ -455,7 +456,10 @@ mod tests {
     #[test]
     fn provider_parsing_is_case_insensitive_and_closed() {
         assert_eq!(SearchProvider::parse("Brave"), Some(SearchProvider::Brave));
-        assert_eq!(SearchProvider::parse(" tavily "), Some(SearchProvider::Tavily));
+        assert_eq!(
+            SearchProvider::parse(" tavily "),
+            Some(SearchProvider::Tavily)
+        );
         assert_eq!(SearchProvider::parse("google"), None);
         assert_eq!(SearchProvider::parse(""), None);
     }
@@ -469,7 +473,9 @@ mod tests {
             "http://127.0.0.1/search"
         )
         .is_err());
-        assert!(SearchBackend::with_endpoint(SearchProvider::Brave, "k", "file:///etc/passwd").is_err());
+        assert!(
+            SearchBackend::with_endpoint(SearchProvider::Brave, "k", "file:///etc/passwd").is_err()
+        );
         assert!(SearchBackend::new(SearchProvider::Brave, "k").is_ok());
     }
 

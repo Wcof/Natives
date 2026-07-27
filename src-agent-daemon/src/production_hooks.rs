@@ -18,7 +18,7 @@
 
 use agent_core::{AllowAllHook, CommandHook, HookRegistry, HttpHook};
 use harness_core::hooks::{
-    HookFailurePolicy, HookDefinition, HookEvent, HookId, HookKind, HookScope, HookSource,
+    HookDefinition, HookEvent, HookFailurePolicy, HookId, HookKind, HookScope, HookSource,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -301,7 +301,10 @@ fn push_handler_definition(
             let (program, args) = if let Some(args) = explicit_args {
                 (command.to_string(), args)
             } else if cfg!(windows) {
-                ("cmd.exe".to_string(), vec!["/C".into(), command.to_string()])
+                (
+                    "cmd.exe".to_string(),
+                    vec!["/C".into(), command.to_string()],
+                )
             } else {
                 (
                     "/bin/sh".to_string(),
@@ -342,7 +345,7 @@ fn push_handler_definition(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_core::{HookDecision, HookRequest, HookRegistry, HookResponse};
+    use agent_core::{HookDecision, HookRegistry, HookRequest, HookResponse};
     // Only the assertions need a concrete `Duration`; production code goes
     // through `HookDefinition::timeout()`.
     use std::time::Duration;
@@ -381,8 +384,7 @@ mod tests {
 
     impl TempProject {
         fn new() -> Self {
-            let root =
-                std::env::temp_dir().join(format!("natives-hooks-{}", uuid::Uuid::new_v4()));
+            let root = std::env::temp_dir().join(format!("natives-hooks-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&root).unwrap();
             Self { root }
         }
@@ -431,9 +433,7 @@ mod tests {
     }
 
     fn probe_group(event: &str, command: &str) -> String {
-        format!(
-            r#"{{"hooks":{{"{event}":[{{"hooks":[{{"type":"http","url":"{command}"}}]}}]}}}}"#
-        )
+        format!(r#"{{"hooks":{{"{event}":[{{"hooks":[{{"type":"http","url":"{command}"}}]}}]}}}}"#)
     }
 
     #[tokio::test]
@@ -466,10 +466,7 @@ mod tests {
     #[tokio::test]
     async fn builtin_default_dispatches_before_project_hooks() {
         let project = TempProject::new();
-        project.write(
-            ".claude/hooks.json",
-            &probe_group("PreToolUse", PROBE_URL),
-        );
+        project.write(".claude/hooks.json", &probe_group("PreToolUse", PROBE_URL));
         let responses = dispatch(&project.hooks(), HookEvent::PreToolUse, Some("read_file")).await;
 
         assert_eq!(responses.len(), 2 + env_hook_count("NATIVES_HOOK_CMD"));
@@ -543,9 +540,7 @@ mod tests {
         let project = TempProject::new();
         project.write(
             ".natives/hooks.json",
-            &format!(
-                r#"{{"Notification":[{{"hooks":[{{"type":"http","url":"{PROBE_URL}"}}]}}]}}"#
-            ),
+            &format!(r#"{{"Notification":[{{"hooks":[{{"type":"http","url":"{PROBE_URL}"}}]}}]}}"#),
         );
         assert_eq!(
             dispatch(&project.hooks(), HookEvent::Notification, None)
@@ -560,9 +555,7 @@ mod tests {
         let project = TempProject::new();
         project.write(
             ".natives/hooks.json",
-            &format!(
-                r#"{{"hooks":{{"Notification":[{{"type":"http","url":"{PROBE_URL}"}}]}}}}"#
-            ),
+            &format!(r#"{{"hooks":{{"Notification":[{{"type":"http","url":"{PROBE_URL}"}}]}}}}"#),
         );
         assert_eq!(
             dispatch(&project.hooks(), HookEvent::Notification, None)
@@ -616,7 +609,12 @@ mod tests {
             ),
         );
         let hooks = project.hooks();
-        assert_eq!(dispatch(&hooks, HookEvent::Notification, Some("Bash")).await.len(), 3);
+        assert_eq!(
+            dispatch(&hooks, HookEvent::Notification, Some("Bash"))
+                .await
+                .len(),
+            3
+        );
         assert_eq!(
             dispatch(&hooks, HookEvent::Notification, Some("run_command"))
                 .await
@@ -698,11 +696,16 @@ mod tests {
             ]
         );
         assert_eq!(
-            defs.iter().map(|d| d.matcher.as_deref()).collect::<Vec<_>>(),
+            defs.iter()
+                .map(|d| d.matcher.as_deref())
+                .collect::<Vec<_>>(),
             vec![Some("Edit"), Some("Edit"), Some("Write")]
         );
         // The builtin default already claimed ordinal 0 for this event.
-        assert_eq!(defs.iter().map(|d| d.order).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert_eq!(
+            defs.iter().map(|d| d.order).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
     }
 
     #[test]
@@ -921,7 +924,10 @@ mod tests {
 
         // 2. the project command hook, with file, group, and entry provenance
         let audit = &described[1];
-        assert_eq!(audit.id.as_str(), "project/.claude/settings.json#PreToolUse[0]/0");
+        assert_eq!(
+            audit.id.as_str(),
+            "project/.claude/settings.json#PreToolUse[0]/0"
+        );
         assert_eq!(audit.source.scope, HookScope::Project);
         assert_eq!(audit.source.origin, ".claude/settings.json");
         assert_eq!(audit.source.group_index, Some(0));
@@ -955,8 +961,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn loads_claude_settings_matchers_and_permission_request() {
-        let project =
-            std::env::temp_dir().join(format!("natives-hooks-{}", uuid::Uuid::new_v4()));
+        let project = std::env::temp_dir().join(format!("natives-hooks-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(project.join(".claude")).unwrap();
         std::fs::write(
             project.join(".claude").join("settings.json"),

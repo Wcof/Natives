@@ -46,9 +46,7 @@ pub fn inspect_project(project_path: &str) -> Result<ProjectInspection> {
         .current_dir(path)
         .output()
         .ok();
-    let git_dirty = git_output
-        .map(|o| !o.stdout.is_empty())
-        .unwrap_or(false);
+    let git_dirty = git_output.map(|o| !o.stdout.is_empty()).unwrap_or(false);
 
     let branch_output = std::process::Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
@@ -82,11 +80,16 @@ pub fn prepare_release(project_path: &str, version: &str) -> Result<serde_json::
     if has_package_json {
         if let Ok(content) = std::fs::read_to_string(path.join("package.json")) {
             let updated = content.replace(
-                &format!("\"version\": \"{}\"", read_package_version(path).unwrap_or_default()),
+                &format!(
+                    "\"version\": \"{}\"",
+                    read_package_version(path).unwrap_or_default()
+                ),
                 &format!("\"version\": \"{version}\""),
             );
             if let Err(e) = std::fs::write(path.join("package.json"), updated) {
-                steps.push(serde_json::json!({"step": "update package.json", "error": e.to_string()}));
+                steps.push(
+                    serde_json::json!({"step": "update package.json", "error": e.to_string()}),
+                );
             } else {
                 steps.push(serde_json::json!({"step": "update package.json", "status": "ok"}));
             }
@@ -102,7 +105,8 @@ pub fn prepare_release(project_path: &str, version: &str) -> Result<serde_json::
                 &format!("version = \"{version}\""),
             );
             if let Err(e) = std::fs::write(path.join("Cargo.toml"), updated) {
-                steps.push(serde_json::json!({"step": "update Cargo.toml", "error": e.to_string()}));
+                steps
+                    .push(serde_json::json!({"step": "update Cargo.toml", "error": e.to_string()}));
             } else {
                 steps.push(serde_json::json!({"step": "update Cargo.toml", "status": "ok"}));
             }
@@ -126,7 +130,9 @@ pub fn get_sequence(project_path: &str, version: &str) -> Result<serde_json::Val
     ];
 
     if has_package_json {
-        steps.push(serde_json::json!({"id": "npm", "label": "npm install", "command": "npm install"}));
+        steps.push(
+            serde_json::json!({"id": "npm", "label": "npm install", "command": "npm install"}),
+        );
         steps.push(serde_json::json!({"id": "build", "label": "npm run build", "command": "npm run build"}));
     }
     if has_cargo_toml {

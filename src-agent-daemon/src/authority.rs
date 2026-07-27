@@ -223,7 +223,7 @@ impl ExecutionAuthority for EmbeddedAuthority {
             max_steps: Some(new_run.max_steps),
             project_path: new_run.project_path.clone(),
             idempotency_key: None,
-                    effort: None,
+            effort: None,
             runtime_id: None,
         })
         .map_err(Into::into)
@@ -320,12 +320,8 @@ impl UdsAuthority {
             .map(PathBuf::from)
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or_else(|| self.socket.clone());
-        let mut client = DaemonClient::connect(
-            &socket,
-            &bootstrap,
-            client_protocol_version(),
-        )
-        .await?;
+        let mut client =
+            DaemonClient::connect(&socket, &bootstrap, client_protocol_version()).await?;
         client.call(method, params).await.map_err(Into::into)
     }
 }
@@ -482,7 +478,7 @@ mod tests {
         let auth = EmbeddedAuthority::new();
         let run = auth
             .create_run(CreateRunRequest {
-            capability_selection: None,
+                capability_selection: None,
                 conversation_id: "c-auth".into(),
                 provider_id: "echo".into(),
                 model_id: "echo".into(),
@@ -495,9 +491,9 @@ mod tests {
                 parent_run_id: None,
                 project_path: Some("/tmp".into()),
                 idempotency_key: Some(format!("auth-{}", uuid::Uuid::new_v4())),
-                        effort: None,
-            runtime_id: None,
-        })
+                effort: None,
+                runtime_id: None,
+            })
             .await
             .unwrap();
         assert_eq!(run.project_path.as_deref(), Some("/tmp"));

@@ -298,7 +298,10 @@ fn block_on_dispatch(
 ) -> std::result::Result<DispatchReceipt, DispatchError> {
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => handle.block_on(dispatcher.dispatch(job, trigger)),
-        Err(_) => match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Err(_) => match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
             Ok(rt) => rt.block_on(dispatcher.dispatch(job, trigger)),
             Err(e) => Err(DispatchError::Engine(format!("no async runtime: {e}"))),
         },
@@ -340,16 +343,24 @@ mod tests {
 
     fn test_conn() -> Connection {
         let conn = Connection::open_in_memory().expect("open in-memory db");
-        conn.execute_batch("PRAGMA foreign_keys = ON;").expect("pragma");
+        conn.execute_batch("PRAGMA foreign_keys = ON;")
+            .expect("pragma");
         store::ensure_schema(&conn).expect("ensure schema");
         conn
     }
 
     fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(y, mo, d, h, mi, s).single().expect("valid utc")
+        Utc.with_ymd_and_hms(y, mo, d, h, mi, s)
+            .single()
+            .expect("valid utc")
     }
 
-    fn base_job(id: &str, schedule_type: &str, schedule_value: &str, next_run: &str) -> JobDefinition {
+    fn base_job(
+        id: &str,
+        schedule_type: &str,
+        schedule_value: &str,
+        next_run: &str,
+    ) -> JobDefinition {
         JobDefinition {
             id: id.to_string(),
             name: format!("job {id}"),
@@ -393,10 +404,17 @@ mod tests {
 
         assert_eq!(report.deferred_not_wired, 1);
         assert_eq!(report.skipped_once, 0);
-        assert_eq!(run_count(&conn), 0, "not-wired interval must not write run rows");
+        assert_eq!(
+            run_count(&conn),
+            0,
+            "not-wired interval must not write run rows"
+        );
 
         let stored = store::get_job(&conn, "j1").expect("get").expect("exists");
-        assert_eq!(stored.last_status.as_deref(), Some("dispatch_error:not_wired"));
+        assert_eq!(
+            stored.last_status.as_deref(),
+            Some("dispatch_error:not_wired")
+        );
         assert_eq!(stored.next_run, "2026-07-26T12:05:00Z"); // now + 300s
         assert!(stored.enabled);
         assert!(stored.last_run_at.is_none(), "no run happened");
@@ -422,12 +440,21 @@ mod tests {
         assert_eq!(total, 1);
         assert_eq!(runs[0].status.as_deref(), Some("skipped"));
         assert_eq!(runs[0].trigger.as_deref(), Some("schedule"));
-        assert_eq!(runs[0].error_code.as_deref(), Some("JOB_DISPATCHER_NOT_WIRED"));
-        assert!(runs[0].run_id.is_none(), "never dispatched, no engine run id");
+        assert_eq!(
+            runs[0].error_code.as_deref(),
+            Some("JOB_DISPATCHER_NOT_WIRED")
+        );
+        assert!(
+            runs[0].run_id.is_none(),
+            "never dispatched, no engine run id"
+        );
 
         let stored = store::get_job(&conn, "j2").expect("get").expect("exists");
         assert!(!stored.enabled, "consumed once job must be disabled");
-        assert_eq!(stored.last_status.as_deref(), Some("dispatch_error:not_wired"));
+        assert_eq!(
+            stored.last_status.as_deref(),
+            Some("dispatch_error:not_wired")
+        );
         assert_eq!(stored.last_run_at.as_deref(), Some("2026-07-26T12:00:00Z"));
 
         // 幂等：再 tick 不追加 run 行
@@ -447,7 +474,10 @@ mod tests {
         let report = tick_once(&conn, &NotWiredDispatcher, now).expect("tick");
 
         assert_eq!(report.expired, 1);
-        assert_eq!(report.deferred_not_wired, 0, "expired job must not be re-scheduled");
+        assert_eq!(
+            report.deferred_not_wired, 0,
+            "expired job must not be re-scheduled"
+        );
         assert_eq!(run_count(&conn), 0);
 
         let stored = store::get_job(&conn, "j3").expect("get").expect("exists");

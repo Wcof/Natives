@@ -152,9 +152,7 @@ fn validate_settings_against_db(conn: &Connection, st: &LocalAiSettings) -> Resu
         )
         .unwrap_or(0);
     if keys == 0 {
-        return Err(Error::InvalidInput(
-            "provider has no active API key".into(),
-        ));
+        return Err(Error::InvalidInput("provider has no active API key".into()));
     }
     if st.model.as_deref().unwrap_or("").trim().is_empty() {
         return Err(Error::InvalidInput("AI model not configured".into()));
@@ -200,7 +198,11 @@ pub async fn analyze_with_ai(
     conn: &Connection,
     project_root: &str,
     confirmed: bool,
-) -> Result<(LocalProjectScanResult, Option<LaunchPlan>, serde_json::Value)> {
+) -> Result<(
+    LocalProjectScanResult,
+    Option<LaunchPlan>,
+    serde_json::Value,
+)> {
     if !confirmed {
         return Err(Error::InvalidInput(
             "AI analysis requires explicit confirmation after reviewing the payload preview".into(),

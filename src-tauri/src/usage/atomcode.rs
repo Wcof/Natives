@@ -379,12 +379,8 @@ fn activity(turns: &[Turn]) -> Vec<UsageActivityBucket> {
         let entry = grouped
             .entry((turn.hour_start_ms, turn.project.clone()))
             .or_insert((0, 0, 0));
-        entry.0 += crate::usage::token_total(
-            turn.input_tokens,
-            turn.output_tokens,
-            0,
-            turn.cached_tokens,
-        );
+        entry.0 +=
+            crate::usage::token_total(turn.input_tokens, turn.output_tokens, 0, turn.cached_tokens);
         entry.1 += 1;
         entry.2 += turn.active_seconds;
     }

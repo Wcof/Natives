@@ -12,15 +12,24 @@ struct DbPayload {
 
 #[tauri::command]
 pub fn db_get(key: String, state: State<'_, AppState>) -> Result<Option<JsonValue>> {
-    let pool_conn = state.db.get()
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     db::db_get(conn, &key)
 }
 
 #[tauri::command]
-pub fn db_set(key: String, value: JsonValue, app_handle: tauri::AppHandle, state: State<'_, AppState>) -> Result<()> {
-    let pool_conn = state.db.get()
+pub fn db_set(
+    key: String,
+    value: JsonValue,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     db::db_set(conn, &key, &value)?;
@@ -35,8 +44,14 @@ pub fn db_set(key: String, value: JsonValue, app_handle: tauri::AppHandle, state
 }
 
 #[tauri::command]
-pub fn db_delete(key: String, app_handle: tauri::AppHandle, state: State<'_, AppState>) -> Result<()> {
-    let pool_conn = state.db.get()
+pub fn db_delete(
+    key: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     db::db_delete(conn, &key)?;
@@ -52,7 +67,9 @@ pub fn db_delete(key: String, app_handle: tauri::AppHandle, state: State<'_, App
 
 #[tauri::command]
 pub fn db_list(prefix: Option<String>, state: State<'_, AppState>) -> Result<Vec<String>> {
-    let pool_conn = state.db.get()
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     db::db_list(conn, prefix.as_deref())

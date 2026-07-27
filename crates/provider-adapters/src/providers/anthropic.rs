@@ -716,11 +716,7 @@ mod request_tests {
         let mut req = request("claude-sonnet-4-5");
         req.system_prompt = Some(long_system());
         req.tools = Some(vec![tool("read_file")]);
-        req.messages = vec![
-            text("user", "a"),
-            text("assistant", "b"),
-            text("user", "c"),
-        ];
+        req.messages = vec![text("user", "a"), text("assistant", "b"), text("user", "c")];
         let controls = RequestControls {
             prompt_cache: Some(false),
             ..Default::default()
@@ -733,10 +729,19 @@ mod request_tests {
     #[test]
     fn resolves_max_tokens_from_the_model_instead_of_a_hardcoded_4096() {
         // Known model, no caller value: use the real ceiling.
-        assert_eq!(build_messages_body(&request("claude-sonnet-4-5"))["max_tokens"], 64_000);
-        assert_eq!(build_messages_body(&request("claude-opus-5"))["max_tokens"], 128_000);
+        assert_eq!(
+            build_messages_body(&request("claude-sonnet-4-5"))["max_tokens"],
+            64_000
+        );
+        assert_eq!(
+            build_messages_body(&request("claude-opus-5"))["max_tokens"],
+            128_000
+        );
         // Unknown model: unchanged historical fallback, no invented ceiling.
-        assert_eq!(build_messages_body(&request("claude-unreleased-99"))["max_tokens"], 4096);
+        assert_eq!(
+            build_messages_body(&request("claude-unreleased-99"))["max_tokens"],
+            4096
+        );
 
         // An explicit caller value is honoured and clamped, never raised.
         let mut small = request("claude-sonnet-4-5");
@@ -971,10 +976,7 @@ mod request_tests {
         let body = build_messages_body(&image_request(ImageSource::new("data:;base64,AAAB")));
         let block = &body["messages"][0]["content"][1];
         assert_eq!(block["type"], "text");
-        assert!(block["text"]
-            .as_str()
-            .unwrap()
-            .contains("media_type"));
+        assert!(block["text"].as_str().unwrap().contains("media_type"));
     }
 
     #[test]

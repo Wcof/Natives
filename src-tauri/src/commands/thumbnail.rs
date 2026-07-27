@@ -11,9 +11,10 @@ pub async fn thumbnail_generate(file_path: String, width: u32) -> Result<String>
         .await
         .map_err(|e| Error::Internal(e.to_string()))?;
     let requested_path = file_path.clone();
-    let result = tokio::task::spawn_blocking(move || thumbnail::generate_thumbnail(&file_path, width))
-        .await
-        .map_err(|e| Error::Internal(e.to_string()))??;
+    let result =
+        tokio::task::spawn_blocking(move || thumbnail::generate_thumbnail(&file_path, width))
+            .await
+            .map_err(|e| Error::Internal(e.to_string()))??;
     match result {
         Some((jpeg_data, _cached)) => {
             // Return base64-encoded JPEG

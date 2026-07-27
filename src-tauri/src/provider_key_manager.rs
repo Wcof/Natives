@@ -55,7 +55,7 @@ pub fn init_kek(conn: &rusqlite::Connection) -> Result<[u8; 32]> {
 
     // Ensure the provider_api_keys table has the dek_encrypted column
     let _ = conn.execute_batch(
-        "ALTER TABLE provider_api_keys ADD COLUMN dek_encrypted TEXT NOT NULL DEFAULT '';"
+        "ALTER TABLE provider_api_keys ADD COLUMN dek_encrypted TEXT NOT NULL DEFAULT '';",
     );
 
     Ok(kek)
@@ -97,9 +97,8 @@ pub fn envelope_encrypt(plaintext: &str, conn: &rusqlite::Connection) -> Result<
     OsRng.fill_bytes(&mut dek);
 
     // Encrypt API key with DEK
-    let key = Aes256Gcm::new_from_slice(&dek).map_err(|e| {
-        Error::Internal(format!("Failed to create DEK cipher: {e}"))
-    })?;
+    let key = Aes256Gcm::new_from_slice(&dek)
+        .map_err(|e| Error::Internal(format!("Failed to create DEK cipher: {e}")))?;
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
@@ -114,9 +113,8 @@ pub fn envelope_encrypt(plaintext: &str, conn: &rusqlite::Connection) -> Result<
     let api_key_encrypted = BASE64.encode(&encrypted_payload);
 
     // Encrypt DEK with KEK
-    let kek_key = Aes256Gcm::new_from_slice(&kek).map_err(|e| {
-        Error::Internal(format!("Failed to create KEK cipher: {e}"))
-    })?;
+    let kek_key = Aes256Gcm::new_from_slice(&kek)
+        .map_err(|e| Error::Internal(format!("Failed to create KEK cipher: {e}")))?;
     let mut kek_nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut kek_nonce_bytes);
     let kek_nonce = Nonce::from_slice(&kek_nonce_bytes);
@@ -148,9 +146,8 @@ pub fn envelope_decrypt(
         return Err(Error::Internal("DEK package too short".to_string()));
     }
     let (kek_nonce_bytes, dek_encrypted_bytes) = dek_package.split_at(12);
-    let kek_key = Aes256Gcm::new_from_slice(&kek).map_err(|e| {
-        Error::Internal(format!("Failed to create KEK cipher: {e}"))
-    })?;
+    let kek_key = Aes256Gcm::new_from_slice(&kek)
+        .map_err(|e| Error::Internal(format!("Failed to create KEK cipher: {e}")))?;
     let dek = kek_key
         .decrypt(Nonce::from_slice(kek_nonce_bytes), dek_encrypted_bytes)
         .map_err(|e| Error::Internal(format!("DEK decryption failed: {e}")))?;
@@ -163,15 +160,13 @@ pub fn envelope_decrypt(
         return Err(Error::Internal("API key payload too short".to_string()));
     }
     let (nonce_bytes, ciphertext) = encrypted_payload.split_at(12);
-    let key = Aes256Gcm::new_from_slice(&dek).map_err(|e| {
-        Error::Internal(format!("Failed to create DEK cipher: {e}"))
-    })?;
+    let key = Aes256Gcm::new_from_slice(&dek)
+        .map_err(|e| Error::Internal(format!("Failed to create DEK cipher: {e}")))?;
     let plaintext = key
         .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
         .map_err(|e| Error::Internal(format!("API key decryption failed: {e}")))?;
 
-    String::from_utf8(plaintext)
-        .map_err(|e| Error::Internal(format!("Invalid UTF-8: {e}")))
+    String::from_utf8(plaintext).map_err(|e| Error::Internal(format!("Invalid UTF-8: {e}")))
 }
 
 #[cfg(test)]
@@ -199,8 +194,9 @@ mod tests {
                 api_key_encrypted TEXT NOT NULL DEFAULT '',
                 dek_encrypted TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
-            );"
-        ).unwrap();
+            );",
+        )
+        .unwrap();
         conn
     }
 
@@ -230,7 +226,9 @@ mod tests {
         let kek_key = Aes256Gcm::new_from_slice(&kek).unwrap();
         let mut kek_nonce = [0u8; 12];
         kek_nonce[..4].copy_from_slice(&[0x09, 0x0a, 0x0b, 0x0c]);
-        let dek_enc = kek_key.encrypt(Nonce::from_slice(&kek_nonce), dek.as_slice()).unwrap();
+        let dek_enc = kek_key
+            .encrypt(Nonce::from_slice(&kek_nonce), dek.as_slice())
+            .unwrap();
         let mut dek_package = Vec::new();
         dek_package.extend_from_slice(&kek_nonce);
         dek_package.extend_from_slice(&dek_enc);
@@ -239,7 +237,9 @@ mod tests {
         // Decrypt DEK
         let dek_pkg = BASE64.decode(&dek_encrypted).unwrap();
         let (kek_nonce_bytes, dek_enc_bytes) = dek_pkg.split_at(12);
-        let recovered_dek = kek_key.decrypt(Nonce::from_slice(kek_nonce_bytes), dek_enc_bytes).unwrap();
+        let recovered_dek = kek_key
+            .decrypt(Nonce::from_slice(kek_nonce_bytes), dek_enc_bytes)
+            .unwrap();
         assert_eq!(recovered_dek, dek);
 
         // Decrypt API key
@@ -261,7 +261,9 @@ mod tests {
         nonce1[0] = 0x22;
 
         let key1 = Aes256Gcm::new_from_slice(&dek1).unwrap();
-        let ct1 = key1.encrypt(Nonce::from_slice(&nonce1), plaintext.as_bytes()).unwrap();
+        let ct1 = key1
+            .encrypt(Nonce::from_slice(&nonce1), plaintext.as_bytes())
+            .unwrap();
         let mut payload1 = Vec::new();
         payload1.extend_from_slice(&nonce1);
         payload1.extend_from_slice(&ct1);
@@ -274,13 +276,18 @@ mod tests {
         nonce2[0] = 0x44;
 
         let key2 = Aes256Gcm::new_from_slice(&dek2).unwrap();
-        let ct2 = key2.encrypt(Nonce::from_slice(&nonce2), plaintext.as_bytes()).unwrap();
+        let ct2 = key2
+            .encrypt(Nonce::from_slice(&nonce2), plaintext.as_bytes())
+            .unwrap();
         let mut payload2 = Vec::new();
         payload2.extend_from_slice(&nonce2);
         payload2.extend_from_slice(&ct2);
         let enc2 = BASE64.encode(&payload2);
 
-        assert_ne!(enc1, enc2, "Same plaintext encrypted with different DEKs should differ");
+        assert_ne!(
+            enc1, enc2,
+            "Same plaintext encrypted with different DEKs should differ"
+        );
     }
 
     #[test]
@@ -292,7 +299,9 @@ mod tests {
         let kek = init_kek(&conn).unwrap();
         assert_eq!(kek.len(), 32);
 
-        let stored = db::get_setting(&conn, PROVIDER_KEK_SETTING).unwrap().unwrap();
+        let stored = db::get_setting(&conn, PROVIDER_KEK_SETTING)
+            .unwrap()
+            .unwrap();
         assert_eq!(hex::decode(stored).unwrap().len(), 32);
     }
 

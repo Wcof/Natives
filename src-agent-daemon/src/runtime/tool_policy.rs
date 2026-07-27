@@ -633,8 +633,8 @@ pub fn permission_class_for_tool(tool_name: &str) -> String {
         // the daemon intercepts it and drives a real human approval. Neither can
         // touch the machine, so neither belongs behind a permission class that
         // would make the user approve a prompt about being asked.
-        "task_output" | "memory_search" | "memory_get" | "skill" | "todo_write" | "notification"
-        | "enter_plan_mode" | "exit_plan_mode" => "always_allowed".into(),
+        "task_output" | "memory_search" | "memory_get" | "skill" | "todo_write"
+        | "notification" | "enter_plan_mode" | "exit_plan_mode" => "always_allowed".into(),
         name if name.starts_with("mcp__") => "external_write".into(),
         _ => "unknown".into(),
     }
@@ -785,7 +785,10 @@ mod tests {
         pol.remember(&inv, "session", None).await.unwrap();
         let mut next_run = inv.clone();
         next_run.run_id = "r2".into();
-        assert!(matches!(pol.check(&next_run).await, GrantDecision::Allowed { .. }));
+        assert!(matches!(
+            pol.check(&next_run).await,
+            GrantDecision::Allowed { .. }
+        ));
         next_run.conversation_id = "c2".into();
         next_run.session_id = Some("s2".into());
         assert_eq!(pol.check(&next_run).await, GrantDecision::NeedsApproval);

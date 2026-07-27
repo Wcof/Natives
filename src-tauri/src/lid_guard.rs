@@ -78,7 +78,10 @@ impl LidGuard {
     }
 
     fn disable_sleep(&self) -> Result<()> {
-        let mut guard = self.guard.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        let mut guard = self
+            .guard
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         if guard.is_some() {
             return Ok(()); // Already disabled
         }
@@ -195,7 +198,10 @@ impl LidGuard {
     }
 
     fn enable_sleep(&self) -> Result<()> {
-        let mut guard = self.guard.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        let mut guard = self
+            .guard
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
 
         // Kill the guard process — this releases the assertion
         if let Some(sg) = guard.take() {

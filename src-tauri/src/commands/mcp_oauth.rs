@@ -141,7 +141,12 @@ pub async fn mcp_oauth_start(
         ])
         .send()
         .await
-        .map_err(|e| Error::Internal(format!("token request failed: {}", sanitize_reqwest_error(&e))))?;
+        .map_err(|e| {
+            Error::Internal(format!(
+                "token request failed: {}",
+                sanitize_reqwest_error(&e)
+            ))
+        })?;
     let status = response.status();
     if !status.is_success() {
         // Body deliberately dropped: it may echo the authorization code.
@@ -154,7 +159,9 @@ pub async fn mcp_oauth_start(
         .await
         .map_err(|_| Error::Internal("token endpoint returned an invalid JSON body".into()))?;
     if token.access_token.trim().is_empty() {
-        return Err(Error::Internal("token endpoint returned an empty access_token".into()));
+        return Err(Error::Internal(
+            "token endpoint returned an empty access_token".into(),
+        ));
     }
     // Daemon rpc.rs reads `expires_at` with `as_u64()` — epoch seconds, not RFC3339.
     let expires_at = token.expires_in.filter(|s| *s > 0).and_then(|s| {
@@ -255,7 +262,12 @@ fn wait_for_callback(
 
         let query = path.splitn(2, '?').nth(1).unwrap_or("");
         let params = parse_query(query);
-        let get = |key: &str| params.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+        let get = |key: &str| {
+            params
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.as_str())
+        };
 
         if let Some(_error) = get("error") {
             respond(
@@ -268,7 +280,11 @@ fn wait_for_callback(
             return Err("authorization was denied by the provider".into());
         }
         if get("state") != Some(expected_state) {
-            respond(&mut stream, 400, "State mismatch. You can close this window.");
+            respond(
+                &mut stream,
+                400,
+                "State mismatch. You can close this window.",
+            );
             return Err("OAuth state mismatch — possible CSRF, flow aborted".into());
         }
         match get("code").map(str::trim).filter(|c| !c.is_empty()) {
@@ -320,9 +336,7 @@ fn respond(stream: &mut std::net::TcpStream, status: u16, body: &str) {
 fn validate_endpoint_url(url: &str, field: &str) -> Result<()> {
     let url = url.trim();
     if !(url.starts_with("https://") || url.starts_with("http://")) {
-        return Err(Error::Internal(format!(
-            "{field} must be an http(s) URL"
-        )));
+        return Err(Error::Internal(format!("{field} must be an http(s) URL")));
     }
     Ok(())
 }

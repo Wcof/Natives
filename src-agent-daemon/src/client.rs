@@ -9,7 +9,9 @@
 //! let run = c.call("run.start", serde_json::json!({ ... })).await?;
 //! ```
 
-use assistant_protocol::v1::daemon::{HandshakeRequest, HandshakeResponse, RpcRequest, RpcResponse};
+use assistant_protocol::v1::daemon::{
+    HandshakeRequest, HandshakeResponse, RpcRequest, RpcResponse,
+};
 use assistant_protocol::v2::PROTOCOL_V2;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -33,16 +35,20 @@ pub enum DaemonClientError {
 }
 
 /// Parse one newline-delimited handshake response body.
-pub(crate) fn parse_handshake_response_line(line: &str) -> Result<HandshakeResponse, DaemonClientError> {
+pub(crate) fn parse_handshake_response_line(
+    line: &str,
+) -> Result<HandshakeResponse, DaemonClientError> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
-        return Err(DaemonClientError::Handshake("empty handshake response".into()));
+        return Err(DaemonClientError::Handshake(
+            "empty handshake response".into(),
+        ));
     }
 
     // Prefer explicit JSON inspection so DaemonError bodies (legacy rejects)
     // never coerce into an empty HandshakeResponse via serde defaults.
-    let value: Value = serde_json::from_str(trimmed)
-        .map_err(|e| DaemonClientError::Handshake(e.to_string()))?;
+    let value: Value =
+        serde_json::from_str(trimmed).map_err(|e| DaemonClientError::Handshake(e.to_string()))?;
 
     // Daemon auth/protocol failures historically serialized as DaemonError.
     if let Some(msg) = value
@@ -124,13 +130,9 @@ impl DaemonClient {
     ) -> Result<Self, DaemonClientError> {
         let socket_path = socket_path.as_ref().to_path_buf();
         let client_id = format!("tauri-{}", Uuid::new_v4());
-        let (writer, reader, session_token, protocol_version) = Self::handshake_stream(
-            &socket_path,
-            bootstrap_token,
-            client_version,
-            &client_id,
-        )
-        .await?;
+        let (writer, reader, session_token, protocol_version) =
+            Self::handshake_stream(&socket_path, bootstrap_token, client_version, &client_id)
+                .await?;
 
         Ok(Self {
             socket_path,
@@ -201,7 +203,6 @@ impl DaemonClient {
         ))
     }
 
-
     /// Re-handshake after disconnect (uses stored bootstrap; never logs it).
     pub async fn reconnect(&mut self) -> Result<(), DaemonClientError> {
         let (writer, reader, session_token, protocol_version) = Self::handshake_stream(
@@ -263,9 +264,7 @@ impl DaemonClient {
 
     /// Reconnect once with the supervisor's current bootstrap after a sidecar
     /// restart. The cached client may only know the previous bootstrap.
-    async fn reconnect_from_current_env(
-        &self,
-    ) -> Result<DaemonClient, DaemonClientError> {
+    async fn reconnect_from_current_env(&self) -> Result<DaemonClient, DaemonClientError> {
         let socket = std::env::var_os("NATIVES_DAEMON_SOCKET")
             .map(PathBuf::from)
             .unwrap_or_else(|| self.socket_path.clone());
@@ -316,7 +315,10 @@ pub enum RunAuthorityMode {
     /// In-process `global_run_manager()` (embedded / tests / transitional).
     Embedded,
     /// Independent sidecar via UDS (`NATIVES_DAEMON_SOCKET` + bootstrap).
-    Uds { socket: PathBuf, bootstrap_token: String },
+    Uds {
+        socket: PathBuf,
+        bootstrap_token: String,
+    },
 }
 
 fn default_daemon_socket() -> PathBuf {
@@ -384,10 +386,7 @@ pub fn resolve_run_authority_mode() -> RunAuthorityMode {
 
 /// Returns true when mode requires UDS and forbids silent embedded fallback.
 pub fn mode_requires_uds() -> bool {
-    matches!(
-        resolve_run_authority_mode(),
-        RunAuthorityMode::Uds { .. }
-    ) && {
+    matches!(resolve_run_authority_mode(), RunAuthorityMode::Uds { .. }) && {
         let m = std::env::var("NATIVES_DAEMON_MODE")
             .unwrap_or_else(|_| {
                 if cfg!(test) {
@@ -483,10 +482,7 @@ mod tests {
         let prev_sock = std::env::var("NATIVES_DAEMON_SOCKET").ok();
         let prev_boot = std::env::var("NATIVES_DAEMON_BOOTSTRAP").ok();
         std::env::set_var("NATIVES_DAEMON_MODE", "auto");
-        std::env::set_var(
-            "NATIVES_DAEMON_SOCKET",
-            "/tmp/natives-auto-no-socket.sock",
-        );
+        std::env::set_var("NATIVES_DAEMON_SOCKET", "/tmp/natives-auto-no-socket.sock");
         std::env::remove_var("NATIVES_DAEMON_BOOTSTRAP");
         assert_eq!(resolve_run_authority_mode(), RunAuthorityMode::Embedded);
         assert!(!mode_requires_uds());
@@ -509,7 +505,10 @@ mod tests {
         let err = parse_handshake_response_line(line).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("Invalid bootstrap token"), "{msg}");
-        assert!(!msg.contains("missing field `session_token` at line"), "{msg}");
+        assert!(
+            !msg.contains("missing field `session_token` at line"),
+            "{msg}"
+        );
     }
 
     #[test]
@@ -527,5 +526,4 @@ mod tests {
         assert!(resp.accepted);
         assert_eq!(resp.session_token, "tok2");
     }
-
 }

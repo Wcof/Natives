@@ -75,10 +75,7 @@ impl CreativeAppService {
 
     /// Resolve source for callers that need source-specific non-lifecycle APIs
     /// (logs, local config, …) without re-implementing lookup order.
-    pub fn resolve_source(
-        conn: &Connection,
-        id: &str,
-    ) -> Result<adapters::ResolvedSource> {
+    pub fn resolve_source(conn: &Connection, id: &str) -> Result<adapters::ResolvedSource> {
         adapters::resolve(conn, id)
     }
 }

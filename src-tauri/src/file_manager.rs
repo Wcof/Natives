@@ -18,7 +18,9 @@ pub struct FileEntry {
     #[serde(rename = "isDir")]
     pub is_dir: bool,
     // kind 值域：detect_file_kind 的产出 + 目录 "dir"。改这里必须同步改 detect_file_kind。
-    #[ts(type = "\"text\" | \"image\" | \"video\" | \"audio\" | \"pdf\" | \"archive\" | \"dir\" | \"other\"")]
+    #[ts(
+        type = "\"text\" | \"image\" | \"video\" | \"audio\" | \"pdf\" | \"archive\" | \"dir\" | \"other\""
+    )]
     pub kind: String,
     pub hidden: bool,
     // u64 默认生成 bigint，前端契约是 number（毫秒/字节都在安全整数范围内）
@@ -33,7 +35,10 @@ pub struct FileEntry {
     /// Mirrors fanbox `projectOf` so grid cards can show badges without N extra round-trips.
     /// 值域由 detect_project_badge 决定，改这里必须同步改该函数。
     #[serde(rename = "projectBadge", skip_serializing_if = "Option::is_none")]
-    #[ts(optional, type = "\"node\" | \"web\" | \"python\" | \"rust\" | \"go\" | \"git\"")]
+    #[ts(
+        optional,
+        type = "\"node\" | \"web\" | \"python\" | \"rust\" | \"go\" | \"git\""
+    )]
     pub project_badge: Option<String>,
     /// 文件所在目录（「最近修改」视图显示来源目录用；recent_files/stat 填充）
     #[serde(rename = "dirHint", skip_serializing_if = "Option::is_none")]
@@ -85,7 +90,10 @@ pub struct StatResult {
     #[ts(optional)]
     pub is_dir: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional, type = "\"text\" | \"image\" | \"video\" | \"audio\" | \"pdf\" | \"archive\" | \"dir\" | \"other\"")]
+    #[ts(
+        optional,
+        type = "\"text\" | \"image\" | \"video\" | \"audio\" | \"pdf\" | \"archive\" | \"dir\" | \"other\""
+    )]
     pub kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
@@ -195,7 +203,9 @@ pub(crate) fn validate_path(path: &Path) -> Result<()> {
     {
         Ok(())
     } else {
-        Err(Error::InvalidInput("path not in allowed directories".into()))
+        Err(Error::InvalidInput(
+            "path not in allowed directories".into(),
+        ))
     }
 }
 
@@ -236,24 +246,25 @@ fn detect_file_kind(name: &str) -> String {
         | "editorconfig" | "graphql" | "gql" | "sql" | "vue" | "svelte" | "astro" => {
             "text".to_string()
         }
-        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "py" | "pyw" | "rb" | "rs" | "go" | "java"
-        | "c" | "cpp" | "h" | "hpp" | "cs" | "swift" | "kt" | "kts" | "sh" | "bash" | "zsh"
-        | "fish" | "ps1" | "bat" | "cmd" | "php" | "scala" => "text".to_string(),
+        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "py" | "pyw" | "rb" | "rs" | "go"
+        | "java" | "c" | "cpp" | "h" | "hpp" | "cs" | "swift" | "kt" | "kts" | "sh" | "bash"
+        | "zsh" | "fish" | "ps1" | "bat" | "cmd" | "php" | "scala" => "text".to_string(),
         "html" | "htm" | "css" | "scss" | "sass" | "less" => "text".to_string(),
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "ico" | "bmp" | "tiff" | "tif"
         | "heic" | "avif" => "image".to_string(),
         "mp4" | "mov" | "avi" | "mkv" | "webm" | "flv" | "wmv" | "m4v" => "video".to_string(),
         "mp3" | "wav" | "ogg" | "flac" | "aac" | "m4a" | "opus" | "wma" => "audio".to_string(),
         "pdf" => "pdf".to_string(),
-        "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" | "rar" | "tgz" | "tbz2" => "archive".to_string(),
+        "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" | "rar" | "tgz" | "tbz2" => {
+            "archive".to_string()
+        }
         _ => "other".to_string(),
     }
 }
 
 /// Infer project type from a set of entry names (fanbox `projectOf`).
 fn detect_project_badge(names: &std::collections::HashSet<String>) -> Option<String> {
-    let lower: std::collections::HashSet<String> =
-        names.iter().map(|n| n.to_lowercase()).collect();
+    let lower: std::collections::HashSet<String> = names.iter().map(|n| n.to_lowercase()).collect();
     if lower.contains("package.json") {
         return Some("node".into());
     }
@@ -365,11 +376,7 @@ pub fn list_dir_detailed(dir_path: &str, options: &ListDirOptions) -> Result<Lis
         let effective_meta = target_meta.as_ref().unwrap_or(&entry_meta);
 
         let is_dir = effective_meta.is_dir();
-        let size = if is_dir {
-            4096
-        } else {
-            effective_meta.len()
-        };
+        let size = if is_dir { 4096 } else { effective_meta.len() };
 
         entries.push(FileEntry {
             name: name.clone(),
@@ -466,10 +473,7 @@ pub fn read_file(file_path: &str) -> Result<ReadFileResult> {
 
     let size = meta.len();
     let mtime = meta_mtime_ms(&meta);
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("file");
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
     let kind = detect_file_kind(name);
 
     if size > MAX_FULL_READ {
@@ -538,10 +542,7 @@ pub fn write_file_atomic(
 
     // Atomic write: tmp file -> fsync -> rename
     let parent = path.parent().unwrap_or_else(|| Path::new("/"));
-    let basename = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("file");
+    let basename = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
     let tmp_name = format!(
         ".tmp-{basename}-{}-{}",
         std::time::SystemTime::now()
@@ -554,17 +555,14 @@ pub fn write_file_atomic(
 
     // Write to tmp file
     use std::io::Write;
-    let mut tmp_file =
-        std::fs::File::create(&tmp_path).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp_path);
-            Error::Io(e)
-        })?;
-    tmp_file
-        .write_all(content.as_bytes())
-        .map_err(|e| {
-            let _ = std::fs::remove_file(&tmp_path);
-            Error::Io(e)
-        })?;
+    let mut tmp_file = std::fs::File::create(&tmp_path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        Error::Io(e)
+    })?;
+    tmp_file.write_all(content.as_bytes()).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        Error::Io(e)
+    })?;
     tmp_file.sync_all().map_err(|e| {
         let _ = std::fs::remove_file(&tmp_path);
         Error::Io(e)
@@ -606,10 +604,7 @@ pub fn create_entry(target_path: &str, entry_type: &str) -> Result<()> {
         validate_path(&path)?;
     }
 
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     if !valid_name(name) {
         return Err(Error::InvalidInput("invalid entry name".into()));
     }
@@ -827,8 +822,7 @@ pub fn stat_path(file_path: &str) -> Result<StatResult> {
 
 fn is_exdev(err: &std::io::Error) -> bool {
     // macOS/Linux EXDEV = 18; also accept ErrorKind::CrossesDevices when available
-    err.raw_os_error() == Some(18)
-        || err.kind() == std::io::ErrorKind::CrossesDevices
+    err.raw_os_error() == Some(18) || err.kind() == std::io::ErrorKind::CrossesDevices
 }
 
 /// Trash entry (macOS/Linux/Windows via trash crate)
@@ -883,7 +877,8 @@ pub fn move_entries(paths: &[String], dest_dir: &str) -> Result<serde_json::Valu
         let src = expand_tilde(p);
         // Skip no-op: already directly inside dest
         if let Some(parent) = src.parent() {
-            let parent_canon = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+            let parent_canon =
+                std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
             if parent_canon == dest_canon {
                 skipped.push(p.clone());
                 continue;
@@ -893,7 +888,9 @@ pub fn move_entries(paths: &[String], dest_dir: &str) -> Result<serde_json::Valu
         if src.is_dir() {
             let src_canon = std::fs::canonicalize(&src).unwrap_or_else(|_| src.clone());
             if dest_canon.starts_with(&src_canon) {
-                errors.push(serde_json::json!({ "path": p, "error": "cannot move a folder into itself" }));
+                errors.push(
+                    serde_json::json!({ "path": p, "error": "cannot move a folder into itself" }),
+                );
                 continue;
             }
         }
@@ -1131,7 +1128,9 @@ pub fn clipboard_copy_files(paths: &[String]) -> Result<serde_json::Value> {
             .map_err(|e| Error::Internal(format!("osascript failed: {e}")))?;
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::Internal(format!("clipboard copy files failed: {err}")));
+            return Err(Error::Internal(format!(
+                "clipboard copy files failed: {err}"
+            )));
         }
         return Ok(serde_json::json!({ "ok": true, "count": abs.len(), "platform": "macos" }));
     }
@@ -1189,11 +1188,7 @@ pub fn clipboard_copy_image(file_path: &str) -> Result<serde_json::Value> {
     if !path.exists() {
         return Err(Error::NotFound(file_path.to_string()));
     }
-    let kind = detect_file_kind(
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(""),
-    );
+    let kind = detect_file_kind(path.file_name().and_then(|n| n.to_str()).unwrap_or(""));
     if kind != "image" {
         return Err(Error::InvalidInput("not an image file".into()));
     }
@@ -1260,10 +1255,7 @@ pub fn import_files(source_paths: &[String], dest_dir: &str) -> Result<Vec<Strin
             eprintln!("import_files: skipping missing source: {src_str}");
             continue;
         }
-        let file_name = src
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("file");
+        let file_name = src.file_name().and_then(|n| n.to_str()).unwrap_or("file");
         let target = deduplicate_path(&dest.join(file_name))?;
 
         if src.is_dir() {
@@ -1332,9 +1324,7 @@ pub fn recent_files(root: &str) -> Result<Vec<FileEntry>> {
                 queue.push_back(entry_path);
             } else {
                 // dirHint：来源目录，供「最近修改」视图展示（前端不再自行推导）
-                let dir_hint = entry_path
-                    .parent()
-                    .map(|p| p.to_string_lossy().to_string());
+                let dir_hint = entry_path.parent().map(|p| p.to_string_lossy().to_string());
                 files.push(FileEntry {
                     kind: detect_file_kind(&name),
                     hidden: name.starts_with('.'),
@@ -1375,10 +1365,7 @@ pub(crate) fn deduplicate_path(path: &Path) -> Result<PathBuf> {
         return Ok(path.to_path_buf());
     }
     let parent = path.parent().unwrap_or_else(|| Path::new("/"));
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("file");
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -1571,13 +1558,16 @@ mod tests {
         let dir = tmp_dir("roundtrip");
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
         // Ensure path is under allowlist (home or /tmp)
-        let base = if dir.starts_with(&home) || dir.starts_with("/tmp") || dir.starts_with("/private/tmp") {
-            dir.clone()
-        } else {
-            let fallback = std::env::temp_dir().join(format!("natives-fm-home-{}", std::process::id()));
-            let _ = std::fs::create_dir_all(&fallback);
-            fallback
-        };
+        let base =
+            if dir.starts_with(&home) || dir.starts_with("/tmp") || dir.starts_with("/private/tmp")
+            {
+                dir.clone()
+            } else {
+                let fallback =
+                    std::env::temp_dir().join(format!("natives-fm-home-{}", std::process::id()));
+                let _ = std::fs::create_dir_all(&fallback);
+                fallback
+            };
 
         let file = base.join("hello.txt");
         create_entry(file.to_str().unwrap(), "file").expect("create file");
@@ -1591,11 +1581,8 @@ mod tests {
         assert!(Path::new(&renamed).exists());
         assert!(!file.exists());
 
-        let copied = copy_entry(
-            &renamed,
-            base.join("hello-copy.txt").to_str().unwrap(),
-        )
-        .expect("copy");
+        let copied =
+            copy_entry(&renamed, base.join("hello-copy.txt").to_str().unwrap()).expect("copy");
         assert!(Path::new(&copied).exists());
         assert!(Path::new(&renamed).exists());
 
@@ -1758,7 +1745,11 @@ mod tests {
         assert_eq!(newest.kind, "image", "kind 由后端 detect_file_kind 计算");
         assert!(!newest.is_dir);
         assert!(!newest.hidden);
-        assert_eq!(newest.dir_hint.as_deref(), sub.to_str(), "dirHint 指向来源目录");
+        assert_eq!(
+            newest.dir_hint.as_deref(),
+            sub.to_str(),
+            "dirHint 指向来源目录"
+        );
         assert!(newest.mtime > 0.0);
 
         let older = &entries[1];
@@ -1767,7 +1758,6 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&base);
     }
-
 
     #[test]
     fn batch_copy_move_trash_and_roots() {
@@ -1780,7 +1770,10 @@ mod tests {
         std::fs::create_dir(&dest).unwrap();
 
         let copied = copy_entries(
-            &[a.to_string_lossy().to_string(), b.to_string_lossy().to_string()],
+            &[
+                a.to_string_lossy().to_string(),
+                b.to_string_lossy().to_string(),
+            ],
             dest.to_str().unwrap(),
         )
         .unwrap();

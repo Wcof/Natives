@@ -61,14 +61,20 @@ pub enum PermissionProfile {
 impl RunStatus {
     /// Returns true if the status is a terminal state.
     pub fn is_terminal(&self) -> bool {
-        matches!(self, RunStatus::Completed | RunStatus::Failed | RunStatus::Interrupted)
+        matches!(
+            self,
+            RunStatus::Completed | RunStatus::Failed | RunStatus::Interrupted
+        )
     }
 
     /// Returns true if the status is an active (non-terminal, non-queued) state.
     pub fn is_active(&self) -> bool {
         matches!(
             self,
-            RunStatus::Preparing | RunStatus::Running | RunStatus::WaitingPermission | RunStatus::Cancelling
+            RunStatus::Preparing
+                | RunStatus::Running
+                | RunStatus::WaitingPermission
+                | RunStatus::Cancelling
         )
     }
 

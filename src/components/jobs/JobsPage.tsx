@@ -88,7 +88,7 @@ export default function JobsPage() {
 
   useEffect(() => {
     // 挂载即同步外部系统（job_list）；refresh 内所有 setState 均发生在 await 之后
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     void refresh(false);
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refresh(true);

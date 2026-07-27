@@ -4,24 +4,33 @@
 //! aggregation: any Deny wins; empty registry for those events denies by default
 //! when `fail_closed` is set on the registry.
 
+use crate::event_seq::EventSequencer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::time::Instant;
+use uuid::Uuid;
 
 // The Hook data model — event identity, provenance, matching — lives in
 // `harness-core`. This module owns only the executable runtime around it.
 pub use harness_core::hooks::{
-    Condition, ConditionOperator, HookDefinition, HookEvent, HookFailurePolicy, HookId, HookKind,
-    HookScope, HookSource, tool_pattern_matches,
+    tool_pattern_matches, Condition, ConditionOperator, HookDefinition, HookEvent,
+    HookFailurePolicy, HookId, HookKind, HookScope, HookSource,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookDecision {
     Allow,
-    Deny { reason: String },
-    Modify { payload: Value },
-    Inject { messages: Vec<String> },
+    Deny {
+        reason: String,
+    },
+    Modify {
+        payload: Value,
+    },
+    Inject {
+        messages: Vec<String>,
+    },
     /// Historical variant with **no engine implementation**.
     ///
     /// Nothing constructs this any more: `parse_hook_stdout` used to turn
@@ -145,11 +154,17 @@ struct Registered {
 }
 
 /// Registry of hook handlers keyed by event.
-#[derive(Default)]
 pub struct HookRegistry {
     entries: HashMap<HookEvent, Vec<Registered>>,
     /// When true, security-sensitive events with zero matching handlers deny.
     pub fail_closed_security: bool,
+    events: Option<EventSequencer>,
+}
+
+impl Default for HookRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HookRegistry {
@@ -160,7 +175,13 @@ impl HookRegistry {
         Self {
             entries: HashMap::new(),
             fail_closed_security: false,
+            events: None,
         }
+    }
+
+    pub fn with_events(mut self, events: EventSequencer) -> Self {
+        self.events = Some(events);
+        self
     }
 
     pub fn enable_security_fail_closed(&mut self) {
@@ -228,7 +249,7 @@ impl HookRegistry {
     pub async fn dispatch_outcomes(&self, request: HookRequest) -> Vec<HookOutcome> {
         let mut out = Vec::new();
         if let Some(entries) = self.entries.get(&request.event) {
-            for entry in entries {
+            for (ordinal, entry) in entries.iter().enumerate() {
                 // Both gates are consulted so the described matcher is provably
                 // load-bearing: a compiled handler carries the same matcher as
                 // its definition, and if the two ever diverge the stricter one
@@ -244,7 +265,87 @@ impl HookRegistry {
                 if !entry.handler.matches_tool(request.tool_name.as_deref()) {
                     continue;
                 }
-                match entry.handler.handle_outcome(request.clone()).await {
+                let invocation_id = Uuid::new_v4().to_string();
+                let input_json =
+                    serde_json::to_string(&request.input).unwrap_or_else(|_| "{}".into());
+                let input_truncated = input_json.chars().count() > 512;
+                let input_summary = assistant_protocol::v2::redact_secrets(
+                    &input_json.chars().take(512).collect::<String>(),
+                );
+                if let Some(events) = &self.events {
+                    if events
+                        .append_checked(
+                            &request.run_id,
+                            assistant_protocol::v2::RunEventKind::HookInvocationStarted {
+                                invocation_id: invocation_id.clone(),
+                                hook_id: entry.definition.id.to_string(),
+                                hook_event: request.event.to_string(),
+                                source: entry.definition.source.origin.clone(),
+                                ordinal: ordinal as u32,
+                                input_summary,
+                                input_truncated,
+                            },
+                        )
+                        .is_err()
+                    {
+                        out.push(HookOutcome::Failed {
+                            reason: "hook telemetry persistence failed before handler".into(),
+                        });
+                        break;
+                    }
+                }
+                let started = Instant::now();
+                let outcome = entry.handler.handle_outcome(request.clone()).await;
+                let (status, decision, error_category, output_summary) = match &outcome {
+                    HookOutcome::Decided(response) => (
+                        "completed",
+                        Some(format!("{:?}", response.decision)),
+                        None,
+                        "decision".into(),
+                    ),
+                    HookOutcome::Permission(verdict) => (
+                        "completed",
+                        Some(format!("{:?}", verdict)),
+                        None,
+                        "permission".into(),
+                    ),
+                    HookOutcome::Failed { reason } => (
+                        "failed",
+                        None,
+                        Some("handler_failure".into()),
+                        assistant_protocol::v2::redact_secrets(
+                            &reason.chars().take(512).collect::<String>(),
+                        ),
+                    ),
+                };
+                let mut telemetry_ok = true;
+                if let Some(events) = &self.events {
+                    if events
+                        .append_checked(
+                            &request.run_id,
+                            assistant_protocol::v2::RunEventKind::HookInvocationCompleted {
+                                invocation_id,
+                                hook_id: entry.definition.id.to_string(),
+                                hook_event: request.event.to_string(),
+                                source: entry.definition.source.origin.clone(),
+                                ordinal: ordinal as u32,
+                                status: status.into(),
+                                effective_decision: decision,
+                                error_category,
+                                duration_ms: started.elapsed().as_millis() as u64,
+                                output_truncated: output_summary.chars().count() > 512,
+                                output_summary: output_summary.chars().take(512).collect(),
+                            },
+                        )
+                        .is_err()
+                    {
+                        out.push(HookOutcome::Failed {
+                            reason: "hook telemetry persistence failed after handler".into(),
+                        });
+                        telemetry_ok = false;
+                    }
+                }
+                match outcome {
                     HookOutcome::Failed { reason } => {
                         if let Some(resolved) = resolve_failure(
                             request.event,
@@ -257,15 +358,15 @@ impl HookRegistry {
                     }
                     other => out.push(other),
                 }
+                if !telemetry_ok {
+                    break;
+                }
             }
         }
         // Fail-closed for security events with no matching handler. A hook that
         // was dropped by `Skip` counts as "no handler" here, so skipping cannot
         // quietly turn a security event into an allow.
-        if out.is_empty()
-            && self.fail_closed_security
-            && request.event.is_security_sensitive()
-        {
+        if out.is_empty() && self.fail_closed_security && request.event.is_security_sensitive() {
             out.push(HookOutcome::Decided(HookResponse {
                 decision: HookDecision::Deny {
                     reason: format!(
@@ -320,9 +421,7 @@ impl HookRegistry {
                 // A handler-level failure that reached here unresolved is still
                 // a failure: deny. `dispatch_outcomes` normally resolves these,
                 // so this arm only guards hand-built inputs.
-                HookOutcome::Failed { reason } => {
-                    return PermissionAggregate::Deny(reason.clone())
-                }
+                HookOutcome::Failed { reason } => return PermissionAggregate::Deny(reason.clone()),
                 HookOutcome::Permission(PermissionVerdict::Ask { .. }) => ask = true,
                 HookOutcome::Permission(PermissionVerdict::Allow { reason }) => {
                     if approve.is_none() {
@@ -754,7 +853,10 @@ mod tests {
         let described = reg.describe();
         assert_eq!(described.len(), 3, "describe must not omit ad-hoc handlers");
         assert_eq!(
-            described.iter().map(|d| d.id.to_string()).collect::<Vec<_>>(),
+            described
+                .iter()
+                .map(|d| d.id.to_string())
+                .collect::<Vec<_>>(),
             vec![
                 "builtin/ad-hoc/0#PreToolUse",
                 "builtin/ad-hoc/1#PreToolUse",
@@ -777,7 +879,11 @@ mod tests {
 
         assert_eq!(
             reg.describe().iter().map(|d| d.event).collect::<Vec<_>>(),
-            vec![HookEvent::SessionStart, HookEvent::PreToolUse, HookEvent::Error]
+            vec![
+                HookEvent::SessionStart,
+                HookEvent::PreToolUse,
+                HookEvent::Error
+            ]
         );
     }
 
@@ -974,9 +1080,6 @@ mod tests {
             })
             .await;
         assert_eq!(responses.len(), 1);
-        assert!(matches!(
-            responses[0].decision,
-            HookDecision::Deny { .. }
-        ));
+        assert!(matches!(responses[0].decision, HookDecision::Deny { .. }));
     }
 }

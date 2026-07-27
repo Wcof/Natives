@@ -693,7 +693,13 @@ export type AssistantMethod =
   | 'harness.binding.get'
   | 'harness.binding.set'
   | 'harness.run.getSnapshot'
-  | 'harness.audit.list';
+  | 'harness.audit.list'
+  | 'harness.prompt.preview'
+  | 'harness.source.list'
+  | 'harness.source.acknowledgeDrift'
+  | 'harness.subscribe'
+  | 'harness.trace.list'
+  | 'harness.audit.export';
 
 /**
  * Capability library selection carried on run.start / conversation rows

@@ -141,7 +141,7 @@ export default function DraftPreview({
   }, [draftId]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     void resolveUrl();
   }, [resolveUrl]);
 

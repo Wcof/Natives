@@ -326,10 +326,7 @@ impl McpRuntime {
     }
 
     pub fn server_status(&self, id: &str) -> Option<String> {
-        self.status
-            .lock()
-            .ok()
-            .and_then(|m| m.get(id).cloned())
+        self.status.lock().ok().and_then(|m| m.get(id).cloned())
     }
 
     pub fn register_server(&self, config: McpServerConfig) -> Result<(), String> {
@@ -377,7 +374,10 @@ impl McpRuntime {
     /// preserving warm starts across turns of the same conversation.
     pub fn release_run(&self, run_id: &str) {
         let released: Vec<String> = match self.run_refs.lock() {
-            Ok(mut refs) => refs.remove(run_id).map(|s| s.into_iter().collect()).unwrap_or_default(),
+            Ok(mut refs) => refs
+                .remove(run_id)
+                .map(|s| s.into_iter().collect())
+                .unwrap_or_default(),
             Err(_) => return,
         };
         if released.is_empty() {
@@ -547,12 +547,8 @@ impl McpRuntime {
         // Legacy tolerance: a server that sent no `capabilities` at all predates
         // the field being load-bearing, so we still probe it. A server that sent
         // a populated object without `tools` is taken at its word.
-        let advertises_tools = caps.tools
-            || caps
-                .raw
-                .as_object()
-                .map(|o| o.is_empty())
-                .unwrap_or(true);
+        let advertises_tools =
+            caps.tools || caps.raw.as_object().map(|o| o.is_empty()).unwrap_or(true);
         if let Ok(mut map) = self.capabilities.lock() {
             map.insert(server_id.to_string(), caps);
         }
@@ -890,10 +886,7 @@ impl McpRuntime {
         if let Some(err) = resp.get("error") {
             return Err(format!("mcp tools/call error: {err}"));
         }
-        Ok(resp
-            .get("result")
-            .cloned()
-            .unwrap_or(resp))
+        Ok(resp.get("result").cloned().unwrap_or(resp))
     }
 
     /// One request/response exchange on a live stdio session.
@@ -920,10 +913,10 @@ impl McpRuntime {
                 .ok_or_else(|| format!("mcp stdio session not started: {server_id}"))?;
             let id = session.next_id;
             session.next_id += 1;
-            let StdioSession {
-                stdin, reader, ..
-            } = session;
-            stdio_roundtrip(stdin, reader, &roots, &mut notes, id, method, params, timeout)
+            let StdioSession { stdin, reader, .. } = session;
+            stdio_roundtrip(
+                stdin, reader, &roots, &mut notes, id, method, params, timeout,
+            )
         };
         self.record_notifications(server_id, notes);
         result
@@ -1207,8 +1200,7 @@ impl McpRuntime {
     /// forbids collapsing: unknown, unsupported, supported.
     fn require_capability(&self, server_id: &str, key: &str) -> Result<(), McpError> {
         // Confirm the server exists at all before talking about its capabilities.
-        self.server_config(server_id)
-            .map_err(McpError::NotFound)?;
+        self.server_config(server_id).map_err(McpError::NotFound)?;
         match self.server_capabilities(server_id) {
             None => Err(McpError::Unsupported(format!(
                 "mcp capabilities unknown for `{server_id}`: no completed initialize handshake — \
@@ -1937,8 +1929,8 @@ mod tests {
                 args: None,
                 url: Some("http://127.0.0.1:9".into()),
                 trusted: false,
-            auth_token: None,
-            headers: None,
+                auth_token: None,
+                headers: None,
             })
             .unwrap_err();
         assert!(err.to_ascii_lowercase().contains("ssrf") || err.contains("local"));
@@ -1999,9 +1991,7 @@ data: [DONE]
             headers: None,
         })
         .unwrap();
-        let err = rt
-            .call_tool("s", "missing", json!({}))
-            .unwrap_err();
+        let err = rt.call_tool("s", "missing", json!({})).unwrap_err();
         assert!(err.contains("not registered"));
     }
 
@@ -2119,8 +2109,12 @@ data: [DONE]
         );
         assert_eq!(err.kind(), "unsupported");
         assert_eq!(
-            map_jsonrpc_error("s", "prompts/get", &json!({"code": -32602, "message": "bad"}))
-                .kind(),
+            map_jsonrpc_error(
+                "s",
+                "prompts/get",
+                &json!({"code": -32602, "message": "bad"})
+            )
+            .kind(),
             "invalid"
         );
     }
@@ -2163,7 +2157,8 @@ data: [DONE]
         seed_resources(&rt, "res", &["mem://note/1"]);
         let cfg = rt.server_config("res").unwrap();
         assert_eq!(
-            rt.assert_resource_uri_allowed(&cfg, "mem://note/1").unwrap(),
+            rt.assert_resource_uri_allowed(&cfg, "mem://note/1")
+                .unwrap(),
             "listed"
         );
     }
@@ -2187,7 +2182,9 @@ data: [DONE]
         // Even publishing it does not buy the right to name a local path.
         seed_resources(&rt, "sketchy", &["file:///etc/passwd"]);
 
-        let err = rt.read_resource("sketchy", "file:///etc/passwd").unwrap_err();
+        let err = rt
+            .read_resource("sketchy", "file:///etc/passwd")
+            .unwrap_err();
         assert_eq!(err.kind(), "denied");
         assert!(err.message().contains("untrusted"), "{err}");
     }
@@ -2200,7 +2197,10 @@ data: [DONE]
         seed_resources(
             &rt,
             "t",
-            &["file:///srv/data/../../etc/shadow", "file://evil.example.com/share/x"],
+            &[
+                "file:///srv/data/../../etc/shadow",
+                "file://evil.example.com/share/x",
+            ],
         );
         let cfg = rt.server_config("t").unwrap();
 
@@ -2251,7 +2251,10 @@ data: [DONE]
 
     #[test]
     fn template_matches_only_single_segment_expansions() {
-        assert!(uri_matches_template("db://table/users", "db://table/{name}"));
+        assert!(uri_matches_template(
+            "db://table/users",
+            "db://table/{name}"
+        ));
         assert!(uri_matches_template(
             "repo://natives/file/main.rs",
             "repo://{project}/file/{path}"
@@ -2264,9 +2267,15 @@ data: [DONE]
         // Variable must consume something.
         assert!(!uri_matches_template("db://table/", "db://table/{name}"));
         // Literal prefix mismatch.
-        assert!(!uri_matches_template("other://table/users", "db://table/{name}"));
+        assert!(!uri_matches_template(
+            "other://table/users",
+            "db://table/{name}"
+        ));
         // Trailing literal must be consumed exactly.
-        assert!(uri_matches_template("db://x/rows.json", "db://{t}/rows.json"));
+        assert!(uri_matches_template(
+            "db://x/rows.json",
+            "db://{t}/rows.json"
+        ));
         assert!(!uri_matches_template(
             "db://x/rows.json.bak",
             "db://{t}/rows.json"
@@ -2290,10 +2299,10 @@ data: [DONE]
         let rt = McpRuntime::new();
         http_server(&rt, "t");
         caps_with(&rt, "t", json!({ "resources": {} }));
-        rt.resource_templates
-            .lock()
-            .unwrap()
-            .insert("t".into(), vec![json!({"uriTemplate": "db://table/{name}"})]);
+        rt.resource_templates.lock().unwrap().insert(
+            "t".into(),
+            vec![json!({"uriTemplate": "db://table/{name}"})],
+        );
         let cfg = rt.server_config("t").unwrap();
         assert_eq!(
             rt.assert_resource_uri_allowed(&cfg, "db://table/users")
@@ -2359,9 +2368,7 @@ data: [DONE]
         );
         let dir = std::env::temp_dir().join(format!("mcp-root-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        let granted = rt
-            .set_roots(&[dir.to_string_lossy().to_string()])
-            .unwrap();
+        let granted = rt.set_roots(&[dir.to_string_lossy().to_string()]).unwrap();
         assert_eq!(granted.len(), 1);
         assert!(granted[0].uri.starts_with("file://"));
         assert_eq!(rt.client_roots().len(), 1);
@@ -2395,7 +2402,10 @@ data: [DONE]
         rt.record_notifications("s", frames);
         let kept = rt.notifications(Some("s"));
         assert_eq!(kept.len(), NOTIFICATION_RING_CAP);
-        assert_eq!(kept.last().unwrap().params["seq"], NOTIFICATION_RING_CAP + 49);
+        assert_eq!(
+            kept.last().unwrap().params["seq"],
+            NOTIFICATION_RING_CAP + 49
+        );
     }
 
     #[test]
@@ -2421,10 +2431,16 @@ data: [DONE]
     #[test]
     fn notifications_are_scoped_per_server() {
         let rt = McpRuntime::new();
-        rt.record_notifications("a", vec![json!({"method": "notifications/tools/list_changed"})]);
+        rt.record_notifications(
+            "a",
+            vec![json!({"method": "notifications/tools/list_changed"})],
+        );
         rt.record_notifications("b", vec![json!({"method": "notifications/message"})]);
         assert_eq!(rt.notifications(Some("a")).len(), 1);
-        assert_eq!(rt.notifications(Some("a"))[0].method, "notifications/tools/list_changed");
+        assert_eq!(
+            rt.notifications(Some("a"))[0].method,
+            "notifications/tools/list_changed"
+        );
         assert_eq!(rt.notifications(None).len(), 2);
         assert_eq!(rt.notifications(Some("missing")).len(), 0);
     }

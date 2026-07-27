@@ -116,28 +116,45 @@ fn list(params: Value) -> Result<Value, String> {
 }
 
 fn list_page(params: Value) -> Result<Value, String> {
-    let limit = params.get("limit").and_then(Value::as_i64).unwrap_or(100).clamp(20, 200);
+    let limit = params
+        .get("limit")
+        .and_then(Value::as_i64)
+        .unwrap_or(100)
+        .clamp(20, 200);
     let cursor = params.get("cursor");
-    let cursor_updated = cursor.and_then(|v| v.get("updatedAt").or_else(|| v.get("updated_at"))).and_then(Value::as_str);
+    let cursor_updated = cursor
+        .and_then(|v| v.get("updatedAt").or_else(|| v.get("updated_at")))
+        .and_then(Value::as_str);
     let cursor_id = cursor.and_then(|v| v.get("id")).and_then(Value::as_str);
     let store = store()?;
     let conn = store.conn()?;
-    let mut stmt = conn.prepare(
-        "SELECT id, mode, project_id, title, provider_id, model_id, permission_profile_id,
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, mode, project_id, title, provider_id, model_id, permission_profile_id,
                 created_at, updated_at, archived_at, parent_conversation_id
          FROM conversation
          WHERE parent_conversation_id IS NULL
            AND (?1 IS NULL OR updated_at < ?1 OR (updated_at = ?1 AND id < ?2))
-         ORDER BY updated_at DESC, id DESC LIMIT ?3")
+         ORDER BY updated_at DESC, id DESC LIMIT ?3",
+        )
         .map_err(|e| e.to_string())?;
-    let rows = stmt.query_map(params![cursor_updated, cursor_id, limit + 1], row_to_conversation)
+    let rows = stmt
+        .query_map(
+            params![cursor_updated, cursor_id, limit + 1],
+            row_to_conversation,
+        )
         .map_err(|e| e.to_string())?;
     let mut conversations: Vec<Value> = rows.filter_map(Result::ok).collect();
     let has_more = conversations.len() > limit as usize;
     conversations.truncate(limit as usize);
-    let next_cursor = has_more.then(|| conversations.last()).flatten().and_then(|row| Some(serde_json::json!({
-        "updatedAt": row.get("updated_at")?, "id": row.get("id")?
-    })));
+    let next_cursor = has_more
+        .then(|| conversations.last())
+        .flatten()
+        .and_then(|row| {
+            Some(serde_json::json!({
+                "updatedAt": row.get("updated_at")?, "id": row.get("id")?
+            }))
+        });
     Ok(serde_json::json!({ "conversations": conversations, "nextCursor": next_cursor }))
 }
 
@@ -253,7 +270,7 @@ fn create(params: Value) -> Result<Value, String> {
     }
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
-    let project_id = params.get("project_id").and_then(Value::as_str);
+    let project_id = required_str(&params, "project_id")?;
     let store = store()?;
     let conn = store.conn()?;
     conn.execute(
@@ -292,9 +309,14 @@ fn fork(params: Value) -> Result<Value, String> {
 
 fn get_messages(params: Value) -> Result<Value, String> {
     let conversation_id = required_str(&params, "conversation_id")?;
-    let page_limit = params.get("limit").and_then(Value::as_i64).map(|n| n.clamp(20, 200));
+    let page_limit = params
+        .get("limit")
+        .and_then(Value::as_i64)
+        .map(|n| n.clamp(20, 200));
     let cursor = params.get("cursor");
-    let cursor_created = cursor.and_then(|v| v.get("createdAt").or_else(|| v.get("created_at"))).and_then(Value::as_str);
+    let cursor_created = cursor
+        .and_then(|v| v.get("createdAt").or_else(|| v.get("created_at")))
+        .and_then(Value::as_str);
     let cursor_id = cursor.and_then(|v| v.get("id")).and_then(Value::as_str);
     let store = store()?;
     let conn = store.conn()?;
@@ -305,18 +327,23 @@ fn get_messages(params: Value) -> Result<Value, String> {
                AND (?2 IS NULL OR created_at < ?2 OR (created_at = ?2 AND id < ?3))
              ORDER BY created_at DESC, id DESC LIMIT ?4",
         ).map_err(|e| e.to_string())?;
-        let rows = stmt.query_map(params![conversation_id, cursor_created, cursor_id, limit + 1], |row| {
-            Ok(serde_json::json!({
-                "id": row.get::<_, String>(0)?,
-                "role": row.get::<_, String>(1)?,
-                "conversation_id": row.get::<_, String>(2)?,
-                "parent_message_id": row.get::<_, Option<String>>(3)?,
-                "status": row.get::<_, String>(4)?,
-                "input_tokens": row.get::<_, Option<i64>>(5)?,
-                "output_tokens": row.get::<_, Option<i64>>(6)?,
-                "created_at": row.get::<_, String>(7)?,
-            }))
-        }).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(
+                params![conversation_id, cursor_created, cursor_id, limit + 1],
+                |row| {
+                    Ok(serde_json::json!({
+                        "id": row.get::<_, String>(0)?,
+                        "role": row.get::<_, String>(1)?,
+                        "conversation_id": row.get::<_, String>(2)?,
+                        "parent_message_id": row.get::<_, Option<String>>(3)?,
+                        "status": row.get::<_, String>(4)?,
+                        "input_tokens": row.get::<_, Option<i64>>(5)?,
+                        "output_tokens": row.get::<_, Option<i64>>(6)?,
+                        "created_at": row.get::<_, String>(7)?,
+                    }))
+                },
+            )
+            .map_err(|e| e.to_string())?;
         let mut rows: Vec<Value> = rows.filter_map(Result::ok).collect();
         rows.reverse();
         rows
@@ -396,11 +423,14 @@ fn get_messages(params: Value) -> Result<Value, String> {
                     .filter_map(|payload| serde_json::from_str::<RunEventV2>(payload).ok())
                     .collect::<Vec<_>>();
                 if let Some(reasoning) = reasoning_block_from_events(&events) {
-                    content_blocks.insert(0, serde_json::json!({
-                        "type": "reasoning",
-                        "index": 0,
-                        "content": reasoning,
-                    }));
+                    content_blocks.insert(
+                        0,
+                        serde_json::json!({
+                            "type": "reasoning",
+                            "index": 0,
+                            "content": reasoning,
+                        }),
+                    );
                 }
             }
         }
@@ -411,17 +441,30 @@ fn get_messages(params: Value) -> Result<Value, String> {
 
 fn get_messages_page(params: Value) -> Result<Value, String> {
     let conversation_id = required_str(&params, "conversation_id")?;
-    let limit = params.get("limit").and_then(Value::as_i64).unwrap_or(100).clamp(20, 200);
+    let limit = params
+        .get("limit")
+        .and_then(Value::as_i64)
+        .unwrap_or(100)
+        .clamp(20, 200);
     let cursor = params.get("cursor");
-    let cursor_created = cursor.and_then(|v| v.get("createdAt").or_else(|| v.get("created_at"))).and_then(Value::as_str);
+    let cursor_created = cursor
+        .and_then(|v| v.get("createdAt").or_else(|| v.get("created_at")))
+        .and_then(Value::as_str);
     let cursor_id = cursor.and_then(|v| v.get("id")).and_then(Value::as_str);
-    let all = get_messages(serde_json::json!({ "conversation_id": conversation_id, "limit": limit, "cursor": { "createdAt": cursor_created, "id": cursor_id } }))?;
+    let all = get_messages(
+        serde_json::json!({ "conversation_id": conversation_id, "limit": limit, "cursor": { "createdAt": cursor_created, "id": cursor_id } }),
+    )?;
     let mut messages: Vec<Value> = all.as_array().cloned().unwrap_or_default();
     let has_more = messages.len() > limit as usize;
     messages.truncate(limit as usize);
-    let next_cursor = has_more.then(|| messages.first()).flatten().and_then(|row| Some(serde_json::json!({
-        "createdAt": row.get("created_at")?, "id": row.get("id")?
-    })));
+    let next_cursor = has_more
+        .then(|| messages.first())
+        .flatten()
+        .and_then(|row| {
+            Some(serde_json::json!({
+                "createdAt": row.get("created_at")?, "id": row.get("id")?
+            }))
+        });
     messages.reverse();
     Ok(serde_json::json!({ "messages": messages, "nextCursor": next_cursor }))
 }
@@ -815,12 +858,15 @@ pub fn append_trigger_message_idempotent(
 
     // If the latest user message already has the same text, reuse it (duplicate start).
     if let Some(text) = content.filter(|s| !s.trim().is_empty()) {
-        if let Ok(messages) = get_messages(serde_json::json!({ "conversation_id": conversation_id }))
+        if let Ok(messages) =
+            get_messages(serde_json::json!({ "conversation_id": conversation_id }))
         {
             if let Some(rows) = messages.as_array() {
-                if let Some(last) = rows.iter().rev().find(|m| {
-                    m.get("role").and_then(Value::as_str) == Some("user")
-                }) {
+                if let Some(last) = rows
+                    .iter()
+                    .rev()
+                    .find(|m| m.get("role").and_then(Value::as_str) == Some("user"))
+                {
                     let last_text = last
                         .get("content_blocks")
                         .and_then(Value::as_array)
@@ -1126,6 +1172,22 @@ mod tests {
         .is_none());
     }
 
+    #[tokio::test]
+    async fn conversation_create_requires_project_id() {
+        let error = request(
+            names::CONVERSATION_CREATE,
+            serde_json::json!({
+                "mode": "agent",
+                "title": "No project",
+                "provider_id": "p",
+                "model_id": "m"
+            }),
+        )
+        .await
+        .expect_err("conversation without a project must be rejected");
+        assert_eq!(error, "project_id is required");
+    }
+
     struct ClearTestDb;
     impl Drop for ClearTestDb {
         fn drop(&mut self) {
@@ -1165,7 +1227,9 @@ mod tests {
         };
         let _clear_db = ClearTestDb;
         let dir = tempfile::tempdir().unwrap();
-        let db = dir.path().join(format!("natives-{}.db", uuid::Uuid::new_v4()));
+        let db = dir
+            .path()
+            .join(format!("natives-{}.db", uuid::Uuid::new_v4()));
         std::env::set_var("NATIVES_DB_PATH", &db);
         std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
@@ -1178,6 +1242,7 @@ mod tests {
             serde_json::json!({
                 "mode": "agent",
                 "title": "Test",
+                "project_id": "/project/test",
                 "provider_id": "p",
                 "model_id": "m",
                 "permission_profile_id": "readonly"
@@ -1217,33 +1282,33 @@ mod tests {
             "run-1",
             &[
                 RunEventV2 {
-            event_id: uuid::Uuid::new_v4().to_string(),
-            global_sequence: 0,
-            run_sequence: 0,
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    global_sequence: 0,
+                    run_sequence: 0,
                     run_id: "run-1".into(),
-sequence: 1,
+                    sequence: 1,
                     timestamp: reasoning_started,
                     payload: RunEventKind::ReasoningDelta {
                         text: "inspect persisted path".into(),
                     },
                 },
                 RunEventV2 {
-            event_id: uuid::Uuid::new_v4().to_string(),
-            global_sequence: 0,
-            run_sequence: 0,
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    global_sequence: 0,
+                    run_sequence: 0,
                     run_id: "run-1".into(),
-sequence: 2,
+                    sequence: 2,
                     timestamp: reasoning_finished,
                     payload: RunEventKind::TextDelta {
                         text: "done".into(),
                     },
                 },
                 RunEventV2 {
-            event_id: uuid::Uuid::new_v4().to_string(),
-            global_sequence: 0,
-            run_sequence: 0,
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    global_sequence: 0,
+                    run_sequence: 0,
                     run_id: "run-1".into(),
-sequence: 3,
+                    sequence: 3,
                     timestamp: chrono::Utc::now(),
                     payload: RunEventKind::ToolCallCompleted {
                         id: "tool-1".into(),
@@ -1281,7 +1346,6 @@ sequence: 3,
             .unwrap();
         assert_eq!(reasoning["content"]["reasoning"], "inspect persisted path");
         assert_eq!(reasoning["content"]["duration_ms"], 1500);
-
     }
 
     #[test]
@@ -1294,7 +1358,9 @@ sequence: 3,
         };
         let _clear_db = ClearTestDb;
         let dir = tempfile::tempdir().unwrap();
-        let db = dir.path().join(format!("natives-{}.db", uuid::Uuid::new_v4()));
+        let db = dir
+            .path()
+            .join(format!("natives-{}.db", uuid::Uuid::new_v4()));
         std::env::set_var("NATIVES_DB_PATH", &db);
         std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
@@ -1326,11 +1392,11 @@ sequence: 3,
             "compact-run",
             &[
                 RunEventV2 {
-            event_id: uuid::Uuid::new_v4().to_string(),
-            global_sequence: 0,
-            run_sequence: 0,
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    global_sequence: 0,
+                    run_sequence: 0,
                     run_id: "compact-run".into(),
-sequence: 7,
+                    sequence: 7,
                     timestamp: chrono::Utc::now(),
                     payload: RunEventKind::ContextCompressed {
                         before_tokens: 100,
@@ -1339,11 +1405,11 @@ sequence: 7,
                     },
                 },
                 RunEventV2 {
-            event_id: uuid::Uuid::new_v4().to_string(),
-            global_sequence: 0,
-            run_sequence: 0,
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    global_sequence: 0,
+                    run_sequence: 0,
                     run_id: "compact-run".into(),
-sequence: 8,
+                    sequence: 8,
                     timestamp: chrono::Utc::now(),
                     payload: RunEventKind::TextDelta {
                         text: "current answer".into(),
@@ -1366,7 +1432,6 @@ sequence: 8,
         let history = engine_history("compact-conv").unwrap();
         assert_eq!(history[0].role, "system");
         assert!(history[0].content.contains("alpha survives"));
-
     }
 
     #[test]
@@ -1379,7 +1444,9 @@ sequence: 8,
         };
         let _clear_db = ClearTestDb;
         let dir = tempfile::tempdir().unwrap();
-        let db = dir.path().join(format!("natives-{}.db", uuid::Uuid::new_v4()));
+        let db = dir
+            .path()
+            .join(format!("natives-{}.db", uuid::Uuid::new_v4()));
         std::env::set_var("NATIVES_DB_PATH", &db);
         std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
@@ -1425,7 +1492,9 @@ sequence: 8,
         };
         let _clear_db = ClearTestDb;
         let dir = tempfile::tempdir().unwrap();
-        let db = dir.path().join(format!("natives-del-{}.db", uuid::Uuid::new_v4()));
+        let db = dir
+            .path()
+            .join(format!("natives-del-{}.db", uuid::Uuid::new_v4()));
         std::env::set_var("NATIVES_DB_PATH", &db);
         std::env::set_var("NATIVES_ASSISTANT_DB_PATH", &db);
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
@@ -1494,6 +1563,9 @@ sequence: 8,
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(usage_in >= 100, "usage_stats should retain folded tokens, got {usage_in}");
+        assert!(
+            usage_in >= 100,
+            "usage_stats should retain folded tokens, got {usage_in}"
+        );
     }
 }

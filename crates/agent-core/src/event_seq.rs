@@ -92,7 +92,11 @@ impl EventSequencer {
         if let Some(persistence) = &self.persistence {
             if let Ok(loaded) = persistence.replay_after(run_id, 0) {
                 if !loaded.is_empty() {
-                    let max_seq = loaded.iter().map(|ev| ev.effective_run_sequence()).max().unwrap_or(0);
+                    let max_seq = loaded
+                        .iter()
+                        .map(|ev| ev.effective_run_sequence())
+                        .max()
+                        .unwrap_or(0);
                     inner.sequences.insert(run_id.to_string(), max_seq);
                     inner.events.insert(run_id.to_string(), loaded);
                     return;
@@ -187,6 +191,20 @@ impl EventSequencer {
         event
     }
 
+    /// Append and surface persistence failures to execution seams.
+    pub fn append_checked(
+        &self,
+        run_id: &str,
+        payload: RunEventKind,
+    ) -> Result<RunEventV2, String> {
+        let event = self.append(run_id, payload);
+        if matches!(&event.payload, RunEventKind::Failed { code, .. } if code == "PERSISTENCE_FAILED")
+        {
+            return Err("PERSISTENCE_FAILED".into());
+        }
+        Ok(event)
+    }
+
     /// Inject an already-persisted (or memory-CAS-committed) event into the
     /// sequencer memory + broadcast without re-persisting.
     ///
@@ -196,10 +214,7 @@ impl EventSequencer {
         let mut inner = self.inner.lock().expect("event sequencer lock");
         self.ensure_loaded(&mut inner, &event.run_id);
         let seq = event.effective_run_sequence();
-        let entry = inner
-            .sequences
-            .entry(event.run_id.clone())
-            .or_insert(0);
+        let entry = inner.sequences.entry(event.run_id.clone()).or_insert(0);
         if seq > *entry {
             *entry = seq;
         }

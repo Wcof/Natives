@@ -22,11 +22,7 @@ pub fn get(conn: &Connection, id: &str) -> Result<CreativeAppSummary> {
     Ok(install::summary_from_external(&rec))
 }
 
-pub async fn start(
-    conn: &Connection,
-    app: &AppHandle,
-    id: &str,
-) -> Result<CreativeAppSummary> {
+pub async fn start(conn: &Connection, app: &AppHandle, id: &str) -> Result<CreativeAppSummary> {
     install::start_app(conn, app, id).await
 }
 
@@ -46,9 +42,7 @@ pub async fn delete(
 pub fn open_target(conn: &Connection, id: &str) -> Result<OpenTarget> {
     let rec = store::get_app(conn, id)?.ok_or_else(|| Error::NotFound(id.into()))?;
     if rec.state != CreativeAppState::Running {
-        return Err(Error::InvalidInput(
-            "external app is not running".into(),
-        ));
+        return Err(Error::InvalidInput("external app is not running".into()));
     }
     let url = rec
         .open_url

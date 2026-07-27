@@ -287,7 +287,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     };
     window.addEventListener('favorites-changed', onFavoritesChanged);
     return () => window.removeEventListener('favorites-changed', onFavoritesChanged);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   const isFavorite = isFavoritePath(favorites, currentPath);
@@ -411,7 +411,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   }, [currentPath, sortBy, sortDir, showHidden, recentMode, recentOpenedMode, locale, showToast]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     loadEntries();
   }, [loadEntries]);
 
@@ -419,7 +419,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
   useEffect(() => {
     if (!recentOpenedMode) return;
     void loadEntries();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [recentOpenedPaths, recentOpenedMode]);
 
   // ── fs_watch 接线：当前目录的真实文件变更 → 卡片点亮（改·N/heat）+ 防抖自动刷新 ──
@@ -571,7 +571,7 @@ export default function FileBrowser({ onFileSelect }: FileBrowserProps) {
     // 挂载前发出的跳转（挂载竞态）：consume pending 兜底
     const pending = consumePendingNavigate();
     if (pending) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+
       applyNav(pending);
     }
 

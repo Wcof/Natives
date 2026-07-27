@@ -3,10 +3,9 @@
 
 #![allow(unused_imports, dead_code, unused_variables)]
 use crate::usage::{
-    now_ms, UsageActivityBucket, UsageDailyRecord, UsageQuality, UsageSessionRecord,
-    UsageSourceState, UsageSourceStatus, UsageWarning, UsageWarningCode, DurationMethod,
-    SourceCapabilities, UsageSourceKind, mask_home, UsageDimension,
-    UsageBreadcrumb, BreadcrumbKind,
+    mask_home, now_ms, BreadcrumbKind, DurationMethod, SourceCapabilities, UsageActivityBucket,
+    UsageBreadcrumb, UsageDailyRecord, UsageDimension, UsageQuality, UsageSessionRecord,
+    UsageSourceKind, UsageSourceState, UsageSourceStatus, UsageWarning, UsageWarningCode,
 };
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use serde::Deserialize;
@@ -100,7 +99,10 @@ struct CodexFileContext {
     project: Option<String>,
 }
 
-fn collect_session_files(sessions_dir: &std::path::Path, archived_dir: &std::path::Path) -> HashMap<String, PathBuf> {
+fn collect_session_files(
+    sessions_dir: &std::path::Path,
+    archived_dir: &std::path::Path,
+) -> HashMap<String, PathBuf> {
     let mut files = HashMap::new();
     for root in [archived_dir, sessions_dir] {
         if !root.exists() {
@@ -125,24 +127,48 @@ fn normalize_codex_line(line: &str, context: &mut CodexFileContext) -> Option<Co
 
     match line_type {
         Some("session_meta") => {
-            context.session_id = payload?.get("id").and_then(|v| v.as_str()).map(String::from);
-            context.project = payload?.get("cwd").and_then(|v| v.as_str()).map(String::from);
+            context.session_id = payload?
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            context.project = payload?
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             return None;
         }
         Some("turn_context") => {
-            context.model = payload?.get("model").and_then(|v| v.as_str()).map(String::from);
-            context.project = payload?.get("cwd").and_then(|v| v.as_str()).map(String::from).or_else(|| context.project.clone());
+            context.model = payload?
+                .get("model")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            context.project = payload?
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .or_else(|| context.project.clone());
             return None;
         }
-        Some("event_msg") if payload?.get("type").and_then(|v| v.as_str()) == Some("token_count") => {
+        Some("event_msg")
+            if payload?.get("type").and_then(|v| v.as_str()) == Some("token_count") =>
+        {
             let info = payload?.get("info")?;
             return Some(CodexJsonLine {
                 event_id: None,
                 session_id: context.session_id.clone(),
                 event_type: Some("token_count".into()),
-                timestamp: value.get("timestamp").and_then(|v| v.as_str()).map(String::from),
-                last_token_usage: info.get("last_token_usage").cloned().and_then(|v| serde_json::from_value(v).ok()),
-                total_token_usage: info.get("total_token_usage").cloned().and_then(|v| serde_json::from_value(v).ok()),
+                timestamp: value
+                    .get("timestamp")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                last_token_usage: info
+                    .get("last_token_usage")
+                    .cloned()
+                    .and_then(|v| serde_json::from_value(v).ok()),
+                total_token_usage: info
+                    .get("total_token_usage")
+                    .cloned()
+                    .and_then(|v| serde_json::from_value(v).ok()),
                 turn_context: Some(CodexTurnContext {
                     model: context.model.clone(),
                     cwd: context.project.clone(),
@@ -159,11 +185,7 @@ fn normalize_codex_line(line: &str, context: &mut CodexFileContext) -> Option<Co
 }
 
 /// Scan Codex session directories for JSONL event files.
-pub fn scan_codex_logs(
-    start_ms: i64,
-    end_ms: i64,
-    tz: &chrono_tz::Tz,
-) -> CodexScanResult {
+pub fn scan_codex_logs(start_ms: i64, end_ms: i64, tz: &chrono_tz::Tz) -> CodexScanResult {
     let mut warnings = Vec::new();
 
     let home = match crate::usage::tool_home("CODEX_HOME", ".codex") {
@@ -174,7 +196,10 @@ pub fn scan_codex_logs(
                 code: UsageWarningCode::SourceUnavailable,
                 details: {
                     let mut m = HashMap::new();
-                    m.insert("reason".into(), serde_json::Value::String("no home dir".into()));
+                    m.insert(
+                        "reason".into(),
+                        serde_json::Value::String("no home dir".into()),
+                    );
                     m
                 },
             });
@@ -183,7 +208,10 @@ pub fn scan_codex_logs(
                 activity: vec![],
                 sessions: vec![],
                 state: UsageSourceState::Unavailable,
-                breadcrumbs: vec![UsageBreadcrumb { kind: BreadcrumbKind::RawLog, label: "~/.codex/sessions/".into() }],
+                breadcrumbs: vec![UsageBreadcrumb {
+                    kind: BreadcrumbKind::RawLog,
+                    label: "~/.codex/sessions/".into(),
+                }],
                 warnings,
             };
         }
@@ -207,7 +235,10 @@ pub fn scan_codex_logs(
             activity: vec![],
             sessions: vec![],
             state: UsageSourceState::Ok,
-            breadcrumbs: vec![UsageBreadcrumb { kind: BreadcrumbKind::RawLog, label: breadcrumb.clone() }],
+            breadcrumbs: vec![UsageBreadcrumb {
+                kind: BreadcrumbKind::RawLog,
+                label: breadcrumb.clone(),
+            }],
             warnings,
         };
     }
@@ -322,7 +353,10 @@ pub fn scan_codex_logs(
         activity,
         sessions,
         state: UsageSourceState::Ok,
-        breadcrumbs: vec![UsageBreadcrumb { kind: BreadcrumbKind::RawLog, label: breadcrumb.clone() }],
+        breadcrumbs: vec![UsageBreadcrumb {
+            kind: BreadcrumbKind::RawLog,
+            label: breadcrumb.clone(),
+        }],
         warnings,
     }
 }
@@ -345,7 +379,8 @@ fn compute_codex_delta(
         if let Some(prev) = prev_total {
             let input_delta = total.input.unwrap_or(0) - prev.input.unwrap_or(0);
             let output_delta = total.output.unwrap_or(0) - prev.output.unwrap_or(0);
-            let cache_read_delta = total.input_cache_hit.unwrap_or(0) - prev.input_cache_hit.unwrap_or(0);
+            let cache_read_delta =
+                total.input_cache_hit.unwrap_or(0) - prev.input_cache_hit.unwrap_or(0);
             return (
                 input_delta.max(0),
                 output_delta.max(0),
@@ -376,10 +411,8 @@ fn normalize_codex_input(input: i64, cache_read: i64) -> (i64, i64) {
 
 fn build_codex_daily(events: &[ParsedCodexEvent]) -> Vec<UsageDailyRecord> {
     // Group by (date, model, project) to aggregate daily tokens
-    let mut groups: HashMap<
-        (String, Option<String>, Option<String>),
-        (i64, i64, i64, i64)
-    > = HashMap::new();
+    let mut groups: HashMap<(String, Option<String>, Option<String>), (i64, i64, i64, i64)> =
+        HashMap::new();
 
     for event in events {
         if event.is_replay_or_fork {
@@ -429,10 +462,8 @@ fn build_codex_daily(events: &[ParsedCodexEvent]) -> Vec<UsageDailyRecord> {
 
 fn build_codex_activity(events: &[ParsedCodexEvent]) -> Vec<UsageActivityBucket> {
     // (hour, source, model, project) -> (token sum, timestamps for gap duration)
-    let mut groups: HashMap<
-        (i64, String, Option<String>, Option<String>),
-        (i64, Vec<i64>),
-    > = HashMap::new();
+    let mut groups: HashMap<(i64, String, Option<String>, Option<String>), (i64, Vec<i64>)> =
+        HashMap::new();
 
     for event in events {
         if event.is_replay_or_fork {
@@ -526,7 +557,7 @@ fn build_codex_sessions(events: &[ParsedCodexEvent]) -> Vec<UsageSessionRecord> 
             source_id: "codex".into(),
             model_id: first.model.clone(),
             project_id: first.project.clone(),
-                terminal_id: None,
+            terminal_id: None,
             started_at_ms,
             ended_at_ms,
             user_messages: 0,
@@ -569,7 +600,10 @@ fn ts_to_date_str(ts_ms: i64) -> String {
     }
 }
 
-pub fn codex_source_status(state: &UsageSourceState, breadcrumbs: &Vec<UsageBreadcrumb>) -> UsageSourceStatus {
+pub fn codex_source_status(
+    state: &UsageSourceState,
+    breadcrumbs: &Vec<UsageBreadcrumb>,
+) -> UsageSourceStatus {
     UsageSourceStatus {
         id: "codex".into(),
         label: "Codex".into(),
@@ -619,7 +653,10 @@ mod tests {
         assert!(normalize_codex_line(turn, &mut context).is_none());
         let event = normalize_codex_line(tokens, &mut context).expect("token event");
         assert_eq!(event.session_id.as_deref(), Some("session-1"));
-        assert_eq!(event.turn_context.as_ref().and_then(|c| c.model.as_deref()), Some("gpt-5.6"));
+        assert_eq!(
+            event.turn_context.as_ref().and_then(|c| c.model.as_deref()),
+            Some("gpt-5.6")
+        );
         assert_eq!(compute_codex_delta(&event, None), (100, 20, 40));
     }
 
@@ -644,7 +681,7 @@ mod tests {
         };
         let delta = compute_codex_delta(&event, None);
         assert_eq!(delta.0, 100); // input
-        assert_eq!(delta.1, 20);  // output
+        assert_eq!(delta.1, 20); // output
     }
 
     #[test]
@@ -704,7 +741,12 @@ mod tests {
 
     #[test]
     fn codex_cumulative_usage_subtracts_previous_total() {
-        let prev = CodexTokenUsage { input: Some(50), output: Some(10), reasoning_tokens: Some(0), input_cache_hit: Some(20) };
+        let prev = CodexTokenUsage {
+            input: Some(50),
+            output: Some(10),
+            reasoning_tokens: Some(0),
+            input_cache_hit: Some(20),
+        };
         let event = CodexJsonLine {
             event_id: Some("evt2".into()),
             session_id: Some("sess1".into()),
@@ -722,13 +764,18 @@ mod tests {
             fork_from: None,
         };
         let delta = compute_codex_delta(&event, Some(&prev));
-        assert_eq!(delta.0, 50);  // 100 - 50
-        assert_eq!(delta.1, 15);  // 25 - 10
+        assert_eq!(delta.0, 50); // 100 - 50
+        assert_eq!(delta.1, 15); // 25 - 10
     }
 
     #[test]
     fn codex_cumulative_reset_is_not_negative() {
-        let prev = CodexTokenUsage { input: Some(200), output: Some(50), reasoning_tokens: Some(0), input_cache_hit: Some(100) };
+        let prev = CodexTokenUsage {
+            input: Some(200),
+            output: Some(50),
+            reasoning_tokens: Some(0),
+            input_cache_hit: Some(100),
+        };
         let event = CodexJsonLine {
             event_id: Some("evt3".into()),
             session_id: Some("sess1".into()),
@@ -736,7 +783,7 @@ mod tests {
             timestamp: Some("2026-07-14T10:02:00Z".into()),
             last_token_usage: None,
             total_token_usage: Some(CodexTokenUsage {
-                input: Some(100),  // reset - lower than prev
+                input: Some(100), // reset - lower than prev
                 output: Some(25),
                 reasoning_tokens: Some(0),
                 input_cache_hit: Some(30),
@@ -746,8 +793,8 @@ mod tests {
             fork_from: None,
         };
         let delta = compute_codex_delta(&event, Some(&prev));
-        assert_eq!(delta.0, 0);  // 100 - 200 = -100, clamped to 0
-        assert_eq!(delta.1, 0);  // 25 - 50 = -25, clamped to 0
+        assert_eq!(delta.0, 0); // 100 - 200 = -100, clamped to 0
+        assert_eq!(delta.1, 0); // 25 - 50 = -25, clamped to 0
     }
 
     #[test]
@@ -758,7 +805,12 @@ mod tests {
             session_id: Some("sess1".into()),
             event_type: Some("turn".into()),
             timestamp: Some("2026-07-14T10:00:00Z".into()),
-            last_token_usage: Some(CodexTokenUsage { input: Some(100), output: Some(20), reasoning_tokens: Some(0), input_cache_hit: Some(0) }),
+            last_token_usage: Some(CodexTokenUsage {
+                input: Some(100),
+                output: Some(20),
+                reasoning_tokens: Some(0),
+                input_cache_hit: Some(0),
+            }),
             total_token_usage: None,
             turn_context: None,
             replay_for: Some("original-evt".into()),

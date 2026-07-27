@@ -32,7 +32,6 @@ pub struct AssistantMessage {
     pub sequence: i64,
 }
 
-
 #[tauri::command]
 pub fn assistant_list_sessions(
     project_id: Option<String>,
@@ -58,15 +57,14 @@ pub fn assistant_list_sessions(
         stmt.query_map(params![pid], row_to_session)
     } else {
         stmt.query_map([], row_to_session)
-    }.map_err(|e| e.to_string())?;
+    }
+    .map_err(|e| e.to_string())?;
 
     Ok(session_rows.filter_map(|r| r.ok()).collect())
 }
 
 #[tauri::command]
-pub fn assistant_get_messages(
-    session_id: String,
-) -> Result<Vec<AssistantMessage>, String> {
+pub fn assistant_get_messages(session_id: String) -> Result<Vec<AssistantMessage>, String> {
     let conn = crate::db::get_assistant_db_conn().map_err(|e| e.to_string())?;
 
     let mut stmt = conn.prepare(
@@ -76,20 +74,22 @@ pub fn assistant_get_messages(
          ORDER BY sequence ASC"
     ).map_err(|e| e.to_string())?;
 
-    let rows = stmt.query_map(params![session_id], |row| {
-        Ok(AssistantMessage {
-            id: row.get(0)?,
-            session_id: row.get(1)?,
-            role: row.get(2)?,
-            content: row.get(3)?,
-            tool_calls: row.get(4)?,
-            tool_result: row.get(5)?,
-            status: row.get(6)?,
-            token_count: row.get(7)?,
-            created_at: row.get(8)?,
-            sequence: row.get(9)?,
+    let rows = stmt
+        .query_map(params![session_id], |row| {
+            Ok(AssistantMessage {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                role: row.get(2)?,
+                content: row.get(3)?,
+                tool_calls: row.get(4)?,
+                tool_result: row.get(5)?,
+                status: row.get(6)?,
+                token_count: row.get(7)?,
+                created_at: row.get(8)?,
+                sequence: row.get(9)?,
+            })
         })
-    }).map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?;
 
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
@@ -129,15 +129,14 @@ pub fn assistant_create_session(
 }
 
 #[tauri::command]
-pub fn assistant_delete_session(
-    session_id: String,
-) -> Result<(), String> {
+pub fn assistant_delete_session(session_id: String) -> Result<(), String> {
     let conn = crate::db::get_assistant_db_conn().map_err(|e| e.to_string())?;
 
     conn.execute(
         "DELETE FROM assistant_sessions WHERE id = ?1",
         params![session_id],
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -176,7 +175,8 @@ pub fn assistant_save_message(
     conn.execute(
         "UPDATE assistant_sessions SET updated_at = ?1 WHERE id = ?2",
         params![now, session_id],
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(AssistantMessage {
         id,
@@ -209,17 +209,15 @@ pub fn assistant_update_message_status(
 }
 
 #[tauri::command]
-pub fn assistant_update_session_title(
-    session_id: String,
-    title: String,
-) -> Result<(), String> {
+pub fn assistant_update_session_title(session_id: String, title: String) -> Result<(), String> {
     let conn = crate::db::get_assistant_db_conn().map_err(|e| e.to_string())?;
 
     let now = chrono_now();
     conn.execute(
         "UPDATE assistant_sessions SET title = ?1, updated_at = ?2 WHERE id = ?3",
         params![title, now, session_id],
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(())
 }

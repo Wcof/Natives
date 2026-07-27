@@ -1,6 +1,6 @@
 //! ToolManifest — unified tool declaration for Protocol v2 / Agent Engine.
 
-use crate::{PermissionClass, SideEffect, PathScope};
+use crate::{PathScope, PermissionClass, SideEffect};
 use serde::{Deserialize, Serialize};
 
 /// Full tool manifest sent to models and the permission engine.

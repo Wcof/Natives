@@ -47,14 +47,13 @@ pub struct ValidationReport {
 
 impl ValidationReport {
     pub fn is_publishable(&self) -> bool {
-        !self
-            .findings
-            .iter()
-            .any(|f| f.severity == Severity::Error)
+        !self.findings.iter().any(|f| f.severity == Severity::Error)
     }
 
     pub fn errors(&self) -> impl Iterator<Item = &ValidationFinding> {
-        self.findings.iter().filter(|f| f.severity == Severity::Error)
+        self.findings
+            .iter()
+            .filter(|f| f.severity == Severity::Error)
     }
 }
 
@@ -68,7 +67,7 @@ pub fn validate(draft: &HarnessBlueprint, discovered: &[HookDefinition]) -> Vali
     let index: std::collections::BTreeMap<&HookId, &HookDefinition> =
         discovered.iter().map(|d| (&d.id, d)).collect();
 
-    for overlay in &draft.hooks {
+    for overlay in draft.overlays() {
         match index.get(&overlay.hook_id) {
             Some(definition) if is_locked(definition) => {
                 findings.push(ValidationFinding {
@@ -168,9 +167,9 @@ pub fn diff(before: &HarnessBlueprint, after: &HarnessBlueprint) -> Vec<Blueprin
     }
 
     let ids: std::collections::BTreeSet<&HookId> = before
-        .hooks
+        .overlays()
         .iter()
-        .chain(&after.hooks)
+        .chain(after.overlays())
         .map(|o| &o.hook_id)
         .collect();
     for id in ids {
@@ -189,7 +188,13 @@ pub fn diff(before: &HarnessBlueprint, after: &HarnessBlueprint) -> Vec<Blueprin
                 _ => serde_json::Value::Null,
             }
         };
-        for field in ["enabled", "order", "matcher", "timeout_ms", "failure_policy"] {
+        for field in [
+            "enabled",
+            "order",
+            "matcher",
+            "timeout_ms",
+            "failure_policy",
+        ] {
             let from = field_value(old, field);
             let to = field_value(new, field);
             if from != to {
@@ -241,6 +246,9 @@ mod tests {
             schema_version: BLUEPRINT_SCHEMA_VERSION,
             hook_semantics_version: HookSemanticsVersion::LegacyV1,
             hooks,
+            hook_overlays: Vec::new(),
+            native_hooks: Vec::new(),
+            prompt_blocks: Vec::new(),
         }
     }
 
@@ -272,9 +280,16 @@ mod tests {
         ));
         overlay.timeout_ms = Some(5_000);
         let report = validate(&doc(vec![overlay]), &[project_hook()]);
-        assert!(report.is_publishable(), "a missing source is not a broken document");
+        assert!(
+            report.is_publishable(),
+            "a missing source is not a broken document"
+        );
         assert_eq!(
-            report.findings.iter().map(|f| f.code.as_str()).collect::<Vec<_>>(),
+            report
+                .findings
+                .iter()
+                .map(|f| f.code.as_str())
+                .collect::<Vec<_>>(),
             vec!["harness.unknown_hook"]
         );
     }
@@ -311,7 +326,11 @@ mod tests {
         let report = validate(&doc(vec![HookOverlay::new(hook.id.clone())]), &[hook]);
         assert!(report.is_publishable());
         assert_eq!(
-            report.findings.iter().map(|f| f.code.as_str()).collect::<Vec<_>>(),
+            report
+                .findings
+                .iter()
+                .map(|f| f.code.as_str())
+                .collect::<Vec<_>>(),
             vec!["harness.empty_overlay"]
         );
     }
@@ -334,8 +353,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 ("enabled", serde_json::Value::Null, serde_json::json!(false)),
-                ("matcher", serde_json::json!("Edit"), serde_json::Value::Null),
-                ("timeout_ms", serde_json::json!(1_000), serde_json::json!(2_000)),
+                (
+                    "matcher",
+                    serde_json::json!("Edit"),
+                    serde_json::Value::Null
+                ),
+                (
+                    "timeout_ms",
+                    serde_json::json!(1_000),
+                    serde_json::json!(2_000)
+                ),
             ]
         );
     }

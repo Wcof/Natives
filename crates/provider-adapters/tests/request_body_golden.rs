@@ -106,8 +106,14 @@ fn wire(body: &serde_json::Value) -> String {
 
 #[test]
 fn default_controls_produce_the_pre_existing_bytes() {
-    assert_eq!(wire(&build_chat_completions_body(&fixture("gpt-4o"))), GOLDEN_CHAT);
-    assert_eq!(wire(&build_responses_body(&fixture("o3"))), GOLDEN_RESPONSES);
+    assert_eq!(
+        wire(&build_chat_completions_body(&fixture("gpt-4o"))),
+        GOLDEN_CHAT
+    );
+    assert_eq!(
+        wire(&build_responses_body(&fixture("o3"))),
+        GOLDEN_RESPONSES
+    );
     assert_eq!(
         wire(&build_messages_body(&fixture("claude-sonnet-4-5"))),
         GOLDEN_ANTHROPIC
@@ -243,7 +249,10 @@ fn prompt_cache_opt_out_on_the_request_removes_every_breakpoint() {
     assert_eq!(
         wire(&body),
         GOLDEN_ANTHROPIC
-            .replace(r#"{"cache_control":{"type":"ephemeral"},"content""#, r#"{"content""#)
+            .replace(
+                r#"{"cache_control":{"type":"ephemeral"},"content""#,
+                r#"{"content""#
+            )
             .replace(
                 r#"{"cache_control":{"type":"ephemeral"},"description":"Write a file""#,
                 r#"{"description":"Write a file""#

@@ -45,8 +45,17 @@ pub struct ResolvedHarnessSnapshot {
     /// Every discovered Hook, redacted, in effective dispatch order.
     pub hooks: Vec<ResolvedHook>,
     pub issues: Vec<ResolutionIssue>,
+    /// Prompt provenance only. Raw effective system prompt is never persisted.
+    #[serde(default)]
+    pub prompt_plan: PromptPlanSummary,
     /// RFC 3339, set by the caller so tests can be deterministic.
     pub resolved_at: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptPlanSummary {
+    pub source_digests: Vec<String>,
+    pub token_estimate: usize,
 }
 
 impl ResolvedHarnessSnapshot {
@@ -80,6 +89,7 @@ impl ResolvedHarnessSnapshot {
             hook_semantics_version: resolution.semantics,
             hooks,
             issues: resolution.issues.clone(),
+            prompt_plan: PromptPlanSummary::default(),
             resolved_at: resolved_at.into(),
         }
     }

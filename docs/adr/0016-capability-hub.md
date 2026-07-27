@@ -66,7 +66,7 @@ ADR-0012 后置到 P2 的是「联网商店**上架 / 发现 / 订阅**」——
 
 ### 8. 与 Harness 控制面的关系
 
-能力库 = 能力对象的**权威 CRUD 与 ID 命名空间**；Harness Blueprint（设计稿第 9 节，未落地）= 按 global→project→session 分层**选用这些 ID** 的版本化编排层。约定：Blueprint 一律以 `capability_*` 主键引用能力，不重复建模本体；`capability_resolution` 的调用点即 Harness 冻结的 `resolve_run` 插入点，Phase 2 落地时单点搬迁、无数据反迁。
+能力库 = 能力对象的**权威 CRUD、ID 命名空间与会话/Run 选用权威**。Harness Blueprint 按 global→project→session 管理 Hook 与 Natives Prompt Block；它不复制能力对象，也不建立第二份能力选择。Run 启动时先由 `capability_resolution` 解析能力，再由 Harness 在同一插入缝消费其只读快照引用/哈希与提示词贡献，最终产出一份可执行计划及对应 Run 证据。未来若要让 Blueprint 改写能力选择，必须另行修订本 ADR，不能在 Harness 实施中隐式搬迁权威。
 
 ---
 
@@ -99,7 +99,7 @@ ADR-0012 后置到 P2 的是「联网商店**上架 / 发现 / 订阅**」——
 
 - capability 轨首次获得完整数据模型与管理面，ADR-0012 落地清单「web-module 与 capability 分表」闭环。
 - MCP 从「实质不可注册」变为可用；`AgentProfile.skills` 首次获得消费者；三条专家线收敛为一。
-- 会话选用链路与 Harness Blueprint 同构，未来迁移单点。
+- 会话选用链路保持能力库权威；Harness 在 Run 启动单缝消费其解析快照，无双写与数据反迁。
 
 ### 负面 / 成本
 
@@ -136,3 +136,4 @@ ADR-0012 后置到 P2 的是「联网商店**上架 / 发现 / 订阅**」——
 | 日期 | 变更 |
 |------|------|
 | 2026-07-26 | 初版：冻结能力库三子域、权威存储、会话选用链路、fail-closed 语义、联网消费边界 |
+| 2026-07-27 | 对齐 Harness 落地设计：能力库继续拥有会话/Run 选用权威；Harness 只消费只读快照引用并管理 Hook/Prompt Plan |

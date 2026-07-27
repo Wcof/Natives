@@ -152,7 +152,7 @@ export default function AnnotationEditor({ locale, imageUrl, onSave, onClose }: 
 
   return (
     <div
-    // eslint-disable-next-line react-hooks/refs
+
       ref={trap.dialogRef}
       role="dialog"
       aria-modal="true"

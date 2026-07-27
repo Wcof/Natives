@@ -669,7 +669,7 @@ mod tests {
         let (log, run_id) = setup_event_log();
         let event = RunEvent {
             run_id: run_id.clone(),
-sequence: 0, // Will be overwritten
+            sequence: 0, // Will be overwritten
             timestamp: chrono::Utc::now(),
             payload: RunEventPayload::TextDelta {
                 text: "Hello, world!".to_string(),
@@ -695,7 +695,7 @@ sequence: 0, // Will be overwritten
             global_sequence: 0,
             run_sequence: 0,
             run_id: run_id.clone(),
-sequence: 1,
+            sequence: 1,
             timestamp: chrono::Utc::now(),
             payload: RunEventKind::UsageUpdated {
                 input_tokens: 10,

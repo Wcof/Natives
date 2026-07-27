@@ -1,5 +1,3 @@
-import { fsApi, hasNativeFiles } from '@/lib/files-api';
-
 export interface ActiveProjectApi {
   db?: {
     get?: (key: string) => Promise<unknown>;
@@ -20,25 +18,6 @@ function browserLegacyValue(): string | null {
   }
 }
 
-/**
- * Validate that a path exists and is a directory.
- * Uses the filesystem API when available inside Tauri.
- * Falls back to trusting the stored value in browser/SSR context.
- */
-async function pathExists(path: string): Promise<boolean> {
-  if (typeof window === 'undefined') return true;
-  try {
-    // files-api 契约：先探测可用性，listDir 抛错才代表路径不存在
-    if (hasNativeFiles()) {
-      await fsApi().listDir(path);
-      return true;
-    }
-  } catch {
-    return false; // listDir threw -> path does not exist
-  }
-  return true; // no fs API available, trust the value
-}
-
 /** SQLite is authoritative; the second argument exists only for one-time migration/testing. */
 export async function readActiveProject(
   api: ActiveProjectApi | undefined,
@@ -47,11 +26,9 @@ export async function readActiveProject(
   try {
     const stored = await api?.db?.get?.(ACTIVE_PROJECT_KEY);
     if (typeof stored === 'string' && stored.trim()) {
-      // Clean up stale entries (directory no longer exists)
-      if (!(await pathExists(stored.trim()))) {
-        await writeActiveProject(api, null);
-        return null;
-      }
+      // Project existence comes from project.list. The file manager intentionally
+      // scopes general file access to trusted roots, so probing here would reject
+      // a user-selected external volume and erase a valid active project.
       return stored.trim();
     }
   } catch {

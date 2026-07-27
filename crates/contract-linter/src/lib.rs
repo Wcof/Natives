@@ -21,11 +21,7 @@
 
 use regex::Regex;
 
-const ALLOWED_SCRIPT_SOURCES: &[&str] = &[
-    "'self'",
-    "tauri://assets",
-    "tauri://assets/vendor/",
-];
+const ALLOWED_SCRIPT_SOURCES: &[&str] = &["'self'", "tauri://assets", "tauri://assets/vendor/"];
 
 const ALLOWED_PERMISSIONS: &[&str] = &[
     "db:read",
@@ -54,7 +50,10 @@ pub fn lint_html(html_content: &str) -> LinterResult {
     let script_re = Regex::new(r#"<script[^>]*src\s*=\s*["']([^"']+)["']"#).unwrap();
     for cap in script_re.captures_iter(html_content) {
         let src = cap.get(1).map(|m| m.as_str()).unwrap_or("");
-        if !ALLOWED_SCRIPT_SOURCES.iter().any(|allowed| src.starts_with(allowed)) {
+        if !ALLOWED_SCRIPT_SOURCES
+            .iter()
+            .any(|allowed| src.starts_with(allowed))
+        {
             errors.push(format!(
                 "Remote script source not allowed: '{}'. Only tauri://assets/vendor/ sources are permitted.",
                 src
@@ -92,7 +91,10 @@ pub fn lint_manifest(manifest_json: &serde_json::Value) -> LinterResult {
         Some(v) if v.is_string() => {
             let ver = v.as_str().unwrap();
             if ver != "1.0" && ver != "1.1" {
-                errors.push(format!("Unsupported schema_version: {}. Expected 1.0 or 1.1.", ver));
+                errors.push(format!(
+                    "Unsupported schema_version: {}. Expected 1.0 or 1.1.",
+                    ver
+                ));
             }
         }
         Some(_) => errors.push("schema_version must be a string.".to_string()),
@@ -104,7 +106,10 @@ pub fn lint_manifest(manifest_json: &serde_json::Value) -> LinterResult {
         for perm in perms {
             if let Some(p_str) = perm.as_str() {
                 if !ALLOWED_PERMISSIONS.contains(&p_str) {
-                    errors.push(format!("Permission '{}' is not in the allowed list.", p_str));
+                    errors.push(format!(
+                        "Permission '{}' is not in the allowed list.",
+                        p_str
+                    ));
                 }
             }
         }
@@ -131,7 +136,8 @@ mod tests {
 
     #[test]
     fn test_allow_tauri_vendor_script() {
-        let html = r#"<html><body><script src="tauri://assets/vendor/alpine.js"></script></body></html>"#;
+        let html =
+            r#"<html><body><script src="tauri://assets/vendor/alpine.js"></script></body></html>"#;
         let result = lint_html(html);
         assert!(result.passed);
     }

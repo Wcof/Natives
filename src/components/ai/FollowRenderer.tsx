@@ -27,7 +27,7 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
 
   // Fetch file content when path changes — use Tauri IPC fs.readFile
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     if (!filePath) { setContent(null); setReadError(false); return; }
     let cancelled = false;
     (async () => {
@@ -51,7 +51,7 @@ export default function FollowRenderer({ filePath }: FollowRendererProps) {
 
   // Compute changed lines
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     if (!content || !lastContent) { setHighlightedLines(new Set()); return; }
     const range = changedRange(lastContent, content);
     const lines = new Set<number>();

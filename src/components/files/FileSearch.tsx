@@ -131,7 +131,7 @@ export default function FileSearch({ onClose, onNavigate, rootPath = '/' }: File
   // Re-run when scope changes with existing query
   useEffect(() => {
     if (query.trim()) void runSearch(query, mode);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [scope]);
 
   const openResult = async (path: string) => {

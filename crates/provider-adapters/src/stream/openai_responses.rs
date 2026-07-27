@@ -60,7 +60,10 @@ pub fn parse_responses_event(data: &str) -> Vec<ProviderEvent> {
                 .and_then(|i| i.as_str())
                 .map(str::to_string);
             events.push(ProviderEvent::ToolCallDelta {
-                index: value.get("output_index").and_then(|i| i.as_u64()).unwrap_or(0) as usize,
+                index: value
+                    .get("output_index")
+                    .and_then(|i| i.as_u64())
+                    .unwrap_or(0) as usize,
                 id,
                 name,
                 arguments_delta: args,
@@ -106,7 +109,11 @@ pub fn parse_responses_event(data: &str) -> Vec<ProviderEvent> {
                 .take(400)
                 .collect::<String>();
             let rate_limited = message.to_ascii_lowercase().contains("rate")
-                || value.get("code").and_then(|v| v.as_str()).unwrap_or_default() == "429";
+                || value
+                    .get("code")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    == "429";
             events.push(ProviderEvent::Error(ProviderError {
                 code: "responses_error".into(),
                 message,
@@ -131,14 +138,10 @@ mod tests {
 
     #[test]
     fn parses_text_reasoning_and_tool_deltas() {
-        let t = parse_responses_event(
-            r#"{"type":"response.output_text.delta","delta":"Hi"}"#,
-        );
+        let t = parse_responses_event(r#"{"type":"response.output_text.delta","delta":"Hi"}"#);
         assert!(matches!(t.as_slice(), [ProviderEvent::TextDelta(s)] if s == "Hi"));
 
-        let r = parse_responses_event(
-            r#"{"type":"response.reasoning.delta","delta":"think"}"#,
-        );
+        let r = parse_responses_event(r#"{"type":"response.reasoning.delta","delta":"think"}"#);
         assert!(matches!(r.as_slice(), [ProviderEvent::ReasoningDelta(s)] if s == "think"));
 
         let tool = parse_responses_event(
@@ -167,8 +170,6 @@ mod tests {
         assert_eq!(usage.input_tokens, 9000 - 8192);
         assert_eq!(usage.total_prompt_tokens(), 9000);
         assert_eq!(usage.reasoning_tokens, Some(64));
-        assert!(events
-            .iter()
-            .any(|e| matches!(e, ProviderEvent::Completed)));
+        assert!(events.iter().any(|e| matches!(e, ProviderEvent::Completed)));
     }
 }

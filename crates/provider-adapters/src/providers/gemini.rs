@@ -665,8 +665,6 @@ mod tool_message_tests {
         let body = build_generate_body(&image_request(ImageSource::new(
             "data:image/webp;base64,AAAB",
         )));
-        assert!(body["contents"][0]["parts"][1]
-            .get("inlineData")
-            .is_some());
+        assert!(body["contents"][0]["parts"][1].get("inlineData").is_some());
     }
 }

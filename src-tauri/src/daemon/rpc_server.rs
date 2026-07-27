@@ -592,9 +592,7 @@ async fn handle_conversation_create(
         None => return error_response(request, "INVALID_INPUT", "Missing 'model_id' parameter"),
     };
 
-    // Allow project_id to be null/absent/empty → SQL NULL
-    // Only validate directory existence when a non-empty value is provided
-    let project_id_value: Option<String> = match request
+    let project_id_value = match request
         .params
         .get("project_id")
         .and_then(|value| value.as_str())
@@ -617,9 +615,9 @@ async fn handle_conversation_create(
                     &format!("Not a directory: {value}"),
                 );
             }
-            Some(value.to_string())
+            value.to_string()
         }
-        None => None,
+        None => return error_response(request, "INVALID_INPUT", "Missing 'project_id' parameter"),
     };
 
     let id = Uuid::new_v4().to_string();
@@ -649,7 +647,6 @@ async fn handle_conversation_create(
         );
     }
 
-    // Insert with optional project_id (NULL if no project selected)
     if let Err(e) = conn.execute(
         "INSERT INTO assistant_conversations (id, mode, project_id, title, provider_id, model_id, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -2447,7 +2444,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn conversation_create_allows_null_project_and_rejects_unavailable_pair() {
+    async fn conversation_create_requires_project_and_rejects_unavailable_pair() {
         let (store, _) = setup();
         // Create provider and model
         store.conn().execute_batch(
@@ -2462,7 +2459,7 @@ mod tests {
              VALUES ('cache-null', 'provider', 'model', 'Model', '{}', 0, 0, 'api_discovery', 'now');",
         ).unwrap();
 
-        // Creating conversation without project_id should succeed with NULL in DB
+        // Missing, empty, and null project IDs must never create an unassigned conversation.
         let no_project = handle_conversation_create(
             &provider_request(
                 "conversation.create",
@@ -2474,27 +2471,8 @@ mod tests {
             &store,
         )
         .await;
-        assert!(
-            no_project.success,
-            "create without project_id should succeed: {:?}",
-            no_project.error
-        );
-        assert_eq!(
-            no_project.data.as_ref().unwrap()["project_id"],
-            serde_json::Value::Null
-        );
-        // Verify DB has NULL
-        let db_project_id: Option<String> = store
-            .conn()
-            .query_row(
-                "SELECT project_id FROM assistant_conversations WHERE id = ?1",
-                rusqlite::params![no_project.data.as_ref().unwrap()["id"].as_str().unwrap()],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(db_project_id, None);
+        assert!(!no_project.success);
 
-        // Creating conversation with empty project_id should also work (NULL in DB)
         let empty_project = handle_conversation_create(
             &provider_request(
                 "conversation.create",
@@ -2506,17 +2484,8 @@ mod tests {
             &store,
         )
         .await;
-        assert!(
-            empty_project.success,
-            "create with empty project_id should succeed: {:?}",
-            empty_project.error
-        );
-        assert_eq!(
-            empty_project.data.as_ref().unwrap()["project_id"],
-            serde_json::Value::Null
-        );
+        assert!(!empty_project.success);
 
-        // Creating conversation with null project_id should also work
         let null_project = handle_conversation_create(
             &provider_request(
                 "conversation.create",
@@ -2528,15 +2497,7 @@ mod tests {
             &store,
         )
         .await;
-        assert!(
-            null_project.success,
-            "create with null project_id should succeed: {:?}",
-            null_project.error
-        );
-        assert_eq!(
-            null_project.data.as_ref().unwrap()["project_id"],
-            serde_json::Value::Null
-        );
+        assert!(!null_project.success);
 
         // Unavailable model pair should still fail
         let unavailable_pair = handle_conversation_create(
@@ -2552,7 +2513,7 @@ mod tests {
         .await;
         assert!(!unavailable_pair.success);
 
-        // Verify total count: 3 successful + 0 failed
+        // Invalid requests never reach storage.
         assert_eq!(
             store
                 .conn()
@@ -2560,7 +2521,7 @@ mod tests {
                     row.get::<_, i64>(0)
                 },)
                 .unwrap(),
-            3
+            0
         );
     }
 

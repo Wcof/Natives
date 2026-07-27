@@ -17,20 +17,17 @@ pub struct VendorEntry {
 
 /// Get the current vendor whitelist from the database.
 pub fn get_vendor_whitelist(conn: &rusqlite::Connection) -> Result<Vec<VendorEntry>> {
-    let mut stmt = conn.prepare(
-        "SELECT value FROM settings WHERE key = ?1"
-    ).map_err(|e| Error::Internal(e.to_string()))?;
+    let mut stmt = conn
+        .prepare("SELECT value FROM settings WHERE key = ?1")
+        .map_err(|e| Error::Internal(e.to_string()))?;
 
-    let result: Option<String> = stmt.query_row(
-        rusqlite::params![VENDOR_DB_KEY],
-        |row| row.get(0),
-    ).ok();
+    let result: Option<String> = stmt
+        .query_row(rusqlite::params![VENDOR_DB_KEY], |row| row.get(0))
+        .ok();
 
     match result {
-        Some(json_str) => {
-            serde_json::from_str(&json_str)
-                .map_err(|e| Error::Internal(format!("Failed to parse vendor whitelist: {e}")))
-        }
+        Some(json_str) => serde_json::from_str(&json_str)
+            .map_err(|e| Error::Internal(format!("Failed to parse vendor whitelist: {e}"))),
         None => Ok(default_whitelist()),
     }
 }
@@ -43,7 +40,8 @@ pub fn save_vendor_whitelist(conn: &rusqlite::Connection, entries: &[VendorEntry
     conn.execute(
         "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?1, ?2, datetime('now'))",
         rusqlite::params![VENDOR_DB_KEY, json_str],
-    ).map_err(|e| Error::Internal(e.to_string()))?;
+    )
+    .map_err(|e| Error::Internal(e.to_string()))?;
 
     Ok(())
 }
@@ -106,8 +104,9 @@ mod tests {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
                 updated_at TEXT
-            );"
-        ).unwrap();
+            );",
+        )
+        .unwrap();
         conn
     }
 

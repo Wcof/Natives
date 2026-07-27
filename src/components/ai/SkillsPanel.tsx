@@ -74,7 +74,7 @@ export default function SkillsPanel() {
   }, [uninstallTarget, loadSkills, toast]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     loadSkills();
   }, [loadSkills]);
 

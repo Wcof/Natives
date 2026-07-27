@@ -73,11 +73,7 @@ pub fn insert_task(
 }
 
 /// Update task status.
-pub fn update_task_status(
-    id: &str,
-    status: &str,
-    result: Option<&Value>,
-) -> Result<(), String> {
+pub fn update_task_status(id: &str, status: &str, result: Option<&Value>) -> Result<(), String> {
     let s = store()?;
     let conn = s.conn().map_err(|e| format!("conn lock: {e}"))?;
     let now = chrono::Utc::now().to_rfc3339();
@@ -206,7 +202,15 @@ mod tests {
     fn insert_get_update_roundtrip() {
         with_temp_db(|| {
             let id = format!("task-{}", uuid::Uuid::new_v4());
-            insert_task(&id, None, None, None, "Test task", Some(&json!({"cmd": "ls"}))).unwrap();
+            insert_task(
+                &id,
+                None,
+                None,
+                None,
+                "Test task",
+                Some(&json!({"cmd": "ls"})),
+            )
+            .unwrap();
 
             let task = get_task(&id).unwrap().expect("task should exist");
             assert_eq!(task["status"], "pending");
@@ -224,7 +228,10 @@ mod tests {
     fn list_tasks_for_conversation() {
         with_temp_db(|| {
             let cid = format!("conv-{}", uuid::Uuid::new_v4());
-            crate::conversation_store::ensure_conversation_stub(&cid, "openai", "gpt-4o", None, None).unwrap();
+            crate::conversation_store::ensure_conversation_stub(
+                &cid, "openai", "gpt-4o", None, None,
+            )
+            .unwrap();
 
             let id1 = format!("task-{}", uuid::Uuid::new_v4());
             let id2 = format!("task-{}", uuid::Uuid::new_v4());

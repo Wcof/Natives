@@ -14,8 +14,8 @@ pub use ssrf::validate_fetch_url;
 pub use web_search::{web_search_tool, SearchBackend, SearchProvider};
 
 use crate::{
-    Tool, SideEffect, PermissionClass, PathScope, ToolHandler, ToolOutput, ToolError, ToolCallContext,
-    ProcessSupervisor,
+    PathScope, PermissionClass, ProcessSupervisor, SideEffect, Tool, ToolCallContext, ToolError,
+    ToolHandler, ToolOutput,
 };
 use std::sync::Arc;
 
@@ -37,10 +37,7 @@ impl ToolHandler for ReadFileTool {
                 retryable: false,
             })?;
         let path = context.resolve_path(path_str)?;
-        let offset = input
-            .get("offset")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
+        let offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let limit = input
             .get("limit")
             .and_then(|v| v.as_u64())
@@ -86,11 +83,13 @@ impl ToolHandler for ReadFileTool {
             });
         }
 
-        let full = tokio::fs::read_to_string(&path).await.map_err(|e| ToolError {
-            code: "read_error".into(),
-            message: e.to_string(),
-            retryable: true,
-        })?;
+        let full = tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|e| ToolError {
+                code: "read_error".into(),
+                message: e.to_string(),
+                retryable: true,
+            })?;
         let lines: Vec<&str> = full.lines().collect();
         let total_lines = lines.len();
         let start = offset.min(total_lines);
@@ -129,10 +128,13 @@ impl ToolHandler for SearchFilesTool {
         input: serde_json::Value,
         _context: &ToolCallContext,
     ) -> Result<ToolOutput, ToolError> {
-        let pattern = input.get("pattern")
+        let pattern = input
+            .get("pattern")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError {
-                code: "invalid_input".into(), message: "Missing 'pattern' field".into(), retryable: false,
+                code: "invalid_input".into(),
+                message: "Missing 'pattern' field".into(),
+                retryable: false,
             })?;
         let root = input.get("root").and_then(|v| v.as_str()).unwrap_or(".");
         let walker = walkdir::WalkDir::new(root).max_depth(5);
@@ -141,16 +143,24 @@ impl ToolHandler for SearchFilesTool {
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
             .map(|e| e.path().to_string_lossy().to_string())
-            .filter(|p| crate::policy::glob_matches_public(p, pattern)
-                || p.contains(pattern)
-                || std::path::Path::new(p)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|n| n.contains(pattern) || crate::policy::glob_matches_public(n, pattern))
-                    .unwrap_or(false))
+            .filter(|p| {
+                crate::policy::glob_matches_public(p, pattern)
+                    || p.contains(pattern)
+                    || std::path::Path::new(p)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| {
+                            n.contains(pattern) || crate::policy::glob_matches_public(n, pattern)
+                        })
+                        .unwrap_or(false)
+            })
             .take(100)
             .collect();
-        Ok(ToolOutput { result: serde_json::json!({"files": results, "count": results.len(), "pattern": pattern}), truncated: results.len() >= 100, duration_ms: 0 })
+        Ok(ToolOutput {
+            result: serde_json::json!({"files": results, "count": results.len(), "pattern": pattern}),
+            truncated: results.len() >= 100,
+            duration_ms: 0,
+        })
     }
 }
 
@@ -163,13 +173,34 @@ impl ToolHandler for WriteFileTool {
         input: serde_json::Value,
         _context: &ToolCallContext,
     ) -> Result<ToolOutput, ToolError> {
-        let path = input.get("path").and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError { code: "invalid_input".into(), message: "Missing 'path'".into(), retryable: false })?;
-        let content = input.get("content").and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError { code: "invalid_input".into(), message: "Missing 'content'".into(), retryable: false })?;
-        tokio::fs::write(path, content).await
-            .map_err(|e| ToolError { code: "write_error".into(), message: e.to_string(), retryable: true })?;
-        Ok(ToolOutput { result: serde_json::json!({"path": path, "bytes": content.len()}), truncated: false, duration_ms: 0 })
+        let path = input
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError {
+                code: "invalid_input".into(),
+                message: "Missing 'path'".into(),
+                retryable: false,
+            })?;
+        let content = input
+            .get("content")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError {
+                code: "invalid_input".into(),
+                message: "Missing 'content'".into(),
+                retryable: false,
+            })?;
+        tokio::fs::write(path, content)
+            .await
+            .map_err(|e| ToolError {
+                code: "write_error".into(),
+                message: e.to_string(),
+                retryable: true,
+            })?;
+        Ok(ToolOutput {
+            result: serde_json::json!({"path": path, "bytes": content.len()}),
+            truncated: false,
+            duration_ms: 0,
+        })
     }
 }
 
@@ -183,14 +214,8 @@ impl ToolHandler for ListDirTool {
         _context: &ToolCallContext,
     ) -> Result<ToolOutput, ToolError> {
         let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-        let limit = input
-            .get("limit")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(200) as usize;
-        let cursor = input
-            .get("cursor")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(200) as usize;
+        let cursor = input.get("cursor").and_then(|v| v.as_str()).unwrap_or("");
         let mut entries = tokio::fs::read_dir(path).await.map_err(|e| ToolError {
             code: "read_error".into(),
             message: e.to_string(),
@@ -203,11 +228,7 @@ impl ToolHandler for ListDirTool {
             retryable: true,
         })? {
             let name = entry.file_name().to_string_lossy().to_string();
-            let is_dir = entry
-                .file_type()
-                .await
-                .map(|t| t.is_dir())
-                .unwrap_or(false);
+            let is_dir = entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false);
             items.push((name, is_dir));
         }
         items.sort_by(|a, b| a.0.cmp(&b.0));
@@ -351,7 +372,10 @@ async fn try_ripgrep_json(
             .pointer("/path/text")
             .and_then(|p| p.as_str())
             .unwrap_or("");
-        let line_no = data.get("line_number").and_then(|n| n.as_u64()).unwrap_or(0);
+        let line_no = data
+            .get("line_number")
+            .and_then(|n| n.as_u64())
+            .unwrap_or(0);
         let text = data
             .pointer("/lines/text")
             .and_then(|t| t.as_str())
@@ -396,26 +420,37 @@ impl ToolHandler for EditFileTool {
         input: serde_json::Value,
         _context: &ToolCallContext,
     ) -> Result<ToolOutput, ToolError> {
-        let path = input.get("path").and_then(|v| v.as_str()).ok_or_else(|| ToolError {
-            code: "invalid_input".into(),
-            message: "Missing path".into(),
-            retryable: false,
-        })?;
-        let old = input.get("old_string").and_then(|v| v.as_str()).ok_or_else(|| ToolError {
-            code: "invalid_input".into(),
-            message: "Missing old_string".into(),
-            retryable: false,
-        })?;
-        let new = input.get("new_string").and_then(|v| v.as_str()).ok_or_else(|| ToolError {
-            code: "invalid_input".into(),
-            message: "Missing new_string".into(),
-            retryable: false,
-        })?;
-        let content = tokio::fs::read_to_string(path).await.map_err(|e| ToolError {
-            code: "read_error".into(),
-            message: e.to_string(),
-            retryable: true,
-        })?;
+        let path = input
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError {
+                code: "invalid_input".into(),
+                message: "Missing path".into(),
+                retryable: false,
+            })?;
+        let old = input
+            .get("old_string")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError {
+                code: "invalid_input".into(),
+                message: "Missing old_string".into(),
+                retryable: false,
+            })?;
+        let new = input
+            .get("new_string")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError {
+                code: "invalid_input".into(),
+                message: "Missing new_string".into(),
+                retryable: false,
+            })?;
+        let content = tokio::fs::read_to_string(path)
+            .await
+            .map_err(|e| ToolError {
+                code: "read_error".into(),
+                message: e.to_string(),
+                retryable: true,
+            })?;
         if !content.contains(old) {
             return Err(ToolError {
                 code: "not_found".into(),
@@ -424,11 +459,13 @@ impl ToolHandler for EditFileTool {
             });
         }
         let updated = content.replacen(old, new, 1);
-        tokio::fs::write(path, &updated).await.map_err(|e| ToolError {
-            code: "write_error".into(),
-            message: e.to_string(),
-            retryable: true,
-        })?;
+        tokio::fs::write(path, &updated)
+            .await
+            .map_err(|e| ToolError {
+                code: "write_error".into(),
+                message: e.to_string(),
+                retryable: true,
+            })?;
         Ok(ToolOutput {
             result: serde_json::json!({"path": path, "replaced": true}),
             truncated: false,
@@ -492,38 +529,37 @@ impl ToolHandler for RunTerminalTool {
         }
 
         // Legacy argv-only path when `args` is present.
-        let (program, args, display) = if let Some(arr) = input.get("args").and_then(|v| v.as_array())
-        {
-            if command.contains(['|', ';', '&', '`', '$', '\n', '>', '<']) {
-                return Err(ToolError {
-                    code: "shell_injection".into(),
-                    message: "Shell metacharacters rejected for argv mode".into(),
-                    retryable: false,
-                });
-            }
-            let args: Vec<String> = arr
-                .iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect();
-            let display = format!("{command} {}", args.join(" "));
-            (command.to_string(), args, display)
-        } else {
-            // Shell form — real user command for permission cards.
-            let (shell, mut prefix) = crate::process_supervisor::platform_shell_program();
-            prefix.push(command.to_string());
-            let display = command.to_string();
-            let program = shell;
-            let args = prefix;
-            (program, args, display)
-        };
+        let (program, args, display) =
+            if let Some(arr) = input.get("args").and_then(|v| v.as_array()) {
+                if command.contains(['|', ';', '&', '`', '$', '\n', '>', '<']) {
+                    return Err(ToolError {
+                        code: "shell_injection".into(),
+                        message: "Shell metacharacters rejected for argv mode".into(),
+                        retryable: false,
+                    });
+                }
+                let args: Vec<String> = arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect();
+                let display = format!("{command} {}", args.join(" "));
+                (command.to_string(), args, display)
+            } else {
+                // Shell form — real user command for permission cards.
+                let (shell, mut prefix) = crate::process_supervisor::platform_shell_program();
+                prefix.push(command.to_string());
+                let display = command.to_string();
+                let program = shell;
+                let args = prefix;
+                (program, args, display)
+            };
 
-        let cwd = crate::process_supervisor::resolve_cwd(&context.project_root, cwd_input).map_err(
-            |e| ToolError {
+        let cwd = crate::process_supervisor::resolve_cwd(&context.project_root, cwd_input)
+            .map_err(|e| ToolError {
                 code: "cwd_invalid".into(),
                 message: e,
                 retryable: false,
-            },
-        )?;
+            })?;
 
         let task_id = uuid::Uuid::new_v4().to_string();
         let supervisor = crate::global_process_supervisor();

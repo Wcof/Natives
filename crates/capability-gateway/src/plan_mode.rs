@@ -93,10 +93,9 @@ pub fn decision(
         return PlanDecision::Allow;
     }
     match (side_effect, permission_class) {
-        (
-            SideEffect::ReadOnly,
-            PermissionClass::AlwaysAllowed | PermissionClass::ProjectRead,
-        ) => PlanDecision::Allow,
+        (SideEffect::ReadOnly, PermissionClass::AlwaysAllowed | PermissionClass::ProjectRead) => {
+            PlanDecision::Allow
+        }
         _ => PlanDecision::Deny,
     }
 }
@@ -234,7 +233,11 @@ fn invalid(message: impl Into<String>) -> ToolError {
 }
 
 fn text_field(value: Option<&serde_json::Value>, field: &str) -> Result<String, ToolError> {
-    let raw = value.and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let raw = value
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if raw.len() > MAX_TEXT_BYTES {
         return Err(invalid(format!(
             "plan field `{field}` exceeds {MAX_TEXT_BYTES} bytes"
@@ -630,9 +633,7 @@ pub fn changed_event(
 fn not_planning() -> ToolError {
     ToolError {
         code: "not_in_plan_mode".into(),
-        message: format!(
-            "this run is not in Plan Mode; call `{ENTER_PLAN_MODE_TOOL}` first"
-        ),
+        message: format!("this run is not in Plan Mode; call `{ENTER_PLAN_MODE_TOOL}` first"),
         retryable: false,
     }
 }
@@ -650,9 +651,17 @@ mod tests {
     #[test]
     fn read_only_project_tools_pass_the_latch() {
         for (name, se, pc) in [
-            ("read_file", SideEffect::ReadOnly, PermissionClass::ProjectRead),
+            (
+                "read_file",
+                SideEffect::ReadOnly,
+                PermissionClass::ProjectRead,
+            ),
             ("grep", SideEffect::ReadOnly, PermissionClass::ProjectRead),
-            ("skill", SideEffect::ReadOnly, PermissionClass::AlwaysAllowed),
+            (
+                "skill",
+                SideEffect::ReadOnly,
+                PermissionClass::AlwaysAllowed,
+            ),
         ] {
             assert_eq!(decision(name, se, pc), PlanDecision::Allow, "{name}");
         }
@@ -661,8 +670,16 @@ mod tests {
     #[test]
     fn write_process_and_mcp_are_blocked() {
         for (name, se, pc) in [
-            ("write_file", SideEffect::Write, PermissionClass::ProjectWrite),
-            ("apply_patch", SideEffect::Write, PermissionClass::ProjectWrite),
+            (
+                "write_file",
+                SideEffect::Write,
+                PermissionClass::ProjectWrite,
+            ),
+            (
+                "apply_patch",
+                SideEffect::Write,
+                PermissionClass::ProjectWrite,
+            ),
             (
                 "run_terminal",
                 SideEffect::Process,
@@ -955,7 +972,11 @@ mod tests {
     fn entering_reports_the_plan_gear_and_carries_no_plan() {
         let id = run("event-enter");
         let session = enter(&id, "autonomous");
-        let kind = changed_event(&session, PlanTransition::Entered, Some("  wide blast radius  "));
+        let kind = changed_event(
+            &session,
+            PlanTransition::Entered,
+            Some("  wide blast radius  "),
+        );
         let (transition, profile, has_plan, rejections, reason) = event_fields(&kind);
         assert_eq!(transition, "entered");
         assert_eq!(profile, PLAN_PROFILE);
@@ -999,7 +1020,10 @@ mod tests {
         let kind = changed_event(&snapshot(&id).unwrap(), PlanTransition::Rejected, None);
         let (transition, profile, has_plan, rejections, _) = event_fields(&kind);
         assert_eq!(transition, "rejected");
-        assert_eq!(profile, PLAN_PROFILE, "a rejected plan leaves the latch shut");
+        assert_eq!(
+            profile, PLAN_PROFILE,
+            "a rejected plan leaves the latch shut"
+        );
         assert!(has_plan);
         assert_eq!(rejections, Some(2), "a loop has to be countable");
         clear(&id);

@@ -92,22 +92,16 @@ pub enum RunEventPayload {
     /// A checkpoint was created.
     CheckpointCreated { checkpoint_id: String },
     /// A sub-agent was created.
-    SubAgentCreated {
-        sub_run_id: String,
-        task: String,
-    },
+    SubAgentCreated { sub_run_id: String, task: String },
     /// A sub-agent completed.
-    SubAgentCompleted {
-        sub_run_id: String,
-        result: String,
-    },
+    SubAgentCompleted { sub_run_id: String, result: String },
     /// A sub-agent failed.
-    SubAgentFailed {
-        sub_run_id: String,
-        error: String,
-    },
+    SubAgentFailed { sub_run_id: String, error: String },
     /// Generic progress update.
-    Progress { message: String, percentage: Option<f64> },
+    Progress {
+        message: String,
+        percentage: Option<f64>,
+    },
     /// Unknown event type (for forward compatibility).
     Unknown { raw: serde_json::Value },
 }

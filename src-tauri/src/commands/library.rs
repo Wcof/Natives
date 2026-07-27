@@ -1,8 +1,8 @@
+use crate::AppState;
 use crate::{Error, Result};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use tauri::State;
-use crate::AppState;
 
 // ── Data types ──
 
@@ -125,7 +125,11 @@ where
 pub struct UpdateItemInput {
     pub id: String,
     /// 双层 Option：缺字段 = 保留现值；显式 null = 移出文件夹。
-    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub folder_id: Option<Option<String>>,
     #[serde(default)]
     pub title: Option<String>,
@@ -238,37 +242,41 @@ pub fn ensure_tables(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_library_items_created
             ON library_items(created_at);
         CREATE INDEX IF NOT EXISTS idx_library_folders_parent
-            ON library_folders(parent_id);"
+            ON library_folders(parent_id);",
     )
 }
 
 // ── Folder Commands ──
 
 #[tauri::command]
-pub fn library_list_folders(
-    state: State<'_, AppState>,
-) -> Result<Vec<Folder>> {
-    let conn = state.db.get()
+pub fn library_list_folders(state: State<'_, AppState>) -> Result<Vec<Folder>> {
+    let conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
     ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
 
-    let mut stmt = conn.prepare(
-        "SELECT id, name, parent_id, sort_order, created_at, updated_at
-         FROM library_folders ORDER BY sort_order, name"
-    ).map_err(|e| Error::Internal(e.to_string()))?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, name, parent_id, sort_order, created_at, updated_at
+         FROM library_folders ORDER BY sort_order, name",
+        )
+        .map_err(|e| Error::Internal(e.to_string()))?;
 
-    let folders = stmt.query_map([], |row| {
-        Ok(Folder {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            parent_id: row.get(2)?,
-            sort_order: row.get(3)?,
-            created_at: row.get(4)?,
-            updated_at: row.get(5)?,
+    let folders = stmt
+        .query_map([], |row| {
+            Ok(Folder {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                parent_id: row.get(2)?,
+                sort_order: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
         })
-    }).map_err(|e| Error::Internal(e.to_string()))?
-    .filter_map(|r| r.ok())
-    .collect();
+        .map_err(|e| Error::Internal(e.to_string()))?
+        .filter_map(|r| r.ok())
+        .collect();
 
     Ok(folders)
 }
@@ -278,7 +286,9 @@ pub fn library_create_folder(
     state: State<'_, AppState>,
     input: CreateFolderInput,
 ) -> Result<Folder> {
-    let conn = state.db.get()
+    let conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
     ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
 
@@ -288,7 +298,8 @@ pub fn library_create_folder(
         "INSERT INTO library_folders (id, name, parent_id, sort_order, created_at, updated_at)
          VALUES (?1, ?2, ?3, 0, ?4, ?5)",
         params![id, input.name, input.parent_id, now, now],
-    ).map_err(|e| Error::Internal(e.to_string()))?;
+    )
+    .map_err(|e| Error::Internal(e.to_string()))?;
 
     Ok(Folder {
         id,
@@ -301,17 +312,17 @@ pub fn library_create_folder(
 }
 
 #[tauri::command]
-pub fn library_update_folder(
-    state: State<'_, AppState>,
-    input: UpdateFolderInput,
-) -> Result<()> {
-    let conn = state.db.get()
+pub fn library_update_folder(state: State<'_, AppState>, input: UpdateFolderInput) -> Result<()> {
+    let conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
     let now = chrono_now();
     conn.execute(
         "UPDATE library_folders SET name = ?1, updated_at = ?2 WHERE id = ?3",
         params![input.name, now, input.id],
-    ).map_err(|e| Error::Internal(e.to_string()))?;
+    )
+    .map_err(|e| Error::Internal(e.to_string()))?;
     Ok(())
 }
 
@@ -321,27 +332,30 @@ pub fn library_delete_folder(
     id: String,
     move_items: bool,
 ) -> Result<()> {
-    let conn = state.db.get()
+    let conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
 
-    let tx = conn.unchecked_transaction()
+    let tx = conn
+        .unchecked_transaction()
         .map_err(|e| Error::Internal(e.to_string()))?;
     if move_items {
         // Move items to no folder before deleting
         tx.execute(
             "UPDATE library_items SET folder_id = NULL WHERE folder_id = ?1",
             params![id],
-        ).map_err(|e| Error::Internal(e.to_string()))?;
+        )
+        .map_err(|e| Error::Internal(e.to_string()))?;
     }
     // Cascade for sub-folders: set parent_id to NULL
     tx.execute(
         "UPDATE library_folders SET parent_id = NULL WHERE parent_id = ?1",
         params![id],
-    ).map_err(|e| Error::Internal(e.to_string()))?;
-    tx.execute(
-        "DELETE FROM library_folders WHERE id = ?1",
-        params![id],
-    ).map_err(|e| Error::Internal(e.to_string()))?;
+    )
+    .map_err(|e| Error::Internal(e.to_string()))?;
+    tx.execute("DELETE FROM library_folders WHERE id = ?1", params![id])
+        .map_err(|e| Error::Internal(e.to_string()))?;
     tx.commit().map_err(|e| Error::Internal(e.to_string()))?;
     Ok(())
 }
@@ -349,36 +363,37 @@ pub fn library_delete_folder(
 // ── Tag Commands ──
 
 #[tauri::command]
-pub fn library_list_tags(
-    state: State<'_, AppState>,
-) -> Result<Vec<Tag>> {
-    let conn = state.db.get()
+pub fn library_list_tags(state: State<'_, AppState>) -> Result<Vec<Tag>> {
+    let conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
     ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
 
-    let mut stmt = conn.prepare(
-        "SELECT id, name, color, created_at FROM library_tags ORDER BY name"
-    ).map_err(|e| Error::Internal(e.to_string()))?;
+    let mut stmt = conn
+        .prepare("SELECT id, name, color, created_at FROM library_tags ORDER BY name")
+        .map_err(|e| Error::Internal(e.to_string()))?;
 
-    let tags = stmt.query_map([], |row| {
-        Ok(Tag {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            color: row.get(2)?,
-            created_at: row.get(3)?,
+    let tags = stmt
+        .query_map([], |row| {
+            Ok(Tag {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                color: row.get(2)?,
+                created_at: row.get(3)?,
+            })
         })
-    }).map_err(|e| Error::Internal(e.to_string()))?
-    .filter_map(|r| r.ok())
-    .collect();
+        .map_err(|e| Error::Internal(e.to_string()))?
+        .filter_map(|r| r.ok())
+        .collect();
     Ok(tags)
 }
 
 #[tauri::command]
-pub fn library_create_tag(
-    state: State<'_, AppState>,
-    input: CreateTagInput,
-) -> Result<Tag> {
-    let conn = state.db.get()
+pub fn library_create_tag(state: State<'_, AppState>, input: CreateTagInput) -> Result<Tag> {
+    let conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
     ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
 
@@ -387,17 +402,22 @@ pub fn library_create_tag(
     conn.execute(
         "INSERT INTO library_tags (id, name, color, created_at) VALUES (?1, ?2, ?3, ?4)",
         params![id, input.name, input.color, now],
-    ).map_err(|e| Error::Internal(e.to_string()))?;
+    )
+    .map_err(|e| Error::Internal(e.to_string()))?;
 
-    Ok(Tag { id, name: input.name, color: input.color, created_at: now })
+    Ok(Tag {
+        id,
+        name: input.name,
+        color: input.color,
+        created_at: now,
+    })
 }
 
 #[tauri::command]
-pub fn library_delete_tag(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<()> {
-    let conn = state.db.get()
+pub fn library_delete_tag(state: State<'_, AppState>, id: String) -> Result<()> {
+    let conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
     conn.execute("DELETE FROM library_tags WHERE id = ?1", params![id])
         .map_err(|e| Error::Internal(e.to_string()))?;
@@ -428,7 +448,7 @@ fn load_tags_for_item(conn: &rusqlite::Connection, item_id: &str) -> Vec<Tag> {
          FROM library_tags t
          JOIN library_item_tags it ON t.id = it.tag_id
          WHERE it.item_id = ?1
-         ORDER BY t.name"
+         ORDER BY t.name",
     ) {
         Ok(s) => s,
         Err(_) => return vec![],
@@ -440,7 +460,8 @@ fn load_tags_for_item(conn: &rusqlite::Connection, item_id: &str) -> Vec<Tag> {
             color: row.get(2)?,
             created_at: row.get(3)?,
         })
-    }).ok()
+    })
+    .ok()
     .map(|iter| iter.filter_map(|r| r.ok()).collect())
     .unwrap_or_default()
 }
@@ -450,7 +471,9 @@ pub fn library_list_items(
     state: State<'_, AppState>,
     filter: ItemFilter,
 ) -> Result<Vec<LibraryItem>> {
-    let conn = state.db.get()
+    let conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
     ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
 
@@ -478,7 +501,9 @@ pub fn library_list_items(
     }
     if let Some(kw) = &filter.keyword {
         let idx = params_vec.len() + 1;
-        conditions.push(format!("(i.title LIKE ?{idx} OR i.description LIKE ?{idx})"));
+        conditions.push(format!(
+            "(i.title LIKE ?{idx} OR i.description LIKE ?{idx})"
+        ));
         params_vec.push(Box::new(format!("%{}%", kw)));
     }
 
@@ -515,13 +540,15 @@ pub fn library_list_items(
     params_vec.push(Box::new(limit));
     params_vec.push(Box::new(offset));
 
-    let mut stmt = conn.prepare(&sql)
+    let mut stmt = conn
+        .prepare(&sql)
         .map_err(|e| Error::Internal(e.to_string()))?;
 
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter()
-        .map(|p| p.as_ref()).collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params_vec.iter().map(|p| p.as_ref()).collect();
 
-    let items = stmt.query_map(param_refs.as_slice(), item_from_row)
+    let items = stmt
+        .query_map(param_refs.as_slice(), item_from_row)
         .map_err(|e| Error::Internal(e.to_string()))?
         .filter_map(|r| r.ok())
         .map(|mut item| {
@@ -534,21 +561,23 @@ pub fn library_list_items(
 }
 
 #[tauri::command]
-pub fn library_get_item(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<Option<LibraryItem>> {
-    let conn = state.db.get()
+pub fn library_get_item(state: State<'_, AppState>, id: String) -> Result<Option<LibraryItem>> {
+    let conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
     ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
 
-    let mut stmt = conn.prepare(
-        "SELECT i.id, i.folder_id, i.title, i.description, i.content,
+    let mut stmt = conn
+        .prepare(
+            "SELECT i.id, i.folder_id, i.title, i.description, i.content,
                 i.source_url, i.item_type, i.status, i.created_at, i.updated_at
-         FROM library_items i WHERE i.id = ?1"
-    ).map_err(|e| Error::Internal(e.to_string()))?;
+         FROM library_items i WHERE i.id = ?1",
+        )
+        .map_err(|e| Error::Internal(e.to_string()))?;
 
-    let mut rows = stmt.query_map(params![id], item_from_row)
+    let mut rows = stmt
+        .query_map(params![id], item_from_row)
         .map_err(|e| Error::Internal(e.to_string()))?;
 
     if let Some(Ok(mut item)) = rows.next() {
@@ -564,13 +593,16 @@ pub fn library_create_item(
     state: State<'_, AppState>,
     input: CreateItemInput,
 ) -> Result<LibraryItem> {
-    let conn = state.db.get()
+    let conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
     ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
 
     let id = uuid_v4();
     let now = chrono_now();
-    let tx = conn.unchecked_transaction()
+    let tx = conn
+        .unchecked_transaction()
         .map_err(|e| Error::Internal(e.to_string()))?;
     tx.execute(
         "INSERT INTO library_items (id, folder_id, title, description, content, source_url, item_type, status, created_at, updated_at)
@@ -584,17 +616,30 @@ pub fn library_create_item(
         tx.execute(
             "INSERT OR IGNORE INTO library_item_tags (item_id, tag_id) VALUES (?1, ?2)",
             params![id, tag_id],
-        ).map_err(|e| Error::Internal(e.to_string()))?;
+        )
+        .map_err(|e| Error::Internal(e.to_string()))?;
     }
     tx.commit().map_err(|e| Error::Internal(e.to_string()))?;
 
-    let tags: Vec<Tag> = input.tag_ids.iter().filter_map(|tid| {
-        conn.query_row(
-            "SELECT id, name, color, created_at FROM library_tags WHERE id = ?1",
-            params![tid],
-            |row| Ok(Tag { id: row.get(0)?, name: row.get(1)?, color: row.get(2)?, created_at: row.get(3)? }),
-        ).ok()
-    }).collect();
+    let tags: Vec<Tag> = input
+        .tag_ids
+        .iter()
+        .filter_map(|tid| {
+            conn.query_row(
+                "SELECT id, name, color, created_at FROM library_tags WHERE id = ?1",
+                params![tid],
+                |row| {
+                    Ok(Tag {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        color: row.get(2)?,
+                        created_at: row.get(3)?,
+                    })
+                },
+            )
+            .ok()
+        })
+        .collect();
 
     Ok(LibraryItem {
         id,
@@ -612,35 +657,40 @@ pub fn library_create_item(
 }
 
 #[tauri::command]
-pub fn library_update_item(
-    state: State<'_, AppState>,
-    input: UpdateItemInput,
-) -> Result<()> {
-    let conn = state.db.get()
+pub fn library_update_item(state: State<'_, AppState>, input: UpdateItemInput) -> Result<()> {
+    let conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
     let now = chrono_now();
 
     // 读现值做合并：缺字段保留，防止部分更新清空 content/source_url
-    let current = conn.query_row(
-        "SELECT folder_id, title, description, content, source_url, status
+    let current = conn
+        .query_row(
+            "SELECT folder_id, title, description, content, source_url, status
          FROM library_items WHERE id = ?1",
-        params![input.id],
-        |row| Ok((
-            row.get::<_, Option<String>>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, String>(3)?,
-            row.get::<_, String>(4)?,
-            row.get::<_, String>(5)?,
-        )),
-    ).map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => Error::InvalidInput(format!("item not found: {}", input.id)),
-        other => Error::Internal(other.to_string()),
-    })?;
+            params![input.id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => {
+                Error::InvalidInput(format!("item not found: {}", input.id))
+            }
+            other => Error::Internal(other.to_string()),
+        })?;
 
     let folder_id = match input.folder_id {
-        Some(v) => v,          // Some(None) = 显式移出文件夹
-        None => current.0,     // 缺字段 = 保留
+        Some(v) => v,      // Some(None) = 显式移出文件夹
+        None => current.0, // 缺字段 = 保留
     };
     let title = input.title.unwrap_or(current.1);
     let description = input.description.unwrap_or(current.2);
@@ -648,24 +698,39 @@ pub fn library_update_item(
     let source_url = input.source_url.unwrap_or(current.4);
     let status = input.status.unwrap_or(current.5);
 
-    let tx = conn.unchecked_transaction()
+    let tx = conn
+        .unchecked_transaction()
         .map_err(|e| Error::Internal(e.to_string()))?;
     tx.execute(
         "UPDATE library_items SET folder_id = ?1, title = ?2, description = ?3,
          content = ?4, source_url = ?5, status = ?6, updated_at = ?7
          WHERE id = ?8",
-        params![folder_id, title, description, content, source_url, status, now, input.id],
-    ).map_err(|e| Error::Internal(e.to_string()))?;
+        params![
+            folder_id,
+            title,
+            description,
+            content,
+            source_url,
+            status,
+            now,
+            input.id
+        ],
+    )
+    .map_err(|e| Error::Internal(e.to_string()))?;
 
     // 缺 tagIds = 不动标签；提供时全量替换
     if let Some(tag_ids) = &input.tag_ids {
-        tx.execute("DELETE FROM library_item_tags WHERE item_id = ?1", params![input.id])
-            .map_err(|e| Error::Internal(e.to_string()))?;
+        tx.execute(
+            "DELETE FROM library_item_tags WHERE item_id = ?1",
+            params![input.id],
+        )
+        .map_err(|e| Error::Internal(e.to_string()))?;
         for tag_id in tag_ids {
             tx.execute(
                 "INSERT OR IGNORE INTO library_item_tags (item_id, tag_id) VALUES (?1, ?2)",
                 params![input.id, tag_id],
-            ).map_err(|e| Error::Internal(e.to_string()))?;
+            )
+            .map_err(|e| Error::Internal(e.to_string()))?;
         }
     }
     tx.commit().map_err(|e| Error::Internal(e.to_string()))?;
@@ -673,11 +738,10 @@ pub fn library_update_item(
 }
 
 #[tauri::command]
-pub fn library_delete_item(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<()> {
-    let conn = state.db.get()
+pub fn library_delete_item(state: State<'_, AppState>, id: String) -> Result<()> {
+    let conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
     conn.execute("DELETE FROM library_items WHERE id = ?1", params![id])
         .map_err(|e| Error::Internal(e.to_string()))?;
@@ -687,20 +751,21 @@ pub fn library_delete_item(
 // ── Bulk Operations ──
 
 #[tauri::command]
-pub fn library_batch_tag(
-    state: State<'_, AppState>,
-    input: BatchTagInput,
-) -> Result<()> {
-    let conn = state.db.get()
+pub fn library_batch_tag(state: State<'_, AppState>, input: BatchTagInput) -> Result<()> {
+    let conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
-    let tx = conn.unchecked_transaction()
+    let tx = conn
+        .unchecked_transaction()
         .map_err(|e| Error::Internal(e.to_string()))?;
     for item_id in &input.item_ids {
         for tag_id in &input.tag_ids {
             tx.execute(
                 "INSERT OR IGNORE INTO library_item_tags (item_id, tag_id) VALUES (?1, ?2)",
                 params![item_id, tag_id],
-            ).map_err(|e| Error::Internal(e.to_string()))?;
+            )
+            .map_err(|e| Error::Internal(e.to_string()))?;
         }
     }
     tx.commit().map_err(|e| Error::Internal(e.to_string()))?;
@@ -708,33 +773,34 @@ pub fn library_batch_tag(
 }
 
 #[tauri::command]
-pub fn library_batch_move(
-    state: State<'_, AppState>,
-    input: BatchMoveInput,
-) -> Result<()> {
-    let conn = state.db.get()
+pub fn library_batch_move(state: State<'_, AppState>, input: BatchMoveInput) -> Result<()> {
+    let conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
     let now = chrono_now();
-    let tx = conn.unchecked_transaction()
+    let tx = conn
+        .unchecked_transaction()
         .map_err(|e| Error::Internal(e.to_string()))?;
     for item_id in &input.item_ids {
         tx.execute(
             "UPDATE library_items SET folder_id = ?1, updated_at = ?2 WHERE id = ?3",
             params![input.folder_id, now, item_id],
-        ).map_err(|e| Error::Internal(e.to_string()))?;
+        )
+        .map_err(|e| Error::Internal(e.to_string()))?;
     }
     tx.commit().map_err(|e| Error::Internal(e.to_string()))?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn library_batch_delete(
-    state: State<'_, AppState>,
-    input: BatchDeleteInput,
-) -> Result<()> {
-    let conn = state.db.get()
+pub fn library_batch_delete(state: State<'_, AppState>, input: BatchDeleteInput) -> Result<()> {
+    let conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
-    let tx = conn.unchecked_transaction()
+    let tx = conn
+        .unchecked_transaction()
         .map_err(|e| Error::Internal(e.to_string()))?;
     for item_id in &input.item_ids {
         tx.execute("DELETE FROM library_items WHERE id = ?1", params![item_id])
@@ -747,58 +813,68 @@ pub fn library_batch_delete(
 // ── Statistics ──
 
 #[tauri::command]
-pub fn library_get_stats(
-    state: State<'_, AppState>,
-) -> Result<LibraryStats> {
-    let conn = state.db.get()
+pub fn library_get_stats(state: State<'_, AppState>) -> Result<LibraryStats> {
+    let conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("DB error: {e}")))?;
     ensure_tables(&*conn).map_err(|e| Error::Internal(e.to_string()))?;
 
-    let total_items: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM library_items", [], |row| row.get(0)
-    ).unwrap_or(0);
+    let total_items: i64 = conn
+        .query_row("SELECT COUNT(*) FROM library_items", [], |row| row.get(0))
+        .unwrap_or(0);
 
-    let total_folders: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM library_folders", [], |row| row.get(0)
-    ).unwrap_or(0);
+    let total_folders: i64 = conn
+        .query_row("SELECT COUNT(*) FROM library_folders", [], |row| row.get(0))
+        .unwrap_or(0);
 
-    let total_tags: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM library_tags", [], |row| row.get(0)
-    ).unwrap_or(0);
+    let total_tags: i64 = conn
+        .query_row("SELECT COUNT(*) FROM library_tags", [], |row| row.get(0))
+        .unwrap_or(0);
 
     // Items created in last 7 days.
     // created_at 存储为 %Y-%m-%dT%H:%M:%SZ；datetime('now') 是空格分隔格式，
     // 字符串比较会在边界日错判，必须用同格式的 strftime。
-    let recent_items: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM library_items
+    let recent_items: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM library_items
          WHERE created_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-7 days')",
-        [], |row| row.get(0)
-    ).unwrap_or(0);
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
 
     // Items by folder
-    let mut stmt = conn.prepare(
-        "SELECT f.id, f.name, COUNT(i.id)
+    let mut stmt = conn
+        .prepare(
+            "SELECT f.id, f.name, COUNT(i.id)
          FROM library_folders f
          LEFT JOIN library_items i ON i.folder_id = f.id
          GROUP BY f.id
-         ORDER BY COUNT(i.id) DESC"
-    ).map_err(|e| Error::Internal(e.to_string()))?;
+         ORDER BY COUNT(i.id) DESC",
+        )
+        .map_err(|e| Error::Internal(e.to_string()))?;
 
-    let items_by_folder: Vec<CountByFolder> = stmt.query_map([], |row| {
-        Ok(CountByFolder {
-            folder_id: Some(row.get::<_, String>(0)?),
-            folder_name: row.get(1)?,
-            count: row.get(2)?,
+    let items_by_folder: Vec<CountByFolder> = stmt
+        .query_map([], |row| {
+            Ok(CountByFolder {
+                folder_id: Some(row.get::<_, String>(0)?),
+                folder_name: row.get(1)?,
+                count: row.get(2)?,
+            })
         })
-    }).map_err(|e| Error::Internal(e.to_string()))?
-    .filter_map(|r| r.ok())
-    .collect();
+        .map_err(|e| Error::Internal(e.to_string()))?
+        .filter_map(|r| r.ok())
+        .collect();
 
     // Also count items without a folder
-    let unassigned: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM library_items WHERE folder_id IS NULL",
-        [], |row| row.get(0)
-    ).unwrap_or(0);
+    let unassigned: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM library_items WHERE folder_id IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
     let mut all_by_folder = items_by_folder;
     if unassigned > 0 {
         all_by_folder.push(CountByFolder {
@@ -838,8 +914,7 @@ mod tests {
     /// 回归：部分更新缺字段 = None（保留现值），不得被当成清空。
     #[test]
     fn update_item_input_partial_fields_deserialize_as_none() {
-        let input: UpdateItemInput =
-            serde_json::from_str(r#"{"id":"x","title":"new"}"#).unwrap();
+        let input: UpdateItemInput = serde_json::from_str(r#"{"id":"x","title":"new"}"#).unwrap();
         assert_eq!(input.title.as_deref(), Some("new"));
         assert!(input.description.is_none());
         assert!(input.content.is_none());
@@ -852,12 +927,10 @@ mod tests {
     /// 双层 Option：显式 null = 移出文件夹；字符串 = 移入指定文件夹。
     #[test]
     fn update_item_input_folder_double_option() {
-        let clear: UpdateItemInput =
-            serde_json::from_str(r#"{"id":"x","folderId":null}"#).unwrap();
+        let clear: UpdateItemInput = serde_json::from_str(r#"{"id":"x","folderId":null}"#).unwrap();
         assert_eq!(clear.folder_id, Some(None));
 
-        let set: UpdateItemInput =
-            serde_json::from_str(r#"{"id":"x","folderId":"f1"}"#).unwrap();
+        let set: UpdateItemInput = serde_json::from_str(r#"{"id":"x","folderId":"f1"}"#).unwrap();
         assert_eq!(set.folder_id, Some(Some("f1".to_string())));
     }
 }

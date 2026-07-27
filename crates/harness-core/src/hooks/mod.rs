@@ -7,6 +7,6 @@
 pub mod definition;
 
 pub use definition::{
-    Condition, ConditionOperator, HookDefinition, HookEvent, HookFailurePolicy, HookId, HookKind,
-    HookScope, HookSource, tool_pattern_matches,
+    tool_pattern_matches, Condition, ConditionOperator, HookDefinition, HookEvent,
+    HookFailurePolicy, HookId, HookKind, HookScope, HookSource,
 };

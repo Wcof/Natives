@@ -11,7 +11,10 @@ use std::sync::Arc;
 
 use super::{error_response, success_response, RpcResponse};
 
-pub(crate) async fn handle_artifact_list(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
+pub(crate) async fn handle_artifact_list(
+    data_store: &Arc<DataStore>,
+    params: &Value,
+) -> RpcResponse {
     if daemon_authority::authority_mode_label() == "uds" {
         return match daemon_authority::request("artifact.list", params.clone()).await {
             Ok(data) => success_response(data),
@@ -91,7 +94,10 @@ fn row_to_artifact(row: &rusqlite::Row) -> rusqlite::Result<Value> {
     }))
 }
 
-pub(crate) async fn handle_artifact_open(data_store: &Arc<DataStore>, params: &Value) -> RpcResponse {
+pub(crate) async fn handle_artifact_open(
+    data_store: &Arc<DataStore>,
+    params: &Value,
+) -> RpcResponse {
     let path = match params.get("path").and_then(|v| v.as_str()) {
         Some(p) if !p.trim().is_empty() => p.trim(),
         _ => return error_response("MISSING_PARAM", "path is required"),
@@ -152,11 +158,7 @@ fn artifact_json_contains_path(data: &Value, canonical: &Path) -> bool {
     let items = data
         .as_array()
         .cloned()
-        .or_else(|| {
-            data.get("artifacts")
-                .and_then(|v| v.as_array())
-                .cloned()
-        })
+        .or_else(|| data.get("artifacts").and_then(|v| v.as_array()).cloned())
         .unwrap_or_default();
     for item in items {
         let Some(path) = item.get("path").and_then(|v| v.as_str()) else {
@@ -202,11 +204,12 @@ mod artifact_path_tests {
     #[tokio::test]
     async fn registered_mirror_path_is_allowed_to_resolve() {
         let store = Arc::new(DataStore::new(":memory:").unwrap());
-        store.conn().execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
-        let path = std::env::temp_dir().join(format!(
-            "natives-artifact-ok-{}.txt",
-            uuid::Uuid::new_v4()
-        ));
+        store
+            .conn()
+            .execute_batch("PRAGMA foreign_keys = OFF;")
+            .unwrap();
+        let path =
+            std::env::temp_dir().join(format!("natives-artifact-ok-{}.txt", uuid::Uuid::new_v4()));
         std::fs::write(&path, "ok").unwrap();
         let canon = std::fs::canonicalize(&path).unwrap();
         store
@@ -233,10 +236,7 @@ mod artifact_path_tests {
         let data = serde_json::json!([{ "path": canon.display().to_string() }]);
         assert!(artifact_json_contains_path(&data, &canon));
         let other = std::env::temp_dir().join("natives-artifact-missing-xyz");
-        assert!(!artifact_json_contains_path(
-            &data,
-            Path::new(&other)
-        ));
+        assert!(!artifact_json_contains_path(&data, Path::new(&other)));
         let _ = std::fs::remove_file(path);
     }
 }

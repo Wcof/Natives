@@ -15,9 +15,9 @@ use std::path::Path;
 use std::sync::Arc;
 use tauri::AppHandle;
 
+use super::local as local_mod;
 use super::local::LocalRuntimeManager;
 use super::store as external_store;
-use super::local as local_mod;
 
 /// Resolved source for a creative-app id (catalog lookup).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

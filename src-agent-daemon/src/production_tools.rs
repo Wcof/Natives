@@ -663,7 +663,8 @@ impl EngineToolRuntime for PermissionGatedTools {
                             .project_root
                             .as_deref()
                             .map(std::path::Path::new),
-                    );
+                    )
+                    .with_events(self.events.clone());
                     let _ = hooks
                         .dispatch(HookRequest {
                             event: HookEvent::Notification,
@@ -930,7 +931,8 @@ impl PermissionGatedTools {
             .as_deref()
             .map(std::path::Path::new);
         let permission_hooks =
-            crate::production_hooks::build_production_hooks_for_project(project_root);
+            crate::production_hooks::build_production_hooks_for_project(project_root)
+                .with_events(self.events.clone());
         let hook_outcomes = permission_hooks
             .dispatch_outcomes(HookRequest {
                 event: HookEvent::PermissionRequest,
@@ -1240,17 +1242,17 @@ impl PermissionGatedTools {
             Ok(profile) => {
                 self.emit_plan_transition(plan_mode::PlanTransition::Approved, None);
                 ToolExecutionResult {
-                output: serde_json::json!({
-                    "approved": true,
-                    "plan_mode": false,
-                    "permission_profile": profile,
-                    "plan": plan_json,
-                    "message": "The user approved this plan. Plan Mode is off and the run is back \
-                                on its original permission profile. Execute the approved steps and \
-                                nothing beyond them.",
-                }),
-                is_error: false,
-                duration_ms: started.elapsed().as_millis() as u64,
+                    output: serde_json::json!({
+                        "approved": true,
+                        "plan_mode": false,
+                        "permission_profile": profile,
+                        "plan": plan_json,
+                        "message": "The user approved this plan. Plan Mode is off and the run is back \
+                                    on its original permission profile. Execute the approved steps and \
+                                    nothing beyond them.",
+                    }),
+                    is_error: false,
+                    duration_ms: started.elapsed().as_millis() as u64,
                 }
             }
             Err(err) => ToolExecutionResult {
@@ -1606,7 +1608,10 @@ impl PermissionGatedTools {
                 }
                 match crate::capability_resolution::load_profile(
                     agent,
-                    self.gateway.project_root.as_deref().map(std::path::Path::new),
+                    self.gateway
+                        .project_root
+                        .as_deref()
+                        .map(std::path::Path::new),
                 ) {
                     Some(profile) => Some((agent.to_string(), profile)),
                     None => {
@@ -1855,7 +1860,8 @@ impl PermissionGatedTools {
         // model having asked nicely.
         let subagent_hooks = crate::production_hooks::build_production_hooks_for_project(
             project_path.as_deref().map(std::path::Path::new),
-        );
+        )
+        .with_events(self.events.clone());
         let start_responses = subagent_hooks
             .dispatch(HookRequest {
                 event: HookEvent::SubagentStart,
@@ -1884,9 +1890,9 @@ impl PermissionGatedTools {
 
         let created = match crate::global_run_manager().create_run(
             assistant_protocol::v2::CreateRunRequest {
-            // Child runs never inherit the parent conversation's selection;
-            // member skills come from the member profile at child resolve.
-            capability_selection: None,
+                // Child runs never inherit the parent conversation's selection;
+                // member skills come from the member profile at child resolve.
+                capability_selection: None,
                 conversation_id: child_conversation_id.clone(),
                 provider_id: child_provider.clone(),
                 model_id: child_model.clone(),
@@ -1992,8 +1998,8 @@ impl PermissionGatedTools {
 
         let start_result = crate::run_manager::RunManager::start_detached_global(
             assistant_protocol::v2::StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+                agent_profile_id: None,
+                capability_selection: None,
                 run_id: Some(child_run_id.clone()),
                 conversation_id: Some(child_conversation_id.clone()),
                 provider_id: Some(child_provider.clone()),

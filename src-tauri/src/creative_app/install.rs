@@ -42,13 +42,15 @@ pub fn resolve_token(conn: &Connection, request_token: Option<&str>) -> Result<O
     store::get_github_token_plaintext(conn)
 }
 
-pub fn inspect(
-    conn: &Connection,
-    req: &InspectGithubRequest,
-) -> Result<InspectGithubResult> {
+pub fn inspect(conn: &Connection, req: &InspectGithubRequest) -> Result<InspectGithubResult> {
     let repo = github::parse_github_url(&req.repository_url)?;
     if req.save_token {
-        if let Some(t) = req.token.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        if let Some(t) = req
+            .token
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
             store::set_github_token(conn, t)?;
         }
     }
@@ -150,8 +152,7 @@ pub async fn install_github(
     let token = resolve_token(conn, req.token.as_deref())?;
     let token_ref = token.as_deref();
 
-    let release =
-        github::get_release_by_tag(&repo.owner, &repo.repo, &req.release_tag, token_ref)?;
+    let release = github::get_release_by_tag(&repo.owner, &repo.repo, &req.release_tag, token_ref)?;
 
     // Initial probe by names
     let initial = probe::probe_release(&release, None)?;
@@ -265,7 +266,9 @@ pub async fn install_github(
         open_url: Some(open_url.clone()),
         health_url: health_url.clone(),
         host_port: Some(host_port),
-        runtime_config_json: runtime_config.to_json().map_err(|e| Error::Internal(e.to_string()))?,
+        runtime_config_json: runtime_config
+            .to_json()
+            .map_err(|e| Error::Internal(e.to_string()))?,
         last_error: None,
         created_at: ts.clone(),
         updated_at: ts.clone(),
@@ -275,7 +278,12 @@ pub async fn install_github(
         store::set_env(conn, &app_id, &e.key, &e.value)?;
     }
     broadcast(app, "install_start", &app_id);
-    emit_progress(app, &app_id, ProgressStage::InspectingRelease, "Downloading release assets");
+    emit_progress(
+        app,
+        &app_id,
+        ProgressStage::InspectingRelease,
+        "Downloading release assets",
+    );
 
     let release_dir = paths::release_dir(&app_id);
     let runtime_dir = paths::runtime_dir(&app_id);
@@ -330,12 +338,18 @@ pub async fn install_github(
         ));
     }
 
-    emit_progress(app, &app_id, ProgressStage::DownloadingAssets, "Assets ready");
+    emit_progress(
+        app,
+        &app_id,
+        ProgressStage::DownloadingAssets,
+        "Assets ready",
+    );
 
-    let env_map: HashMap<String, String> = store::get_env_map(conn, &app_id)?
-        .into_iter()
+    let env_map: HashMap<String, String> = store::get_env_map(conn, &app_id)?.into_iter().collect();
+    let env_pairs: Vec<(String, String)> = env_map
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    let env_pairs: Vec<(String, String)> = env_map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
 
     let install_result = match refined.runtime {
         CreativeAppRuntime::DockerCompose => {
@@ -373,16 +387,14 @@ pub async fn install_github(
         }
         CreativeAppRuntime::WorkshopStatic
         | CreativeAppRuntime::LocalStatic
-        | CreativeAppRuntime::NodeDevServer => {
-            Err(Error::InvalidInput("invalid runtime".into()))
-        }
+        | CreativeAppRuntime::NodeDevServer => Err(Error::InvalidInput("invalid runtime".into())),
     };
 
     match install_result {
         Ok(cfg) => {
             let ts = now();
-            let mut rec = store::get_app(conn, &app_id)?
-                .ok_or_else(|| Error::NotFound(app_id.clone()))?;
+            let mut rec =
+                store::get_app(conn, &app_id)?.ok_or_else(|| Error::NotFound(app_id.clone()))?;
             rec.state = CreativeAppState::Running;
             rec.runtime_config_json = cfg.to_json().map_err(|e| Error::Internal(e.to_string()))?;
             rec.open_url = Some(open_url.clone());
@@ -427,9 +439,8 @@ async fn install_compose(
     }
     if !compose_src.exists() {
         // try any compose name in release dir
-        compose_src = find_compose_in_dir(release_dir).ok_or_else(|| {
-            Error::InvalidInput("compose file not found after download".into())
-        })?;
+        compose_src = find_compose_in_dir(release_dir)
+            .ok_or_else(|| Error::InvalidInput("compose file not found after download".into()))?;
     }
 
     // Re-analyze for hard blockers
@@ -442,20 +453,24 @@ async fn install_compose(
     }
 
     let dest = runtime_dir.join("docker-compose.yml");
-    probe::normalize_compose_to_localhost(
-        &compose_src,
-        &dest,
-        service,
-        host_port,
-        container_port,
-    )?;
+    probe::normalize_compose_to_localhost(&compose_src, &dest, service, host_port, container_port)?;
 
     let project = paths::compose_project_name(app_id);
-    emit_progress(app, app_id, ProgressStage::PullingImage, "docker compose pull");
+    emit_progress(
+        app,
+        app_id,
+        ProgressStage::PullingImage,
+        "docker compose pull",
+    );
     docker::compose_pull(&project, &dest).await?;
     emit_progress(app, app_id, ProgressStage::Creating, "docker compose up");
     docker::compose_up(&project, &dest, env_pairs).await?;
-    emit_progress(app, app_id, ProgressStage::HealthCheck, "waiting for readiness");
+    emit_progress(
+        app,
+        app_id,
+        ProgressStage::HealthCheck,
+        "waiting for readiness",
+    );
 
     let health = health_path
         .as_ref()
@@ -510,7 +525,12 @@ async fn install_run(
     .await?;
     emit_progress(app, app_id, ProgressStage::Starting, "docker start");
     docker::docker_start(&name).await?;
-    emit_progress(app, app_id, ProgressStage::HealthCheck, "waiting for readiness");
+    emit_progress(
+        app,
+        app_id,
+        ProgressStage::HealthCheck,
+        "waiting for readiness",
+    );
     let health = health_path
         .as_ref()
         .map(|h| format!("http://127.0.0.1:{host_port}{h}"))
@@ -558,7 +578,13 @@ fn find_compose_in_dir(dir: &PathBuf) -> Option<PathBuf> {
 
 fn fail_install(conn: &Connection, app: &AppHandle, app_id: &str, err: &str) -> Result<()> {
     let ts = now();
-    store::set_state(conn, app_id, CreativeAppState::InstallFailed, Some(err), &ts)?;
+    store::set_state(
+        conn,
+        app_id,
+        CreativeAppState::InstallFailed,
+        Some(err),
+        &ts,
+    )?;
     emit_progress(app, app_id, ProgressStage::Failed, err);
     broadcast(app, "install_failed", app_id);
     Ok(())
@@ -687,13 +713,7 @@ pub async fn stop_app(conn: &Connection, app: &AppHandle, id: &str) -> Result<Cr
         Err(e) => {
             let ts = now();
             let msg = e.to_string();
-            store::set_state(
-                conn,
-                id,
-                CreativeAppState::StartFailed,
-                Some(&msg),
-                &ts,
-            )?;
+            store::set_state(conn, id, CreativeAppState::StartFailed, Some(&msg), &ts)?;
             broadcast(app, "stop_failed", id);
             // Fail closed: restart must not start a new container after stop failure.
             Err(Error::Internal(format!("stop failed: {msg}")))
@@ -745,7 +765,13 @@ pub async fn delete_app(
             };
             if let Err(e) = r {
                 let ts = now();
-                store::set_state(conn, id, CreativeAppState::DeleteFailed, Some(&e.to_string()), &ts)?;
+                store::set_state(
+                    conn,
+                    id,
+                    CreativeAppState::DeleteFailed,
+                    Some(&e.to_string()),
+                    &ts,
+                )?;
                 broadcast(app, "delete_failed", id);
                 return Ok(DeleteResult {
                     ok: false,

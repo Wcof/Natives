@@ -331,10 +331,7 @@ mod tests {
 
     #[test]
     fn test_plan_profile_keeps_reads_open() {
-        for class in [
-            PermissionClass::AlwaysAllowed,
-            PermissionClass::ProjectRead,
-        ] {
+        for class in [PermissionClass::AlwaysAllowed, PermissionClass::ProjectRead] {
             assert!(
                 matches!(
                     check_permission(class, crate::plan_mode::PLAN_PROFILE),

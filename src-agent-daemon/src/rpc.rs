@@ -409,9 +409,12 @@ async fn test_provider_model(
 fn mcp_error_to_daemon(err: crate::mcp_runtime::McpError) -> DaemonError {
     use crate::mcp_runtime::McpError;
     match err {
-        McpError::Invalid(m) => {
-            DaemonError::new(error_codes::INVALID_INPUT, ErrorCategory::Validation, false, m)
-        }
+        McpError::Invalid(m) => DaemonError::new(
+            error_codes::INVALID_INPUT,
+            ErrorCategory::Validation,
+            false,
+            m,
+        ),
         McpError::NotFound(m) => {
             DaemonError::new(error_codes::NOT_FOUND, ErrorCategory::NotFound, false, m)
         }
@@ -2776,10 +2779,7 @@ pub async fn handle_rpc(
 }
 
 /// Read a required non-empty string param, accepting snake_case and camelCase aliases.
-fn required_param<'a>(
-    params: &'a serde_json::Value,
-    aliases: &[&str],
-) -> Result<&'a str, String> {
+fn required_param<'a>(params: &'a serde_json::Value, aliases: &[&str]) -> Result<&'a str, String> {
     for key in aliases {
         if let Some(value) = params.get(*key).and_then(|v| v.as_str()) {
             let value = value.trim();
@@ -2797,16 +2797,17 @@ fn required_param<'a>(
 /// the live ExecutionRegistry: children of a finished parent must still be listable.
 /// Depth-1 only; callers recurse if they want the whole tree.
 fn handle_run_list_children(params: &serde_json::Value) -> Result<serde_json::Value, String> {
-    let parent = required_param(
-        params,
-        &["parent_run_id", "parentRunId", "run_id", "runId"],
-    )?;
+    let parent = required_param(params, &["parent_run_id", "parentRunId", "run_id", "runId"])?;
     let mut children: Vec<assistant_protocol::v2::RunV2> = run_manager()
         .list_runs(None)
         .into_iter()
         .filter(|r| r.parent_run_id.as_deref() == Some(parent))
         .collect();
-    children.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
+    children.sort_by(|a, b| {
+        a.created_at
+            .cmp(&b.created_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
     Ok(serde_json::json!({
         "parent_run_id": parent,
         "children": children,
@@ -2918,8 +2919,16 @@ fn filter_permission_interactions(value: serde_json::Value) -> serde_json::Value
                 .unwrap_or(false)
         })
         .map(|row| {
-            let payload = row.get("payload").cloned().unwrap_or(serde_json::Value::Null);
-            let field = |name: &str| payload.get(name).cloned().unwrap_or(serde_json::Value::Null);
+            let payload = row
+                .get("payload")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let field = |name: &str| {
+                payload
+                    .get(name)
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null)
+            };
             serde_json::json!({
                 "id": row.get("id").cloned().unwrap_or(serde_json::Value::Null),
                 "run_id": row.get("run_id").cloned().unwrap_or(serde_json::Value::Null),

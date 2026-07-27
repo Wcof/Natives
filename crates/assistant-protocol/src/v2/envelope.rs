@@ -363,7 +363,10 @@ mod tests {
 
     #[test]
     fn legacy_response_shape() {
-        let ok = V2Response::Success(V2SuccessResponse::new("r", serde_json::json!({"pong": true})));
+        let ok = V2Response::Success(V2SuccessResponse::new(
+            "r",
+            serde_json::json!({"pong": true}),
+        ));
         let j = response_to_legacy_json(&ok);
         assert_eq!(j["success"], true);
         assert_eq!(j["data"]["pong"], true);

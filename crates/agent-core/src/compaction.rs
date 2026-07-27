@@ -338,8 +338,8 @@ pub fn summary_message(summary: &str, omitted_messages: usize) -> Value {
         "role": "system",
         "content": format!(
             "{SUMMARY_MARKER} The first {omitted_messages} messages of this conversation were \
-replaced by the summary below to stay inside the context budget. Treat it as an accurate \
-record of work already done; continue from it instead of redoing that work.\n\n{}",
+    replaced by the summary below to stay inside the context budget. Treat it as an accurate \
+    record of work already done; continue from it instead of redoing that work.\n\n{}",
             summary.trim()
         ),
     })
@@ -434,7 +434,10 @@ mod tests {
         let msgs = tool_history();
         // keep_tail = 3 would start the tail at index 4 (a tool result).
         let split = choose_summary_split(&msgs, 3);
-        assert_eq!(split, 3, "split must back up onto the assistant that made the calls");
+        assert_eq!(
+            split, 3,
+            "split must back up onto the assistant that made the calls"
+        );
         assert_ne!(msgs[split]["role"], "tool");
     }
 
@@ -479,13 +482,18 @@ mod tests {
     fn transcript_render_is_bounded_and_keeps_the_first_message() {
         let mut msgs = vec![json!({"role":"user","content":"the original goal"})];
         for i in 0..40 {
-            msgs.push(json!({"role":"assistant","content": format!("step {i} {}", "z".repeat(500))}));
+            msgs.push(
+                json!({"role":"assistant","content": format!("step {i} {}", "z".repeat(500))}),
+            );
         }
         let rendered = render_transcript_for_summary(&msgs, 4_000, 200);
         assert!(rendered.len() <= 4_000, "rendered {} chars", rendered.len());
         assert!(rendered.contains("the original goal"));
         assert!(rendered.contains("intermediate messages elided"));
-        assert!(rendered.contains("step 39"), "most recent messages must survive");
+        assert!(
+            rendered.contains("step 39"),
+            "most recent messages must survive"
+        );
     }
 
     #[test]

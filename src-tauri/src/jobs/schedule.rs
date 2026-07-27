@@ -72,15 +72,15 @@ pub fn parse_utc(s: &str) -> Option<DateTime<Utc>> {
 pub fn parse(schedule_type: &str, schedule_value: &str) -> Result<ScheduleSpec, String> {
     match schedule_type {
         "once" => {
-            let t = parse_utc(schedule_value.trim())
-                .ok_or_else(|| format!("once schedule expects an ISO8601 timestamp, got '{schedule_value}'"))?;
+            let t = parse_utc(schedule_value.trim()).ok_or_else(|| {
+                format!("once schedule expects an ISO8601 timestamp, got '{schedule_value}'")
+            })?;
             Ok(ScheduleSpec::Once(t))
         }
         "interval" => {
-            let secs: u64 = schedule_value
-                .trim()
-                .parse()
-                .map_err(|_| format!("interval schedule expects seconds, got '{schedule_value}'"))?;
+            let secs: u64 = schedule_value.trim().parse().map_err(|_| {
+                format!("interval schedule expects seconds, got '{schedule_value}'")
+            })?;
             if secs < MIN_INTERVAL_SECS {
                 return Err(format!(
                     "interval must be >= {MIN_INTERVAL_SECS} seconds, got {secs}"
@@ -190,9 +190,7 @@ fn parse_field(field: &str, min: u32, max: u32) -> Result<(Vec<u32>, bool), Stri
                 return Err(format!("cron range start > end in '{item}'"));
             }
             if a < min || b > max {
-                return Err(format!(
-                    "cron range '{item}' out of bounds [{min},{max}]"
-                ));
+                return Err(format!("cron range '{item}' out of bounds [{min},{max}]"));
             }
             values.extend(a..=b);
         } else {
@@ -308,13 +306,19 @@ mod tests {
     fn cron_every_minute() {
         let after = utc(2026, 7, 26, 12, 0, 30);
         // 严格晚于 after：秒数截断后进位到下一分钟
-        assert_eq!(cron_next("* * * * *", after), Some(utc(2026, 7, 26, 12, 1, 0)));
+        assert_eq!(
+            cron_next("* * * * *", after),
+            Some(utc(2026, 7, 26, 12, 1, 0))
+        );
     }
 
     #[test]
     fn cron_fixed_minute() {
         let after = utc(2026, 7, 26, 12, 10, 0);
-        assert_eq!(cron_next("5 * * * *", after), Some(utc(2026, 7, 26, 13, 5, 0)));
+        assert_eq!(
+            cron_next("5 * * * *", after),
+            Some(utc(2026, 7, 26, 13, 5, 0))
+        );
     }
 
     #[test]
@@ -376,14 +380,20 @@ mod tests {
     fn cron_boundary_exact_match_advances() {
         // after 恰好命中表达式时，next 必须是下一个匹配点（严格晚于 after）
         let after = utc(2026, 1, 1, 0, 0, 0);
-        assert_eq!(cron_next("0 0 * * *", after), Some(utc(2026, 1, 2, 0, 0, 0)));
+        assert_eq!(
+            cron_next("0 0 * * *", after),
+            Some(utc(2026, 1, 2, 0, 0, 0))
+        );
     }
 
     #[test]
     fn cron_year_rollover() {
         // 每年 1 月 1 日 0 点，从 2 月出发跨年
         let after = utc(2026, 2, 10, 0, 0, 0);
-        assert_eq!(cron_next("0 0 1 1 *", after), Some(utc(2027, 1, 1, 0, 0, 0)));
+        assert_eq!(
+            cron_next("0 0 1 1 *", after),
+            Some(utc(2027, 1, 1, 0, 0, 0))
+        );
     }
 
     #[test]

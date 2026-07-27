@@ -45,11 +45,7 @@ const DISPATCH_SOURCES: &[(&str, &str)] = &[
 /// `#[cfg(test)]` marker — every file in this tree puts its unit tests last.
 fn production_source(path: &Path) -> Option<String> {
     let raw = std::fs::read_to_string(path).ok()?;
-    let body = raw
-        .split("#[cfg(test)]")
-        .next()
-        .unwrap_or(&raw)
-        .to_string();
+    let body = raw.split("#[cfg(test)]").next().unwrap_or(&raw).to_string();
     Some(
         body.lines()
             .map(|line| match line.find("//") {

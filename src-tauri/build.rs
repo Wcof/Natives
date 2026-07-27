@@ -32,7 +32,12 @@ fn main() {
                 println!("cargo:rerun-if-changed=References/ghostty/build.zig");
 
                 let status = std::process::Command::new(zig)
-                    .args(["build", "-Demit-lib-vt", "--prefix", &install_dir.to_string_lossy()])
+                    .args([
+                        "build",
+                        "-Demit-lib-vt",
+                        "--prefix",
+                        &install_dir.to_string_lossy(),
+                    ])
                     .current_dir(ghostty_src)
                     .status()
                     .expect("failed to run zig build for ghostty-vt");
@@ -63,7 +68,8 @@ fn main() {
             if stub_c.exists() {
                 let status = std::process::Command::new("cc")
                     .args([
-                        "-c", "-o",
+                        "-c",
+                        "-o",
                         &lib_dir.join("ghostty-vt-stub.o").to_string_lossy(),
                         &stub_c.to_string_lossy(),
                     ])

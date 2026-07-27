@@ -49,8 +49,20 @@ pub fn list_archive(archive_path: &str) -> Result<ArchiveListing> {
         .unwrap_or("")
         .to_lowercase();
 
-    if full_name.ends_with(".tar.gz") || full_name.ends_with(".tar.bz2") || full_name.ends_with(".tar.xz") {
-        return list_tar(path, if full_name.ends_with(".gz") { "tgz" } else if full_name.ends_with(".bz2") { "bz2" } else { "xz" });
+    if full_name.ends_with(".tar.gz")
+        || full_name.ends_with(".tar.bz2")
+        || full_name.ends_with(".tar.xz")
+    {
+        return list_tar(
+            path,
+            if full_name.ends_with(".gz") {
+                "tgz"
+            } else if full_name.ends_with(".bz2") {
+                "bz2"
+            } else {
+                "xz"
+            },
+        );
     }
 
     match ext.as_str() {
@@ -97,11 +109,7 @@ fn list_zip(path: &Path) -> Result<ArchiveListing> {
             entry.name().to_string()
         };
 
-        entries.push(ArchiveEntry {
-            name,
-            size,
-            is_dir,
-        });
+        entries.push(ArchiveEntry { name, size, is_dir });
     }
 
     Ok(ArchiveListing {
@@ -197,8 +205,7 @@ fn decode_zip_name(raw: &[u8], gpbf: &u16) -> String {
 
 fn find_signature(data: &[u8], sig: u32) -> Option<usize> {
     let sig_bytes = sig.to_le_bytes();
-    data.windows(4)
-        .rposition(|w| w == sig_bytes)
+    data.windows(4).rposition(|w| w == sig_bytes)
 }
 
 fn read_u16(data: &[u8], offset: usize) -> u16 {

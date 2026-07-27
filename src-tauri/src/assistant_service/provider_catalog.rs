@@ -5,7 +5,10 @@ use std::sync::Arc;
 
 use super::{error_response, success_response, RpcResponse};
 
-pub(crate) async fn handle_provider_list(data_store: &Arc<DataStore>, _params: &Value) -> RpcResponse {
+pub(crate) async fn handle_provider_list(
+    data_store: &Arc<DataStore>,
+    _params: &Value,
+) -> RpcResponse {
     // Prefer natives.db (Settings SoT). Fall back to assistant.db mirror only when
     // the main pool is unavailable (e.g. unit tests with :memory: DataStore).
     match list_providers_from_natives_db() {
@@ -181,9 +184,7 @@ pub(crate) fn list_providers_from_natives_db() -> std::result::Result<Vec<Value>
 
     // Active key presence from natives.db only.
     let mut kstmt = natives
-        .prepare(
-            "SELECT provider_id FROM provider_api_keys WHERE COALESCE(is_active, 1) = 1",
-        )
+        .prepare("SELECT provider_id FROM provider_api_keys WHERE COALESCE(is_active, 1) = 1")
         .map_err(|e| e.to_string())?;
     let active_providers: std::collections::HashSet<String> = kstmt
         .query_map([], |row| row.get::<_, String>(0))
@@ -192,10 +193,10 @@ pub(crate) fn list_providers_from_natives_db() -> std::result::Result<Vec<Value>
         .collect();
 
     // Optional model cache from assistant.db (discovery results); never required.
-    let model_rows: std::collections::HashMap<String, Vec<Value>> = match crate::db::get_assistant_db_conn()
-    {
-        Ok(assistant) => {
-            let mut stmt = match assistant.prepare(
+    let model_rows: std::collections::HashMap<String, Vec<Value>> =
+        match crate::db::get_assistant_db_conn() {
+            Ok(assistant) => {
+                let mut stmt = match assistant.prepare(
                 "SELECT provider_id, model_id, display_name, capabilities, context_window, max_output, source, discovered_at
                  FROM assistant_model_cache ORDER BY model_id ASC",
             ) {
@@ -204,32 +205,32 @@ pub(crate) fn list_providers_from_natives_db() -> std::result::Result<Vec<Value>
                     return Ok(assemble_natives_providers(provider_rows, &active_providers, &std::collections::HashMap::new()));
                 }
             };
-            let mut grouped: std::collections::HashMap<String, Vec<Value>> =
-                std::collections::HashMap::new();
-            if let Ok(rows) = stmt.query_map([], |row| {
-                let capabilities = row.get::<_, String>(3).unwrap_or_else(|_| "{}".into());
-                Ok((
-                    row.get::<_, String>(0)?,
-                    serde_json::json!({
-                        "id": row.get::<_, String>(1)?,
-                        "display_name": row.get::<_, Option<String>>(2)?,
-                        "capabilities": serde_json::from_str::<Value>(&capabilities)
-                            .unwrap_or_else(|_| serde_json::json!({})),
-                        "context_window": row.get::<_, i64>(4).unwrap_or(0),
-                        "max_output": row.get::<_, i64>(5).unwrap_or(0),
-                        "source": row.get::<_, String>(6).unwrap_or_else(|_| "cache".into()),
-                        "discovered_at": row.get::<_, String>(7).unwrap_or_default(),
-                    }),
-                ))
-            }) {
-                for row in rows.flatten() {
-                    grouped.entry(row.0).or_default().push(row.1);
+                let mut grouped: std::collections::HashMap<String, Vec<Value>> =
+                    std::collections::HashMap::new();
+                if let Ok(rows) = stmt.query_map([], |row| {
+                    let capabilities = row.get::<_, String>(3).unwrap_or_else(|_| "{}".into());
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        serde_json::json!({
+                            "id": row.get::<_, String>(1)?,
+                            "display_name": row.get::<_, Option<String>>(2)?,
+                            "capabilities": serde_json::from_str::<Value>(&capabilities)
+                                .unwrap_or_else(|_| serde_json::json!({})),
+                            "context_window": row.get::<_, i64>(4).unwrap_or(0),
+                            "max_output": row.get::<_, i64>(5).unwrap_or(0),
+                            "source": row.get::<_, String>(6).unwrap_or_else(|_| "cache".into()),
+                            "discovered_at": row.get::<_, String>(7).unwrap_or_default(),
+                        }),
+                    ))
+                }) {
+                    for row in rows.flatten() {
+                        grouped.entry(row.0).or_default().push(row.1);
+                    }
                 }
+                grouped
             }
-            grouped
-        }
-        Err(_) => std::collections::HashMap::new(),
-    };
+            Err(_) => std::collections::HashMap::new(),
+        };
 
     Ok(assemble_natives_providers(
         provider_rows,
@@ -386,4 +387,3 @@ pub(crate) fn provider_model_pair_available(
 }
 
 // ─── Run gateway (host preflight + daemon orchestration) ───
-

@@ -28,20 +28,18 @@ test('clearing the active project deletes the database value', async () => {
   assert.equal(deleted, true);
 });
 
-test('stale directories return null and delete from DB', async () => {
+test('a selected external-volume project remains active until project.list verifies it is gone', async () => {
   let deleted = false;
   const api = {
     db: {
-      // Simulate a stored path that no longer exists — we trust the stored value in test/browser mode
-      get: async () => '/path/that/does/not/exist',
+      get: async () => '/Volumes/UNTITLED/project',
       set: async () => undefined,
       delete: async () => { deleted = true; },
     },
   };
   const result = await readActiveProject(api);
-  // In browser/test context pathExists trusts the value, so it returns the stored path
-  // The actual fs validation happens in Tauri context
-  assert.equal(result, '/path/that/does/not/exist');
+  assert.equal(result, '/Volumes/UNTITLED/project');
+  assert.equal(deleted, false);
 });
 
 test('writing empty string is treated same as null', async () => {

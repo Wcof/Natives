@@ -21,7 +21,7 @@ function createMockIframe() {
 
 function setupMocks() {
   const mockElements: ReturnType<typeof createMockIframe>[] = [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   (globalThis as any).document = {
     createElement: (tag: string) => {
       if (tag !== 'iframe') throw new Error(`Unexpected createElement('${tag}')`);
@@ -34,7 +34,7 @@ function setupMocks() {
 }
 
 function teardownMocks() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   delete (globalThis as any).document;
 }
 

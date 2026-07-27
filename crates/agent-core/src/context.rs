@@ -68,23 +68,13 @@ pub fn assemble_context(
                     .collect::<Vec<_>>();
                 rules.sort();
                 for path in rules {
-                    append_instruction_file(
-                        &path,
-                        &mut seen_paths,
-                        &mut parts,
-                        &mut sources,
-                    );
+                    append_instruction_file(&path, &mut seen_paths, &mut parts, &mut sources);
                 }
             }
         }
         for dir in &instruction_dirs {
             for name in ["AGENTS.md", "agents.md", "CLAUDE.md", "Claude.md"] {
-                append_instruction_file(
-                    &dir.join(name),
-                    &mut seen_paths,
-                    &mut parts,
-                    &mut sources,
-                );
+                append_instruction_file(&dir.join(name), &mut seen_paths, &mut parts, &mut sources);
             }
             for rules_dir in [".agents/rules", ".claude/rules", ".natives/rules"] {
                 let mut rules = std::fs::read_dir(dir.join(rules_dir))
@@ -101,12 +91,7 @@ pub fn assemble_context(
                     .collect::<Vec<_>>();
                 rules.sort();
                 for path in rules {
-                    append_instruction_file(
-                        &path,
-                        &mut seen_paths,
-                        &mut parts,
-                        &mut sources,
-                    );
+                    append_instruction_file(&path, &mut seen_paths, &mut parts, &mut sources);
                 }
             }
         }
@@ -126,22 +111,29 @@ pub fn assemble_context(
                 ".claude/skills",
             ] {
                 let dir = dir.join(skills_dir);
-            if let Ok(rd) = std::fs::read_dir(&dir) {
-                let names: Vec<_> = rd
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.path().is_dir() || e.path().extension().map(|x| x == "md").unwrap_or(false))
-                    .map(|e| e.file_name().to_string_lossy().to_string())
-                    .filter(|name| seen_skills.insert(name.clone()))
-                    .take(20)
-                    .collect();
-                if !names.is_empty() {
-                    parts.push(format!(
-                        "# Available skills\n{}",
-                        names.iter().map(|n| format!("- {n}")).collect::<Vec<_>>().join("\n")
-                    ));
-                    sources.push(dir.display().to_string());
+                if let Ok(rd) = std::fs::read_dir(&dir) {
+                    let names: Vec<_> = rd
+                        .filter_map(|e| e.ok())
+                        .filter(|e| {
+                            e.path().is_dir()
+                                || e.path().extension().map(|x| x == "md").unwrap_or(false)
+                        })
+                        .map(|e| e.file_name().to_string_lossy().to_string())
+                        .filter(|name| seen_skills.insert(name.clone()))
+                        .take(20)
+                        .collect();
+                    if !names.is_empty() {
+                        parts.push(format!(
+                            "# Available skills\n{}",
+                            names
+                                .iter()
+                                .map(|n| format!("- {n}"))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        ));
+                        sources.push(dir.display().to_string());
+                    }
                 }
-            }
             }
         }
     }
@@ -283,9 +275,7 @@ pub fn compact_messages(
             // tool_result we already skipped. Break when cut is clean.
             break;
         }
-        let prev_role = messages[keep_from.saturating_sub(1)]
-            .0
-            .to_ascii_lowercase();
+        let prev_role = messages[keep_from.saturating_sub(1)].0.to_ascii_lowercase();
         if prev_role.contains("tool")
             && !prev_role.contains("result")
             && (role.contains("result") || role.contains("output") || role.contains("tool"))
@@ -364,7 +354,10 @@ Dropped by role: user={users}, assistant={assistants}, other={others}.",
     if !recent.is_empty() {
         notice.push_str("\nLast dropped messages (verbatim, truncated):");
         for (role, content) in recent.into_iter().rev() {
-            notice.push_str(&format!("\n- {role}: {}", preview(content, NOTICE_PREVIEW_CHARS)));
+            notice.push_str(&format!(
+                "\n- {role}: {}",
+                preview(content, NOTICE_PREVIEW_CHARS)
+            ));
         }
     }
     notice
@@ -458,7 +451,12 @@ mod tests {
     #[test]
     fn compact_drops_old_messages() {
         let messages: Vec<_> = (0..10)
-            .map(|i| ("user".into(), format!("message number {i} with padding xxxxx")))
+            .map(|i| {
+                (
+                    "user".into(),
+                    format!("message number {i} with padding xxxxx"),
+                )
+            })
             .collect();
         let (kept, summary) = compact_messages(&messages, 20);
         assert!(summary.is_some());
@@ -487,7 +485,12 @@ mod tests {
     #[test]
     fn compact_prepends_the_truncation_notice_as_system() {
         let messages: Vec<(String, String)> = (0..10)
-            .map(|i| ("user".to_string(), format!("message {i} {}", "pad ".repeat(20))))
+            .map(|i| {
+                (
+                    "user".to_string(),
+                    format!("message {i} {}", "pad ".repeat(20)),
+                )
+            })
             .collect();
         let (kept, summary) = compact_messages(&messages, 20);
         assert_eq!(kept[0].0, "system");

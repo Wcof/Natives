@@ -25,13 +25,21 @@ async fn gateway_execute_denies_traversal_and_etc() {
         "ask".into(),
     );
     let err = gateway
-        .execute("read_file", serde_json::json!({"path": "../etc/passwd"}), &context)
+        .execute(
+            "read_file",
+            serde_json::json!({"path": "../etc/passwd"}),
+            &context,
+        )
         .await
         .unwrap_err();
     assert_eq!(err.code, "path_traversal");
 
     let err2 = gateway
-        .execute("read_file", serde_json::json!({"path": "/etc/passwd"}), &context)
+        .execute(
+            "read_file",
+            serde_json::json!({"path": "/etc/passwd"}),
+            &context,
+        )
         .await
         .unwrap_err();
     assert!(

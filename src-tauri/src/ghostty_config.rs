@@ -124,23 +124,44 @@ mod tests {
     #[test]
     fn test_generate_config_contains_palette() {
         let config = generate_config("terminal-volt");
-        assert!(config.contains("palette = 0="), "should contain palette entry 0");
-        assert!(config.contains("palette = 15="), "should contain palette entry 15");
+        assert!(
+            config.contains("palette = 0="),
+            "should contain palette entry 0"
+        );
+        assert!(
+            config.contains("palette = 15="),
+            "should contain palette entry 15"
+        );
     }
 
     #[test]
     fn test_generate_config_contains_foreground() {
         let config = generate_config("terminal-volt");
-        assert!(config.contains("foreground = "), "should contain foreground");
-        assert!(config.contains("background = "), "should contain background");
-        assert!(config.contains("cursor-color = "), "should contain cursor-color");
+        assert!(
+            config.contains("foreground = "),
+            "should contain foreground"
+        );
+        assert!(
+            config.contains("background = "),
+            "should contain background"
+        );
+        assert!(
+            config.contains("cursor-color = "),
+            "should contain cursor-color"
+        );
     }
 
     #[test]
     fn test_generate_config_contains_frosted_jasmine() {
         let config = generate_config("frosted-jasmine");
-        assert!(config.contains("palette = 0=#111827"), "frosted-jasmine black should match text color");
-        assert!(config.contains("background = #ffffff"), "frosted-jasmine bg should match terminal-bg");
+        assert!(
+            config.contains("palette = 0=#111827"),
+            "frosted-jasmine black should match text color"
+        );
+        assert!(
+            config.contains("background = #ffffff"),
+            "frosted-jasmine bg should match terminal-bg"
+        );
     }
 
     #[test]

@@ -175,7 +175,10 @@ pub fn update(params_value: &Value) -> Result<Value, String> {
 
     let mut sets: Vec<String> = Vec::new();
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    let push = |sets: &mut Vec<String>, args: &mut Vec<Box<dyn rusqlite::ToSql>>, col: &str, v: Box<dyn rusqlite::ToSql>| {
+    let push = |sets: &mut Vec<String>,
+                args: &mut Vec<Box<dyn rusqlite::ToSql>>,
+                col: &str,
+                v: Box<dyn rusqlite::ToSql>| {
         sets.push(format!("{col} = ?"));
         args.push(v);
     };
@@ -196,7 +199,12 @@ pub fn update(params_value: &Value) -> Result<Value, String> {
         if v.trim().is_empty() {
             return Err("systemPrompt must not be empty".into());
         }
-        push(&mut sets, &mut args, "system_prompt", Box::new(v.to_string()));
+        push(
+            &mut sets,
+            &mut args,
+            "system_prompt",
+            Box::new(v.to_string()),
+        );
     }
     for (key, col) in [
         ("tools", "tools_json"),
@@ -204,8 +212,17 @@ pub fn update(params_value: &Value) -> Result<Value, String> {
         ("skills", "skills_json"),
     ] {
         if let Some(v) = params_value.get(key).and_then(Value::as_array) {
-            let items: Vec<String> = v.iter().filter_map(Value::as_str).map(str::to_string).collect();
-            push(&mut sets, &mut args, col, Box::new(serde_json::to_string(&items).unwrap_or_else(|_| "[]".into())));
+            let items: Vec<String> = v
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+            push(
+                &mut sets,
+                &mut args,
+                col,
+                Box::new(serde_json::to_string(&items).unwrap_or_else(|_| "[]".into())),
+            );
         }
     }
     for (key, col) in [
@@ -235,9 +252,15 @@ pub fn update(params_value: &Value) -> Result<Value, String> {
     sets.push("updated_at = ?".into());
     args.push(Box::new(now_iso()));
     args.push(Box::new(id.to_string()));
-    let sql = format!("UPDATE capability_expert SET {} WHERE id = ?", sets.join(", "));
+    let sql = format!(
+        "UPDATE capability_expert SET {} WHERE id = ?",
+        sets.join(", ")
+    );
     let changed = conn
-        .execute(&sql, rusqlite::params_from_iter(args.iter().map(|a| a.as_ref())))
+        .execute(
+            &sql,
+            rusqlite::params_from_iter(args.iter().map(|a| a.as_ref())),
+        )
         .map_err(|e| e.to_string())?;
     if changed == 0 {
         return Err(format!("expert not found: {id}"));
@@ -248,7 +271,10 @@ pub fn update(params_value: &Value) -> Result<Value, String> {
 
 pub fn delete(params_value: &Value) -> Result<Value, String> {
     let id = required_str(params_value, "id")?;
-    let force = params_value.get("force").and_then(Value::as_bool).unwrap_or(false);
+    let force = params_value
+        .get("force")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let data = store()?;
     let conn = data.conn()?;
     // Referential honesty: surface team references before cascading.
@@ -382,7 +408,10 @@ pub fn export_md(params_value: &Value) -> Result<Value, String> {
     ] {
         if let Some(v) = expert["params"].get(param) {
             if !v.is_null() {
-                let rendered = v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string());
+                let rendered = v
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| v.to_string());
                 front.push_str(&format!("{key}: {rendered}\n"));
             }
         }
@@ -573,11 +602,8 @@ pub fn team_update(params_value: &Value) -> Result<Value, String> {
         || params_value.get("failurePolicy").is_some()
         || params_value.get("maxConcurrent").is_some()
     {
-        let (strategy, failure_policy, max_concurrent) = validate_team_settings_with_defaults(
-            params_value,
-            &tx,
-            &id,
-        )?;
+        let (strategy, failure_policy, max_concurrent) =
+            validate_team_settings_with_defaults(params_value, &tx, &id)?;
         tx.execute(
             "UPDATE capability_expert_team
                 SET strategy = ?2, failure_policy = ?3, max_concurrent = ?4 WHERE id = ?1",
@@ -641,7 +667,10 @@ pub fn team_delete(params_value: &Value) -> Result<Value, String> {
     let data = store()?;
     let conn = data.conn()?;
     let changed = conn
-        .execute("DELETE FROM capability_expert_team WHERE id = ?1", params![id])
+        .execute(
+            "DELETE FROM capability_expert_team WHERE id = ?1",
+            params![id],
+        )
         .map_err(|e| e.to_string())?;
     if changed == 0 {
         return Err(format!("team not found: {id}"));
@@ -836,7 +865,13 @@ fn insert_members(
             "INSERT INTO capability_expert_team_member
                 (team_id, position, expert_id, role_hint, task_template)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![team_id, position as i64, expert_id, role_hint, task_template],
+            params![
+                team_id,
+                position as i64,
+                expert_id,
+                role_hint,
+                task_template
+            ],
         )
         .map_err(|e| e.to_string())?;
     }
@@ -867,7 +902,11 @@ fn validate_team_settings(params_value: &Value) -> Result<(String, String, i64),
     if !(1..=8).contains(&max_concurrent) {
         return Err("maxConcurrent must be in 1..=8".into());
     }
-    Ok((strategy.to_string(), failure_policy.to_string(), max_concurrent))
+    Ok((
+        strategy.to_string(),
+        failure_policy.to_string(),
+        max_concurrent,
+    ))
 }
 
 fn validate_team_settings_with_defaults(
@@ -932,7 +971,12 @@ fn list_json(params: &Value, key: &str) -> String {
     let items: Vec<String> = params
         .get(key)
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     serde_json::to_string(&items).unwrap_or_else(|_| "[]".into())
 }

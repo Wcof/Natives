@@ -25,8 +25,22 @@ pub fn generate_thumbnail(file_path: &str, width: u32) -> Result<Option<(Vec<u8>
     // Check supported formats
     let supported = matches!(
         ext.as_str(),
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tiff" | "tif" | "heic" | "avif"
-            | "mp4" | "mov" | "avi" | "mkv" | "webm" | "m4v"
+        "png"
+            | "jpg"
+            | "jpeg"
+            | "gif"
+            | "webp"
+            | "bmp"
+            | "tiff"
+            | "tif"
+            | "heic"
+            | "avif"
+            | "mp4"
+            | "mov"
+            | "avi"
+            | "mkv"
+            | "webm"
+            | "m4v"
             | "pdf"
     );
     if !supported {
@@ -144,26 +158,24 @@ fn generate_ql_thumb(path: &Path, width: u32) -> Result<Vec<u8>> {
 
     if !output.status.success() {
         let _ = std::fs::remove_dir_all(&tmp_dir);
-        return Err(Error::Internal("qlmanage thumbnail generation failed".into()));
+        return Err(Error::Internal(
+            "qlmanage thumbnail generation failed".into(),
+        ));
     }
 
     // qlmanage names its output "<full file name>.png" (e.g. video.mp4.png), not
     // "<stem>.png". Rather than reconstruct that name, take the first .png that
     // landed in our private temp dir — it's the only file qlmanage wrote there.
-    let png_path = std::fs::read_dir(&tmp_dir)
-        .ok()
-        .and_then(|dir| {
-            dir.flatten()
-                .map(|e| e.path())
-                .find(|p| p.extension().and_then(|e| e.to_str()) == Some("png"))
-        });
+    let png_path = std::fs::read_dir(&tmp_dir).ok().and_then(|dir| {
+        dir.flatten()
+            .map(|e| e.path())
+            .find(|p| p.extension().and_then(|e| e.to_str()) == Some("png"))
+    });
     let png_path = match png_path {
         Some(p) => p,
         None => {
             let _ = std::fs::remove_dir_all(&tmp_dir);
-            return Err(Error::Internal(
-                "qlmanage produced no thumbnail".into(),
-            ));
+            return Err(Error::Internal("qlmanage produced no thumbnail".into()));
         }
     };
 

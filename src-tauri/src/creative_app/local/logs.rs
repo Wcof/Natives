@@ -86,10 +86,7 @@ impl LocalLogStore {
     /// Inject this app's concrete env values so live + persisted log lines
     /// redact them by value (not just by pattern). Call before start/install.
     pub fn set_secrets(&self, values: Vec<String>) {
-        let filtered: Vec<String> = values
-            .into_iter()
-            .filter(|v| v.trim().len() >= 4)
-            .collect();
+        let filtered: Vec<String> = values.into_iter().filter(|v| v.trim().len() >= 4).collect();
         let mut guard = self.secrets.lock().unwrap_or_else(|e| e.into_inner());
         *guard = filtered;
     }
@@ -127,7 +124,12 @@ impl LocalLogStore {
     pub fn recent_memory(&self, limit: usize) -> Vec<LogLine> {
         let ring = self.ring.lock().unwrap_or_else(|e| e.into_inner());
         let n = limit.min(ring.lines.len());
-        ring.lines.iter().rev().take(n).cloned().collect::<Vec<_>>()
+        ring.lines
+            .iter()
+            .rev()
+            .take(n)
+            .cloned()
+            .collect::<Vec<_>>()
             .into_iter()
             .rev()
             .collect()
@@ -155,10 +157,7 @@ impl LocalLogStore {
                 *size = 0;
             }
         }
-        let mut f = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
+        let mut f = OpenOptions::new().create(true).append(true).open(&path)?;
         let record = format!("{ts_ms}\t{}\t{text}\n", stream.as_str());
         f.write_all(record.as_bytes())?;
         let mut size = self.current_size.lock().unwrap_or_else(|e| e.into_inner());
@@ -267,9 +266,7 @@ fn redact_key_values(input: &str, key: &str) -> String {
     let bytes = input.as_bytes();
     let lower_b = lower.as_bytes();
     while i < bytes.len() {
-        if i + key_l.len() <= lower_b.len()
-            && &lower_b[i..i + key_l.len()] == key_l.as_bytes()
-        {
+        if i + key_l.len() <= lower_b.len() && &lower_b[i..i + key_l.len()] == key_l.as_bytes() {
             out.push_str(&input[i..i + key_l.len()]);
             i += key_l.len();
             // skip whitespace
@@ -337,22 +334,20 @@ impl LogRegistry {
         if let Some(s) = map.get(app_id) {
             return s.clone();
         }
-        let store = Arc::new(
-            LocalLogStore::open(app_id).unwrap_or_else(|_| {
-                // fallback: still construct with temp path semantics
-                LocalLogStore {
-                    app_id: app_id.to_string(),
-                    dir: log_dir(app_id),
-                    ring: Mutex::new(RingState {
-                        seq: 0,
-                        bytes: 0,
-                        lines: VecDeque::new(),
-                    }),
-                    current_size: Mutex::new(0),
-                    secrets: Mutex::new(Vec::new()),
-                }
-            }),
-        );
+        let store = Arc::new(LocalLogStore::open(app_id).unwrap_or_else(|_| {
+            // fallback: still construct with temp path semantics
+            LocalLogStore {
+                app_id: app_id.to_string(),
+                dir: log_dir(app_id),
+                ring: Mutex::new(RingState {
+                    seq: 0,
+                    bytes: 0,
+                    lines: VecDeque::new(),
+                }),
+                current_size: Mutex::new(0),
+                secrets: Mutex::new(Vec::new()),
+            }
+        }));
         map.insert(app_id.to_string(), store.clone());
         store
     }

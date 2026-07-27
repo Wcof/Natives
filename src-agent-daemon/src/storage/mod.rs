@@ -19,12 +19,12 @@ pub mod host_authority_migration;
 pub mod migrations;
 
 use rusqlite::{params, Connection};
-use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
-#[cfg(test)]
-use std::sync::MutexGuard;
 #[cfg(test)]
 use std::cell::Cell;
+use std::path::PathBuf;
+#[cfg(test)]
+use std::sync::MutexGuard;
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(test)]
 thread_local! {
@@ -90,12 +90,15 @@ pub fn set_test_db_override(db: Option<std::path::PathBuf>, artifacts: Option<st
 #[cfg(test)]
 pub fn test_db_override() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
     let db = TEST_DB_OVERRIDE.with(|c| c.borrow().clone())?;
-    let art = TEST_ARTIFACT_OVERRIDE.with(|c| c.borrow().clone())
-        .unwrap_or_else(|| db.parent().map(|p| p.join("artifacts")).unwrap_or_else(std::env::temp_dir));
+    let art = TEST_ARTIFACT_OVERRIDE
+        .with(|c| c.borrow().clone())
+        .unwrap_or_else(|| {
+            db.parent()
+                .map(|p| p.join("artifacts"))
+                .unwrap_or_else(std::env::temp_dir)
+        });
     Some((db, art))
 }
-
-
 
 /// The data store — manages SQLite connection and artifact storage.
 pub struct DataStore {
@@ -154,7 +157,9 @@ impl DataStore {
     }
 
     /// Merge host `assistant_*` rows into canonical tables (best-effort).
-    pub fn run_host_authority_migration(&self) -> Result<host_authority_migration::HostAuthorityMigrationResult, String> {
+    pub fn run_host_authority_migration(
+        &self,
+    ) -> Result<host_authority_migration::HostAuthorityMigrationResult, String> {
         let conn = self.conn()?;
         host_authority_migration::migrate_host_authority(&conn)
     }
@@ -257,7 +262,9 @@ impl DataStore {
                         "INSERT OR IGNORE INTO _daemon_schema_version (version) VALUES (?1)",
                         params![version],
                     )
-                    .map_err(|e| format!("Failed to bootstrap daemon schema version {version}: {e}"))?;
+                    .map_err(|e| {
+                        format!("Failed to bootstrap daemon schema version {version}: {e}")
+                    })?;
                 }
             }
         }
@@ -279,7 +286,9 @@ impl DataStore {
             if let Err(e) = conn.execute_batch(sql) {
                 let msg = e.to_string();
                 // Tolerate additive column re-runs / partial rebuilds.
-                if (*version == 7 || *version == 11 || *version == 12) && msg.contains("duplicate column") {
+                if (*version == 7 || *version == 11 || *version == 12)
+                    && msg.contains("duplicate column")
+                {
                     let _ = conn.execute(
                         "INSERT OR IGNORE INTO _daemon_schema_version (version) VALUES (?1)",
                         params![version],
@@ -530,7 +539,9 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM conversation", [], |r| r.get(0))
             .unwrap();
         let host_n: i64 = conn
-            .query_row("SELECT COUNT(*) FROM assistant_conversations", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM assistant_conversations", [], |r| {
+                r.get(0)
+            })
             .unwrap_or(0);
         assert!(
             n >= host_n,

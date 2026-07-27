@@ -70,8 +70,7 @@ fn isolate_env() {
 
 fn call(method: &str, params: Value) -> Value {
     isolate_env();
-    control_plane::request(method, params)
-        .unwrap_or_else(|e| panic!("{method} failed: {e}"))
+    control_plane::request(method, params).unwrap_or_else(|e| panic!("{method} failed: {e}"))
 }
 
 fn call_err(method: &str, params: Value) -> String {
@@ -140,8 +139,10 @@ fn migration_creates_every_harness_table() {
             "harness_audit",
             "harness_binding",
             "harness_draft",
+            "harness_hook_trace",
             "harness_profile",
             "harness_run_snapshot",
+            "harness_source_manifest",
             "harness_version",
         ]
     );
@@ -246,8 +247,7 @@ fn topology_covers_every_stage_and_every_hook_event() {
         .expect("permission stage");
     assert_eq!(permission["safe_points"][0], "after_permission_resolved");
     assert_eq!(
-        permission["hook_points"][0]["dispatch_module"],
-        "natives-agent-daemon::production_tools",
+        permission["hook_points"][0]["dispatch_module"], "natives-agent-daemon::production_tools",
         "permission hooks fire from the tool path, not the engine loop"
     );
 
@@ -260,8 +260,7 @@ fn topology_covers_every_stage_and_every_hook_event() {
         "SubagentStart/Stop are dispatched by the `task` tool"
     );
     assert_eq!(
-        subagent["hook_points"][0]["dispatch_module"],
-        "natives-agent-daemon::production_tools",
+        subagent["hook_points"][0]["dispatch_module"], "natives-agent-daemon::production_tools",
         "the parent's engine hands the spawn off and returns, so the subagent \
          lifecycle cannot come from the engine loop"
     );

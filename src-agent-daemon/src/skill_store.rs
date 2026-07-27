@@ -414,13 +414,7 @@ impl SkillStore {
         }
     }
 
-    fn scan_dir(
-        &self,
-        dir: &Path,
-        scope: SkillScope,
-        home_namespace: bool,
-        ledger: &TrustLedger,
-    ) {
+    fn scan_dir(&self, dir: &Path, scope: SkillScope, home_namespace: bool, ledger: &TrustLedger) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
@@ -738,7 +732,8 @@ pub fn load_skill_for_project_with_surface(
     let parsed = parse_skill_markdown(&raw, Some(Path::new(&skill.path)));
     let truncated = parsed.body.chars().count() > MAX_LOADED_BODY_CHARS;
     let body: String = parsed.body.chars().take(MAX_LOADED_BODY_CHARS).collect();
-    let effective_tools = resolve_skill_tool_surface(parsed.allowed_tools.as_deref(), parent_surface);
+    let effective_tools =
+        resolve_skill_tool_surface(parsed.allowed_tools.as_deref(), parent_surface);
     let mut payload = serde_json::json!({
         "skill": skill.name,
         "loaded": true,
@@ -881,7 +876,10 @@ mod tests {
 
         store.set_trust(&demo.id, SkillTrust::Trusted).unwrap();
         let ad = store.advertisement();
-        assert!(ad.contains("demo (project): Do the demo thing carefully."), "{ad}");
+        assert!(
+            ad.contains("demo (project): Do the demo thing carefully."),
+            "{ad}"
+        );
     }
 
     #[test]
@@ -1031,7 +1029,11 @@ mod tests {
         let prompt = prompt_for_project(&fx.root);
         assert!(prompt.contains("A big skill."));
         assert!(!prompt.contains(&huge));
-        assert!(prompt.len() < 1_000, "prompt grew with body: {}", prompt.len());
+        assert!(
+            prompt.len() < 1_000,
+            "prompt grew with body: {}",
+            prompt.len()
+        );
     }
 
     #[test]
@@ -1177,10 +1179,7 @@ mod tests {
             SkillTrust::Untrusted,
             "$HOME/.claude/skills is a third-party drop point"
         );
-        assert_eq!(
-            by_name["foreign"].trust_basis,
-            SkillTrustBasis::Unreviewed
-        );
+        assert_eq!(by_name["foreign"].trust_basis, SkillTrustBasis::Unreviewed);
     }
 
     #[test]
@@ -1239,7 +1238,9 @@ mod tests {
             declared
         );
         // Empty declaration means "no tools", not "all tools".
-        assert!(resolve_skill_tool_surface(Some(&[]), None).unwrap().is_empty());
+        assert!(resolve_skill_tool_surface(Some(&[]), None)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

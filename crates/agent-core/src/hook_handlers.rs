@@ -313,11 +313,13 @@ pub fn validate_http_hook_url(url: &str, allow_hosts: &[String]) -> Result<(), S
     if scheme != "https" && scheme != "http" {
         return Err("only http/https hooks allowed".into());
     }
-    let host = parsed.host_str().ok_or_else(|| "missing host".to_string())?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "missing host".to_string())?;
     if !allow_hosts.is_empty()
-        && !allow_hosts
-            .iter()
-            .any(|allowed| allowed.eq_ignore_ascii_case(host) || host.ends_with(&format!(".{allowed}")))
+        && !allow_hosts.iter().any(|allowed| {
+            allowed.eq_ignore_ascii_case(host) || host.ends_with(&format!(".{allowed}"))
+        })
     {
         return Err(format!("host '{host}' not in allowlist"));
     }
@@ -327,11 +329,7 @@ pub fn validate_http_hook_url(url: &str, allow_hosts: &[String]) -> Result<(), S
             return Err("private/loopback IPs are not allowed for HTTP hooks".into());
         }
     }
-    let blocked = [
-        "localhost",
-        "metadata.google.internal",
-        "169.254.169.254",
-    ];
+    let blocked = ["localhost", "metadata.google.internal", "169.254.169.254"];
     if blocked.iter().any(|b| host.eq_ignore_ascii_case(b)) {
         return Err("blocked host".into());
     }
@@ -364,8 +362,16 @@ mod tests {
 
     #[test]
     fn allowlist_enforced() {
-        assert!(validate_http_hook_url("https://hooks.example.com/h", &["hooks.example.com".into()]).is_ok());
-        assert!(validate_http_hook_url("https://evil.example.org/h", &["hooks.example.com".into()]).is_err());
+        assert!(validate_http_hook_url(
+            "https://hooks.example.com/h",
+            &["hooks.example.com".into()]
+        )
+        .is_ok());
+        assert!(validate_http_hook_url(
+            "https://evil.example.org/h",
+            &["hooks.example.com".into()]
+        )
+        .is_err());
     }
 
     /// Collapse an outcome to its decision for the tests that only care about
@@ -384,9 +390,8 @@ mod tests {
             HookDecision::Deny { ref reason } if reason == "blocked"
         ));
 
-        let modified = parse_hook_stdout(
-            br#"{"hookSpecificOutput":{"updatedInput":{"path":"safe.txt"}}}"#,
-        );
+        let modified =
+            parse_hook_stdout(br#"{"hookSpecificOutput":{"updatedInput":{"path":"safe.txt"}}}"#);
         assert!(matches!(
             decision_of(modified),
             HookDecision::Modify { ref payload } if payload["path"] == "safe.txt"
@@ -432,9 +437,8 @@ mod tests {
     /// A verdict this engine does not know is not an approval.
     #[test]
     fn unknown_permission_decision_is_not_an_approval() {
-        let outcome = parse_hook_stdout(
-            br#"{"hookSpecificOutput":{"permissionDecision":"maybe"}}"#,
-        );
+        let outcome =
+            parse_hook_stdout(br#"{"hookSpecificOutput":{"permissionDecision":"maybe"}}"#);
         assert!(matches!(outcome, HookOutcome::Decided(_)));
         assert!(matches!(decision_of(outcome), HookDecision::Allow));
     }
@@ -476,10 +480,8 @@ mod tests {
     /// land on "no objection", never on something that could skip a prompt.
     #[test]
     fn permission_verdict_degrades_to_allow_not_to_a_bypass() {
-        let response = HookOutcome::Permission(PermissionVerdict::Allow {
-            reason: "r".into(),
-        })
-        .into_response();
+        let response = HookOutcome::Permission(PermissionVerdict::Allow { reason: "r".into() })
+            .into_response();
         assert!(matches!(response.decision, HookDecision::Allow));
     }
 

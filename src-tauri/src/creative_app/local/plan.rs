@@ -6,9 +6,9 @@
 use super::path::resolve_under;
 use crate::creative_app::model::*;
 use crate::{Error, Result};
-use std::path::Path;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::path::Path;
 
 const MIN_TIMEOUT_MS: u32 = 5_000;
 const MAX_TIMEOUT_MS: u32 = 300_000;
@@ -16,8 +16,7 @@ const DEFAULT_TIMEOUT_MS: u32 = 60_000;
 
 /// Shell metacharacters / constructs that must never appear in scripts or args.
 const FORBIDDEN_SCRIPT_MARKERS: &[&str] = &[
-    "&&", "||", ";", "|", ">", "<", "`", "$(", "${", "\n", "\r",
-    "\0", "&",
+    "&&", "||", ";", "|", ">", "<", "`", "$(", "${", "\n", "\r", "\0", "&",
 ];
 
 /// Validate and normalize a LaunchPlan against a project root.
@@ -59,9 +58,10 @@ pub fn validate_launch_plan(root: &Path, mut plan: LaunchPlan) -> Result<LaunchP
             plan.port.value = None;
         }
         LaunchPortMode::Fixed => {
-            let p = plan.port.value.ok_or_else(|| {
-                Error::InvalidInput("fixed port requires value".into())
-            })?;
+            let p = plan
+                .port
+                .value
+                .ok_or_else(|| Error::InvalidInput("fixed port requires value".into()))?;
             if p == 0 {
                 return Err(Error::InvalidInput("invalid fixed port".into()));
             }
@@ -85,11 +85,7 @@ pub fn validate_launch_plan(root: &Path, mut plan: LaunchPlan) -> Result<LaunchP
                     "static_http must not set script".into(),
                 ));
             }
-            let entry = plan
-                .entry_file
-                .as_deref()
-                .unwrap_or("index.html")
-                .trim();
+            let entry = plan.entry_file.as_deref().unwrap_or("index.html").trim();
             let entry_n = normalize_rel(entry)?;
             let entry_path = resolve_under(root, &join_rel(&plan.cwd_relative, &entry_n))?;
             if !entry_path.is_file() {
@@ -148,8 +144,7 @@ pub fn validate_launch_plan(root: &Path, mut plan: LaunchPlan) -> Result<LaunchP
                     })?;
                     let entry_n = normalize_rel(entry)?;
                     validate_node_entry(&entry_n)?;
-                    let entry_path =
-                        resolve_under(root, &join_rel(&plan.cwd_relative, &entry_n))?;
+                    let entry_path = resolve_under(root, &join_rel(&plan.cwd_relative, &entry_n))?;
                     if !entry_path.is_file() {
                         return Err(Error::InvalidInput(format!(
                             "entryFile not found: {entry_n}"
@@ -238,9 +233,7 @@ fn normalize_rel(s: &str) -> Result<String> {
         return Ok(".".into());
     }
     if t.starts_with('/') || t.contains("..") {
-        return Err(Error::InvalidInput(format!(
-            "unsafe relative path: {s}"
-        )));
+        return Err(Error::InvalidInput(format!("unsafe relative path: {s}")));
     }
     // backslash on unix is unusual — normalize
     let n = t.replace('\\', "/");
@@ -277,7 +270,9 @@ fn normalize_url_path(s: &str) -> Result<String> {
         return Ok("/".into());
     }
     if t.contains("://") || t.contains("..") {
-        return Err(Error::InvalidInput(format!("invalid open/health path: {s}")));
+        return Err(Error::InvalidInput(format!(
+            "invalid open/health path: {s}"
+        )));
     }
     if t.starts_with('/') {
         Ok(t.to_string())
@@ -369,8 +364,23 @@ pub fn detect_script_runner(body: &str) -> Option<ScriptRunner> {
         return None;
     }
     for banned in [
-        "sudo", "sh", "bash", "zsh", "fish", "cmd", "powershell", "pwsh", "npx", "yarn", "pnpm",
-        "npm", "bun", "deno", "cross-env", "env", "exec",
+        "sudo",
+        "sh",
+        "bash",
+        "zsh",
+        "fish",
+        "cmd",
+        "powershell",
+        "pwsh",
+        "npx",
+        "yarn",
+        "pnpm",
+        "npm",
+        "bun",
+        "deno",
+        "cross-env",
+        "env",
+        "exec",
     ] {
         if first.eq_ignore_ascii_case(banned) {
             return None;
@@ -453,13 +463,15 @@ fn read_package_script_body(pkg_path: &Path, script: &str) -> Result<String> {
         return Err(Error::InvalidInput("package.json too large".into()));
     }
     let data = std::fs::read_to_string(pkg_path).map_err(Error::Io)?;
-    let v: serde_json::Value =
-        serde_json::from_str(&data).map_err(|e| Error::InvalidInput(format!("package.json: {e}")))?;
+    let v: serde_json::Value = serde_json::from_str(&data)
+        .map_err(|e| Error::InvalidInput(format!("package.json: {e}")))?;
     let body = v
         .get("scripts")
         .and_then(|s| s.get(script))
         .and_then(|x| x.as_str())
-        .ok_or_else(|| Error::InvalidInput(format!("script '{script}' not found in package.json")))?;
+        .ok_or_else(|| {
+            Error::InvalidInput(format!("script '{script}' not found in package.json"))
+        })?;
     Ok(body.to_string())
 }
 
@@ -562,7 +574,10 @@ mod tests {
         assert!(detect_script_runner("vite && echo hi").is_none());
         assert!(detect_script_runner("npx vite").is_none());
         assert!(detect_script_runner("cross-env NODE_ENV=dev vite").is_none());
-        assert_eq!(detect_script_runner("vite"), Some(crate::creative_app::model::ScriptRunner::Vite));
+        assert_eq!(
+            detect_script_runner("vite"),
+            Some(crate::creative_app::model::ScriptRunner::Vite)
+        );
         assert_eq!(
             detect_script_runner("vue-cli-service serve"),
             Some(crate::creative_app::model::ScriptRunner::VueCli)

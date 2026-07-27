@@ -92,7 +92,11 @@ pub fn window_tile(app: tauri::AppHandle, action: String) -> Result<()> {
                 .map_err(|e| Error::Internal(e.to_string()))?;
             return Ok(());
         }
-        _ => return Err(Error::InvalidInput(format!("unknown tile action: {action}"))),
+        _ => {
+            return Err(Error::InvalidInput(format!(
+                "unknown tile action: {action}"
+            )))
+        }
     };
 
     // Exit fullscreen first if needed

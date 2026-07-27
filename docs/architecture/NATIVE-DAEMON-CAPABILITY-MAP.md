@@ -74,6 +74,7 @@ Daemon 是**本地 sidecar 微服务**：会话 / Run / 工具 / 供应商流式
 | **工具执行** | `PermissionGatedTools` + `capability-gateway` | `tool.list`；执行仅 Engine 调 | ToolCall* | Schema→PathScope→Permission |
 | **权限 / 交互** | `production` waiters + `interaction_store` | `permission.respond` / `interaction.*` | Permission* | grant 可落 `tool_grant` |
 | **Hook** | `production::build_production_hooks*` + `agent-core` | Engine 钩子点 | Hook* | 项目 hooks 默认不信任 |
+| **Harness 控制面** | `harness-core` + `src-agent-daemon/harness` | `harness.*`；Run 启动内部 `resolve_run` | `harness_run_snapshot` + `harness_audit` + `run_events` | Phase 2 **partial**：18 方法/迁移已落地，但 `resolve_run` 尚无生产调用方；Blueprint v1 仅 Hook overlay，Prompt Plan / Native Hook / telemetry / Settings UI 待按设计 Phase 2.5–4 实施 |
 | **子 Agent** | `production` spawn + `subagent_store` + `task_store` | 工具 `task`（含 `agent` 团队成员参数）；`subagent.*` | 子 Run 事件流 | 独立 provider/key；不继承父 Key |
 | **能力库（配置权威）** | `capability/`（skills/mcp/experts/hub 存储 + bootstrap 可信配置源）+ `capability_resolution`（run 级 resolve） | `capability.*` / `conversation.updateCapabilities` | run 行 `capability_snapshot_json`（仅 id，无密钥） | ADR-0016；专家/专家团唯一归属；MCP 注册唯一入口；resolve fail-closed |
 | **会话 / 消息** | `conversation_store` | `conversation.*` | — | 生产 UDS 下 daemon-owned |

@@ -146,7 +146,9 @@ pub fn capability_secret_delete(id: String, state: State<'_, AppState>) -> Resul
         .execute("DELETE FROM capability_secrets WHERE id = ?1", params![id])
         .map_err(Error::Database)?;
     if changed == 0 {
-        return Err(Error::Internal(format!("capability secret '{id}' not found")));
+        return Err(Error::Internal(format!(
+            "capability secret '{id}' not found"
+        )));
     }
     Ok(())
 }
@@ -247,8 +249,7 @@ mod tests {
         assert_ne!(ciphertext, "refresh-token-plaintext");
         assert!(!ciphertext.contains("refresh-token-plaintext"));
 
-        let decrypted =
-            provider_key_manager::envelope_decrypt(&ciphertext, &nonce, &conn).unwrap();
+        let decrypted = provider_key_manager::envelope_decrypt(&ciphertext, &nonce, &conn).unwrap();
         assert_eq!(decrypted, "refresh-token-plaintext");
     }
 
@@ -259,7 +260,10 @@ mod tests {
             upsert_capability_secret(&conn, "mcp_env", "server-2", Some("API_KEY"), "v1").unwrap();
         let id2 =
             upsert_capability_secret(&conn, "mcp_env", "server-2", Some("API_KEY"), "v2").unwrap();
-        assert_eq!(id1, id2, "same (kind, owner_ref, key_name) must update in place");
+        assert_eq!(
+            id1, id2,
+            "same (kind, owner_ref, key_name) must update in place"
+        );
 
         let count: i64 = conn
             .query_row(
@@ -277,8 +281,7 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        let decrypted =
-            provider_key_manager::envelope_decrypt(&ciphertext, &nonce, &conn).unwrap();
+        let decrypted = provider_key_manager::envelope_decrypt(&ciphertext, &nonce, &conn).unwrap();
         assert_eq!(decrypted, "v2");
     }
 

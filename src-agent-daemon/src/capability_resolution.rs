@@ -185,7 +185,11 @@ pub fn resolve(
         let wanted: Vec<&str> = [
             selection.expert_id.as_ref().map(|_| "expert"),
             selection.team_id.as_ref().map(|_| "team"),
-            selection.skills.as_ref().filter(|s| !s.is_empty()).map(|_| "skills"),
+            selection
+                .skills
+                .as_ref()
+                .filter(|s| !s.is_empty())
+                .map(|_| "skills"),
             selection
                 .mcp_servers
                 .as_ref()
@@ -257,7 +261,10 @@ pub fn resolve(
             Err(missing) => {
                 return Err(ResolveError::new(
                     "SKILL_NOT_FOUND",
-                    format!("skills unavailable (missing/disabled/untrusted): {}", missing.join(", ")),
+                    format!(
+                        "skills unavailable (missing/disabled/untrusted): {}",
+                        missing.join(", ")
+                    ),
                 ));
             }
         }
@@ -308,11 +315,13 @@ pub fn resolve(
                         .map(|server| servers.iter().any(|s| s == server))
                         .unwrap_or(false)
                 })
-                .map(|(name, description, input_schema)| agent_core::engine::ToolSchema {
-                    name,
-                    description,
-                    input_schema,
-                })
+                .map(
+                    |(name, description, input_schema)| agent_core::engine::ToolSchema {
+                        name,
+                        description,
+                        input_schema,
+                    },
+                )
                 .collect();
         }
         snapshot.mcp_servers = servers.clone();
@@ -379,7 +388,10 @@ fn load_expert_profile_from_db(id: &str) -> Option<AgentProfile> {
             .get("providerId")
             .and_then(Value::as_str)
             .map(str::to_string),
-        key_id: expert.get("keyId").and_then(Value::as_str).map(str::to_string),
+        key_id: expert
+            .get("keyId")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         model_id: expert
             .get("modelId")
             .and_then(Value::as_str)
@@ -420,8 +432,8 @@ fn resolve_team(team_id: &str, _project_root: Option<&Path>) -> Result<ResolvedT
     let mut members = Vec::new();
     for member in &members_json {
         let expert_id = member["expertId"].as_str().unwrap_or_default().to_string();
-        let expert = crate::capability::experts::get(&json!({ "id": expert_id }))
-            .map_err(|_| {
+        let expert =
+            crate::capability::experts::get(&json!({ "id": expert_id })).map_err(|_| {
                 ResolveError::new(
                     "TEAM_MEMBER_INVALID",
                     format!("team member expert missing: {expert_id}"),
@@ -437,7 +449,10 @@ fn resolve_team(team_id: &str, _project_root: Option<&Path>) -> Result<ResolvedT
         members.push(ResolvedTeamMember {
             expert_id,
             name: expert["name"].as_str().unwrap_or_default().to_string(),
-            description: expert["description"].as_str().unwrap_or_default().to_string(),
+            description: expert["description"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
             role_hint: member["roleHint"].as_str().unwrap_or_default().to_string(),
         });
     }
@@ -470,7 +485,10 @@ fn team_roster_prompt(team: &ResolvedTeam) -> String {
         } else {
             member.role_hint.clone()
         };
-        out.push_str(&format!("- `{}` — {}: {}\n", member.expert_id, member.name, hint));
+        out.push_str(&format!(
+            "- `{}` — {}: {}\n",
+            member.expert_id, member.name, hint
+        ));
     }
     out
 }

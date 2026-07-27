@@ -114,7 +114,8 @@ impl AnthropicSseParser {
                     if block.block_type == "tool_use" {
                         let id = block.id.unwrap_or_default();
                         let name = block.name.unwrap_or_default();
-                        self.tools.insert(index, (id.clone(), name.clone(), String::new()));
+                        self.tools
+                            .insert(index, (id.clone(), name.clone(), String::new()));
                         out.push(ProviderEvent::ToolCallDelta {
                             index,
                             id: Some(id),
@@ -204,8 +205,8 @@ impl AnthropicSseParser {
             }
             "error" => {
                 let message = data.chars().take(300).collect::<String>();
-                let rate_limited = message.to_ascii_lowercase().contains("rate")
-                    || message.contains("429");
+                let rate_limited =
+                    message.to_ascii_lowercase().contains("rate") || message.contains("429");
                 out.push(ProviderEvent::Error(ProviderError {
                     code: "anthropic_error".into(),
                     message,

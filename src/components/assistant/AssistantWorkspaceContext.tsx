@@ -460,11 +460,12 @@ export function AssistantWorkspaceProvider({ children }: { children: React.React
 
     // Keep host project.list order (last_opened_at DESC). Do not re-sort by session time.
     const projectMetas = registeredProjects.map((project) => {
-      const rec = project as { path: string; lastOpenedAt?: string | null; last_opened_at?: string | null; label?: string };
+      const rec = project as { path: string; lastOpenedAt?: string | null; last_opened_at?: string | null; label?: string; exists?: boolean };
       return {
         path: rec.path,
         lastOpenedAt: rec.lastOpenedAt ?? rec.last_opened_at ?? null,
         label: rec.label,
+        exists: rec.exists,
       };
     });
     // Sessions that reference unregistered / legacy project paths go to unassigned.

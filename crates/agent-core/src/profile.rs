@@ -34,7 +34,10 @@ pub struct AgentProfile {
 }
 
 /// Parse a Markdown agent profile with optional YAML frontmatter.
-pub fn parse_agent_profile_markdown(raw: &str, path: Option<&Path>) -> Result<AgentProfile, String> {
+pub fn parse_agent_profile_markdown(
+    raw: &str,
+    path: Option<&Path>,
+) -> Result<AgentProfile, String> {
     let trimmed = raw.trim_start_matches('\u{feff}');
     if !trimmed.starts_with("---") {
         let id = path
@@ -73,7 +76,11 @@ pub fn parse_agent_profile_markdown(raw: &str, path: Option<&Path>) -> Result<Ag
             continue;
         };
         let key = key.trim();
-        let value = value.trim().trim_matches('"').trim_matches('\'').to_string();
+        let value = value
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .to_string();
         match key {
             "id" => profile.id = value,
             "name" => profile.name = value,
@@ -117,12 +124,7 @@ fn parse_inline_list(value: &str) -> Vec<String> {
         .trim_start_matches('[')
         .trim_end_matches(']')
         .split(',')
-        .map(|item| {
-            item.trim()
-                .trim_matches('"')
-                .trim_matches('\'')
-                .to_string()
-        })
+        .map(|item| item.trim().trim_matches('"').trim_matches('\'').to_string())
         .filter(|item| !item.is_empty())
         .collect()
 }
@@ -216,10 +218,7 @@ pub fn list_agent_profiles(project_root: Option<&Path>) -> Vec<AgentProfile> {
     out
 }
 
-pub fn load_agent_profile(
-    profile_id: &str,
-    project_root: Option<&Path>,
-) -> Option<AgentProfile> {
+pub fn load_agent_profile(profile_id: &str, project_root: Option<&Path>) -> Option<AgentProfile> {
     if !is_safe_profile_id(profile_id) {
         return None;
     }
@@ -304,7 +303,11 @@ You are a careful coding agent.
             "---\nname: Reviewer HIGH\ntools: [read_file]\nmaxSteps: 7\n---\nHigh prompt.",
         )
         .unwrap();
-        std::fs::write(low.join("reviewer.md"), "---\nname: Reviewer LOW\n---\nLow prompt.").unwrap();
+        std::fs::write(
+            low.join("reviewer.md"),
+            "---\nname: Reviewer LOW\n---\nLow prompt.",
+        )
+        .unwrap();
         std::fs::write(low.join("scribe.md"), "---\nname: Scribe\n---\nWrite docs.").unwrap();
         // Non-markdown files are ignored.
         std::fs::write(low.join("notes.txt"), "not a profile").unwrap();

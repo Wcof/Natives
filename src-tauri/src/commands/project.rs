@@ -82,7 +82,8 @@ pub fn project_register(path: String) -> Result<ProjectInfo> {
     }
 
     // Canonicalize to get the absolute, normalized path
-    let canonical = path_ref.canonicalize()
+    let canonical = path_ref
+        .canonicalize()
         .map_err(|e| format!("Failed to canonicalize path: {e}"))?;
     let canonical_str = canonical.to_string_lossy().to_string();
 

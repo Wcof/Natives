@@ -7,13 +7,13 @@ use std::sync::Arc;
 /// Falls back to ~/Desktop if defaults fails or does not exist.
 fn screenshots_dir() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    
+
     let output = std::process::Command::new("defaults")
         .arg("read")
         .arg("com.apple.screencapture")
         .arg("location")
         .output();
-        
+
     if let Ok(out) = output {
         if out.status.success() {
             let path_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -29,7 +29,7 @@ fn screenshots_dir() -> PathBuf {
             }
         }
     }
-    
+
     home.join("Desktop")
 }
 
@@ -38,18 +38,29 @@ fn is_screenshot_file(filename: &str) -> bool {
     if !(name.ends_with(".png") || name.ends_with(".jpg") || name.ends_with(".jpeg")) {
         return false;
     }
-    
+
     let prefixes = [
-        "screenshot", "screen shot", "屏幕截图", "图片", "截图", "截圖", "截屏", ".截屏", 
-        "snipaste", "微信图片", "qq截图", "cleanshot", "scr-"
+        "screenshot",
+        "screen shot",
+        "屏幕截图",
+        "图片",
+        "截图",
+        "截圖",
+        "截屏",
+        ".截屏",
+        "snipaste",
+        "微信图片",
+        "qq截图",
+        "cleanshot",
+        "scr-",
     ];
-    
+
     for prefix in &prefixes {
         if name.starts_with(prefix) {
             return true;
         }
     }
-    
+
     false
 }
 
@@ -123,7 +134,12 @@ fn find_newest_screenshot(dir: &PathBuf) -> Option<PathBuf> {
         .ok()?
         .filter_map(|e| e.ok())
         .filter(|e| is_screenshot_file(&e.file_name().to_string_lossy()))
-        .max_by_key(|e| e.metadata().ok().and_then(|m| m.modified().ok()).unwrap_or(std::time::UNIX_EPOCH))
+        .max_by_key(|e| {
+            e.metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .unwrap_or(std::time::UNIX_EPOCH)
+        })
         .map(|e| e.path())
 }
 

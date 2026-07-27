@@ -14,10 +14,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum TransitionError {
     #[error("Illegal transition from {from:?} to {to:?}")]
-    IllegalTransition {
-        from: RunStatusV2,
-        to: RunStatusV2,
-    },
+    IllegalTransition { from: RunStatusV2, to: RunStatusV2 },
 
     #[error("Transition from terminal state {from:?} is not allowed")]
     TerminalState { from: RunStatusV2 },
@@ -43,9 +40,12 @@ impl From<TransitionError> for DaemonError {
                 format!("Cannot transition from terminal state {:?}", from),
             )
             .with_user_key("error.run_invalid_state"),
-            TransitionError::Other(msg) => {
-                DaemonError::new(error_codes::INTERNAL_ERROR, ErrorCategory::Internal, false, msg)
-            }
+            TransitionError::Other(msg) => DaemonError::new(
+                error_codes::INTERNAL_ERROR,
+                ErrorCategory::Internal,
+                false,
+                msg,
+            ),
         }
     }
 }
@@ -159,14 +159,18 @@ pub fn legal_next_states(current: RunStatusV2) -> Vec<RunStatusV2> {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EngineOutcome {
-    Completed { reason: String },
+    Completed {
+        reason: String,
+    },
     Failed {
         code: String,
         error: String,
         retryable: bool,
     },
     Cancelled,
-    Interrupted { reason: String },
+    Interrupted {
+        reason: String,
+    },
 }
 
 impl EngineOutcome {
@@ -372,7 +376,10 @@ pub trait RunLifecycleAuthority: Send + Sync {
 
 /// Helper: map an engine outcome into a commit request target + metadata.
 pub fn outcome_commit_parts(outcome: &EngineOutcome) -> (RunStatusV2, TransitionMetadata) {
-    (outcome.target_status(), TransitionMetadata::from_outcome(outcome))
+    (
+        outcome.target_status(),
+        TransitionMetadata::from_outcome(outcome),
+    )
 }
 
 #[cfg(test)]
@@ -503,10 +510,7 @@ mod tests {
 
     #[test]
     fn engine_outcome_targets() {
-        assert_eq!(
-            EngineOutcome::completed("stop").target_status(),
-            Completed
-        );
+        assert_eq!(EngineOutcome::completed("stop").target_status(), Completed);
         assert_eq!(EngineOutcome::Cancelled.target_status(), Cancelled);
         assert_eq!(
             EngineOutcome::failed("x", "y", false).target_status(),

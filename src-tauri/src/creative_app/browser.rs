@@ -142,9 +142,7 @@ pub fn browser_forward(app: &AppHandle) -> Result<()> {
 }
 
 pub fn browser_current(state: &BrowserStateHandle) -> Result<serde_json::Value> {
-    let st = state
-        .lock()
-        .map_err(|e| Error::Internal(e.to_string()))?;
+    let st = state.lock().map_err(|e| Error::Internal(e.to_string()))?;
     Ok(serde_json::json!({
         "appId": st.active_app_id,
         "url": st.current_url,

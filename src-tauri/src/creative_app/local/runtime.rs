@@ -3,7 +3,7 @@
 //! Designed for Vite/Vue/Node dev servers. Does not use shell. Does not
 //! auto-take over orphan PIDs without identity verification.
 
-use super::logs::{append_with_secrets, LogLine, LogRegistry, LogStream, LocalLogStore};
+use super::logs::{append_with_secrets, LocalLogStore, LogLine, LogRegistry, LogStream};
 use crate::creative_app::model::{LaunchPlan, LaunchProgram, LocalLaunchRuntime, ProcessIdentity};
 use crate::{Error, Result};
 use std::collections::HashMap;
@@ -118,8 +118,7 @@ impl LocalRuntimeManager {
         let Some(mut live) = map.remove(app_id) else {
             return Ok(());
         };
-        live.log
-            .append(LogStream::System, "stopping process tree…");
+        live.log.append(LogStream::System, "stopping process tree…");
         if let Some(mut child) = live.child.take() {
             terminate_tree(&mut child, live.identity.process_group_id).await;
         }
@@ -159,13 +158,12 @@ impl LocalRuntimeManager {
 
         let port = match plan.port.mode {
             crate::creative_app::model::LaunchPortMode::Fixed => {
-                let p = plan.port.value.ok_or_else(|| {
-                    Error::InvalidInput("fixed port missing".into())
-                })?;
+                let p = plan
+                    .port
+                    .value
+                    .ok_or_else(|| Error::InvalidInput("fixed port missing".into()))?;
                 if port_in_use(p) {
-                    return Err(Error::InvalidInput(format!(
-                        "port {p} is already in use"
-                    )));
+                    return Err(Error::InvalidInput(format!("port {p} is already in use")));
                 }
                 p
             }
@@ -351,10 +349,8 @@ impl LocalRuntimeManager {
             Ok(Some(status)) => {
                 let code = status.code().unwrap_or(-1);
                 live.child = None;
-                live.log.append(
-                    LogStream::System,
-                    &format!("process exited (code {code})"),
-                );
+                live.log
+                    .append(LogStream::System, &format!("process exited (code {code})"));
                 map.remove(app_id);
                 Some(code)
             }
@@ -398,9 +394,10 @@ impl LocalRuntimeManager {
             if !self.is_running(app_id).await {
                 return Err(Error::Internal("process exited before healthy".into()));
             }
-            let port = self.current_port(app_id).await.ok_or_else(|| {
-                Error::Internal("missing port".into())
-            })?;
+            let port = self
+                .current_port(app_id)
+                .await
+                .ok_or_else(|| Error::Internal("missing port".into()))?;
             if port_listening(port) {
                 let url = format!("http://127.0.0.1:{port}{health_path}");
                 if http_reachable(&url).await {
@@ -422,9 +419,7 @@ impl LocalRuntimeManager {
     }
 
     pub fn persisted_tail(&self, app_id: &str, max_bytes: usize) -> String {
-        self.logs
-            .get_or_open(app_id)
-            .read_persisted_tail(max_bytes)
+        self.logs.get_or_open(app_id).read_persisted_tail(max_bytes)
     }
 
     pub fn purge_logs(&self, app_id: &str) {
@@ -592,7 +587,6 @@ pub fn identity_matches_live_strict(ident: &ProcessIdentity) -> bool {
     }
     true
 }
-
 
 fn is_safe_inherited_env(key: &str) -> bool {
     matches!(

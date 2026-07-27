@@ -18,7 +18,11 @@ impl ProtocolVersion {
     };
 
     pub fn new(major: u32, minor: u32, patch: u32) -> Self {
-        ProtocolVersion { major, minor, patch }
+        ProtocolVersion {
+            major,
+            minor,
+            patch,
+        }
     }
 
     /// Returns true if `self` is compatible with `other` (same major version).
@@ -59,7 +63,10 @@ pub struct VersionNegotiation {
 }
 
 /// Version negotiation logic.
-pub fn negotiate(client_version: &ProtocolVersion, daemon_version: &ProtocolVersion) -> VersionNegotiation {
+pub fn negotiate(
+    client_version: &ProtocolVersion,
+    daemon_version: &ProtocolVersion,
+) -> VersionNegotiation {
     let compatible = client_version.is_compatible_with(daemon_version);
     let upgrade_required = if !compatible {
         Some(format!(
@@ -104,14 +111,20 @@ mod tests {
 
     #[test]
     fn test_negotiation_compatible() {
-        let result = negotiate(&ProtocolVersion::new(2, 0, 0), &ProtocolVersion::new(2, 0, 0));
+        let result = negotiate(
+            &ProtocolVersion::new(2, 0, 0),
+            &ProtocolVersion::new(2, 0, 0),
+        );
         assert!(result.compatible);
         assert!(result.upgrade_required.is_none());
     }
 
     #[test]
     fn test_negotiation_incompatible() {
-        let result = negotiate(&ProtocolVersion::new(0, 1, 0), &ProtocolVersion::new(2, 0, 0));
+        let result = negotiate(
+            &ProtocolVersion::new(0, 1, 0),
+            &ProtocolVersion::new(2, 0, 0),
+        );
         assert!(!result.compatible);
         assert!(result.upgrade_required.is_some());
     }

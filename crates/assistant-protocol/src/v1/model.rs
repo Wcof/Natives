@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use super::provider::ModelCapabilities;
+use serde::{Deserialize, Serialize};
 
 /// A model and its capabilities.
 #[derive(Debug, Clone, Serialize, Deserialize)]

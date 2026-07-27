@@ -160,7 +160,7 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       setRightPanelMode('closed');
       setFollowPath(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [followMode]);
 
   // FOUC guard + locale/theme init + state persistence LOAD（只执行一次）
@@ -537,10 +537,10 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
       <Suspense fallback={null}><LazyCommandPalette
         isOpen={state.cmdkOpen}
         onClose={() => setState((prev) => ({ ...prev, cmdkOpen: false }))}
-    // eslint-disable-next-line react-hooks/refs
+
         onSelect={handleModuleSelect}
         onToggleTerminal={toggleTerminal}
-    // eslint-disable-next-line react-hooks/refs
+
         terminalSessionId={terminalSessionIdRef.current}
       /></Suspense>
 

@@ -92,10 +92,7 @@ extern "C" {
 
     /// 释放由 ghostty_terminal_get 返回的字符串
     /// 必须使用 Ghostty 的分配器释放，不能用 libc::free
-    fn ghostty_terminal_free_string(
-        terminal: *mut c_void,
-        ptr: *mut c_void,
-    );
+    fn ghostty_terminal_free_string(terminal: *mut c_void, ptr: *mut c_void);
 }
 
 // ── Effect 回调 trampolines ──────────────────────────────────────────────
@@ -104,7 +101,7 @@ extern "C" {
 #[repr(C)]
 struct Userdata {
     app_handle: *mut c_void, // 实际上是 tauri::AppHandle 的堆分配指针
-    session_id: *mut c_char,  // session_id 的 C 字符串
+    session_id: *mut c_char, // session_id 的 C 字符串
 }
 
 extern "C" fn title_changed_cb(
@@ -119,9 +116,7 @@ extern "C" fn title_changed_cb(
         let ud = &*(userdata as *const Userdata);
         let c_str = CStr::from_ptr(title);
         if let Ok(s) = c_str.to_str() {
-            let session_id = CStr::from_ptr(ud.session_id)
-                .to_str()
-                .unwrap_or("unknown");
+            let session_id = CStr::from_ptr(ud.session_id).to_str().unwrap_or("unknown");
             let handle = &*(ud.app_handle as *const AppHandle);
             let _ = handle.emit(
                 "terminal:title-changed",
@@ -134,11 +129,7 @@ extern "C" fn title_changed_cb(
     }
 }
 
-extern "C" fn pwd_changed_cb(
-    _terminal: *mut c_void,
-    pwd: *const c_char,
-    userdata: *mut c_void,
-) {
+extern "C" fn pwd_changed_cb(_terminal: *mut c_void, pwd: *const c_char, userdata: *mut c_void) {
     if userdata.is_null() || pwd.is_null() {
         return;
     }
@@ -146,9 +137,7 @@ extern "C" fn pwd_changed_cb(
         let ud = &*(userdata as *const Userdata);
         let c_str = CStr::from_ptr(pwd);
         if let Ok(s) = c_str.to_str() {
-            let session_id = CStr::from_ptr(ud.session_id)
-                .to_str()
-                .unwrap_or("unknown");
+            let session_id = CStr::from_ptr(ud.session_id).to_str().unwrap_or("unknown");
             let handle = &*(ud.app_handle as *const AppHandle);
             let _ = handle.emit(
                 "terminal:pwd-changed",
@@ -167,9 +156,7 @@ extern "C" fn bell_cb(_terminal: *mut c_void, userdata: *mut c_void) {
     }
     unsafe {
         let ud = &*(userdata as *const Userdata);
-        let session_id = CStr::from_ptr(ud.session_id)
-            .to_str()
-            .unwrap_or("unknown");
+        let session_id = CStr::from_ptr(ud.session_id).to_str().unwrap_or("unknown");
         let handle = &*(ud.app_handle as *const AppHandle);
         let _ = handle.emit(
             "terminal:bell",
@@ -193,9 +180,7 @@ extern "C" fn write_pty_cb(
     }
     unsafe {
         let ud = &*(userdata as *const Userdata);
-        let session_id = CStr::from_ptr(ud.session_id)
-            .to_str()
-            .unwrap_or("unknown");
+        let session_id = CStr::from_ptr(ud.session_id).to_str().unwrap_or("unknown");
         let slice = std::slice::from_raw_parts(data, len);
         let handle = &*(ud.app_handle as *const AppHandle);
         let _ = handle.emit(
@@ -241,12 +226,17 @@ impl GhosttyTerminal {
 
         // 构建 options 数组：cols, rows
         let opts: [c_uint; 2] = [cols as c_uint, rows as c_uint];
-        let ret = unsafe { ghostty_terminal_new(&allocator, &mut raw, opts.as_ptr() as *const c_void, opts.len()) };
+        let ret = unsafe {
+            ghostty_terminal_new(
+                &allocator,
+                &mut raw,
+                opts.as_ptr() as *const c_void,
+                opts.len(),
+            )
+        };
 
         if ret != GHOSTTY_SUCCESS || raw.is_null() {
-            return Err(crate::Error::Internal(
-                "ghostty_terminal_new failed".into(),
-            ));
+            return Err(crate::Error::Internal("ghostty_terminal_new failed".into()));
         }
 
         let mut term = Self {
@@ -263,11 +253,11 @@ impl GhosttyTerminal {
 
     /// 喂 PTY 数据到 VT 解析器
     pub fn vt_write(&self, buf: &[u8]) -> crate::Result<()> {
-        let ret = unsafe {
-            ghostty_terminal_vt_write(self.raw, buf.as_ptr(), buf.len() as size_t)
-        };
+        let ret = unsafe { ghostty_terminal_vt_write(self.raw, buf.as_ptr(), buf.len() as size_t) };
         if ret != GHOSTTY_SUCCESS {
-            return Err(crate::Error::Internal("ghostty_terminal_vt_write failed".into()));
+            return Err(crate::Error::Internal(
+                "ghostty_terminal_vt_write failed".into(),
+            ));
         }
         Ok(())
     }
@@ -319,7 +309,11 @@ impl GhosttyTerminal {
                 GhosttyTerminalData::GHOSTTY_TERMINAL_DATA_CURSOR_X as c_uint,
                 &mut out as *mut c_uint as *mut c_void,
             );
-            if ret == GHOSTTY_SUCCESS { out as u16 } else { 0 }
+            if ret == GHOSTTY_SUCCESS {
+                out as u16
+            } else {
+                0
+            }
         }
     }
 
@@ -332,7 +326,11 @@ impl GhosttyTerminal {
                 GhosttyTerminalData::GHOSTTY_TERMINAL_DATA_CURSOR_Y as c_uint,
                 &mut out as *mut c_uint as *mut c_void,
             );
-            if ret == GHOSTTY_SUCCESS { out as u16 } else { 0 }
+            if ret == GHOSTTY_SUCCESS {
+                out as u16
+            } else {
+                0
+            }
         }
     }
 
@@ -345,7 +343,11 @@ impl GhosttyTerminal {
                 GhosttyTerminalData::GHOSTTY_TERMINAL_DATA_COLS as c_uint,
                 &mut out as *mut c_uint as *mut c_void,
             );
-            if ret == GHOSTTY_SUCCESS { out as u16 } else { 80 }
+            if ret == GHOSTTY_SUCCESS {
+                out as u16
+            } else {
+                80
+            }
         }
     }
 
@@ -358,7 +360,11 @@ impl GhosttyTerminal {
                 GhosttyTerminalData::GHOSTTY_TERMINAL_DATA_ROWS as c_uint,
                 &mut out as *mut c_uint as *mut c_void,
             );
-            if ret == GHOSTTY_SUCCESS { out as u16 } else { 24 }
+            if ret == GHOSTTY_SUCCESS {
+                out as u16
+            } else {
+                24
+            }
         }
     }
 

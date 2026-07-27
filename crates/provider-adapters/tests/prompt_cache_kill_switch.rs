@@ -16,21 +16,27 @@ fn request() -> ProviderRequest {
         messages: vec![
             ProviderMessage {
                 role: "user".into(),
-                content: vec![provider_adapters::capabilities::ProviderContentBlock::Text {
-                    text: "hi".into(),
-                }],
+                content: vec![
+                    provider_adapters::capabilities::ProviderContentBlock::Text {
+                        text: "hi".into(),
+                    },
+                ],
             },
             ProviderMessage {
                 role: "assistant".into(),
-                content: vec![provider_adapters::capabilities::ProviderContentBlock::Text {
-                    text: "hello".into(),
-                }],
+                content: vec![
+                    provider_adapters::capabilities::ProviderContentBlock::Text {
+                        text: "hello".into(),
+                    },
+                ],
             },
             ProviderMessage {
                 role: "user".into(),
-                content: vec![provider_adapters::capabilities::ProviderContentBlock::Text {
-                    text: "again".into(),
-                }],
+                content: vec![
+                    provider_adapters::capabilities::ProviderContentBlock::Text {
+                        text: "again".into(),
+                    },
+                ],
             },
         ],
         system_prompt: Some("s".repeat(20_000)),

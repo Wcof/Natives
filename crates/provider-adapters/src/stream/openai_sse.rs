@@ -100,9 +100,11 @@ impl UsageWire {
     /// being invented.
     pub(crate) fn to_provider(&self) -> ProviderUsage {
         let prompt_tokens = self.prompt_tokens.unwrap_or(0);
-        let cache_read = self
-            .prompt_cache_hit_tokens
-            .or_else(|| self.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens));
+        let cache_read = self.prompt_cache_hit_tokens.or_else(|| {
+            self.prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens)
+        });
         // DeepSeek reports the uncached remainder directly; prefer its own
         // number over arithmetic. Otherwise subtract the cached count.
         let input_tokens = match (self.prompt_cache_miss_tokens, cache_read) {
@@ -214,9 +216,10 @@ impl OpenAiSseParser {
                 }
                 for tc in delta.tool_calls.unwrap_or_default() {
                     let index = tc.index.unwrap_or(0);
-                    let entry = self.tool_acc.entry(index).or_insert_with(|| {
-                        (String::new(), String::new(), String::new())
-                    });
+                    let entry = self
+                        .tool_acc
+                        .entry(index)
+                        .or_insert_with(|| (String::new(), String::new(), String::new()));
                     if let Some(id) = tc.id {
                         if !id.is_empty() {
                             entry.0 = id.clone();
@@ -303,9 +306,7 @@ mod tests {
     #[test]
     fn parses_text_and_tool_call_deltas() {
         let mut parser = OpenAiSseParser::new();
-        let e1 = parser.push_data_line(
-            r#"{"choices":[{"delta":{"content":"Hello"}}]}"#,
-        );
+        let e1 = parser.push_data_line(r#"{"choices":[{"delta":{"content":"Hello"}}]}"#);
         assert!(matches!(e1.as_slice(), [ProviderEvent::TextDelta(t)] if t == "Hello"));
 
         let e2 = parser.push_data_line(
@@ -336,9 +337,8 @@ mod tests {
     #[test]
     fn parses_reasoning_content() {
         let mut parser = OpenAiSseParser::new();
-        let events = parser.push_data_line(
-            r#"{"choices":[{"delta":{"reasoning_content":"plan step"}}]}"#,
-        );
+        let events =
+            parser.push_data_line(r#"{"choices":[{"delta":{"reasoning_content":"plan step"}}]}"#);
         assert!(matches!(
             events.as_slice(),
             [ProviderEvent::ReasoningDelta(t)] if t == "plan step"

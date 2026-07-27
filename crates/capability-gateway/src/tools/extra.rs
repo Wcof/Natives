@@ -1,7 +1,10 @@
 //! Additional built-in tools required by the Native engine plan.
 
 use super::apply_patch_parser::{parse_patch_input, PatchOp};
-use crate::{PermissionClass, PathScope, SideEffect, Tool, ToolError, ToolHandler, ToolOutput, ToolCallContext};
+use crate::{
+    PathScope, PermissionClass, SideEffect, Tool, ToolCallContext, ToolError, ToolHandler,
+    ToolOutput,
+};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -117,7 +120,9 @@ impl ToolHandler for ApplyPatchTool {
                 return Err(e);
             }
             match &p.op {
-                PatchOp::Add { path, .. } => changed.push(serde_json::json!({"op":"add","path":path})),
+                PatchOp::Add { path, .. } => {
+                    changed.push(serde_json::json!({"op":"add","path":path}))
+                }
                 PatchOp::Update { path, .. } => {
                     changed.push(serde_json::json!({"op":"update","path":path}))
                 }
@@ -165,35 +170,43 @@ async fn apply_planned(p: &Planned) -> Result<(), ToolError> {
     match &p.op {
         PatchOp::Add { content, .. } | PatchOp::Update { content, .. } => {
             if let Some(parent) = p.abs.parent() {
-                tokio::fs::create_dir_all(parent).await.map_err(|e| ToolError {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| ToolError {
+                        code: "write_error".into(),
+                        message: e.to_string(),
+                        retryable: true,
+                    })?;
+            }
+            tokio::fs::write(&p.abs, content)
+                .await
+                .map_err(|e| ToolError {
                     code: "write_error".into(),
                     message: e.to_string(),
                     retryable: true,
                 })?;
-            }
-            tokio::fs::write(&p.abs, content).await.map_err(|e| ToolError {
-                code: "write_error".into(),
-                message: e.to_string(),
-                retryable: true,
-            })?;
         }
         PatchOp::Delete { .. } => {
             if p.abs.exists() {
-                tokio::fs::remove_file(&p.abs).await.map_err(|e| ToolError {
-                    code: "write_error".into(),
-                    message: e.to_string(),
-                    retryable: true,
-                })?;
+                tokio::fs::remove_file(&p.abs)
+                    .await
+                    .map_err(|e| ToolError {
+                        code: "write_error".into(),
+                        message: e.to_string(),
+                        retryable: true,
+                    })?;
             }
         }
         PatchOp::Move { .. } => {
             let to = p.abs_to.as_ref().unwrap();
             if let Some(parent) = to.parent() {
-                tokio::fs::create_dir_all(parent).await.map_err(|e| ToolError {
-                    code: "write_error".into(),
-                    message: e.to_string(),
-                    retryable: true,
-                })?;
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| ToolError {
+                        code: "write_error".into(),
+                        message: e.to_string(),
+                        retryable: true,
+                    })?;
             }
             tokio::fs::rename(&p.abs, to).await.map_err(|e| ToolError {
                 code: "write_error".into(),

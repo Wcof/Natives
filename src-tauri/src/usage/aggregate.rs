@@ -3,9 +3,7 @@
 
 use crate::usage::{
     atomcode::{atomcode_source_status, scan_atomcode_logs, AtomcodeScanResult},
-    ccusage::{
-        build_ccusage_source_states, scan_ccusage_all, CcusageDailyEntry,
-    },
+    ccusage::{build_ccusage_source_states, scan_ccusage_all, CcusageDailyEntry},
     claude::{claude_source_status, scan_claude_logs, ClaudeScanResult},
     codex::{codex_source_status, scan_codex_logs, CodexScanResult},
     collect_dimensions,

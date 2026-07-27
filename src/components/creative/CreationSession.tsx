@@ -17,6 +17,7 @@ import {
 } from '@/lib/assistant-workspace/selectors';
 import { useAssistantRun } from '@/lib/assistant-workspace/use-assistant-run';
 import { mapWireConversation } from '@/lib/assistant-protocol';
+import { readActiveProject } from '@/lib/active-project';
 import { mapWireProviders } from '@/lib/provider-model-selection';
 import type { Conversation } from '@/lib/assistant-protocol';
 import type { AssistantDraft } from '@/lib/assistant-composer';
@@ -139,6 +140,8 @@ export default function CreationSession({
   const ensureConversation = useCallback(async (): Promise<string> => {
     if (conversationId) return conversationId;
     if (!provider || !modelId) throw new Error(t(locale, 'creative.session.noModel'));
+    const projectId = await readActiveProject(window.nativesAPI);
+    if (!projectId) throw new Error(locale === 'zh' ? '请先选择项目文件夹' : 'Select a project directory first');
 
     setCreating(true);
     try {
@@ -149,6 +152,7 @@ export default function CreationSession({
           title: draft.name,
           provider_id: provider.id,
           model_id: modelId,
+          project_id: projectId,
           permission_profile_id: permissionProfile,
         },
       );

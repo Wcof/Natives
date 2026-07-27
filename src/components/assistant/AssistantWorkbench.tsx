@@ -212,7 +212,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   const [providerReadiness, setProviderReadiness] = useState<ProviderReadiness>('no_provider');
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [activeProjectPath, setActiveProjectPath] = useState<string | null>(null);
-  const [registeredProjects, setRegisteredProjects] = useState<Array<{ id: string; path: string; lastOpenedAt?: string | null; label?: string }>>([]);
+  const [registeredProjects, setRegisteredProjects] = useState<Array<{ id: string; path: string; lastOpenedAt?: string | null; label?: string; exists?: boolean }>>([]);
   const [pinnedConversationIds, setPinnedConversationIds] = useState<Set<string>>(new Set());
   const [rightPanelOpen, setRightPanelOpen] = useState(!state.view.rightCollapsed);
   const [loadingConversations, setLoadingConversations] = useState(true);
@@ -238,7 +238,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       // Switching another root conversation exits child view.
       setSelectedChildConversationId(null);
     }
-  }, [storeActiveId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [storeActiveId]);
 
   const surfaceConversationId = selectSurfaceConversationId(
     selectedRootConversationId ?? storeActiveId,
@@ -270,7 +270,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   // the underlying maps change. Selectors themselves are also identity-cached.
   const messages = useMemo(
     () => selectConversationMessages(state, activeId),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- maps + live/run tables are the true inputs
+
     [
       activeId,
       state.messagesByConversation,
@@ -321,7 +321,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
   // flips when the user inspects a subagent session.
   const rootEvents = useMemo(
     () => selectEventsForRunTree(state, rootRunId),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
     [rootRunId, state.eventsByRun, state.childRunsByParent],
   );
   const selectedChildEvents = useMemo(
@@ -329,7 +329,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       selectedChildConversationId
         ? selectRunEvents(state, surfaceRun?.id ?? null)
         : EMPTY_CHILD_EVENTS,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
     [selectedChildConversationId, surfaceRun?.id, state.eventsByRun],
   );
   // Timeline / file events follow the surface (child when selected).
@@ -339,7 +339,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       selectedChildConversationId
         ? selectArtifacts(state, surfaceRun?.id ?? null)
         : selectArtifactsForRunTree(state, rootRunId),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
     [
       selectedChildConversationId,
       surfaceRun?.id,
@@ -354,7 +354,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       selectedChildConversationId
         ? selectFileChanges(state, surfaceRun?.id ?? null)
         : selectFileChangesForRunTree(state, rootRunId),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
     [
       selectedChildConversationId,
       surfaceRun?.id,
@@ -693,7 +693,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     // terminal child / parent left). Without this, every historical active run kept
     // polling → multi-subscription thrash and wasted gateway traffic.
     retainSubscriptions(wanted);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- children/subagentSessions captured; identity churn ignored via *SubKey
+
   }, [rootRun?.id, rootRun?.status, childrenSubKey, subagentSubKey, ensureRunSubscription]);
 
   // Load subagent.list when root conversation is visible. Avoid re-listing on every
@@ -752,7 +752,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         updatedAt: c.updatedAt,
         pinned: pinnedConversationIds.has(c.id),
       })),
-      registeredProjects.map((p) => ({ path: p.path, lastOpenedAt: (p as { lastOpenedAt?: string | null; last_opened_at?: string | null }).lastOpenedAt ?? (p as { last_opened_at?: string | null }).last_opened_at ?? null, label: p.label })),
+      registeredProjects.map((p) => ({ path: p.path, lastOpenedAt: (p as { lastOpenedAt?: string | null; last_opened_at?: string | null }).lastOpenedAt ?? (p as { last_opened_at?: string | null }).last_opened_at ?? null, label: p.label, exists: p.exists })),
       zh ? '未关联项目' : 'Unassigned',
     );
     // Merge with projects already seeded by AssistantWorkspaceProvider so a
@@ -914,7 +914,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     if (!selected || selected === rootConversationId) return;
     if (isTempConversationId(selected)) return;
     void selectConversation(selected);
-  }, [navigation.selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [navigation.selectedId]);
 
   /**
    * Hydrate a root-level temp shell into the workbench store.
@@ -988,7 +988,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         },
       });
     }
-  }, [navigation.tempSession?.conversation.id, loadingConversations]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [navigation.tempSession?.conversation.id, loadingConversations]);
 
   // Legacy deferred path: shell set pendingCreateProjectPath before tempSession existed.
   useEffect(() => {
@@ -1028,7 +1028,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       selectedId: conversation.id,
       activeProjectPath: path,
     }));
-  }, [navigation.pendingCreateProjectPath]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [navigation.pendingCreateProjectPath]);
 
   const handleSend = useCallback(
     async (draft: AssistantDraft, forceImmediate = false): Promise<boolean> => {
@@ -1062,6 +1062,16 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
 
       try {
         if (!conversationId || isTempConversationId(conversationId)) {
+          const activeProject = registeredProjects.find((project) => project.path === activeProjectPath);
+          if (!activeProjectPath || activeProject?.exists === false) {
+            toast(
+              zh
+                ? '请先选择一个存在的项目文件夹'
+                : 'Select an existing project directory before starting a conversation',
+              'error',
+            );
+            return false;
+          }
           const title = draft.content.trim().slice(0, 30) || t(locale, 'assistant.newConversation');
           const createdRaw = await gateway.request<Record<string, unknown> | Conversation>(
             'conversation.create',
@@ -1206,7 +1216,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     }
   }, [
     // React Compiler cannot prove selector results immutable; callback dependencies are intentional.
-    // eslint-disable-next-line react-hooks/preserve-manual-memoization
+
     activeRunId, gateway, dispatch, toast, stoppingRunId,
   ]);
 
@@ -1231,7 +1241,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
         );
       }
     },
-    // eslint-disable-next-line react-hooks/preserve-manual-memoization
+
     [activeId, dispatch, gateway, toast, locale],
   );
 
@@ -1249,7 +1259,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
       toast(classifyError(err).userMessage, 'error');
     }
   }, [
-    // eslint-disable-next-line react-hooks/preserve-manual-memoization
+
     activeRunId, gateway, dispatch, toast, ensureRunSubscription,
   ]);
 
@@ -1267,7 +1277,7 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     },
     [
       gateway, dispatch,
-      // eslint-disable-next-line react-hooks/preserve-manual-memoization
+
       activeRunId,
     ],
   );
@@ -1791,9 +1801,9 @@ function WorkbenchInner({ locale }: { locale: Locale }) {
     zh,
     isStreaming,
     // Selector-derived primitives are immutable for this render.
-    // eslint-disable-next-line react-hooks/preserve-manual-memoization
+
     activeRunId,
-    // eslint-disable-next-line react-hooks/preserve-manual-memoization
+
     activeRunStatus,
     handleStop,
     handleRetry,

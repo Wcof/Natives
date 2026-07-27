@@ -28,9 +28,18 @@ pub struct QrCode {
 
 fn client_version(v: &str) -> String {
     let parts: Vec<&str> = v.split('.').collect();
-    let maj = parts.first().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-    let min = parts.get(1).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-    let pat = parts.get(2).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+    let maj = parts
+        .first()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+    let min = parts
+        .get(1)
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+    let pat = parts
+        .get(2)
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
     ((maj & 0xff) << 16 | (min & 0xff) << 8 | (pat & 0xff)).to_string()
 }
 
@@ -113,7 +122,10 @@ fn random_hex(bytes: usize) -> String {
 
 /// Fetch QR code for login
 pub fn fetch_qrcode() -> Result<QrCode, String> {
-    let url = format!("{}/ilink/bot/get_bot_qrcode?bot_type={}", LOGIN_BASE, BOT_TYPE);
+    let url = format!(
+        "{}/ilink/bot/get_bot_qrcode?bot_type={}",
+        LOGIN_BASE, BOT_TYPE
+    );
     let body = json!({ "local_token_list": [] });
     let r = http_json(&url, "POST", post_headers(None), Some(&body), 15000)?;
     if !r["ok"].as_bool().unwrap_or(false) {
@@ -123,8 +135,16 @@ pub fn fetch_qrcode() -> Result<QrCode, String> {
 }
 
 /// Poll QR scan status (long-poll, ~35s per round)
-pub fn poll_qr_status(base_url: &str, qrcode: &str, verify_code: Option<&str>) -> Result<Value, String> {
-    let mut url = format!("{}/ilink/bot/get_qrcode_status?qrcode={}", base_url, urlencode(qrcode));
+pub fn poll_qr_status(
+    base_url: &str,
+    qrcode: &str,
+    verify_code: Option<&str>,
+) -> Result<Value, String> {
+    let mut url = format!(
+        "{}/ilink/bot/get_qrcode_status?qrcode={}",
+        base_url,
+        urlencode(qrcode)
+    );
     if let Some(vc) = verify_code {
         url.push_str(&format!("&verify_code={}", urlencode(vc)));
     }
@@ -133,18 +153,33 @@ pub fn poll_qr_status(base_url: &str, qrcode: &str, verify_code: Option<&str>) -
 }
 
 /// Long-poll for new messages/updates
-pub fn get_updates(account: &Account, get_updates_buf: &str, timeout_ms: u64) -> Result<Value, String> {
+pub fn get_updates(
+    account: &Account,
+    get_updates_buf: &str,
+    timeout_ms: u64,
+) -> Result<Value, String> {
     let url = format!("{}/ilink/bot/getupdates", account.base_url);
     let body = json!({
         "get_updates_buf": get_updates_buf,
         "base_info": base_info()
     });
-    let r = http_json(&url, "POST", post_headers(Some(&account.token)), Some(&body), timeout_ms)?;
+    let r = http_json(
+        &url,
+        "POST",
+        post_headers(Some(&account.token)),
+        Some(&body),
+        timeout_ms,
+    )?;
     Ok(r["json"].clone())
 }
 
 /// Send a text message
-pub fn send_text(account: &Account, to_user_id: &str, text: &str, context_token: &str) -> Result<Value, String> {
+pub fn send_text(
+    account: &Account,
+    to_user_id: &str,
+    text: &str,
+    context_token: &str,
+) -> Result<Value, String> {
     let url = format!("{}/ilink/bot/sendmessage", account.base_url);
     let body = json!({
         "msg": {
@@ -158,7 +193,13 @@ pub fn send_text(account: &Account, to_user_id: &str, text: &str, context_token:
         },
         "base_info": base_info()
     });
-    let r = http_json(&url, "POST", post_headers(Some(&account.token)), Some(&body), 15000)?;
+    let r = http_json(
+        &url,
+        "POST",
+        post_headers(Some(&account.token)),
+        Some(&body),
+        15000,
+    )?;
     Ok(r["json"].clone())
 }
 
@@ -166,7 +207,13 @@ pub fn send_text(account: &Account, to_user_id: &str, text: &str, context_token:
 pub fn ping(account: &Account) -> Result<Value, String> {
     let url = format!("{}/ilink/bot/getconfig", account.base_url);
     let body = json!({ "ilink_user_id": account.user_id, "base_info": base_info() });
-    http_json(&url, "POST", post_headers(Some(&account.token)), Some(&body), 8000)
+    http_json(
+        &url,
+        "POST",
+        post_headers(Some(&account.token)),
+        Some(&body),
+        8000,
+    )
 }
 
 /// Extract content from a received message: (text, medias)

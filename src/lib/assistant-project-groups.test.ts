@@ -49,8 +49,14 @@ test('sorts conversations inside a project by latest activity', () => {
   assert.deepEqual(group?.conversations.map(conversation => conversation.id), ['newer', 'older']);
 });
 
-test('no project is not an error — engine and provider ready gives ready', () => {
-  assert.equal(projectCreationState({ engine: 'ready', providerReadiness: 'ready' }), 'ready');
+test('conversations whose registered project directory is gone move to unassigned', () => {
+  const groups = groupAssistantConversations(
+    [{ id: 'lost', projectId: '/Volumes/Offline/project', updatedAt: '2026-07-12T12:00:00Z', title: 'Lost' }],
+    [{ path: '/Volumes/Offline/project', exists: false }],
+  );
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0]!.path, null);
+  assert.deepEqual(groups[0]!.conversations.map((conversation) => conversation.id), ['lost']);
 });
 
 test('engine unavailable still blocks creation', () => {

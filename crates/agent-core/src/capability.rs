@@ -356,9 +356,15 @@ mod tests {
         let profile = expert.to_agent_profile();
         assert_eq!(profile.id, "coder");
         assert_eq!(profile.system_prompt.as_deref(), Some("You are a coder."));
-        assert_eq!(profile.tools.as_deref(), Some(&["read_file".to_string()][..]));
+        assert_eq!(
+            profile.tools.as_deref(),
+            Some(&["read_file".to_string()][..])
+        );
         assert_eq!(profile.disallowed_tools, None);
-        assert_eq!(profile.skills.as_deref(), Some(&["skill-1".to_string()][..]));
+        assert_eq!(
+            profile.skills.as_deref(),
+            Some(&["skill-1".to_string()][..])
+        );
         assert_eq!(profile.max_steps, Some(12));
         assert_eq!(profile.token_budget, Some(50000));
     }

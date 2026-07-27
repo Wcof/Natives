@@ -321,11 +321,9 @@ pub async fn respond(params: Value) -> Result<Value, String> {
                     })
                 });
             if let Some(bindings) = bindings_val {
-                if let Ok(list) =
-                    serde_json::from_value::<Vec<crate::subagent_store::RouteBinding>>(
-                        bindings.clone(),
-                    )
-                {
+                if let Ok(list) = serde_json::from_value::<Vec<crate::subagent_store::RouteBinding>>(
+                    bindings.clone(),
+                ) {
                     if !list.is_empty() {
                         let mode = response
                             .get("mode")
@@ -485,7 +483,12 @@ mod tests {
                     "response": { "approved": false },
                 })))
                 .unwrap_err();
-            assert!(err.contains("not pending") || err.contains("not found") || err.contains("already_resolved"), "{err}");
+            assert!(
+                err.contains("not pending")
+                    || err.contains("not found")
+                    || err.contains("already_resolved"),
+                "{err}"
+            );
         });
     }
 

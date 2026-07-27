@@ -1,6 +1,6 @@
 use crate::{Error, Result};
-use rusqlite::OptionalExtension;
 use rusqlite::Connection;
+use rusqlite::OptionalExtension;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -29,7 +29,9 @@ pub fn list_permissions(conn: &Connection, module_id: &str) -> Result<Vec<Permis
         )
         .map_err(Error::Database)?;
     let mut results = Vec::new();
-    let mut rows = stmt.query(rusqlite::params![module_id]).map_err(Error::Database)?;
+    let mut rows = stmt
+        .query(rusqlite::params![module_id])
+        .map_err(Error::Database)?;
     while let Some(row) = rows.next().map_err(Error::Database)? {
         results.push(PermissionRecord {
             module_id: row.get(0).map_err(Error::Database)?,
@@ -96,9 +98,13 @@ pub fn approve_all_permissions(
     // Get all ungranted permissions
     let pending: Vec<String> = {
         let mut stmt = conn
-            .prepare("SELECT permission FROM module_permissions WHERE module_id = ?1 AND granted = 0")
+            .prepare(
+                "SELECT permission FROM module_permissions WHERE module_id = ?1 AND granted = 0",
+            )
             .map_err(Error::Database)?;
-        let mut rows = stmt.query(rusqlite::params![module_id]).map_err(Error::Database)?;
+        let mut rows = stmt
+            .query(rusqlite::params![module_id])
+            .map_err(Error::Database)?;
         let mut perms = Vec::new();
         while let Some(row) = rows.next().map_err(Error::Database)? {
             perms.push(row.get::<_, String>(0).map_err(Error::Database)?);
@@ -169,9 +175,7 @@ pub fn check_permission(conn: &Connection, module_id: &str, permission: &str) ->
         .prepare("SELECT granted FROM module_permissions WHERE module_id = ?1 AND permission = ?2")
         .map_err(Error::Database)?;
     let result: Option<i32> = stmt
-        .query_row(rusqlite::params![module_id, permission], |row| {
-            row.get(0)
-        })
+        .query_row(rusqlite::params![module_id, permission], |row| row.get(0))
         .optional()
         .map_err(Error::Database)?;
     Ok(result == Some(1))

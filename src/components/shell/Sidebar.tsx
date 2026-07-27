@@ -30,6 +30,7 @@ import {
   SlidersHorizontal,
   Cpu,
   Server,
+  Workflow,
   PanelLeft,
   PanelLeftClose,
   Star,
@@ -111,6 +112,7 @@ const SETTINGS_NAV_ITEMS = [
   { id: 'appearance', labelKey: 'settings.tabAppearance', icon: Palette },
   { id: 'providers', labelKey: 'settings.tabProviders', icon: Cpu },
   { id: 'runtime', labelKey: 'settings.tabExecutor', icon: SlidersHorizontal },
+  { id: 'engineering', labelKey: 'settings.tabEngineEngineering', icon: Workflow },
   { id: 'engine', labelKey: 'settings.tabEngineCaps', icon: Server },
   { id: 'plugins', labelKey: 'settings.tabPlugins', icon: Plug },
 ] satisfies ReadonlyArray<{
@@ -280,7 +282,7 @@ export default function Sidebar({
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     loadEnabledTools();
     let unsub: (() => void) | undefined;
     try {
@@ -354,7 +356,7 @@ export default function Sidebar({
   // hydration mismatch。
   const [usesNativeTrafficLights, setUsesNativeTrafficLights] = useState(false);
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- platform chrome only known after mount
+
     setUsesNativeTrafficLights(detectNativeTrafficLights());
   }, []);
 

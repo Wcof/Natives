@@ -124,9 +124,7 @@ pub fn list_apps(conn: &Connection) -> Result<Vec<ExternalCreativeAppRecord>> {
              FROM external_creative_apps ORDER BY updated_at DESC",
         )
         .map_err(Error::Database)?;
-    let rows = stmt
-        .query_map([], map_row)
-        .map_err(Error::Database)?;
+    let rows = stmt.query_map([], map_row).map_err(Error::Database)?;
     let mut out = Vec::new();
     for r in rows {
         out.push(r.map_err(Error::Database)?);
@@ -144,9 +142,7 @@ pub fn list_transient(conn: &Connection) -> Result<Vec<ExternalCreativeAppRecord
              WHERE state IN ('installing','starting','stopping','deleting')",
         )
         .map_err(Error::Database)?;
-    let rows = stmt
-        .query_map([], map_row)
-        .map_err(Error::Database)?;
+    let rows = stmt.query_map([], map_row).map_err(Error::Database)?;
     let mut out = Vec::new();
     for r in rows {
         out.push(r.map_err(Error::Database)?);
@@ -298,7 +294,14 @@ pub fn mask_token(token: &str) -> String {
         return "••••".to_string();
     }
     let head: String = t.chars().take(4).collect();
-    let tail: String = t.chars().rev().take(4).collect::<String>().chars().rev().collect();
+    let tail: String = t
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
     format!("{head}…{tail}")
 }
 
@@ -409,7 +412,9 @@ mod tests {
         // re-apply migrations (idempotent)
         apply_migrations(&conn).unwrap();
         let n: i64 = conn
-            .query_row("SELECT COUNT(*) FROM modules WHERE id='m1'", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM modules WHERE id='m1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(n, 1);
         let ver: String = conn

@@ -50,13 +50,13 @@ pub struct Conversation {
 
 #[derive(Debug, Clone)]
 pub struct Message {
-    pub role: String,    // "user" | "assistant" | "system"
+    pub role: String, // "user" | "assistant" | "system"
     pub text: String,
     pub time: u64,
 }
 
 pub struct Bridge {
-    pub target: String,                // "claude" | "codex"
+    pub target: String, // "claude" | "codex"
     pub persona: String,
     pub cwd: String,
     pub conversations: HashMap<String, Conversation>,

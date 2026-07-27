@@ -8,19 +8,19 @@
 //! `RpcRequest` / `RpcResponse` shells. Servers may still accept v1-shaped JSON
 //! via [`envelope::parse_request_compat`].
 
-pub mod methods;
-pub mod run_event;
-pub mod run;
 pub mod capabilities;
 pub mod credential;
 pub mod envelope;
+pub mod methods;
+pub mod run;
+pub mod run_event;
 
-pub use methods::*;
-pub use run_event::*;
-pub use run::*;
 pub use capabilities::*;
 pub use credential::*;
 pub use envelope::*;
+pub use methods::*;
+pub use run::*;
+pub use run_event::*;
 
 /// Wire protocol major version for v2.
 pub const PROTOCOL_V2: &str = "2.0.0";

@@ -51,8 +51,14 @@ impl ExtensionStore {
             ));
         }
         if let Ok(cwd) = std::env::current_dir() {
-            roots.push((cwd.join(".natives").join("extensions"), ExtensionScope::Project));
-            roots.push((cwd.join(".grok").join("extensions"), ExtensionScope::Project));
+            roots.push((
+                cwd.join(".natives").join("extensions"),
+                ExtensionScope::Project,
+            ));
+            roots.push((
+                cwd.join(".grok").join("extensions"),
+                ExtensionScope::Project,
+            ));
         }
         for (dir, scope) in roots {
             self.scan_dir(&dir, scope);

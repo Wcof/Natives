@@ -1,6 +1,6 @@
+use lazy_static::lazy_static;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use lazy_static::lazy_static;
 
 lazy_static! {
     /// Global monotonic sequence counter for event ordering (KI-4).
@@ -61,19 +61,19 @@ mod tests {
     fn test_should_process_new_events() {
         let session = "test-session";
         let seq1 = next_sequence();
-        
+
         // First event should always be processed
         assert!(should_process(session, seq1));
-        
+
         // Record it
         update_last_sequence(session, seq1);
-        
+
         // Same sequence should not be processed
         assert!(!should_process(session, seq1));
-        
+
         // Older sequence should not be processed
         assert!(!should_process(session, seq1 - 1));
-        
+
         // Newer sequence should be processed
         let seq2 = next_sequence();
         assert!(should_process(session, seq2));
@@ -83,15 +83,15 @@ mod tests {
     fn test_different_sessions_independent() {
         let session_a = "session-a";
         let session_b = "session-b";
-        
+
         let seq_a = next_sequence();
         let seq_b = next_sequence();
-        
+
         update_last_sequence(session_a, seq_a);
-        
+
         // Session B should still process even if its sequence is older than A's last
         assert!(should_process(session_b, seq_b));
-        
+
         // Session A should not reprocess same
         assert!(!should_process(session_a, seq_a));
     }

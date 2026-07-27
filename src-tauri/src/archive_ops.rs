@@ -266,7 +266,10 @@ fn count_files_recursive(dir: &Path) -> usize {
 }
 
 /// 把多个文件/目录打包为 zip。dest_zip_path 缺省为第一项同目录下 `<名称>.zip`（防覆盖）。
-pub fn compress_entries(paths: &[String], dest_zip_path: Option<&str>) -> Result<CompressEntriesResult> {
+pub fn compress_entries(
+    paths: &[String],
+    dest_zip_path: Option<&str>,
+) -> Result<CompressEntriesResult> {
     if paths.is_empty() {
         return Err(Error::InvalidInput("no paths to compress".into()));
     }
@@ -506,8 +509,8 @@ mod tests {
     fn extract_default_dest_deduplicates() {
         let dir = test_dir("dedupe");
         std::fs::write(dir.join("data.txt"), b"d").unwrap();
-        let res = compress_entries(&[dir.join("data.txt").to_string_lossy().to_string()], None)
-            .unwrap();
+        let res =
+            compress_entries(&[dir.join("data.txt").to_string_lossy().to_string()], None).unwrap();
         // 预先占用同名目录
         std::fs::create_dir_all(dir.join("data")).unwrap();
         let out = extract_archive(&res.zip_path, None).unwrap();

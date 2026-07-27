@@ -142,8 +142,8 @@ impl DraftPaths {
     /// draft metadata and draft content in the same place even for relocated or
     /// portable installs.
     pub fn from_env() -> Self {
-        let db_path = env_path("NATIVES_DB_PATH")
-            .unwrap_or_else(|| default_natives_dir().join("natives.db"));
+        let db_path =
+            env_path("NATIVES_DB_PATH").unwrap_or_else(|| default_natives_dir().join("natives.db"));
         let data_dir = env_path("NATIVES_DATA_DIR")
             .or_else(|| db_path.parent().map(Path::to_path_buf))
             .unwrap_or_else(default_natives_dir);
@@ -665,10 +665,9 @@ impl ToolHandler for ReadDraftModuleTool {
         let paths = resolve_paths!(self);
         let conversation_id = context.conversation_id.clone();
         let draft_for_worker = draft_id.clone();
-        let (revision, html) = in_blocking(move || {
-            read_current_revision(&paths, &draft_for_worker, &conversation_id)
-        })
-        .await?;
+        let (revision, html) =
+            in_blocking(move || read_current_revision(&paths, &draft_for_worker, &conversation_id))
+                .await?;
 
         Ok(ToolOutput {
             result: serde_json::json!({
@@ -913,11 +912,7 @@ mod tests {
         )
     }
 
-    async fn write(
-        fx: &Fixture,
-        draft_id: &str,
-        html: &str,
-    ) -> Result<ToolOutput, ToolError> {
+    async fn write(fx: &Fixture, draft_id: &str, html: &str) -> Result<ToolOutput, ToolError> {
         WriteDraftModuleTool::with_paths(fx.paths.clone())
             .execute(
                 serde_json::json!({"draftId": draft_id, "htmlContent": html}),
@@ -986,11 +981,7 @@ mod tests {
         assert_eq!(out.result["revision"], 1);
         assert_eq!(out.result["previewUrl"], "/drafts/draft-1/");
         assert_eq!(fx.current_revision("draft-1"), 1);
-        assert!(fx
-            .paths
-            .revision_path("draft-1", 1)
-            .expect("path")
-            .exists());
+        assert!(fx.paths.revision_path("draft-1", 1).expect("path").exists());
 
         let out = write(&fx, "draft-1", "<html><div>two</div></html>")
             .await
@@ -1021,11 +1012,7 @@ mod tests {
 
         assert_eq!(fx.current_revision("draft-1"), 1);
         assert_eq!(fx.revision_rows("draft-1"), 1);
-        assert!(!fx
-            .paths
-            .revision_path("draft-1", 2)
-            .expect("path")
-            .exists());
+        assert!(!fx.paths.revision_path("draft-1", 2).expect("path").exists());
         assert_eq!(
             read(&fx, "draft-1").await.expect("read").result["content"],
             "<html><div>good</div></html>"
@@ -1059,9 +1046,7 @@ mod tests {
     #[tokio::test]
     async fn read_errors_when_the_draft_does_not_exist() {
         let fx = Fixture::new();
-        let err = read(&fx, "draft-missing")
-            .await
-            .expect_err("unknown draft");
+        let err = read(&fx, "draft-missing").await.expect_err("unknown draft");
         assert_eq!(err.code, "draft_not_found");
     }
 
@@ -1084,11 +1069,7 @@ mod tests {
             "<html><div>one</div></html>"
         );
         // Undo must be undoable, so rev-2 stays on disk and in the metadata.
-        assert!(fx
-            .paths
-            .revision_path("draft-1", 2)
-            .expect("path")
-            .exists());
+        assert!(fx.paths.revision_path("draft-1", 2).expect("path").exists());
         assert_eq!(fx.revision_rows("draft-1"), 2);
     }
 
@@ -1145,11 +1126,7 @@ mod tests {
         );
         // The abandoned branch is gone rather than lingering as unreachable rows.
         assert_eq!(fx.revision_rows("draft-1"), 2);
-        assert!(!fx
-            .paths
-            .revision_path("draft-1", 3)
-            .expect("path")
-            .exists());
+        assert!(!fx.paths.revision_path("draft-1", 3).expect("path").exists());
     }
 
     #[tokio::test]
@@ -1187,9 +1164,7 @@ mod tests {
         let fx = Fixture::new();
         fx.create_draft("draft-1", Some(CONVERSATION));
         let huge = "a".repeat(MAX_HTML_BYTES + 1);
-        let err = write(&fx, "draft-1", &huge)
-            .await
-            .expect_err("size cap");
+        let err = write(&fx, "draft-1", &huge).await.expect_err("size cap");
         assert_eq!(err.code, "invalid_input");
         assert_eq!(fx.current_revision("draft-1"), 0);
     }
@@ -1325,11 +1300,7 @@ mod tests {
         let current = fx.current_revision("draft-1");
         assert_eq!(current, MAX_DRAFT_REVISIONS + 3);
         assert_eq!(fx.revision_rows("draft-1"), MAX_DRAFT_REVISIONS);
-        assert!(fx
-            .paths
-            .revision_path("draft-1", 1)
-            .expect("path")
-            .exists());
+        assert!(fx.paths.revision_path("draft-1", 1).expect("path").exists());
         assert!(fx
             .paths
             .revision_path("draft-1", current)

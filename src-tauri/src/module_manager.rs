@@ -1,8 +1,8 @@
 use crate::{Error, Result};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::Path;
-use sha2::{Sha256, Digest};
 
 /// Module manifest — mirrors Natives Zod schema
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,8 +47,7 @@ pub struct InstalledModule {
 
 /// Validate a manifest JSON value
 pub fn validate_manifest(data: &serde_json::Value) -> std::result::Result<Manifest, String> {
-    serde_json::from_value::<Manifest>(data.clone())
-        .map_err(|e| format!("invalid manifest: {e}"))
+    serde_json::from_value::<Manifest>(data.clone()).map_err(|e| format!("invalid manifest: {e}"))
 }
 
 /// Read manifest from a directory
@@ -221,23 +220,23 @@ pub fn install_module(conn: &Connection, modules_dir: &Path, source: &str) -> Re
                 .as_millis()
         ));
         extract_zip(source_path, &temp_dir)?;
-        
+
         // Find manifest in extracted content
         let actual_dir = get_actual_manifest_dir(&temp_dir);
         let manifest = read_manifest_from_dir(&actual_dir).map_err(|e| Error::InvalidInput(e))?;
-        
+
         // Move to final location
         let dest = modules_dir.join(&manifest.id);
         if dest.exists() {
             std::fs::remove_dir_all(&dest).map_err(Error::Io)?;
         }
         std::fs::rename(&actual_dir, &dest).map_err(Error::Io)?;
-        
+
         // Clean up temp_dir if it was nested
         if actual_dir != temp_dir {
             let _ = std::fs::remove_dir_all(&temp_dir);
         }
-        
+
         manifest
     } else {
         return Err(Error::InvalidInput(
@@ -383,10 +382,14 @@ pub fn update_module(
     // Re-sync permissions: delete old, insert new (preserve granted status for matching perms)
     let existing_granted: std::collections::HashMap<String, bool> = {
         let mut map = std::collections::HashMap::new();
-        let mut stmt = conn.prepare("SELECT permission, granted FROM module_permissions WHERE module_id = ?1").map_err(Error::Database)?;
-        let rows = stmt.query_map(rusqlite::params![manifest.id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
-        }).map_err(Error::Database)?;
+        let mut stmt = conn
+            .prepare("SELECT permission, granted FROM module_permissions WHERE module_id = ?1")
+            .map_err(Error::Database)?;
+        let rows = stmt
+            .query_map(rusqlite::params![manifest.id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
+            })
+            .map_err(Error::Database)?;
         for row in rows {
             if let Ok((perm, granted)) = row {
                 map.insert(perm, granted);
@@ -398,7 +401,8 @@ pub fn update_module(
     conn.execute(
         "DELETE FROM module_permissions WHERE module_id = ?1",
         rusqlite::params![manifest.id],
-    ).map_err(Error::Database)?;
+    )
+    .map_err(Error::Database)?;
 
     for perm in &manifest.permissions {
         // Preserve previously granted status; new perms default to not granted
@@ -406,7 +410,8 @@ pub fn update_module(
         conn.execute(
             "INSERT INTO module_permissions (module_id, permission, granted) VALUES (?1, ?2, ?3)",
             rusqlite::params![manifest.id, perm, granted],
-        ).map_err(Error::Database)?;
+        )
+        .map_err(Error::Database)?;
     }
 
     // 5. Remove backup on success
@@ -673,12 +678,7 @@ pub fn write_generated_module(
             contract_id = excluded.contract_id,
             schema_version = excluded.schema_version,
             content_hash = excluded.content_hash",
-        rusqlite::params![
-            module_id,
-            contract_id,
-            schema_version,
-            &content_hash,
-        ],
+        rusqlite::params![module_id, contract_id, schema_version, &content_hash,],
     )
     .map_err(|e| Error::Internal(format!("Failed to persist contract audit record: {e}")))?;
 
@@ -721,12 +721,12 @@ pub fn rollback_module_html(modules_dir: &Path, module_id: &str, old_content: &s
 /// leaves either the old or the new file intact — never a partial write.
 pub fn atomic_write(path: &Path, content: &str) -> Result<()> {
     use std::io::Write;
-    let dir = path.parent().ok_or_else(|| Error::Internal("no parent dir".into()))?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| Error::Internal("no parent dir".into()))?;
     let tmp_path = dir.join(format!(
         ".{}.tmp",
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("file")
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("file")
     ));
     {
         let mut f = std::fs::File::create(&tmp_path).map_err(Error::Io)?;

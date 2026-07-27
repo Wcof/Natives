@@ -16,7 +16,7 @@
 //! produces an issue, not a row.
 
 use crate::blueprint::{HarnessBlueprint, HookOverlay, HookSemanticsVersion};
-use crate::hooks::{HookDefinition, HookId, HookScope};
+use crate::hooks::{HookDefinition, HookId, HookScope, HookSource};
 use serde::{Deserialize, Serialize};
 
 /// Which configuration layer a value came from.
@@ -60,7 +60,10 @@ pub enum ResolutionIssue {
     /// Not fatal: a project overlay may legitimately mention a Hook file that
     /// only exists on another machine. It must still be visible, or the user
     /// stares at a setting that does nothing.
-    UnknownHook { hook_id: HookId, layer: ProfileLayer },
+    UnknownHook {
+        hook_id: HookId,
+        layer: ProfileLayer,
+    },
     /// An overlay tried to change a locked Hook. Ignored, never applied.
     LockedHook {
         hook_id: HookId,
@@ -144,8 +147,11 @@ pub fn resolve(
                 continue;
             };
             if locked {
-                let fields: Vec<String> =
-                    overlay.set_fields().iter().map(|f| (*f).to_string()).collect();
+                let fields: Vec<String> = overlay
+                    .set_fields()
+                    .iter()
+                    .map(|f| (*f).to_string())
+                    .collect();
                 if !fields.is_empty() {
                     issues.push(ResolutionIssue::LockedHook {
                         hook_id: definition.id.clone(),
@@ -155,7 +161,13 @@ pub fn resolve(
                 }
                 continue;
             }
-            apply_overlay(overlay, *layer, &mut effective, &mut enabled, &mut overrides);
+            apply_overlay(
+                overlay,
+                *layer,
+                &mut effective,
+                &mut enabled,
+                &mut overrides,
+            );
         }
 
         hooks.push(ResolvedHook {
@@ -166,11 +178,34 @@ pub fn resolve(
         });
     }
 
+    for (_, document) in layers {
+        for native in &document.native_hooks {
+            let source =
+                HookSource::file(HookScope::Project, format!("native:{}", native.id), 0, 0);
+            hooks.push(ResolvedHook {
+                definition: HookDefinition {
+                    id: HookId::native(&native.id, native.event),
+                    event: native.event,
+                    source,
+                    order: native.order,
+                    matcher: native.matcher.clone(),
+                    conditions: Vec::new(),
+                    timeout_ms: native.timeout_ms,
+                    failure_policy: native.failure_policy,
+                    kind: native.kind.clone(),
+                },
+                enabled: true,
+                locked: false,
+                overrides: Vec::new(),
+            });
+        }
+    }
+
     // Overlays that matched nothing must surface, once per layer.
     let discovered_ids: std::collections::BTreeSet<&HookId> =
         discovered.iter().map(|d| &d.id).collect();
     for (layer, document) in layers {
-        for overlay in &document.hooks {
+        for overlay in document.overlays() {
             if !discovered_ids.contains(&overlay.hook_id) {
                 issues.push(ResolutionIssue::UnknownHook {
                     hook_id: overlay.hook_id.clone(),
@@ -267,7 +302,13 @@ mod tests {
         }
     }
 
-    fn project(path: &str, event: HookEvent, group: usize, entry: usize, order: i32) -> HookDefinition {
+    fn project(
+        path: &str,
+        event: HookEvent,
+        group: usize,
+        entry: usize,
+        order: i32,
+    ) -> HookDefinition {
         let source = HookSource::file(HookScope::Project, path, group, entry);
         HookDefinition {
             id: HookId::new(&source, event),
@@ -291,6 +332,9 @@ mod tests {
             schema_version: BLUEPRINT_SCHEMA_VERSION,
             hook_semantics_version: HookSemanticsVersion::LegacyV1,
             hooks,
+            hook_overlays: Vec::new(),
+            native_hooks: Vec::new(),
+            prompt_blocks: Vec::new(),
         }
     }
 
@@ -308,7 +352,13 @@ mod tests {
 
     #[test]
     fn empty_documents_reproduce_discovery_exactly() {
-        let discovered = vec![project(".claude/settings.json", HookEvent::PostToolUse, 0, 0, 1)];
+        let discovered = vec![project(
+            ".claude/settings.json",
+            HookEvent::PostToolUse,
+            0,
+            0,
+            1,
+        )];
         let resolved = resolve(
             &discovered,
             &[
@@ -337,7 +387,10 @@ mod tests {
             ],
         );
         let only = &resolved.hooks[0];
-        assert_eq!(only.definition.timeout_ms, 2_000, "project overrides global");
+        assert_eq!(
+            only.definition.timeout_ms, 2_000,
+            "project overrides global"
+        );
         assert_eq!(
             only.definition.matcher.as_deref(),
             Some("Edit"),
@@ -346,8 +399,14 @@ mod tests {
         assert_eq!(
             only.overrides,
             vec![
-                FieldOverride { field: "matcher".into(), layer: ProfileLayer::Global },
-                FieldOverride { field: "timeout_ms".into(), layer: ProfileLayer::Project },
+                FieldOverride {
+                    field: "matcher".into(),
+                    layer: ProfileLayer::Global
+                },
+                FieldOverride {
+                    field: "timeout_ms".into(),
+                    layer: ProfileLayer::Project
+                },
             ]
         );
     }
@@ -388,9 +447,15 @@ mod tests {
         let mut overlay = HookOverlay::new(hook.id.clone());
         overlay.enabled = Some(false);
         overlay.timeout_ms = Some(1);
-        let resolved = resolve(&[hook.clone()], &[(ProfileLayer::Global, doc(vec![overlay]))]);
+        let resolved = resolve(
+            &[hook.clone()],
+            &[(ProfileLayer::Global, doc(vec![overlay]))],
+        );
 
-        assert!(resolved.hooks[0].enabled, "a locked hook cannot be disabled");
+        assert!(
+            resolved.hooks[0].enabled,
+            "a locked hook cannot be disabled"
+        );
         assert!(resolved.hooks[0].locked);
         assert_eq!(resolved.hooks[0].definition, hook, "nothing was applied");
         assert_eq!(
@@ -411,7 +476,10 @@ mod tests {
         );
         let resolved = resolve(
             &[builtin("allow-all", HookEvent::PreToolUse, 0)],
-            &[(ProfileLayer::Project, doc(vec![HookOverlay::new(missing.clone())]))],
+            &[(
+                ProfileLayer::Project,
+                doc(vec![HookOverlay::new(missing.clone())]),
+            )],
         );
         assert_eq!(
             resolved.issues,

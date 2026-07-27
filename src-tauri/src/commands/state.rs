@@ -8,8 +8,14 @@ const SYSTEM_MODULE_ID: &str = "__system__";
 /// Save module state to module_data table.
 /// Key format: "_state:{moduleId}"
 #[tauri::command]
-pub fn state_save(module_id: String, state_value: String, state: State<'_, AppState>) -> Result<()> {
-    let pool_conn = state.db.get()
+pub fn state_save(
+    module_id: String,
+    state_value: String,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     let key = format!("_state:{module_id}");
@@ -20,7 +26,9 @@ pub fn state_save(module_id: String, state_value: String, state: State<'_, AppSt
 /// Load module state from module_data table.
 #[tauri::command]
 pub fn state_load(module_id: String, state: State<'_, AppState>) -> Result<Option<String>> {
-    let pool_conn = state.db.get()
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     let key = format!("_state:{module_id}");
@@ -34,7 +42,9 @@ pub fn state_load(module_id: String, state: State<'_, AppState>) -> Result<Optio
 /// Clear module state from module_data table.
 #[tauri::command]
 pub fn state_clear(module_id: String, state: State<'_, AppState>) -> Result<()> {
-    let pool_conn = state.db.get()
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     let key = format!("_state:{module_id}");

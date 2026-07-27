@@ -11,11 +11,11 @@ use crate::{Error, Result};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::collections::HashSet;
-use ts_rs::TS;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::Emitter;
+use ts_rs::TS;
 
 /// Event payload sent to the frontend via Tauri event system.
 #[derive(Debug, Clone, Serialize, TS)]
@@ -50,7 +50,10 @@ impl FsWatcher {
 
     /// Start watching a directory recursively.
     pub fn start(&self, path: &str) -> Result<()> {
-        let mut inner = self.inner.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         if inner.watched_paths.contains(path) {
             return Ok(());
         }
@@ -85,7 +88,10 @@ impl FsWatcher {
 
     /// Stop watching a specific path.
     pub fn stop(&self, path: &str) -> Result<()> {
-        let mut inner = self.inner.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         if !inner.watched_paths.contains(path) {
             return Ok(());
         }
@@ -101,7 +107,10 @@ impl FsWatcher {
 
     /// Stop all watchers.
     pub fn stop_all(&self) -> Result<()> {
-        let mut inner = self.inner.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         let paths: Vec<_> = inner.watched_paths.iter().cloned().collect();
         if let Some(ref mut watcher) = inner.watcher {
             for path in &paths {
@@ -115,7 +124,10 @@ impl FsWatcher {
 
     /// Get list of currently watched paths.
     pub fn watched_paths(&self) -> Result<Vec<String>> {
-        let inner = self.inner.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         Ok(inner.watched_paths.iter().cloned().collect())
     }
 }
@@ -167,14 +179,20 @@ fn handle_fs_event(app: &tauri::AppHandle, event: &Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use notify::event::{AccessKind, CreateKind, DataChange, MetadataKind, ModifyKind, RemoveKind, RenameMode};
+    use notify::event::{
+        AccessKind, CreateKind, DataChange, MetadataKind, ModifyKind, RemoveKind, RenameMode,
+    };
 
     #[test]
     fn metadata_and_access_events_are_noise() {
-        assert!(is_noise_event_kind(&EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any))));
+        assert!(is_noise_event_kind(&EventKind::Modify(
+            ModifyKind::Metadata(MetadataKind::Any)
+        )));
         assert!(is_noise_event_kind(&EventKind::Access(AccessKind::Any)));
         assert!(!is_noise_event_kind(&EventKind::Create(CreateKind::File)));
-        assert!(!is_noise_event_kind(&EventKind::Modify(ModifyKind::Data(DataChange::Any))));
+        assert!(!is_noise_event_kind(&EventKind::Modify(ModifyKind::Data(
+            DataChange::Any
+        ))));
         assert!(!is_noise_event_kind(&EventKind::Remove(RemoveKind::File)));
     }
 
@@ -189,7 +207,10 @@ mod tests {
 
     #[test]
     fn event_kinds_map_to_wire_labels() {
-        assert_eq!(event_kind_label(&EventKind::Create(CreateKind::File)), "create");
+        assert_eq!(
+            event_kind_label(&EventKind::Create(CreateKind::File)),
+            "create"
+        );
         assert_eq!(
             event_kind_label(&EventKind::Modify(ModifyKind::Name(RenameMode::Any))),
             "rename"
@@ -198,6 +219,9 @@ mod tests {
             event_kind_label(&EventKind::Modify(ModifyKind::Data(DataChange::Any))),
             "modify"
         );
-        assert_eq!(event_kind_label(&EventKind::Remove(RemoveKind::File)), "remove");
+        assert_eq!(
+            event_kind_label(&EventKind::Remove(RemoveKind::File)),
+            "remove"
+        );
     }
 }

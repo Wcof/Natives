@@ -22,8 +22,8 @@
 //!   immediate error write, so anything that takes time is definitionally not it.
 
 use assistant_protocol::v1::daemon::RpcRequest;
-use assistant_protocol::version::ProtocolVersion;
 use assistant_protocol::v2::{HOST_IMPLEMENTED_METHODS, IMPLEMENTED_METHODS};
+use assistant_protocol::version::ProtocolVersion;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -50,8 +50,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 fn isolate_env() {
     static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     INIT.get_or_init(|| {
-        let root =
-            std::env::temp_dir().join(format!("natives-dispatch-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("natives-dispatch-{}", uuid::Uuid::new_v4()));
         let runtime = root.join("runtime");
         std::fs::create_dir_all(&runtime).expect("create temp runtime dir");
         let db = root.join("assistant.db");

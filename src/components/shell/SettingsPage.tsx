@@ -13,6 +13,7 @@ import ProviderDetail from '@/components/settings/ProviderDetail';
 import { ProviderSettingsWorkspace } from '@/components/settings/provider-routing/ProviderSettingsWorkspace';
 import AddProviderDialog from '@/components/settings/AddProviderDialog';
 import EngineCapabilitiesPanel from '@/components/settings/EngineCapabilitiesPanel';
+import NativeHarnessPanel from '@/components/settings/NativeHarnessPanel';
 import type { ProviderSummary, TestKeyResult } from '@/types/provider';
 import {
   type SettingsSection,
@@ -806,6 +807,8 @@ export default function SettingsPage({
             <CreativeRuntimeSettings locale={locale} />
           </>
         );
+      case 'engineering':
+        return <NativeHarnessPanel locale={locale} />;
       case 'engine':
         return renderEngineCaps();
       case 'plugins':
@@ -817,7 +820,7 @@ export default function SettingsPage({
     <div style={{ height: '100%', overflow: 'auto' }}>
       <div
         style={{
-          width: 'min(100%, 920px)',
+          width: activeSection === 'engineering' ? 'min(100%, 1380px)' : 'min(100%, 920px)',
           margin: '0 auto',
           boxSizing: 'border-box',
           padding: `${SPACING.xl}px ${SPACING.lg}px ${SPACING.xxl}px`,

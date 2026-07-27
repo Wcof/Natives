@@ -1,9 +1,7 @@
 //! Release asset probe — compose / zip / natives.app.json candidates.
 
 use super::github::{is_compose_asset_name, is_manifest_asset_name, GhAsset, GhRelease};
-use super::model::{
-    CreativeAppRuntime, EnvRequirement, InstallCandidate,
-};
+use super::model::{CreativeAppRuntime, EnvRequirement, InstallCandidate};
 use crate::{Error, Result};
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -45,10 +43,7 @@ pub struct ManifestEnv {
 }
 
 /// Probe a release (in-memory asset list + optional downloaded files under `release_dir`).
-pub fn probe_release(
-    release: &GhRelease,
-    release_dir: Option<&Path>,
-) -> Result<ProbeOutcome> {
+pub fn probe_release(release: &GhRelease, release_dir: Option<&Path>) -> Result<ProbeOutcome> {
     let mut warnings = Vec::new();
     let mut blockers = Vec::new();
     let mut candidates: Vec<InstallCandidate> = Vec::new();
@@ -205,7 +200,9 @@ pub fn probe_release(
 
         // Docker Run candidate from manifest
         let runtime_s = m.runtime.as_deref().unwrap_or("");
-        let wants_run = runtime_s == "docker-run" || runtime_s == "docker_run" || (m.image.is_some() && m.port.is_some());
+        let wants_run = runtime_s == "docker-run"
+            || runtime_s == "docker_run"
+            || (m.image.is_some() && m.port.is_some());
         if wants_run {
             if let (Some(image), Some(port)) = (&m.image, m.port) {
                 candidates.push(InstallCandidate {
@@ -262,7 +259,9 @@ pub fn probe_release(
                 one_click_eligible = true;
                 one_click_id = Some(top.id.clone());
             } else if ties > 1 {
-                warnings.push("multiple equally confident candidates; manual selection required".into());
+                warnings.push(
+                    "multiple equally confident candidates; manual selection required".into(),
+                );
             } else if top.requires_manual || !top.hard_blockers.is_empty() || !env_ok {
                 warnings.push("top candidate requires manual configuration".into());
             }
@@ -334,8 +333,8 @@ pub fn analyze_compose_file(path: &Path) -> Result<ComposeAnalysis> {
 }
 
 pub fn analyze_compose_yaml(text: &str) -> Result<ComposeAnalysis> {
-    let doc: serde_yaml::Value =
-        serde_yaml::from_str(text).map_err(|e| Error::InvalidInput(format!("compose yaml: {e}")))?;
+    let doc: serde_yaml::Value = serde_yaml::from_str(text)
+        .map_err(|e| Error::InvalidInput(format!("compose yaml: {e}")))?;
     let mut analysis = ComposeAnalysis::default();
 
     // Hard blockers at top-level
@@ -365,7 +364,12 @@ pub fn analyze_compose_yaml(text: &str) -> Result<ComposeAnalysis> {
 
         let (host_ports, container_ports) = parse_ports(v.get("ports"));
         // privileged etc. on service
-        scan_dangerous_yaml(v, &format!("services.{name}"), &mut analysis.hard_blockers, &mut analysis.risks);
+        scan_dangerous_yaml(
+            v,
+            &format!("services.{name}"),
+            &mut analysis.hard_blockers,
+            &mut analysis.risks,
+        );
 
         analysis.services.push(ComposeServiceInfo {
             name: name.clone(),
@@ -386,7 +390,11 @@ pub fn analyze_compose_yaml(text: &str) -> Result<ComposeAnalysis> {
     if web_like.len() == 1 {
         let s = web_like[0];
         analysis.preferred_service = Some(s.name.clone());
-        analysis.host_port = s.host_ports.first().copied().or_else(|| s.container_ports.first().copied());
+        analysis.host_port = s
+            .host_ports
+            .first()
+            .copied()
+            .or_else(|| s.container_ports.first().copied());
         analysis.container_port = s.container_ports.first().copied().or(analysis.host_port);
     } else if web_like.is_empty() {
         // single service without ports → manual
@@ -394,14 +402,19 @@ pub fn analyze_compose_yaml(text: &str) -> Result<ComposeAnalysis> {
             analysis.preferred_service = Some(analysis.services[0].name.clone());
         }
     } else {
-        analysis
-            .risks
-            .push(format!("{} services publish ports; select web service manually", web_like.len()));
+        analysis.risks.push(format!(
+            "{} services publish ports; select web service manually",
+            web_like.len()
+        ));
         // Prefer name web/frontend/app/ui
         for pref in ["web", "frontend", "app", "ui", "nginx"] {
             if let Some(s) = web_like.iter().find(|s| s.name.eq_ignore_ascii_case(pref)) {
                 analysis.preferred_service = Some(s.name.clone());
-                analysis.host_port = s.host_ports.first().copied().or_else(|| s.container_ports.first().copied());
+                analysis.host_port = s
+                    .host_ports
+                    .first()
+                    .copied()
+                    .or_else(|| s.container_ports.first().copied());
                 analysis.container_port = s.container_ports.first().copied().or(analysis.host_port);
                 break;
             }
@@ -624,8 +637,8 @@ pub fn normalize_compose_to_localhost(
     container_port: u16,
 ) -> Result<()> {
     let text = std::fs::read_to_string(source).map_err(Error::Io)?;
-    let mut doc: serde_yaml::Value =
-        serde_yaml::from_str(&text).map_err(|e| Error::InvalidInput(format!("compose yaml: {e}")))?;
+    let mut doc: serde_yaml::Value = serde_yaml::from_str(&text)
+        .map_err(|e| Error::InvalidInput(format!("compose yaml: {e}")))?;
 
     let services = doc
         .get_mut("services")
@@ -696,8 +709,8 @@ pub fn collect_host_ports(text: &str) -> Result<BTreeSet<u16>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::github::GhRelease;
+    use super::*;
 
     #[test]
     fn compose_simple_fixture() {
@@ -730,10 +743,7 @@ mod tests {
 
     #[test]
     fn port_normalize_localhost() {
-        assert_eq!(
-            force_localhost_port_str("8080:80"),
-            "127.0.0.1:8080:80"
-        );
+        assert_eq!(force_localhost_port_str("8080:80"), "127.0.0.1:8080:80");
         assert_eq!(
             force_localhost_port_str("0.0.0.0:8080:80"),
             "127.0.0.1:8080:80"
@@ -765,8 +775,8 @@ mod tests {
 
     #[test]
     fn probe_run_manifest() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/creative_apps/run_manifest");
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/creative_apps/run_manifest");
         let release = GhRelease {
             id: 2,
             tag_name: "v1".into(),
@@ -791,7 +801,10 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::copy(dir.join("natives.app.json"), tmp.join("natives.app.json")).unwrap();
         let out = probe_release(&release, Some(&tmp)).unwrap();
-        assert!(out.candidates.iter().any(|c| c.runtime == CreativeAppRuntime::DockerRun));
+        assert!(out
+            .candidates
+            .iter()
+            .any(|c| c.runtime == CreativeAppRuntime::DockerRun));
         // required env → not one-click
         assert!(!out.one_click_eligible);
         let _ = std::fs::remove_dir_all(&tmp);

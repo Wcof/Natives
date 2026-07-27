@@ -19,8 +19,8 @@
 use super::HarnessError;
 use crate::storage::DataStore;
 use harness_core::blueprint::HarnessBlueprint;
-use harness_core::snapshot::ResolvedHarnessSnapshot;
 use harness_core::resolver::ProfileLayer;
+use harness_core::snapshot::ResolvedHarnessSnapshot;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -102,6 +102,7 @@ pub struct DraftRow {
     pub document_json: String,
     pub revision: i64,
     pub updated_at: String,
+    pub source_candidate_json: Option<String>,
 }
 
 impl DraftRow {
@@ -185,7 +186,9 @@ pub fn store() -> Result<DataStore, String> {
 }
 
 /// Run `f` against an open connection with defaults already seeded.
-pub fn with_conn<T>(f: impl FnOnce(&Connection) -> Result<T, HarnessError>) -> Result<T, HarnessError> {
+pub fn with_conn<T>(
+    f: impl FnOnce(&Connection) -> Result<T, HarnessError>,
+) -> Result<T, HarnessError> {
     let store = store().map_err(HarnessError::internal)?;
     let conn = store.conn().map_err(HarnessError::internal)?;
     ensure_defaults(&conn)?;
@@ -218,7 +221,8 @@ pub fn ensure_defaults(conn: &Connection) -> Result<(), HarnessError> {
     }
 
     let document = HarnessBlueprint::default();
-    let document_json = serde_json::to_string(&document).map_err(|e| HarnessError::internal(e.to_string()))?;
+    let document_json =
+        serde_json::to_string(&document).map_err(|e| HarnessError::internal(e.to_string()))?;
     let version_id = format!("{DEFAULT_GLOBAL_PROFILE_ID}.v1");
     let stamp = now();
 
@@ -482,7 +486,7 @@ fn publish_version_inner(
 
 pub fn get_draft(conn: &Connection, profile_id: &str) -> Result<Option<DraftRow>, HarnessError> {
     conn.query_row(
-        "SELECT profile_id, base_version_id, document_json, revision, updated_at
+        "SELECT profile_id, base_version_id, document_json, revision, updated_at, source_candidate_json
            FROM harness_draft WHERE profile_id = ?1",
         params![profile_id],
         |row| {
@@ -492,6 +496,7 @@ pub fn get_draft(conn: &Connection, profile_id: &str) -> Result<Option<DraftRow>
                 document_json: row.get(2)?,
                 revision: row.get(3)?,
                 updated_at: row.get(4)?,
+                source_candidate_json: row.get(5)?,
             })
         },
     )
@@ -504,10 +509,7 @@ pub fn get_draft(conn: &Connection, profile_id: &str) -> Result<Option<DraftRow>
 /// Opening an editor must not require a separate "create draft" call: the
 /// document a user sees is always either their work in progress or an exact
 /// copy of what is live.
-pub fn get_or_create_draft(
-    conn: &Connection,
-    profile_id: &str,
-) -> Result<DraftRow, HarnessError> {
+pub fn get_or_create_draft(conn: &Connection, profile_id: &str) -> Result<DraftRow, HarnessError> {
     if let Some(existing) = get_draft(conn, profile_id)? {
         return Ok(existing);
     }
@@ -519,8 +521,8 @@ pub fn get_or_create_draft(
             serde_json::to_string(&HarnessBlueprint::default()).unwrap_or_else(|_| "{}".into())
         });
     conn.execute(
-        "INSERT INTO harness_draft (profile_id, base_version_id, document_json, revision, updated_at)
-         VALUES (?1, ?2, ?3, 0, ?4)",
+        "INSERT INTO harness_draft (profile_id, base_version_id, document_json, revision, updated_at, source_candidate_json)
+         VALUES (?1, ?2, ?3, 0, ?4, NULL)",
         params![
             profile_id,
             current.as_ref().map(|v| v.id.clone()),
@@ -568,6 +570,83 @@ pub fn save_draft(
     }
     get_draft(conn, profile_id)?
         .ok_or_else(|| HarnessError::internal("draft vanished after update"))
+}
+
+/// Create one drift candidate from the currently published document. The
+/// candidate is metadata-only: source bodies never cross this boundary.
+pub fn ensure_source_drift_candidate(
+    conn: &Connection,
+    profile_id: &str,
+    mismatches: &Value,
+) -> Result<Option<DraftRow>, HarnessError> {
+    if mismatches.as_array().map_or(true, Vec::is_empty) {
+        return Ok(None);
+    }
+    let candidate_json = mismatches.to_string();
+    if let Some(existing) = get_draft(conn, profile_id)? {
+        if existing.source_candidate_json.as_deref() == Some(candidate_json.as_str()) {
+            return Ok(Some(existing));
+        }
+        return Err(HarnessError::draft_conflict(
+            "an unpublished Draft already exists; reload before acknowledging source drift",
+        ));
+    }
+    let current = current_version(conn, profile_id)?
+        .ok_or_else(|| HarnessError::not_found("published Harness profile has no version"))?;
+    conn.execute(
+        "INSERT INTO harness_draft
+           (profile_id, base_version_id, document_json, revision, updated_at, source_candidate_json)
+         VALUES (?1, ?2, ?3, 0, ?4, ?5)",
+        params![
+            profile_id,
+            current.id,
+            current.document_json,
+            now(),
+            candidate_json
+        ],
+    )
+    .map_err(sql)?;
+    Ok(Some(get_draft(conn, profile_id)?.ok_or_else(|| {
+        HarnessError::internal("drift candidate vanished")
+    })?))
+}
+
+pub fn acknowledge_source_drift(
+    conn: &Connection,
+    profile_id: &str,
+    source_id: &str,
+    observed_digest: &str,
+    expected_revision: i64,
+) -> Result<DraftRow, HarnessError> {
+    let draft = get_draft(conn, profile_id)?
+        .ok_or_else(|| HarnessError::not_found("no drift candidate exists"))?;
+    if draft.revision != expected_revision {
+        return Err(HarnessError::draft_conflict(
+            "draft revision changed; reload before acknowledging drift",
+        ));
+    }
+    let candidate = draft
+        .source_candidate_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .ok_or_else(|| HarnessError::invalid("draft has no source drift candidate"))?;
+    let found = candidate
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|item| item.get("source_id").and_then(Value::as_str) == Some(source_id))
+        .and_then(|item| item.get("observed_digest").and_then(Value::as_str));
+    if found != Some(observed_digest) {
+        return Err(HarnessError::invalid(
+            "observed digest does not match drift candidate",
+        ));
+    }
+    conn.execute(
+        "UPDATE harness_draft SET revision = revision + 1, updated_at = ?2 WHERE profile_id = ?1 AND revision = ?3",
+        params![profile_id, now(), expected_revision],
+    ).map_err(sql)?;
+    get_draft(conn, profile_id)?
+        .ok_or_else(|| HarnessError::internal("draft vanished after acknowledgement"))
 }
 
 /// Drop a draft once it has been published. The published version is the record.
@@ -633,9 +712,7 @@ pub fn set_binding(
     }
     if mode == "pinned" {
         let Some(version_id) = version_id else {
-            return Err(HarnessError::invalid(
-                "mode=pinned requires a version_id",
-            ));
+            return Err(HarnessError::invalid("mode=pinned requires a version_id"));
         };
         match get_version(conn, version_id)? {
             Some(version) if version.profile_id == profile_id => {}
@@ -734,6 +811,27 @@ pub fn insert_run_snapshot(
 ) -> Result<(), HarnessError> {
     let snapshot_json = serde_json::to_string(snapshot)
         .map_err(|e| HarnessError::snapshot_persist_failed(e.to_string()))?;
+    let existing: Option<String> = conn
+        .query_row(
+            "SELECT canonical_hash FROM harness_run_snapshot WHERE run_id = ?1",
+            params![snapshot.run_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| HarnessError::snapshot_persist_failed(e.to_string()))?;
+    if let Some(hash) = existing {
+        if hash != snapshot.canonical_hash() {
+            return Err(HarnessError::new(
+                "harness_snapshot_conflict",
+                assistant_protocol::error::ErrorCategory::Conflict,
+                format!(
+                    "run {} already has a different Harness snapshot",
+                    snapshot.run_id
+                ),
+            ));
+        }
+        return Ok(());
+    }
     conn.execute(
         "INSERT INTO harness_run_snapshot
             (run_id, global_version_id, project_version_id, session_version_id,
@@ -832,4 +930,121 @@ pub fn list_audit(conn: &Connection, limit: i64) -> Result<Vec<Value>, HarnessEr
         })
         .map_err(sql)?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(sql)
+}
+
+pub fn sync_source(
+    conn: &Connection,
+    source_id: &str,
+    digest: &str,
+    mode: &str,
+) -> Result<bool, HarnessError> {
+    let old: Option<(String, String)> = conn
+        .query_row(
+            "SELECT digest, mode FROM harness_source_manifest WHERE source_id = ?1",
+            params![source_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(sql)?;
+    let drifted = old.as_ref().is_some_and(|(previous, _)| previous != digest);
+    if let Some((_, previous_mode)) = old {
+        if drifted && previous_mode == "pinned" {
+            return Err(HarnessError::invalid(format!(
+                "pinned Harness source drifted: {source_id}"
+            )));
+        }
+    }
+    conn.execute(
+        "INSERT INTO harness_source_manifest(source_id,digest,mode,status,updated_at)
+         VALUES(?1,?2,?3,?4,datetime('now'))
+         ON CONFLICT(source_id) DO UPDATE SET
+           digest=CASE WHEN excluded.status='current' THEN excluded.digest ELSE harness_source_manifest.digest END,
+           mode=excluded.mode, status=excluded.status, updated_at=excluded.updated_at",
+        params![source_id, digest, mode, if drifted { "drifted" } else { "current" }],
+    )
+    .map_err(sql)?;
+    Ok(drifted)
+}
+
+pub fn source_digest(
+    conn: &Connection,
+    source_id: &str,
+) -> Result<Option<(String, String)>, HarnessError> {
+    conn.query_row(
+        "SELECT digest, mode FROM harness_source_manifest WHERE source_id = ?1",
+        params![source_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
+    .map_err(sql)
+}
+
+pub fn list_sources(conn: &Connection, limit: i64) -> Result<Vec<Value>, HarnessError> {
+    let mut stmt = conn.prepare("SELECT source_id,digest,mode,status,updated_at FROM harness_source_manifest ORDER BY updated_at DESC LIMIT ?1").map_err(sql)?;
+    let rows = stmt
+        .query_map(params![limit], |row| {
+            Ok(serde_json::json!({
+                "source_id": row.get::<_, String>(0)?, "digest": row.get::<_, String>(1)?,
+                "mode": row.get::<_, String>(2)?, "status": row.get::<_, String>(3)?,
+                "updated_at": row.get::<_, String>(4)?
+            }))
+        })
+        .map_err(sql)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(sql)
+}
+
+pub fn insert_hook_trace(
+    conn: &Connection,
+    run_id: &str,
+    hook_id: &str,
+    phase: &str,
+    status: &str,
+    duration_ms: Option<u64>,
+) -> Result<(), HarnessError> {
+    conn.execute("INSERT INTO harness_hook_trace(id,run_id,hook_id,phase,status,duration_ms) VALUES(?1,?2,?3,?4,?5,?6)", params![format!("ht-{}", uuid::Uuid::new_v4()), run_id, hook_id, phase, status, duration_ms.map(|v| v as i64)]).map_err(sql)?;
+    Ok(())
+}
+
+pub fn list_hook_trace(
+    conn: &Connection,
+    run_id: Option<&str>,
+    limit: i64,
+) -> Result<Vec<Value>, HarnessError> {
+    let mut stmt = conn.prepare("SELECT id,run_id,hook_id,phase,status,duration_ms,created_at FROM harness_hook_trace WHERE (?1 IS NULL OR run_id=?1) ORDER BY created_at DESC,id DESC LIMIT ?2").map_err(sql)?;
+    let rows = stmt.query_map(params![run_id, limit], |row| Ok(serde_json::json!({
+        "id": row.get::<_, String>(0)?, "run_id": row.get::<_, String>(1)?, "hook_id": row.get::<_, String>(2)?,
+        "phase": row.get::<_, String>(3)?, "status": row.get::<_, String>(4)?, "duration_ms": row.get::<_, Option<i64>>(5)?, "created_at": row.get::<_, String>(6)?
+    }))).map_err(sql)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(sql)
+}
+
+/// Hook invocation projection from the single durable run_event authority.
+pub fn list_run_hook_trace(
+    conn: &Connection,
+    run_id: Option<&str>,
+    after_sequence: i64,
+    limit: i64,
+) -> Result<Vec<Value>, HarnessError> {
+    let capped = limit.clamp(1, 200);
+    let mut stmt = conn
+        .prepare(
+            "SELECT run_id, sequence, payload, timestamp FROM run_event
+         WHERE (?1 IS NULL OR run_id = ?1) AND sequence > ?2
+           AND event_type IN ('hook_invocation_started','hook_invocation_completed')
+         ORDER BY sequence ASC LIMIT ?3",
+        )
+        .map_err(sql)?;
+    let rows = stmt
+        .query_map(params![run_id, after_sequence, capped], |row| {
+            let payload: String = row.get(2)?;
+            let mut value: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("run_id".into(), Value::String(row.get(0)?));
+                obj.insert("sequence".into(), Value::from(row.get::<_, i64>(1)?));
+                obj.insert("timestamp".into(), Value::String(row.get(3)?));
+            }
+            Ok(value)
+        })
+        .map_err(sql)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(sql)
 }

@@ -78,7 +78,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
   const [results, setResults] = useState<CommandItem[]>(() => getStaticCommands(locale));
   const [searchScope, setSearchScope] = useState<'global' | 'local'>('global');
   const mounted = useHydrated();
-  
+
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Load locale
@@ -95,7 +95,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
 
   // Update static commands when locale changes
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     setAllCommands(() => {
       const statics = getStaticCommands(locale);
       // Re-add module commands if any
@@ -134,7 +134,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
     if (isOpen) {
       setTimeout(() => inputRef.current?.focus(), 50);
       startTransition(() => { setQuery(''); });
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
       setSelectedIndex(0);
       setResults(allCommands);
     }
@@ -144,7 +144,7 @@ export default function CommandPalette({ isOpen, onClose, onSelect, onToggleTerm
   useEffect(() => {
     if (!query.trim()) {
       startTransition(() => { setResults(allCommands); });
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
       setSelectedIndex(0);
       return;
     }

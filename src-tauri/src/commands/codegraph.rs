@@ -58,7 +58,10 @@ fn parse_rtk_gain_output(text: &str) -> Option<RtkGainResult> {
     for line in text.lines() {
         let trimmed = line.trim();
         if let Some(val) = trimmed.strip_prefix("Total commands:") {
-            total_commands = val.trim().split_whitespace().next()
+            total_commands = val
+                .trim()
+                .split_whitespace()
+                .next()
                 .and_then(|s| s.replace(',', "").parse().ok())
                 .unwrap_or(0);
         }
@@ -117,7 +120,11 @@ fn parse_rtk_gain_output(text: &str) -> Option<RtkGainResult> {
                     let saved = parse_token_amount(parts[si]);
 
                     if !command.is_empty() && (count > 0 || saved > 0) {
-                        commands.push(RtkGainCommand { command, count, tokens_saved: saved });
+                        commands.push(RtkGainCommand {
+                            command,
+                            count,
+                            tokens_saved: saved,
+                        });
                     }
                 }
             }
@@ -132,20 +139,24 @@ fn parse_rtk_gain_output(text: &str) -> Option<RtkGainResult> {
         total_saved = commands.iter().map(|c| c.tokens_saved).sum();
     }
 
-    Some(RtkGainResult { total_saved, total_commands, commands })
+    Some(RtkGainResult {
+        total_saved,
+        total_commands,
+        commands,
+    })
 }
 
 /// Parse a token amount like "11.1M", "7.4M", "176.4K", "1234"
 fn parse_token_amount(s: &str) -> u64 {
     let s = s.trim();
     if s.ends_with('M') {
-        let num: f64 = s[..s.len()-1].parse().unwrap_or(0.0);
+        let num: f64 = s[..s.len() - 1].parse().unwrap_or(0.0);
         (num * 1_000_000.0) as u64
     } else if s.ends_with('K') {
-        let num: f64 = s[..s.len()-1].parse().unwrap_or(0.0);
+        let num: f64 = s[..s.len() - 1].parse().unwrap_or(0.0);
         (num * 1_000.0) as u64
     } else if s.ends_with('B') {
-        let num: f64 = s[..s.len()-1].parse().unwrap_or(0.0);
+        let num: f64 = s[..s.len() - 1].parse().unwrap_or(0.0);
         (num * 1_000_000_000.0) as u64
     } else {
         s.replace(',', "").parse().unwrap_or(0)
@@ -213,7 +224,10 @@ fn find_project_root() -> PathBuf {
         // Check if CWD or CWD/parent has src/ or .codegraph/
         let mut check = Some(cwd.as_path());
         while let Some(dir) = check {
-            if dir.join("src").exists() || dir.join(".codegraph").exists() || dir.join("AGENTS.md").exists() {
+            if dir.join("src").exists()
+                || dir.join(".codegraph").exists()
+                || dir.join("AGENTS.md").exists()
+            {
                 return dir.to_path_buf();
             }
             check = dir.parent();
@@ -227,7 +241,12 @@ fn find_project_root() -> PathBuf {
 /// Try to generate CodeGraph data using the `codegraph explore` CLI.
 fn generate_codegraph_via_cli(root: &PathBuf) -> Option<Vec<CodeGraphNode>> {
     let output = std::process::Command::new("codegraph")
-        .args(["explore", root.to_string_lossy().as_ref(), "--format", "json"])
+        .args([
+            "explore",
+            root.to_string_lossy().as_ref(),
+            "--format",
+            "json",
+        ])
         .output()
         .ok()?;
 
@@ -251,7 +270,8 @@ fn read_codegraph_dir_tree(dir: &PathBuf, root: &PathBuf) -> Vec<CodeGraphNode> 
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            let name = path.file_name()
+            let name = path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .map(|s| s.to_string())
                 .unwrap_or_default();
@@ -297,7 +317,8 @@ fn read_simple_tree(dir: &PathBuf) -> Vec<CodeGraphNode> {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten().take(50) {
             let path = entry.path();
-            let name = path.file_name()
+            let name = path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .map(|s| s.to_string())
                 .unwrap_or_default();
@@ -364,27 +385,58 @@ fn try_parse_json_index(path: &std::path::Path) -> Vec<CodeGraphNode> {
         _ => return vec![],
     };
 
-    candidates.iter().filter_map(|v| {
-        let name = v.get("name").and_then(|n| n.as_str())?.to_string();
-        let kind = v.get("kind").and_then(|k| k.as_str()).unwrap_or("symbol").to_string();
-        let path = v.get("path").and_then(|p| p.as_str()).map(|s| s.to_string());
-        let symbol_type = v.get("symbolType").and_then(|t| t.as_str()).or_else(|| {
-            v.get("type").and_then(|t| t.as_str())
-        }).map(|s| s.to_string());
-        let line = v.get("line").and_then(|l| l.as_u64());
-        let children = v.get("children")
-            .and_then(|c| c.as_array())
-            .map(|arr| {
-                arr.iter().filter_map(|cv| {
-                    let n = cv.get("name").and_then(|n| n.as_str())?.to_string();
-                    let k = cv.get("kind").and_then(|k| k.as_str()).unwrap_or("symbol").to_string();
-                    Some(CodeGraphNode {
-                        name: n, kind: k, path: None, symbol_type: None, line: None, children: vec![],
-                    })
-                }).collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+    candidates
+        .iter()
+        .filter_map(|v| {
+            let name = v.get("name").and_then(|n| n.as_str())?.to_string();
+            let kind = v
+                .get("kind")
+                .and_then(|k| k.as_str())
+                .unwrap_or("symbol")
+                .to_string();
+            let path = v
+                .get("path")
+                .and_then(|p| p.as_str())
+                .map(|s| s.to_string());
+            let symbol_type = v
+                .get("symbolType")
+                .and_then(|t| t.as_str())
+                .or_else(|| v.get("type").and_then(|t| t.as_str()))
+                .map(|s| s.to_string());
+            let line = v.get("line").and_then(|l| l.as_u64());
+            let children = v
+                .get("children")
+                .and_then(|c| c.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|cv| {
+                            let n = cv.get("name").and_then(|n| n.as_str())?.to_string();
+                            let k = cv
+                                .get("kind")
+                                .and_then(|k| k.as_str())
+                                .unwrap_or("symbol")
+                                .to_string();
+                            Some(CodeGraphNode {
+                                name: n,
+                                kind: k,
+                                path: None,
+                                symbol_type: None,
+                                line: None,
+                                children: vec![],
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
 
-        Some(CodeGraphNode { name, kind, path, symbol_type, line, children })
-    }).collect()
+            Some(CodeGraphNode {
+                name,
+                kind,
+                path,
+                symbol_type,
+                line,
+                children,
+            })
+        })
+        .collect()
 }

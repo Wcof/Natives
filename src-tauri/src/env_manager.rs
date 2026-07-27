@@ -68,8 +68,8 @@ pub fn init_env_encryption_key(conn: &Connection) -> Result<String> {
 }
 
 fn validate_hex_key(key: &str) -> Result<()> {
-    let bytes =
-        hex::decode(key).map_err(|e| Error::Internal(format!("invalid encryption key hex: {e}")))?;
+    let bytes = hex::decode(key)
+        .map_err(|e| Error::Internal(format!("invalid encryption key hex: {e}")))?;
     if bytes.len() != 32 {
         return Err(Error::Internal(format!(
             "invalid encryption key length: expected 32 bytes, got {}",
@@ -81,8 +81,7 @@ fn validate_hex_key(key: &str) -> Result<()> {
 
 fn generate_random_hex(bytes: usize) -> String {
     use std::io::Read;
-    let mut rng = std::fs::File::open("/dev/urandom")
-        .expect("failed to open /dev/urandom");
+    let mut rng = std::fs::File::open("/dev/urandom").expect("failed to open /dev/urandom");
     let mut buf = vec![0u8; bytes];
     rng.read_exact(&mut buf)
         .expect("failed to read from /dev/urandom");
@@ -95,11 +94,10 @@ fn generate_random_hex(bytes: usize) -> String {
 ///
 /// The nonce (12 bytes) and tag (16 bytes) are randomly generated per encryption.
 pub fn encrypt(text: &str, encryption_key: &str) -> Result<String> {
-    let key_bytes =
-        hex::decode(encryption_key).map_err(|e| Error::Internal(format!("invalid key hex: {e}")))?;
+    let key_bytes = hex::decode(encryption_key)
+        .map_err(|e| Error::Internal(format!("invalid key hex: {e}")))?;
     let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
-    let cipher =
-        Aes256Gcm::new(key);
+    let cipher = Aes256Gcm::new(key);
 
     // Generate random 12-byte nonce
     let mut nonce_bytes = [0u8; 12];
@@ -130,8 +128,8 @@ pub fn encrypt(text: &str, encryption_key: &str) -> Result<String> {
 /// compatibility — on read, old values are transparently re-encrypted as v2
 /// by the caller (set_variable stores newly encrypted values).
 pub fn decrypt(encoded: &str, encryption_key: &str) -> Result<String> {
-    let key_bytes =
-        hex::decode(encryption_key).map_err(|e| Error::Internal(format!("invalid key hex: {e}")))?;
+    let key_bytes = hex::decode(encryption_key)
+        .map_err(|e| Error::Internal(format!("invalid key hex: {e}")))?;
 
     if encoded.starts_with(V2_PREFIX) {
         // New AES-256-GCM format: v2:<nonce_hex>:<ciphertext_hex>:<tag_hex>
@@ -144,8 +142,8 @@ pub fn decrypt(encoded: &str, encryption_key: &str) -> Result<String> {
             .map_err(|e| Error::Internal(format!("invalid nonce hex: {e}")))?;
         let ct_bytes = hex::decode(parts[1])
             .map_err(|e| Error::Internal(format!("invalid ciphertext hex: {e}")))?;
-        let tag_bytes = hex::decode(parts[2])
-            .map_err(|e| Error::Internal(format!("invalid tag hex: {e}")))?;
+        let tag_bytes =
+            hex::decode(parts[2]).map_err(|e| Error::Internal(format!("invalid tag hex: {e}")))?;
 
         if nonce_bytes.len() != 12 {
             return Err(Error::Internal("nonce must be 12 bytes".into()));
@@ -162,23 +160,18 @@ pub fn decrypt(encoded: &str, encryption_key: &str) -> Result<String> {
         let mut combined = ct_bytes;
         combined.extend_from_slice(&tag_bytes);
 
-        let plaintext = cipher
-            .decrypt(nonce, combined.as_slice())
-            .map_err(|_| Error::Internal("decryption failed (wrong key or corrupted data)".into()))?;
+        let plaintext = cipher.decrypt(nonce, combined.as_slice()).map_err(|_| {
+            Error::Internal("decryption failed (wrong key or corrupted data)".into())
+        })?;
 
         String::from_utf8(plaintext)
             .map_err(|e| Error::Internal(format!("decrypted bytes not valid UTF-8: {e}")))
     } else {
         // Legacy XOR + base64 format — attempt migration
-        let encrypted = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            encoded,
-        )
-        .map_err(|e| {
-            Error::Internal(format!(
-                "legacy base64 decode failed (corrupted data): {e}"
-            ))
-        })?;
+        let encrypted = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+            .map_err(|e| {
+                Error::Internal(format!("legacy base64 decode failed (corrupted data): {e}"))
+            })?;
         let mut decrypted = Vec::with_capacity(encrypted.len());
         for (i, &byte) in encrypted.iter().enumerate() {
             decrypted.push(byte ^ key_bytes[i % key_bytes.len()]);
@@ -367,7 +360,9 @@ mod tests {
         let key = init_env_encryption_key(&conn).unwrap();
         assert_eq!(hex::decode(&key).unwrap().len(), 32);
 
-        let stored = db::get_setting(&conn, ENCRYPTION_KEY_SETTING).unwrap().unwrap();
+        let stored = db::get_setting(&conn, ENCRYPTION_KEY_SETTING)
+            .unwrap()
+            .unwrap();
         assert_eq!(stored, key);
     }
 

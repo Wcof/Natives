@@ -167,7 +167,10 @@ fn parse_page(body: &Value) -> HubPage {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    HubPage { entries, next_cursor }
+    HubPage {
+        entries,
+        next_cursor,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -213,8 +216,11 @@ pub(crate) async fn search_with(client: &dyn HubClient, params: &Value) -> Resul
         Ok(page) => {
             cache_upsert(&page.entries)?;
             let installed = installed_hub_refs()?;
-            let servers: Vec<Value> =
-                page.entries.iter().map(|e| decorate(e, &installed)).collect();
+            let servers: Vec<Value> = page
+                .entries
+                .iter()
+                .map(|e| decorate(e, &installed))
+                .collect();
             Ok(json!({
                 "servers": servers,
                 "nextCursor": page.next_cursor,
@@ -373,7 +379,10 @@ fn apply_package(draft: &mut Map<String, Value>, package: &Value) -> Result<(), 
                 Some(v) if !identifier.contains(':') => format!("{identifier}:{v}"),
                 _ => identifier.to_string(),
             };
-            ("docker", vec!["run".into(), "--rm".into(), "-i".into(), image])
+            (
+                "docker",
+                vec!["run".into(), "--rm".into(), "-i".into(), image],
+            )
         }
         other => {
             return Err(format!(
@@ -605,10 +614,18 @@ mod tests {
 
     impl FakeHubClient {
         fn ok(entries: Vec<Value>, next_cursor: Option<&str>) -> Self {
-            Self { fail: false, entries, next_cursor: next_cursor.map(str::to_string) }
+            Self {
+                fail: false,
+                entries,
+                next_cursor: next_cursor.map(str::to_string),
+            }
         }
         fn down() -> Self {
-            Self { fail: true, entries: Vec::new(), next_cursor: None }
+            Self {
+                fail: true,
+                entries: Vec::new(),
+                next_cursor: None,
+            }
         }
     }
 
@@ -623,7 +640,10 @@ mod tests {
             if self.fail {
                 return Err("network down".into());
             }
-            Ok(HubPage { entries: self.entries.clone(), next_cursor: self.next_cursor.clone() })
+            Ok(HubPage {
+                entries: self.entries.clone(),
+                next_cursor: self.next_cursor.clone(),
+            })
         }
 
         async fn get(&self, registry_name: &str) -> Result<Value, String> {
@@ -700,7 +720,9 @@ mod tests {
             let data = store().unwrap();
             let conn = data.conn().unwrap();
             let cached: i64 = conn
-                .query_row("SELECT COUNT(*) FROM capability_mcp_hub_cache", [], |r| r.get(0))
+                .query_row("SELECT COUNT(*) FROM capability_mcp_hub_cache", [], |r| {
+                    r.get(0)
+                })
                 .unwrap();
             assert_eq!(cached, 2);
         })
@@ -711,14 +733,21 @@ mod tests {
     async fn search_network_failure_degrades_to_stale_cache() {
         with_temp_db(|| async {
             // No cache yet: failure must be honest, not an empty fake page.
-            let err = search_with(&FakeHubClient::down(), &json!({})).await.unwrap_err();
+            let err = search_with(&FakeHubClient::down(), &json!({}))
+                .await
+                .unwrap_err();
             assert!(err.contains("no local cache"), "{err}");
 
             // Seed the cache with a live page, then lose the network.
-            search_with(&FakeHubClient::ok(vec![npm_entry(), remote_entry()], None), &json!({}))
+            search_with(
+                &FakeHubClient::ok(vec![npm_entry(), remote_entry()], None),
+                &json!({}),
+            )
+            .await
+            .unwrap();
+            let out = search_with(&FakeHubClient::down(), &json!({}))
                 .await
                 .unwrap();
-            let out = search_with(&FakeHubClient::down(), &json!({})).await.unwrap();
             assert_eq!(out["stale"], true);
             assert_eq!(out["nextCursor"], Value::Null);
             assert_eq!(out["servers"].as_array().unwrap().len(), 2);
@@ -750,7 +779,10 @@ mod tests {
             assert_eq!(server["command"], "npx");
             assert_eq!(server["args"], json!(["-y", "@acme/files-mcp@1.2.3"]));
             assert_eq!(server["trusted"], false, "hub installs are never trusted");
-            assert_eq!(server["enabled"], false, "hub installs need explicit enabling");
+            assert_eq!(
+                server["enabled"], false,
+                "hub installs need explicit enabling"
+            );
             assert_eq!(server["source"], "hub");
             assert_eq!(server["hubRef"], "io.github.acme/files");
 

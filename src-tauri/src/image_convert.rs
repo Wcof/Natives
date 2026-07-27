@@ -178,7 +178,11 @@ mod tests {
     fn select_evictions_under_limit_is_noop() {
         let entries = vec![
             (PathBuf::from("/c/1.jpg"), 10, UNIX_EPOCH),
-            (PathBuf::from("/c/2.jpg"), 10, UNIX_EPOCH + Duration::from_secs(1)),
+            (
+                PathBuf::from("/c/2.jpg"),
+                10,
+                UNIX_EPOCH + Duration::from_secs(1),
+            ),
         ];
         assert!(select_evictions(&entries, 100).is_empty());
     }
@@ -186,9 +190,17 @@ mod tests {
     #[test]
     fn select_evictions_removes_oldest_first() {
         let entries = vec![
-            (PathBuf::from("/c/new.jpg"), 60, UNIX_EPOCH + Duration::from_secs(30)),
+            (
+                PathBuf::from("/c/new.jpg"),
+                60,
+                UNIX_EPOCH + Duration::from_secs(30),
+            ),
             (PathBuf::from("/c/oldest.jpg"), 60, UNIX_EPOCH),
-            (PathBuf::from("/c/mid.jpg"), 60, UNIX_EPOCH + Duration::from_secs(10)),
+            (
+                PathBuf::from("/c/mid.jpg"),
+                60,
+                UNIX_EPOCH + Duration::from_secs(10),
+            ),
         ];
         // 总量 180，上限 120 → 只需删掉最旧的一个
         let victims = select_evictions(&entries, 120);

@@ -23,7 +23,9 @@ pub fn run(cmd: &str, stdin_text: &str, cwd: Option<&str>, _idle_ms: u64, max_ms
         .spawn()
     {
         Ok(c) => c,
-        Err(e) => return json!({ "ok": false, "err": e.to_string(), "ms": started.elapsed().as_millis() }),
+        Err(e) => {
+            return json!({ "ok": false, "err": e.to_string(), "ms": started.elapsed().as_millis() })
+        }
     };
 
     if let Some(mut stdin) = child.stdin.take() {
@@ -32,7 +34,9 @@ pub fn run(cmd: &str, stdin_text: &str, cwd: Option<&str>, _idle_ms: u64, max_ms
 
     let output = match child.wait_with_output() {
         Ok(o) => o,
-        Err(e) => return json!({ "ok": false, "err": e.to_string(), "ms": started.elapsed().as_millis() }),
+        Err(e) => {
+            return json!({ "ok": false, "err": e.to_string(), "ms": started.elapsed().as_millis() })
+        }
     };
 
     let elapsed = started.elapsed().as_millis();

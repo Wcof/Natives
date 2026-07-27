@@ -165,15 +165,12 @@ pub fn search_files_with_deadline(
             } else {
                 let name_score = fuzzy_score(&q, &name_lower);
                 if name_score > 0.0 {
-                    let path_bonus = if fuzzy_score(
-                        &q,
-                        &entry_path.to_string_lossy().to_lowercase(),
-                    ) > 0.0
-                    {
-                        3.0
-                    } else {
-                        0.0
-                    };
+                    let path_bonus =
+                        if fuzzy_score(&q, &entry_path.to_string_lossy().to_lowercase()) > 0.0 {
+                            3.0
+                        } else {
+                            0.0
+                        };
                     results.push(SearchResult {
                         path: entry_path.to_string_lossy().to_string(),
                         line: None,
@@ -262,13 +259,7 @@ fn grep_with_system(
     _file_pattern: Option<&str>,
 ) -> Result<Vec<SearchResult>> {
     let mut cmd = std::process::Command::new("grep");
-    cmd.args([
-        "-r",
-        "-n",
-        "--include=*",
-        "-m",
-        &max_results.to_string(),
-    ]);
+    cmd.args(["-r", "-n", "--include=*", "-m", &max_results.to_string()]);
     cmd.arg(query).arg(root);
 
     let output = cmd
@@ -450,9 +441,8 @@ pub fn search_spotlight(query: &str, root: &str) -> Result<Vec<SearchResult>> {
         .filter(|c| *c != '\\' && *c != '"' && *c != '*')
         .collect();
     // Use kMDItemTextContent property query — enables PDF/DOCX/OCR full-text search
-    let mdfind_query = format!(
-        "(kMDItemTextContent == \"*{esc}*\"cd) || (kMDItemDisplayName == \"*{esc}*\"cd)"
-    );
+    let mdfind_query =
+        format!("(kMDItemTextContent == \"*{esc}*\"cd) || (kMDItemDisplayName == \"*{esc}*\"cd)");
 
     // Run mdfind with timeout
     let output = std::process::Command::new("mdfind")

@@ -60,7 +60,14 @@ pub fn create_draft(
             (draft_id, name, intent, conversation_id, origin_module_id,
              current_revision, state, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, 0, 'drafting', ?6, ?6)",
-        rusqlite::params![draft_id, name, intent, conversation_id, origin_module_id, ts],
+        rusqlite::params![
+            draft_id,
+            name,
+            intent,
+            conversation_id,
+            origin_module_id,
+            ts
+        ],
     )?;
     get_draft(conn, draft_id)
 }
@@ -328,8 +335,8 @@ mod tests {
     #[test]
     fn create_and_fetch_draft() {
         let (conn, dir) = setup();
-        let d = create_draft(&conn, "draft-1", "Pomodoro", "做一个番茄钟", None, None)
-            .expect("create");
+        let d =
+            create_draft(&conn, "draft-1", "Pomodoro", "做一个番茄钟", None, None).expect("create");
         assert_eq!(d.current_revision, 0);
         assert_eq!(d.state, DraftState::Drafting);
         assert_eq!(get_draft(&conn, "draft-1").expect("fetch").name, "Pomodoro");
@@ -341,8 +348,8 @@ mod tests {
         let (conn, dir) = setup();
         create_draft(&conn, "draft-1", "App", "intent", None, None).expect("create");
 
-        let out = append_revision(&conn, dir.path(), "draft-1", "<html>one</html>")
-            .expect("append");
+        let out =
+            append_revision(&conn, dir.path(), "draft-1", "<html>one</html>").expect("append");
         assert_eq!(out.revision, 1);
 
         let path = paths::revision_path(dir.path(), "draft-1", 1).expect("path");
@@ -455,8 +462,7 @@ mod tests {
     fn successful_publish_archives_draft_and_writes_module() {
         let (conn, dir) = setup();
         create_draft(&conn, "draft-1", "App", "intent", None, None).expect("create");
-        append_revision(&conn, dir.path(), "draft-1", "<html><div>ok</div></html>")
-            .expect("rev1");
+        append_revision(&conn, dir.path(), "draft-1", "<html><div>ok</div></html>").expect("rev1");
         set_state(&conn, "draft-1", DraftState::Generating).expect("to generating");
         set_state(&conn, "draft-1", DraftState::Ready).expect("to ready");
 
@@ -490,8 +496,7 @@ mod tests {
     fn publish_works_from_the_state_a_new_draft_is_actually_in() {
         let (conn, dir) = setup();
         create_draft(&conn, "draft-1", "App", "intent", None, None).expect("create");
-        append_revision(&conn, dir.path(), "draft-1", "<html><div>ok</div></html>")
-            .expect("rev1");
+        append_revision(&conn, dir.path(), "draft-1", "<html><div>ok</div></html>").expect("rev1");
         assert_eq!(
             get_draft(&conn, "draft-1").expect("draft").state,
             DraftState::Drafting,
@@ -499,8 +504,16 @@ mod tests {
         );
 
         let modules = dir.path().join("modules");
-        publish(&conn, dir.path(), &modules, "draft-1", "my-app", "My App", &[])
-            .expect("publish must work straight from Drafting");
+        publish(
+            &conn,
+            dir.path(),
+            &modules,
+            "draft-1",
+            "my-app",
+            "My App",
+            &[],
+        )
+        .expect("publish must work straight from Drafting");
         assert!(modules.join("my-app").join("index.html").exists());
     }
 
@@ -517,7 +530,10 @@ mod tests {
         let out = append_revision(&conn, dir.path(), "draft-1", "<html>three</html>")
             .expect("writing after undo must not collide");
 
-        assert_eq!(out.revision, 2, "the pointer, not the directory, picks the slot");
+        assert_eq!(
+            out.revision, 2,
+            "the pointer, not the directory, picks the slot"
+        );
         assert_eq!(
             read_current(&conn, dir.path(), "draft-1").expect("read"),
             "<html>three</html>"
@@ -530,7 +546,16 @@ mod tests {
         let (conn, dir) = setup();
         create_draft(&conn, "draft-1", "App", "intent", None, None).expect("create");
         let modules = dir.path().join("modules");
-        assert!(publish(&conn, dir.path(), &modules, "draft-1", "my-app", "My App", &[]).is_err());
+        assert!(publish(
+            &conn,
+            dir.path(),
+            &modules,
+            "draft-1",
+            "my-app",
+            "My App",
+            &[]
+        )
+        .is_err());
     }
 
     #[test]

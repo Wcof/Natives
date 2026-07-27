@@ -131,9 +131,7 @@ impl McpRegistry {
                     || url.contains("0.0.0.0")
                     || url.contains("[::1]")
                 {
-                    return Err(
-                        "SSRF: local MCP HTTP endpoints blocked unless trusted".into(),
-                    );
+                    return Err("SSRF: local MCP HTTP endpoints blocked unless trusted".into());
                 }
             }
         }
@@ -149,7 +147,8 @@ impl McpRegistry {
     }
 
     pub fn upsert_tool(&mut self, tool: McpToolDescriptor) {
-        self.tools.retain(|t| !(t.server_id == tool.server_id && t.name == tool.name));
+        self.tools
+            .retain(|t| !(t.server_id == tool.server_id && t.name == tool.name));
         self.tools.push(tool);
     }
 
@@ -191,8 +190,8 @@ mod tests {
                 args: None,
                 url: None,
                 trusted: false,
-            auth_token: None,
-            headers: None,
+                auth_token: None,
+                headers: None,
             })
             .unwrap_err();
         assert!(err.contains("untrusted"));

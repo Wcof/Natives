@@ -107,7 +107,12 @@ pub fn get_primary_key(conn: &rusqlite::Connection, provider_id: &str) -> Result
 }
 
 /// Mark a key as having failed (for fallback tracking).
-pub fn mark_key_failed(conn: &rusqlite::Connection, key_id: &str, error_code: &str, error_message: &str) -> Result<()> {
+pub fn mark_key_failed(
+    conn: &rusqlite::Connection,
+    key_id: &str,
+    error_code: &str,
+    error_message: &str,
+) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "UPDATE provider_api_keys
@@ -151,8 +156,9 @@ pub fn ensure_lease_table(conn: &rusqlite::Connection) -> Result<()> {
             acquired_at TEXT NOT NULL,
             released_at TEXT,
             fallback_used INTEGER NOT NULL DEFAULT 0
-        );"
-    ).map_err(|e| Error::Internal(e.to_string()))?;
+        );",
+    )
+    .map_err(|e| Error::Internal(e.to_string()))?;
     Ok(())
 }
 

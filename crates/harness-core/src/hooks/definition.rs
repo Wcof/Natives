@@ -191,6 +191,10 @@ impl HookSource {
 pub struct HookId(String);
 
 impl HookId {
+    pub fn native(uuid: &str, event: HookEvent) -> Self {
+        Self(format!("native/{uuid}#{}", event.as_str()))
+    }
+
     pub fn new(source: &HookSource, event: HookEvent) -> Self {
         let prefix = match source.scope {
             HookScope::Builtin => "builtin",
@@ -364,8 +368,7 @@ pub fn tool_pattern_matches(pattern: Option<&str>, tool_name: Option<&str>) -> b
         let candidate = candidate.trim();
         candidate == "*"
             || candidate == tool_name
-            || (candidate.ends_with('*')
-                && tool_name.starts_with(candidate.trim_end_matches('*')))
+            || (candidate.ends_with('*') && tool_name.starts_with(candidate.trim_end_matches('*')))
     })
 }
 
@@ -409,10 +412,19 @@ mod tests {
 
     #[test]
     fn event_parse_accepts_historical_aliases() {
-        assert_eq!(HookEvent::parse("pre_tool_use"), Some(HookEvent::PreToolUse));
-        assert_eq!(HookEvent::parse("CompactStart"), Some(HookEvent::PreCompact));
+        assert_eq!(
+            HookEvent::parse("pre_tool_use"),
+            Some(HookEvent::PreToolUse)
+        );
+        assert_eq!(
+            HookEvent::parse("CompactStart"),
+            Some(HookEvent::PreCompact)
+        );
         assert_eq!(HookEvent::parse("CompactEnd"), Some(HookEvent::PostCompact));
-        assert_eq!(HookEvent::parse("SubagentEnd"), Some(HookEvent::SubagentStop));
+        assert_eq!(
+            HookEvent::parse("SubagentEnd"),
+            Some(HookEvent::SubagentStop)
+        );
         assert_eq!(HookEvent::parse("NotAnEvent"), None);
     }
 
@@ -470,7 +482,10 @@ mod tests {
         assert!(tool_pattern_matches(None, Some("anything")));
         assert!(tool_pattern_matches(Some("  "), Some("anything")));
         assert!(tool_pattern_matches(Some("*"), Some("anything")));
-        assert!(tool_pattern_matches(Some("Bash|run_*"), Some("run_command")));
+        assert!(tool_pattern_matches(
+            Some("Bash|run_*"),
+            Some("run_command")
+        ));
         assert!(tool_pattern_matches(Some("Bash|run_*"), Some("Bash")));
         assert!(!tool_pattern_matches(Some("Bash|run_*"), Some("read_file")));
     }
@@ -578,7 +593,6 @@ mod tests {
             failure_policy: HookFailurePolicy::Fail,
             kind: HookKind::Builtin { name: "t".into() },
         };
-
 
         assert!(def.applies_to(Some("Bash"), &json!({"command": "git push"})));
         assert!(!def.applies_to(Some("Bash"), &json!({"command": "ls"})));

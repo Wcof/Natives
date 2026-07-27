@@ -195,9 +195,7 @@ impl ProcessSupervisor for LocalProcessSupervisor {
             cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
         }
 
-        let child = cmd
-            .spawn()
-            .map_err(|e| format!("spawn failed: {e}"))?;
+        let child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
 
         let live = LiveProcess {
             run_id: spec.run_id.clone(),
@@ -223,7 +221,8 @@ impl ProcessSupervisor for LocalProcessSupervisor {
         }
 
         if !spec.background {
-            let budget = Duration::from_millis(self.foreground_budget_ms.min(spec.timeout_ms.max(1)));
+            let budget =
+                Duration::from_millis(self.foreground_budget_ms.min(spec.timeout_ms.max(1)));
             let deadline = Instant::now() + budget;
             loop {
                 {
@@ -269,10 +268,7 @@ impl ProcessSupervisor for LocalProcessSupervisor {
         let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(1));
         loop {
             let snap = self.poll(task_id).await?;
-            if !matches!(
-                snap.state,
-                ProcessState::Running | ProcessState::Background
-            ) {
+            if !matches!(snap.state, ProcessState::Running | ProcessState::Background) {
                 return Ok(snap);
             }
             if Instant::now() >= deadline {

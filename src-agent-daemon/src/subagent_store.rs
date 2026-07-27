@@ -467,7 +467,8 @@ fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<SubagentSession> 
     })
 }
 
-const SESSION_SELECT: &str = "SELECT id, parent_conversation_id, child_conversation_id, parent_run_id,
+const SESSION_SELECT: &str =
+    "SELECT id, parent_conversation_id, child_conversation_id, parent_run_id,
     task_call_id, name, task, status, provider_id, key_id, model_id, attempted_bindings_json,
     last_activity_at, closed_at, error, created_at, updated_at
  FROM subagent_session";
@@ -652,7 +653,9 @@ pub fn get_session_by_child_conversation(
     let s = store()?;
     let conn = s.conn().map_err(|e| format!("conn lock: {e}"))?;
     conn.query_row(
-        &format!("{SESSION_SELECT} WHERE child_conversation_id = ?1 ORDER BY created_at DESC LIMIT 1"),
+        &format!(
+            "{SESSION_SELECT} WHERE child_conversation_id = ?1 ORDER BY created_at DESC LIMIT 1"
+        ),
         params![child],
         row_to_session,
     )
@@ -800,9 +803,11 @@ pub async fn request(method: &str, params: Value) -> Result<Value, String> {
                 .or_else(|| params.get("subagent_id"))
                 .and_then(Value::as_str)
             {
-                let next = if let Some(explicit) = params.get("binding").cloned().and_then(|v| {
-                    serde_json::from_value::<RouteBinding>(v).ok()
-                }) {
+                let next = if let Some(explicit) = params
+                    .get("binding")
+                    .cloned()
+                    .and_then(|v| serde_json::from_value::<RouteBinding>(v).ok())
+                {
                     crate::production::validate_route_binding(&explicit)?;
                     explicit
                 } else {
@@ -840,11 +845,7 @@ mod tests {
         let _warm = crate::storage::DataStore::new(&db, &art).expect("subagent temp db migrate");
         // Ensure parent conversation exists for FK tests.
         crate::conversation_store::ensure_conversation_stub(
-            "parent-1",
-            "openai",
-            "gpt-4o",
-            None,
-            None,
+            "parent-1", "openai", "gpt-4o", None, None,
         )
         .unwrap();
         f();
@@ -1016,10 +1017,16 @@ mod tests {
 
             touch_parent_heartbeat("parent-1").unwrap();
             assert!(parent_heartbeat_recent("parent-1", 90));
-            let before = get_subagent_session(&sid).unwrap().unwrap().last_activity_at;
+            let before = get_subagent_session(&sid)
+                .unwrap()
+                .unwrap()
+                .last_activity_at;
             // Parent touch must not bump child activity.
             touch_parent_heartbeat("parent-1").unwrap();
-            let after = get_subagent_session(&sid).unwrap().unwrap().last_activity_at;
+            let after = get_subagent_session(&sid)
+                .unwrap()
+                .unwrap()
+                .last_activity_at;
             assert_eq!(before, after);
         });
     }
@@ -1040,12 +1047,9 @@ mod tests {
             None,
         )
         .unwrap();
-        let out = request(
-            "subagent.touch",
-            json!({ "conversation_id": "parent-1" }),
-        )
-        .await
-        .unwrap();
+        let out = request("subagent.touch", json!({ "conversation_id": "parent-1" }))
+            .await
+            .unwrap();
         assert_eq!(out["ok"], true);
         assert_eq!(out["parent_heartbeat"], true);
         crate::storage::set_test_db_override(None, None);

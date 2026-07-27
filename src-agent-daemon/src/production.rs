@@ -161,6 +161,8 @@ pub struct RunStartContext {
     pub max_steps: u32,
     pub project_path: Option<std::path::PathBuf>,
     pub capability: Option<crate::capability_resolution::ResolvedCapabilitySnapshot>,
+    pub hooks: Option<agent_core::HookRegistry>,
+    pub prompt_blocks: Vec<harness_core::blueprint::PromptBlock>,
 }
 
 impl ProductionRuntime {
@@ -438,12 +440,16 @@ impl ProductionRuntime {
             max_steps,
             project_path,
             capability,
+            hooks,
+            prompt_blocks,
         } = ctx;
         let project_root = project_path.ok_or_else(|| {
             "project_path is required for daemon runs; process cwd fallback is disabled".to_string()
         })?;
-        // Full production hook set + project hooks for this workspace.
-        let hooks = build_production_hooks_for_project(Some(&project_root));
+        // RunManager resolved and persisted the Harness before entering this
+        // method. Keep a compatibility fallback only for direct test callers.
+        let hooks =
+            hooks.unwrap_or_else(|| build_production_hooks_for_project(Some(&project_root)));
         // Context budget: min(Profile tokenBudget, model context_window); default 128K.
         // chars/4 is only used when Provider usage is unavailable (engine estimate path).
         // Profile priority: resolved capability snapshot (DB authority) →
@@ -573,6 +579,12 @@ impl ProductionRuntime {
             .as_ref()
             .and_then(|c| c.skill_prompt.clone())
             .unwrap_or_else(|| crate::skill_store::prompt_for_project(&project_root));
+        let harness_prompt = prompt_blocks
+            .iter()
+            .filter(|b| b.enabled)
+            .map(|b| b.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
         // Parent-authored directive for this child run (registered by the `task`
         // tool before RunManager started us). Layered on top of the profile
         // prompt — prompt text only, so it cannot widen permissions or tools,
@@ -584,6 +596,13 @@ impl ProductionRuntime {
             Some(&project_root),
             (!skill_prompt.is_empty()).then_some(skill_prompt.as_str()),
         );
+        if !harness_prompt.trim().is_empty() {
+            assembled.system_prompt = if assembled.system_prompt.is_empty() {
+                harness_prompt
+            } else {
+                format!("{}\n\n{}", assembled.system_prompt, harness_prompt)
+            };
+        }
         // Built-in surfaces have no profile on disk, so their working
         // instructions are prepended here. Project/skill context still applies.
         if let Some(surface_prompt) = agent_profile_id

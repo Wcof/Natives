@@ -1,5 +1,5 @@
-use crate::{Error, Result};
 use crate::terminal_recorder;
+use crate::{Error, Result};
 use portable_pty::{CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -69,7 +69,8 @@ fn sanitize_pty_input(data: &str) -> String {
         .filter_map(|(b, k)| if *k { Some(*b) } else { None })
         .collect();
     // 剔除的都是完整的 ESC 序列（ASCII 边界），剩余字节仍是合法 UTF-8
-    String::from_utf8(filtered).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+    String::from_utf8(filtered)
+        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
 /// Session 生命周期状态
@@ -135,7 +136,8 @@ impl TerminalManager {
             // 查找 ESC ] 7 ;
             if let Some(pos) = line.find("\x1b]7;") {
                 let after_prefix = &line[pos + 5..];
-                let end = after_prefix.find(|c: char| c == '\x07' || c == '\x1b')
+                let end = after_prefix
+                    .find(|c: char| c == '\x07' || c == '\x1b')
                     .unwrap_or(after_prefix.len());
                 let content = &after_prefix[..end];
                 // 格式: file://hostname/path 或裸路径
@@ -172,7 +174,8 @@ impl TerminalManager {
                 let pattern = format!("\x1b]{};", osc_num);
                 if let Some(pos) = line.find(&pattern) {
                     let after_prefix = &line[pos + pattern.len()..];
-                    let end = after_prefix.find(|c: char| c == '\x07' || c == '\x1b')
+                    let end = after_prefix
+                        .find(|c: char| c == '\x07' || c == '\x1b')
                         .unwrap_or(after_prefix.len());
                     let title = &after_prefix[..end];
                     if !title.is_empty() {
@@ -213,7 +216,11 @@ impl TerminalManager {
 
         // Build command
         let shell = std::env::var("SHELL").unwrap_or_else(|_| {
-            if cfg!(windows) { "powershell.exe".to_string() } else { "/bin/zsh".to_string() }
+            if cfg!(windows) {
+                "powershell.exe".to_string()
+            } else {
+                "/bin/zsh".to_string()
+            }
         });
         let mut cmd = CommandBuilder::new(&shell);
 
@@ -252,7 +259,8 @@ if [[ -n "$NATIVES" ]]; then
     }
     add-zsh-hook preexec _natives_preexec
 fi
-"#.trim()
+"#
+                .trim(),
             ))
         } else if shell.ends_with("bash") {
             Some((
@@ -267,7 +275,8 @@ if [ -n "$NATIVES" ]; then
     PROMPT_COMMAND="_natives_chpwd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
     _natives_chpwd
 fi
-"#.trim()
+"#
+                .trim(),
             ))
         } else {
             None
@@ -280,7 +289,9 @@ fi
         // Sanitize env: strip __NEXT_PRIVATE_* and add overrides + locale
         let mut has_utf8_locale = false;
         for (key, value) in std::env::vars() {
-            if key.starts_with("__NEXT_PRIVATE_") { continue; }
+            if key.starts_with("__NEXT_PRIVATE_") {
+                continue;
+            }
             if key == "LC_ALL" || key == "LC_CTYPE" || key == "LANG" {
                 if value.contains("UTF-8") || value.contains("utf8") || value.contains("utf-8") {
                     has_utf8_locale = true;
@@ -291,7 +302,14 @@ fi
         // GUI 启动的 app 不继承 shell 的 locale，zsh 会把中文路径按字节转义成乱码
         // 兜底设 UTF-8 locale
         if !has_utf8_locale {
-            cmd.env("LANG", if cfg!(target_os = "macos") { "zh_CN.UTF-8" } else { "en_US.UTF-8" });
+            cmd.env(
+                "LANG",
+                if cfg!(target_os = "macos") {
+                    "zh_CN.UTF-8"
+                } else {
+                    "en_US.UTF-8"
+                },
+            );
         }
         // 标准终端能力声明
         cmd.env("TERM", "xterm-256color");
@@ -349,7 +367,10 @@ fi
             .to_string();
 
         {
-            let mut sessions = self.sessions.lock().map_err(|e| Error::Internal(e.to_string()))?;
+            let mut sessions = self
+                .sessions
+                .lock()
+                .map_err(|e| Error::Internal(e.to_string()))?;
             sessions.insert(
                 session_id.clone(),
                 TerminalSession {
@@ -369,7 +390,10 @@ fi
             );
         }
         {
-            let mut writers = self.writers.lock().map_err(|e| Error::Internal(e.to_string()))?;
+            let mut writers = self
+                .writers
+                .lock()
+                .map_err(|e| Error::Internal(e.to_string()))?;
             writers.insert(session_id.clone(), writer);
         }
 
@@ -479,11 +503,15 @@ fi
                                 osc_buffer.push(byte as char);
                                 if byte == 0x07 || byte == 0x1b {
                                     // OSC 序列结束，尝试解析
-                                    if osc_buffer.contains("]7;") || osc_buffer.contains("]0;")
-                                        || osc_buffer.contains("]1;") || osc_buffer.contains("]2;")
+                                    if osc_buffer.contains("]7;")
+                                        || osc_buffer.contains("]0;")
+                                        || osc_buffer.contains("]1;")
+                                        || osc_buffer.contains("]2;")
                                     {
                                         if let Ok(mut sessions) = reader_sessions.lock() {
-                                            if let Some(session) = sessions.get_mut(&reader_session_id) {
+                                            if let Some(session) =
+                                                sessions.get_mut(&reader_session_id)
+                                            {
                                                 if let Some(cwd) = Self::parse_osc7(&osc_buffer) {
                                                     session.cwd = cwd.clone();
                                                     let _ = app_handle_clone.emit(
@@ -491,7 +519,9 @@ fi
                                                         serde_json::json!({ "sessionId": &reader_session_id, "pwd": cwd }),
                                                     );
                                                 }
-                                                if let Some(title) = Self::parse_osc_title(&osc_buffer) {
+                                                if let Some(title) =
+                                                    Self::parse_osc_title(&osc_buffer)
+                                                {
                                                     session.title = title.clone();
                                                     let _ = app_handle_clone.emit(
                                                         "terminal:title-changed",
@@ -559,7 +589,10 @@ fi
         // from raw writes is safe and prevents injection attacks.
         let sanitized = sanitize_pty_input(data);
 
-        let mut writers = self.writers.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        let mut writers = self
+            .writers
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         let writer = writers
             .get_mut(session_id)
             .ok_or_else(|| Error::NotFound(format!("session {session_id}")))?;
@@ -581,7 +614,10 @@ fi
 
     /// Resize a PTY session — sends the new size to the kernel via the master fd.
     pub fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<()> {
-        let mut sessions = self.sessions.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         if let Some(session) = sessions.get_mut(session_id) {
             // Update in-memory fields
             session.cols = cols;
@@ -589,7 +625,12 @@ fi
             // Actual PTY resize via the master fd
             if let Some(ref master) = session.master_pty {
                 if let Ok(m) = master.lock() {
-                    if let Err(e) = m.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }) {
+                    if let Err(e) = m.resize(PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    }) {
                         eprintln!("[Terminal] PTY resize failed for {session_id}: {e}");
                     }
                 }
@@ -607,8 +648,14 @@ fi
 
     /// Kill a PTY session — terminates the child process and cleans up.
     pub fn kill(&self, session_id: &str) -> Result<()> {
-        let mut sessions = self.sessions.lock().map_err(|e| Error::Internal(e.to_string()))?;
-        let mut writers = self.writers.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        let mut writers = self
+            .writers
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
 
         if let Some(session) = sessions.get_mut(session_id) {
             // ── Unix: send SIGTERM to the entire process group first ──
@@ -660,13 +707,21 @@ fi
 
     /// Get session info (used by ghostty-vt render state query).
     #[cfg(feature = "ghostty-vt")]
-    pub fn get_session(&self, _session_id: &str) -> Result<std::sync::MutexGuard<'_, std::collections::HashMap<String, TerminalSession>>> {
-        self.sessions.lock().map_err(|e| Error::Internal(e.to_string()))
+    pub fn get_session(
+        &self,
+        _session_id: &str,
+    ) -> Result<std::sync::MutexGuard<'_, std::collections::HashMap<String, TerminalSession>>> {
+        self.sessions
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))
     }
 
     /// 获取 session 状态快照（用于前端查询）
     pub fn get_session_state(&self, session_id: &str) -> Result<SessionStateSnapshot> {
-        let sessions = self.sessions.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        let sessions = self
+            .sessions
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         let session = sessions
             .get(session_id)
             .ok_or_else(|| Error::NotFound(format!("session {session_id}")))?;
@@ -684,24 +739,33 @@ fi
 
     /// 获取 session 列表（用于前端展示 tabs）
     pub fn list_sessions(&self) -> Result<Vec<SessionStateSnapshot>> {
-        let sessions = self.sessions.lock().map_err(|e| Error::Internal(e.to_string()))?;
-        Ok(sessions.iter().map(|(id, s)| SessionStateSnapshot {
-            session_id: id.clone(),
-            cols: s.cols,
-            rows: s.rows,
-            title: s.title.clone(),
-            cwd: s.cwd.clone(),
-            foreground_process: s.foreground_process.clone(),
-            pid: s.pid,
-            status: s.status.clone(),
-        }).collect())
+        let sessions = self
+            .sessions
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        Ok(sessions
+            .iter()
+            .map(|(id, s)| SessionStateSnapshot {
+                session_id: id.clone(),
+                cols: s.cols,
+                rows: s.rows,
+                title: s.title.clone(),
+                cwd: s.cwd.clone(),
+                foreground_process: s.foreground_process.clone(),
+                pid: s.pid,
+                status: s.status.clone(),
+            })
+            .collect())
     }
 
     /// Get the CWD of a PTY session.
     /// 优先使用 OSC 7 追踪到的 cwd（已存储在 session.cwd），
     /// 失败再走 lsof fallback，最后才回 HOME。
     pub fn cwd(&self, session_id: &str) -> Result<(String, &str)> {
-        let sessions = self.sessions.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        let sessions = self
+            .sessions
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         let session = sessions
             .get(session_id)
             .ok_or_else(|| Error::NotFound(format!("session {session_id}")))?;
@@ -738,7 +802,8 @@ fi
             .arg(pid.to_string())
             .arg("-Fn")
             .env("LC_ALL", "en_US.UTF-8")
-            .output().ok()?;
+            .output()
+            .ok()?;
 
         if !output.status.success() {
             return None;
@@ -767,7 +832,10 @@ fi
 
     /// 获取前台进程信息
     pub fn proc(&self, session_id: &str) -> Result<(String, u32)> {
-        let sessions = self.sessions.lock().map_err(|e| Error::Internal(e.to_string()))?;
+        let sessions = self
+            .sessions
+            .lock()
+            .map_err(|e| Error::Internal(e.to_string()))?;
         let session = sessions
             .get(session_id)
             .ok_or_else(|| Error::NotFound(format!("session {session_id}")))?;
@@ -781,8 +849,7 @@ fi
         // 使用 `ps -o comm=,pid= -p <child>` 递归查找
         drop(sessions);
 
-        let proc_name = Self::get_foreground_process(pid)
-            .unwrap_or_else(|| "shell".to_string());
+        let proc_name = Self::get_foreground_process(pid).unwrap_or_else(|| "shell".to_string());
 
         // 也尝试更新 session 中的 foreground_process
         if let Ok(mut sessions) = self.sessions.lock() {
@@ -800,9 +867,12 @@ fi
         if let Some(name) = Self::get_process_name(pid) {
             // 如果是 shell，查找其子进程
             let name_lower = name.to_lowercase();
-            if name_lower.contains("zsh") || name_lower.contains("bash")
-                || name_lower.contains("fish") || name_lower.contains("sh")
-                || name_lower.contains("powershell") || name_lower.contains("cmd")
+            if name_lower.contains("zsh")
+                || name_lower.contains("bash")
+                || name_lower.contains("fish")
+                || name_lower.contains("sh")
+                || name_lower.contains("powershell")
+                || name_lower.contains("cmd")
             {
                 // 查找子进程
                 if let Some(child) = Self::get_child_process(pid) {
@@ -821,7 +891,8 @@ fi
             .arg(pid.to_string())
             .arg("-o")
             .arg("comm=")
-            .output().ok()?;
+            .output()
+            .ok()?;
         if output.status.success() {
             let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !name.is_empty() {
@@ -839,17 +910,26 @@ fi
         let pgrep = std::process::Command::new("pgrep")
             .arg("-P")
             .arg(parent_pid.to_string())
-            .output().ok()?;
+            .output()
+            .ok()?;
         if !pgrep.status.success() {
             return None;
         }
         let stdout = String::from_utf8_lossy(&pgrep.stdout);
         // 取最后一个（最新创建的子进程）
-        let child_pid = stdout.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).last()?;
+        let child_pid = stdout
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .last()?;
         let name = Self::get_process_name(child_pid.parse().ok()?)?;
         // 去掉路径前缀（macOS comm 可能是全路径）
         let base = name.rsplit('/').next().unwrap_or(&name).to_string();
-        if base.is_empty() { None } else { Some(base) }
+        if base.is_empty() {
+            None
+        } else {
+            Some(base)
+        }
     }
 }
 
@@ -869,8 +949,8 @@ fn decode_lsof_path(path: &str) -> String {
     let chars: Vec<char> = path.chars().collect();
     let mut i = 0;
     while i < chars.len() {
-        if i + 3 < chars.len() && chars[i] == '\\' && chars[i+1] == 'x' {
-            let hex_str: String = chars[i+2..i+4].iter().collect();
+        if i + 3 < chars.len() && chars[i] == '\\' && chars[i + 1] == 'x' {
+            let hex_str: String = chars[i + 2..i + 4].iter().collect();
             if let Ok(byte_val) = u8::from_str_radix(&hex_str, 16) {
                 bytes.push(byte_val);
                 i += 4;
@@ -969,8 +1049,7 @@ pub fn launch_binary(name: &str, extra_paths: &[&str]) -> Result<()> {
         }
     }
 
-    let bin_path = resolved_path
-        .ok_or_else(|| Error::NotFound(format!("{name} not found")))?;
+    let bin_path = resolved_path.ok_or_else(|| Error::NotFound(format!("{name} not found")))?;
 
     std::process::Command::new(&bin_path)
         .spawn()
@@ -989,7 +1068,9 @@ pub struct GhosttyManager {
 
 impl GhosttyManager {
     pub fn new() -> Self {
-        Self { pids: Arc::new(Mutex::new(Vec::new())) }
+        Self {
+            pids: Arc::new(Mutex::new(Vec::new())),
+        }
     }
 
     /// Launch Ghostty as a standalone terminal emulator.
@@ -999,8 +1080,7 @@ impl GhosttyManager {
     /// If `config_path` is provided, pass `--config-file=<path>` to Ghostty.
     pub fn launch(&self, config_path: Option<&std::path::Path>) -> Result<()> {
         let ghostty_path = Self::find_binary();
-        let path = ghostty_path
-            .ok_or_else(|| Error::NotFound("Ghostty not found".into()))?;
+        let path = ghostty_path.ok_or_else(|| Error::NotFound("Ghostty not found".into()))?;
 
         // On macOS, use `open` to launch the .app bundle (handles activation
         // policies, LSEnvironment, and Dock integration correctly).
@@ -1025,11 +1105,14 @@ impl GhosttyManager {
             cmd.spawn()
         };
 
-        let mut child = child
-            .map_err(|e| Error::Internal(format!("failed to launch Ghostty: {e}")))?;
+        let mut child =
+            child.map_err(|e| Error::Internal(format!("failed to launch Ghostty: {e}")))?;
         let pid = child.id();
         {
-            let mut pids = self.pids.lock().map_err(|e| Error::Internal(e.to_string()))?;
+            let mut pids = self
+                .pids
+                .lock()
+                .map_err(|e| Error::Internal(e.to_string()))?;
             pids.push(pid);
         }
         // Detach — don't wait for child
@@ -1054,7 +1137,9 @@ impl GhosttyManager {
     /// Focus the Ghostty window (macOS only).
     /// Uses `osascript` to send the activate command to the running app.
     pub fn focus(&self) -> Result<()> {
-        if !cfg!(target_os = "macos") { return Ok(()); }
+        if !cfg!(target_os = "macos") {
+            return Ok(());
+        }
         std::process::Command::new("osascript")
             .arg("-e")
             .arg("tell application \"Ghostty\" to activate")
@@ -1067,7 +1152,9 @@ impl GhosttyManager {
     pub fn kill_all(&self) {
         if let Ok(mut pids) = self.pids.lock() {
             for &pid in pids.iter() {
-                unsafe { libc::kill(pid as i32, libc::SIGTERM); }
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGTERM);
+                }
             }
             pids.clear();
         }
@@ -1087,7 +1174,9 @@ impl GhosttyManager {
             if cfg!(target_os = "macos") {
                 v.push("/Applications/Ghostty.app/Contents/MacOS/ghostty".to_string());
                 if let Some(ref h) = home {
-                    v.push(format!("{h}/Applications/Ghostty.app/Contents/MacOS/ghostty"));
+                    v.push(format!(
+                        "{h}/Applications/Ghostty.app/Contents/MacOS/ghostty"
+                    ));
                 }
             }
             if cfg!(target_os = "linux") {

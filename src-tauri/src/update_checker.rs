@@ -12,14 +12,8 @@ const GITHUB_REPO: &str = "Wcof/Natives";
 /// Semantic version comparison.
 /// Returns: -1 if a < b, 0 if a == b, 1 if a > b
 pub fn compare_versions(a: &str, b: &str) -> i8 {
-    let a_parts: Vec<u64> = a
-        .split('.')
-        .filter_map(|s| s.parse().ok())
-        .collect();
-    let b_parts: Vec<u64> = b
-        .split('.')
-        .filter_map(|s| s.parse().ok())
-        .collect();
+    let a_parts: Vec<u64> = a.split('.').filter_map(|s| s.parse().ok()).collect();
+    let b_parts: Vec<u64> = b.split('.').filter_map(|s| s.parse().ok()).collect();
 
     let max_len = a_parts.len().max(b_parts.len());
     for i in 0..max_len {
@@ -138,7 +132,9 @@ pub fn check_for_updates(state: &AppState) -> Result<serde_json::Value> {
     };
 
     // Check if version is muted or dismissed
-    let pool_conn = state.db.get()
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
 

@@ -163,8 +163,7 @@ impl DoomLoopDetector {
 
     fn diagnose_tools(&self) -> Option<DoomLoopReason> {
         let seq: Vec<&str> = self.recent_tools.iter().map(String::as_str).collect();
-        let (period, repeats) =
-            find_periodic_cycle(&seq, TOOL_MAX_PERIOD, required_tool_repeats)?;
+        let (period, repeats) = find_periodic_cycle(&seq, TOOL_MAX_PERIOD, required_tool_repeats)?;
         Some(DoomLoopReason {
             signal: DoomLoopSignal::Tool,
             period,
@@ -175,8 +174,7 @@ impl DoomLoopDetector {
 
     fn diagnose_texts(&self) -> Option<DoomLoopReason> {
         let seq: Vec<&str> = self.recent_texts.iter().map(String::as_str).collect();
-        let (period, repeats) =
-            find_periodic_cycle(&seq, TEXT_MAX_PERIOD, required_text_repeats)?;
+        let (period, repeats) = find_periodic_cycle(&seq, TEXT_MAX_PERIOD, required_text_repeats)?;
         let block = &seq[seq.len() - period..];
         // Short blocks ("Ok.", "Trying again.") repeat for benign reasons; the
         // cycle only counts if at least one step carries real content.
@@ -340,7 +338,9 @@ mod tests {
         assert!(!d.is_doom_loop());
         d.observe_text(a);
         d.observe_text(b);
-        let reason = d.diagnose().expect("period-2 text cycle should be detected");
+        let reason = d
+            .diagnose()
+            .expect("period-2 text cycle should be detected");
         assert_eq!(reason.signal, DoomLoopSignal::Text);
         assert_eq!(reason.period, 2);
         assert_eq!(reason.repeats, 3);
@@ -355,7 +355,10 @@ mod tests {
         // so no block repeats verbatim.
         let mut d = DoomLoopDetector::new();
         for round in 0..6 {
-            d.observe_tool("edit_file", &format!("path=/a,old=v{round},new=v{}", round + 1));
+            d.observe_tool(
+                "edit_file",
+                &format!("path=/a,old=v{round},new=v{}", round + 1),
+            );
             d.observe_tool("run_tests", "suite=unit");
             assert!(
                 !d.is_doom_loop(),
@@ -414,7 +417,10 @@ mod tests {
             d.observe_tool("read_file", "path=/a");
             d.observe_tool("write_file", "path=/a");
         }
-        assert!(!d.is_doom_loop(), "3 rounds must stay under the period-2 bar");
+        assert!(
+            !d.is_doom_loop(),
+            "3 rounds must stay under the period-2 bar"
+        );
     }
 
     #[test]

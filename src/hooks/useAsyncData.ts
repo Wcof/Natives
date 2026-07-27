@@ -36,7 +36,7 @@ export function useAsyncData<T>(
     } catch (err) {
       if (mounted.current) setState({ data: null, loading: false, error: classifyError(err) });
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/use-memo
+  // eslint-disable-next-line react-hooks/use-memo
   }, deps);
 
   const setError = useCallback((e: unknown) => {

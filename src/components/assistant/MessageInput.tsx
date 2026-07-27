@@ -192,7 +192,7 @@ export default function MessageInput(props: MessageInputProps) {
     flushDraftToStore();
     localDirtyRef.current = false;
     if (draftText !== undefined) setInput(draftText);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when conversation (draftKey) changes
+
   }, [draftKey]);
 
   // Store → input for the *same* conversation only when we are not mid-edit
@@ -209,7 +209,7 @@ export default function MessageInput(props: MessageInputProps) {
       return;
     }
     if (draftText !== input) setInput(draftText);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- input is local authority while dirty
+
   }, [draftText]);
 
   useEffect(() => {
@@ -217,7 +217,7 @@ export default function MessageInput(props: MessageInputProps) {
     setQuestionHistory(history);
     questionHistoryIndexRef.current = history.length;
     questionHistoryDraftRef.current = input;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- project change resets its history cursor
+
   }, [projectPath]);
 
   useEffect(() => {

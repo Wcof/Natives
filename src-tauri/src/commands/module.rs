@@ -1,4 +1,4 @@
-use crate::{module_manager, permission_center, emit_db_state_changed, Error, Result};
+use crate::{emit_db_state_changed, module_manager, permission_center, Error, Result};
 use serde_json::Value as JsonValue;
 use tauri::State;
 
@@ -14,14 +14,23 @@ fn dirs_or_home() -> std::path::PathBuf {
 
 /// 扫描模块目录并把结果同步进 DB（module_list 读 DB，不同步则「扫描」形同虚设）。
 #[tauri::command]
-pub fn module_scan(app_handle: tauri::AppHandle, state: State<'_, AppState>) -> Result<Vec<JsonValue>> {
+pub fn module_scan(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<JsonValue>> {
     let dir = modules_dir();
     let results = module_manager::scan_modules(&dir);
-    let pool_conn = state.db.get()
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     module_manager::sync_modules_to_db(conn, &dir)?;
-    emit_db_state_changed(&app_handle, "module", serde_json::json!({ "action": "scan" }));
+    emit_db_state_changed(
+        &app_handle,
+        "module",
+        serde_json::json!({ "action": "scan" }),
+    );
     serde_json::to_value(results)
         .map(|v| {
             if let JsonValue::Array(arr) = v {
@@ -34,20 +43,29 @@ pub fn module_scan(app_handle: tauri::AppHandle, state: State<'_, AppState>) -> 
 }
 
 #[tauri::command]
-pub fn module_install(path_or_zip: String, app_handle: tauri::AppHandle, state: State<'_, AppState>) -> Result<JsonValue> {
-    let pool_conn = state.db.get()
+pub fn module_install(
+    path_or_zip: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<JsonValue> {
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     let module_id = module_manager::install_module(conn, &modules_dir(), &path_or_zip)?;
-    emit_db_state_changed(&app_handle, "module", serde_json::json!({ "action": "install", "moduleId": module_id }));
+    emit_db_state_changed(
+        &app_handle,
+        "module",
+        serde_json::json!({ "action": "install", "moduleId": module_id }),
+    );
     Ok(serde_json::json!({ "moduleId": module_id }))
 }
 
 #[tauri::command]
 pub fn module_read_manifest(source: String) -> Result<JsonValue> {
-    let manifest =
-        module_manager::read_manifest_from_source(&modules_dir(), &source)
-            .map_err(|e| Error::InvalidInput(e))?;
+    let manifest = module_manager::read_manifest_from_source(&modules_dir(), &source)
+        .map_err(|e| Error::InvalidInput(e))?;
     serde_json::to_value(manifest).map_err(|e| Error::Internal(e.to_string()))
 }
 
@@ -57,7 +75,9 @@ pub fn module_grant_permission(
     permission: String,
     state: State<'_, AppState>,
 ) -> Result<()> {
-    let pool_conn = state.db.get()
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     permission_center::grant_permission(conn, &module_id, &permission, None)
@@ -69,7 +89,9 @@ pub fn module_revoke_permission(
     permission: String,
     state: State<'_, AppState>,
 ) -> Result<()> {
-    let pool_conn = state.db.get()
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     permission_center::revoke_permission(conn, &module_id, &permission, None)
@@ -80,7 +102,9 @@ pub fn module_list_permissions(
     module_id: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<JsonValue>> {
-    let pool_conn = state.db.get()
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     let records = permission_center::list_permissions(conn, &module_id)?;
@@ -101,7 +125,9 @@ pub fn module_get_audit_log(
     limit: Option<i64>,
     state: State<'_, AppState>,
 ) -> Result<Vec<JsonValue>> {
-    let pool_conn = state.db.get()
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     let entries =
@@ -118,29 +144,40 @@ pub fn module_get_audit_log(
 }
 
 #[tauri::command]
-pub fn module_approve_all_permissions(
-    module_id: String,
-    state: State<'_, AppState>,
-) -> Result<()> {
-    let pool_conn = state.db.get()
+pub fn module_approve_all_permissions(module_id: String, state: State<'_, AppState>) -> Result<()> {
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     permission_center::approve_all_permissions(conn, &module_id, None)
 }
 
 #[tauri::command]
-pub fn module_uninstall(module_id: String, app_handle: tauri::AppHandle, state: State<'_, AppState>) -> Result<()> {
-    let pool_conn = state.db.get()
+pub fn module_uninstall(
+    module_id: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     module_manager::uninstall_module(conn, &modules_dir(), &module_id)?;
-    emit_db_state_changed(&app_handle, "module", serde_json::json!({ "action": "uninstall", "moduleId": module_id }));
+    emit_db_state_changed(
+        &app_handle,
+        "module",
+        serde_json::json!({ "action": "uninstall", "moduleId": module_id }),
+    );
     Ok(())
 }
 
 #[tauri::command]
 pub fn module_list(state: State<'_, AppState>) -> Result<Vec<JsonValue>> {
-    let pool_conn = state.db.get()
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     let modules = module_manager::list_modules(conn)?;
@@ -156,40 +193,75 @@ pub fn module_list(state: State<'_, AppState>) -> Result<Vec<JsonValue>> {
 }
 
 #[tauri::command]
-pub fn module_enable(module_id: String, app_handle: tauri::AppHandle, state: State<'_, AppState>) -> Result<()> {
-    let pool_conn = state.db.get()
+pub fn module_enable(
+    module_id: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     module_manager::enable_module(conn, &module_id)?;
-    emit_db_state_changed(&app_handle, "module", serde_json::json!({ "action": "enable", "moduleId": module_id }));
+    emit_db_state_changed(
+        &app_handle,
+        "module",
+        serde_json::json!({ "action": "enable", "moduleId": module_id }),
+    );
     Ok(())
 }
 
 #[tauri::command]
-pub fn module_disable(module_id: String, app_handle: tauri::AppHandle, state: State<'_, AppState>) -> Result<()> {
-    let pool_conn = state.db.get()
+pub fn module_disable(
+    module_id: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<()> {
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     module_manager::disable_module(conn, &module_id)?;
-    emit_db_state_changed(&app_handle, "module", serde_json::json!({ "action": "disable", "moduleId": module_id }));
+    emit_db_state_changed(
+        &app_handle,
+        "module",
+        serde_json::json!({ "action": "disable", "moduleId": module_id }),
+    );
     Ok(())
 }
 
 #[tauri::command]
-pub fn module_update(module_id: String, source: Option<String>, app_handle: tauri::AppHandle, state: State<'_, AppState>) -> Result<JsonValue> {
-    let pool_conn = state.db.get()
+pub fn module_update(
+    module_id: String,
+    source: Option<String>,
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<JsonValue> {
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     let mdir = modules_dir();
     if let Some(src) = source {
         // Full update: read new manifest → replace files → re-sync permissions
         let updated_id = module_manager::update_module(conn, &mdir, &module_id, &src)?;
-        emit_db_state_changed(&app_handle, "module", serde_json::json!({ "action": "update", "moduleId": updated_id }));
+        emit_db_state_changed(
+            &app_handle,
+            "module",
+            serde_json::json!({ "action": "update", "moduleId": updated_id }),
+        );
         Ok(serde_json::json!({ "moduleId": updated_id, "ok": true }))
     } else {
         // No source provided: just re-sync DB from existing files on disk
         module_manager::sync_modules_to_db(conn, &mdir)?;
-        emit_db_state_changed(&app_handle, "module", serde_json::json!({ "action": "update", "moduleId": module_id }));
+        emit_db_state_changed(
+            &app_handle,
+            "module",
+            serde_json::json!({ "action": "update", "moduleId": module_id }),
+        );
         Ok(serde_json::json!({ "moduleId": module_id, "ok": true }))
     }
 }
@@ -206,7 +278,9 @@ pub fn write_generated_module(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<JsonValue> {
-    let pool_conn = state.db.get()
+    let pool_conn = state
+        .db
+        .get()
         .map_err(|e| Error::Internal(format!("failed to get DB connection: {e}")))?;
     let conn: &rusqlite::Connection = &*pool_conn;
     let outcome = module_manager::write_generated_module(

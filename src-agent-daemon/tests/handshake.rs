@@ -7,12 +7,11 @@
 //! - Forged and replayed requests
 //! - Client disconnect cleanup
 
-use assistant_protocol::v1::daemon::{
-    HandshakeRequest, HandshakeResponse,
-    RpcRequest, RpcResponse,
-};
 use assistant_protocol::error::DaemonError;
-use assistant_protocol::version::{ProtocolVersion, negotiate};
+use assistant_protocol::v1::daemon::{
+    HandshakeRequest, HandshakeResponse, RpcRequest, RpcResponse,
+};
+use assistant_protocol::version::{negotiate, ProtocolVersion};
 
 // ---------------------------------------------------------------------------
 // Handshake protocol tests
@@ -82,7 +81,10 @@ fn test_protocol_version_incompatible() {
     let client = ProtocolVersion::new(0, 1, 0);
     let daemon = ProtocolVersion::new(2, 0, 0);
     let result = negotiate(&client, &daemon);
-    assert!(!result.compatible, "Different major version should be incompatible");
+    assert!(
+        !result.compatible,
+        "Different major version should be incompatible"
+    );
     assert!(result.upgrade_required.is_some());
 }
 
@@ -158,7 +160,10 @@ fn test_session_token_isolation() {
     let client1_token = "session-1";
     let client2_token = "session-2";
 
-    assert_ne!(client1_token, client2_token, "Session tokens must be unique");
+    assert_ne!(
+        client1_token, client2_token,
+        "Session tokens must be unique"
+    );
 
     // Each client can only use their own token
     let client1_sessions = vec![client1_token.to_string()];
@@ -203,5 +208,8 @@ fn test_daemon_status_serialization() {
         serde_json::from_str(&json).unwrap();
 
     assert_eq!(deserialized.uptime_secs, 42);
-    assert_eq!(deserialized.health, assistant_protocol::v1::daemon::DaemonHealth::Healthy);
+    assert_eq!(
+        deserialized.health,
+        assistant_protocol::v1::daemon::DaemonHealth::Healthy
+    );
 }

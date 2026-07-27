@@ -20,7 +20,15 @@ pub const REDACTED: &str = "***";
 
 /// Key fragments that make the value after `=` or `:` a secret.
 const SECRET_KEYS: [&str; 10] = [
-    "token", "secret", "password", "passwd", "apikey", "api_key", "api-key", "auth", "credential",
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "apikey",
+    "api_key",
+    "api-key",
+    "auth",
+    "credential",
     "session",
 ];
 
@@ -148,7 +156,10 @@ mod tests {
     fn secret_shaped_arguments_are_masked() {
         assert_eq!(redact_argument("--token=abc123"), "--token=***");
         assert_eq!(redact_argument("API_KEY=sk-live-1"), "API_KEY=***");
-        assert_eq!(redact_argument("authorization:Bearer x"), "authorization:***");
+        assert_eq!(
+            redact_argument("authorization:Bearer x"),
+            "authorization:***"
+        );
     }
 
     #[test]

@@ -90,7 +90,11 @@ pub fn counts(resolution: &Resolution) -> Value {
         if hook.enabled {
             enabled += 1;
         }
-        if !hook_point_of(hook.definition.event).1.trigger.is_dispatched() {
+        if !hook_point_of(hook.definition.event)
+            .1
+            .trigger
+            .is_dispatched()
+        {
             inert += 1;
         }
     }
@@ -205,10 +209,7 @@ mod tests {
     fn a_hook_projection_carries_its_full_provenance() {
         let resolution = resolve(&[http_hook("https://hooks.example/post")], &[]);
         let value = resolved_hook(&resolution.hooks[0]);
-        assert_eq!(
-            value["id"],
-            "project/.claude/hooks.json#PostToolUse[0]/0"
-        );
+        assert_eq!(value["id"], "project/.claude/hooks.json#PostToolUse[0]/0");
         assert_eq!(value["stage"], "tool_execute");
         assert_eq!(value["source"]["origin"], ".claude/hooks.json");
         assert_eq!(value["source"]["group_index"], 0);
@@ -218,7 +219,11 @@ mod tests {
         assert_eq!(value["failure_policy"], "fail");
         assert_eq!(value["dispatched"], true);
         assert_eq!(value["locked"], false);
-        assert_eq!(value["trusted"], Value::Null, "trust does not apply to HTTP hooks");
+        assert_eq!(
+            value["trusted"],
+            Value::Null,
+            "trust does not apply to HTTP hooks"
+        );
     }
 
     #[test]
@@ -287,7 +292,10 @@ mod tests {
 
     #[test]
     fn counts_group_by_source_scope() {
-        let resolution = resolve(&[http_hook("https://hooks.example/post"), subagent_hook()], &[]);
+        let resolution = resolve(
+            &[http_hook("https://hooks.example/post"), subagent_hook()],
+            &[],
+        );
         let counts = hook_catalog(&resolution)["counts"].clone();
         assert_eq!(counts["total"], 2);
         assert_eq!(counts["enabled"], 2);

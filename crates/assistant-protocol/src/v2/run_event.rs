@@ -57,6 +57,28 @@ pub enum RunEventKind {
     Queued,
     Preparing,
     Started,
+    HookInvocationStarted {
+        invocation_id: String,
+        hook_id: String,
+        hook_event: String,
+        source: String,
+        ordinal: u32,
+        input_summary: String,
+        input_truncated: bool,
+    },
+    HookInvocationCompleted {
+        invocation_id: String,
+        hook_id: String,
+        hook_event: String,
+        source: String,
+        ordinal: u32,
+        status: String,
+        effective_decision: Option<String>,
+        error_category: Option<String>,
+        duration_ms: u64,
+        output_summary: String,
+        output_truncated: bool,
+    },
     TextDelta {
         text: String,
     },
@@ -280,6 +302,8 @@ impl RunEventKind {
             Self::Queued => "queued",
             Self::Preparing => "preparing",
             Self::Started => "started",
+            Self::HookInvocationStarted { .. } => "hook_invocation_started",
+            Self::HookInvocationCompleted { .. } => "hook_invocation_completed",
             Self::TextDelta { .. } => "text_delta",
             Self::ReasoningDelta { .. } => "reasoning_delta",
             Self::ToolCallRequested { .. } => "tool_call_requested",
@@ -414,9 +438,7 @@ mod tests {
             RunEventKind::Queued,
             RunEventKind::Preparing,
             RunEventKind::Started,
-            RunEventKind::TextDelta {
-                text: "hi".into(),
-            },
+            RunEventKind::TextDelta { text: "hi".into() },
             RunEventKind::ReasoningDelta {
                 text: "think".into(),
             },
@@ -527,7 +549,8 @@ mod tests {
     /// decode. This is the whole reason they are `#[serde(default)]`.
     #[test]
     fn plan_mode_changed_decodes_a_minimal_stored_payload() {
-        let stored = r#"{"type":"plan_mode_changed","transition":"approved","effective_profile":"ask"}"#;
+        let stored =
+            r#"{"type":"plan_mode_changed","transition":"approved","effective_profile":"ask"}"#;
         let decoded: RunEventKind = serde_json::from_str(stored).unwrap();
         assert_eq!(decoded.type_name(), "plan_mode_changed");
         assert!(!decoded.is_terminal());

@@ -84,13 +84,7 @@ fn ensure_conversation_for_queue(conversation_id: &str, params: &Value) -> Resul
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     let project = params.get("project_id").and_then(Value::as_str);
-    conversation_store::ensure_conversation_stub(
-        conversation_id,
-        provider,
-        model,
-        None,
-        project,
-    )
+    conversation_store::ensure_conversation_stub(conversation_id, provider, model, None, project)
 }
 
 fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
@@ -544,9 +538,7 @@ fn reorder(params: Value) -> Result<Value, String> {
     let store = store()?;
     let conn = store.conn()?;
     let now = chrono::Utc::now().to_rfc3339();
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(|e| e.to_string())?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     for (position, id) in id_list.iter().enumerate() {
         tx.execute(
             "UPDATE prompt_queue SET position = ?1, updated_at = ?2
@@ -593,14 +585,7 @@ async fn send_now(params: Value) -> Result<Value, String> {
         .ok_or_else(|| "id is required".to_string())?;
 
     let store = store()?;
-    let (
-        conversation_id,
-        content,
-        attachments_raw,
-        provider_id,
-        model_id,
-        project_path,
-    ) = {
+    let (conversation_id, content, attachments_raw, provider_id, model_id, project_path) = {
         let conn = store.conn()?;
         conn.query_row(
             "SELECT q.conversation_id, q.content, q.attachments,
@@ -637,9 +622,7 @@ async fn send_now(params: Value) -> Result<Value, String> {
         );
     }
 
-    let action = harness
-        .send_now(&conversation_id, id)
-        .map_err(|e| e)?;
+    let action = harness.send_now(&conversation_id, id).map_err(|e| e)?;
     persist_actor_snapshot(&conversation_id)?;
 
     // Cancel active runs when needed. Only the winner of finish_run(expected_run_id)
@@ -686,12 +669,12 @@ async fn send_now(params: Value) -> Result<Value, String> {
                             "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
                             params![now, item.id],
                         );
-                        let _ =
-                            conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id]);
+                        let _ = conn
+                            .execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id]);
                     }
                     let start_req = StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+                        agent_profile_id: None,
+                        capability_selection: None,
                         run_id: None,
                         conversation_id: Some(conversation_id.clone()),
                         provider_id: Some(provider_id.clone()),
@@ -756,8 +739,8 @@ async fn send_now(params: Value) -> Result<Value, String> {
         .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
 
     let start_req = StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+        agent_profile_id: None,
+        capability_selection: None,
         run_id: None,
         conversation_id: Some(conversation_id.clone()),
         provider_id: Some(provider_id),
@@ -841,15 +824,12 @@ pub async fn on_run_terminal(
                     "UPDATE prompt_queue SET status = 'sent', updated_at = ?1 WHERE id = ?2",
                     params![now, item.id],
                 );
-                let _ = conn.execute(
-                    "DELETE FROM prompt_queue WHERE id = ?1",
-                    params![item.id],
-                );
+                let _ = conn.execute("DELETE FROM prompt_queue WHERE id = ?1", params![item.id]);
             }
 
             let start_req = StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+                agent_profile_id: None,
+                capability_selection: None,
                 run_id: None,
                 conversation_id: Some(conversation_id.to_string()),
                 provider_id: Some(provider_id),
@@ -867,12 +847,7 @@ pub async fn on_run_terminal(
                 runtime_id: None,
             };
             let run = crate::run_manager::RunManager::start_detached_global(start_req)?;
-            harness.mark_running_item(
-                conversation_id,
-                &run.id,
-                Some(&item.id),
-                &item.content,
-            );
+            harness.mark_running_item(conversation_id, &run.id, Some(&item.id), &item.content);
             persist_actor_snapshot(conversation_id)?;
             Ok(Some(run.id))
         }
@@ -897,7 +872,7 @@ pub fn queue_item_json(item: &QueueItem) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     fn env_lock() -> crate::storage::EnvTestGuard {
         crate::storage::DataStore::env_test_lock()
     }
@@ -941,8 +916,7 @@ mod tests {
         std::env::set_var("NATIVES_RUNTIME_DIR", dir.path());
         let art = dir.path().join("artifacts");
         crate::storage::set_test_db_override(Some(db.clone()), Some(art.clone()));
-        let warm = crate::storage::DataStore::new(&db, &art)
-            .expect("prompt_queue temp db migrate");
+        let warm = crate::storage::DataStore::new(&db, &art).expect("prompt_queue temp db migrate");
         assert!(
             warm.has_table("conversation") && warm.has_table("prompt_queue"),
             "temp db missing tables: {}",
@@ -1081,7 +1055,11 @@ mod tests {
             rt.block_on(async {
                 let cid = format!("pq-sendnow-{}", Uuid::new_v4());
                 conversation_store::ensure_conversation_stub(
-                    &cid, "openai", "gpt-4o", None, Some("/tmp"),
+                    &cid,
+                    "openai",
+                    "gpt-4o",
+                    None,
+                    Some("/tmp"),
                 )
                 .unwrap();
                 // Use process-global manager: send_now cancels via global_run_manager().
@@ -1089,7 +1067,7 @@ mod tests {
                 let rm = crate::run_manager::global_run_manager();
                 let active = rm
                     .create_run(assistant_protocol::v2::CreateRunRequest {
-            capability_selection: None,
+                        capability_selection: None,
                         conversation_id: cid.clone(),
                         provider_id: "openai".into(),
                         model_id: "gpt-4o".into(),
@@ -1108,8 +1086,8 @@ mod tests {
                     .unwrap();
                 let _ = crate::run_manager::RunManager::start_detached_global(
                     assistant_protocol::v2::StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+                        agent_profile_id: None,
+                        capability_selection: None,
                         run_id: Some(active.id.clone()),
                         conversation_id: Some(cid.clone()),
                         provider_id: Some("openai".into()),
@@ -1170,6 +1148,4 @@ mod tests {
             });
         });
     }
-
-
 }

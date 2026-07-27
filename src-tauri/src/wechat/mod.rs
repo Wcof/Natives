@@ -7,6 +7,6 @@
 //!
 //! Reference: fanbox/electron/wechat/ (bridge.js 467L + ilink.js 213L + driver.js 187L)
 
-pub mod ilink;
 pub mod bridge;
 pub mod driver;
+pub mod ilink;

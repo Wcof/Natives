@@ -38,6 +38,8 @@ pub const ALL: &[(i64, &str)] = &[
     // and both must stay present and ascending.
     (21, MIGRATION_021),
     (22, MIGRATION_022),
+    (23, MIGRATION_023),
+    (24, MIGRATION_024),
 ];
 
 /// Migration 001: Core schema — conversations, messages, runs, events.
@@ -912,6 +914,35 @@ CREATE INDEX IF NOT EXISTS idx_harness_audit_profile
     ON harness_audit(profile_id, created_at DESC);
 ";
 
+const MIGRATION_023: &str = "
+CREATE TABLE IF NOT EXISTS harness_source_manifest (
+    source_id TEXT PRIMARY KEY,
+    profile_id TEXT,
+    digest TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'tracked' CHECK(mode IN ('tracked','pinned')),
+    status TEXT NOT NULL DEFAULT 'current' CHECK(status IN ('current','drifted')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_harness_source_manifest_status
+    ON harness_source_manifest(status, updated_at DESC);
+CREATE TABLE IF NOT EXISTS harness_hook_trace (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    hook_id TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    status TEXT NOT NULL,
+    duration_ms INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_harness_hook_trace_run
+    ON harness_hook_trace(run_id, created_at DESC, id DESC);
+";
+
+/// Migration 024: bounded metadata for an automatically discovered source drift.
+const MIGRATION_024: &str = "
+ALTER TABLE harness_draft ADD COLUMN source_candidate_json TEXT;
+";
+
 #[cfg(test)]
 mod tests {
     use super::ALL;
@@ -938,14 +969,22 @@ mod tests {
     #[test]
     fn the_capability_and_harness_migrations_are_both_present() {
         let versions: Vec<i64> = ALL.iter().map(|(v, _)| *v).collect();
-        assert!(versions.contains(&21), "capability library migration 021 is missing");
-        assert!(versions.contains(&22), "harness control plane migration 022 is missing");
         assert!(
-            ALL.iter().any(|(v, sql)| *v == 21 && sql.contains("capability_skill")),
+            versions.contains(&21),
+            "capability library migration 021 is missing"
+        );
+        assert!(
+            versions.contains(&22),
+            "harness control plane migration 022 is missing"
+        );
+        assert!(
+            ALL.iter()
+                .any(|(v, sql)| *v == 21 && sql.contains("capability_skill")),
             "021 is no longer the capability library migration"
         );
         assert!(
-            ALL.iter().any(|(v, sql)| *v == 22 && sql.contains("harness_profile")),
+            ALL.iter()
+                .any(|(v, sql)| *v == 22 && sql.contains("harness_profile")),
             "022 is no longer the harness control plane migration"
         );
     }

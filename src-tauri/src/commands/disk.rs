@@ -67,7 +67,11 @@ static METRICS: OnceLock<Mutex<MetricsSampler>> = OnceLock::new();
 #[tauri::command]
 pub async fn system_metrics() -> Result<SystemMetrics> {
     tokio::task::spawn_blocking(|| {
-        let sampler = METRICS.get_or_init(|| Mutex::new(MetricsSampler { system: System::new_all() }));
+        let sampler = METRICS.get_or_init(|| {
+            Mutex::new(MetricsSampler {
+                system: System::new_all(),
+            })
+        });
         let mut sampler = sampler.lock().map_err(|e| Error::Internal(e.to_string()))?;
         sampler.system.refresh_cpu_usage();
         sampler.system.refresh_memory();

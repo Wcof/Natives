@@ -185,7 +185,9 @@ fn handshake_captures_capabilities_verbatim() {
     };
     assert_eq!(started["tools_discovered"], 2);
 
-    let caps = rt.server_capabilities("full").expect("capabilities captured");
+    let caps = rt
+        .server_capabilities("full")
+        .expect("capabilities captured");
     assert!(caps.tools);
     assert!(caps.resources);
     assert!(caps.resources_list_changed);
@@ -283,9 +285,14 @@ fn resource_templates_widen_the_allowlist_only_by_one_segment() {
     let tpl = rt
         .list_resource_templates("full")
         .expect("resources/templates/list");
-    assert_eq!(tpl["resource_templates"][0]["uriTemplate"], "mem://doc/{slug}");
+    assert_eq!(
+        tpl["resource_templates"][0]["uriTemplate"],
+        "mem://doc/{slug}"
+    );
 
-    let read = rt.read_resource("full", "mem://doc/intro").expect("template read");
+    let read = rt
+        .read_resource("full", "mem://doc/intro")
+        .expect("template read");
     assert_eq!(read["allowlist_match"], "template:mem://doc/{slug}");
 
     // The template must not become a subtree pass.

@@ -223,8 +223,7 @@ pub fn replace_env(conn: &Connection, app_id: &str, pairs: &[(String, String)]) 
     // Prefer upsert semantics: do not wipe keys that are not mentioned.
     // For full replace callers still pass the complete list.
     let existing = list_env_keys(conn, app_id)?;
-    let new_keys: std::collections::HashSet<&str> =
-        pairs.iter().map(|(k, _)| k.as_str()).collect();
+    let new_keys: std::collections::HashSet<&str> = pairs.iter().map(|(k, _)| k.as_str()).collect();
     for old in existing {
         if !new_keys.contains(old.as_str()) {
             remove_env_key(conn, app_id, &old)?;
@@ -429,7 +428,10 @@ mod tests {
             "loc1"
         );
         set_env(&conn, "loc1", "API_URL", "http://x").unwrap();
-        assert_eq!(list_env_keys(&conn, "loc1").unwrap(), vec!["API_URL".to_string()]);
+        assert_eq!(
+            list_env_keys(&conn, "loc1").unwrap(),
+            vec!["API_URL".to_string()]
+        );
         let map = get_env_map(&conn, "loc1").unwrap();
         assert_eq!(map, vec![("API_URL".into(), "http://x".into())]);
 

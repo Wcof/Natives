@@ -2,13 +2,13 @@
 // Per-timezone SQLite-backed cache for dashboard snapshots.
 // The snapshot is built by usage_sync and read by usage_get_cached.
 
-use chrono::{Datelike, TimeZone};
 use crate::db;
 use crate::usage::{
-    UsageDashboardResponse, UsagePeriodData, UsageSourceStatus, UsageWarning, RtkSummary,
+    RtkSummary, UsageDashboardResponse, UsagePeriodData, UsageSourceStatus, UsageWarning,
 };
-use serde::{Deserialize, Serialize};
+use chrono::{Datelike, TimeZone};
 use rusqlite::OptionalExtension;
+use serde::{Deserialize, Serialize};
 
 /// Schema version for snapshot serialization.
 /// Increment when the payload structure changes.
@@ -193,7 +193,10 @@ pub fn slice_response_with_custom(
     );
 
     // Filter daily records to the range
-    let daily: Vec<_> = snapshot.calendar.daily.iter()
+    let daily: Vec<_> = snapshot
+        .calendar
+        .daily
+        .iter()
         .filter(|r| {
             // Simple date-based filtering: records have date strings YYYY-MM-DD
             // We convert to timestamp for comparison
@@ -203,29 +206,41 @@ pub fn slice_response_with_custom(
         .filter(|r| {
             // Apply project filter
             project_path.map_or(true, |proj| {
-                r.project_id.as_ref().map_or(false, |pid| is_project_match(pid, proj))
+                r.project_id
+                    .as_ref()
+                    .map_or(false, |pid| is_project_match(pid, proj))
             })
         })
         .cloned()
         .collect();
 
     // Filter activity to the range
-    let activity: Vec<_> = snapshot.calendar.activity.iter()
+    let activity: Vec<_> = snapshot
+        .calendar
+        .activity
+        .iter()
         .filter(|a| a.hour_start_ms >= start_ms && a.hour_start_ms < end_ms)
         .filter(|a| {
             project_path.map_or(true, |proj| {
-                a.project_id.as_ref().map_or(false, |pid| is_project_match(pid, proj))
+                a.project_id
+                    .as_ref()
+                    .map_or(false, |pid| is_project_match(pid, proj))
             })
         })
         .cloned()
         .collect();
 
     // Filter sessions to the range
-    let sessions: Vec<_> = snapshot.calendar.sessions.iter()
+    let sessions: Vec<_> = snapshot
+        .calendar
+        .sessions
+        .iter()
         .filter(|s| s.started_at_ms >= start_ms && s.started_at_ms < end_ms)
         .filter(|s| {
             project_path.map_or(true, |proj| {
-                s.project_id.as_ref().map_or(false, |pid| is_project_match(pid, proj))
+                s.project_id
+                    .as_ref()
+                    .map_or(false, |pid| is_project_match(pid, proj))
             })
         })
         .cloned()
@@ -244,26 +259,41 @@ pub fn slice_response_with_custom(
 
     // Handle 24h preset specially — use rolling_24h data
     let (daily, activity, sessions) = if preset == "24h" {
-        let rolling_daily: Vec<_> = snapshot.rolling_24h.daily.iter()
+        let rolling_daily: Vec<_> = snapshot
+            .rolling_24h
+            .daily
+            .iter()
             .filter(|r| {
                 project_path.map_or(true, |proj| {
-                    r.project_id.as_ref().map_or(false, |pid| is_project_match(pid, proj))
+                    r.project_id
+                        .as_ref()
+                        .map_or(false, |pid| is_project_match(pid, proj))
                 })
             })
             .cloned()
             .collect();
-        let rolling_activity: Vec<_> = snapshot.rolling_24h.activity.iter()
+        let rolling_activity: Vec<_> = snapshot
+            .rolling_24h
+            .activity
+            .iter()
             .filter(|a| {
                 project_path.map_or(true, |proj| {
-                    a.project_id.as_ref().map_or(false, |pid| is_project_match(pid, proj))
+                    a.project_id
+                        .as_ref()
+                        .map_or(false, |pid| is_project_match(pid, proj))
                 })
             })
             .cloned()
             .collect();
-        let rolling_sessions: Vec<_> = snapshot.rolling_24h.sessions.iter()
+        let rolling_sessions: Vec<_> = snapshot
+            .rolling_24h
+            .sessions
+            .iter()
             .filter(|s| {
                 project_path.map_or(true, |proj| {
-                    s.project_id.as_ref().map_or(false, |pid| is_project_match(pid, proj))
+                    s.project_id
+                        .as_ref()
+                        .map_or(false, |pid| is_project_match(pid, proj))
                 })
             })
             .cloned()
@@ -313,10 +343,11 @@ fn compute_range(
         let nanos = ((now_ms % 1000) * 1_000_000) as u32;
         let dt = chrono::Utc.timestamp_opt(secs, nanos).unwrap();
         let local_dt = dt.with_timezone(&tz);
-        let local_midnight = chrono::NaiveDate::from_ymd_opt(local_dt.year(), local_dt.month(), local_dt.day())
-            .unwrap()
-            .and_hms_opt(0, 0, 0)
-            .unwrap();
+        let local_midnight =
+            chrono::NaiveDate::from_ymd_opt(local_dt.year(), local_dt.month(), local_dt.day())
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap();
         // Convert local midnight back to UTC milliseconds
         let local_midnight_utc = tz.from_local_datetime(&local_midnight).unwrap();
         local_midnight_utc.timestamp_millis()
@@ -360,26 +391,41 @@ fn build_comparison(
 
     // For 24h, use the dedicated rolling_24h_comparison
     if preset == "24h" {
-        let comp_daily: Vec<_> = snapshot.rolling_24h_comparison.daily.iter()
+        let comp_daily: Vec<_> = snapshot
+            .rolling_24h_comparison
+            .daily
+            .iter()
             .filter(|r| {
                 project_path.map_or(true, |proj| {
-                    r.project_id.as_ref().map_or(false, |pid| is_project_match(pid, proj))
+                    r.project_id
+                        .as_ref()
+                        .map_or(false, |pid| is_project_match(pid, proj))
                 })
             })
             .cloned()
             .collect();
-        let comp_activity: Vec<_> = snapshot.rolling_24h_comparison.activity.iter()
+        let comp_activity: Vec<_> = snapshot
+            .rolling_24h_comparison
+            .activity
+            .iter()
             .filter(|a| {
                 project_path.map_or(true, |proj| {
-                    a.project_id.as_ref().map_or(false, |pid| is_project_match(pid, proj))
+                    a.project_id
+                        .as_ref()
+                        .map_or(false, |pid| is_project_match(pid, proj))
                 })
             })
             .cloned()
             .collect();
-        let comp_sessions: Vec<_> = snapshot.rolling_24h_comparison.sessions.iter()
+        let comp_sessions: Vec<_> = snapshot
+            .rolling_24h_comparison
+            .sessions
+            .iter()
             .filter(|s| {
                 project_path.map_or(true, |proj| {
-                    s.project_id.as_ref().map_or(false, |pid| is_project_match(pid, proj))
+                    s.project_id
+                        .as_ref()
+                        .map_or(false, |pid| is_project_match(pid, proj))
                 })
             })
             .cloned()
@@ -396,32 +442,47 @@ fn build_comparison(
     }
 
     // For calendar-based presets, slice from snapshot.calendar
-    let comp_daily: Vec<_> = snapshot.calendar.daily.iter()
+    let comp_daily: Vec<_> = snapshot
+        .calendar
+        .daily
+        .iter()
         .filter(|r| {
             let date_ms = date_to_ms(&r.date);
             date_ms >= comp_start_ms && date_ms < comp_end_ms
         })
         .filter(|r| {
             project_path.map_or(true, |proj| {
-                r.project_id.as_ref().map_or(false, |pid| is_project_match(pid, proj))
+                r.project_id
+                    .as_ref()
+                    .map_or(false, |pid| is_project_match(pid, proj))
             })
         })
         .cloned()
         .collect();
-    let comp_activity: Vec<_> = snapshot.calendar.activity.iter()
+    let comp_activity: Vec<_> = snapshot
+        .calendar
+        .activity
+        .iter()
         .filter(|a| a.hour_start_ms >= comp_start_ms && a.hour_start_ms < comp_end_ms)
         .filter(|a| {
             project_path.map_or(true, |proj| {
-                a.project_id.as_ref().map_or(false, |pid| is_project_match(pid, proj))
+                a.project_id
+                    .as_ref()
+                    .map_or(false, |pid| is_project_match(pid, proj))
             })
         })
         .cloned()
         .collect();
-    let comp_sessions: Vec<_> = snapshot.calendar.sessions.iter()
+    let comp_sessions: Vec<_> = snapshot
+        .calendar
+        .sessions
+        .iter()
         .filter(|s| s.started_at_ms >= comp_start_ms && s.started_at_ms < comp_end_ms)
         .filter(|s| {
             project_path.map_or(true, |proj| {
-                s.project_id.as_ref().map_or(false, |pid| is_project_match(pid, proj))
+                s.project_id
+                    .as_ref()
+                    .map_or(false, |pid| is_project_match(pid, proj))
             })
         })
         .cloned()
@@ -533,19 +594,28 @@ mod tests {
             coverage_end_ms: now,
             time_zone: "UTC".to_string(),
             calendar: UsagePeriodData {
-                range: crate::usage::UsageDashboardRange { start_ms: 0, end_ms: 0 },
+                range: crate::usage::UsageDashboardRange {
+                    start_ms: 0,
+                    end_ms: 0,
+                },
                 daily: vec![],
                 activity: vec![],
                 sessions: vec![],
             },
             rolling_24h: UsagePeriodData {
-                range: crate::usage::UsageDashboardRange { start_ms: 0, end_ms: 0 },
+                range: crate::usage::UsageDashboardRange {
+                    start_ms: 0,
+                    end_ms: 0,
+                },
                 daily: vec![],
                 activity: vec![],
                 sessions: vec![],
             },
             rolling_24h_comparison: UsagePeriodData {
-                range: crate::usage::UsageDashboardRange { start_ms: 0, end_ms: 0 },
+                range: crate::usage::UsageDashboardRange {
+                    start_ms: 0,
+                    end_ms: 0,
+                },
                 daily: vec![],
                 activity: vec![],
                 sessions: vec![],
@@ -570,19 +640,28 @@ mod tests {
             coverage_end_ms: now,
             time_zone: "UTC".to_string(),
             calendar: UsagePeriodData {
-                range: crate::usage::UsageDashboardRange { start_ms: 0, end_ms: 0 },
+                range: crate::usage::UsageDashboardRange {
+                    start_ms: 0,
+                    end_ms: 0,
+                },
                 daily: vec![],
                 activity: vec![],
                 sessions: vec![],
             },
             rolling_24h: UsagePeriodData {
-                range: crate::usage::UsageDashboardRange { start_ms: 0, end_ms: 0 },
+                range: crate::usage::UsageDashboardRange {
+                    start_ms: 0,
+                    end_ms: 0,
+                },
                 daily: vec![],
                 activity: vec![],
                 sessions: vec![],
             },
             rolling_24h_comparison: UsagePeriodData {
-                range: crate::usage::UsageDashboardRange { start_ms: 0, end_ms: 0 },
+                range: crate::usage::UsageDashboardRange {
+                    start_ms: 0,
+                    end_ms: 0,
+                },
                 daily: vec![],
                 activity: vec![],
                 sessions: vec![],
@@ -607,19 +686,28 @@ mod tests {
             coverage_end_ms: now,
             time_zone: "UTC".to_string(),
             calendar: UsagePeriodData {
-                range: crate::usage::UsageDashboardRange { start_ms: 0, end_ms: 0 },
+                range: crate::usage::UsageDashboardRange {
+                    start_ms: 0,
+                    end_ms: 0,
+                },
                 daily: vec![],
                 activity: vec![],
                 sessions: vec![],
             },
             rolling_24h: UsagePeriodData {
-                range: crate::usage::UsageDashboardRange { start_ms: 0, end_ms: 0 },
+                range: crate::usage::UsageDashboardRange {
+                    start_ms: 0,
+                    end_ms: 0,
+                },
                 daily: vec![],
                 activity: vec![],
                 sessions: vec![],
             },
             rolling_24h_comparison: UsagePeriodData {
-                range: crate::usage::UsageDashboardRange { start_ms: 0, end_ms: 0 },
+                range: crate::usage::UsageDashboardRange {
+                    start_ms: 0,
+                    end_ms: 0,
+                },
                 daily: vec![],
                 activity: vec![],
                 sessions: vec![],
@@ -669,19 +757,28 @@ mod tests {
             coverage_end_ms: 2000,
             time_zone: "test_roundtrip".to_string(),
             calendar: UsagePeriodData {
-                range: crate::usage::UsageDashboardRange { start_ms: 0, end_ms: 2000 },
+                range: crate::usage::UsageDashboardRange {
+                    start_ms: 0,
+                    end_ms: 2000,
+                },
                 daily: vec![],
                 activity: vec![],
                 sessions: vec![],
             },
             rolling_24h: UsagePeriodData {
-                range: crate::usage::UsageDashboardRange { start_ms: 0, end_ms: 0 },
+                range: crate::usage::UsageDashboardRange {
+                    start_ms: 0,
+                    end_ms: 0,
+                },
                 daily: vec![],
                 activity: vec![],
                 sessions: vec![],
             },
             rolling_24h_comparison: UsagePeriodData {
-                range: crate::usage::UsageDashboardRange { start_ms: 0, end_ms: 0 },
+                range: crate::usage::UsageDashboardRange {
+                    start_ms: 0,
+                    end_ms: 0,
+                },
                 daily: vec![],
                 activity: vec![],
                 sessions: vec![],
@@ -715,19 +812,28 @@ mod tests {
             coverage_end_ms: 2000,
             time_zone: "test_schema_mismatch".to_string(),
             calendar: UsagePeriodData {
-                range: crate::usage::UsageDashboardRange { start_ms: 0, end_ms: 2000 },
+                range: crate::usage::UsageDashboardRange {
+                    start_ms: 0,
+                    end_ms: 2000,
+                },
                 daily: vec![],
                 activity: vec![],
                 sessions: vec![],
             },
             rolling_24h: UsagePeriodData {
-                range: crate::usage::UsageDashboardRange { start_ms: 0, end_ms: 0 },
+                range: crate::usage::UsageDashboardRange {
+                    start_ms: 0,
+                    end_ms: 0,
+                },
                 daily: vec![],
                 activity: vec![],
                 sessions: vec![],
             },
             rolling_24h_comparison: UsagePeriodData {
-                range: crate::usage::UsageDashboardRange { start_ms: 0, end_ms: 0 },
+                range: crate::usage::UsageDashboardRange {
+                    start_ms: 0,
+                    end_ms: 0,
+                },
                 daily: vec![],
                 activity: vec![],
                 sessions: vec![],

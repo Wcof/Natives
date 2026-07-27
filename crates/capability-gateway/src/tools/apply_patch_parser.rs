@@ -152,9 +152,7 @@ fn parse_begin_patch(text: &str) -> Result<Vec<PatchOp>, ToolError> {
     Ok(ops)
 }
 
-fn collect_plus_body(
-    lines: &mut std::iter::Peekable<std::str::Lines<'_>>,
-) -> String {
+fn collect_plus_body(lines: &mut std::iter::Peekable<std::str::Lines<'_>>) -> String {
     let mut out = String::new();
     while let Some(peek) = lines.peek() {
         let t = peek.trim_end();
@@ -180,9 +178,7 @@ fn collect_plus_body(
     out
 }
 
-fn collect_update_body(
-    lines: &mut std::iter::Peekable<std::str::Lines<'_>>,
-) -> String {
+fn collect_update_body(lines: &mut std::iter::Peekable<std::str::Lines<'_>>) -> String {
     // If the update only has + lines (common AI full rewrite), join them.
     // Mixed -/+ without base file is treated as full content of remaining + lines.
     collect_plus_body(lines)
@@ -202,7 +198,8 @@ fn reject_escape(path: &str) -> Result<(), ToolError> {
     if path.is_empty() {
         return Err(err("empty path"));
     }
-    if path.starts_with('/') || path.contains(':') && cfg!(windows) && path.chars().nth(1) == Some(':')
+    if path.starts_with('/')
+        || path.contains(':') && cfg!(windows) && path.chars().nth(1) == Some(':')
     {
         // Absolute paths rejected — must be project-relative
         if std::path::Path::new(path).is_absolute() {

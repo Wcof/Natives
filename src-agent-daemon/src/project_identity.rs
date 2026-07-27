@@ -20,10 +20,7 @@ pub enum ProjectIdentityError {
     #[error("project path is not a directory: {0}")]
     NotDirectory(String),
     #[error("failed to canonicalize path '{path}': {message}")]
-    Canonicalize {
-        path: String,
-        message: String,
-    },
+    Canonicalize { path: String, message: String },
     #[error("path escapes project boundary: {0}")]
     Escape(String),
     #[error("PROJECT_IDENTITY_CHANGED: fingerprint mismatch for {project_id}")]
@@ -89,10 +86,12 @@ impl ProjectIdentityResolver {
         if !path.is_dir() {
             return Err(ProjectIdentityError::NotDirectory(trimmed.into()));
         }
-        let canonical = path.canonicalize().map_err(|e| ProjectIdentityError::Canonicalize {
-            path: trimmed.into(),
-            message: e.to_string(),
-        })?;
+        let canonical = path
+            .canonicalize()
+            .map_err(|e| ProjectIdentityError::Canonicalize {
+                path: trimmed.into(),
+                message: e.to_string(),
+            })?;
         // Reject symlink/junction that left the intended tree by requiring
         // the canonical path still looks like a directory root.
         if !canonical.is_dir() {
@@ -105,7 +104,10 @@ impl ProjectIdentityResolver {
     }
 
     /// Build a new identity (caller persists project_id).
-    pub fn mint(project_id: impl Into<String>, raw_path: &str) -> Result<ProjectIdentity, ProjectIdentityError> {
+    pub fn mint(
+        project_id: impl Into<String>,
+        raw_path: &str,
+    ) -> Result<ProjectIdentity, ProjectIdentityError> {
         let (canonical, fp) = Self::resolve_path(raw_path)?;
         Ok(ProjectIdentity {
             project_id: project_id.into(),
@@ -117,7 +119,10 @@ impl ProjectIdentityResolver {
     }
 
     /// Re-bind after user confirms a moved directory (bumps identity_version).
-    pub fn rebind(existing: &ProjectIdentity, raw_path: &str) -> Result<ProjectIdentity, ProjectIdentityError> {
+    pub fn rebind(
+        existing: &ProjectIdentity,
+        raw_path: &str,
+    ) -> Result<ProjectIdentity, ProjectIdentityError> {
         let (canonical, fp) = Self::resolve_path(raw_path)?;
         Ok(ProjectIdentity {
             project_id: existing.project_id.clone(),
@@ -129,19 +134,28 @@ impl ProjectIdentityResolver {
     }
 
     /// Ensure a path is under an identity's canonical root (for tool path resolution).
-    pub fn ensure_under(identity: &ProjectIdentity, candidate: &Path) -> Result<PathBuf, ProjectIdentityError> {
+    pub fn ensure_under(
+        identity: &ProjectIdentity,
+        candidate: &Path,
+    ) -> Result<PathBuf, ProjectIdentityError> {
         identity.verify()?;
         let root = identity.as_path();
         let resolved = if candidate.is_absolute() {
             if candidate.exists() {
-                candidate.canonicalize().map_err(|e| ProjectIdentityError::Other(e.to_string()))?
+                candidate
+                    .canonicalize()
+                    .map_err(|e| ProjectIdentityError::Other(e.to_string()))?
             } else if let Some(parent) = candidate.parent() {
                 let parent_c = if parent.as_os_str().is_empty() {
                     root.to_path_buf()
                 } else if parent.exists() {
-                    parent.canonicalize().map_err(|e| ProjectIdentityError::Other(e.to_string()))?
+                    parent
+                        .canonicalize()
+                        .map_err(|e| ProjectIdentityError::Other(e.to_string()))?
                 } else {
-                    return Err(ProjectIdentityError::Escape(candidate.display().to_string()));
+                    return Err(ProjectIdentityError::Escape(
+                        candidate.display().to_string(),
+                    ));
                 };
                 parent_c.join(candidate.file_name().unwrap_or_default())
             } else {
@@ -180,14 +194,16 @@ fn filesystem_fingerprint(path: &Path) -> Result<String, ProjectIdentityError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let meta = std::fs::metadata(path).map_err(|e| ProjectIdentityError::Other(e.to_string()))?;
+        let meta =
+            std::fs::metadata(path).map_err(|e| ProjectIdentityError::Other(e.to_string()))?;
         Ok(format!("unix:{}:{}", meta.dev(), meta.ino()))
     }
     #[cfg(windows)]
     {
         // Best-effort: use canonical path + file attributes size/ctime proxy.
         // Full volume serial + file index requires winapi; fail-closed on path change.
-        let meta = std::fs::metadata(path).map_err(|e| ProjectIdentityError::Other(e.to_string()))?;
+        let meta =
+            std::fs::metadata(path).map_err(|e| ProjectIdentityError::Other(e.to_string()))?;
         let canon = path
             .canonicalize()
             .map_err(|e| ProjectIdentityError::Other(e.to_string()))?;
@@ -239,8 +255,8 @@ pub mod store {
     /// Register or return existing active identity for the same fingerprint/path.
     pub fn register_or_get(conn: &Connection, raw_path: &str) -> Result<ProjectIdentity, String> {
         ensure_table(conn)?;
-        let (canonical, fp) = ProjectIdentityResolver::resolve_path(raw_path)
-            .map_err(|e| e.to_string())?;
+        let (canonical, fp) =
+            ProjectIdentityResolver::resolve_path(raw_path).map_err(|e| e.to_string())?;
         let canon_s = canonical.to_string_lossy().into_owned();
 
         // Same active path → same identity
@@ -339,8 +355,8 @@ pub mod store {
         conn: &Connection,
         project_id: &str,
     ) -> Result<ProjectIdentity, String> {
-        let identity = get(conn, project_id)?
-            .ok_or_else(|| format!("unknown project_id: {project_id}"))?;
+        let identity =
+            get(conn, project_id)?.ok_or_else(|| format!("unknown project_id: {project_id}"))?;
         identity.verify().map_err(|e| e.to_string())?;
         let _ = conn.execute(
             "UPDATE project_identity SET verified_at = ?1, updated_at = datetime('now')

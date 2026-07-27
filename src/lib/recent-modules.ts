@@ -67,7 +67,7 @@ export function useRecentModules(limit = MAX_ENTRIES): {
   }, [limit]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     refresh();
     const onChange = () => refresh();
     // Cross-tab updates:

@@ -12,7 +12,7 @@ use crate::compaction::{
 use crate::doom_loop::DoomLoopDetector;
 use crate::event_seq::EventSequencer;
 use crate::hooks::{HookDecision, HookEvent, HookRegistry, HookRequest};
-use assistant_protocol::v2::{RunEventKind};
+use assistant_protocol::v2::RunEventKind;
 use futures_util::{Stream, StreamExt};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -276,7 +276,13 @@ impl EngineError {
     }
 
     pub fn retryable(&self) -> bool {
-        matches!(self, Self::Provider { retryable: true, .. })
+        matches!(
+            self,
+            Self::Provider {
+                retryable: true,
+                ..
+            }
+        )
     }
 
     pub fn is_rate_limited(&self) -> bool {
@@ -354,7 +360,7 @@ impl AgentEngine {
     }
 
     pub fn with_hooks(mut self, hooks: HookRegistry) -> Self {
-        self.hooks = hooks;
+        self.hooks = hooks.with_events(self.events.clone());
         self
     }
 
@@ -594,7 +600,10 @@ impl AgentEngine {
                                 retry_in_ms: Some(delay),
                             },
                         );
-                        if !self.sleep_provider_backoff(attempt, e.retry_after_ms()).await {
+                        if !self
+                            .sleep_provider_backoff(attempt, e.retry_after_ms())
+                            .await
+                        {
                             return Ok(EngineOutcome::Cancelled);
                         }
                         attempt += 1;
@@ -643,9 +652,9 @@ impl AgentEngine {
                             arguments_delta,
                         } => {
                             saw_generation_delta = true;
-                            let entry = tool_acc.entry(index).or_insert_with(|| {
-                                (String::new(), String::new(), String::new())
-                            });
+                            let entry = tool_acc
+                                .entry(index)
+                                .or_insert_with(|| (String::new(), String::new(), String::new()));
                             if let Some(id) = id.clone() {
                                 if !id.is_empty() {
                                     entry.0 = id;
@@ -692,7 +701,8 @@ impl AgentEngine {
                             category,
                             retry_after_ms,
                         } => {
-                            if !saw_generation_delta && retryable && attempt < MAX_PROVIDER_ATTEMPTS {
+                            if !saw_generation_delta && retryable && attempt < MAX_PROVIDER_ATTEMPTS
+                            {
                                 // Same fix as the connect path above: honour the
                                 // provider's own delay instead of special-casing
                                 // RateLimit into a zero-wait retry.
@@ -785,10 +795,8 @@ impl AgentEngine {
                     });
                 }
 
-                self.events.append(
-                    run_id,
-                    RunEventKind::GenerationAttemptCommitted { attempt },
-                );
+                self.events
+                    .append(run_id, RunEventKind::GenerationAttemptCommitted { attempt });
                 break (text_acc, tool_acc);
             };
 
@@ -820,9 +828,7 @@ impl AgentEngine {
                             input: serde_json::json!({ "reason": reason }),
                         })
                         .await;
-                    return Err(EngineError::Message(format!(
-                        "stop hook denied: {reason}"
-                    )));
+                    return Err(EngineError::Message(format!("stop hook denied: {reason}")));
                 }
                 return Ok(EngineOutcome::completed("stop"));
             }
@@ -925,8 +931,7 @@ impl AgentEngine {
                 });
             }
 
-            let executed =
-                self.execute_prepared_tools(run_id, tools, prepared).await;
+            let executed = self.execute_prepared_tools(run_id, tools, prepared).await;
 
             // Safe point: after tool batch completes.
             self.apply_safe_point(
@@ -1015,10 +1020,7 @@ impl AgentEngine {
             // Contiguous non-denied `task` tools → one batch assignment.
             if prepared[i].name == "task" {
                 let mut batch = Vec::new();
-                while i < prepared.len()
-                    && prepared[i].name == "task"
-                    && !prepared[i].denied
-                {
+                while i < prepared.len() && prepared[i].name == "task" && !prepared[i].denied {
                     batch.push(prepared[i].clone());
                     i += 1;
                 }
@@ -1082,24 +1084,19 @@ impl AgentEngine {
                 }
 
                 let cancel = self.cancel.clone();
-                let results: Vec<(usize, ToolExecutionResult)> = stream::iter(
-                    batch
-                        .iter()
-                        .cloned()
-                        .enumerate()
-                        .map(|(idx, call)| {
-                            let cancel = cancel.clone();
-                            async move {
-                                let result = tools
-                                    .execute_tool(&call.name, call.input.clone(), &cancel)
-                                    .await;
-                                (idx, result)
-                            }
-                        }),
-                )
-                .buffer_unordered(PARALLEL_SAFE_MAX_CONCURRENCY)
-                .collect()
-                .await;
+                let results: Vec<(usize, ToolExecutionResult)> =
+                    stream::iter(batch.iter().cloned().enumerate().map(|(idx, call)| {
+                        let cancel = cancel.clone();
+                        async move {
+                            let result = tools
+                                .execute_tool(&call.name, call.input.clone(), &cancel)
+                                .await;
+                            (idx, result)
+                        }
+                    }))
+                    .buffer_unordered(PARALLEL_SAFE_MAX_CONCURRENCY)
+                    .collect()
+                    .await;
 
                 let mut by_idx: Vec<Option<ToolExecutionResult>> =
                     (0..batch.len()).map(|_| None).collect();
@@ -1205,9 +1202,7 @@ impl AgentEngine {
         provider: &dyn EngineProvider,
         messages: Vec<EngineMessage>,
     ) -> Vec<EngineMessage> {
-        let history_limit = self
-            .history_compact_chars
-            .unwrap_or(HISTORY_COMPACT_CHARS);
+        let history_limit = self.history_compact_chars.unwrap_or(HISTORY_COMPACT_CHARS);
         let tool_limit = self.tool_output_max_chars.unwrap_or(TOOL_OUTPUT_MAX_CHARS);
         let before_chars: usize = messages.iter().map(|m| m.content.len()).sum();
         if before_chars < history_limit {
@@ -1411,14 +1406,16 @@ fn apply_prompt_hook_responses(
                 }
             }
             HookDecision::Inject { messages } => {
-                config.messages.extend(messages.into_iter().map(|content| EngineMessage {
-                    role: "system".into(),
-                    content,
-                    tool_call_id: None,
-                    tool_name: None,
-                    tool_calls: None,
-                    images: Vec::new(),
-                }));
+                config
+                    .messages
+                    .extend(messages.into_iter().map(|content| EngineMessage {
+                        role: "system".into(),
+                        content,
+                        tool_call_id: None,
+                        tool_name: None,
+                        tool_calls: None,
+                        images: Vec::new(),
+                    }));
             }
             HookDecision::Allow | HookDecision::Rewake => {}
         }
@@ -1552,10 +1549,7 @@ fn values_to_engine_messages(values: &[Value]) -> Vec<EngineMessage> {
                 .get("tool_call_id")
                 .and_then(|x| x.as_str())
                 .map(str::to_string);
-            let tool_name = v
-                .get("name")
-                .and_then(|x| x.as_str())
-                .map(str::to_string);
+            let tool_name = v.get("name").and_then(|x| x.as_str()).map(str::to_string);
             let tool_calls = v.get("tool_calls").and_then(|x| x.as_array()).map(|arr| {
                 arr.iter()
                     .filter_map(|c| {
@@ -1613,11 +1607,10 @@ fn values_to_engine_messages(values: &[Value]) -> Vec<EngineMessage> {
         .collect()
 }
 
-
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
     struct FakeProvider {
@@ -1678,10 +1671,7 @@ mod tests {
 
         #[async_trait::async_trait]
         impl crate::hooks::HookHandler for RecordingHook {
-            async fn handle(
-                &self,
-                request: HookRequest,
-            ) -> crate::hooks::HookResponse {
+            async fn handle(&self, request: HookRequest) -> crate::hooks::HookResponse {
                 self.0.lock().unwrap().push(request.event);
                 crate::hooks::HookResponse {
                     decision: HookDecision::Allow,
@@ -1691,10 +1681,7 @@ mod tests {
 
         let seen = Arc::new(Mutex::new(Vec::new()));
         let mut hooks = HookRegistry::new();
-        hooks.register(
-            HookEvent::SessionEnd,
-            Box::new(RecordingHook(seen.clone())),
-        );
+        hooks.register(HookEvent::SessionEnd, Box::new(RecordingHook(seen.clone())));
         let engine = AgentEngine::new(EventSequencer::new()).with_hooks(hooks);
         let provider = FakeProvider {
             rounds: Mutex::new(Vec::new()),
@@ -1824,7 +1811,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
+        assert!(
+            matches!(status, crate::EngineOutcome::Completed { .. }),
+            "{status:?}"
+        );
         assert_eq!(tools.batch_calls.load(AtomicOrdering::SeqCst), 1);
         assert_eq!(tools.single_task_calls.load(AtomicOrdering::SeqCst), 0);
         let events = engine.events.replay_after(&run_id, 0);
@@ -1868,16 +1858,23 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
+        assert!(
+            matches!(status, crate::EngineOutcome::Completed { .. }),
+            "{status:?}"
+        );
         let events = engine.events.replay_after("r1", 0);
-        assert!(events.iter().any(|e| matches!(e.payload, RunEventKind::Started)));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e.payload, RunEventKind::Started)));
         assert!(events
             .iter()
             .any(|e| matches!(e.payload, RunEventKind::TextDelta { .. })));
-        assert!(events
-            .iter()
-            .any(|e| matches!(e.payload, RunEventKind::Completed { .. }))
-            || matches!(status, crate::EngineOutcome::Completed { .. }));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.payload, RunEventKind::Completed { .. }))
+                || matches!(status, crate::EngineOutcome::Completed { .. })
+        );
     }
 
     #[tokio::test]
@@ -1984,7 +1981,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
+        assert!(
+            matches!(status, crate::EngineOutcome::Completed { .. }),
+            "{status:?}"
+        );
         let events = engine.events.replay_after("r2", 0);
         assert!(events
             .iter()
@@ -2004,16 +2004,19 @@ mod tests {
                 _system_prompt: Option<&str>,
                 _cancel: CancellationToken,
             ) -> Result<EngineProviderEventStream, EngineError> {
-                Ok(Box::pin(futures_util::stream::unfold(0, |state| async move {
-                    match state {
-                        0 => Some((EngineProviderEvent::TextDelta("early".into()), 1)),
-                        1 => {
-                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                            Some((EngineProviderEvent::Completed, 2))
+                Ok(Box::pin(futures_util::stream::unfold(
+                    0,
+                    |state| async move {
+                        match state {
+                            0 => Some((EngineProviderEvent::TextDelta("early".into()), 1)),
+                            1 => {
+                                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                                Some((EngineProviderEvent::Completed, 2))
+                            }
+                            _ => None,
                         }
-                        _ => None,
-                    }
-                })))
+                    },
+                )))
             }
         }
 
@@ -2054,7 +2057,10 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        assert!(saw_text_before_done, "text delta must be emitted before stream completion");
+        assert!(
+            saw_text_before_done,
+            "text delta must be emitted before stream completion"
+        );
         handle.await.expect("join").expect("run");
     }
 
@@ -2136,7 +2142,10 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        assert!(saw_text, "test must observe first text delta before cancelling");
+        assert!(
+            saw_text,
+            "test must observe first text delta before cancelling"
+        );
         cancel.cancel();
 
         let status = tokio::time::timeout(std::time::Duration::from_secs(1), handle)
@@ -2144,7 +2153,13 @@ mod tests {
             .expect("run should stop promptly after cancel")
             .expect("join")
             .expect("run");
-        assert!(matches!(status, crate::EngineOutcome::Cancelled | crate::EngineOutcome::Interrupted { .. }), "{status:?}");
+        assert!(
+            matches!(
+                status,
+                crate::EngineOutcome::Cancelled | crate::EngineOutcome::Interrupted { .. }
+            ),
+            "{status:?}"
+        );
         assert!(
             provider_cancel_seen.load(Ordering::SeqCst),
             "provider stream must observe engine cancel flag"
@@ -2213,7 +2228,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
+        assert!(
+            matches!(status, crate::EngineOutcome::Completed { .. }),
+            "{status:?}"
+        );
         assert_eq!(
             provider.attempts.load(std::sync::atomic::Ordering::SeqCst),
             3
@@ -2221,12 +2239,7 @@ mod tests {
         let events = engine.events.replay_after(&run_id, 0);
         let attempt_events = events
             .iter()
-            .filter(|e| {
-                matches!(
-                    &e.payload,
-                    RunEventKind::GenerationAttemptStarted { .. }
-                )
-            })
+            .filter(|e| matches!(&e.payload, RunEventKind::GenerationAttemptStarted { .. }))
             .count();
         assert_eq!(attempt_events, 3);
         assert!(events.iter().any(|e| {
@@ -2241,10 +2254,12 @@ mod tests {
                 } if code == "http_503"
             )
         }));
-        assert!(events
-            .iter()
-            .any(|e| matches!(e.payload, RunEventKind::Completed { .. }))
-            || matches!(status, crate::EngineOutcome::Completed { .. }));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.payload, RunEventKind::Completed { .. }))
+                || matches!(status, crate::EngineOutcome::Completed { .. })
+        );
         assert!(events.iter().any(|e| {
             matches!(
                 e.payload,
@@ -2283,7 +2298,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
+        assert!(
+            matches!(status, crate::EngineOutcome::Completed { .. }),
+            "{status:?}"
+        );
         let events = engine.events.replay_after(&run_id, 0);
         assert!(events.iter().any(|e| {
             matches!(
@@ -2347,7 +2365,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
+        assert!(
+            matches!(status, crate::EngineOutcome::Completed { .. }),
+            "{status:?}"
+        );
         let events = engine.events.replay_after(&run_id, 0);
         assert!(events.iter().any(|e| {
             matches!(
@@ -2472,10 +2493,12 @@ mod tests {
             _cancel: CancellationToken,
         ) -> Result<EngineProviderEventStream, EngineError> {
             if system_prompt == Some(SUMMARY_SYSTEM_PROMPT) {
-                self.summary_requests
-                    .lock()
-                    .unwrap()
-                    .push(messages.first().map(|m| m.content.clone()).unwrap_or_default());
+                self.summary_requests.lock().unwrap().push(
+                    messages
+                        .first()
+                        .map(|m| m.content.clone())
+                        .unwrap_or_default(),
+                );
                 if !tools.is_empty() {
                     self.summary_tools_empty.store(false, Ordering::SeqCst);
                 }
@@ -2540,7 +2563,11 @@ mod tests {
     fn long_history(turns: usize) -> Vec<EngineMessage> {
         (0..turns)
             .map(|i| EngineMessage {
-                role: if i % 2 == 0 { "user".into() } else { "assistant".into() },
+                role: if i % 2 == 0 {
+                    "user".into()
+                } else {
+                    "assistant".into()
+                },
                 content: format!("turn {i}: {}", "detail ".repeat(40)),
                 tool_call_id: None,
                 tool_name: None,
@@ -2617,15 +2644,25 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
+        assert!(
+            matches!(status, crate::EngineOutcome::Completed { .. }),
+            "{status:?}"
+        );
 
-        assert_eq!(provider.summary_count(), 1, "exactly one summarization round trip");
+        assert_eq!(
+            provider.summary_count(),
+            1,
+            "exactly one summarization round trip"
+        );
         assert!(
             provider.summary_tools_empty.load(Ordering::SeqCst),
             "summarization must be sent without tools so it cannot start a tool loop"
         );
         let asked = provider.summary_requests.lock().unwrap()[0].clone();
-        assert!(asked.contains("turn 0"), "transcript must carry the oldest turn");
+        assert!(
+            asked.contains("turn 0"),
+            "transcript must carry the oldest turn"
+        );
 
         // The next provider turn sees the summary instead of the old prefix.
         let after = provider.last_main_history();
@@ -2635,7 +2672,10 @@ mod tests {
             .collect();
         assert_eq!(summary_msgs.len(), 1, "history: {after:?}");
         assert!(summary_msgs[0].content.contains("## Next steps"));
-        assert!(!after.iter().any(|m| m.content.contains("turn 0")), "prefix must be gone");
+        assert!(
+            !after.iter().any(|m| m.content.contains("turn 0")),
+            "prefix must be gone"
+        );
         assert!(after.len() <= SUMMARY_KEEP_TAIL_MESSAGES + 1);
         assert_tool_pairs_intact(&after);
 
@@ -2652,8 +2692,14 @@ mod tests {
             })
             .collect();
         assert_eq!(compressed.len(), 1);
-        assert!(compressed[0].2.contains("## Goal"), "event must carry the real summary");
-        assert!(compressed[0].1 < compressed[0].0, "compaction must shrink the history");
+        assert!(
+            compressed[0].2.contains("## Goal"),
+            "event must carry the real summary"
+        );
+        assert!(
+            compressed[0].1 < compressed[0].0,
+            "compaction must shrink the history"
+        );
     }
 
     #[tokio::test]
@@ -2687,7 +2733,10 @@ mod tests {
             .await
             .unwrap();
         // The hard requirement: a failed summary never fails the Run.
-        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
+        assert!(
+            matches!(status, crate::EngineOutcome::Completed { .. }),
+            "{status:?}"
+        );
         assert_eq!(provider.summary_count(), 1);
 
         let after = provider.last_main_history();
@@ -2754,7 +2803,10 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        assert!(started, "test must observe the summarization request before cancelling");
+        assert!(
+            started,
+            "test must observe the summarization request before cancelling"
+        );
         cancel.cancel();
 
         let status = tokio::time::timeout(std::time::Duration::from_secs(2), handle)
@@ -2762,7 +2814,10 @@ mod tests {
             .expect("a cancelled summary must not hold the run open")
             .expect("join")
             .expect("run");
-        assert!(matches!(status, crate::EngineOutcome::Cancelled), "{status:?}");
+        assert!(
+            matches!(status, crate::EngineOutcome::Cancelled),
+            "{status:?}"
+        );
     }
 
     #[tokio::test]
@@ -2793,7 +2848,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
+        assert!(
+            matches!(status, crate::EngineOutcome::Completed { .. }),
+            "{status:?}"
+        );
         assert_eq!(
             provider.summary_count(),
             SUMMARY_MAX_FAILURES as usize,
@@ -3000,7 +3058,10 @@ mod tests {
             .await
             .unwrap();
         let waited = start.elapsed();
-        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
+        assert!(
+            matches!(status, crate::EngineOutcome::Completed { .. }),
+            "{status:?}"
+        );
         assert!(
             waited >= std::time::Duration::from_millis(700),
             "429 must wait out Retry-After, waited {waited:?}"
@@ -3024,7 +3085,10 @@ mod tests {
             .await
             .unwrap();
         let waited = start.elapsed();
-        assert!(matches!(status, crate::EngineOutcome::Completed { .. }), "{status:?}");
+        assert!(
+            matches!(status, crate::EngineOutcome::Completed { .. }),
+            "{status:?}"
+        );
         assert!(
             waited >= std::time::Duration::from_millis(900),
             "a stream-side 429 must wait too, waited {waited:?}"
@@ -3060,7 +3124,10 @@ mod tests {
             .expect("a cancelled backoff must not hold the run open")
             .expect("join")
             .expect("run");
-        assert!(matches!(status, crate::EngineOutcome::Cancelled), "{status:?}");
+        assert!(
+            matches!(status, crate::EngineOutcome::Cancelled),
+            "{status:?}"
+        );
     }
 
     // ---- doom loop diagnostics -------------------------------------------

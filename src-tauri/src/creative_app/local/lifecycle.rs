@@ -45,14 +45,7 @@ fn set_status_detail(
         .map(serde_json::to_string)
         .transpose()
         .map_err(|e| Error::Internal(e.to_string()))?;
-    store::set_state(
-        conn,
-        id,
-        state,
-        last_error,
-        detail_json.as_deref(),
-        &now(),
-    )
+    store::set_state(conn, id, state, last_error, detail_json.as_deref(), &now())
 }
 
 pub async fn start_app(
@@ -94,8 +87,9 @@ pub async fn start_app(
                 if identity_looks_orphaned(&ident) {
                     let detail = CreativeAppStatusDetail {
                         code: LocalCreativeIssueCode::OrphanedProcess,
-                        message: "found leftover process identity after crash; choose stop or restart"
-                            .into(),
+                        message:
+                            "found leftover process identity after crash; choose stop or restart"
+                                .into(),
                         recovery_actions: vec![
                             "resolve_orphan_stop".into(),
                             "resolve_orphan_restart".into(),
@@ -120,8 +114,7 @@ pub async fn start_app(
     broadcast(app, "starting", id);
 
     if runtime::plan_is_static(&plan) {
-        let open_url =
-            runtime::static_open_url(host_http_port, id, &plan.open_path);
+        let open_url = runtime::static_open_url(host_http_port, id, &plan.open_path);
         // Verify entry is readable via filesystem (HTTP route will serve it).
         let entry = plan.entry_file.as_deref().unwrap_or("index.html");
         let entry_path = if plan.cwd_relative == "." {
@@ -465,10 +458,10 @@ pub async fn resolve_orphan(
             // Only kill if identity still matches (pid + executable + cwd fingerprint).
             if identity_matches_live(&ident) {
                 force_kill_identity(&ident);
-                let _ = runtime.logs().get_or_open(id).append(
-                    LogStream::System,
-                    "orphaned process terminated by user",
-                );
+                let _ = runtime
+                    .logs()
+                    .get_or_open(id)
+                    .append(LogStream::System, "orphaned process terminated by user");
             }
         }
     }

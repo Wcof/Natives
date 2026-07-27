@@ -4,10 +4,10 @@
 //! Every tool must be registered with a schema, side effect declaration,
 //! permission class, path scope, timeout, output limit, and cancellation policy.
 
-pub mod plan_mode;
-pub mod policy;
 pub mod manifest;
+pub mod plan_mode;
 pub mod platform_sandbox;
+pub mod policy;
 pub mod process_supervisor;
 pub mod tools;
 
@@ -332,16 +332,10 @@ impl CapabilityGateway {
                 retryable: true,
             })??;
 
-        if policy::check_output_limit(
-            result.result.to_string().as_bytes(),
-            tool.output_limit,
-        ) {
+        if policy::check_output_limit(result.result.to_string().as_bytes(), tool.output_limit) {
             return Err(ToolError {
                 code: "output_limit".into(),
-                message: format!(
-                    "tool `{name}` output exceeded {} bytes",
-                    tool.output_limit
-                ),
+                message: format!("tool `{name}` output exceeded {} bytes", tool.output_limit),
                 retryable: false,
             });
         }

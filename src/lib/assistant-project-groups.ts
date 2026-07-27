@@ -64,6 +64,8 @@ export interface RegisteredProjectMeta {
   path: string;
   lastOpenedAt?: string | null;
   label?: string | null;
+  /** Host filesystem check; false means the recorded project directory is gone. */
+  exists?: boolean;
 }
 
 /**
@@ -90,17 +92,22 @@ export function groupAssistantConversations(
   const byProject = new Map<string, AssistantProjectConversation[]>();
   const unassigned: AssistantProjectConversation[] = [];
   const metaByPath = new Map<string, RegisteredProjectMeta>();
+  const missingProjectPaths = new Set<string>();
 
   for (const proj of registered) {
     const path = proj.path.trim();
     if (!path) continue;
     metaByPath.set(path, proj);
+    if (proj.exists === false) {
+      missingProjectPaths.add(path);
+      continue;
+    }
     if (!byProject.has(path)) byProject.set(path, []);
   }
 
   for (const conversation of conversations) {
     const path = conversation.projectId?.trim() ?? '';
-    if (!path) {
+    if (!path || missingProjectPaths.has(path)) {
       unassigned.push(conversation);
       continue;
     }
@@ -121,7 +128,7 @@ export function groupAssistantConversations(
   const seen = new Set<string>();
   for (const proj of registered) {
     const path = proj.path.trim();
-    if (!path || seen.has(path)) continue;
+    if (!path || missingProjectPaths.has(path) || seen.has(path)) continue;
     seen.add(path);
     const items = byProject.get(path) ?? [];
     groups.push({

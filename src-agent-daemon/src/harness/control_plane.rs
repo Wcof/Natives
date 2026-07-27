@@ -52,6 +52,12 @@ pub fn request(method: &str, params: Value) -> Result<Value, HarnessError> {
         "harness.binding.set" => binding_set(&params),
         "harness.run.getSnapshot" => run_get_snapshot(&params),
         "harness.audit.list" => audit_list(&params),
+        "harness.prompt.preview" => prompt_preview(&params),
+        "harness.source.list" => source_list(&params),
+        "harness.source.acknowledgeDrift" => source_acknowledge_drift(&params),
+        "harness.subscribe" => subscribe(&params),
+        "harness.trace.list" => trace_list(&params),
+        "harness.audit.export" => audit_export(&params),
         other => Err(HarnessError::invalid(format!(
             "unsupported harness method: {other}"
         ))),
@@ -103,8 +109,7 @@ fn layer_refs(
 fn resolved_context(conn: &Connection, params: &Value) -> Result<ResolvedContext, HarnessError> {
     let project_id = opt_str(params, &["project_id", "projectId"]);
     let conversation_id = opt_str(params, &["conversation_id", "conversationId"]);
-    let (documents, layers) =
-        layer_refs(conn, project_id.as_deref(), conversation_id.as_deref())?;
+    let (documents, layers) = layer_refs(conn, project_id.as_deref(), conversation_id.as_deref())?;
     let discovered = discovered_hooks(params);
     Ok(ResolvedContext {
         resolution: resolve(&discovered, &documents),
@@ -209,7 +214,9 @@ fn profile_create(params: &Value) -> Result<Value, HarnessError> {
     let name = req_str(params, &["name"])?;
     let kind = req_str(params, &["kind"])?;
     if !["global_template", "project_overlay", "session_overlay"].contains(&kind.as_str()) {
-        return Err(HarnessError::invalid(format!("unknown profile kind: {kind}")));
+        return Err(HarnessError::invalid(format!(
+            "unknown profile kind: {kind}"
+        )));
     }
     let project_id = opt_str(params, &["project_id", "projectId"]);
     if kind == "project_overlay" && project_id.is_none() {
@@ -279,6 +286,7 @@ fn draft_get(params: &Value) -> Result<Value, HarnessError> {
             "updated_at": draft.updated_at,
             "document": serde_json::from_str::<Value>(&draft.document_json)
                 .unwrap_or(Value::Null),
+            "source_candidate": draft.source_candidate_json.as_deref().and_then(|v| serde_json::from_str::<Value>(v).ok()),
         }))
     })
 }
@@ -444,7 +452,8 @@ fn version_rollback(params: &Value) -> Result<Value, HarnessError> {
 // ── bindings ────────────────────────────────────────────────────────────────
 
 fn binding_scope(params: &Value) -> Result<(String, String), HarnessError> {
-    let scope_type = opt_str(params, &["scope_type", "scopeType"]).unwrap_or_else(|| "global".into());
+    let scope_type =
+        opt_str(params, &["scope_type", "scopeType"]).unwrap_or_else(|| "global".into());
     let scope_id = match scope_type.as_str() {
         "global" => GLOBAL_SCOPE_ID.to_string(),
         "project" => req_str(params, &["scope_id", "scopeId", "project_id", "projectId"])?,
@@ -483,7 +492,9 @@ fn binding_set(params: &Value) -> Result<Value, HarnessError> {
     let profile_id = req_str(params, &["profile_id", "profileId"])?;
     let mode = opt_str(params, &["mode"]).unwrap_or_else(|| "follow_published".into());
     if !["follow_published", "pinned"].contains(&mode.as_str()) {
-        return Err(HarnessError::invalid(format!("unknown binding mode: {mode}")));
+        return Err(HarnessError::invalid(format!(
+            "unknown binding mode: {mode}"
+        )));
     }
     let version_id = opt_str(params, &["version_id", "versionId"]);
 
@@ -538,6 +549,105 @@ fn audit_list(params: &Value) -> Result<Value, HarnessError> {
     })
 }
 
+fn prompt_preview(params: &Value) -> Result<Value, HarnessError> {
+    repository::with_conn(|conn| {
+        let context = resolved_context(conn, params)?;
+        let mut blocks = Vec::new();
+        for layer in context.layers.iter() {
+            if let Some(version) = repository::get_version(conn, &layer.version_id)? {
+                let doc = version.document()?;
+                for block in doc.prompt_blocks.iter().filter(|b| b.enabled) {
+                    blocks.push(serde_json::json!({
+                        "id": block.id, "label": block.label, "order": block.order,
+                        "source_digest": harness_core::sha256_hex(&block.content),
+                        "token_estimate": block.content.chars().count().div_ceil(4),
+                    }));
+                }
+            }
+        }
+        blocks.sort_by_key(|b| b.get("order").and_then(Value::as_i64).unwrap_or_default());
+        Ok(serde_json::json!({"blocks": blocks, "raw_persisted": false}))
+    })
+}
+
+fn source_list(params: &Value) -> Result<Value, HarnessError> {
+    let limit = opt_i64(params, &["limit"], 100, 500);
+    let discovered = discovered_hooks(params);
+    let sources = discovered.into_iter().map(|hook| serde_json::json!({
+        "scope": hook.source.scope,
+        "origin": hook.source.origin,
+        "digest": harness_core::sha256_hex(&serde_json::to_string(&hook.kind).unwrap_or_default()),
+        "tracked": hook.source.scope == harness_core::HookScope::Project,
+        "pinned": false,
+    })).collect::<Vec<_>>();
+    repository::with_conn(|conn| {
+        let stored = repository::list_sources(conn, limit)?;
+        Ok(
+            serde_json::json!({"sources": if stored.is_empty() { sources } else { stored }, "page_size": limit}),
+        )
+    })
+}
+
+fn source_acknowledge_drift(params: &Value) -> Result<Value, HarnessError> {
+    let source = req_str(params, &["source_id", "sourceId"])?;
+    let profile_id = req_str(params, &["profile_id", "profileId"])?;
+    let observed_digest = req_str(params, &["observed_digest", "observedDigest"])?;
+    let expected_revision = params
+        .get("revision")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| HarnessError::invalid("revision is required"))?;
+    repository::with_conn(|conn| {
+        let draft = repository::get_draft(conn, &profile_id)?
+            .ok_or_else(|| HarnessError::not_found("no draft exists for drift acknowledgement"))?;
+        if draft.revision != expected_revision {
+            return Err(HarnessError::draft_conflict(
+                "draft revision changed; reload before acknowledging drift",
+            ));
+        }
+        let acknowledged = repository::acknowledge_source_drift(
+            conn,
+            &profile_id,
+            &source,
+            &observed_digest,
+            expected_revision,
+        )?;
+        repository::append_audit(
+            conn,
+            "source_drift_ack",
+            Some(&profile_id),
+            None,
+            None,
+            None,
+            &serde_json::json!({"source_id": source, "observed_digest": observed_digest, "revision": acknowledged.revision}),
+        )?;
+        Ok(
+            serde_json::json!({"source_id": source, "profile_id": profile_id, "revision": acknowledged.revision}),
+        )
+    })
+}
+
+fn subscribe(_params: &Value) -> Result<Value, HarnessError> {
+    Ok(serde_json::json!({"subscription": "harness", "transport": "daemon_events"}))
+}
+
+fn trace_list(params: &Value) -> Result<Value, HarnessError> {
+    let run_id = opt_str(params, &["run_id", "runId"]);
+    let limit = opt_i64(params, &["limit"], 100, 200);
+    let after = opt_i64(params, &["after_sequence", "afterSequence"], 0, i64::MAX);
+    repository::with_conn(|conn| {
+        Ok(
+            serde_json::json!({"entries": repository::list_run_hook_trace(conn, run_id.as_deref(), after, limit)?, "page_size": limit, "after_sequence": after}),
+        )
+    })
+}
+
+fn audit_export(params: &Value) -> Result<Value, HarnessError> {
+    let limit = opt_i64(params, &["limit"], 50, 500);
+    repository::with_conn(|conn| {
+        Ok(serde_json::json!({"entries": repository::list_audit(conn, limit)?, "redacted": true}))
+    })
+}
+
 // ── the Run start seam ──────────────────────────────────────────────────────
 
 /// Resolve and persist the Harness a Run will use, then hand it back.
@@ -570,8 +680,46 @@ pub fn resolve_run(
     let discovered = crate::production_hooks::discover_production_hooks(project);
     repository::with_conn(|conn| {
         let (documents, refs) = layer_refs(conn, project_id, conversation_id)?;
+        let drift_profile = refs.first().map(|r| r.profile_id.clone());
+        let base_version_id = refs.first().map(|r| r.version_id.clone());
+        let mut mismatches = Vec::new();
+        for hook in &discovered {
+            let digest =
+                harness_core::sha256_hex(&serde_json::to_string(&hook.kind).unwrap_or_default());
+            if let Some((published, mode)) = repository::source_digest(conn, hook.id.as_str())? {
+                if published != digest && mode == "tracked" {
+                    mismatches.push(serde_json::json!({
+                        "source_id": hook.id.as_str(),
+                        "published_digest": published,
+                        "observed_digest": digest,
+                        "policy": "tracked",
+                        "observed_at": chrono::Utc::now().to_rfc3339(),
+                        "manifest": {"scope": hook.source.scope, "origin": hook.source.origin}
+                    }));
+                }
+            }
+            let _ = repository::sync_source(conn, hook.id.as_str(), &digest, "tracked")?;
+        }
+        if let (Some(profile_id), Some(base_version_id)) = (drift_profile, base_version_id) {
+            let candidate = serde_json::Value::Array(mismatches);
+            if candidate.as_array().is_some_and(|items| !items.is_empty()) {
+                let had_draft = repository::get_draft(conn, &profile_id)?.is_some();
+                let _ = repository::ensure_source_drift_candidate(conn, &profile_id, &candidate)?;
+                if !had_draft {
+                    repository::append_audit(
+                        conn,
+                        "source_drift_ack",
+                        Some(&profile_id),
+                        Some(&base_version_id),
+                        None,
+                        None,
+                        &serde_json::json!({"candidate": true, "source_count": candidate.as_array().map_or(0, Vec::len)}),
+                    )?;
+                }
+            }
+        }
         let resolution = resolve(&discovered, &documents);
-        let snapshot = ResolvedHarnessSnapshot::new(
+        let mut snapshot = ResolvedHarnessSnapshot::new(
             run_id,
             conversation_id.map(str::to_string),
             project_id.map(str::to_string),
@@ -579,10 +727,23 @@ pub fn resolve_run(
             &resolution,
             chrono::Utc::now().to_rfc3339(),
         );
+        let mut prompt_plan = harness_core::PromptPlanSummary::default();
+        let mut prompt_blocks = Vec::new();
+        for (_, document) in &documents {
+            for block in document.prompt_blocks.iter().filter(|b| b.enabled) {
+                prompt_blocks.push(block.clone());
+                prompt_plan
+                    .source_digests
+                    .push(harness_core::sha256_hex(&block.content));
+                prompt_plan.token_estimate += block.content.chars().count().div_ceil(4);
+            }
+        }
+        snapshot.prompt_plan = prompt_plan;
         repository::insert_run_snapshot(conn, &snapshot)?;
         Ok(RunHarnessPlan {
             snapshot,
             resolution,
+            prompt_blocks,
         })
     })
 }
@@ -599,6 +760,7 @@ pub struct RunHarnessPlan {
     pub snapshot: ResolvedHarnessSnapshot,
     /// Live values, never persisted, never sent to the Renderer.
     pub resolution: Resolution,
+    pub prompt_blocks: Vec<harness_core::blueprint::PromptBlock>,
 }
 
 impl RunHarnessPlan {

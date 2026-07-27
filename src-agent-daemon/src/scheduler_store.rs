@@ -123,9 +123,7 @@ impl SchedulerStore {
             provider_id: req.provider_id,
             key_id: req.key_id,
             model_id: req.model_id,
-            permission_profile: req
-                .permission_profile
-                .unwrap_or_else(|| "ask".into()),
+            permission_profile: req.permission_profile.unwrap_or_else(|| "ask".into()),
             prompt: req.prompt,
             created_at: now,
             updated_at: now,
@@ -224,11 +222,7 @@ impl SchedulerStore {
 fn is_due(job: &SchedulerJob, now: DateTime<Utc>) -> bool {
     match &job.schedule {
         ScheduleKind::OneShot { at } => {
-            now >= *at
-                && job
-                    .last_run_at
-                    .map(|t| t < *at)
-                    .unwrap_or(true)
+            now >= *at && job.last_run_at.map(|t| t < *at).unwrap_or(true)
         }
         ScheduleKind::Interval { every_secs } => {
             let every = (*every_secs).max(1);
@@ -280,7 +274,9 @@ fn field_matches(field: &str, value: u32, min: u32, max: u32) -> bool {
     }
     // lists
     if field.contains(',') {
-        return field.split(',').any(|f| field_matches(f.trim(), value, min, max));
+        return field
+            .split(',')
+            .any(|f| field_matches(f.trim(), value, min, max));
     }
     // step
     if let Some((base, step_s)) = field.split_once('/') {
@@ -400,15 +396,20 @@ impl SchedulerRunner {
 }
 
 fn fire_job(job: &SchedulerJob) -> Result<String, String> {
-    use assistant_protocol::v2::{CreateRunRequest, StartRunRequest};
     use crate::run_manager::{global_run_manager, RunManager};
+    use assistant_protocol::v2::{CreateRunRequest, StartRunRequest};
 
-    if job.project_path.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+    if job
+        .project_path
+        .as_ref()
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true)
+    {
         return Err("scheduler job missing project_path".into());
     }
     let conv = format!("sched-{}", job.id);
     let run = global_run_manager().create_run(CreateRunRequest {
-            capability_selection: None,
+        capability_selection: None,
         conversation_id: conv,
         provider_id: job.provider_id.clone(),
         model_id: job.model_id.clone(),
@@ -420,17 +421,13 @@ fn fire_job(job: &SchedulerJob) -> Result<String, String> {
         max_steps: Some(30),
         parent_run_id: None,
         project_path: job.project_path.clone(),
-        idempotency_key: Some(format!(
-            "sched-{}-{}",
-            job.id,
-            Utc::now().timestamp()
-        )),
-                effort: None,
-            runtime_id: None,
-        })?;
+        idempotency_key: Some(format!("sched-{}-{}", job.id, Utc::now().timestamp())),
+        effort: None,
+        runtime_id: None,
+    })?;
     let started = RunManager::start_detached_global(StartRunRequest {
-            agent_profile_id: None,
-            capability_selection: None,
+        agent_profile_id: None,
+        capability_selection: None,
         run_id: Some(run.id.clone()),
         conversation_id: Some(run.conversation_id.clone()),
         provider_id: Some(run.provider_id.clone()),
@@ -443,9 +440,9 @@ fn fire_job(job: &SchedulerJob) -> Result<String, String> {
         max_steps: Some(run.max_steps),
         project_path: job.project_path.clone(),
         idempotency_key: None,
-                effort: None,
-            runtime_id: None,
-        })?;
+        effort: None,
+        runtime_id: None,
+    })?;
     Ok(started.id)
 }
 
@@ -474,10 +471,7 @@ mod tests {
 
     #[test]
     fn create_list_delete_round_trip() {
-        let dir = std::env::temp_dir().join(format!(
-            "natives-sched-{}",
-            Uuid::new_v4()
-        ));
+        let dir = std::env::temp_dir().join(format!("natives-sched-{}", Uuid::new_v4()));
         let _ = std::fs::create_dir_all(&dir);
         std::env::set_var("NATIVES_RUNTIME_DIR", &dir);
         let store = SchedulerStore {

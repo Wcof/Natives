@@ -872,7 +872,9 @@ mod request_controls_tests {
         assert!(RequestControls::default()
             .with_effort_str(Some("wharrgarbl"))
             .is_default());
-        assert!(RequestControls::default().with_effort_str(None).is_default());
+        assert!(RequestControls::default()
+            .with_effort_str(None)
+            .is_default());
     }
 
     #[test]

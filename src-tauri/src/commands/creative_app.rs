@@ -30,8 +30,7 @@ fn modules_dir() -> std::path::PathBuf {
 }
 
 fn conn(pool: &DbPool) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>> {
-    pool.get()
-        .map_err(|e| Error::Internal(format!("db: {e}")))
+    pool.get().map_err(|e| Error::Internal(format!("db: {e}")))
 }
 
 fn lifecycle_ctx(
@@ -143,10 +142,7 @@ pub async fn creative_app_restart(
 }
 
 #[tauri::command]
-pub fn creative_app_get_open_target(
-    id: String,
-    state: State<'_, AppState>,
-) -> Result<OpenTarget> {
+pub fn creative_app_get_open_target(id: String, state: State<'_, AppState>) -> Result<OpenTarget> {
     let c = conn(&state.db)?;
     service::CreativeAppService::get_open_target(&c, &id)
 }
@@ -273,9 +269,7 @@ pub async fn creative_app_reconcile(
 }
 
 #[tauri::command]
-pub fn creative_app_github_token_status(
-    state: State<'_, AppState>,
-) -> Result<GithubTokenStatus> {
+pub fn creative_app_github_token_status(state: State<'_, AppState>) -> Result<GithubTokenStatus> {
     let c = conn(&state.db)?;
     store::github_token_status(&c)
 }
@@ -431,8 +425,8 @@ pub fn creative_app_rescan_local(
     state: State<'_, AppState>,
 ) -> Result<LocalProjectScanResult> {
     let c = conn(&state.db)?;
-    let rec = crate::creative_app::local::get_app(&c, &id)?
-        .ok_or_else(|| Error::NotFound(id.clone()))?;
+    let rec =
+        crate::creative_app::local::get_app(&c, &id)?.ok_or_else(|| Error::NotFound(id.clone()))?;
     crate::creative_app::local::inspect_local_project(
         &c,
         &InspectLocalRequest {
@@ -559,11 +553,8 @@ fn create_local_app(
     let tx = conn.transaction().map_err(Error::Database)?;
     local::insert_app(&tx, &rec)?;
     if !request.env.is_empty() {
-        let pairs: Vec<(String, String)> = request
-            .env
-            .into_iter()
-            .map(|p| (p.key, p.value))
-            .collect();
+        let pairs: Vec<(String, String)> =
+            request.env.into_iter().map(|p| (p.key, p.value)).collect();
         local::store::replace_env(&tx, &id, &pairs)?;
     }
     tx.commit().map_err(Error::Database)?;
@@ -582,8 +573,8 @@ fn update_local_app(
 ) -> Result<CreativeAppSummary> {
     use crate::creative_app::local::{self, fingerprint_plan, validate_launch_plan};
 
-    let mut rec = local::get_app(conn, &request.id)?
-        .ok_or_else(|| Error::NotFound(request.id.clone()))?;
+    let mut rec =
+        local::get_app(conn, &request.id)?.ok_or_else(|| Error::NotFound(request.id.clone()))?;
 
     if let Some(title) = request.title {
         let t = title.trim();
@@ -724,12 +715,7 @@ pub async fn creative_app_install_local_dependencies(
     tokio::task::spawn_blocking(move || {
         let rt = tokio::runtime::Handle::current();
         let c = conn(&pool)?;
-        rt.block_on(local::deps::install_dependencies(
-            &c,
-            &handle,
-            &logs,
-            &id,
-        ))
+        rt.block_on(local::deps::install_dependencies(&c, &handle, &logs, &id))
     })
     .await
     .map_err(|e| Error::Internal(format!("install deps join: {e}")))?
